@@ -221,6 +221,7 @@ pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
 mod branch_equations;
+mod function_induction;
 mod meaning;
 mod measure_context;
 mod metaprograms;

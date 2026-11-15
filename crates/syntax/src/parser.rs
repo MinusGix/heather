@@ -941,6 +941,12 @@ impl Parser {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
     }
 
+    /// `induct f(…)`: the word followed by a name, so `induct` stays an
+    /// ordinary identifier everywhere else (`induct(x)`, `let induct = …`).
+    fn at_induct(&self) -> bool {
+        self.at_kw("induct") && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
+    }
+
     /// `op as ∙` — the **body spelling** a declaring binder installs
     /// (issues/binder-symbol-as-notation.md). Read directly after the binder's
     /// name, before its `:`.
@@ -3508,6 +3514,66 @@ impl Parser {
             let close = self.expect(&TokKind::RBrace, "`}`")?;
             return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
         }
+        // `induct f(x̄); all_goals { … }` and `induct f(x̄) { C => e, … }`:
+        // induction along `f`'s own recursion at the goal, every case with
+        // the same block or each with its own arm. Packaged like `split_all`,
+        // since the cases are only known once `f::induct` is resolved.
+        if self.at_induct() {
+            let start = self.bump().span;
+            let call = self.with_record_lit(true, |p| p.expr())?;
+            let result = if matches!(self.peek(), TokKind::Semi) {
+                self.bump();
+                if !self.eat_kw("all_goals") {
+                    return self.err("`induct f(…);` must be followed by `all_goals { ... }`");
+                }
+                let goals = self.block()?;
+                if !goals.ons.is_empty() {
+                    return Err(ParseError {
+                        msg: "an `all_goals` block cannot contain declaration-scoped `on` discharges".into(),
+                        span: goals.span,
+                    });
+                }
+                let span = start.join(goals.span);
+                Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(INDUCT_ALL_GOALS.into()), span: start }),
+                        args: vec![call, Expr { kind: ExprKind::Block(Box::new(goals)), span }],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                }
+            } else {
+                let open_cases = self.expect(&TokKind::LBrace, "`{` with one arm per case, or `; all_goals { … }`, after `induct f(…)`")?;
+                let arms = self.match_arms()?;
+                let close_cases = self.expect(&TokKind::RBrace, "`}` after the cases")?;
+                let span = start.join(close_cases);
+                let cases = Expr {
+                    kind: ExprKind::Match {
+                        form: MatchForm::Match,
+                        generated: false,
+                        scrut: Box::new(call),
+                        eqbind: None,
+                        motive: None,
+                        arms,
+                    },
+                    span: open_cases.join(close_cases),
+                };
+                Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(INDUCT_CASES.into()), span: start }),
+                        args: vec![cases],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                }
+            };
+            let close = self.expect(&TokKind::RBrace, "`}` after `induct`")?;
+            return Ok(Block { stmts, result: Box::new(result), ons: Vec::new(), span: open.join(close) });
+        }
         // Goal combinators are statement-shaped: `split_all` replaces the
         // current goal by one goal per finite branch, then `all_goals` checks
         // the same block in every resulting branch. The parser packages the
@@ -3962,6 +4028,7 @@ impl Parser {
             if matches!(self.peek(), TokKind::RBrace | TokKind::Eof)
                 || self.at_kw("split")
                 || self.at_kw("split_all")
+                || self.at_induct()
                 || self.at_kw("on")
                 || self.at_sequent_binders()
             {

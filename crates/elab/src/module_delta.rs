@@ -1590,8 +1590,12 @@ impl Deltas<'_> {
                     }) => Some("representation"),
             DeltaEvent::Impl { repr, op, .. }
                 if self.representations.has_impl(repr, op) => Some("implementation"),
-            DeltaEvent::Access { designed, .. }
-                if self.access_alias(designed).is_some() => Some("designed-access"),
+            // Two modules may designate one spelling for one minted name
+            // (`apps::Nil` for `apps#Nil` of two modules' `apps`): the name
+            // the minted spelling then resolves to is the module's in scope,
+            // as any name is, so only a different minted name conflicts.
+            DeltaEvent::Access { designed, minted }
+                if self.access_alias(designed).is_some_and(|m| m != minted) => Some("designed-access"),
             DeltaEvent::Meta { module, name, slot, .. }
                 if self.meta_programs.definition(module, name).is_some()
                     || slot.is_some_and(|slot| self.meta_programs.slot_owner(slot).is_some()) =>

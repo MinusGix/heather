@@ -5,7 +5,7 @@ labels: [proofs,elaboration,native]
 area: language
 milestone: [lang-proof-modularity]
 created: 2026-10-31
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 Round P4 of `docs/native/compiler-milestones-proposal.md` (§6.2, §7): proofs about imperative code through rules,
@@ -27,3 +27,4 @@ not unfolding.
 - 2026-11-14: The `decreases` half, for loops counting a word (the native work's loops, `/mnt/project-files/design/language-feature-threads-2026-11-14.md` §2). Generated `f::step`/`f::done` beside `f_unfold` (now also `f::unfold`) for a body that is one test with an equation (`docs/language/recursion/decreases-unfolding-design.md` §6.1), over `Bool::convoy_true`/`convoy_false` and `decide_bit_of` in `bool.hthr`; the rule `BitVec::loop_up` and `BitVec::run_up_invariant` in `lib/std/bitvec/bitvec_loop.hthr`. `Sha256::begin` is one call to the rule, and `Sha256::expand`'s invariant (the whole schedule follows §6.2.2 from the first sixteen words) is proved through it (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`). Left: the `for` half (`List::foldl_invariant`, `List::for_in_invariant` and the tactic step of §7.2), `count_words`, procedure contracts, and a tactic step that supplies `g` from `f::step` so a client gives only the invariant.
 - 2026-11-14: a step of a `decreases` loop at its `if h:` test is now `trans(f_unfold(x), Bool::taken_true(c, e))`, the arms learned from the unfolding ([[unify-through-match-arms]]); the hand induction over the count remains this issue's.
 - 2026-11-14: a non-recursive function's branches get the same treatment, named by the arm (`f::True`, `f::False`): [[definition-branch-equations]].
+- 2026-11-15: the hand induction is retired by functional induction (`docs/tactics/functional-induction-design.md`): every recursive `fn` the branch equations read, `decreases` or structural, gets `f::induct`, and `induct f(x̄); all_goals { … }` applies it (`tally_gains` is `induct tally(start, acc); all_goals { bv_omega }`; `Sha256::zero_block` is an `induct` over the zeroing loop, replacing the `Sha256::zeroed` fold and its two theorems). The `for` half: `List::foldl_induct` and `List::foldl_invariant` in `list.hthr`. Left: `List::for_in_invariant`, `count_words`, procedure contracts; a structural function's principle from an importing module is [[function-induction-across-modules]].
