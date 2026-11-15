@@ -22,9 +22,10 @@
 // The computation is written as an `ELoop` here, and the reflector reads
 // the surface method into exactly it (`tr_reflected`), with the bridge
 // between the two at every world (`tr_bridged`,
-// docs/native/io-programs-design.md §2.2, §2.3); a span whose length is
-// not its buffer's own is refused. Tests, not library: nothing outside
-// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+// docs/native/io-programs-design.md §2.2, §2.3); the refusal of a span
+// whose length is not its buffer's own is in rt_io_while_tests, since
+// `write-elf` reads this module without expectations. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic;
 import bool;
 import nat;
@@ -351,25 +352,4 @@ theorem tr_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io))
 {
     by io_loop_bridge("Io::tr_upper", [], [], ["raise_span"], "tr_world", "tr_lents")
-}
-
-// A span lent with a length that is not its buffer's own: `raise_span`
-// reads its length off its bytes, so the call is not a `Lend`.
-fn Io::tr_short(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
-    let mut io = io;
-    let mut buf = buf;
-    let mut n: BitVec(64) = BitVec::ofNat(1);
-    while BitVec::ofNat(0).unsigned_lt_bit(n) {
-        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(tr_capacity()));
-        let m = raise_span(r.buf, BitVec::ofNat(3), r.result, BitVec::ofNat(0));
-        let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
-        buf := m.after;
-        n := r.result;
-    }
-    Pointed::ret(Mutated(io, n))
-}
-
-// expect-error: whose length is not its buffer's own
-theorem tr_short_refused(): True {
-    by reflects_io_loop_as(["Io::tr_short"], [], [], ["raise_span"], [LoopFun([Bytes(0)], Word(64), tr_prog())])
 }

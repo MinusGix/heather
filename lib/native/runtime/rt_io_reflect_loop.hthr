@@ -255,7 +255,6 @@ fn rt_state_count_of(fuel: Nat, mutated: Nat, sv: Head) → Tac<Nat> {
 
 fn rt_spell(e: Expr) → Tac<Handle> { next_spelling(e).bind(λ c => rt_loop_ok("a loop's step at its state", c)) }
 
-
 // The arm of a `Bool` match for `True` or `False`, by its constructor.
 fn rt_bool_arm(m: MatchInfo, which: String) → Tac<Handle> {
     match m.arms.find(λ a => Known::str_same(a.ctor, which)) {

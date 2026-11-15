@@ -29,6 +29,7 @@ import rt_io_reflect;
 import rt_io_reflect_loop;
 import runtime;
 import rt_io_bridge;
+import native_tool_spans;
 
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
@@ -177,4 +178,25 @@ theorem twice_wrong_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVe
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_wrong().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
 {
     by io_loop_bridge("Io::write_out_twice", [], [], [], "wd", "no_lents")
+}
+
+// A span lent with a length that is not its buffer's own: `raise_span`
+// reads its length off its bytes, so the call is not a `Lend`.
+fn Io::tr_short(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(256));
+        let m = raise_span(r.buf, BitVec::ofNat(3), r.result, BitVec::ofNat(0));
+        let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
+        buf := m.after;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+// expect-error: whose length is not its buffer's own
+theorem tr_short_refused(): True {
+    by reflects_io_loop_as(["Io::tr_short"], [], [], ["raise_span"], [])
 }

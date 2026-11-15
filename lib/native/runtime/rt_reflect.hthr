@@ -977,7 +977,6 @@ fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
     match Known::index(io.lends, g.id, 0) { Some(_) => True, None => False }
 }
 
-
 // The calls a world has been through, the first first: the parameter has
 // been through none, and `m(w, …).after` through `w`'s and then `m`.
 fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
