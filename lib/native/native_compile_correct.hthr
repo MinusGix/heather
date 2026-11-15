@@ -75,20 +75,25 @@ theorem Prog::within_exits(self p: Prog, layout: Layout, known: List<Fact>, stat
 
 // The calls' code from its start: fixed runs of items between the words'
 // loads and stores, whose length is each word's home.
-theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, len, result, capacity, names: Nat):
-    p.Within(p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog) {
-    let r0 = p.known_to(layout, known, len, Rdx);
-    let clamped = then(r0, Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rdx, R9, Succ(names));
-    let r1 = then(clamped, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))]));
-    let r2 = r1.known_to(layout, known, fd, Rdi);
-    let asked = then(r2, Syscall);
-    let copied = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names))))).copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
-    p.within_trans(r0, p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog, p.within_known_to(layout, known, len, Rdx),
-        r0.within_trans(clamped, p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog, Exists(5, refl),
-            clamped.within_trans(r1, p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog, clamped.within_then(0, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))])),
-                r1.within_trans(r2, p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog, r1.within_known_to(layout, known, fd, Rdi),
-                    r2.within_trans(copied, p.reads(layout, known, out, fd, buf, len, result, capacity, names).prog, Exists(12, refl),
-                        copied.within_word_from(layout, out, result, Rax))))))
+theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result, capacity, names: Nat):
+    p.Within(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names).prog) {
+    let whole = p.reads(layout, known, out, fd, buf, at, len, result, capacity, names).prog;
+    let r0 = p.known_to(layout, known, at, R8);
+    let start = then(r0, Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
+    let r1 = then(start, Block([SubRR(R9, R8)]));
+    let r2 = r1.known_to(layout, known, len, Rdx);
+    let room = r2.clamp(Rdx, R9, Succ(Succ(names)));
+    let r3 = then(room, Block([MovRR(R9, R8), MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))]));
+    let r4 = r3.known_to(layout, known, fd, Rdi);
+    let asked = then(r4, Syscall);
+    let done = Succ(Succ(Succ(Succ(names))));
+    let copied = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, done)).copy_in(layout, buf, Succ(Succ(Succ(names))), done).label(done);
+    p.within_trans(r0, whole, p.within_known_to(layout, known, at, R8),
+        r0.within_trans(r1, whole, Exists(6, refl),
+            r1.within_trans(r2, whole, r1.within_known_to(layout, known, len, Rdx),
+                r2.within_trans(r3, whole, Exists(5, refl),
+                    r3.within_trans(r4, whole, r3.within_known_to(layout, known, fd, Rdi),
+                        r4.within_trans(copied, whole, Exists(12, refl), copied.within_word_from(layout, out, result, Rax)))))))
 }
 
 theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result, capacity, names: Nat):
@@ -172,12 +177,12 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_extends(layout, p, out, names, c, emitted),
         },
         Invoke(shape) => λ p out known names c => match shape {
-            Reads(fd, buf, len, result) => match layout.words_fit([fd, len, result]) {
+            Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
                 False => λ none => absurd(none),
                 True => match layout.capacities.nth(buf) {
                     None => λ none => absurd(none),
-                    Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, known, out, fd, buf, len, result, capacity, names), c, same),
-                        λ x _ => p.Within(x.prog), p.within_reads(layout, known, out, fd, buf, len, result, capacity, names)),
+                    Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names), c, same),
+                        λ x _ => p.Within(x.prog), p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
                 },
             },
             Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
@@ -328,7 +333,7 @@ fn Target::RunsK(self t: Target, s: Stmt, known: List<Fact>, call: Writers(), pe
 // Nothing known: what is live before a statement is what `live_in` says.
 theorem CallShape::live_head_nil(self shape: CallShape, homes: Homes, out: List<Nat>): Invoke(shape).live_head(homes, Nil, out) = Invoke(shape).live_in(homes, out) {
     match shape {
-        Reads(_, _, _, _) => refl,
+        Reads(_, _, _, _, _) => refl,
         Writes(_, _, _, _, _) => refl,
         Opens(_, _, _) => refl,
         Closes(_, _) => refl,
@@ -670,23 +675,26 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
             Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
         },
         Invoke(shape) => λ p out known names c => match shape {
-            Reads(fd, buf, len, result) => (match layout.words_fit([fd, len, result]) as λ b => layout.words_fit([fd, len, result]) = b → (match b {
+            Reads(fd, buf, at, len, result) => (match layout.words_fit([fd, at, len, result]) as λ b => layout.words_fit([fd, at, len, result]) = b → (match b {
                     False => None,
-                    True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.reads(layout, known, out, fd, buf, len, result, capacity, names)) },
-                }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, len, result)), known, call, perform, out, p, c.prog) {
+                    True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names)) },
+                }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, at, len, result)), known, call, perform, out, p, c.prog) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(len) && (layout.word_fits(result) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok.right);
-                    let ok3 = Bool::is_true_and(layout.word_fits(result), True, ok2.right);
+                    let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(at) && (layout.word_fits(len) && (layout.word_fits(result) && True)),
+                        j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(layout.word_fits(at), layout.word_fits(len) && (layout.word_fits(result) && True), ok.right);
+                    let ok3 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok2.right);
+                    let ok4 = Bool::is_true_and(layout.word_fits(result), True, ok3.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
-                        Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, known, out, fd, buf, len, result, capacity, names), c, same),
-                            λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, len, result)), known, call, perform, out, p, x.prog),
-                            λ within apart n env k knows exits next => t.goes_reads(out, env, p, known, knows, fd, buf, len, result, capacity, names,
-                                layout.word_inside(fd, ok.left), layout.word_inside(len, ok2.left), layout.word_inside(result, ok3.left), found, apart, within,
-                                λ a => k(Onward(Reads(fd, buf, len, result).answer(env, a))),
-                                λ a answers => next(Reads(fd, buf, len, result).answer(env, a)))),
+                        Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names), c, same),
+                            λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, at, len, result)), known, call, perform, out, p, x.prog),
+                            λ within apart n env k knows exits next => t.goes_reads(out, env, p, known, knows, fd, buf, at, len, result, capacity, names,
+                                layout.word_inside(fd, ok.left), layout.word_inside(at, ok2.left), layout.word_inside(len, ok3.left),
+                                layout.word_inside(result, ok4.left), found, apart, within,
+                                λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
+                                λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))),
                     })
                 },
             })(refl),

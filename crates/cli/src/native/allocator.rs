@@ -140,9 +140,9 @@ impl Reader<'_> {
             0 => Stmt::Leaf(self.body()?),
             1 => {
                 let tag = self.next()?;
-                let f = self.take(match tag { 0 => 4, 1 => 5, 2 => 3, 3 => 2, 4 => 4, 5 => 3, _ => return None })?;
+                let f = self.take(match tag { 0 => 5, 1 => 5, 2 => 3, 3 => 2, 4 => 4, 5 => 3, _ => return None })?;
                 let (reads, result) = match tag {
-                    0 => (vec![f[0], f[2]], f[3]),
+                    0 => (vec![f[0], f[2], f[3]], f[4]),
                     1 => (vec![f[0], f[2], f[3]], f[4]),
                     2 => (vec![f[1]], f[2]),
                     3 => (vec![f[0]], f[1]),

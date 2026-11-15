@@ -18,7 +18,8 @@ fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, P
 
 // Words: 0 stdin, 1 stdout, 2 the buffer's capacity, 3 what a read
 // returned, 4 how much of it is sent, 5 how much is left, 6 what a write
-// returned, 10 and 11 the statuses 1 and 0, 13 the next sent count, 16 zero.
+// returned, 10 and 11 the statuses 1 and 0, 13 the next sent count, 16 zero
+// (where each read lands).
 // Bits: 7 the read failed, 8 the input ended, 12 the write failed, 14 write
 // again, 15 read again, 17 nothing left, 18 stop writing, 19 one.
 fn cat_setup(capacity: Nat) → Stmt {
@@ -36,7 +37,7 @@ fn cat_write() → Stmt {
 
 // One read, and everything it read written.
 fn cat_pass() → Stmt {
-    Then(Invoke(Reads(0, 0, 2, 3)),
+    Then(Invoke(Reads(0, 0, 16, 2, 3)),
         Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
             Branch(7, Exit(10),
                 Branch(8, Exit(11),

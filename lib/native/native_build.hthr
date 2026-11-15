@@ -116,10 +116,10 @@ inductive Act {
     While(condition: Val, body: Act),
     // The body, then again while the condition holds.
     DoWhile(body: Act, condition: Val),
-    // A read of at most `len` bytes (and the buffer's capacity) into the
-    // buffer's start, and a write of `len` bytes from `from`; the count or
-    // the negated errno into `result`.
-    ReadTo(fd: Val, buf: Buf, len: Val, result: Var),
+    // A read of at most `len` bytes (and what the buffer holds past `at`)
+    // into the buffer from `at`, and a write of `len` bytes from `from`; the
+    // count or the negated errno into `result`.
+    ReadTo(fd: Val, buf: Buf, at: Val, len: Val, result: Var),
     WriteFrom(fd: Val, buf: Buf, from: Val, len: Val, result: Var),
     // openat(AT_FDCWD, path, O_RDONLY) of the path in the buffer's first
     // `len` bytes (and its capacity), up to a NUL; the descriptor or the
@@ -241,7 +241,8 @@ fn when(condition: Val, yes: Act) → Act { When(condition, Act::pair(yes, Skip)
 fn branch(condition: Val, yes, no: Act) → Act { When(condition, Act::pair(yes, no)) }
 fn loop_while(condition: Val, body: Act) → Act { While(condition, body) }
 fn do_while(body: Act, condition: Val) → Act { DoWhile(body, condition) }
-fn read(fd: Val, buf: Buf, len: Val, result: Var) → Act { ReadTo(fd, buf, len, result) }
+fn read(fd: Val, buf: Buf, len: Val, result: Var) → Act { ReadTo(fd, buf, num(0), len, result) }
+fn read_at(fd: Val, buf: Buf, at, len: Val, result: Var) → Act { ReadTo(fd, buf, at, len, result) }
 fn write(fd: Val, buf: Buf, from, len: Val, result: Var) → Act { WriteFrom(fd, buf, from, len, result) }
 fn open(path: Buf, len: Val, fd: Var) → Act { OpenOf(path, len, fd) }
 fn close(fd: Val, result: Var) → Act { CloseOf(fd, result) }
@@ -299,6 +300,17 @@ fn each_read(fd: Val, buf: Buf, body: Var → Act) → Act {
     local(num(0), λ n => do_while(
         read(fd, buf, buf.size(), n) ++ when(n.get().negative(), exit(num(1))) ++ when(n.get(), body(n)),
         n.get()))
+}
+
+// Reads from `fd` into the buffer until the input ends or the buffer is
+// full, each read landing where the last one ended, `got` counting the bytes
+// read: the whole input in one buffer, as far as it holds. A failed read
+// exits 1.
+fn read_whole(fd: Val, buf: Buf, got: Var) → Act {
+    local(num(0), λ n => do_while(
+        read_at(fd, buf, got.get(), buf.size() - got.get(), n) ++ when(n.get().negative(), exit(num(1)))
+            ++ got.set(got.get() + n.get()),
+        n.get().and_also(got.get().below(buf.size()))))
 }
 
 // The buffer's `len` bytes from `from` written to `fd`, again for what is
@@ -709,10 +721,11 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
             let t = condition.truth().place(next);
             [Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id))]
         },
-        ReadTo(fd, buf, len, result) => {
+        ReadTo(fd, buf, at, len, result) => {
             let f = fd.place(next);
-            let n = len.place(f.next);
-            (f.nodes ++ n.nodes).ops() ++ [Do(Invoke(Reads(f.id, buf.id, n.id, result.id)))]
+            let s = at.place(f.next);
+            let n = len.place(s.next);
+            (f.nodes ++ s.nodes ++ n.nodes).ops() ++ [Do(Invoke(Reads(f.id, buf.id, s.id, n.id, result.id)))]
         },
         WriteFrom(fd, buf, from, len, result) => {
             let f = fd.place(next);

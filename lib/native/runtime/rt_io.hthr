@@ -28,8 +28,8 @@
 // (`ETm`, lowered to `Source` statements), Levy's call-by-push-value.
 //
 // The calls are machine-shaped, as `Source`'s `CallShape`s are: a read
-// names a buffer and lands its bytes in it (`fill`), a write names a span
-// of one, a result is a count or a negated errno in a word. The word-level
+// names a buffer and an offset in it and lands its bytes there
+// (`fill_at`), a write names a span of one, a result is a count or a negated errno in a word. The word-level
 // methods here (`Io::read_into`, …) are what effectful runtime code calls,
 // and `Effect::sem` is defined by them, so a pin unfolds onto the
 // elaborated body node for node, as pure `rt`'s does.
@@ -50,7 +50,7 @@ import rt;
 // Word-level calls: Linux as the machine sees it
 
 // What a read into a buffer returns: the buffer with the bytes landed at
-// its start, and the count, or the errno negated.
+// the offset, and the count, or the errno negated.
 record ReadInto { buf: List<BitVec(8)>, result: BitVec(64) }
 
 // The result word of an answer: a count, or the errno negated
@@ -64,18 +64,18 @@ fn Io::open_word(r: OpenResult) → BitVec(64) {
 fn Io::close_word(r: CloseResult) → BitVec(64) {
     match r { Closed => count_word(0), CloseFailed(e) => errno_word(e) }
 }
-fn Io::landed(buf: List<BitVec(8)>, r: ReadResult) → ReadInto {
+fn Io::landed(buf: List<BitVec(8)>, at: Nat, r: ReadResult) → ReadInto {
     match r {
-        ReadBytes(bytes) => ReadInto(fill(buf, bytes), count_word(bytes.len())),
+        ReadBytes(bytes) => ReadInto(fill_at(buf, at, bytes), count_word(bytes.len())),
         ReadFailed(e) => ReadInto(buf, errno_word(e)),
     }
 }
 
-// `read(fd, buf, max)`: at most `max` bytes, and no more than the buffer
-// holds.
-fn Io::read_into(mut self io: Io, fd: BitVec(64), buf: List<BitVec(8)>, max: BitVec(64)) → ReadInto {
-    let r = io.read(fd, max.toNat().min(buf.len()));
-    Io::landed(buf, r)
+// `read(fd, buf + at, max)`: at most `max` bytes, and no more than the
+// buffer holds past `at`.
+fn Io::read_into(mut self io: Io, fd: BitVec(64), buf: List<BitVec(8)>, at, max: BitVec(64)) → ReadInto {
+    let r = io.read(fd, max.toNat().min(buf.len() - at.toNat()));
+    Io::landed(buf, at.toNat(), r)
 }
 
 // `write(fd, buf + from, len)`.
@@ -99,7 +99,7 @@ fn Io::close_fd(mut self io: Io, fd: BitVec(64)) → BitVec(64) {
 // Effects: the calls `rt` knows, with their operand and result codes
 
 inductive Effect {
-    // fd, buffer, most bytes → the buffer after, the result.
+    // fd, buffer, offset, most bytes → the buffer after, the result.
     Reads(cap: Nat),
     // fd, buffer, from, length → the result.
     Writes(cap: Nat),
@@ -111,7 +111,7 @@ inductive Effect {
 
 fn Effect::params(self e: Effect) → List<Ty> {
     match e {
-        Reads(c) => [Word(64), Bytes(c), Word(64)],
+        Reads(c) => [Word(64), Bytes(c), Word(64), Word(64)],
         Writes(c) => [Word(64), Bytes(c), Word(64), Word(64)],
         Opens(c) => [Bytes(c), Word(64)],
         Closes => [Word(64)],
@@ -126,9 +126,9 @@ fn Effect::results(self e: Effect) → List<Ty> {
 // its answer as the tuple of its result codes.
 fn Effect::sem(self e: Effect, tys: Nat → RecInfo) → Io → Ty::ArrowsTo(tys, e.params(), Mutated<Io, Ty::Flats(e.results())>) {
     match e {
-        Reads(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (max: BitVec(64)) =>
-            Mutated(Io::read_into(io, fd, buf, max).after,
-                Pair(Io::read_into(io, fd, buf, max).value.buf, Pair(Io::read_into(io, fd, buf, max).value.result, trivial))),
+        Reads(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (at: BitVec(64)) (max: BitVec(64)) =>
+            Mutated(Io::read_into(io, fd, buf, at, max).after,
+                Pair(Io::read_into(io, fd, buf, at, max).value.buf, Pair(Io::read_into(io, fd, buf, at, max).value.result, trivial))),
         Writes(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (from: BitVec(64)) (len: BitVec(64)) =>
             Mutated(Io::write_from(io, fd, buf, from, len).after, Pair(Io::write_from(io, fd, buf, from, len).value, trivial)),
         Opens(_) => λ io (path: List<BitVec(8)>) (len: BitVec(64)) =>

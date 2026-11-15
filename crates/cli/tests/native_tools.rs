@@ -1,4 +1,5 @@
-//! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, `echo` and `yes STR` over
+//! `tr a-z A-Z`, `yes`, `head -c 10` (and `head -c 4096` holding its whole
+//! input, read at offsets), `wc -l`, `echo` and `yes STR` over
 //! the command line, `cat FILE…` over open and close, and `wc [-clw]` and
 //! `head -n N` over decimal output and input, and `grep -F PATTERN` over a
 //! procedure (issues/native-compiled-procedures.md), written with the builder (`native_build`),
@@ -286,6 +287,55 @@ fn compiled_head_runs_as_gnu_head() {
         assert_eq!(code, gnu_code, "as GNU's does");
         assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
     }
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `head -c 4096` that reads its whole input into one buffer before writing
+/// any of it, each read landing where the last one ended
+/// (`read_whole`, native_build): GNU's bytes for
+/// inputs shorter than the buffer, as long, longer, much longer than a pipe
+/// holds at once, and for an input that arrives two bytes at a time, so
+/// every read lands past the one before.
+#[test]
+fn compiled_head_holding_its_whole_input_runs_as_gnu_head() {
+    let dir = scratch("head-whole");
+    let binary = dir.join("head");
+    write_tool("head_whole_tool", &binary);
+
+    let mut random = Bytes::seeded("head-whole");
+    let short = random.take(4095, |r| r as u8);
+    let exact = random.take(4096, |r| r as u8);
+    let long = random.take(4097, |r| r as u8);
+    let huge = random.take(200000, |r| r as u8);
+    for input in [&b""[..], b"abc", &short, &exact, &long, &huge] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("head").args(["-c", "4096"]), input, Stdio::piped());
+        assert_eq!(code, Some(0), "head exits 0");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // Reads of two bytes each, with a pause: every one lands past the last.
+    let dripped: Vec<u8> = (0..40u8).map(|i| b'a' + i % 26).collect();
+    let mut child = Command::new(&binary).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let sent = dripped.clone();
+    let writer = std::thread::spawn(move || {
+        for pair in sent.chunks(2) {
+            let _ = stdin.write_all(pair);
+            let _ = stdin.flush();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert_eq!((out.status.code(), &out.stdout[..]), (Some(0), &dripped[..]), "reads landing one after another");
 
     if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
         let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full));
