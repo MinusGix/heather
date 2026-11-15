@@ -102,7 +102,7 @@ fn conv_relates_term_to_its_whnf() {
 /// looking. With the check in place it fails on the first run, seed 102.
 ///
 /// **The gap this found is closed** as of route (a)
-/// (`docs/unit-empty-level-indexing.md`): `Vec^l(T;0) ⇝ Unit^l` now carries
+/// (`docs/kernel/unit-empty-level-indexing.md`): `Vec^l(T;0) ⇝ Unit^l` now carries
 /// its level, so the narrow skip that used to sit here — only this reduct,
 /// only `LevelMismatch` — is gone and the law runs unconditionally.
 #[test]

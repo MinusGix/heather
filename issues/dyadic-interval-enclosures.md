@@ -8,7 +8,7 @@ updated: 2026-10-26
 ---
 
 CoqInterval proves inequalities about real expressions, integrals included,
-by evaluating enclosures (`docs/coq-hardware-floats-survey.md` §6.1). Its
+by evaluating enclosures (`docs/surveys/coq-hardware-floats-survey.md` §6.1). Its
 original arithmetic matches Heather's `Dyadic` exactly: an integer mantissa
 and exponent, an unbounded exponent, no infinities, and every operation at a
 requested precision with exact directed rounding. Heather has the pieces
@@ -47,7 +47,7 @@ design so that whichever of the customers above arrives first starts from it.
 ## Log
 
 - 2026-10-26: LANDED: `lib/std/num/float/interval.hthr` (design
-  `docs/floating-point-design.md` §16). Intervals of two dyadics or `Whole`,
+  `docs/library/floating-point-design.md` §16). Intervals of two dyadics or `Whole`,
   containment at `Rat` with the vacuous reading of crossed bounds; `neg`,
   `add`, `sub`, `mul`, `recip` (to `Whole` around zero), constants and powers
   by squaring, each with its containment theorem; rounding at `p` bits is a

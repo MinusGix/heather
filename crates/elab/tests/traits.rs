@@ -1,5 +1,5 @@
 //! Traits, layer 1: the `class` and `instance` declaration forms
-//! (`docs/traits-layer1-design.md`, `issues/traits.md`).
+//! (`docs/language/classes/traits-layer1-design.md`, `issues/traits.md`).
 //!
 //! Everything here is a *generated term* test in the sense of
 //! `docs/testing-generated-terms.md`, because every artifact is synthesized:
@@ -43,7 +43,7 @@ fn bad(src: &str) -> String {
     }
 }
 
-/// The prelude-shaped corpus named in `docs/traits-design.md` §13: a class
+/// The prelude-shaped corpus named in `docs/language/classes/traits-design.md` §13: a class
 /// over container-ish carriers, with a **dependent** field (a law mentioning
 /// earlier fields) so the Σ spine's dependency is exercised, not just its
 /// product part.
@@ -552,7 +552,7 @@ instance<A> C<Box<A>> requires pa: P<A> {
 
 #[test]
 fn classes_over_the_prelude_carriers() {
-    // `docs/traits-design.md` §13's first acceptance item: ordinary classes
+    // `docs/language/classes/traits-design.md` §13's first acceptance item: ordinary classes
     // over Option/Result/List-shaped types, each used through an **open** type
     // parameter so nothing is hidden by a closed carrier
     // (docs/testing-generated-terms.md).

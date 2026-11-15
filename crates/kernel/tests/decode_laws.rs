@@ -5,7 +5,7 @@
 //!
 //! The law the elaborator's emission sites lean on
 //! (`crates/elab/src/inductive.rs`'s `decode_deep`,
-//! docs/annotation-component-respell-design.md §2.4): pushing the `El` decode
+//! docs/elaborator/annotation-component-respell-design.md §2.4): pushing the `El` decode
 //! rules of `reduce::step_type` through every type component of a type
 //! commutes with local substitution,
 //!

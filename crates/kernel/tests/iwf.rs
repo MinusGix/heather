@@ -1,5 +1,5 @@
 //! `IWf`, `sup_i` and `elim_IWf`: step 3 of the `IWf` landing
-//! (`docs/iwf-former-design.md` §1.2, §2, §4, §5, §13; `issues/iwf-former.md`).
+//! (`docs/kernel/iwf-former-design.md` §1.2, §2, §4, §5, §13; `issues/iwf-former.md`).
 //!
 //! `IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` is `Wf` with an index: the
 //! constructor `sup_i(a; cs)` is at its output index `o[a/x]`, its `k`th child

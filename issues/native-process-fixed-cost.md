@@ -62,7 +62,7 @@ those cases.
     statement was re-checked on every load: in the warm native world, 2916
     unsealed and 731 sealed statements, all of the replay's evaluator steps.
     Statement verdicts now cover them (`KernelGate::admits_statement`,
-    `merkle::statement_key`, `docs/cache-v1-design.md` §12). A statement
+    `merkle::statement_key`, `docs/infrastructure/cache-v1-design.md` §12). A statement
     check that opened a sealed proof keeps none.
   - **Most of the merkle walk was the world hashed again.** `write-elf`'s
     forks share the parent's gate, and the gate cleared its prefix of
@@ -110,5 +110,5 @@ those cases.
     verdicts only a replay records. Recording a statement verdict when the
     building process lands a theorem would remove it; that touches what the
     cache vouches for, so it is its own round.
-- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Retagged nh-effects: [[effects-uniqueness-surface]] rewrites the tools, which must check under the suite's rail.
-- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/cache-v1-design.md`); [[parallel-checking-and-caching]] (`docs/cache-v1-design.md`).
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/native/compiler-milestones-proposal.md §8). Retagged nh-effects: [[effects-uniqueness-surface]] rewrites the tools, which must check under the suite's rail.
+- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/infrastructure/cache-v1-design.md`); [[parallel-checking-and-caching]] (`docs/infrastructure/cache-v1-design.md`).

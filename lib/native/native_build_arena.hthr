@@ -1,6 +1,6 @@
 // A bump arena for builder tools: cells allocated bottom up from one
 // buffer in the data segment, a word holding how much of it is used, and
-// running out a defined exit (docs/native-heap-arena-design.md §2, §3;
+// running out a defined exit (docs/native/native-heap-arena-design.md §2, §3;
 // issues/native-heap-arena.md).
 //
 // The arena is an ordinary `Source` buffer, so nothing here is new to the
@@ -40,7 +40,7 @@ import nat;
 // A number below 2^24 kept as its three bytes, least significant first.
 // No word holds the number beside them: every word a loop updates stays
 // live across the loop, and what is live is what `write-elf`'s certificate
-// pays for (docs/native-heap-arena-design.md §3.1), so where the number is
+// pays for (docs/native/native-heap-arena-design.md §3.1), so where the number is
 // wanted as a word the tool keeps it from what it knows (the top).
 record Name { b0: Var, b1: Var, b2: Var }
 

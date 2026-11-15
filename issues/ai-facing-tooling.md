@@ -107,7 +107,7 @@ idempotence permits omitting a duplicate-removal pass before a compatible fold;
 otherwise a certified duplicate-free enumeration enables a different fold.
 Preserve all affected consumers' observations. The compiler-side owner retains
 responsibility for whether a semantically valid optimization is profitable.
-See `docs/finite-set-client-design.md` §6 for candidate examples.
+See `docs/showcase/finite-set-client-design.md` §6 for candidate examples.
 
 ## Log
 
@@ -128,6 +128,6 @@ See `docs/finite-set-client-design.md` §6 for candidate examples.
 [[generated-proof-cost-diagnostics]] owns bounded declaration/conversion cost
 diagnostics motivated by the x86 certificate round. This issue owns the shared
 structured-output conventions.
-- 2026-10-23: Arend's answer to the same premise is a skills pack for agents (formalize, prove, quirks, error diagnosis); Heather's is [[agent-skills-pack]] (docs/arend-survey.md §6).
+- 2026-10-23: Arend's answer to the same premise is a skills pack for agents (formalize, prove, quirks, error diagnosis); Heather's is [[agent-skills-pack]] (docs/surveys/arend-survey.md §6).
 - 2026-10-27: Related, filed 2026-10-27: [[lemma-search]] (heather search, exact?, apply?) returns its candidates as data in this form.
-- 2026-11-02: grind's failure report is the first instance (docs/grind-design.md §4): each side's class, every class with its members, the facts read and not, and the equation that would close it, as Note data; see [[grind-port]].
+- 2026-11-02: grind's failure report is the first instance (docs/tactics/grind-design.md §4): each side's class, every class with its members, the facts read and not, and the equation that would close it, as Note data; see [[grind-port]].

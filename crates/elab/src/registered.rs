@@ -1,4 +1,4 @@
-//! Checked names and registered values (docs/registered-values-design.md).
+//! Checked names and registered values (docs/metaprogramming/registered-values-design.md).
 //!
 //! Three surface forms let a tactic's tables live beside the lemmas they
 //! name, where every name is checked, instead of as strings in the tactic:
@@ -40,7 +40,7 @@ impl Elaborator {
         if !d.value {
             return err(
                 "`register` marks a `def`: a registered value is a table a reader collects \
-                 with `registered(T)` (docs/registered-values-design.md)",
+                 with `registered(T)` (docs/metaprogramming/registered-values-design.md)",
                 d.span,
             );
         }

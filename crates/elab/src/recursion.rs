@@ -491,7 +491,7 @@ pub(crate) enum RecursionPlan {
     ByMeasure { dec: usize, read: Span, name: String, from: usize },
     /// A recursive `match` on `dec` is somewhere the structural lowering
     /// cannot put the recursion, and the measure lowering has no unfolding
-    /// equation for (docs/decreases-unfolding-design.md §3). Refused with
+    /// equation for (docs/language/recursion/decreases-unfolding-design.md §3). Refused with
     /// `msg`, but only at a self-call the elaborator actually lowers under a
     /// guard on `dec`: the syntax cannot tell `contents.size()` on another
     /// type's member from a self-call.
@@ -901,7 +901,7 @@ pub(crate) fn elab_self_call(
                     "recursive call to `{name}` under a `match` on the codata `{codata}`: codata \
                      has no structural order, so a function out of it cannot recurse on it — \
                      recurse on a `Nat` fuel parameter beside it instead \
-                     (docs/codata-elaborator-design.md §4)"
+                     (docs/inductives/codata-elaborator-design.md §4)"
                 ),
                 span,
             );
@@ -1120,7 +1120,7 @@ pub(crate) fn elab_self_call(
                     }
                 }
                 // Tier 2: the subtrees are the plain child and `k` applied
-                // to anything (docs/inductive-tier2-w-lowering.md §8).
+                // to anything (docs/inductives/inductive-tier2-w-lowering.md §8).
                 GuardKind::Wf { fn_children, .. } if !fn_children.is_empty() => (
                     "a recursive field, or the function field applied to an argument, \
                      bound by"
@@ -1128,7 +1128,7 @@ pub(crate) fn elab_self_call(
                     ". Through a function field `k` every `k(e)` is a subtree, \
                      whatever `e` is; a value built *around* one is not, so it has no \
                      induction hypothesis to elaborate to \
-                     (docs/inductive-tier2-w-lowering.md §8)"
+                     (docs/inductives/inductive-tier2-w-lowering.md §8)"
                         .to_string(),
                 ),
                 GuardKind::Wf { cov, shape, .. } => match cov {
@@ -1149,7 +1149,7 @@ pub(crate) fn elab_self_call(
                                  even when it is genuinely smaller. The chain reaches \
                                  one further at each arm that scrutinizes its own \
                                  recursive field again, and no further than that \
-                                 (docs/list-course-of-values-design.md §4)",
+                                 (docs/language/recursion/list-course-of-values-design.md §4)",
                                 window.comps.len()
                             ),
                         )
@@ -1166,14 +1166,14 @@ pub(crate) fn elab_self_call(
                                  only one that a nested `match` on the recursive field \
                                  binds: the recursion then carries a window of earlier \
                                  values down the chain \
-                                 (docs/list-course-of-values-design.md §4). This argument \
+                                 (docs/language/recursion/list-course-of-values-design.md §4). This argument \
                                  is neither"
                                 .to_string(),
                             WfShape::Branching => format!(
                                 "{} A window of earlier values exists for \
                                  **chain-shaped** declarations — every constructor with at \
                                  most one recursive field and no container \
-                                 (docs/list-course-of-values-design.md §1) — and this one \
+                                 (docs/language/recursion/list-course-of-values-design.md §1) — and this one \
                                  is not: a branching constructor has no chain to walk, only \
                                  a tree of children, and a container field is a group of \
                                  children that a self-call maps over rather than descends \
@@ -1186,7 +1186,7 @@ pub(crate) fn elab_self_call(
                             WfShape::NoWindowRoute => format!(
                                 "{} A window of earlier values is built only for a \
                                  chain-shaped declaration without indices or function \
-                                 fields (docs/list-course-of-values-design.md §1), and this \
+                                 fields (docs/language/recursion/list-course-of-values-design.md §1), and this \
                                  one is lowered by a route that carries none",
                                 ". A deeper subterm is refused too, even though it is genuinely \
                          smaller: the induction hypothesis this `match` binds is the \
@@ -1234,7 +1234,7 @@ pub(crate) fn elab_self_call(
                      generalized into the motive — so that a recursive call may vary it \
                      — only when the `match` is checked against a known result type \
                      and the varying call is visible in its arms \
-                     (docs/ih-generalization-design.md); here it was not",
+                     (docs/tactics/ih-generalization-design.md); here it was not",
                     self_ref.params[position].0
                 ),
                 argument.span,
@@ -1388,7 +1388,7 @@ pub(crate) fn elab_self_call(
 }
 
 /// A self-call's decreasing argument read as `k e`, for `k` one of an arm's
-/// recursive function fields (docs/inductive-tier2-w-lowering.md §8): the
+/// recursive function fields (docs/inductives/inductive-tier2-w-lowering.md §8): the
 /// field it goes through and `e`. By **term**, never by name, like every
 /// other descent: the application's head has to be the field binder's own
 /// term, so a shadowing name cannot fake it.
@@ -1440,7 +1440,7 @@ impl SelfRef {
             name: decl.name.rsplit("::").next().unwrap_or(&decl.name).to_string(),
             written_name: decl.name.clone(),
             // Type parameters participate in guarded-call bookkeeping as
-            // implicit parameters (docs/surface-polymorphism.md §6.1).
+            // implicit parameters (docs/language/surface-polymorphism.md §6.1).
             params: decl
                 .tyvars
                 .iter()
@@ -1534,7 +1534,7 @@ pub(crate) struct Guard {
     pub(crate) dec: usize,
     pub(crate) kind: GuardKind,
     /// An indexed `match`'s index parameter, *rebound* by the arm
-    /// (docs/inductive-indexed-lowering.md §6): a self-call must pass the
+    /// (docs/inductives/inductive-indexed-lowering.md §6): a self-call must pass the
     /// arm's pattern variable there, not the original parameter.
     ///
     /// `(parameter position, one index term per descendant)` — parallel to
@@ -1554,7 +1554,7 @@ pub(crate) struct Guard {
 /// The two arm shapes a self-call can sit in. They differ in how many
 /// descendants an arm has — one for `Nat`, `mᵢ` for a branching constructor —
 /// and correspondingly in whether the ih is a variable or a function of the
-/// index (`docs/inductive-tier1-wf-lowering.md` §6.4).
+/// index (`docs/inductives/inductive-tier1-wf-lowering.md` §6.4).
 pub(crate) enum GuardKind {
     /// A `Succ(k)` arm. Positions are *absolute* (indices into `cx.names`,
     /// outermost first) so they stay valid as inner binders are pushed.
@@ -1568,7 +1568,7 @@ pub(crate) enum GuardKind {
         /// One entry for the ordinary one-step recursion; the chain grows only
         /// where the arm's own body scrutinizes the predecessor again, and
         /// only by being convoyed through that `match`
-        /// (docs/course-of-values-recursion-design.md §5).
+        /// (docs/language/recursion/course-of-values-recursion-design.md §5).
         preds: Vec<usize>,
         /// The window of past values in scope: the ih binder itself for the
         /// ordinary recursion, a Σ-tuple of the last `comps.len()` values
@@ -1605,7 +1605,7 @@ pub(crate) enum GuardKind {
         depth: usize,
         children: Vec<(Rc<Term>, Rc<Term>, Type, Level)>,
         /// The course-of-values window, where the recursion carries one
-        /// (`docs/list-course-of-values-design.md` §3). `None` for every
+        /// (`docs/language/recursion/list-course-of-values-design.md` §3). `None` for every
         /// ordinary one-step recursion — which is every `Wf` recursion
         /// written before this existed, and which therefore still emits the
         /// term it always did.
@@ -1622,13 +1622,13 @@ pub(crate) enum GuardKind {
         /// is built for.
         shape: WfShape,
         /// The arm's *container* field, if it has one
-        /// (`docs/container-fields.md` §4.2). A container is a group of
+        /// (`docs/language/container-fields.md` §4.2). A container is a group of
         /// children rather than one, so a self-call over it maps rather than
         /// descends — and the thing it maps to is the ih *tabulated* over the
         /// container's index range.
         container: Option<ContainerIh>,
         /// The arm's recursive **function** fields — a tier-2 arm's `k : A ->
-        /// D` (docs/inductive-tier2-w-lowering.md §8). Empty for every `Wf`
+        /// D` (docs/inductives/inductive-tier2-w-lowering.md §8). Empty for every `Wf`
         /// arm. A self-call descends through one at *any* argument: its
         /// decreasing argument is `k e`, matched by the application's head.
         fn_children: Vec<FnChildIh>,
@@ -1636,7 +1636,7 @@ pub(crate) enum GuardKind {
 }
 
 /// What a self-call through a recursive function field needs
-/// (docs/inductive-tier2-w-lowering.md §8), scoped like the rest of
+/// (docs/inductives/inductive-tier2-w-lowering.md §8), scoped like the rest of
 /// [`GuardKind::Wf`], at `depth` binders.
 pub(crate) struct FnChildIh {
     /// The field binder's own term, `λy. ⟨f' y, c y⟩`: a call's decreasing
@@ -1647,7 +1647,7 @@ pub(crate) struct FnChildIh {
     /// Its type, `Π(y : A). M[k y]`, kept whole so that a call site shifts it
     /// like any other type and reads the codomain under its own binder.
     pub(crate) ih_ty: Type,
-    /// In an indexed family (docs/iwf-infinitary-design.md §8), the child's
+    /// In an indexed family (docs/kernel/iwf-infinitary-design.md §8), the child's
     /// written index as a term under the field's one binder `y`, scoped like
     /// the rest at `depth + 1`: what a self-call through `k e` must pass at
     /// [`Guard::rebind`]'s parameter, instantiated at its `e`. `None` on
@@ -1656,7 +1656,7 @@ pub(crate) struct FnChildIh {
 }
 
 /// The window of past values a course-of-values `Wf` arm carries
-/// (`docs/list-course-of-values-design.md` §3), field for field the twin of
+/// (`docs/language/recursion/list-course-of-values-design.md` §3), field for field the twin of
 /// [`GuardKind::Nat`]'s — with `pred` replaced by the recursive-field
 /// projection, and the chain followed by **term** rather than by binder
 /// position, because a `Wf` arm binder is an alias and has no position.
@@ -1666,7 +1666,7 @@ pub(crate) struct FnChildIh {
 /// `gamma` and `tail`, which travel as they were written so that a nested
 /// `match` can reindex them at *its* scrutinee.
 /// Whether a `Wf` recursion's declaration can carry a course-of-values
-/// window (`docs/list-course-of-values-design.md` §1).
+/// window (`docs/language/recursion/list-course-of-values-design.md` §1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WfShape {
     /// Chain-shaped, on the route that builds windows: one is built when the
@@ -1759,11 +1759,11 @@ pub(crate) struct ContainerIh {
     pub(crate) plain: usize,
     /// The motive, *strengthened* — a self-call over a container maps to a
     /// `Vec` of results, which requires a motive independent of the scrutinee
-    /// (`docs/container-fields.md` §4.3). `None` when it depends, in which case
+    /// (`docs/language/container-fields.md` §4.3). `None` when it depends, in which case
     /// [`ContainerIh::eq`] decides whether this is phase 3 or a diagnostic.
     pub(crate) result: Option<Type>,
     /// The motive read as an **equation**, when it is one — phase 3
-    /// (`docs/container-proofs.md` §5). Set only when `result` is `None`: a
+    /// (`docs/language/container-proofs.md` §5). Set only when `result` is `None`: a
     /// dependent motive `Id^l(A; lhs(z); rhs(z))` whose *type* `A` does not
     /// mention `z` still relates the two children vectors pointwise, which is
     /// what `vec::tab_cong` turns into an equation between them.
@@ -1781,7 +1781,7 @@ pub(crate) struct ContainerIh {
 }
 
 /// A dependent motive that is an equation, split into its two endpoints
-/// (`docs/container-proofs.md` §5).
+/// (`docs/language/container-proofs.md` §5).
 #[derive(Clone)]
 pub(crate) struct EqSplit {
     /// The level `Id^l` is at, which is `A`'s.

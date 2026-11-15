@@ -1,4 +1,4 @@
-// Probes of recursion at the top on `Nat` (docs/recursion-at-the-top-design.md
+// Probes of recursion at the top on `Nat` (docs/language/recursion/recursion-at-the-top-design.md
 // §3, issues/recursion-below-nat-fallback.md): where compiling the recursion
 // at the `match` would not mean the source (the parameter, or a `let` from a
 // parameter the calls vary, read inside the arm), the body is compiled under

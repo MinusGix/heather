@@ -15,7 +15,7 @@ Build the typing memo's three keys from one sub-struct of the checker's `Env`, s
 
 Ψ is keyed by `bindings` alone. `GlobalCtx::sealed` and `withheld` (`term.rs` ~1836) change what δ does, and the keys are sound only because a `Tc` lives for one gate over one Ψ. That invariant is not stated. The verdict cache in `crates/cache` mixes `withheld` into its key explicitly.
 
-Review: `docs/kernel-implicit-state-review.md` §3.
+Review: `docs/kernel/kernel-implicit-state-review.md` §3.
 
 ## Proposal
 
@@ -26,4 +26,4 @@ Split `Env` into a `Copy` `JudgmentScope { psi_id, gamma_id, gamma_base, univs, 
 [[kernel-checker-mode-enum]], [[kernel-psi-bound-cache]], [[kernel-typing-memo-on-node-identity]].
 
 ## Log
-- 2026-11-09: done, without splitting `Env`: `Ambient` (`psi`, `gamma_base`, `univs`, `layer`, `under_box`) is built only by `Env::ambient`, an exhaustive destructure, and `Scope`/`TyScope`/`SigScope` hold it. The sealed/withheld question is answered in `Ambient`'s doc instead of a `debug_assert!`: `withholding` refreshes Ψ's identity, and a later sealed proof only adds δ-steps (`docs/kernel-implicit-state-review.md` §3).
+- 2026-11-09: done, without splitting `Env`: `Ambient` (`psi`, `gamma_base`, `univs`, `layer`, `under_box`) is built only by `Env::ambient`, an exhaustive destructure, and `Scope`/`TyScope`/`SigScope` hold it. The sealed/withheld question is answered in `Ambient`'s doc instead of a `debug_assert!`: `withholding` refreshes Ψ's identity, and a later sealed proof only adds δ-steps (`docs/kernel/kernel-implicit-state-review.md` §3).

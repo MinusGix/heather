@@ -1,5 +1,5 @@
 // Recursion with no fuel: a partial function as a coinductive computation
-// (docs/partial-functions-design.md; issue partial-functions-coinductive).
+// (docs/language/partial-functions-design.md; issue partial-functions-coinductive).
 //
 // A recursive function is a body whose calls to itself are events: the
 // command is the argument, the answer the result (`D`, as in the finite
@@ -47,7 +47,7 @@ import omega;
 fn Events::calls(A: Type, B: Type) → Events { Events(A, λ _ => B) }
 
 // One call of a function `A → B`, as an event of its body's carrier: what a
-// self-call `f(a)` in a `partial fn` is (docs/partial-functions-design.md
+// self-call `f(a)` in a `partial fn` is (docs/language/partial-functions-design.md
 // §4.2).
 fn CoTree::call<A, B>(E: Events, a: A) → CoTree<B>(Events::sum(Events::calls(A, B), E)) {
     CVis(Inl(a), λ b => CRet(b))
@@ -853,7 +853,7 @@ fn Eutt::mrec_bind<A, R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Res
 }
 
 // Running a pending tree respects `Eutt` (`Eutt::mrec_cong`), into the
-// carrier without the calls (§11.4 of docs/equation-rewrite-design.md).
+// carrier without the calls (§11.4 of docs/tactics/equation-rewrite-design.md).
 evidence theorem Eutt::mrec_respects<R>({D: Events}, {E: Events}, {body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E))}):
     PreservesRelation(Eutt::Rel<R>(Events::sum(D, E)), Eutt::Rel<R>(E), λ t => CoTree::mrec(D, E, body, t))
 {

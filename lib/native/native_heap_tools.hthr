@@ -1,5 +1,5 @@
 // `tac` and `sort`: the first native tools whose data is recursive, a list
-// of the input's lines held in an arena (docs/native-heap-arena-design.md;
+// of the input's lines held in an arena (docs/native/native-heap-arena-design.md;
 // issues/native-heap-arena.md). Written with the builder (`native_build`)
 // over its arena (`native_build_arena`), and lowered to sources
 // `heather write-elf` compiles; `native_compile_correct` is the proof of

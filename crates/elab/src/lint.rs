@@ -57,7 +57,7 @@ pub enum Lint {
     RecursionMeaning,
     /// A decimal literal at a carrier that does not hold its value exactly
     /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
-    /// instance (docs/floating-point-design.md §15).
+    /// instance (docs/library/floating-point-design.md §15).
     InexactLiteral,
     /// What a tactic says about a run that succeeded (`tactic::say`): an
     /// account a reader acts on, such as the lemmas `grind_report` used.

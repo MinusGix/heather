@@ -133,7 +133,7 @@ fn decode(e: &Term) -> Type {
         },
         Term::TmFin { len } => Type::Fin { len: Rc::clone(len) },
         // Unit^l / Empty^l — level-indexed as of
-        // docs/unit-empty-level-indexing.md, so the code's level is the
+        // docs/kernel/unit-empty-level-indexing.md, so the code's level is the
         // decoded type's.
         Term::TmUnit { level } => Type::Unit { level: level.clone() },
         Term::TmEmpty { level } => Type::Empty { level: level.clone() },
@@ -150,7 +150,7 @@ fn decode(e: &Term) -> Type {
             shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
             arity: Rc::clone(arity),
         },
-        // M (docs/kernel-m-codes-design.md §1): every piece decodes under its
+        // M (docs/kernel/kernel-m-codes-design.md §1): every piece decodes under its
         // binders; `next` and the index are terms and ride across.
         Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Type::M {
             sig: Rc::new(MSig {

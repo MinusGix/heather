@@ -59,7 +59,7 @@ theorem sum_distribution<A: Semiring(≈, +, *)>(x: A, ys: List<A>): x ≈ x {
 theorem rat_signs(x, y: Rat): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }
 
 // ---------------------------------------------------------------------------
-// One theorem library (docs/relation-indexed-algebra-design.md): `algebra`'s
+// One theorem library (docs/library/relation-indexed-algebra-design.md): `algebra`'s
 // identity classes are `algebra_rel`'s at `RelId`, so a relational theorem is
 // spent at an identity structure and at an unreduced one alike.
 

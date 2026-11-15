@@ -10,7 +10,7 @@ updated: 2026-10-30
 Minus (2026-10-30): which APIs or tactic automation would make
 `lib/std/num/float/interval.hthr` more elegant, given the repeated
 `le_respects` chains and logic that looks automatable. The analysis, with
-before/after for each shape, is `docs/interval-proof-shapes.md`.
+before/after for each shape, is `docs/library/interval-proof-shapes.md`.
 
 Done in the round: one-sided `≈` steps (`Rat::le_of_same_of_le`,
 `le_of_le_of_same`), `Interval::bnd_has_of` and `round_out_has`, written

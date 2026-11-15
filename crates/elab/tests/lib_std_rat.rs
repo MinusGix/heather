@@ -1,4 +1,4 @@
-//! `lib/std/num/rat.hthr` (`docs/setoid-rationals-round.md`): the refusals
+//! `lib/std/num/rat.hthr` (`docs/showcase/setoid-rationals-round.md`): the refusals
 //! that need the checker. Everything the language can state about rationals
 //! is a theorem: the probes at specific values, the instance and `calc`
 //! checks, and the `¬` theorems for the false claims a reader might expect
@@ -108,7 +108,7 @@ fn rel_cong_checks_its_context() {
 /// for one fails, at a literal zero, at an unknown `x`, and from `¬(x = 0)`,
 /// which at the pair's equality does not say `x` is not ≈ 0 (`Rat(0, 2)`).
 /// `¬(x ≈ 0)` is read, through `Rat::apart_of_nonzero`
-/// (docs/division-design.md).
+/// (docs/library/division-design.md).
 #[test]
 fn an_inverse_needs_apartness() {
     let cases = [

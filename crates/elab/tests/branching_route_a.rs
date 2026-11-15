@@ -1,4 +1,4 @@
-//! Branching-inductives prototype, route A (`docs/branching-inductives-choice.md` §4):
+//! Branching-inductives prototype, route A (`docs/inductives/branching-inductives-choice.md` §4):
 //! `Tree { Leaf, Node(Tree, Tree) }` as a container on the kernel's `W`,
 //! with funext postulated in Ψ where the dependent eliminator needs it.
 //!

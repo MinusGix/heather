@@ -116,7 +116,7 @@ impl MismatchNotes<'_> {
     ///
     /// A diagnostic probe is elaborator-side conversion run for the *message*,
     /// not for the judgement. That is what makes it its own column
-    /// (`docs/instrumentation-design.md` §5) rather than a share of the body
+    /// (`docs/infrastructure/instrumentation-design.md` §5) rather than a share of the body
     /// walk that contains the site — and now that the probe runs only on
     /// rejection, the column reads as what it always meant: on a successful
     /// module it is zero.
@@ -169,7 +169,7 @@ impl MismatchNotes<'_> {
             return Some((MismatchNote::Spelled(msg), *span));
         }
         // A `partial fn`'s call where its result is expected: the function
-        // is named, with the ways out (docs/partial-functions-design.md §4.2).
+        // is named, with the ways out (docs/language/partial-functions-design.md §4.2).
         if let Some(msg) = partial.as_ref().and_then(|f| Partial(self).partial_use_note(cx, f, got, expected)) {
             return Some((MismatchNote::Spelled(msg), *span));
         }

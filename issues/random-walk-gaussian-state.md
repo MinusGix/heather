@@ -11,7 +11,7 @@ updated: 2026-11-10
 Brownian motion at time `t` as the limit of its step program, stated
 without measure theory: the states of the symmetric random walk with step
 `√dt` converge, on every polynomial, to the centred Gaussian state of
-variance `t` (`docs/continuous-time-survey.md` §5.3).
+variance `t` (`docs/surveys/continuous-time-survey.md` §5.3).
 
 This is the headline example of Imada and Hsu (arXiv 2611.12761, Program 1:
 `E[xⁿ] = (n - 1)!!` for even `n` in the limit), restated so that the limit
@@ -32,7 +32,7 @@ Scope:
 Not in scope: that the Gaussian state is integration against a measure,
 Wasserstein or weak convergence, stopping times, reflected or absorbed
 walks. Those need measure theory or the guard question
-(`docs/continuous-time-survey.md` §5.4).
+(`docs/surveys/continuous-time-survey.md` §5.4).
 
 ## What it assumes from elsewhere
 

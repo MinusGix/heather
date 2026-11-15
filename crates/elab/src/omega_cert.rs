@@ -162,7 +162,7 @@ thread_local! {
 /// outer certificate is *checked*, after its reconstruction returned), so one
 /// thread-local accumulator per thread is enough.
 ///
-/// The bracket is the registry's (`docs/instrumentation-design.md` §3), read
+/// The bracket is the registry's (`docs/infrastructure/instrumentation-design.md` §3), read
 /// twice: the registry gets the phase's **exclusive** self time, for the
 /// per-declaration columns of the dump, and the per-invocation accumulator
 /// keeps the **inclusive** elapsed time it always kept, so an `OmegaReport`
@@ -624,7 +624,7 @@ fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
 
 /// An order at `Int` or `Nat` as written, not unfolded: whether it is at
 /// `Nat`, whether it is strict, and its two sides. `nlinarith` multiplies
-/// these (docs/nonlinear-arithmetic-design.md §4.4).
+/// these (docs/tactics/nonlinear-arithmetic-design.md §4.4).
 /// A head β-redex is read through its contractum, as [`push_conjuncts`] does.
 pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool, Rc<Term>, Rc<Term>)> {
     let contracted = crate::spelling::beta_head_ty(ty);
@@ -637,7 +637,7 @@ pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool
 }
 
 /// The two sides of a relation this frontend reflects, as `linarith` at
-/// `Int` and `Nat` reads them (docs/linarith-design.md §8): `<=`, `<` or `=`
+/// `Int` and `Nat` reads them (docs/tactics/linarith-design.md §8): `<=`, `<` or `=`
 /// at either, its negation, or a defined proposition that unfolds to one;
 /// `true` for `Nat`. A head β-redex is read through its contractum, as
 /// [`push_conjuncts`] does.
@@ -1359,7 +1359,7 @@ pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Resu
 }
 
 /// The arithmetic a projection out of a value computes to
-/// (docs/omega-measure-reduction-design.md §10): a field read off a
+/// (docs/tactics/omega-measure-reduction-design.md §10): a field read off a
 /// constructor, or off a `match` on one — what a motive instantiated at
 /// `False` leaves, `(match False { … }).words` — whose bounded weak head is
 /// `Succ(s.words)` or `0`. Kept only on an arithmetic head whose leaves spell,
@@ -1496,7 +1496,7 @@ fn nat_affine_syntax(
 }
 
 /// [`nat_affine_syntax`] with the budget the atom fallback's reduce-and-name
-/// step spends (docs/omega-measure-reduction-design.md §2, §2.1): each
+/// step spends (docs/tactics/omega-measure-reduction-design.md §2, §2.1): each
 /// re-entry on a reduct costs one.
 fn nat_affine_syntax_within(
     elab: &Elaborator,
@@ -1524,7 +1524,7 @@ fn nat_affine_syntax_within(
     }
     // An open successor is `inner + 1`: pattern variables arrive as `Succ(k)`
     // from every `match` on a `Nat`, and a measure obligation is nothing but
-    // those (docs/termination-measures-design.md §3). `nat::Nat::add(k, 1)` reduces
+    // those (docs/language/recursion/termination-measures-design.md §3). `nat::Nat::add(k, 1)` reduces
     // to `Succ(k)`, so a certificate stated over the sum checks at the goal.
     if let Term::Succ(inner) = &**tm {
         let left_nat = nat_term_source(elab, cx, inner)?;
@@ -1753,7 +1753,7 @@ fn nat_affine_syntax_within(
             Err(()) => stopped(format!("`{nat_source}` did not compute within {steps} steps")),
         }
     }
-    // The atom fallback (docs/omega-measure-reduction-design.md §2): before a
+    // The atom fallback (docs/tactics/omega-measure-reduction-design.md §2): before a
     // measure at a constructor pattern becomes an opaque atom, ask whether
     // reduction reaches arithmetic, and name the reduct's leaves by conversion
     // against the original's own spelling.
@@ -1904,7 +1904,7 @@ enum Carrier {
 }
 
 /// Re-entries the atom fallback may spend on a reduct
-/// (docs/omega-measure-reduction-design.md §2.1). Two, so a measure whose
+/// (docs/tactics/omega-measure-reduction-design.md §2.1). Two, so a measure whose
 /// unfolding yields two successors still lands on a named leaf.
 const MEASURE_REDUCTION_DEPTH: u32 = 2;
 
@@ -2092,7 +2092,7 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
 /// `tm` with the argument `outward` applications from the outside replaced.
 fn with_arg_at(tm: &Rc<Term>, outward: usize, new: &Rc<Term>) -> Rc<Term> {
     // The checked spelling carries no annotation that a replaced argument
-    // could leave stale (docs/app-by-head-type-design.md §6.2).
+    // could leave stale (docs/elaborator/app-by-head-type-design.md §6.2).
     if let Term::AppAt { fun, arg } = &**tm {
         let (fun, arg) = if outward == 0 {
             (Rc::clone(fun), Rc::clone(new))
@@ -3355,7 +3355,7 @@ fn int_ctor(value: Z) -> String {
 }
 
 /// A natural constant as source: the numeral it is, at any size
-/// (docs/wide-numerals-design.md). Before numerals were unbounded, a value
+/// (docs/language/wide-numerals-design.md). Before numerals were unbounded, a value
 /// past a `u64` was spelled over its top word one byte at a time.
 pub(crate) fn nat_lit(value: Z) -> String {
     debug_assert!(value >= 0, "a natural constant is nonnegative");

@@ -1,6 +1,6 @@
 // Regular Cauchy reals: the first computational presentation of the real
-// numbers (issues/regular-cauchy-reals.md; docs/regular-cauchy-reals-round.md,
-// docs/creal-dyadic-round.md).
+// numbers (issues/regular-cauchy-reals.md; docs/library/regular-cauchy-reals-round.md,
+// docs/library/creal-dyadic-round.md).
 //
 // A real is a sequence of dyadic rationals with its rate of convergence
 // written in: the n-th term is meant to be within 2^-n of the number, so any
@@ -34,7 +34,7 @@
 // reads further out by the bit width of its factors' canonical bound, and an
 // inverse by that of its argument's gap from zero, each then rounded. The
 // reals are complete: a regular sequence of reals converges to its diagonal,
-// a limit given as data (docs/creal-completeness-round.md).
+// a limit given as data (docs/library/creal-completeness-round.md).
 //
 // Calling convention: as at `Rat`, a lemma whose every `CReal` is named by
 // one of its hypotheses takes them implicitly; any other takes the first as
@@ -1394,7 +1394,7 @@ theorem CReal::inv_term_r(self x: CReal, k, start: Nat, gap: x.Away(k, start), n
 }
 
 // `x⁻¹` is this with `h` searched at the call
-// (docs/inverse-power-notation-design.md): a local apartness, a local
+// (docs/library/inverse-power-notation-design.md): a local apartness, a local
 // `0 < x` or `x < 0` (`apart_of_positive`), or a rational apart from zero
 // (`ofRat_apart`).
 fn CReal::inv(self x: CReal, h: x.Apart(0) := infer) → CReal {
@@ -1597,7 +1597,7 @@ theorem CReal::le_of_ofRat_le({p, q: Rat}, h: CReal::ofRat(p) <= CReal::ofRat(q)
     Rat::le_of_not_lt(λ below => h(CReal::ofRat_lt(below)))
 }
 
-// The rationals inside the reals, as a cast edge (docs/casting-design.md
+// The rationals inside the reals, as a cast edge (docs/language/casting-design.md
 // §5.6). A numeral at `CReal` is the rational numeral embedded, so `0` and
 // `1` are preserved by reflexivity.
 fn CReal::ofRat_hom() → OrderedRingHom<Rat, CReal>(CReal::ofRat,
@@ -1833,7 +1833,7 @@ theorem CReal::bishop_of_le({x, y: CReal}, h: x <= y): x.BishopLe(y) {
 }
 
 // ---------------------------------------------------------------------------
-// Signs, and integer powers (docs/inverse-power-notation-design.md), as at
+// Signs, and integer powers (docs/library/inverse-power-notation-design.md), as at
 // `Rat`. The sign predicates are the one-place premises of the apartness
 // rules, so that the search through them shrinks its goal; a local
 // `h: CReal::zero() < x` is one by conversion.
@@ -1915,7 +1915,7 @@ theorem CReal::pow_two(self x: CReal): x ^ 2 ≈ x * x { CReal::mul_respects(x.p
 theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(0) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
 
 // ---------------------------------------------------------------------------
-// Order and multiplication (docs/creal-mul-order-round.md). A product's
+// Order and multiplication (docs/library/creal-mul-order-round.md). A product's
 // term is its factors' product at one index a, at or past its own, within a
 // rounding. A positive product needs no estimate beyond that: past both
 // gaps' starts each factor is at least its gap, the product of the terms
@@ -2300,7 +2300,7 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
 theorem CReal::sq_nonneg(self x: CReal): 0 <= x * x { OrderedRing::sq_nonneg(x) }
 
 // ---------------------------------------------------------------------------
-// Division (docs/division-design.md), as at `Rat`: `a / b` is `a * b⁻¹` at a
+// Division (docs/library/division-design.md), as at `Rat`: `a / b` is `a * b⁻¹` at a
 // searched `b.Apart(0)`, with the same sign rules and fallback. What differs:
 // no rule from `¬(b ≈ 0)`, which at `CReal` does not give apartness (it is
 // not decidable which side the number is on), and `nlinarith` is weaker
@@ -2480,7 +2480,7 @@ evidence theorem CReal::apart_by_nlinarith({x: CReal}, h: 0 < x := nlinarith): x
 evidence theorem CReal::apart_by_nlinarith_neg({x: CReal}, h: x < 0 := nlinarith): x.Apart(0) { Inl(h) }
 
 // ---------------------------------------------------------------------------
-// Completeness (docs/creal-completeness-round.md). A sequence of reals is
+// Completeness (docs/library/creal-completeness-round.md). A sequence of reals is
 // regular when its m-th and n-th reals are within 2^-m + 2^-n, the rate a
 // real's own terms keep, and it converges to y at the same rate. Every
 // regular sequence of reals has a limit, read off the diagonal: the limit's
@@ -2882,7 +2882,7 @@ theorem CReal::lim_terms(self x: CReal): CReal::lim(λ n => CReal::ofRat(x.at(n)
 
 // ---------------------------------------------------------------------------
 // Negation reverses the order, and a factor at most zero reverses a product's
-// (the enclosures' arithmetic at `CReal`, docs/floating-point-design.md
+// (the enclosures' arithmetic at `CReal`, docs/library/floating-point-design.md
 // §16). A sign split of a real is never decided, but a `≤` is a
 // refutation, and inside one the excluded middle on `y < 0` is free:
 // `le_by_sign` takes one proof for each side.

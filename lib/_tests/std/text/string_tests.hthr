@@ -1,5 +1,5 @@
 // Probes of `lib/std/text/char.hthr` and `lib/std/text/string.hthr`
-// (docs/string-char-design.md): every law at a literal and at a neutral
+// (docs/library/string-char-design.md): every law at a literal and at a neutral
 // string, from a checking position, with a `¬` theorem beside it for the
 // wrong value a reader might expect (`docs/testing-generated-terms.md`).
 // Tests, not library: nothing outside lib/_tests imports this module
@@ -13,7 +13,7 @@ theorem round_trip(code: Nat, p: scalar(code)): ofNat(code, p).toNat() = code { 
 // The witness is not part of the value: two proofs of the same code build
 // the same character. At an OPEN code that is `scalar_unique` through
 // `code_injective` rather than a conversion — the witness is relevant
-// (docs/string-char-design.md §5.1) — while at a closed one the two proofs
+// (docs/library/string-char-design.md §5.1) — while at a closed one the two proofs
 // inhabit `Unit` and are definitionally equal.
 theorem witness_irrelevant(code: Nat, p, q: scalar(code)): ofNat(code, p) = ofNat(code, q) {
     code_injective(ofNat(code, p), ofNat(code, q), refl)
@@ -25,7 +25,7 @@ theorem surrogates_excluded(p: scalar(55296)): False { p }
 theorem past_the_end_excluded(p: scalar(1114112)): False { p }
 theorem boundaries(): scalar(55295) ∧ scalar(57344) ∧ scalar(1114111) { decide }
 // The witness is Bool-reflected, so its arithmetic reading is a lemma rather
-// than a projection (docs/string-char-design.md §5.1).
+// than a projection (docs/library/string-char-design.md §5.1).
 theorem sound(code: Nat, p: scalar(code)): code < 0x110000 { scalar_sound(code, p).left }
 theorem sound_surrogate(p: scalar(0xD800)): False {
     scalar_sound(0xD800, p).right(And(Nat::le_refl(0xD800), Nat::lt_succ_self(0xD800)))

@@ -42,7 +42,7 @@ never unfolds `max` (whose definition is a recursion).
 - Cost: `scripts/timings --diff` on omega_tests shows no new atoms or
   certificate growth on goals that mention no `max`/`min`.
 
-Related: [[cutsat-first-class-relations]]; docs/stdlib-math-awkwardness-survey.md §8.
+Related: [[cutsat-first-class-relations]]; docs/surveys/stdlib-math-awkwardness-survey.md §8.
 
 ## Landed (2026-11-09)
 
@@ -55,7 +55,7 @@ other, each branch closed by `omega` again. The lemmas cite
 `Nat::max_eq_l`), never the definitions. A case split rather than the three
 facts with a disjunction: the case's two facts imply all three, and the
 split is the shape §16's subtraction split already takes. Design:
-`docs/omega-measure-reduction-design.md` §20.
+`docs/tactics/omega-measure-reduction-design.md` §20.
 
 Probes in `lib/_tests/std/tactic/omega_tests.hthr`: `max_le_bare` (this
 issue's `m_le`), `le_min_bare`, `max_bounds`, `min_add_max`,

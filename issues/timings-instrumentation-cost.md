@@ -30,7 +30,7 @@ Every `scripts/perf ab`, `scripts/perf snapshot` and `scripts/bench-probes` time
 - `live_opened` and `live_closed` each rewrite the `<stem>.open.tsv` sidecar through `write_open`: a staged file is created and written, then renamed over the sidecar, or the sidecar is removed when nothing is open;
 - `live_closed` appends the row to the live table.
 
-That is two `/proc` reads, two file creations and two renames per declaration. The sidecar exists so that a run killed at the rail names the declaration that was running (`docs/instrumentation-design.md`), which only matters for a declaration that runs long.
+That is two `/proc` reads, two file creations and two renames per declaration. The sidecar exists so that a run killed at the rail names the declaration that was running (`docs/infrastructure/instrumentation-design.md`), which only matters for a declaration that runs long.
 
 ## Options
 

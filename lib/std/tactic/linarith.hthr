@@ -1,6 +1,6 @@
 // `linarith`: linear arithmetic at an ordered field, read at the field's
 // setoid equality (issues/linarith-ordered-fields.md;
-// docs/linarith-design.md).
+// docs/tactics/linarith-design.md).
 //
 // The tactic (crates/elab/src/linarith.rs) reads the goal and the given
 // facts as linear forms over `ring`'s monomials, finds a nonnegative
@@ -152,7 +152,7 @@ theorem lin_same_of_le(a, b: A, hab: a <= b, hba: b <= a): a ≈ b { StrictOrder
 theorem lin_not_lt_of_le(a, b: A, h: b <= a): ¬(a < b) { A.not_lt_of_le(b, a, h) }
 
 // ---------------------------------------------------------------------------
-// `nlinarith` (docs/nonlinear-arithmetic-design.md): products of parts and
+// `nlinarith` (docs/tactics/nonlinear-arithmetic-design.md): products of parts and
 // squares are parts too, and `a <= b` is read back from a refutation of
 // `b < a`, so the goal's negation can be multiplied like a fact.
 

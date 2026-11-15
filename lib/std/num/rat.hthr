@@ -1,10 +1,10 @@
 // Rationals as unreduced fractions: the first serious setoid customer
 // (issues/positive-naturals-and-rationals.md, issues/setoid-core-api.md;
-// docs/setoid-rationals-round.md).
+// docs/showcase/setoid-rationals-round.md).
 //
 // A rational is an integer numerator over a positive `Nat` denominator
 // (`den: Pos<Nat>`: the number `den` and the fact `den_pos: 0 < den`, read
-// through the rule `Rat::den_positive`; docs/positivity-evidence-design.md
+// through the rule `Rat::den_positive`; docs/library/positivity-evidence-design.md
 // §11). Nothing is
 // ever reduced: no gcd, no normal form, no non-structural recursion. The
 // mathematical equality is `Rat::Same`, cross-multiplication, written `≈`;
@@ -13,7 +13,7 @@
 // proofs). Every operation is defined on representatives and
 // then proved to respect `≈`, and every law is stated modulo `≈`, so clients
 // rewrite with `calc { … ≈ … }` and `rel_cong` exactly as over finite sets,
-// or with `rewrite(h, …)` along `≈` itself (docs/equation-rewrite-design.md §9).
+// or with `rewrite(h, …)` along `≈` itself (docs/tactics/equation-rewrite-design.md §9).
 //
 // Calling convention: a lemma whose every `Rat` is named by one of its
 // hypotheses takes those endpoints implicitly (`Rat::le_trans(h1, h2)`); any
@@ -92,7 +92,7 @@ fn Rat::ofInt(n: Int) → Rat { Rat(n, 1) }
 instance Numeral<Rat> { ofNat := λ (n: Nat) => Rat::ofInt(OfNat(n)) }
 
 // ---------------------------------------------------------------------------
-// Literals with a point or an exponent (docs/floating-point-design.md §15):
+// Literals with a point or an exponent (docs/library/floating-point-design.md §15):
 // `1.5` and `1e-3` are `Decimal`s, `0x1.8p3` a `HexFloat`, each its
 // mantissa and exponent as written. At another carrier a literal resolves
 // `DecimalLiteral` or `HexLiteral`, the way a numeral resolves `Numeral`; in
@@ -320,7 +320,7 @@ theorem Rat::ofInt_respects(m, n: Int, h: m = n): Rat::ofInt(m) ≈ Rat::ofInt(n
 // The reciprocal of a fraction, as raw arithmetic: total, with 0 sent to 0,
 // so its law asks for a nonzero argument. This is not the inverse `x⁻¹`,
 // which takes apartness from zero and so has no value at 0 (below, and
-// docs/inverse-power-notation-design.md); it is what that inverse computes,
+// docs/library/inverse-power-notation-design.md); it is what that inverse computes,
 // and what a real's inverse reads term by term at indices whose gap from
 // zero it tracks itself. The numerator's sign moves to the new numerator,
 // its magnitude becomes the new (positive) denominator.
@@ -498,7 +498,7 @@ theorem Rat::le_of_ofInt_le(m, n: Int, h: Rat::ofInt(m) <= Rat::ofInt(n)): m <= 
 
 theorem Rat::lt_of_ofInt_lt(m, n: Int, h: Rat::ofInt(m) < Rat::ofInt(n)): m < n { omega }
 
-// The integers inside the rationals, as a cast edge (docs/casting-design.md
+// The integers inside the rationals, as a cast edge (docs/language/casting-design.md
 // §5.6). `Int`'s `≈` is equality.
 fn Rat::ofInt_hom() → OrderedRingHom<Int, Rat>(Rat::ofInt,
         Int::Same, Int::Lt, Int::Le, Int::add, Int::mul, Int::neg, 0, 1,
@@ -911,7 +911,7 @@ theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
 fn Rat::inv_succ(n: Nat) → Rat { Rat(1, Succ(n)) }
 
 // What `ring` clears `inv_succ(n)` with: it is the reciprocal of `n + 1`
-// (docs/ring-normalization-design.md §9).
+// (docs/tactics/ring-normalization-design.md §9).
 theorem Rat::inv_succ_cancel(n: Nat): Rat::inv_succ(n) * (Rat::ofInt(OfNat(n)) + 1) ≈ 1 {
     let a = Rat::inv_succ(n);
     let b = Rat::ofInt(OfNat(n)) + 1;
@@ -1512,7 +1512,7 @@ theorem Rat::le_of_le_add_inv_succ({a, b: Rat}, close: (k: Nat) → a <= b + Rat
 
 // ---------------------------------------------------------------------------
 // Apartness, the inverse, and integer powers
-// (docs/inverse-power-notation-design.md). The inverse takes apartness from
+// (docs/library/inverse-power-notation-design.md). The inverse takes apartness from
 // zero, as the reals' does, rather than giving 0 a junk value: `x⁻¹` is
 // `x.inv(h)` with `h` searched at the call (`:= infer`), so it costs
 // nothing where a hypothesis is in scope, a rule builds one, or `x` is a
@@ -1546,7 +1546,7 @@ theorem Rat::apart_irrefl(self x: Rat): ¬(x.Apart(x)) {
     }
 }
 
-// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// Closed facts by evaluation (`norm_num`, docs/tactics/numeral-normalisation-design.md):
 // `≈` and the orders as `Bool`s over the cross products, through `Int`'s
 // `same` and `leb`. A verdict computed to `True` proves the fact and one
 // computed to `False` refutes it, so a closed comparison costs evaluating
@@ -2178,7 +2178,7 @@ theorem Rat::le_add_shift({a, q, e, r, f: Rat}, d: a <= q + (e + r), s: e <= f):
 theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f): q - r <= a + f { linarith(d, s) }
 
 // ---------------------------------------------------------------------------
-// Division (docs/division-design.md). `a / b` is `a * b⁻¹` and asks what `b⁻¹`
+// Division (docs/library/division-design.md). `a / b` is `a * b⁻¹` and asks what `b⁻¹`
 // asks, `b.Apart(0)`, searched at the call. There is no junk `a / 0`: the
 // total reciprocal stays `Rat::recip`. What the search reads, cheapest first:
 //
@@ -2406,7 +2406,7 @@ evidence theorem Rat::nonneg_by_linarith({x: Rat}, h: 0 <= x := linarith): x.Non
 
 // The arithmetic fallback, tried after every rule about `Apart`: a sign
 // `nlinarith` proves from the caller's hypotheses. A search rule
-// (docs/facts-on-demand-design.md §3), so a divisor or an inverse that a
+// (docs/native/facts-on-demand-design.md §3), so a divisor or an inverse that a
 // local or a rule answers never runs it.
 evidence theorem Rat::apart_by_nlinarith_neg({x: Rat}, h: x < 0 := nlinarith): x.Apart(0) { Inl(h) }
 evidence theorem Rat::apart_by_nlinarith({x: Rat}, h: 0 < x := nlinarith): x.Apart(0) { Inr(h) }

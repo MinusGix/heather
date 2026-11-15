@@ -23,7 +23,7 @@
 //! against the reference model, with increments as counts and iteration one
 //! composition per step: `lib/kernel_model/kernel_runs.hthr`
 //! (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`;
-//! `docs/kernel-model-design.md` §7). Programs and binary powering against
+//! `docs/kernel/kernel-model-design.md` §7). Programs and binary powering against
 //! that iteration rest on `value/algebra.rs`'s reference test.
 
 use crate::rc::Rc;
@@ -55,7 +55,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// [`Eval::fold_run`] once the step is classified: kept apart so the
     /// classification, which re-enters the machine, stands on a small frame
-    /// (docs/native-depth-budget-design.md §8).
+    /// (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn fold_by_class(
         &mut self,

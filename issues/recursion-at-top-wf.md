@@ -7,7 +7,7 @@ created: 2026-11-07
 updated: 2026-11-07
 ---
 
-Slice 3 of docs/recursion-at-the-top-design.md §4 (Minus chose option A,
+Slice 3 of docs/language/recursion/recursion-at-the-top-design.md §4 (Minus chose option A,
 2026-11-04; started 2026-11-07). Recursion at the top on an explicit
 parameter of a tier-1 `Wf` inductive (recursive, not codata, indexed, `IWf`,
 mutual or infinitary), as the default where the body's first `match` on a

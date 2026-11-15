@@ -1,5 +1,5 @@
 // Probes of the `Compile` class at a function lent a span
-// (lib/native/runtime/runtime.hthr; docs/native-one-compiler-design.md
+// (lib/native/runtime/runtime.hthr; docs/native/native-one-compiler-design.md
 // §2.3, U3c step 3): the instance holds one code, and its agreement is
 // stated at every file, so the code run over a file returns what the
 // function does at that file's span. Two instances are built by hand here,

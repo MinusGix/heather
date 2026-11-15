@@ -8,7 +8,7 @@ updated: 2026-09-26
 
 Comparing two values of a declared inductive cost several times what the
 values contain. Every constructor carries its declaration's nominal tag
-(`docs/inductive-tier0-lowering.md` §3.3), and the tag was the declaration
+(`docs/inductives/inductive-tier0-lowering.md` §3.3), and the tag was the declaration
 index's binary digits as a right-nested Σ of `Unit`s. The tier-0 design
 called it "free in conversion", on the grounds that η never compares it. In
 fact Σ-η projects its way down the nest, so every comparison of two values

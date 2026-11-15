@@ -1,5 +1,5 @@
 // Functions over a buffer they are lent, which the builder's tools call
-// (docs/native-one-compiler-design.md §2.3): `runtime fn`s whose first
+// (docs/native/native-one-compiler-design.md §2.3): `runtime fn`s whose first
 // parameter is a span of bytes, compiled into the tool's file by the
 // function compiler and passed the buffer by the call
 // (`Prog::function_call`). Each is a Heather function, and its program is
@@ -8,12 +8,12 @@
 // stated below from that. `raise_span` stores into the buffer: it is a
 // `runtime fn` over the span it writes, and its program is proved to run
 // to it at every file (`f::runs_over`,
-// docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
+// docs/native/native-one-compiler-design.md §2.6). `copy_span` stores into one
 // span what it reads of another: the span after the written one is lent to
 // read, and the statement is at every file, the span read being the file's
 // next. `List::raise_letters` is `raise_span` as a method of its span, the
 // one export named by a method's path. `copy_window` calls `copy_span` over
-// a window of each of its spans (docs/native-library-exports-design.md
+// a window of each of its spans (docs/native/native-library-exports-design.md
 // §3.1): the loop runs from its own index 0 over two windows and is told
 // nothing of where in the spans they lie.
 // The probes are lib/_tests/native/native_tool_spans_tests.hthr.

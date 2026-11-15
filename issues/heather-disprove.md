@@ -46,7 +46,7 @@ before reporting a refutation. This requires evidence for the premise, not
 only different computed outputs. At this concrete finite Nat example membership
 comparison can be decided or proved directly.
 
-`docs/three-small-transfer-experiences.md` specifies the human rendering and
+`docs/showcase/three-small-transfer-experiences.md` specifies the human rendering and
 the repair suggestion. A stuck generator or bounded search without a witness
 reports its actual status; it does not claim this refutation occurred.
 

@@ -1,5 +1,5 @@
 // The producers of `InBounds`, the fact a dropped bounds check needs
-// (docs/facts-on-demand-design.md; lib/lang/facts/checked_reads.hthr is
+// (docs/native/facts-on-demand-design.md; lib/lang/facts/checked_reads.hthr is
 // the language and the compiler that consumes it).
 //
 // A fact is a proposition with open producers, tried cheapest first when a

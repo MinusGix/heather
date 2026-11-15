@@ -12,7 +12,7 @@ updated: 2026-11-12
 refused: `mix::rt` would read as `rt` in the module `mix`, not as a member
 of the function `mix`". The same holds for `program` in `program.hthr`. The
 round that put the examples through `Compile(f)` renamed the files
-(`word_mix.hthr`, `levels.hthr`, docs/runtime-fn-setups-design.md §16.9)
+(`word_mix.hthr`, `levels.hthr`, docs/native/runtime-fn-setups-design.md §16.9)
 instead.
 
 The check guards a real ambiguity in how `a::b` is read. Any generator

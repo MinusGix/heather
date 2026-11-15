@@ -1,6 +1,6 @@
 //! Reading implicit arguments off an argument type that has to *reduce* first
 //! (issues/motive-application-hides-hypothesis-type.md,
-//! docs/argument-type-reduction-design.md, 2026-08-17).
+//! docs/elaborator/argument-type-reduction-design.md, 2026-08-17).
 //!
 //! An induction principle whose motive is a value parameter — `int_ind(P: Int
 //! -> Type, …)`, and every hand-written principle over a non-recursive
@@ -148,7 +148,7 @@ fn an_open_element_type_reduces_the_same_way() {
 
 // ---------------------------------------------------------------------------
 // Composition with the motive synthesis that landed the same day
-// (docs/goal-motive-synthesis-design.md): a synthesized motive's arm goal is
+// (docs/elaborator/goal-motive-synthesis-design.md): a synthesized motive's arm goal is
 // an applied motive too, so a motive-less `match` inside a value-parameter
 // induction is both mechanisms at once.
 

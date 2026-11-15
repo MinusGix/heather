@@ -17,8 +17,8 @@ j(sym(rsi_value), λ w _ => ReadsFrom(file, page, source0, w), λ i => refl)    
 
 There are about 714 `j(` uses in the library, most of them this shape. The
 match-motive work already abstracts a scrutinee's occurrences from the goal
-(`docs/goal-motive-synthesis-design.md`), and the contextual-rewrite rounds
-do the relational case (`docs/contextual-rewrite-round.md`).
+(`docs/elaborator/goal-motive-synthesis-design.md`), and the contextual-rewrite rounds
+do the relational case (`docs/showcase/contextual-rewrite-round.md`).
 
 Wanted: the `=` case at a checking position. Given `h: a = b` and a goal
 mentioning `b`, abstract `b`'s occurrences to build the motive, and elaborate
@@ -36,7 +36,7 @@ controls as [[relational-rewrite-controls]] defines them.
 ## Log
 
 - 2026-10-21: landed as `rewrite(h₁, …, hₙ, e)` at a checking position
-  (`docs/equation-rewrite-design.md`, `crates/elab/src/rewrite.rs`). Each
+  (`docs/tactics/equation-rewrite-design.md`, `crates/elab/src/rewrite.rs`). Each
   equation rewrites its left side to its right side in the goal as written
   (then one exposed layer), in turn; `sym(h)` reverses; `at := k` /
   `at := [k, …]` selects occurrences of one equation

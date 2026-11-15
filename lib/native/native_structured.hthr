@@ -1,6 +1,6 @@
 // Which structured regions the native compiler takes inside a leaf
 // (issues/native-compile-wider-leaves.md; round 4 of
-// docs/native-real-programs-plan.md).
+// docs/native/native-real-programs-plan.md).
 //
 // A region other than a dataflow leaf compiles as its parts
 // (native_compile's `Prog::region`): a sequence's leaf then the rest, a
@@ -167,7 +167,7 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
             True => when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ b => Some(a.join(b)))),
         },
         // A call over views is a function's to make, not yet a statement's
-        // (docs/native-library-exports-design.md §3.1).
+        // (docs/native/native-library-exports-design.md §3.1).
         Lend(_, _, _, _) => None,
         // A call reads its arguments and leaves a word, whose low bit a
         // conditional may branch on.

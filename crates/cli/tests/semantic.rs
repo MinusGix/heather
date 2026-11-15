@@ -246,7 +246,7 @@ fn edit(tag: &str, before: &str, after: &str, client: &str) -> Pass {
 const ORIGIN: &str = "fn value() -> Nat { 7 }\ninductive Shade { Light, Dark }\nfn shade() -> Shade { Shade::Dark }\n";
 const CLIENT: &str = "import origin;\ntheorem correct(): origin::value() = 7 { refl }\nfn pick(s: origin::Shade) -> Nat { match s { Light => 0, Dark => origin::value() } }\ntheorem picked(): pick(origin::shade()) = 7 { refl }\n";
 
-/// Early cutoff (`docs/module-interface-cutoff-design.md`): a theorem added
+/// Early cutoff (`docs/infrastructure/module-interface-cutoff-design.md`): a theorem added
 /// to a dependency, ahead of everything the client refers to so that every
 /// reference moves, leaves the client's elaboration unobserved. The stale
 /// lane moves its image onto the new world instead of elaborating it.
@@ -397,7 +397,7 @@ const PICKER: &str = "import shades;\nfn pick(s: shades::Shade) -> Nat { match s
 const UNRELATED: &str = "inductive Other { A, B, C }\nfn first() -> Other { Other::A }\n";
 
 /// A module is checked over its import closure alone
-/// (`docs/module-dag-design.md` §2): a session that checked an unrelated
+/// (`docs/infrastructure/module-dag-design.md` §2): a session that checked an unrelated
 /// module, one with an inductive of its own, before it keys and builds it
 /// exactly as a session that did not, so the second replays the first's
 /// images. Before, a module's image was keyed by everything its process had
@@ -483,7 +483,7 @@ const MAG_NAT: &str = "import mag;\ninstance Mag<Nat> { fn op(x: Nat, y: Nat) ->
 const TWICE: &str = "fn twice(x: Nat) -> Nat { combine(x, x) }\ntheorem second(): twice(3) = 3 { refl }\n";
 
 /// What a module sees of the registries is what its closure contributes
-/// (`docs/module-dag-design.md` §2): an instance declared in a module the
+/// (`docs/infrastructure/module-dag-design.md` §2): an instance declared in a module the
 /// client does not import is not found, although the session checked that
 /// module first, and importing it is the fix. Before, every module checked
 /// earlier in the process was visible, imported or not, so whether `twice`
@@ -537,7 +537,7 @@ const TOP: &str = "import left;\nimport right;\ntheorem both(): right::right() =
 
 /// A session told its load (`expect_load`) keeps a module's world only while
 /// a module still to come imports it, and its delta only while one holds it
-/// in its closure (`docs/module-dag-design.md` §8), so a folder of test
+/// in its closure (`docs/infrastructure/module-dag-design.md` §8), so a folder of test
 /// modules does not hold a world per test. A load that leaves an importer
 /// out costs that importer a rebuilt world, never a verdict.
 #[test]
@@ -577,7 +577,7 @@ const OVER_REFUSING: &str = "import refusing;\ntheorem uses(): refusing::good() 
 /// A module refused exactly as its directives say is, to a session that
 /// judges them, a module that checked: it has an image, which replays with
 /// its refusal count, and its dependents are checked over what did check
-/// (`docs/module-dag-design.md` §11).
+/// (`docs/infrastructure/module-dag-design.md` §11).
 #[test]
 fn a_module_refused_as_it_says_replays_for_a_judging_session() {
     let cache = temp("refusing");

@@ -1,5 +1,5 @@
 // `by simp()`: a goal closed by normalising both of its sides with sets of
-// laws (docs/simp-design.md, issues/simp-tactic.md).
+// laws (docs/tactics/simp-design.md, issues/simp-tactic.md).
 //
 // The walk and the proof are the host's (`Simp`, the request `simp_only`
 // is also built on); which laws a goal gets is decided here:
@@ -192,7 +192,7 @@ fn simp(extra: List<Expr> := [], defaults: Bool := True, entries: List<SimpSet> 
 }
 
 // `simp_check(sets)`: the sets' laws, taken together, pass the checks a set
-// is held to (docs/simp-design.md §4), proving `True`. Written as a theorem
+// is held to (docs/tactics/simp-design.md §4), proving `True`. Written as a theorem
 // beside a set, or beside the sets a module means to use together:
 //
 //     theorem list_shape_checked(): True { by simp_check([simp_list_shape]) }

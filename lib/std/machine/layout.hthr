@@ -1,7 +1,7 @@
 // Layout as a value: how many bytes a value takes and what its place is a
 // multiple of, with the operations Rust's `std::alloc::Layout` has and
 // what its documentation says of them as theorems
-// (docs/layout-design.md; issues/sha256-context-type.md is the first
+// (docs/native/layout-design.md; issues/sha256-context-type.md is the first
 // customer). Two layers, each usable without the next:
 //
 // - `Layout`: a size and an alignment. `offset_of` and `extend` put one
@@ -22,7 +22,7 @@
 //
 // Sizes are `Nat`, so nothing here overflows. The same functions over
 // words, for a layout computed by compiled code, are
-// docs/layout-design.md §4.
+// docs/native/layout-design.md §4.
 
 import logic;
 import bool;

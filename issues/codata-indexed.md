@@ -9,15 +9,15 @@ updated: 2026-10-22
 ---
 
 `codata D : (i: I) -> Type { … }` is refused this round
-(`docs/codata-elaborator-design.md` §1). The kernel's `M` is already
+(`docs/inductives/codata-elaborator-design.md` §1). The kernel's `M` is already
 indexed: shapes depend on the index, and children's indices are computed by
 `next`, with nothing stored. The elaborator's indexed lowerings
-(`docs/inductive-indexed-lowering.md`, fording) are inductive-shaped, and
+(`docs/inductives/inductive-indexed-lowering.md`, fording) are inductive-shaped, and
 codata needs its own.
 
 Why it matters: strong bisimilarity is an `M` indexed by a pair of trees,
 with an `Id` of the labels as the shape. eutt is the same with an inductive
-`Peel` in the shape (`docs/kernel-coinduction-design.md` §4). Both are
+`Peel` in the shape (`docs/kernel/kernel-coinduction-design.md` §4). Both are
 needed for the library's laws (milestone `it-coinductive`).
 
 Sketch:
@@ -37,4 +37,4 @@ Sketch:
 
 ## Log
 
-- 2026-10-22: Implemented on branch claude/project-thread-lozmdm (docs/codata-indexed-design.md). The design departs from this issue's sketch: no result annotations, because codata has no η and an equation like `t = C(…)` at a corecursive `t` is uninhabited. Instead the index binders are in scope in the field types and a child writes its own index, which is the kernel's indexed M directly. Constructors are `in` with the out type as carrier; corecursion carries `Σ varying. Id(g; i)` and moves the step with J. Value parameters and an index combine on codata. Acceptance: crates/elab/tests/codata_indexed.rs (bisimilarity refl/sym/trans by corecursion, Nat index with an equation field, dependent telescope, value parameter + index, image round trip).
+- 2026-10-22: Implemented on branch claude/project-thread-lozmdm (docs/inductives/codata-indexed-design.md). The design departs from this issue's sketch: no result annotations, because codata has no η and an equation like `t = C(…)` at a corecursive `t` is uninhabited. Instead the index binders are in scope in the field types and a child writes its own index, which is the kernel's indexed M directly. Constructors are `in` with the out type as carrier; corecursion carries `Σ varying. Id(g; i)` and moves the step with J. Value parameters and an index combine on codata. Acceptance: crates/elab/tests/codata_indexed.rs (bisimilarity refl/sym/trans by corecursion, Nat index with an equation field, dependent telescope, value parameter + index, image round trip).

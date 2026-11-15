@@ -1,5 +1,5 @@
-// Correct rounding of a real number (docs/floating-point-design.md §6,
-// submilestone `float-reals`; docs/creal-transcendental-round.md).
+// Correct rounding of a real number (docs/library/floating-point-design.md §6,
+// submilestone `float-reals`; docs/library/creal-transcendental-round.md).
 //
 // No finite approximation decides which side of a breakpoint a real lies on,
 // so rounding a real is not a function. What is always meaningful is the
@@ -201,7 +201,7 @@ theorem Float::same_of_agree({F: Format}, a, b: Float(F), h: a.agree(b).IsTrue()
 }
 
 // ---------------------------------------------------------------------------
-// The relation over any ordered field (docs/floating-point-design.md §6,
+// The relation over any ordered field (docs/library/floating-point-design.md §6,
 // §18).
 //
 // A point `x` of an ordered field `K` is read through the rationals that a
@@ -780,7 +780,7 @@ theorem Format::off_grid_of_apart(self F: Format, X: CReal, dd: Rat, hdd: 0 < dd
 }
 
 // ---------------------------------------------------------------------------
-// Faithful rounding (docs/floating-point-design.md §5.4, §6, §18.3).
+// Faithful rounding (docs/library/floating-point-design.md §5.4, §6, §18.3).
 //
 // A faithful rounding of `q` is one of its two neighbours: rounded down or
 // rounded up. At a real it always computes, with no breakpoint to clear.

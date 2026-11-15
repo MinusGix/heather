@@ -1,5 +1,5 @@
 //! Acceptance for issues/ih-generalization.md
-//! (docs/ih-generalization-design.md): a structurally recursive `match` whose
+//! (docs/tactics/ih-generalization-design.md): a structurally recursive `match` whose
 //! self-calls *vary* a non-decreasing parameter gets a motive that quantifies
 //! that parameter, computed by the elaborator. Before this round every such
 //! definition was curried by hand (`fn sub(m: Nat) -> Nat -> Nat`) and every
@@ -314,7 +314,7 @@ fn a_written_motive_is_the_manual_route() {
     // A `match` with a *written* motive is the manual route, and a written
     // motive that does not quantify `m` has no ih at `Succ(m)`. The plain
     // lowering refuses the varying call; recursion at the top generalizes
-    // `m` around the whole body (docs/recursion-at-the-top-design.md §5),
+    // `m` around the whole body (docs/language/recursion/recursion-at-the-top-design.md §5),
     // and the written `match` takes its arm inside it.
     ok(r#"
         fn g(n: Nat, m: Nat) -> Nat {

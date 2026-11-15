@@ -6,7 +6,7 @@ use super::ParamMeta;
 use crate::inductive::Inductive;
 use crate::{ElabError, R, err};
 
-/// A defaulted parameter a call left out (docs/named-arguments-design.md §9):
+/// A defaulted parameter a call left out (docs/language/named-arguments-design.md §9):
 /// the marker's arguments are the declaring global's key and the parameter's
 /// index in its table, and checking it runs the default against the
 /// parameter's instantiated domain. Like the parser's markers, this head
@@ -30,7 +30,7 @@ fn default_marker(default: &super::ParamDefault, span: Span) -> Expr {
     }
 }
 
-/// Named arguments at a **callable** head (docs/named-arguments-design.md
+/// Named arguments at a **callable** head (docs/language/named-arguments-design.md
 /// §8.3): permute the written `x := e` arguments into declaration order
 /// and hand the result to the ordinary spine walkers, which never learn
 /// that any name was written.
@@ -49,7 +49,7 @@ fn default_marker(default: &super::ParamDefault, span: Span) -> Expr {
 /// [`PARAM_DEFAULT`]'s marker with its mask bit flipped, so the default is
 /// a named argument the caller did not have to write: checked at the
 /// parameter's domain in declaration order, and deferred until that domain
-/// is known, by the same path (docs/named-arguments-design.md §9.6).
+/// is known, by the same path (docs/language/named-arguments-design.md §9.6).
 ///
 /// `None` — and *nothing cloned* — when no named argument was written and
 /// the call leaves no default to fill, which is this round's invariant: such
@@ -109,7 +109,7 @@ pub(crate) fn resolve_named(
                 format!(
                     "`{}` is a type parameter of `{callee}`, and a type argument is a \
                      *type* rather than an expression — write `{callee}<…>` \
-                     (docs/named-arguments-design.md §5.3)",
+                     (docs/language/named-arguments-design.md §5.3)",
                     na.name
                 ),
                 na.name_span,
@@ -220,7 +220,7 @@ pub(crate) fn resolve_named(
 }
 
 /// The refusal for a named argument whose name no parameter has
-/// (docs/named-arguments-design.md §7): two messages, because a callee
+/// (docs/language/named-arguments-design.md §7): two messages, because a callee
 /// with no parameter *names* is a different situation from a typo.
 fn no_such_param(
     callee: &str,
@@ -263,7 +263,7 @@ fn no_such_param(
 
 /// The refusal for a named argument at a head that has no parameter table
 /// at all — a builtin arm, an expression in head position, a self-call
-/// (docs/named-arguments-design.md §8.2). Called *centrally*, so a form
+/// (docs/language/named-arguments-design.md §8.2). Called *centrally*, so a form
 /// that never learned about names cannot silently drop one.
 pub(crate) fn refuse_named(what: &str, why: &str, named: &[NamedArg]) -> R<()> {
     match named.first() {
@@ -275,7 +275,7 @@ pub(crate) fn refuse_named(what: &str, why: &str, named: &[NamedArg]) -> R<()> {
     }
 }
 
-/// Named arguments at a **constructor** (docs/named-arguments-design.md
+/// Named arguments at a **constructor** (docs/language/named-arguments-design.md
 /// §6): permute by field name into field order. Shares
 /// [`permute_by_name_refs`] with the record literal, so
 /// `Monoid(unit := 0)` and `Monoid { unit: 0 }` cannot drift into
@@ -310,8 +310,8 @@ pub(crate) fn resolve_constructor_arguments<'a>(
 
 /// Permute a by-name argument list into declaration order: the one
 /// function behind the record literal `D { f: e }` (§6 of
-/// docs/surface-records.md) and the named-argument constructor call
-/// `C(f := e)` (§6 of docs/named-arguments-design.md).
+/// docs/language/surface-records.md) and the named-argument constructor call
+/// `C(f := e)` (§6 of docs/language/named-arguments-design.md).
 ///
 /// One function rather than two, because these two spellings say the same
 /// thing and their diagnostics must not be able to disagree about what is

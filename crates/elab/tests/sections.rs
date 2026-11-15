@@ -1,5 +1,5 @@
 //! `section<…>(…) { … }` writes a head once for a run of declarations
-//! (docs/sections-design.md). The parser splices the head into each member's
+//! (docs/language/sections-design.md). The parser splices the head into each member's
 //! own, so what is pinned here is that the result is the declaration a reader
 //! would have written by hand, and that the splice refuses what it cannot make
 //! into one.

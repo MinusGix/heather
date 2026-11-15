@@ -31,7 +31,7 @@ constructor a `Type`-valued field, so all classes landed at one level
 Found 2026-08-06 while building the level-1 fixture for the `D#fam` round
 ([[indexed-families]]), which routes around it by keeping its classes
 level-homogeneous. Full writeup with the failing shape and fix direction:
-`docs/inductive-indexed-lowering.md` §10.5.
+`docs/inductives/inductive-indexed-lowering.md` §10.5.
 
 **Fix direction** (from that writeup): build every class code at the
 family's `l` — the formers all take a level (`Type::Unit { level }`,

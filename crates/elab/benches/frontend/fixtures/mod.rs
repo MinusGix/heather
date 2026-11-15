@@ -41,7 +41,7 @@ pub mod scale;
 /// Every family, in report order. Constructing them does all the setup —
 /// source generation, prelude construction, and one validating run each — so
 /// that the timing loop times nothing else (the kernel suite's fixture rule
-/// 1, docs/benchmarking.md).
+/// 1, docs/infrastructure/benchmarking.md).
 pub fn all() -> Vec<Family> {
     let mut v = vec![];
     v.extend(corpus::families());
@@ -113,7 +113,7 @@ fn measure_phases(src: &str, cell: &Rc<Cell<Phases>>, total_ns: u64) {
 }
 
 /// A run over a whole **import closure**, in the order the CLI's loader
-/// produces (docs/modules-design.md §3.2): dependencies first, root last, one
+/// produces (docs/language/modules-design.md §3.2): dependencies first, root last, one
 /// shared elaborator. `ir_v1.hthr` became multi-file when the Nat kit
 /// moved to `lib/std/num/nat.hthr`, so the number a user waits for is the closure
 /// and not the root — timing the root alone would time a file that no longer

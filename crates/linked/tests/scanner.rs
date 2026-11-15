@@ -11,7 +11,7 @@
 //! three that do not fit (an exponent, a `\u{…}` escape, an argument-slot
 //! index); the scanner returns spans. [`lex_linked`] closes it the way the
 //! roadmap says the linked lexer will at first
-//! (`docs/native-lexer-crypto-roadmap.md` §3): the scanner cuts the source,
+//! (`docs/native/native-lexer-crypto-roadmap.md` §3): the scanner cuts the source,
 //! and each token's value is read from its span alone. That function is a
 //! whole lexer, and it is compared with the oracle token for token, values
 //! included.

@@ -1,7 +1,7 @@
 # `wc` as a command — design
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **design, 2026-10-03; nothing built.** Anchor issue:

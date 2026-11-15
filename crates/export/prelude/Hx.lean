@@ -1,5 +1,5 @@
 /-
-Heather export prelude for Lean 4 (docs/export-fragment-design.md §4).
+Heather export prelude for Lean 4 (docs/library/export-fragment-design.md §4).
 
 This file is the whole per-target trusted text of the export: one constant
 per kernel former, at the kernel's own argument order, so the exported

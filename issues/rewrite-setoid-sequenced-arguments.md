@@ -9,7 +9,7 @@ updated: 2026-11-07
 ---
 
 A relation `rewrite` crosses a node by one argument's `PreservesRelation` or
-by `Respects2` over its last two (`docs/equation-rewrite-design.md` §9.3,
+by `Respects2` over its last two (`docs/tactics/equation-rewrite-design.md` §9.3,
 §11.6). Two changed arguments anywhere else (`k(x, n, x)`, a λ beside an
 argument, two children of a constructor) are refused, now naming the
 relations each changed by.

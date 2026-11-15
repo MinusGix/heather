@@ -1,5 +1,5 @@
 //! `lib/std/num/nat.hthr`'s **propositional** order and the `Cmp` class that now
-//! takes it (`issues/nat-order-kit.md`, `docs/nat-order-design.md`).
+//! takes it (`issues/nat-order-kit.md`, `docs/library/nat-order-design.md`).
 //!
 //! The module checking is not the interesting assertion — every `.hthr` file
 //! under `lib/` is checked somewhere already. What is asserted here is the
@@ -264,7 +264,7 @@ fn f(h: Iff<And<Nat, Nat>, Nat>) -> Nat { 0 }");
 /// test starts failing, that issue has been fixed and this becomes a
 /// positive". It did, so it is — `issues/comparison-inside-type-arguments.md`
 /// closed the same day under the one-directional whitespace rule
-/// (`docs/type-argument-disambiguation.md`), and an unparenthesized comparison
+/// (`docs/language/type-argument-disambiguation.md`), and an unparenthesized comparison
 /// inside type arguments now parses.
 ///
 /// The parenthesized spelling is asserted beside it, because parens did not

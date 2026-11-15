@@ -19,7 +19,7 @@ share a subtree stops at the shared node.
 Nothing in the kernel says so. Three consequences:
 
 - **It is load-bearing and undocumented.** The 2026-09-13 arena design pass
-  (`docs/kernel-arena-terms-design.md` §4) initially costed hash-consing as
+  (`docs/kernel/kernel-arena-terms-design.md` §4) initially costed hash-consing as
   worth the whole 2.78 M-hit walk, and was wrong for exactly this reason. The
   next reader will make the same mistake.
 - **It is fragile in a way the compiler will not catch.** Wrapping a child in

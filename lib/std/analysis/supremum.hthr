@@ -1,6 +1,6 @@
 // Suprema of located sets, and order completeness as a capability
 // (issues/order-completeness-located-sup.md;
-// docs/sequences-and-completeness.md §2, §4).
+// docs/library/sequences-and-completeness.md §2, §4).
 //
 // A set is a predicate `S: K → Type` over a section's `K: OrderedField(≈,
 // <, <=, +, *)`. Its supremum is read constructively, with the

@@ -23,7 +23,7 @@ nothing. The tail of a fresh-box run was the gate followed by `native_tools`.
 - `heather check --cache-dir D --unbuilt <paths>` names the modules of the
   paths' loads that `D` has no image of, in the loader's order, and exits 1
   while there are any. It is `--build-jobs`' plan (`BuildPlan`,
-  `docs/module-dag-design.md` §12): keys chained up the import graph from
+  `docs/infrastructure/module-dag-design.md` §12): keys chained up the import graph from
   image headers, nothing elaborated, under a second on the debug binary
   for `lib/native lib/_tests/native`.
 - `PREREQUISITES` in `scripts/run-test-targets.mjs` names, per

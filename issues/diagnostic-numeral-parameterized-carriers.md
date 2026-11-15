@@ -10,7 +10,7 @@ updated: 2026-11-07
 Since [[diagnostic-numeral-literal-spelling]] a diagnostic spells a numeral at
 `Int`, `Rat`, `Dyadic` or `CReal` as the numeral, by reading each closed
 `Numeral` instance's `ofNat` body backwards (`Speller::carrier_numeral`,
-docs/surface-type-display-design.md §5.3). A parameterized instance
+docs/elaborator/surface-type-display-design.md §5.3). A parameterized instance
 contributes no template, so `3` at `BitVec(8)` still reads `ofNat(3)`, and
 the same at `SInt(n)`.
 

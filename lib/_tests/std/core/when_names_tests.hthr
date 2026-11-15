@@ -1,4 +1,4 @@
-// Probes of the tested call's reach (docs/when-design.md §4): a `match` is
+// Probes of the tested call's reach (docs/language/when-design.md §4): a `match` is
 // read as a test only when its arms name `When`'s own constructors, and a
 // tested call inside statement sugar is still tested once, at its own span.
 // A module of its own because its `Attendance` names constructors `Present`

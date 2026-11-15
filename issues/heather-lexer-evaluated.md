@@ -67,7 +67,7 @@ refused).
 
 ## Log
 
-- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §3 splits the lexer in two: a
+- 2026-11-10: `docs/native/native-lexer-crypto-roadmap.md` §3 splits the lexer in two: a
   **scanner** (kinds and spans over bytes, state held in words) and
   **values** (numeral and string payloads, built from a span on demand). The
   scanner is the half that is compiled and linked ([[self-lexer-linked]]); the

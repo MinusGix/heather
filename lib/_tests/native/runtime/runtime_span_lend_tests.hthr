@@ -1,6 +1,6 @@
 // Probes of `runtime fn` on functions that call another over windows of
 // their spans (`FTm::Lend`, lib/native/runtime/rt_file.hthr;
-// docs/native-library-exports-design.md §3.1, V5a): the callee's spans
+// docs/native/native-library-exports-design.md §3.1, V5a): the callee's spans
 // are windows of the caller's, the written window is put back, and the
 // generated statements are at every file. Tests, not library: nothing
 // imports this module.

@@ -26,7 +26,7 @@ instantiation is lost (the class's parameters are substituted in type
 positions and not in the term an equation's sides are).
 
 The customer: `Compile<F>(f)`'s `typed` field (lib/native/runtime/runtime.hthr,
-docs/runtime-fn-setups-design.md §16.8) is spelled through `Itself` for this.
+docs/native/runtime-fn-setups-design.md §16.8) is spelled through `Itself` for this.
 
 ## Done when
 

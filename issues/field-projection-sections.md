@@ -15,7 +15,7 @@ fold_counts_runs(wc_step, λ s => s.words, λ s => s.inside, space, …)
 ```
 
 Argument-slot sections exist (`·`, [[argument-slot-sections]],
-`docs/argument-slot-sections-design.md`) and cover `f(·)`. Wanted: a
+`docs/language/argument-slot-sections-design.md`) and cover `f(·)`. Wanted: a
 projection section, so `λ s => s.lines` is `·.lines` (or another spelling
 such as `.lines` at a function-typed checking position).
 
@@ -42,7 +42,7 @@ read, which today's producer recovers by evaluation.
 ## Log
 
 - 2026-10-08: Implemented as `·.field` (and chains, `·.inner.field`):
-  `docs/argument-slot-sections-design.md` §5. `resolve_dot` passes a slot
+  `docs/language/argument-slot-sections-design.md` §5. `resolve_dot` passes a slot
   receiver's escape on to the enclosing function-typed position, which lowers
   the section to the ordinary lambda, so the field is looked up at the
   expected binder type; a masked sibling projects to the probe's disposable

@@ -1,5 +1,5 @@
 // What a call over views reads of a valuation
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 //
 // A lend's windows are cut at the values of its views' `start` and `end`,
 // which its own nodes mention, so two valuations that agree on what those

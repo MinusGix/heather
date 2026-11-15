@@ -15,7 +15,7 @@ Hold the bounded `Debug` formatter's state in one enum, so `write_exact` nested 
 
 Nothing calls `write_exact` from inside a `Debug` impl today (its callers are the metrics sampler and the elaborator tests' Ψ hash), so this is latent. But "an accidental `{:?}` is safe" is a rail CLAUDE.md relies on.
 
-Review: `docs/kernel-implicit-state-review.md` §7.
+Review: `docs/kernel/kernel-implicit-state-review.md` §7.
 
 ## Proposal
 

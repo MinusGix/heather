@@ -7,7 +7,7 @@ created: 2026-11-12
 updated: 2026-11-12
 ---
 
-`laid record T { … }` (`lib/std/machine/laid.hthr`, `docs/layout-design.md` §6.2) places a record's fields in the order they are written. Minus decided (2026-11-12) that this is not the rule: reordering "should be "magical" by whatever setup the `laid` uses", "the ability for compiler to decide is valuable, though we don't need complex reordering yet", and it is "something to have an issue for". This is that issue.
+`laid record T { … }` (`lib/std/machine/laid.hthr`, `docs/native/layout-design.md` §6.2) places a record's fields in the order they are written. Minus decided (2026-11-12) that this is not the rule: reordering "should be "magical" by whatever setup the `laid` uses", "the ability for compiler to decide is valuable, though we don't need complex reordering yet", and it is "something to have an issue for". This is that issue.
 
 What is built toward it: the declaration takes `order`, `AnyOrder` by default and `AsWritten` for C's rule, and the note says nothing may read an offset off the source (it is `T::f_part().offset`). Today both orders are the written one, so the freedom is stated and not yet used. SHA-256's context says `AsWritten` because its functions' bodies write the offsets out.
 
@@ -18,7 +18,7 @@ A first rule, and what it needs:
 - **The permutation in two places**: `to` and `from` of `Stored::record` are written from the constructor's order and the layout's order, which today are the same list. The parts are by name and do not change.
 - **Nothing to prove**: a part's laws do not mention where it lies.
 
-What it opens, none of it needed now: a rule as an argument (a function over the table of fields, which is the `docs/datarepr-design.md` §5.2 "layout is DATA" reading), rules that read use (fields a loop touches together placed together), and the compiler choosing with what it knows, which is the case Minus named for keeping the choice with the declaration. A first-order description of a layout ([[layout-first-order-description]]) would make each of these a function over data and not over terms.
+What it opens, none of it needed now: a rule as an argument (a function over the table of fields, which is the `docs/native/datarepr-design.md` §5.2 "layout is DATA" reading), rules that read use (fields a loop touches together placed together), and the compiler choosing with what it knows, which is the case Minus named for keeping the choice with the declaration. A first-order description of a layout ([[layout-first-order-description]]) would make each of these a function over data and not over terms.
 
 Done when: `laid record` under `AnyOrder` places fields by a rule that is not the written order, the probes state offsets only under `AsWritten` or through the parts, and a record with a `u8` before a `u64` is shown to lose its padding.
 

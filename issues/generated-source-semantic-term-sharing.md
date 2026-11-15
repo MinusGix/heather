@@ -42,4 +42,4 @@ checking, not merely remove the sub-100ms text parse.
 ## Log
 
 - 2026-09-11: Merged in [[generated-heather-direct-elaboration]] (2026-09-11): its question — is the render-to-source-then-parse round trip material — is answered by this issue's own 100-node datum (reflection/generation <150 ms each, parse ~30 ms, against 199.3 s checking). A direct sink stays listed here as one experiment, to be pursued only if that ratio changes.
-- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

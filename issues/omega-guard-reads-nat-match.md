@@ -9,7 +9,7 @@ updated: 2026-10-30
 ---
 
 `omega`'s guard round ([[omega-reads-bool-guards]], design §17 of
-`docs/omega-measure-reduction-design.md`) reads `&&`, `||`, `!`, `leb` and
+`docs/tactics/omega-measure-reduction-design.md`) reads `&&`, `||`, `!`, `leb` and
 Bool definitions, but a stuck `match` inside a guard is bound and left
 alone. `Format::canonical`'s least-exponent test is one:
 
@@ -38,4 +38,4 @@ probe and a control in `lib/_tests/std/tactic/omega_tests.hthr`.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/omega-measure-reduction-design.md`); [[lifted-obligation-refusal-reports-retry-error]] (`docs/omega-measure-reduction-design.md`); [[review-lint-redundant-motive-on-generated]] (`lib/_tests/std/tactic/omega_tests.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/tactics/omega-measure-reduction-design.md`); [[lifted-obligation-refusal-reports-retry-error]] (`docs/tactics/omega-measure-reduction-design.md`); [[review-lint-redundant-motive-on-generated]] (`lib/_tests/std/tactic/omega_tests.hthr`).

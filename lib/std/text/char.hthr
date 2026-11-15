@@ -4,7 +4,7 @@
 // inhabitant at `True` and none at `False` (`bool`), so equality of characters
 // is equality of codes and rebuilding the witness cannot disturb a value —
 // and, unlike a truncated witness, a consumer may refute it
-// (docs/string-char-design.md §5.1).
+// (docs/library/string-char-design.md §5.1).
 //
 // Surrogates are excluded because UTF-8 encoding is the first repr of a string
 // and has to be injective on the spec type; that repr and the `Utf8` spec type
@@ -106,7 +106,7 @@ instance DecEq<Char> { eq_dec := char_eq_dec }
 
 // ---------------------------------------------------------------------------
 // The literal class. `Numeral`'s counterpart for `'x'`
-// (docs/string-char-design.md §3): at any carrier that is not `Char` itself a
+// (docs/library/string-char-design.md §3): at any carrier that is not `Char` itself a
 // character literal resolves this and applies `ofChar`. It is declared here
 // rather than beside `Numeral` in `algebra` because its field mentions
 // `Char`, and `algebra` sits *below* this module in the library's import

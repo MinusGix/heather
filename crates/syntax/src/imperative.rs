@@ -1,5 +1,5 @@
 //! Local state in pure code: `let mut`, `:=` and statement `if`/`match`
-//! (docs/sequencing-surface-design.md §4, §5.1), lowered to ordinary
+//! (docs/language/sequencing-surface-design.md §4, §5.1), lowered to ordinary
 //! `let`s. No new kernel form, and no new AST node: the parser writes the
 //! statements as `let`s whose right side is a private marker call, and this
 //! module rewrites each block when it closes, before its binds are lowered
@@ -154,7 +154,7 @@ pub(crate) fn ends_in_method_call(b: &Block) -> bool {
 
 /// The local a method-call candidate may update: its receiver, or the local
 /// its receiver is a field path of (`x.f.g.m(a)` updates `x`,
-/// docs/sequencing-surface-design.md §20).
+/// docs/language/sequencing-surface-design.md §20).
 pub(crate) fn mut_receiver(call: &Expr) -> Option<&str> {
     match &call.kind {
         ExprKind::Dot { recv, .. } => place_root(recv),

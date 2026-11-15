@@ -68,7 +68,7 @@ or register an artifact with outstanding holes.
 
 ## Small automatic entry point candidate
 
-For subtype operation construction, `docs/smart-subtype-inheritance.md` scopes
+For subtype operation construction, `docs/showcase/smart-subtype-inheritance.md` scopes
 the first request to an explicit source operation, target signature, and
 representation interface. Generate the positive-addition wrapper and its
 projection theorem with registered closure evidence or resumable goals. Keep
@@ -81,7 +81,7 @@ work. Later ambient-theorem discovery/application can reuse this machinery to
 adapt a selected theorem to subtype arguments and expose remaining conditions.
 Explicit operation generation alone does not complete that discovery experience.
 
-The tiny examples in `docs/three-small-transfer-experiences.md` propose
+The tiny examples in `docs/showcase/three-small-transfer-experiences.md` propose
 compatibility checking at declarations explicitly using a registered semantic
 interface. This is a scoped UX target, not unrestricted derivation on all
 functions. Retain an explicit derivation path for the first implementation and
@@ -123,7 +123,7 @@ must prevent instance registration.
 - 2026-09-04: Recorded the narrow automatic declaration-checking candidate and the intermediate enumeration relation probe.
 - 2026-09-04: Added the user-authored interface and relational-calculation probe; normal failure reporting requires no counterexample finder.
 - 2026-09-04: **[[manual-mergeable-round]]** supplies a checked `merge_twice` proof with explicit transitivity and compatibility, and a realized showcase. This is the target construction for relational rewriting to reproduce; no generator landed in that round.
-- 2026-09-04: The next context-construction slice adds explicit constant and dependent-on-input function application certificates, plus a self-related binary helper, in `std/relation_context`. `docs/showcase/relational-contexts.hthr` exercises nested and repeated occurrences. See `docs/relational-context-round.md`; automatic context discovery and relational calc remain open. The constructors are transparent functions so proof-relevant evidence can compute. Focused validation: 7 passed. Final plain Furnace suite: 2,322 passed, 0 failed, 5 ignored.
+- 2026-09-04: The next context-construction slice adds explicit constant and dependent-on-input function application certificates, plus a self-related binary helper, in `std/relation_context`. `docs/showcase/relational-contexts.hthr` exercises nested and repeated occurrences. See `docs/showcase/relational-context-round.md`; automatic context discovery and relational calc remain open. The constructors are transparent functions so proof-relevant evidence can compute. Focused validation: 7 passed. Final plain Furnace suite: 2,322 passed, 0 failed, 5 ignored.
 - 2026-09-04: Started [[bounded-relational-context-generator]]: explicit source-level context generation, structured missing-evidence goals, and isolated checking. Boxed-code/meta-layer implementation remains open.
 - 2026-09-04: Started [[single-contextual-rewrite]]: recover a binder-free context from a theorem goal and named relation proof, then reuse the bounded certificate planner. Native tactic and meta-layer integration remain open.
 - 2026-09-04: [[single-contextual-rewrite]] is complete for the bounded source driver: repeated/partial occurrences, checked missing obligations, and ordinary generated proof application. Full suite: 2,336 passed, 0 failed, 5 ignored. Higher-order contexts, calculation chains, native tactic integration, and the boxed-code implementation remain open.
@@ -136,7 +136,7 @@ must prevent instance registration.
 - 2026-09-05: Expected-goal relation/operation inference landed in [[relational-index-inference-from-goals]]; the concise list client now checks. Subtypes remain the next planned customer.
 - 2026-09-05: The author/client round adds a bounded attempt to apply a fixed operation-family argument to a local dictionary field, kernel-checking the candidate at the exact compatibility goal. It aims to remove per-proof image certificate aliases; ambiguous candidates retain obligations. Customer: docs/showcase/finite_set_client.hthr. Validation is in progress.
 - 2026-09-05: The finite-set client now proves nested image compatibility with rel_cong alone. A bounded one-argument local dictionary field search supplies a uniquely matching, kernel-checked family certificate; ambiguous candidates retain the compatibility obligation and an explicit alias selects evidence. Focused controls and the full plain Furnace suite pass (2,411 passed, 0 failed, 5 ignored). Broader transfer/search remains open.
-- 2026-09-05: The independent tree backend supplies a concrete author-automation customer: connective rearrangement for union laws and branching induction for image membership witnesses. See lib/std/data/set/tree_finite_set.hthr and docs/setoid-second-backend-round.md; existing checked client automation is reused unchanged.
+- 2026-09-05: The independent tree backend supplies a concrete author-automation customer: connective rearrangement for union laws and branching induction for image membership witnesses. See lib/std/data/set/tree_finite_set.hthr and docs/showcase/setoid-second-backend-round.md; existing checked client automation is reused unchanged.
 - 2026-09-05: Started [[named-function-compatibility-derivation]]: explicit named theorem requests, transparent compositional derivation, reusable certificates, and a branch-choice obligation through a checked Boolean choice combinator. List/tree clients and refusal/repair controls are under validation.
 - 2026-09-05: Completed [[named-function-compatibility-derivation]] for the bounded homogeneous fragment. The author names an operation and requests a checked preservation theorem; both list and tree clients reuse it. Choice compatibility exposes an explicit stability obligation. Full plain Furnace suite: 2,418 passed, 0 failed, 5 ignored. Arbitrary match/recursion and general parametricity remain open.
 - 2026-09-05: Paused implementation expansion at user direction; [[setoid-roadmap-and-resumption]] records the verified baseline, existing owners, and focused follow-ups. Resume from an actual client need rather than treating the backlog as a sequential implementation plan.

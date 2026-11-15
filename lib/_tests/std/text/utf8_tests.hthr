@@ -1,6 +1,6 @@
 // Probes of `lib/std/text/utf8.hthr`, UTF-8 as the first representation of
 // `String` and the `Utf8` byte-level spec type beside it
-// (docs/string-char-design.md §5): the encoder at a literal of every byte
+// (docs/library/string-char-design.md §5): the encoder at a literal of every byte
 // width, the strict decoder at each rejection, every law at a literal and at
 // a neutral string, and `¬` theorems for the wrong values. Tests, not
 // library: nothing outside lib/_tests imports this module

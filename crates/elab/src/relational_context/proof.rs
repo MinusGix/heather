@@ -58,7 +58,7 @@ impl Relation {
         let (fun, right) = crate::spelling::app_of(tm)?;
         let (head, left) = crate::spelling::app_of(fun)?;
         // The two domains: stated by an `app` node, the head's for an
-        // `app@` one (`docs/app-by-head-type-design.md` §6.2).
+        // `app@` one (`docs/elaborator/app-by-head-type-design.md` §6.2).
         let (first, dom) = match (fun.as_ref(), tm.as_ref()) {
             (
                 Term::App { dom: first, dom_level: fl, .. },
@@ -84,7 +84,7 @@ impl Relation {
 
 impl Relation {
     /// A goal at an indexed codata family whose last two indices are the
-    /// sides, `Eutt<R>(E, t, u)` (docs/equation-rewrite-design.md §11): the
+    /// sides, `Eutt<R>(E, t, u)` (docs/tactics/equation-rewrite-design.md §11): the
     /// family lowers to `M(…)(⟨…, t, u⟩)`, not to an application, so its
     /// relation is the λ `λ a b. ⌜M(…)(⟨…, a, b⟩)⌝`, which converts with a
     /// library's name for it (`Eutt::Rel<R>(E)`).
@@ -216,7 +216,7 @@ struct Builder<'a> {
     derive: bool,
     /// The binders the walk is below, outermost first, each type scoped
     /// where its binder is: the λs of a consumer's argument, walked to a
-    /// pointwise proof (`docs/equation-rewrite-design.md` §10.6).
+    /// pointwise proof (`docs/tactics/equation-rewrite-design.md` §10.6).
     binders: Vec<(Rc<Type>, Level)>,
     /// The supplied proof's two sides at each depth below the binders,
     /// shifted once per depth.
@@ -470,7 +470,7 @@ impl Builder<'_> {
             self.goals += 1;
             // Below binders the statement mentions them: the goal is closed
             // over them, at the tactic's own context, and applied back
-            // (`docs/equation-rewrite-design.md` §10.4).
+            // (`docs/tactics/equation-rewrite-design.md` §10.4).
             let (closed, closed_level) = self.binders.iter().rev().fold((ty.clone(), level.clone()), |(cod, cod_level), (dom, dom_level)| {
                 let pi = Type::Pi {
                     dom_level: dom_level.clone(),
@@ -578,7 +578,7 @@ impl Builder<'_> {
     /// pointwise, `Pointwise(R)` (one per binder they share), and the
     /// consumer crosses that by the evidence `rewrite` asks for,
     /// `PreservesRelation(Pointwise(R), R, λ g. f(…, g, …))`
-    /// (`MonoidRel::range_pointwise` for `∑`; `docs/equation-rewrite-design.md`
+    /// (`MonoidRel::range_pointwise` for `∑`; `docs/tactics/equation-rewrite-design.md`
     /// §10.2, §10.6). `None` for any other pair, and for a consumer that does
     /// not map such functions into the carrier.
     fn across(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> R<Option<String>> {

@@ -1,4 +1,4 @@
-//! The import loader (docs/modules-design.md §3): from a root file, the
+//! The import loader (docs/language/modules-design.md §3): from a root file, the
 //! transitive closure of its imports, deduplicated and topologically ordered.
 //!
 //! One module is one file and its name is the file stem; there are no

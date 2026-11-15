@@ -1,4 +1,4 @@
-// Probes of `lib/std/machine/memory.hthr` (`docs/byte-memory-design.md`),
+// Probes of `lib/std/machine/memory.hthr` (`docs/native/byte-memory-design.md`),
 // with `lib/std/data/vector.hthr` and the byte packing in
 // `lib/std/bitvec/bitvec_bytes.hthr`: the model's choices at a literal memory
 // and at an open one (a refused span stores nothing at any refusal position;

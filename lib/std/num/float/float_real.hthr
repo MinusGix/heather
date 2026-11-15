@@ -1,4 +1,4 @@
-// Floats at the reals (docs/floating-point-design.md §6, §17; submilestone
+// Floats at the reals (docs/library/floating-point-design.md §6, §17; submilestone
 // `float-reals`).
 //
 // A finite float's value is a rational, and its real is that rational's
@@ -140,7 +140,7 @@ theorem Finite::sqrt_rounds_real({F: Format}, a: Finite(F), mode: Mode, nan: F.s
 }
 
 // ---------------------------------------------------------------------------
-// The error model over any ordered field (docs/floating-point-design.md
+// The error model over any ordered field (docs/library/floating-point-design.md
 // §18.2).
 //
 // The rational bound `|r - q| <= u·|q| + η` (error.hthr) is two affine

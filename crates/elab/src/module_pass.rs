@@ -38,14 +38,14 @@ impl ModulePassMut<'_> {
     /// [`Elaborator::elab_source`] into a named module. The elaborator does no file
     /// IO: an `import m;` here requires that `m` has *already* been elaborated
     /// into this same accumulator, which is exactly what the CLI's topological
-    /// walk guarantees (docs/modules-design.md §3.2).
+    /// walk guarantees (docs/language/modules-design.md §3.2).
     /// What one container's item loop needs before it starts: the mutual
-    /// groups of `docs/mutual-recursion-design.md` §1, and the declaration
+    /// groups of `docs/language/recursion/mutual-recursion-design.md` §1, and the declaration
     /// names §8's forward-reference message reads.
     fn begin_container(&mut self, file: &heather_syntax::File) -> ItemPlan {
         let mut groups = measure_groups(&file.items);
         let mut kinds = vec![GroupKind::Measure; groups.len()];
-        // Mutual `inductive` groups (docs/mutual-inductive-design.md §1).
+        // Mutual `inductive` groups (docs/inductives/mutual-inductive-design.md §1).
         for g in mutual_family::inductive_groups(&file.items) {
             groups.push(g);
             kinds.push(GroupKind::Inductive);
@@ -125,7 +125,7 @@ impl ModulePassMut<'_> {
             // *pushing* one; this brackets the lowering that builds them, so
             // an `inductive`'s or an `instance`'s own work has a column
             // instead of landing in `other`
-            // (`docs/instrumentation-design.md` §5).
+            // (`docs/infrastructure/instrumentation-design.md` §5).
             Item::Inductive(i) => match plan.in_group.get(&idx) {
                 Some(&g) if plan.groups[g][0] == idx => {
                     let members: Vec<&heather_syntax::InductiveDecl> = plan.groups[g]
@@ -181,7 +181,7 @@ impl ModulePassMut<'_> {
     ) -> R<()> {
         // Parse time is its own column: it is not elaboration, and a frontend
         // regression in one is not a regression in the other
-        // (`docs/instrumentation-design.md` §5).
+        // (`docs/infrastructure/instrumentation-design.md` §5).
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.policy.lint_profile);
         self.enter_module(module, &file)?;
@@ -205,7 +205,7 @@ impl ModulePassMut<'_> {
             // checks, is charged to its slice (`issues/theorem-witness-unfolding.md`).
             let unsealing = heather_kernel::unseal::Recording::start();
             // `--only` names items that elaborate from source however exact
-            // the prefix is (`docs/check-only-design.md`); a group is named
+            // the prefix is (`docs/infrastructure/check-only-design.md`); a group is named
             // through any member.
             let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
@@ -220,7 +220,7 @@ impl ModulePassMut<'_> {
             let omega_mark = self.pass.omega_reports.borrow().len();
             let r = self.elab_item_at(&file, idx, item, &plan);
             // Canonical derived instances are minted **between** items, where
-            // Ψ may grow (docs/traits-layer2-design.md §8). A failed item
+            // Ψ may grow (docs/language/classes/traits-layer2-design.md §8). A failed item
             // mints nothing: its derivations are as speculative as the rest of
             // it.
             if r.is_err() {
@@ -245,7 +245,7 @@ impl ModulePassMut<'_> {
                     g.abandon(&self.psi);
                 }
                 // Nothing may outlive the module with proofs in flight, the
-                // failure path included (`docs/parallel-kernel-gate-design.md`
+                // failure path included (`docs/kernel/parallel-kernel-gate-design.md`
                 // §5). The item's own error is the one reported — unless a
                 // queued proof also failed, in which case this whole pass is
                 // discarded and replayed serially, and the error the caller
@@ -452,7 +452,7 @@ impl ModulePassMut<'_> {
             let name = item_timing_name(item);
             // The declaration scope, the same bracket as `elab_module_source`
             // — `heather check` is the primary command and had none
-            // (`docs/instrumentation-design.md` §5) — carrying the miss
+            // (`docs/infrastructure/instrumentation-design.md` §5) — carrying the miss
             // sampler's item column with it
             // (issues/conv-miss-sampler-item-attribution.md). A no-op without
             // `value-metrics`, and free without `--timings`.
@@ -463,7 +463,7 @@ impl ModulePassMut<'_> {
             }
             // A slice of the previous delta stands in for the item when its
             // text and the prefix so far match
-            // (`docs/declaration-slice-replay-design.md` §4).
+            // (`docs/infrastructure/declaration-slice-replay-design.md` §4).
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
             let slice_mark = Deltas(self).slice_begin();
@@ -471,7 +471,7 @@ impl ModulePassMut<'_> {
             // checks, is charged to its slice (`issues/theorem-witness-unfolding.md`).
             let unsealing = heather_kernel::unseal::Recording::start();
             // `--only` names items that elaborate from source however exact
-            // the prefix is (`docs/check-only-design.md`); a group is named
+            // the prefix is (`docs/infrastructure/check-only-design.md`); a group is named
             // through any member.
             let forced = DeltasMut(self).slice_forced(&slice_names(&file, idx, &plan));
             // A replayed slice carries the item's warnings, source lints
@@ -521,7 +521,7 @@ impl ModulePassMut<'_> {
             }
         }
         self.pass.container_decls.borrow_mut().clear();
-        // The join (`docs/parallel-kernel-gate-design.md` §5). This is the
+        // The join (`docs/kernel/parallel-kernel-gate-design.md` §5). This is the
         // path `check_module_delta` runs inside, so the semantic image, the
         // declaration cache and `heather check`'s verdict all sit behind it.
         if let Some(e) = self.join_kernel_gate() {

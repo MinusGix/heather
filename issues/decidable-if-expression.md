@@ -94,4 +94,4 @@ the missing `Decide<P>` search trace.
   branches, dependent checking, constant-result inference, and source-shaped
   resolution diagnostics. Raw `Bool` is deliberately rejected. `Int::max`
   and `Int::min` are the representative library uses. Design record:
-  `docs/decidable-if-expression-design.md`.
+  `docs/language/decidable-if-expression-design.md`.

@@ -33,7 +33,7 @@ tree is the events of some returned trace of the tree.
 
 ## Log
 
-- 2026-10-21: `docs/kernel-coinduction-design.md` §6.1 names a kernel-free
+- 2026-10-21: `docs/kernel/kernel-coinduction-design.md` §6.1 names a kernel-free
   route for the diverging case: make a `Tau` cost the machine at least one
   step (non-stuttering simulation, CompCert's measure in its simplest form),
   so a machine that exits after `k` steps meets a tree that does something

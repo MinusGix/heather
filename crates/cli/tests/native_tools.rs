@@ -7,7 +7,7 @@
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
 //! issues/native-source-argv.md, issues/native-compile-other-calls.md,
 //! issues/native-decimal-io.md), tr through a word function it calls, compiled
-//! into the same file (docs/native-one-compiler-design.md), and
+//! into the same file (docs/native/native-one-compiler-design.md), and
 //! `heather reflect`'s program of that function
 //! (issues/native-build-reflected-helpers.md).
 //! None has
@@ -132,7 +132,7 @@ fn compiled_tr_runs_as_gnu_tr() {
 }
 
 /// tr with each byte through `raise_letter`, a function compiled into the
-/// same file and called (docs/native-one-compiler-design.md §2.2): the
+/// same file and called (docs/native/native-one-compiler-design.md §2.2): the
 /// same outputs as GNU's, and so as the tr above.
 #[test]
 fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
@@ -155,7 +155,7 @@ fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
 
 /// tr with each read's bytes raised by `raise_span`, a function lent the
 /// buffer that stores into it and calls `raise_letter` on each byte
-/// (docs/native-one-compiler-design.md §2.6): the write after the call
+/// (docs/native/native-one-compiler-design.md §2.6): the write after the call
 /// sends what the function left, which is what GNU's sends.
 #[test]
 fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
@@ -366,7 +366,7 @@ fn compiled_wc_counts_lines_as_gnu_wc() {
 /// wc -l with each read's newlines counted by `count_newlines`, a function
 /// lent the buffer: compiled into the same file by the function compiler
 /// and passed the buffer's address and capacity by the call
-/// (docs/native-one-compiler-design.md §2.3). GNU's counts, and so the
+/// (docs/native/native-one-compiler-design.md §2.3). GNU's counts, and so the
 /// counts of the wc above, whose loop is the program's own.
 #[test]
 fn compiled_wc_calling_a_function_over_its_buffer_counts_as_gnu_wc() {
@@ -705,7 +705,7 @@ fn reflected_word_program_is_current() {
 /// NUL, which GNU reads as a binary file, and a newline at least every 200
 /// bytes, inside the tool's line buffer), an unterminated last line, and
 /// patterns empty, short, long and past ASCII. Its line test is a procedure
-/// called from two sites (docs/native-procedures-design.md).
+/// called from two sites (docs/native/native-procedures-design.md).
 #[test]
 fn compiled_grep_f_runs_as_gnu_grep() {
     let dir = scratch("grep");
@@ -772,7 +772,7 @@ fn random_lines(random: &mut Bytes, count: usize, longest: u64, alphabet: &[u8],
 /// last line with no newline (which GNU writes first, as it is), lines
 /// longer than the tool's read buffer (so a line is read in parts into its
 /// arena cell), and random bytes. Its lines are a list in an arena
-/// (docs/native-heap-arena-design.md); running out of it is a defined exit,
+/// (docs/native/native-heap-arena-design.md); running out of it is a defined exit,
 /// GNU's message and status 1, which GNU's does not meet at these sizes.
 #[test]
 fn compiled_tac_runs_as_gnu_tac() {
@@ -811,7 +811,7 @@ fn compiled_tac_runs_as_gnu_tac() {
 /// unsigned, a prefix first, alike lines kept, a last line without a
 /// newline given one, over nothing, blank lines, prefixes, duplicates, bytes
 /// past ASCII and lines longer than the read buffer. Its lines are a list in
-/// an arena it never changes (docs/native-heap-arena-design.md §3);
+/// an arena it never changes (docs/native/native-heap-arena-design.md §3);
 /// running out of it exits 2 with GNU's message.
 #[test]
 fn compiled_sort_runs_as_gnu_sort() {

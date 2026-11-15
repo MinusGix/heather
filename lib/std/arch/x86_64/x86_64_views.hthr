@@ -1,5 +1,5 @@
 // Views: lending on a part of a span
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 //
 // A call lent spans may lend a callee parts of them: bytes `start` up to
 // `start + size` of a span it holds, under a number of the callee's own. A

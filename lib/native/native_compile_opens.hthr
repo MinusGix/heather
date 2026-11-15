@@ -1,5 +1,5 @@
 // An open and a close, compiled (issues/native-compile-other-calls.md,
-// round 7 of docs/native-real-programs-plan.md): what `Prog::opens` and
+// round 7 of docs/native/native-real-programs-plan.md): what `Prog::opens` and
 // `Prog::closes` ask Linux, and how each answer lands in the environment as
 // the source decodes it (`CallShape::answer`), as native_compile_calls does
 // for a read and a write.

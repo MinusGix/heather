@@ -1,5 +1,5 @@
 // Probes of `function_ir_writes`, FunctionIR's meaning with the file
-// threaded (docs/native-one-compiler-design.md §2.6): a store runs from a
+// threaded (docs/native/native-one-compiler-design.md §2.6): a store runs from a
 // file to the file with its byte set and to no other, at a neutral
 // valuation and file and at literal ones; a load after a store reads the
 // byte stored, which the fixed-file relation cannot say; a call's file is
@@ -127,7 +127,7 @@ theorem storer_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec
 // Which buffers a program stores into, as marks
 //
 // What a caller that lends a program its buffers is told
-// (docs/native-library-exports-design.md §7): a list with a mark for each
+// (docs/native/native-library-exports-design.md §7): a list with a mark for each
 // buffer some function stores into. `program_marks` reads it off the
 // program, and `program_stores_within` is the claim a certificate checks.
 

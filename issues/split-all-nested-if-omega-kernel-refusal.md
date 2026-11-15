@@ -27,7 +27,7 @@ stepF(w: Nat, i: Bool, b: Nat) → Nat { if b = 32 { w } else { if i =
 Bool::False { w + 1 } else { w } } }` is refused before the kernel instead:
 "`omega` got stuck: Omega could not spell a natural expression".
 
-This is the step-fact shape that `docs/sequencing-surface-design.md` §7.2
+This is the step-fact shape that `docs/language/sequencing-surface-design.md` §7.2
 expects to be one line, and a `for` loop's generated step (`f::step`)
 has exactly this shape.
 

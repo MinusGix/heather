@@ -1,5 +1,5 @@
 // A stream filter's spec as a tree over Linux's calls
-// (issues/native-linux-spec.md; docs/native-program-logic-design.md §4).
+// (issues/native-linux-spec.md; docs/native/native-program-logic-design.md §4).
 //
 // The filter reads its input a chunk at a time, runs the step over the chunk
 // (`stream_filter`'s fold), and writes what it emitted, as many times as a

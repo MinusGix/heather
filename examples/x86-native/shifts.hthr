@@ -18,7 +18,7 @@ import function_ir;
 import function_ir_eval;
 import runtime;
 
-// Shifts by constants (docs/runtime-fn-setups-design.md §16.13, round 3):
+// Shifts by constants (docs/native/runtime-fn-setups-design.md §16.13, round 3):
 // a shift by `k` lowers to `k` one-bit shifts, the only x86 shifts whose
 // flags are all defined but AF.
 runtime fn shifted(a, b: BitVec(64)) → BitVec(64) {

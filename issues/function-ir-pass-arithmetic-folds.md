@@ -57,6 +57,6 @@ would need them in the claim itself, which no tool has wanted yet.
 
 ## Log
 
-- 2026-11-09: 2026-11-09: the ofNat laws at an open width are part of [[machine-words-modular-ring]] (docs/native-mathematics-survey.md §2; probe P3 shows the Add law is not by conversion).
+- 2026-11-09: 2026-11-09: the ofNat laws at an open width are part of [[machine-words-modular-ring]] (docs/surveys/native-mathematics-survey.md §2; probe P3 shows the Add law is not by conversion).
 - 2026-11-09: The open-width laws landed with [[machine-words-modular-ring]]: `BitVec::ofNat_add` (Add), `BitVec::ofNat_sub` under `y <= x` (Sub), `BitVec::ofNat_mul`, all in `bitvec_nat`. The shift law (`ofNat(a).shift_left(k) = ofNat(a * 2^k)`) is not stated yet.
 - 2026-11-12: **A customer from the layout library (PR #551, 2026-11-12).** SHA-256's bodies name their fields' offsets (`Sha256::working_at`, a literal word the `laid` declaration publishes) and add a word's place within its array, so the IR now holds `Add(Lit 32, Lit 16)` where the source used to say 48, and `Add(i, Lit 0)` where the hash value is the first field. Both are computed at run time: the lowering folds one constant into an ADD's immediate and loads the other. A fold of a node whose operands are both literals, and of an addition of zero, would give back the assembly the hand-written offsets had. The four regenerated files (`crates/linked/generated/sha256_*.s`) are the measure: the same stack lines, more instructions.

@@ -1,5 +1,5 @@
 //! `ring`: commutative-ring normalization by reflection
-//! (`docs/ring-normalization-design.md`, `issues/ring-normalization.md`).
+//! (`docs/tactics/ring-normalization-design.md`, `issues/ring-normalization.md`).
 //!
 //! The tactic is an untrusted reifier in front of `lib/std/tactic/ring.hthr`. It
 //! reads an equation at `Int` or `Nat` into `RingExpr`/`RingNat` syntax over
@@ -172,7 +172,7 @@ impl Op {
 ///
 /// At a class carrier the parent dictionary is usually not written out but
 /// an open derivation's global applied to the section's prefix
-/// (docs/traits-layer2-design.md §8.1); its record is read by unfolding that
+/// (docs/language/classes/traits-layer2-design.md §8.1); its record is read by unfolding that
 /// one global, a bounded number of times, and then as above.
 fn same_dictionary_read(elab: &Elaborator, tm: &Term, want: &Term) -> bool {
     if *tm == *want {
@@ -214,7 +214,7 @@ fn unfold_open_base(elab: &Elaborator, tm: &Term) -> Option<Term> {
     Some(out)
 }
 
-/// A class carrier's integers (docs/casting-design.md §16): a type
+/// A class carrier's integers (docs/language/casting-design.md §16): a type
 /// parameter `K` whose ring is a dictionary in scope
 /// (`section<K: OrderedField(≈, <, <=, +, *)>`) has no `CommRingOfInt`
 /// instance, and its integers are the ones every ring has
@@ -309,7 +309,7 @@ impl Carrier {
     }
 }
 
-/// A cast edge the reifier reads through (docs/casting-design.md §5.6): the
+/// A cast edge the reifier reads through (docs/language/casting-design.md §5.6): the
 /// map's global, the `OrderedRingHom` value, and the source carrier's
 /// operations, as bare global names.
 struct Edge {
@@ -595,7 +595,7 @@ pub(crate) struct FieldReading<'a> {
     reifier: Reifier<'a>,
     reciprocals: Vec<Reciprocal>,
     /// The bases of the squares read so far, `t` for each `t * t` written,
-    /// as forms (`nlinarith` offers `t·t ≥ 0`; docs/nonlinear-arithmetic-design.md
+    /// as forms (`nlinarith` offers `t·t ≥ 0`; docs/tactics/nonlinear-arithmetic-design.md
     /// §4.2). Normalization hides a square's shape, so it is kept here.
     squares: Vec<Linear>,
 }
@@ -632,7 +632,7 @@ impl<'a> FieldReading<'a> {
 
     /// The reading at `Int` (`nat` false) or `Nat`, whose operations are the
     /// integers' own: `linarith` there names `ring`'s monomials for `omega`
-    /// (`crate::linarith`, docs/linarith-design.md §8).
+    /// (`crate::linarith`, docs/tactics/linarith-design.md §8).
     pub(crate) fn integral(elab: &'a Elaborator, cx: &'a Cx, nat: bool, ty: Type, level: Level, span: Span) -> Self {
         FieldReading {
             reifier: Reifier {
@@ -917,7 +917,7 @@ impl Reifier<'_> {
         self.projection_or_atom(tm, depth)
     }
 
-    /// The `Nat → Int` edge (docs/casting-design.md §12): an image of a
+    /// The `Nat → Int` edge (docs/language/casting-design.md §12): an image of a
     /// `Nat` sum, product or successor, `OfNat(m + n)` or `(m * n).int()`, is
     /// an atom read with the edge's law (`Int::ofNat_hom`'s `map_add` and
     /// `map_mul`), whose right side, the images of the parts spelled as the
@@ -1099,7 +1099,7 @@ impl Reifier<'_> {
 
     /// A definition that is an edge's image under another name
     /// (`Finite::val(x)` is `x.dyadic().rat()`, `Format::grid(F, n)` is
-    /// `Dyadic(n, …).rat()`, docs/casting-design.md §13): its first few
+    /// `Dyadic(n, …).rat()`, docs/language/casting-design.md §13): its first few
     /// δ-reducts, the first that is an edge's map applied, so the image is
     /// read, and named, as it is everywhere else.
     fn wrapped_image(&self, tm: &Rc<Term>) -> Option<Rc<Term>> {
@@ -1456,7 +1456,7 @@ impl Reifier<'_> {
     /// q)`, `Rat::ofInt(-m)`: `+`, `*`, negation, and subtraction as `x + -y`)
     /// is an atom read with the
     /// edge's law (the field `map_add` of `Dyadic::rat_hom`,
-    /// docs/casting-design.md §11), whose right side, the images of the
+    /// docs/language/casting-design.md §11), whose right side, the images of the
     /// operands, is read the same way. An image of an image (`CReal::ofRat((a + c).rat())`) carries the
     /// inner law through the outer edge by `map_respects`. Confirmed, like
     /// [`Self::cast`], by converting the term to the law's left side.
@@ -1613,7 +1613,7 @@ impl Reifier<'_> {
     }
 
     /// The morphisms in scope that map into this carrier
-    /// (docs/casting-design.md §15, §16): a local whose type is
+    /// (docs/language/casting-design.md §15, §16): a local whose type is
     /// `OrderedRingHom<A, K>(map, …)`, found as `mono` finds one. The record
     /// is structural, so its type names no family: a local map `A → K` in
     /// scope gives the candidate `A`, and a local is a morphism when the

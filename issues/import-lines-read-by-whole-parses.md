@@ -9,7 +9,7 @@ updated: 2026-11-11
 
 A warm `heather check --cache` replays every module of the closure from its image, so nothing in it needs a module's declarations. It parsed every module whole all the same, twice: once in the loader (`loader::Walk::visit`) and once in the session (`semantic::written_imports`), each time to read the `import` lines and drop the rest. A cold run parsed each module a third time, in the elaborator, which is the only parse that uses the result.
 
-Imports come first in a file, and `parse_file` refuses one after a declaration. `docs/modules-design.md` §3.1 gives the reason: it "makes the import DAG readable without parsing declarations". Nothing read it that way.
+Imports come first in a file, and `parse_file` refuses one after a declaration. `docs/language/modules-design.md` §3.1 gives the reason: it "makes the import DAG readable without parsing declarations". Nothing read it that way.
 
 ## What that cost
 

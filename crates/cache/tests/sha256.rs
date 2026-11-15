@@ -1,7 +1,7 @@
 //! SHA-256 against its published vectors, and against an independent
 //! implementation.
 //!
-//! The whole argument for a first-party hash (`docs/cache-v1-design.md` §2) is
+//! The whole argument for a first-party hash (`docs/infrastructure/cache-v1-design.md` §2) is
 //! that SHA-256 is a frozen specification with a *checkable* correctness
 //! criterion rather than an arguable one. This file is that check; without it
 //! the argument does not hold.

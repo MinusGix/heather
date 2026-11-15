@@ -15,7 +15,7 @@ place of "all of std sees all of std".
 
 ## Shape
 
-- `lib/std/prelude.hthr`: a facade (docs/modules-design.md §3.4) whose
+- `lib/std/prelude.hthr`: a facade (docs/language/modules-design.md §3.4) whose
   `export` lists name the everyday surface of the core modules: the types
   and their constructors (`Bool`, `Option`, `List`, `Pair`), the logic
   connectives, the `algebra` classes (`Numeral`, `Default`, `Cmp`, the
@@ -64,5 +64,5 @@ place of "all of std sees all of std".
 
 ## Log
 
-- 2026-11-03: 2026-11-03: Built (thread 'Design a shared common prelude'): `lib/std/core/common.hthr`, implicit for every module later than it in a run's order (loader, `semantic::module_imports`, elaborator agree). Two rules the facade needed, decided with Minus: a type exported through a facade carries its own module's members (read at lookup), and the prelude's closure is visible qualified-only (instances, designations, `nat::…`). docs/modules-design.md §3.5. Not yet done: removing the now-redundant import lines across lib (a mechanical follow-up; explicit imports stay valid since a facade name is the same declaration). Probe: lib/_tests/std/core/common_tests.hthr.
+- 2026-11-03: 2026-11-03: Built (thread 'Design a shared common prelude'): `lib/std/core/common.hthr`, implicit for every module later than it in a run's order (loader, `semantic::module_imports`, elaborator agree). Two rules the facade needed, decided with Minus: a type exported through a facade carries its own module's members (read at lookup), and the prelude's closure is visible qualified-only (instances, designations, `nat::…`). docs/language/modules-design.md §3.5. Not yet done: removing the now-redundant import lines across lib (a mechanical follow-up; explicit imports stay valid since a facade name is the same declaration). Probe: lib/_tests/std/core/common_tests.hthr.
 - 2026-11-10: Minus asked (2026-11-10, issues/linarith-rat-without-ordered-field-import.md) for the ordered-field material the arithmetic tactics name to live in the prelude: common.hthr now has a plain `import ordered_field;` (no export), so ordered_field, semiring, order, int, omega, morphism and mono_laws are qualified-only visible everywhere. This reverses the 'keep int and omega out' line above for those two: of 246 non-test lib modules, about 200 gain ordered_field in their closure, about 120 omega and about 60 int. The seven modules are now inside the prelude's closure and no longer see it.

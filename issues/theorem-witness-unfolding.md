@@ -15,7 +15,7 @@ the library has no `Prop`, so the witness *is* data. Opacity is the only
 thing hiding it.
 
 The regular Cauchy reals hit this first ([[regular-cauchy-reals]],
-docs/regular-cauchy-reals-round.md "Computation"). A `≈` proof's start
+docs/library/regular-cauchy-reals-round.md "Computation"). A `≈` proof's start
 index, a `<` proof's gap and `lt_cotrans`'s branch are what a client
 computes with: an inverse reads the gap, and a limit reads moduli. The
 round's workaround is to write every such proof as a `fn`, and to turn
@@ -29,11 +29,11 @@ question, not the author's.
 
 1. **The edit firewall.** Editing a theorem's proof leaves its Ψ binding and
    its interface hash unchanged, so every later declaration replays
-   (docs/declaration-slice-replay-design.md, "The structural-equality
+   (docs/infrastructure/declaration-slice-replay-design.md, "The structural-equality
    test"). A `fn` body edit re-elaborates everything after it.
 2. **Conversion never enters a proof.** No comparison unfolds a `ring` or
    `omega` certificate. `sym(refl)` does not reduce to `refl`
-   (docs/decreases-unfolding-design.md §3), and that is relied on.
+   (docs/language/recursion/decreases-unfolding-design.md §3), and that is relied on.
 3. **Proof stability.** A client can depend only on a theorem's statement,
    so its proof can be rewritten freely. Computing with a witness gives up
    exactly this for that client. That is inherent to computing with it, and
@@ -85,7 +85,7 @@ Sequence:
    they are rare outside `creal`, D's elaborator risk is small. If they are
    common, start with C.
 2. **Keep theorem bodies.** Images and slices drop them today
-   (docs/declaration-slice-replay-design.md, "The same contribution"), so
+   (docs/infrastructure/declaration-slice-replay-design.md, "The same contribution"), so
    measure the size of keeping them sealed.
 3. **Implement the unfolding with dependency recording.** Either the
    elimination-driven δ (D) or the shadow minting (C), with the unfolded
@@ -117,11 +117,11 @@ declarations that unfolded it.
   - With bodies kept, `creal` written with `theorem`s in place of its data-carrying `fn`s checks, and the showcase's `add_zero_start`/`one_gap` evaluate by `refl`.
 
   Consequence for the plan: D is cheap at conversion. What remains is (a) retaining bodies without a 10–30% memory tax (lazily from the image or disk, or only for theorems whose statement carries data), and (b) recording which theorem bodies a declaration actually unfolded, at the kernel *and* in the elaborator's whnf, so the check key and slice replay depend on exactly those. On today's library that set is almost always empty, so the edit firewall would hold in practice. The probe patch is not committed.
-- 2026-10-16: Landed option D (docs/theorem-witness-unfolding-design.md). A theorem whose statement carries data (a witness, a branch, a number, a function returning one; `crates/elab/src/sealing.rs`) keeps its proof sealed beside its opaque binding in `GlobalCtx::sealed`; bindings and interface hashes are unchanged. Both kernel machines and conversion's δ stage open a sealed proof only under a stuck elimination (projection, match, recursor), never under an application. `heather_kernel::unseal` records which proofs a check opened, at force time in the value machine, so a comparison decided on the spine opens nothing. The verdict store keeps no verdict that opened a proof; slices record what each declaration's pass opened and re-elaborate exactly those after the proof changes; module images (`HTHMOD` 13) carry the module's sealed proofs and the dependency proofs it opened, and whole-image replay misses (`OpenedProofChanged`) when one changed. `creal`'s 23 stopgap `fn`s, `Rat::archimedean(_inv)` and the showcase's `zero_below_one` are theorems again; `add_zero_start`, `one_gap` and `witnesses_compute` pass unchanged.
+- 2026-10-16: Landed option D (docs/kernel/theorem-witness-unfolding-design.md). A theorem whose statement carries data (a witness, a branch, a number, a function returning one; `crates/elab/src/sealing.rs`) keeps its proof sealed beside its opaque binding in `GlobalCtx::sealed`; bindings and interface hashes are unchanged. Both kernel machines and conversion's δ stage open a sealed proof only under a stuck elimination (projection, match, recursor), never under an application. `heather_kernel::unseal` records which proofs a check opened, at force time in the value machine, so a comparison decided on the spine opens nothing. The verdict store keeps no verdict that opened a proof; slices record what each declaration's pass opened and re-elaborate exactly those after the proof changes; module images (`HTHMOD` 13) carry the module's sealed proofs and the dependency proofs it opened, and whole-image replay misses (`OpenedProofChanged`) when one changed. `creal`'s 23 stopgap `fn`s, `Rat::archimedean(_inv)` and the showcase's `zero_below_one` are theorems again; `add_zero_start`, `one_gap` and `witnesses_compute` pass unchanged.
 
     - **Acceptance:** `slice_replay.rs` checks the firewall both ways (an unopened sealed proof edit re-elaborates 1 item, an opened one exactly it and its opener) and across a module image; `end_to_end.rs` checks a warm run re-gates only the opener (and fails with the store's guard removed).
     - **Cost** (`scripts/perf ab --base origin/master --whole-tree`, loaded box, counters only): outside `creal` nothing is opened anywhere in the corpus; the classification adds a weak-head probe per theorem (eval counters +0.2–0.6%), with no body rescopes once a decoded statement is answered from its value. Peak RSS within a few percent, against the keep-all probe's +10–31%.
     - Two tests moved by design: `check_reports_mismatch`'s stuck-projection fixture is an axiom now (a theorem's witness computes), and the Nat-suite golden hash moved because Ψ's printed form gained the `sealed` list.
     - Not done, owing nothing: loading kept proofs lazily from the image (not needed at today's sizes), and turning the `fn` deciders back into theorems (design note §6).
 - 2026-10-16: Full suite found the classifier's other failure mode. Spelling a decoded statement to recurse into it re-evaluated `CodeResident` over the wc program's bytes (a conjunction per byte) at every level and ran the wc certificate build out of memory. The classifier now walks the value domain under fresh variables with one fuel budget and a node bound, and **an unsettled statement keeps its proof out**: a kept proof is run wherever an elimination is stuck on it, so "unknown" must mean opaque, not kept. The wc build then passes; it keeps 338 proofs (native run triples, which carry data), none opened, at a peak RSS roughly a tenth above master. Split out: [[sealed-proof-memory]].
-- 2026-11-05: gardener: cites a file it shares with [[native-tool-test-cold-certificate-rail]] (`crates/elab/src/sealing.rs`, `docs/theorem-witness-unfolding-design.md`); [[omega-listed-facts-only]] (`docs/regular-cauchy-reals-round.md`).
+- 2026-11-05: gardener: cites a file it shares with [[native-tool-test-cold-certificate-rail]] (`crates/elab/src/sealing.rs`, `docs/kernel/theorem-witness-unfolding-design.md`); [[omega-listed-facts-only]] (`docs/library/regular-cauchy-reals-round.md`).

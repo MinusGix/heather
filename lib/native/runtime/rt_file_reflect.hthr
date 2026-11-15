@@ -1,6 +1,6 @@
 // The reflector for functions that write a span: a function from a span's
 // bytes to `Mutated<List<BitVec(8)>, R>`, read from its elaborated body as
-// an `FFun` (docs/native-one-compiler-design.md §2.6, U4 step 4c-3).
+// an `FFun` (docs/native/native-one-compiler-design.md §2.6, U4 step 4c-3).
 //
 // The source is the kernel type a `mut self` method on the bytes has:
 // `fn List::m(mut self span: List<BitVec(8)>, length: BitVec(64), …) → R`,

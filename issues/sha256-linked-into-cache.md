@@ -9,7 +9,7 @@ created: 2026-11-10
 updated: 2026-11-14
 ---
 
-Stage C2 of `docs/native-lexer-crypto-roadmap.md` §4: the compiled, proved
+Stage C2 of `docs/native/native-lexer-crypto-roadmap.md` §4: the compiled, proved
 SHA-256 linked into `crates/cache` in place of the scalar path of
 `crates/cache/src/sha256.rs`.
 

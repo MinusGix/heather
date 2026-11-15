@@ -17,7 +17,7 @@ fn Option::and_then<A, B>(self o: Option<A>, f: A → Option<B>) → Option<B> {
 }
 
 // `Option` is a carrier of binding statements: `let x <- o;` exits with
-// `None` (docs/sequencing-surface-design.md §2.3).
+// `None` (docs/language/sequencing-surface-design.md §2.3).
 instance Bind<Option> { bind := Option::and_then }
 instance Pointed<Option> { pure := λ {A} a => Some(a) }
 

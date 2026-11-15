@@ -12,7 +12,7 @@ cloud box ([[cloud-benchmarks]]). Both had been recorded on the desktop:
 kernel at 5cec674, frontend at f354d48, and the frontend file was missing
 most of the families added since. Six declared bands are now left by the
 measured slope. `--check` fails on a band left on either side
-(`docs/frontend-benchmarking.md`), so a cloud `--check` is red until each one
+(`docs/infrastructure/frontend-benchmarking.md`), so a cloud `--check` is red until each one
 is settled:
 
 | family | band | cloud slope | side |
@@ -42,4 +42,4 @@ their bands, or each family left outside has a written reason.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[parallel-checking-and-caching]] (`docs/frontend-benchmarking.md`); [[prelude-clone-cost-grew]] (`docs/frontend-benchmarking.md`).
+- 2026-11-05: gardener: cites a file it shares with [[parallel-checking-and-caching]] (`docs/infrastructure/frontend-benchmarking.md`); [[prelude-clone-cost-grew]] (`docs/infrastructure/frontend-benchmarking.md`).

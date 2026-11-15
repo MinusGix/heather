@@ -10,7 +10,7 @@ code: crates/kernel/src/rec.rs @ HEAD
 The code recursor's eliminator branches declared the scrutinee's recursive
 call at the *motive's* universe level, while reduction supplies it at the
 *scrutinee's*. Found while transcribing the declarative rules
-([[delam-extensions-writeup]], `docs/delam-extensions.md` §7.7 / §16.1).
+([[delam-extensions-writeup]], `docs/kernel/delam-extensions.md` §7.7 / §16.1).
 
 ## Why
 
@@ -35,7 +35,7 @@ formalization do not transcribe the flaw as scripture.
 
 ## What
 
-Corrected rule (`docs/delam-extensions.md` §7.7):
+Corrected rule (`docs/kernel/delam-extensions.md` §7.7):
 
     x_t : M_Trm[ℓ'/ℓ, g/g, Empty^{ℓ'}/U_T, box u_t^id / x_t] @ l₂
 
@@ -76,7 +76,7 @@ varies only `dom`:
 
 `ℓ` and `ℓ'` are distinct universe *variables* of the telescope, so no
 instantiation can collapse the two readings. Suite 1133 → 1134, all green;
-no golden number moved. `docs/delam-extensions.md` §16.1 carries the
+no golden number moved. `docs/kernel/delam-extensions.md` §16.1 carries the
 resolution and the ill-formedness finding. The `t_elimN`/`t_elim_sE`
 siblings are fixed by the same argument but have no bespoke witness — the
 generic check in [[branch-telescope-entries-unchecked]] is the intended

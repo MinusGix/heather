@@ -1,5 +1,5 @@
 //! `lib/std/core/logic.hthr` and the connective syntax
-//! (`issues/std-logic-module.md`, `docs/logic-connectives-design.md`).
+//! (`issues/std-logic-module.md`, `docs/library/logic-connectives-design.md`).
 //!
 //! Two things are under test and they fail differently, so they are kept
 //! apart below: the **module** (§1–2), which is ordinary declarations and

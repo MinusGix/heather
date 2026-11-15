@@ -1,4 +1,4 @@
-//! Instance resolution and `:= infer` (`docs/traits-layer2-design.md`).
+//! Instance resolution and `:= infer` (`docs/language/classes/traits-layer2-design.md`).
 //!
 //! One entry point — [`Elaborator::resolve_goal`], `(goal, scope) → term` —
 //! consulted from `apply_implicit`'s retry loop for every **solver
@@ -9,7 +9,7 @@
 //! One consumer reads an answer rather than taking it: a dispatched
 //! projection, which asked for a dictionary only to take one field out of it.
 //! [`Resolution::resolve_goal_from`] tells it where an **upcast** answer came
-//! from, and `docs/traits-named-upcast-design.md` is why that matters.
+//! from, and `docs/language/classes/traits-named-upcast-design.md` is why that matters.
 //!
 //! Nothing here is trusted. Every proposal, from every source, is handed to
 //! the kernel at the goal type before it is returned (§4.4) — which is what
@@ -50,7 +50,7 @@ const MAX_DEPTH: usize = 32;
 const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 
 /// The reduction allowance for the **computation** source at a proposition
-/// goal (docs/positivity-evidence-design.md §6 A): `trivial` is proposed only
+/// goal (docs/library/positivity-evidence-design.md §6 A): `trivial` is proposed only
 /// when the goal reduces to `True` within this much work. A goal whose
 /// operands are large closed computations is not worth proving this way, and
 /// an inconclusive check is a miss that falls through to the rules.
@@ -164,12 +164,12 @@ pub(crate) struct DerivedInst {
     /// *different* known head skips the conversion: two goals at different
     /// heads can still convert, but deciding that means unfolding both, which
     /// over computed operands is the cost the head order exists to avoid
-    /// (docs/reflection-through-decide-instances-design.md §3); a miss here
+    /// (docs/tactics/reflection-through-decide-instances-design.md §3); a miss here
     /// costs the registry route, never correctness.
     pub head: Option<String>,
 }
 
-/// One `positivity` run's memory (docs/positivity-evidence-design.md §10):
+/// One `positivity` run's memory (docs/library/positivity-evidence-design.md §10):
 /// the subgoals omega was already stuck on. Every subgoal of one run is
 /// elaborated in the caller's context, since rules bind nothing, so a goal is
 /// compared by syntax.
@@ -224,7 +224,7 @@ impl std::ops::Deref for Resolution<'_> {
 
 impl Resolution<'_> {
     /// The surface shape an `evidence theorem` must have before it is
-    /// elaborated (docs/positivity-evidence-design.md §6 A). A rule is applied
+    /// elaborated (docs/library/positivity-evidence-design.md §6 A). A rule is applied
     /// by search, so search has to be able to fill every parameter: a `{…}`
     /// value is solved by unifying the conclusion with the goal, and a
     /// premise is `:= infer`, resolved by the same search.
@@ -243,7 +243,7 @@ impl Resolution<'_> {
                     "`{}` is an explicit parameter, but an evidence rule is applied by \
                      search, which has no argument to give it: write it `{{{}: …}}` if \
                      the conclusion determines it, or `{}: … := infer` if it is a premise \
-                     (docs/positivity-evidence-design.md §6 A)",
+                     (docs/library/positivity-evidence-design.md §6 A)",
                     p.name, p.name, p.name
                 ),
                 span: p.span,
@@ -274,7 +274,7 @@ impl ResolutionMut<'_> {
     /// relation and check that backchaining through it terminates.
     ///
     /// Termination is Paterson's condition, the one instances obey
-    /// (docs/traits-layer2-design.md §6), read on the checked statement: each
+    /// (docs/language/classes/traits-layer2-design.md §6), read on the checked statement: each
     /// `:= infer` premise is strictly smaller than the conclusion and mentions
     /// no binder more often. Every step of a search through rules then
     /// shrinks the goal, so no rule can loop, alone or with others.
@@ -322,7 +322,7 @@ impl ResolutionMut<'_> {
             // `<A: OrderedField(…)>`) is a class goal: the instance registry
             // answers it, under the instances' own decrease check, and no
             // evidence rule is about a class, so it cannot lead back into
-            // this rule set (docs/division-design.md §6).
+            // this rule set (docs/library/division-design.md §6).
             let written_class = params
                 .get(*at as usize)
                 .and_then(|p| p.solver.as_deref())
@@ -342,7 +342,7 @@ impl ResolutionMut<'_> {
                     "the premise `{name}` of evidence rule `{}` is not smaller than its \
                      conclusion, so a search through it might not terminate: each premise \
                      must have fewer symbols than the conclusion and mention no variable \
-                     more often (docs/traits-layer2-design.md §6)",
+                     more often (docs/language/classes/traits-layer2-design.md §6)",
                     decl.name
                 ));
             }
@@ -384,7 +384,7 @@ impl Resolution<'_> {
     /// When step 1b answers, `up` receives the *child* dictionary and its class
     /// type — the two things a consumer needs to read the answer as a
     /// projection instead of as a value
-    /// (`docs/traits-named-upcast-design.md` §2). Nothing else about the search
+    /// (`docs/language/classes/traits-named-upcast-design.md` §2). Nothing else about the search
     /// changes, and the upcast proposal itself is still built and still gated:
     /// this reports a provenance, it does not open a second route.
     ///
@@ -406,7 +406,7 @@ impl Resolution<'_> {
         up: &mut Option<(Term, Type)>,
     ) -> Option<Term> {
         // Trait/instance resolution's own phase column
-        // (`docs/instrumentation-design.md` §5). Backchaining recurses through
+        // (`docs/infrastructure/instrumentation-design.md` §5). Backchaining recurses through
         // here; the registry's exclusive rule charges each nesting level only
         // its own share, so the column is search time and not search time
         // times depth.
@@ -416,8 +416,8 @@ impl Resolution<'_> {
         // binder type or statement, where a parameterized class instantiation
         // is `El (app(C#tycode_fn^δ; ā))`, and every structural read below —
         // starting with the class lookup — is written against the lowering
-        // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
-        // 2026-09-10; `docs/wf-shape-code-design.md` §4). One head unspell at
+        // (`docs/inductives/per-instantiation-type-codes-design.md` §4.2, amended
+        // 2026-09-10; `docs/inductives/wf-shape-code-design.md` §4). One head unspell at
         // the entry, so the whole search sees one spelling.
         let spelled = goal;
         let inline = self.unspell_here(goal);
@@ -472,7 +472,7 @@ impl Resolution<'_> {
         }
         // 1b. The same scope again, by **upcast**: a dictionary of a *child*
         //     class answers an ancestor's goal, through the canonical parent
-        //     projection (docs/traits-owner-dispatch-design.md §3). After the
+        //     projection (docs/language/classes/traits-owner-dispatch-design.md §3). After the
         //     exact pass, because an exactly-typed value in scope is the one
         //     the writer named; before the registry, because this is still a
         //     scope answer and not a derivation.
@@ -568,7 +568,7 @@ impl Resolution<'_> {
             // The index is part of the candidate line, not a separate one: at a
             // carrier with two structures the trace has to say *which* was
             // tried, and that is the whole observability the registry key buys
-            // (docs/operation-indexed-classes-design.md §3.1, §11).
+            // (docs/language/classes/operation-indexed-classes-design.md §3.1, §11).
             tr.push(line(
                 depth,
                 "candidate",
@@ -764,7 +764,7 @@ impl Resolution<'_> {
 
     /// Steps 3 to 5 at a goal that is not a class: **computation**, the
     /// **evidence rules** about the goal's relation
-    /// (docs/positivity-evidence-design.md §6 A), and, only inside a
+    /// (docs/library/positivity-evidence-design.md §6 A), and, only inside a
     /// `positivity` run, **omega** (§10). Locals and derivations have already
     /// had their turn, so an exact proof in scope still wins.
     fn resolve_proposition(
@@ -850,7 +850,7 @@ impl Resolution<'_> {
             .map(|rule| rule.global.clone())
             .filter(|g| !self.rule_clashes(g, goal))
             .collect();
-        // A **search rule** (docs/facts-on-demand-design.md §3) is a rule
+        // A **search rule** (docs/native/facts-on-demand-design.md §3) is a rule
         // with a premise that runs a tactic, `h: P := omega`: a producer that
         // may cost a search. Every plain rule is tried first, in canonical
         // order, and the search rules after them, so a goal a cheap producer
@@ -862,7 +862,7 @@ impl Resolution<'_> {
         // `OrderedAddMonoid::positive_add` asks for two signs, the located
         // monoid's mixed rules ask for a nonnegative, which a search rule
         // answers by a `linarith` run, and canonical order alone would try
-        // them first (docs/division-design.md §6).
+        // them first (docs/library/division-design.md §6).
         if rules.len() > 1 {
             rules.sort_by_cached_key(|g| self.rule_class_rank(g));
         }
@@ -872,7 +872,7 @@ impl Resolution<'_> {
         // meet the same goal again (a reciprocal's apartness, read while
         // `nlinarith` reads the context that mentions it), and the nesting
         // is bounded only by the depth cap, exponentially. Plain rules still
-        // answer there (docs/division-design.md §3).
+        // answer there (docs/library/division-design.md §3).
         if self.scope.ring_depth.get() == 0 && self.scope.omega_depth.get() == 0 {
             rules.extend(search);
         }
@@ -952,7 +952,7 @@ impl Resolution<'_> {
         None
     }
 
-    /// The `positivity` tactic (docs/positivity-evidence-design.md §10): the
+    /// The `positivity` tactic (docs/library/positivity-evidence-design.md §10): the
     /// search `:= infer` runs at `goal`, with one more source at every
     /// proposition subgoal, `omega`, tried after the evidence rules. Cheap
     /// routes first: a local, computation and a rule are each one kernel
@@ -1066,7 +1066,7 @@ impl Resolution<'_> {
             span,
         };
         // A bare reference fills implicits and solver parameters but leaves
-        // a defaulted parameter to a call (docs/named-arguments-design.md
+        // a defaulted parameter to a call (docs/language/named-arguments-design.md
         // §9.6), so a search rule is built as the call that names nothing:
         // its tactic premises run as their defaults, in the goal's context.
         if self.is_search_rule(global) {
@@ -1137,7 +1137,7 @@ impl Resolution<'_> {
     }
 
     /// Does the global have a defaulted parameter: is it, as an evidence
-    /// rule, a search rule (docs/facts-on-demand-design.md §3)? Read off the
+    /// rule, a search rule (docs/native/facts-on-demand-design.md §3)? Read off the
     /// declaration's parameter table, so nothing new is stored in an image.
     pub(crate) fn is_search_rule(&self, global: &str) -> bool {
         self.names
@@ -1146,7 +1146,7 @@ impl Resolution<'_> {
     }
 
     /// Step 1b: answer the goal from a *child* dictionary in scope
-    /// (docs/traits-owner-dispatch-design.md §3).
+    /// (docs/language/classes/traits-owner-dispatch-design.md §3).
     ///
     /// Owner-keyed dispatch builds its goal at the class that declared the
     /// member, so the dictionary the writer has in hand is routinely a
@@ -1159,7 +1159,7 @@ impl Resolution<'_> {
     /// dictionary with its class type** — the provenance
     /// [`Self::resolve_goal_from`] hands a dispatched projection so that it can
     /// read the field out of the child instead of out of the assembled parent
-    /// (`docs/traits-named-upcast-design.md` §2). `None` is "nothing in scope
+    /// (`docs/language/classes/traits-named-upcast-design.md` §2). `None` is "nothing in scope
     /// upcasts", which costs one `tag_of` when the goal is not a class at all.
     fn scope_upcast(
         &self,
@@ -1300,7 +1300,7 @@ impl Resolution<'_> {
 
 impl Elaborator {
     /// [`Resolution::conv_here`] for consumers outside this module — the value-slot
-    /// ladder's carrier test (`docs/operation-indexed-classes-design.md` §5).
+    /// ladder's carrier test (`docs/language/classes/operation-indexed-classes-design.md` §5).
     pub(crate) fn conv_types(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
         Resolution(self).conv_here(cx, ty, goal, lvl)
     }

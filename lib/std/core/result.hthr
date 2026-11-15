@@ -1,7 +1,7 @@
 // A success value or an error. `?` propagates Err from a function or lambda.
 // `varies A`: as a type constructor (a carrier of `Bind`, an implicit
 // `M: Type → Type` learned from a `Result<A, E>`), `Result` abstracts its
-// value type and fixes its error type (docs/lambda-carrier-instances-design.md §7).
+// value type and fixes its error type (docs/language/classes/lambda-carrier-instances-design.md §7).
 inductive Result<A, E> varies A { Ok(value: A), Err(error: E) }
 
 fn Result::map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {

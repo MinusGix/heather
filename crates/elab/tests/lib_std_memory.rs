@@ -1,6 +1,6 @@
 //! `lib/std/machine/memory.hthr` — byte-addressed memory with explicit access
 //! outcomes (`issues/byte-memory-access-model.md`,
-//! `docs/byte-memory-design.md`): the refusal that needs the checker. The
+//! `docs/native/byte-memory-design.md`): the refusal that needs the checker. The
 //! model's choices at a literal and at an open memory, and the `¬` theorems
 //! that a self-overlapping span does not read back, a refused write has no
 //! `Ok` and the two packings differ, are

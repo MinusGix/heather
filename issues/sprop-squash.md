@@ -38,7 +38,7 @@ separable follow-on scope and must not make the `BoundedList` customer wait.
    at all. The enumeration invariant makes this a real design choice, not a
    generalization.
 3. **Surface SProp target recognition** — elaborator-only, per the dissolved-
-   sort decision (`docs/sprop-design.md` §1): the kernel never learns a
+   sort decision (`docs/kernel/sprop-design.md` §1): the kernel never learns a
    generic classification; the elaborator owns the policy and may synthesize
    admissible elimination routes (as it already owns "`Id` is the surface
    `=`, `sEq` stays generator-internal"). One design section here, not a
@@ -132,7 +132,7 @@ rule freezes; no normal-form readback is involved.
 ## Constraints inherited, not re-decidable here
 
 - **The irrelevant-former set is closed and enumerated** in
-  `docs/sprop-design.md` — extending it (which squash does) is a design
+  `docs/kernel/sprop-design.md` — extending it (which squash does) is a design
   round with a ch. 07 obligation and a stated abort criterion, wf-former
   discipline, not a patch. Budget yardstick: the sEq round's rec.rs bill
   was 7 branches + five transcriptions.

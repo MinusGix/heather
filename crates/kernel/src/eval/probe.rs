@@ -25,7 +25,7 @@
 //! weak-head reduction on a λ + `Nat` fragment in
 //! `lib/kernel_model/kernel_reduction.hthr` (`Tm::whnf_inst_settled`:
 //! an unblocked run is, at the same fuel, the run of every instance;
-//! `docs/kernel-model-design.md`). What is not proved is that this evaluator
+//! `docs/kernel/kernel-model-design.md`). What is not proved is that this evaluator
 //! implements that reduction.
 //!
 //! Each reading is tried **uniformly** (`k` neutral: the class holds at every

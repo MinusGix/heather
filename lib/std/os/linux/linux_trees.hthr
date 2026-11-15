@@ -1,5 +1,5 @@
 // Linux's calls as a container of events, and trees over it
-// (docs/native-program-logic-design.md §4; issues/native-linux-spec.md).
+// (docs/native/native-program-logic-design.md §4; issues/native-linux-spec.md).
 //
 // A spec is a tree over Linux's calls: it reads, writes, opens, closes and
 // stats, and returns its exit status. Facts users care about (what reaches

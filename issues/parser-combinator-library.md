@@ -80,7 +80,7 @@ before closing its chosen implementation scope.
   [[stable-termination-obligation-names]]. The library is now ready to start.
 - 2026-09-14: User requests a design round before implementation, explicitly
   exploiting dependent types for composition and behavioral proofs. Proposal:
-  `docs/parser-combinator-library-design.md` — source-indexed cursors,
+  `docs/library/parser-combinator-library-design.md` — source-indexed cursors,
   intrinsic forward movement, parser-indexed progress and semantic
   certificates, dependent bind, explicit commitment/backtracking semantics,
   pointwise observational laws, and guarded recursive builders. Signatures
@@ -92,7 +92,7 @@ before closing its chosen implementation scope.
   client. Negative testing found that offset/bound fields alone erased source
   distinctions between equal-length inputs; an explicit source-endpoint
   equality field preserves the intended distinction. Details and boundaries:
-  `docs/parser-core-prototype.md`. The full library issue remains open.
+  `docs/showcase/parser-core-prototype.md`. The full library issue remains open.
 - 2026-09-14: Prototype acceptance: focused **2 passed** (checked source laws
   plus seven negative controls); full `scripts/test`: **2668 passed, 0 failed,
   5 ignored**. Tracker and whitespace checks pass.
@@ -104,7 +104,7 @@ before closing its chosen implementation scope.
   and commitment. Generic clients, false-certificate controls, axiom audits,
   the calculator's prior examples/compiler theorem, and a nested cost sweep
   pass focused acceptance (**6 passed**). API and measured bounds:
-  `docs/parser-library.md`.
+  `docs/library/parser-library.md`.
 - 2026-09-14: Scoped follow-ups are explicit: [[parser-grammar-soundness]] owns
   an independent calculator grammar relation and its additional theorem;
   [[parser-cached-cursor-cost]] owns a cached representation comparison. The
@@ -113,6 +113,6 @@ before closing its chosen implementation scope.
   Tracker and whitespace checks pass. The initial library acceptance is
   complete; remaining broader grammar/performance work is separately owned.
 
-- 2026-09-15: [[parser-grammar-soundness]] supplies the independent calculator theorem and extends the certificate bridge; current API details are in `docs/parser-library.md`.
+- 2026-09-15: [[parser-grammar-soundness]] supplies the independent calculator theorem and extends the certificate bridge; current API details are in `docs/library/parser-library.md`.
 - 2026-09-15: The component layout needs an umbrella import; explicit declaration-preserving reexports are tracked by [[module-reexports]].
 - 2026-09-15: 2026-09-15: umbrella restored — `import parser;` is the whole library via reexports ([[module-reexports]] closed); components remain importable with the same identities.

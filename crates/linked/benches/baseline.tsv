@@ -1,5 +1,5 @@
 # scripts/bench-native --save: the linked code's speed and the Rust references'.
-# docs/native-benchmarking.md says how to read it and when to re-record.
+# docs/native/native-benchmarking.md says how to read it and when to re-record.
 env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
 env	commit	80141015e2db

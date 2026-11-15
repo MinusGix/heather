@@ -24,14 +24,14 @@ why the module's tests come in pairs.
 on a *closed* type is the identity. `map`, `fold` and `tabulate` were all
 tested at element type `Nat` and all passed for a phase, while `tabulate`'s
 index-function type was shifting by one too few
-(`docs/container-proofs.md` §10.1). The control is an element type that
+(`docs/language/container-proofs.md` §10.1). The control is an element type that
 mentions an ambient variable — `Vec(Nat; m)` under `Γ = (m, …)` is enough.
 
 **3. Mode: computing is not checking.** A test that only *evaluates* — closed
 values, `refl` at a numeral — never compares an annotation against a goal.
 A plain child's ih annotation in a container constructor was wrong for a whole
 phase because phase 2's mixed-constructor test only computed
-(`docs/container-proofs.md` §10.2). It takes a **proof**, where the ih's stated
+(`docs/language/container-proofs.md` §10.2). It takes a **proof**, where the ih's stated
 type has to convert with the goal, to notice.
 
 And the standing fourth and fifth. The fourth is about direction rather than
@@ -41,7 +41,7 @@ instance:
 and projecting still work when a field has been silently dropped, because
 dropping a field makes a *smaller* type. Only a negative control — two values
 that must *not* be equal, a false theorem that must be rejected — sees it
-(`docs/container-fields.md` §9.1).
+(`docs/language/container-fields.md` §9.1).
 
 The fifth is about *cost* rather than correctness, and it is the one a
 performance fixture has to vary:
@@ -88,7 +88,7 @@ variable that does not occur, so the mis-shifted annotations are discarded
 before the kernel is ever shown them — and every tier-0 test at three
 constructors and an open payload passed for a phase. The reproducer is that
 pair plus `as λ z => f(z) = z`
-(`docs/match-equation-split-design.md` §11.2), pinned in
+(`docs/language/matching/match-equation-split-design.md` §11.2), pinned in
 `crates/elab/tests/inductive_tier0.rs`. Note what found it: the `match h : e`
 convoy, whose motive `Π (e = z). M` is dependent *by construction* — so the
 equation binding doubles as a stress test for every motive consumer in the
@@ -137,7 +137,7 @@ an open element type needs a declaration with a type parameter, and until
 that is itself the finding — the missing language feature is also a missing
 test.
 
-The pattern-compiler row (2026-08-05, `docs/nested-match-patterns-design.md`
+The pattern-compiler row (2026-08-05, `docs/language/matching/nested-match-patterns-design.md`
 §13.2) is the first defect here that a **wrong variable** produced rather than
 a wrong annotation, and it sharpens axis 1 rather than adding a seventh axis.
 A generated `match` on a *neutral* scrutinee typed perfectly with the wrong
@@ -190,7 +190,7 @@ negative control per encoding decision (axis 4).
 ## Where the test goes
 
 At the level the term is *generated*, not only the level it is used
-(`docs/container-fields.md` §10.1). Both `map`/`fold` step-domain bugs were
+(`docs/language/container-fields.md` §10.1). Both `map`/`fold` step-domain bugs were
 caught in seconds by `vec.rs`'s own test module; through three layers of
 elaboration the same bug surfaces as an opaque `NotConvertible` on a user
 program, and the search starts from the wrong end.

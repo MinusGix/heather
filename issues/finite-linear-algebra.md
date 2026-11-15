@@ -13,7 +13,7 @@ scaling, dot product, matrix-vector and matrix-matrix products, transpose,
 identity, quadratic forms, Gram matrices, and positive (semi)definiteness
 over an ordered field with a certificate that can be checked by evaluation
 (an `LDLᵀ` factorisation at `Rat`). ML is the first customer
-(`docs/wick-survey.md` §4.1): layers, NTK Gram matrices, conditioning
+(`docs/surveys/wick-survey.md` §4.1): layers, NTK Gram matrices, conditioning
 constants, and the symmetry results (bracket saturation is a matrix
 commutator computation).
 

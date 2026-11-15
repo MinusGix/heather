@@ -1,5 +1,5 @@
 // FunctionIR's state edges evaluated (issues/native-source-bytes.md;
-// docs/native-effect-source-design.md §6): `run` is `eval` with a file of
+// docs/native/native-effect-source-design.md §6): `run` is `eval` with a file of
 // buffers threaded through the schedule, the one state a region's byte nodes
 // act on.
 //
@@ -10,7 +10,7 @@
 // pass to pass. A call is answered over the file as it is when the call is
 // made, with a word and the file its callee leaves (`Writers`), and the
 // statement after it starts from that file
-// (docs/native-one-compiler-design.md §2.6): which of its buffers a callee
+// (docs/native/native-one-compiler-design.md §2.6): which of its buffers a callee
 // sees, and what it gives back, is the caller's to say
 // (`program_writers`, function_ir_placeless).
 //

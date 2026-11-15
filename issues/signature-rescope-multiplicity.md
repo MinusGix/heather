@@ -35,7 +35,7 @@ width one).
 1. **Do not materialize the declared context at all** — the candidate
    [[global-ref-rescope-per-occurrence]] deferred: thread the global offset
    (`value::Env::gshift`) through `Conv::subst` / `apply_subst_ty` the way
-   `docs/lazy-global-offset-design.md` threads it through definition bodies, so a
+   `docs/kernel/lazy-global-offset-design.md` threads it through definition bodies, so a
    signature is *read* at an offset rather than copied. Ceiling: the ~12 M
    signature nodes, ≈ **1.3 s of a 24.3 s gate, about 5 %**. It reaches only the
    value-domain sites — both `typing.rs` sites (`Type::GlobalTy`,
@@ -88,5 +88,5 @@ that does not exist.
   that regressed +2.8 % on furnace, is −8.0 % here. So that regression is
   environment-local and not a property of the change; the fills-per-occurrence
   reasoning above stands, but the +2.8 % should not be quoted as its evidence.
-- 2026-10-25: From docs/segmap-survey.md §2: candidate 1 stays a weight-0 thinning (a constant offset, composing by addition), which is all a lazy signature read needs. A cutoff (invariant (I) of the lazy-offset design) would need a weight-1 offset, i.e. northeast c then north k; but the boxed sites materialize for trap 2 (boxes compare by ==), not for lack of a cutoff, so a richer offset type alone would not make them lazy.
-- 2026-11-05: gardener: cites a file it shares with [[env-lookup-depth]] (`docs/segmap-survey.md`); [[open-payload-shift-copies]] (`docs/segmap-survey.md`); [[perf-dashboard]] (`perf/README.md`).
+- 2026-10-25: From docs/surveys/segmap-survey.md §2: candidate 1 stays a weight-0 thinning (a constant offset, composing by addition), which is all a lazy signature read needs. A cutoff (invariant (I) of the lazy-offset design) would need a weight-1 offset, i.e. northeast c then north k; but the boxed sites materialize for trap 2 (boxes compare by ==), not for lack of a cutoff, so a richer offset type alone would not make them lazy.
+- 2026-11-05: gardener: cites a file it shares with [[env-lookup-depth]] (`docs/surveys/segmap-survey.md`); [[open-payload-shift-copies]] (`docs/surveys/segmap-survey.md`); [[perf-dashboard]] (`perf/README.md`).

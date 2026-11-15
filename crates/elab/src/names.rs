@@ -1,4 +1,4 @@
-//! Modules and name resolution (docs/modules-design.md §4–5).
+//! Modules and name resolution (docs/language/modules-design.md §4–5).
 //!
 //! Ψ is nameless — a `GlobalVar` is a de Bruijn index into one flat telescope
 //! — so a module system lives entirely here: every name table keys
@@ -30,7 +30,7 @@ thread_local! {
     /// thread looked up, the early cutoff's account of what an elaboration
     /// could have observed of the world's names beyond what its source
     /// spells — an operator's fallback name, a tactic's lemma
-    /// (`docs/module-interface-cutoff-design.md` §2).
+    /// (`docs/infrastructure/module-interface-cutoff-design.md` §2).
     ///
     /// Every lookup of every name in a file comes through here, most of them
     /// for a name already in the record, so the question "is it noted" is
@@ -322,7 +322,7 @@ pub(crate) enum NameRes {
     /// A name the surface does not have, with the sentence that says so: a
     /// generated name written in user source, or an access path naming no
     /// declaration (`access.rs`,
-    /// `docs/repr-access-spellings-design.md` §6). Never produced by
+    /// `docs/native/repr-access-spellings-design.md` §6). Never produced by
     /// [`resolve`] — the elaborator decides it before consulting the tables,
     /// because the name may well *be* in them.
     Restricted(String),
@@ -351,7 +351,7 @@ pub(crate) fn qkey(module: &str, name: &str) -> String {
 /// is the module `int` and the declared name `Le::Decide` — which is exactly
 /// how a member of a type's namespace was already keyed
 /// (`Elaborator::key_of_declared_kinds`). The lexer joins a chain as of
-/// 2026-08-17 (`docs/instance-resolved-key-design.md` §5); nothing here had to
+/// 2026-08-17 (`docs/elaborator/instance-resolved-key-design.md` §5); nothing here had to
 /// move for it.
 ///
 /// A byte scan, not `split_once("::")`: a two-byte pattern builds a
@@ -665,7 +665,7 @@ impl Names {
 
     /// Is the global `module`'s `name` a `def` used as a value: a
     /// [`Decl::value`] whose parameters, if any, are all implicit
-    /// (docs/value-definitions-design.md §2.3)? Read off the layer that
+    /// (docs/metaprogramming/value-definitions-design.md §2.3)? Read off the layer that
     /// registered it, so a same-named declaration of another module is never
     /// consulted.
     pub(crate) fn is_value(&self, module: &str, name: &str) -> bool {
@@ -704,7 +704,7 @@ impl Names {
 
 /// The prelude's module name. Implicitly imported by every module and by
 /// nothing else special: it is an ordinary module that happens to be
-/// elaborated first (docs/modules-design.md §3.2).
+/// elaborated first (docs/language/modules-design.md §3.2).
 pub(crate) const PRELUDE_MODULE: &str = "prelude";
 /// The library's common prelude (`lib/std/common.hthr`): a facade that every
 /// module later than it in a run's order imports implicitly, by name only
@@ -736,7 +736,7 @@ pub(crate) const ANY_KIND: &[NameKind] = &[];
 /// is impossibility rather than preference: a constructor is not a type, so a
 /// `TyKind::Named` that resolved to one could never have elaborated. Dropping
 /// it from the candidate set is therefore a **shrink** and not a
-/// reinterpretation — the invariant `docs/modules-design.md` §8 states for the
+/// reinterpretation — the invariant `docs/language/modules-design.md` §8 states for the
 /// expected-type route, applied to the syntactic position instead of the
 /// checked type.
 ///

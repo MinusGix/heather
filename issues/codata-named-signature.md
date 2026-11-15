@@ -14,7 +14,7 @@ inline signature in the next. Proofs over `Bisim` paid for the product of
 the signatures' sizes at every node, in the elaborator and in the kernel
 term.
 
-Done in `docs/codata-named-signature-design.md`: `D#mshape`, `D#mpos` and
+Done in `docs/inductives/codata-named-signature-design.md`: `D#mshape`, `D#mpos` and
 `D#mnext` name the signature's parts over the `tycode_fn` telescope, the
 structural readers unfold the references, the instance matcher learned `M`
 (so inductives with codata fields get their `tycode_fn` reference), and the

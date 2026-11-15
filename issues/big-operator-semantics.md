@@ -59,4 +59,4 @@ silently change an expression's meaning when a new instance is imported.
   recognized as the sane finite case of a broader operation rather than as a
   permanently separate construct. The issue keeps that possibility live while
   forcing the resolution and rewrite boundaries to be explicit.
-- 2026-10-27: docs/analysis-foundations-design.md §4 recommends route 2 (generic finite folds modulo ≈) for the finite case, with integration defined later as a limit of finite sums (§12); the counting-measure route stays open here. Implementation filed as [[finite-sums-and-products]].
+- 2026-10-27: docs/library/analysis-foundations-design.md §4 recommends route 2 (generic finite folds modulo ≈) for the finite case, with integration defined later as a limit of finite sums (§12); the counting-measure route stays open here. Implementation filed as [[finite-sums-and-products]].

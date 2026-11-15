@@ -16,7 +16,7 @@ and [[and-at-match-predicate-implicit-level-mismatch]] added). Mixed into
 congruence, a guess is taken as early as a forced solution and, with first
 write wins, blocks the right one.
 
-## Proposal (P2 of docs/elaborator-principles-survey.md)
+## Proposal (P2 of docs/elaborator/elaborator-principles-survey.md)
 
 Decided rules first (identity-renaming pattern, same rigid head, `El ?A`),
 δ at head mismatch ([[unifier-lazy-delta]]), and approximations last: a named

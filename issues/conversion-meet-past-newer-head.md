@@ -8,7 +8,7 @@ created: 2026-11-06
 updated: 2026-11-06
 ---
 
-Found wiring loops into `runtime fn` (design §16.11, `docs/runtime-fn-setups-design.md`).
+Found wiring loops into `runtime fn` (design §16.11, `docs/native/runtime-fn-setups-design.md`).
 
 A plain `runtime fn` rests on its pin, `meaning(rt, world)(x⃗) = f(x⃗)` by
 conversion, and `world` holds `f`'s callees as the functions themselves.

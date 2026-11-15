@@ -1,6 +1,6 @@
 //! The declaration cache: content-addressed, kernel-gate-skipping, rung 1.
 //!
-//! Design: `docs/cache-v1-design.md`. Architecture and everything not in v1:
+//! Design: `docs/infrastructure/cache-v1-design.md`. Architecture and everything not in v1:
 //! `issues/parallel-checking-and-caching.md`.
 //!
 //! What it does, in one sentence: it watches the two kernel-gate sites through
@@ -10,7 +10,7 @@
 //! accepted.
 //!
 //! What it does **not** do is skip parsing or elaboration; a warm run pays
-//! those in full (`docs/cache-v1-design.md` §1). And it lives above the
+//! those in full (`docs/infrastructure/cache-v1-design.md` §1). And it lives above the
 //! kernel, never inside it: the kernel stays at zero dependencies and knows
 //! nothing about any of this.
 
@@ -32,7 +32,7 @@ use store::Store;
 /// A fingerprint of the kernel's source, computed by `build.rs` over
 /// `crates/kernel/src` and compiled in.
 ///
-/// This is v1's **kernel-semantics fingerprint** (`docs/cache-v1-design.md`
+/// This is v1's **kernel-semantics fingerprint** (`docs/infrastructure/cache-v1-design.md`
 /// §6). It is deliberately conservative — a comment in the kernel invalidates
 /// every entry — because erring that way is free and the other way is a
 /// wrongly accepted proof, and because deriving it from the build makes
@@ -57,7 +57,7 @@ pub const DEFAULT_DIR: &str = ".heather/cache";
 /// keep, in place of their defaults. For several checkouts of one repository
 /// (git worktrees, one per agent) that should share what they can: every
 /// store below is content-addressed, and every replay is kernel-rechecked or
-/// vouched for under the reader's own kernel (`docs/cache-v1-design.md`), so a
+/// vouched for under the reader's own kernel (`docs/infrastructure/cache-v1-design.md`), so a
 /// shared store can cost a miss but never a wrong answer. A relative value is
 /// taken from the repository root (from the working directory for
 /// [`default_dir`]); set it absolute.
@@ -134,7 +134,7 @@ impl Counts {
 }
 
 /// The name a statement verdict is stored under. Names are metadata
-/// (`docs/cache-v1-design.md` §8) and replay has none to give.
+/// (`docs/infrastructure/cache-v1-design.md` §8) and replay has none to give.
 pub const STATEMENT_ENTRY: &str = "<statement>";
 /// The name column of a whole-replay verdict ([`KernelGate::replay_accepted`]).
 pub const REPLAY_ENTRY: &str = "<replay>";
@@ -187,7 +187,7 @@ struct Inner {
     /// Prefixes of other Ψs this gate was asked about lately, most recent
     /// last, each with the mark of the Ψ it describes in full. A process
     /// checking a module DAG asks in turn about its own world and about each
-    /// module's canonical world (`docs/module-dag-design.md` §6), which share
+    /// module's canonical world (`docs/infrastructure/module-dag-design.md` §6), which share
     /// a prefix and then differ; with one prefix every switch re-hashed
     /// everything past the shared part, which once a large chain (grind's)
     /// sat in one world and not the other was seconds per module
@@ -231,7 +231,7 @@ impl Cache {
     /// this process's own kernel gave, so every declaration still faces the
     /// kernel once; what it vouches for is the same binding met again, which
     /// is what loading a module into another module's world is
-    /// (`docs/module-dag-design.md` §6). A command run without a cache
+    /// (`docs/infrastructure/module-dag-design.md` §6). A command run without a cache
     /// directory installs one, so that it asks the kernel what a cold run
     /// over an empty directory asks
     /// (`issues/cacheless-run-rechecks-loaded-modules.md`).
@@ -294,7 +294,7 @@ impl Cache {
     /// Recorded entries by name: `name → (check key, interface hash)`.
     ///
     /// Test-facing. Names are metadata and identity is the key
-    /// (`docs/cache-v1-design.md` §8) — this exists so a test can ask "did
+    /// (`docs/infrastructure/cache-v1-design.md` §8) — this exists so a test can ask "did
     /// *that* declaration's key move", which is how the red-green rule is
     /// observed at all.
     pub fn recorded(&self) -> std::collections::BTreeMap<String, (String, String)> {
@@ -462,7 +462,7 @@ impl Inner {
         self.counts.hashed += 1;
         // Hashing a declaration is a full render of it — the one thing on this
         // path that costs real time, and until now the only thing about it the
-        // cache reported was a count (`docs/instrumentation-design.md` §5).
+        // cache reported was a count (`docs/infrastructure/instrumentation-design.md` §5).
         heather_elab::stats::count(heather_elab::stats::Counter::CacheHashes);
         let _phase = heather_elab::stats::guard(heather_elab::stats::Timer::CacheHash);
         let binding = item.binding();
@@ -484,7 +484,7 @@ impl Inner {
             let key = merkle::check_key(&self.prefix, item.body, item.opaque, &iface)?;
             // A check made under an interface boundary is a different
             // question: the same item may pass transparently and be refused
-            // with bodies withheld (docs/interface-definitions-design.md §3).
+            // with bodies withheld (docs/language/interface-definitions-design.md §3).
             let key = match psi.withheld.as_deref() {
                 Some(withheld) => {
                     let mut h = crate::sha256::Sha256::new();
@@ -593,7 +593,7 @@ impl KernelGate for Cache {
     /// the statement and, through its references, everything the statement
     /// check reads (`merkle::statement_key`).
     /// A whole module replay, keyed by its caller (the bytes and the world
-    /// under them, `docs/module-dag-design.md` §13). Its interface hashes are
+    /// under them, `docs/infrastructure/module-dag-design.md` §13). Its interface hashes are
     /// not taken: the prefix absorbs them lazily if a later declaration asks.
     fn admits_replay(&self, key: &[u8; 32]) -> bool {
         let mut inner = self.inner.borrow_mut();

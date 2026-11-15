@@ -9,7 +9,7 @@ updated: 2026-11-12
 
 The statement lowering joins each assigned local separately
 (`crates/syntax/src/imperative.rs`, the `#stageN` lets;
-docs/sequencing-surface-design.md §12 states the cost as "one condition copy
+docs/language/sequencing-surface-design.md §12 states the cost as "one condition copy
 per assigned local per `if`"). It copies the whole form, not the condition:
 a call in a branch is written once per local the form assigns.
 
@@ -56,6 +56,6 @@ obligation sites (one `on ?dec1` discharges the method).
   joined directly as before. Probe `fill_once` in
   `lib/_tests/std/core/decreases_unfolding_tests.hthr`: the example's
   `if` owes one obligation, so `on ?dec2` names no goal.
-  docs/sequencing-surface-design.md §3, §12 and §14 item 3 amended. The
+  docs/language/sequencing-surface-design.md §3, §12 and §14 item 3 amended. The
   whole library re-elaborated under the exact image policy with no proof
   needing the per-local shape.

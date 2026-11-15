@@ -7,7 +7,7 @@ created: 2026-10-22
 updated: 2026-10-22
 ---
 
-`docs/iwf-former-design.md` §8.3's tier 1 (a `match` at a
+`docs/kernel/iwf-former-design.md` §8.3's tier 1 (a `match` at a
 constructor-headed index inverts the motive by the index type's own
 eliminator, so impossible arms are `tt`) is implemented for `Nat` and for a
 flat declared index type (`Elaborator::iwf_match_motive`,
@@ -28,4 +28,4 @@ at `List a`) in the formalization's rules, so no kernel change is expected.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[indexed-families]] (`docs/iwf-former-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[indexed-families]] (`docs/kernel/iwf-former-design.md`).

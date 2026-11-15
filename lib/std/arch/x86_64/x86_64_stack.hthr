@@ -285,7 +285,7 @@ theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 }
 
 // ---------------------------------------------------------------------------
-// What a call may store (docs/native-one-compiler-design.md §2.1)
+// What a call may store (docs/native/native-one-compiler-design.md §2.1)
 
 // One store a function entered at stack offset `i` may make: a word of its
 // own room, below its return address.
@@ -355,7 +355,7 @@ theorem Stack::wrote_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
 }
 
 // ---------------------------------------------------------------------------
-// A lent span (docs/native-library-exports-design.md §4.2)
+// A lent span (docs/native/native-library-exports-design.md §4.2)
 
 // Bytes `xs` read at `a`, below the canonical boundary.
 fn Readable<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>) → Type {

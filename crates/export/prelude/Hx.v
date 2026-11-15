@@ -1,4 +1,4 @@
-(* Heather export prelude for Rocq/Coq (docs/export-fragment-design.md §4).
+(* Heather export prelude for Rocq/Coq (docs/library/export-fragment-design.md §4).
 
    The whole per-target trusted text of the export, mirroring prelude/Hx.lean
    constant for constant. Heather level l is Type@{Hx.u_l}: the library is

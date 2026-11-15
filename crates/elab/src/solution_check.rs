@@ -1,4 +1,4 @@
-//! The unifier's one check on a write (docs/elaborator-principles-survey.md
+//! The unifier's one check on a write (docs/elaborator/elaborator-principles-survey.md
 //! P1, issues/unifier-checked-assignment.md): a solution must inhabit its
 //! slot's declared type.
 //!

@@ -36,7 +36,7 @@ Scope:
 ## Log
 
 - 2026-10-27: Landed `norm_num()` (lib/std/tactic/norm_num.hthr, design
-  docs/numeral-normalisation-design.md). `=`, `≈`, `<`, `<=`, `Apart` and their
+  docs/tactics/numeral-normalisation-design.md). `=`, `≈`, `<`, `<=`, `Apart` and their
   negations at `Nat`, `Int`, `Rat`, `Dyadic` and `Finite(F)` by a `Bool`
   verdict closed by evaluation (`Nat::leb`/`same` underneath, accelerated on
   numerals of any size); at `CReal` through `NumReal` trees

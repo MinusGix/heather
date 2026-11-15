@@ -1,5 +1,5 @@
 // `laid record T { … }`: the record `T` laid over bytes
-// (docs/layout-design.md §6.2). The declaration is the record's own, under
+// (docs/native/layout-design.md §6.2). The declaration is the record's own, under
 // the prefix:
 //
 //     laid record Header { tag: u8, length: u64, flags: [u16; 3] }
@@ -48,7 +48,7 @@
 // part.
 //
 // `generate laid("T");` after a record declared elsewhere is the same
-// call, which is what the prefix is (docs/value-definitions-design.md
+// call, which is what the prefix is (docs/metaprogramming/value-definitions-design.md
 // §3.5).
 //
 // Refused, each with its reason: a type that is not a record, a field

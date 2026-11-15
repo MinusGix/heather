@@ -18,7 +18,7 @@ stored `tail: List<A>` re-lowers against the file's scope — where `List`
 is ambiguous or, worse, uniquely the *other* `List`. Today this is loud,
 not silent: nominal tags differ, so the mis-resolved lowering fails to
 typecheck at the use. But it is a use-site error for a declaration-site
-fact, and it violates the growth invariant of `docs/modules-design.md` §8
+fact, and it violates the growth invariant of `docs/language/modules-design.md` §8
 in spirit: adding a declaration to one module changes what an *unrelated*
 module's stored syntax means somewhere else.
 

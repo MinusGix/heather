@@ -9,7 +9,7 @@ updated: 2026-09-24
 A structurally recursive function that varies a non-decreasing parameter checks
 as a freestanding `fn` and is **refused** when the identical body is a
 type-owned member, because the IH-generalization analysis
-(`docs/ih-generalization-design.md`) does not recognize a self-call spelled as
+(`docs/tactics/ih-generalization-design.md`) does not recognize a self-call spelled as
 a receiver.
 
 Repro (`probes/str/p13.hthr`, 12 lines, `import logic; nat; list;`):
@@ -52,5 +52,5 @@ idiom that removed every `append_assoc` from that showcase — cannot be a metho
 
 ## Log
 
-- 2026-09-24: 2026-09-24: No longer reproduces on master: the issue's `Tree::flat_m` repro and the qualified self-call both check. It closes when calc_text's `spell` converts to a member in the namespace round (docs/receiver-member-resolution-design.md §5).
-- 2026-09-24: 2026-09-24: Landed with the namespace round (docs/receiver-member-resolution-design.md; §7 lists what was built and where it deviated). Full suite 2939 passed.
+- 2026-09-24: 2026-09-24: No longer reproduces on master: the issue's `Tree::flat_m` repro and the qualified self-call both check. It closes when calc_text's `spell` converts to a member in the namespace round (docs/language/classes/receiver-member-resolution-design.md §5).
+- 2026-09-24: 2026-09-24: Landed with the namespace round (docs/language/classes/receiver-member-resolution-design.md; §7 lists what was built and where it deviated). Full suite 2939 passed.

@@ -9,7 +9,7 @@ updated: 2026-10-21
 ---
 
 `rewrite(h, e, at := k)` numbers occurrences left to right through the goal
-(`docs/equation-rewrite-design.md` §3). Numbers break silently when the goal
+(`docs/tactics/equation-rewrite-design.md` §3). Numbers break silently when the goal
 is edited. SSReflect selects by a context pattern —
 `rewrite [X in _ <= X]h` — which keeps meaning the same position.
 

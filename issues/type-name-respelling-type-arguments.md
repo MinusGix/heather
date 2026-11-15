@@ -9,7 +9,7 @@ updated: 2026-11-06
 
 [[type-name-display-respelling]] respells an instance by the name the
 program wrote only when the name expands to a declaration with **no type
-parameters** that is not codata (docs/surface-type-display-design.md §5.1):
+parameters** that is not codata (docs/elaborator/surface-type-display-design.md §5.1):
 `u8`, `i(n)`, `def Byte: Type = BitVec(8)`. Two shapes stay spelled as their
 expansion:
 

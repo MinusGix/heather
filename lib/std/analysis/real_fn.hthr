@@ -1,7 +1,7 @@
 // Functions on an ordered field: bounds, Lipschitz bounds, uniform
 // continuity and Bishop's uniform derivative, with the rules of the
 // derivative (issues/real-functions-and-derivatives.md;
-// docs/analysis-foundations-design.md §7.2).
+// docs/library/analysis-foundations-design.md §7.2).
 //
 // Everything is stated once over a section's `K: OrderedField(≈, <, <=, +,
 // *)`, so every theorem reads at `Rat` and at `CReal` alike

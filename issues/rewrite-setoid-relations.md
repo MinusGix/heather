@@ -26,8 +26,8 @@ symmetry evidence.
 
 ## Log
 
-- 2026-10-26: Design reference: docs/mengine-survey.md §4.3. mengine (and Gross et al. 2023 before it) makes setoid-style rewriting linear by rewriting bottom-up with one congruence step per changed node, chained by transitivity, and a node memo keyed by (equation, context, node) kept across calls. Today's `rewrite` abstracts the goal by a tree walk and costs 2^k on a let-shared goal (survey §4.2), so build this one bottom-up from the start. Under binders, use the pointwise relation and a binder `Respects` instance; mengine uses funext, which Heather does not assume. Bench families with linear lower bounds: [[tactic-scaling-bench-families]].
-- 2026-10-26: landed (docs/equation-rewrite-design.md §9). A proof whose type
+- 2026-10-26: Design reference: docs/surveys/mengine-survey.md §4.3. mengine (and Gross et al. 2023 before it) makes setoid-style rewriting linear by rewriting bottom-up with one congruence step per changed node, chained by transitivity, and a node memo keyed by (equation, context, node) kept across calls. Today's `rewrite` abstracts the goal by a tree walk and costs 2^k on a let-shared goal (survey §4.2), so build this one bottom-up from the start. Under binders, use the pointwise relation and a binder `Respects` instance; mengine uses funext, which Heather does not assume. Bench families with linear lower bounds: [[tactic-scaling-bench-families]].
+- 2026-10-26: landed (docs/tactics/equation-rewrite-design.md §9). A proof whose type
   as written is a relation application `R(a, b)` (and does not unfold to an
   `=` of its own sides) is a relation step: goals `S(l, r)` and `P → Q` of
   ones, `in := hyp` forward, chains with `=` steps. The walk is bottom-up with

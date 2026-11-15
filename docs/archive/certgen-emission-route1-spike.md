@@ -1,7 +1,7 @@
 # Route 1 (Ψ-staging) for in-language certificate emission — verification spike
 
 > **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
-> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> (`docs/native/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
 > the source IR the verified compiler reads. The document stays for its reasoning. The last
 > commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
 > heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
@@ -61,7 +61,7 @@ indexed by a generic layer `i`, and layer `m` is "MLTT extended with …"
 - `ir_is_wf_lowered` — the premise. `Ir` copied verbatim from `lib/certgen/ir_v1.hthr`
   really does lower to `Type::Wf`, so this is about `elim_Wf` and not about
   `elim_Sum`. (Three of its constructors carry two recursive fields, which is
-  what puts it on the tier-1 route, `docs/inductive-tier1-wf-lowering.md`.)
+  what puts it on the tier-1 route, `docs/inductives/inductive-tier1-wf-lowering.md`.)
 - `elim_over_a_wf_lowered_inductive_checks_at_the_meta_layer` — the term the
   elaborator committed for a real structural recursion over that `Ir`
   (**neutral** scrutinee: the parameter; all eight arms using the ih, so the
@@ -138,7 +138,7 @@ naming a global too, not only the type).
 A `theorem` is an ordinary Ψ global, so this is item (b) with the global in
 the payload's *head* position instead of its type's. The fold never reads a
 proof — body reflection's opacity policy
-(`docs/opaque-globals-analysis-design.md`) is about `fn_body_code` and is
+(`docs/metaprogramming/opaque-globals-analysis-design.md`) is about `fn_body_code` and is
 simply not what a fold needs — it names the lemma and applies it.
 
 **Against the real kit**, in `crates/elab/tests/ir_v1.rs::the_full_ir_library_checks`:
@@ -184,7 +184,7 @@ calls a fully successful outcome when the cause is precise. The cause:
    "`Ctx`/`TyCode`/`Code` are meta-layer types". Pinned in
    `a_meta_fn_cannot_call_itself_or_another_meta_fn`.
 2. At layer m there is no recursion at all. A `meta fn` is elaborator-held,
-   not Ψ-resident (`docs/in-language-map-design.md` §8), so it is not in scope
+   not Ψ-resident (`docs/metaprogramming/in-language-map-design.md` §8), so it is not in scope
    in its own body ("unbound name `m`") and not in another's ("`a` cannot be
    used here"). Same test.
 3. Even granting (1) and (2), the fold's result type **varies with the
@@ -215,7 +215,7 @@ The issue names two: "ordinary match/recursion in a meta body
 | the issue said | actually |
 | --- | --- |
 | ordinary **match** in a meta body | **already exists.** Landed with the analyzer round; verified here over a Wf-lowered `Ir` at layer m. Nothing to build. |
-| ordinary **recursion** in a meta body | **missing, and it is not `meta-body-statement-loop`.** That issue is about annotated `let` in a meta body — a different, smaller gap. The real one is **Ψ-resident meta definitions** (`docs/in-language-map-design.md` §8, and `docs/archive/certgen-transcriber-in-language-design.md` §11's last-but-one bullet): a `meta fn` cannot name itself or another. `issues/meta-body-statement-loop.md` should not be cited as route 1's prerequisite; the Ψ-resident-meta-defs deferral should. |
+| ordinary **recursion** in a meta body | **missing, and it is not `meta-body-statement-loop`.** That issue is about annotated `let` in a meta body — a different, smaller gap. The real one is **Ψ-resident meta definitions** (`docs/metaprogramming/in-language-map-design.md` §8, and `docs/archive/certgen-transcriber-in-language-design.md` §11's last-but-one bullet): a `meta fn` cannot name itself or another. `issues/meta-body-statement-loop.md` should not be cited as route 1's prerequisite; the Ψ-resident-meta-defs deferral should. |
 | staged elaboration order | **confirmed missing**, and it is the load-bearing one — see below. |
 | *(unnamed)* | **the fold's dependent statement** (§4). Not a surface gap; a calculus gap, and it is route 3's. |
 
@@ -250,7 +250,7 @@ keep.
 
 ## 6. Seams the staged order can reuse
 
-- **Analyzer slots** (`docs/meta-def-registration-design.md` §11, summarized in
+- **Analyzer slots** (`docs/metaprogramming/meta-def-registration-design.md` §11, summarized in
   `docs/archive/certgen-transcriber-in-language-design.md` §6.1). The contract is
   whole-signature convertibility against an expected signature *written in
   Heather* and elaborated in the declaring file's scope, so a

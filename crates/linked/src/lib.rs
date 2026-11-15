@@ -2,7 +2,7 @@
 //!
 //! This is the first place the workspace runs code Heather compiled *inside
 //! a Rust program*, called directly, with no process between them
-//! (`docs/native-lexer-crypto-roadmap.md`: both of that roadmap's targets
+//! (`docs/native/native-lexer-crypto-roadmap.md`: both of that roadmap's targets
 //! are libraries, a compiled function over memory its caller owns). What is
 //! linked is `generated/*.s`: the bytes `compile-x86` certified, checked in,
 //! and held to the compiler by `crates/cli/tests/native_linked.rs`, which
@@ -23,7 +23,7 @@
 //! `safe fn`: nothing a caller passes can make the call misbehave.
 //!
 //! An export may also read **a span of bytes its caller owns**
-//! (docs/native-library-exports-design.md): its code takes the span's
+//! (docs/native/native-library-exports-design.md): its code takes the span's
 //! address and length as two words, and its `_returns` theorem has the
 //! premises a pointer needs, that the two words are a span of readable
 //! bytes the callee's own stores cannot reach (`Stack::LentOver`, `Loan`),

@@ -1,4 +1,4 @@
-// The facts `bv_omega` builds, one per word (docs/bv-omega-design.md). A
+// The facts `bv_omega` builds, one per word (docs/tactics/bv-omega-design.md). A
 // word's value is `w.toNat() + Q = P`, where `P` and `Q` are *forms*: sums
 // `c₁ * a₁ + (c₂ * a₂ + (… + k))` over the call's atoms in a fixed order,
 // with literal coefficients. Adding two forms is one `form_*` step per atom,

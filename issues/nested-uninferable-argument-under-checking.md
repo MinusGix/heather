@@ -21,14 +21,14 @@ fn a03(n: Nat) → BitVec(n) { BitVec::iterate_increment(BitVec::zero(), 3) }   
 `band`'s `n` is pinned by `y` and by the expected type. But the first argument
 is itself a call whose own implicit is solved only through the argument's
 expected type `BitVec(?n)`, and the per-call deferral
-(`docs/unifier-completeness-design.md` §3–§5) apparently does not carry a
+(`docs/elaborator/unifier-completeness-design.md` §3–§5) apparently does not carry a
 solution back into a nested deferred call. That blocks method chains whose head
 is uninferable (`zero().iterate_increment(3).band(y)`), which the namespace
-round (docs/receiver-member-resolution-design.md §7) could only bring to an
+round (docs/language/classes/receiver-member-resolution-design.md §7) could only bring to an
 honest error. Unifier territory: a candidate for the #1b slice beside
 [[vector-literal-length-pins-implicit]] and [[unify-succ-under-addition]], under
 [[elab-unifier-completeness]].
 
 ## Log
 
-- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.
+- 2026-09-24: 2026-09-24: Landed as slice #1b (docs/elaborator/unifier-completeness-design.md §10), with tests in crates/elab/tests/implicit_args.rs. Full suite 2942 passed.

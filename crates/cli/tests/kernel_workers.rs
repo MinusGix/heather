@@ -1,5 +1,5 @@
 //! `--kernel-workers` and `HEATHER_KERNEL_WORKERS` on the primary command
-//! (`docs/parallel-kernel-gate-design.md` §4).
+//! (`docs/kernel/parallel-kernel-gate-design.md` §4).
 //!
 //! A subprocess is what carries an environment variable here: a test binary
 //! that mutated its own would be racing every other test in it.

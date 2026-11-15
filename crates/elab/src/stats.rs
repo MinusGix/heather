@@ -1,5 +1,5 @@
 //! The instrumentation registry: named timers, named counters, scoped rows
-//! and one dump (`docs/instrumentation-design.md`).
+//! and one dump (`docs/infrastructure/instrumentation-design.md`).
 //!
 //! One place where a check's time is attributed, replacing what used to be
 //! `stats::time_kernel` and `omega_cert::OmegaPhases::timed` — the same
@@ -404,7 +404,7 @@ pub fn take_cow_sites() -> String {
 /// `elaborate = total − parse − kernel-gate` remains "the elaborator's own
 /// work, including the conversion it does while working", which is the
 /// quantity a frontend regression would move
-/// (`docs/frontend-benchmarking.md`).
+/// (`docs/infrastructure/frontend-benchmarking.md`).
 pub fn kernel_ns() -> u64 {
     REG.with(|r| r.timers[Timer::KernelGate as usize].get())
 }
@@ -422,7 +422,7 @@ pub(crate) fn time_kernel<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// Fold a kernel worker's numbers for one deferred item back in
-/// (`docs/parallel-kernel-gate-design.md` §7).
+/// (`docs/kernel/parallel-kernel-gate-design.md` §7).
 ///
 /// The kernel *counters* gain the worker's delta on this thread, so every
 /// scope still open — the module row, the run row — accounts for work done
@@ -432,7 +432,7 @@ pub(crate) fn time_kernel<T>(f: impl FnOnce() -> T) -> T {
 /// summed across eight workers does not fit inside either. What the enclosing
 /// rows are charged instead is the join's own wall — the time this thread
 /// really spent blocked — by [`add`] at the join
-/// (`docs/parallel-kernel-gate-design.md` §7).
+/// (`docs/kernel/parallel-kernel-gate-design.md` §7).
 ///
 /// The worker's clock goes where it was spent: the item row named by `row`,
 /// which closed while the worker was still running, is patched in place, its
@@ -450,7 +450,7 @@ pub(crate) fn fold_deferred_kernel(
 }
 
 /// The same patch for a verdict the serial replay *reused* rather than
-/// re-earned (`docs/parallel-kernel-gate-design.md` §5.2): the declaration's
+/// re-earned (`docs/kernel/parallel-kernel-gate-design.md` §5.2): the declaration's
 /// row still says what its proof cost, and the cost is the worker's, since
 /// that is who paid it.
 ///
@@ -738,7 +738,7 @@ pub(crate) fn rows_mark() -> RowsMark {
 }
 
 /// Drop every row collected since [`rows_mark`]. The one caller is the
-/// deferred gate's serial fallback (`docs/parallel-kernel-gate-design.md`
+/// deferred gate's serial fallback (`docs/kernel/parallel-kernel-gate-design.md`
 /// §5.1): a discarded pass leaves no declaration rows behind, so `--timings`
 /// has one row per declaration at every width rather than two for a module
 /// that had to be re-checked. The *cells* are deliberately not rolled back —
@@ -829,7 +829,7 @@ fn row_line(row: &ItemTiming, out: &mut String) {
     out.push('\n');
 }
 
-/// Render rows as the TSV of `docs/instrumentation-design.md` §4.
+/// Render rows as the TSV of `docs/infrastructure/instrumentation-design.md` §4.
 pub fn render(rows: &[ItemTiming]) -> String {
     let mut out = header();
     for row in rows {
@@ -974,7 +974,7 @@ fn end_live() {
 
 // `HEATHER_GENDEF_DECLINES=1`: one line per *decline* of the generated-
 // definition devices — the per-instantiation type code
-// (`docs/per-instantiation-type-codes-design.md` §4.1) and the record
+// (`docs/inductives/per-instantiation-type-codes-design.md` §4.1) and the record
 // projections over it (§13) — naming the site, the declaration and the
 // reason.
 //

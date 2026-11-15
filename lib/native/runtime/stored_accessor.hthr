@@ -1,4 +1,4 @@
-// A codec's compiled accessor, as a class (docs/layout-design.md §10.2,
+// A codec's compiled accessor, as a class (docs/native/layout-design.md §10.2,
 // issues/layout-classes.md). `lib/std/machine/stored.hthr` says what
 // bytes mean and `stored_words.hthr` has the `runtime fn`s that read and
 // store the library's words; this is the association between the two,

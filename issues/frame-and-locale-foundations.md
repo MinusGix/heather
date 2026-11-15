@@ -25,7 +25,7 @@ as maps only as a derived notion; a locale is not defined by its points.
 
 - 2026-09-02: Filed as an independent locale-theory program and prerequisite
   for point-free reals.
-- 2026-10-23: Pointers from Arend (`docs/arend-survey.md` §7). `arend-lib`'s
+- 2026-10-23: Pointers from Arend (`docs/surveys/arend-survey.md` §7). `arend-lib`'s
   `Locale` has `Join : (E → \Prop) → E`, which is small only because its
   `\Prop` is impredicative, so the definition does not port. Its construction
   route does: preorder sites, and `SiteLocale P` as the reflection of a site
@@ -36,8 +36,8 @@ as maps only as a derived notion; a locale is not defined by its points.
   cover spaces (arXiv:2412.20835) are a point-set alternative: completing `Q`
   by Cauchy filters gives the Dedekind reals, cover maps `R → R` match locale
   morphisms, and compactness reads "every Cauchy cover has a finite subcover".
-- 2026-11-02: The finitary vocabulary this assumes now exists (`lib/std/algebra/lattice.hthr`, docs/lattice-structure-design.md): meets, joins, lattices and bounds over `PartialOrderRel(≈, ≤)`, relation-indexed, so a frame of opens can be ordered modulo a setoid with no extensionality. Distributivity is not a class yet; a frame would add it with its arbitrary joins.
-- 2026-11-09: Landed (docs/frame-locale-design.md). `lib/std/locale/`:
+- 2026-11-02: The finitary vocabulary this assumes now exists (`lib/std/algebra/lattice.hthr`, docs/library/lattice-structure-design.md): meets, joins, lattices and bounds over `PartialOrderRel(≈, ≤)`, relation-indexed, so a frame of opens can be ordered modulo a setoid with no extensionality. Distributivity is not a class yet; a frame would add it with its arbitrary joins.
+- 2026-11-09: Landed (docs/library/frame-locale-design.md). `lib/std/locale/`:
   `frame.hthr` has the layered classes at `Type<1>` (`Preorder1`,
   `FiniteMeets`, `SupLattice`, `Frame`; joins over small families, equality
   as the mutual order), `FrameHom` with identity and composition,

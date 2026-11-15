@@ -337,7 +337,7 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
-        // -- finitary branching (docs/wf-former-design.md §6) --
+        // -- finitary branching (docs/kernel/wf-former-design.md §6) --
         // (ℓ, g, U_T, u_k : Trm_c(g ⊢ Nat), x_T, x_k) — the length is a
         // term of g, so it binds nothing.
         ty_vec: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
@@ -395,7 +395,7 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
             ]
         }),
         // (ℓ, ℓ', ℓi, g, U_I, U_S : (g, i), U_P : (g, i, s), u_o : (g, i, s,
-        // p), u_j, x_I … x_j) — docs/kernel-m-codes-design.md §2.
+        // p), u_j, x_I … x_j) — docs/kernel/kernel-m-codes-design.md §2.
         ty_m: t(3, 5, &|g| {
             vec![
                 GK::Ctx,
@@ -441,7 +441,7 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
-        // (ℓ, g, u_n, U_F : (g, i), x_n, x_F) — docs/iwf-former-design.md §6.
+        // (ℓ, g, u_n, U_F : (g, i), x_n, x_F) — docs/kernel/iwf-former-design.md §6.
         ty_dvec: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Ty(sh(g, 1))]),
         tm_dvec: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 1))]),
         // (ℓ, ℓi, g, U_I, U_S, u_n : (g, x), u_o : (g, x), u_c : (g, x, i),
@@ -1354,7 +1354,7 @@ pub fn count_term(t: &Term) -> u64 {
         | Term::TmEmpty { .. }
         | Term::Triv { .. } => 0,
         Term::TmPi { dom, cod, .. } => count_term(dom) + count_term(cod),
-        // The checked spellings (docs/intro-by-type-design.md): one
+        // The checked spellings (docs/elaborator/intro-by-type-design.md): one
         // annotation, no binder.
         Term::PairAt { ty, fst, snd } => {
             ty.as_deref().map_or(0, count_type) + count_term(fst) + count_term(snd)

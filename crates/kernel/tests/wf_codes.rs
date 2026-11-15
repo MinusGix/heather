@@ -1,5 +1,5 @@
 //! Codes and recursor branches for `Vec`/`Fin`/`Wf`: phase 3 of the landing
-//! (`docs/wf-former-design.md` §6, `issues/wf-former.md`).
+//! (`docs/kernel/wf-former-design.md` §6, `issues/wf-former.md`).
 //!
 //! Phases 1–2 gated all three formers out of layer c so that the branch
 //! bundle stayed exhaustive over the layer-c *syntactic formers* — which is

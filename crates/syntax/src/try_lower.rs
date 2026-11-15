@@ -4,10 +4,10 @@
 //!
 //! One continuation-passing walk serves two protocols ([`Protocol`]):
 //!
-//! - **`e?`** (docs/result-propagation-design.md): `K[e?]` is
+//! - **`e?`** (docs/language/result-propagation-design.md): `K[e?]` is
 //!   `result::and_then(e, λ v => K[v])`, scoped to the nearest function or
 //!   λ body. Written blocks and match arms are transparent.
-//! - **`(<- e)` and `let x <- e;`** (docs/sequencing-surface-design.md §3):
+//! - **`(<- e)` and `let x <- e;`** (docs/language/sequencing-surface-design.md §3):
 //!   `K[(<- e)]` is `Bind::seq(e, λ v => K[v])`, at the carrier the
 //!   elaborator finds for the call. A binding statement is the nested bind at
 //!   a `let`'s right side (`let x <- e;` is `let x = (<- e);`), and the
@@ -387,7 +387,7 @@ pub(crate) fn block(mut b: Block, next: &mut usize) -> R<Block> {
 /// A `while` with no measure (`crate::imperative::ITERATE`), bound:
 /// `Bind::seq(\0iterate(step, init), k)` is one call `Iterate::then(init,
 /// step, k)`, so that the carrier is learned from the block's expected type
-/// before the step is checked (docs/sequencing-surface-design.md §18).
+/// before the step is checked (docs/language/sequencing-surface-design.md §18).
 fn iterate_then(e: &mut Expr) {
     if let ExprKind::App { head, args, .. } = &mut e.kind
         && matches!(&head.kind, ExprKind::Var(n) if n == BIND_SEQ)
@@ -442,7 +442,7 @@ pub(crate) fn binds_in_block(mut b: Block, next: &mut usize) -> R<Block> {
 }
 
 /// A λ body's nested binds: a λ is a scope of its own
-/// (docs/sequencing-surface-design.md §3.2), so a bind in its body never
+/// (docs/language/sequencing-surface-design.md §3.2), so a bind in its body never
 /// leaves it.
 pub(crate) fn binds_in_expression(e: Expr, next: &mut usize) -> R<Expr> {
     if !BINDING.contains(&e) { return Ok(e); }

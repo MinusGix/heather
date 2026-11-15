@@ -1,4 +1,4 @@
-// Structure-preserving maps between carriers, as data (docs/casting-design.md
+// Structure-preserving maps between carriers, as data (docs/language/casting-design.md
 // §5.6). A morphism is a record of a map and its laws, indexed by both
 // carriers' relations and operations the way the order and algebra layers
 // are; the structures themselves stay plain classes, and no class fuses a
@@ -15,7 +15,7 @@
 // `map_add` states `(x + y).rat() ≈ x.rat() + y.rat()`, which is what the
 // goals that use it say.
 
-// A cast edge for the surface (docs/casting-design.md §5.2, §14): `↑e` at a
+// A cast edge for the surface (docs/language/casting-design.md §5.2, §14): `↑e` at a
 // position expecting `B` is the maps of the edges along the shortest path
 // from `e`'s carrier to `B`, applied (`↑n : Rat` is `Rat::ofInt(OfNat(n))`).
 // An edge is an instance `Cast<A, B>(map)` beside its target type, indexed by

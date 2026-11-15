@@ -8,7 +8,7 @@ updated: 2026-10-28
 ---
 
 The home pool (`home_pool()`, six registers) excludes every register any
-statement may use as scratch (`docs/native-register-allocation-design.md`
+statement may use as scratch (`docs/native/native-register-allocation-design.md`
 §2), so a home changes only when its word is written and `Held` needs no
 per-statement clobber facts. RSI, RDI, R8 and R9 sit idle across most
 statements.

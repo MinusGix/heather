@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-Round R10 of `docs/compiler-milestones-proposal.md` (§5, §7), milestone `hih-passes`: the first optimisation
+Round R10 of `docs/native/compiler-milestones-proposal.md` (§5, §7), milestone `hih-passes`: the first optimisation
 pass that is a Heather function with its proof.
 
 ## Scope

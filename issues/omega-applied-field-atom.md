@@ -51,5 +51,5 @@ skipped check) are now the elaborator's mismatch notes. omega then keys the atom
 spelling. `field_call_plain` closes, and `Span::offsets_differ`,
 `disjoint_offsets`, `offset_has` and `offset_below` are gone, inlined into
 `Numbering::spans_distinct`/`spans_apart`/`outside`. Design §21 of
-docs/omega-measure-reduction-design.md; probes and the refused
+docs/tactics/omega-measure-reduction-design.md; probes and the refused
 `field_call_apart` are in `lib/_tests/std/tactic/omega_tests.hthr`.

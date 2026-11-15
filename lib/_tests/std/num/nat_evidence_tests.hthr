@@ -1,6 +1,6 @@
 // Probes of `:= infer` at a proposition goal, with `lib/std/num/nat.hthr`'s
 // positivity rules as the customer (`issues/infer-proposition-evidence.md`,
-// `docs/positivity-evidence-design.md` §6 A): computation, a local proof up
+// `docs/library/positivity-evidence-design.md` §6 A): computation, a local proof up
 // to conversion, rules that backchain through locals, nest and mix with
 // computation, a rule called as an ordinary theorem, and a rule declared
 // here used here. The axes of `docs/testing-generated-terms.md`: a literal

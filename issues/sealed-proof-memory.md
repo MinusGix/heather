@@ -8,7 +8,7 @@ updated: 2026-10-17
 
 A theorem whose statement carries data keeps its proof sealed beside its
 opaque binding ([[theorem-witness-unfolding]],
-docs/theorem-witness-unfolding-design.md). Every kept proof lives in Ψ
+docs/kernel/theorem-witness-unfolding-design.md). Every kept proof lives in Ψ
 for the whole run, whether or not anything opens it.
 
 Measured when it landed (2026-10-16, cloud box, one run each): the wc

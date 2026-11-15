@@ -1,5 +1,5 @@
-// Probes of the course-of-values window's convoy (docs/list-course-of-values-design.md
-// §4, docs/course-of-values-recursion-design.md §5): a nested `match` on the
+// Probes of the course-of-values window's convoy (docs/language/recursion/list-course-of-values-design.md
+// §4, docs/language/recursion/course-of-values-recursion-design.md §5): a nested `match` on the
 // chain's end, inside the recursion's arm, carries the window down, and its
 // arms are checked against the recursion's motive there.
 //

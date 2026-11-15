@@ -9,7 +9,7 @@ updated: 2026-08-16
 
 
 
-`docs/let-and-blocks-design.md` §4 made `{ stmt* expr }` an expression in every
+`docs/language/let-and-blocks-design.md` §4 made `{ stmt* expr }` an expression in every
 prefix position. A `code { … }` payload is one of those positions, so
 `code { { let code x = f(g); nth_code($x, i) } }` would *parse* the day that
 lands — and its `let`s would elaborate as aliases at `Layer::Code`. §7.2 of
@@ -28,7 +28,7 @@ re-established, neither of which the block round touched:
   construct into the same region, and whether a splice under it hoists to the
   same place — or must hoist past a binding that mentions it — is not
   established. The failure mode is a silently mis-hoisted splice, which
-  `docs/surface-fin-indexing-design.md` §6 item 10 already flagged as the
+  `docs/language/surface-fin-indexing-design.md` §6 item 10 already flagged as the
   expensive one: it does not fail, it produces the wrong code.
 - **The meta-ANF invariant.** [[box-synthesis-gap]] settled how elaborated
   code avoids the box synthesis gap, and `let code` (`Stmt::LetCode`) is the
@@ -59,7 +59,7 @@ different scope and only available for *code*-typed values.
 
 ## Log
 
-- 2026-08-02: Filed by docs/let-and-blocks-design.md's implementing round (§7.2's recommendation, acceptance item 12). Both rejections are live and tested: the parser declines a block as a quote payload's top level (parser.rs, atom's quote arm) and scan_splices declines a block anywhere inside a payload (quote.rs). Neither is a deferral of effort — the block form itself was cheap; it is a deferral of an ANALYSIS, and the failure mode if it is guessed wrong is a splice that hoists to the wrong place and produces well-typed but wrong code.
+- 2026-08-02: Filed by docs/language/let-and-blocks-design.md's implementing round (§7.2's recommendation, acceptance item 12). Both rejections are live and tested: the parser declines a block as a quote payload's top level (parser.rs, atom's quote arm) and scan_splices declines a block anywhere inside a payload (quote.rs). Neither is a deferral of effort — the block form itself was cheap; it is a deferral of an ANALYSIS, and the failure mode if it is guessed wrong is a splice that hoists to the wrong place and produces well-typed but wrong code.
 - 2026-08-02: Sibling filed, so the two are not confused: [[meta-body-statement-loop]] is a `let` in the `meta fn` body OUTSIDE the quote (it already works unannotated; the meta slice has its own statement loop and rejects an annotated one). This issue is a `let` INSIDE the payload, where the open question is letbox hoisting order rather than which annotations the slice admits.
 - 2026-08-13: Adjacent parser finding filed 2026-08-13: [[match-scrutinee-named-code]] — the `code {` quote lookahead also captures an ordinary variable named `code` in scrutinee position (`match code {`), found writing the showcase. Different fix space, same lookahead.
 - 2026-08-16: The adjacent finding above is resolved and takes nothing from this issue: [[match-scrutinee-named-code]] landed 2026-08-16 by having the quote arm consult no_record_lit, so the lookahead stands down only where the '{' belongs to the enclosing form (a scrutinee, a motive, a block-preceding type). The quote arm's own refusal of a BLOCK as the payload's top level — this issue's subject — is untouched, and so is scan_splices'. The lookahead is shared; the analysis this issue defers is not.

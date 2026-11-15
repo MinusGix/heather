@@ -1,10 +1,10 @@
 //! The audit of `issues/el-reader-decode-audit.md`: every structural reader of
 //! a **lowered** `Type` in `crates/elab`, against a type that arrived wrapped —
-//! `El` of a code (`docs/types-as-expressions.md`) or `El` of a β/δ-**redex**
-//! (`docs/record-type-values.md` §4, a type reached through a `Val -> Type`
+//! `El` of a code (`docs/language/types-as-expressions.md`) or `El` of a β/δ-**redex**
+//! (`docs/language/record-type-values.md` §4, a type reached through a `Val -> Type`
 //! function *value*).
 //!
-//! `docs/record-type-values.md` §6 is the roster this file pins. Five readers
+//! `docs/language/record-type-values.md` §6 is the roster this file pins. Five readers
 //! declined the shape and were repaired; the rest are pinned here as
 //! already-fine so that "which readers walk a lowered type?" stops being an
 //! open question. Every repaired reader has a **negative control** next to it:
@@ -41,7 +41,7 @@ fn elab_err(src: &str) -> String {
 // `Stmt::LetRecord` read its right-hand side with `record_of`, the *structural*
 // reader — the same one `resolve_dot` had to stop using. So `p.a` worked on a
 // receiver whose type came through a `Nat -> Type` value and `let { a } = p;`
-// did not, which is exactly the asymmetry `docs/surface-records.md` §5 says
+// did not, which is exactly the asymmetry `docs/language/surface-records.md` §5 says
 // must not exist ("sugar over `m.a`, and it shares their code").
 #[test]
 fn a_let_pattern_destructures_a_type_valued_functions_record() {
@@ -150,7 +150,7 @@ fn an_indexed_family_survives_a_type_valued_function() {
 
 // Negative controls for repair 2. The reader may not *invent* a family: a
 // constructor of another family, and a family whose index reduced away
-// (`docs/inductive-indexed-lowering.md` §6), keep their messages.
+// (`docs/inductives/inductive-indexed-lowering.md` §6), keep their messages.
 #[test]
 fn the_indexed_reader_still_declines_what_it_should() {
     let m = elab_err(&format!(
@@ -290,9 +290,9 @@ theorem cong_fold(n: Nat, {xs: [Nat; n]}, {ys: [Nat; n]}, p: xs = ys):
 }
 "#;
 
-// Phase 3 of `docs/container-proofs.md` asks "is the motive an equation?"
+// Phase 3 of `docs/language/container-proofs.md` asks "is the motive an equation?"
 // structurally. A **named statement** — the whole point of
-// `docs/types-as-expressions.md` — is `El` of a call, so naming the statement
+// `docs/language/types-as-expressions.md` — is `El` of a call, so naming the statement
 // of a container induction turned it back into the phase-2 rejection.
 //
 // `whnf` is the right fallback *here* and only here: `Id` is a weak-head normal
@@ -327,7 +327,7 @@ fn a_parameterized_statement_can_be_proved_by_container_induction() {
     ));
 }
 
-// **The control that matters** (`docs/container-proofs.md` §9.1): a reader that
+// **The control that matters** (`docs/language/container-proofs.md` §9.1): a reader that
 // reduces to find a shape can find the *wrong* shape, and a positive proof
 // cannot tell. A false theorem of exactly this form, named exactly this way and
 // discharged exactly this way, is still rejected by the kernel.

@@ -1,5 +1,5 @@
 //! `DVec` and `dnth`: step 2 of the `IWf` landing
-//! (`docs/iwf-former-design.md` §1.1, §3, §13; `issues/iwf-former.md`).
+//! (`docs/kernel/iwf-former-design.md` §1.1, §3, §13; `issues/iwf-former.md`).
 //!
 //! `DVec^l(k; i. F)` is `Vec` with a per-position element type. Like `Vec` it
 //! has no introduction or elimination forms of its own: its content is the

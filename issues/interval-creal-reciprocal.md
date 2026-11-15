@@ -10,7 +10,7 @@ updated: 2026-10-27
 `RealExpr` (`lib/std/num/float/creal_interval.hthr`) has no reciprocal:
 `CReal::inv` takes a proof that its argument is apart from zero, and an
 expression tree does not carry one, so `by intervals()` reads `x⁻¹` as a
-leaf enclosed from its terms (`docs/floating-point-design.md` §16,
+leaf enclosed from its terms (`docs/library/floating-point-design.md` §16,
 "Enclosures of reals").
 
 The enclosure can supply the proof. An enclosure of `a` that lies above
@@ -18,7 +18,7 @@ zero (`Interval::below(point(0), I)`) gives `0 < a.eval()` by
 `Interval::lt_of_below_real`, which is `Apart(0)`; so an `RInv(a, h)` node
 whose `h` the tactic builds from a search on `a` alone, and whose
 containment is `recip_has` read at `CReal` (the rational proof's
-`recip_le_recip` with `CReal`'s inverse order facts, `docs/creal-inverse-round.md`).
+`recip_le_recip` with `CReal`'s inverse order facts, `docs/library/creal-inverse-round.md`).
 
 Scope:
 
@@ -36,7 +36,7 @@ Scope:
 
 ## Log
 
-- 2026-10-27: LANDED (design `docs/floating-point-design.md` §16,
+- 2026-10-27: LANDED (design `docs/library/floating-point-design.md` §16,
   "Reciprocals of reals"). `RInv(a, x, h)` carries the real it inverts and
   the proof, beside the tree that encloses it; `RealExpr::Wf` asks that
   `a` denote `x` (reflexivity for a tree read off a goal, `wf_plain` for one

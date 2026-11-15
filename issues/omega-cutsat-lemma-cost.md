@@ -38,7 +38,7 @@ elaborator pay per node? The two groups likely answer differently:
   (`elab_whnf`, `unify`, `resolve`, `omega_*`) before guessing.
 
 Method: `--cache --only omega::<item> --timings` over a replayed prefix
-(`docs/check-only-design.md`), one item of each group, then the phase
+(`docs/infrastructure/check-only-design.md`), one item of each group, then the phase
 columns and `HEATHER_OMEGA_PHASES=1`. Earlier, closed round on the same
 lemmas: [[omega-per-goal-elaboration-cost]] (2026-09-05; whnf probes on
 computing propositions).

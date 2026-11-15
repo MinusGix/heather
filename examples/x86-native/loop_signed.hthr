@@ -14,7 +14,7 @@ import function_ir;
 import function_ir_eval;
 import runtime;
 
-// A loop over an `i64` with an `i64` result (docs/runtime-fn-setups-design.md
+// A loop over an `i64` with an `i64` result (docs/native/runtime-fn-setups-design.md
 // §16.13, round 4): the state and the result are held in a word by `I64`,
 // and the leaving arm returns the `i64` itself, read back as its word
 // outside the match.

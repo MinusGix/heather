@@ -25,9 +25,9 @@ digits  := digit ( "_"? digit )*
   the language deliberately lacks is more design than the arm.
 
 The token is `TokKind::Num` and the AST `ExprKind::Num`, both carrying the value (a
-`Numeral` since 2026-09-26, `docs/wide-numerals-design.md`).
+`Numeral` since 2026-09-26, `docs/language/wide-numerals-design.md`).
 A radix form is a *spelling*: carrier choice (`Nat`, `Fin`, `Numeral<A>` via
-`ofNat`; `docs/carrier-directed-numerals-design.md`), the emitted kernel
+`ofNat`; `docs/language/carrier-directed-numerals-design.md`), the emitted kernel
 term, and every diagnostic downstream see only the value, so `0x48` and `72`
 are indistinguishable past the lexer by construction. The written spelling
 survives wherever a diagnostic quotes the source by span; the resolver's
@@ -38,7 +38,7 @@ written.
 
 ## The bound
 
-*Superseded 2026-09-26* (`docs/wide-numerals-design.md`): numerals are
+*Superseded 2026-09-26* (`docs/language/wide-numerals-design.md`): numerals are
 unbounded in every radix. What this section said still holds of carriers:
 the bound was the token's, not a carrier's — `bitvec::ofNat` wraps `0x12c`
 at width 8 exactly as it wraps `300` — and a position that needs a machine

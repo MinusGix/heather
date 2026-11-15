@@ -1,4 +1,4 @@
-//! Round 3 of `docs/host-elaboration-interface-design.md`: `split_all`
+//! Round 3 of `docs/metaprogramming/host-elaboration-interface-design.md`: `split_all`
 //! written in Heather (`lib/std/tactic/tactic.hthr`) on the host's `Cases`,
 //! `Constructor` and `Close`, closing the goals the Rust combinator closes in
 //! `goal_combinators.rs`, with `reflexivity()` as the leaf where that file's

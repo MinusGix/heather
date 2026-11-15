@@ -8,7 +8,7 @@ updated: 2026-09-18
 ---
 
 Filed off [[recursion-at-deeper-subterms]] (closed 2026-08-17,
-docs/course-of-values-recursion-design.md §5), which records the reasoning this
+docs/language/recursion/course-of-values-recursion-design.md §5), which records the reasoning this
 issue exists to test.
 
 A course-of-values recursion convoys its window of past values through the

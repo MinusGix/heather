@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`norm_num` ([[numeral-normalisation]], docs/numeral-normalisation-design.md)
+`norm_num` ([[numeral-normalisation]], docs/tactics/numeral-normalisation-design.md)
 decides `≈`, `<` and `<=` at `Finite(F)`, through `Finite::val`. The float
 literals denote `Float(F)` values (`b64(0.1)`), and `Float(F)` has only
 structural `=` and the named IEEE comparisons, so a client stating a fact

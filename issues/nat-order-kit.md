@@ -10,7 +10,7 @@ updated: 2026-08-17
 ## Current state (rewritten 2026-08-16; the log below is archive)
 
 **The definition, `Lt`, and the order/strict/bridge kit LANDED 2026-08-16.**
-`docs/nat-order-design.md` is the reasoning. **Closed 2026-08-17**: the order
+`docs/library/nat-order-design.md` is the reasoning. **Closed 2026-08-17**: the order
 is stated, `Lt` exists, and the kit is proved — the scope of this issue in
 full. The arithmetic tail it had been holding open is [[nat-arithmetic-kit]].
 
@@ -200,7 +200,7 @@ deliberately rather than incidentally.
   `Unit` at closed arguments. That, plus definitional inversion, is why the
   recommendation is (a) rather than the Lean-shaped (b).
 - 2026-08-16: **LANDED** (see the status header). Reasoning and the measured
-  cost of the Prop-first direction are in `docs/nat-order-design.md`; four
+  cost of the Prop-first direction are in `docs/library/nat-order-design.md`; four
   corrections this file owes its own text:
   1. **"a library declaration plus a designation row, not a grammar change"
      was wrong about `Lt`.** `<` did not parse in *any* type position —

@@ -1,4 +1,4 @@
-// Division of words, unsigned and signed (docs/fixed-width-integers-design.md
+// Division of words, unsigned and signed (docs/library/fixed-width-integers-design.md
 // §4). Unsigned division is restoring long division over the dividend's bits,
 // most significant first, so a closed quotient costs the width squared and
 // never the operands' magnitude: a `u64` divides in 64 steps of a 65-bit

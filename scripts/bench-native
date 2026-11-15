@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # How fast the code our compiler emits runs, and what it costs to compile:
 # the linked SHA-256 and scanner (`crates/linked`) against Rust references,
-# under the same caps as every other bench. docs/native-benchmarking.md says
+# under the same caps as every other bench. docs/native/native-benchmarking.md says
 # what each number means and when to re-record the snapshot
 # (`crates/linked/benches/baseline.tsv`).
 #

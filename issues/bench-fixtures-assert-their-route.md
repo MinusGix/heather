@@ -12,7 +12,7 @@ indices, tried first), and no test crossed the claim with the classifier.
 Two rounds of forded levers "inexplicably" failed to move it, a third defect
 was hypothesized from machinery the declaration does not emit
 ([[wf-shape-annotation-slots]], since corrected), and route 1's lever moved
-it at once — 2.79 → 2.22 (`docs/frontend-benchmarking.md`, 2026-08-06,
+it at once — 2.79 → 2.22 (`docs/infrastructure/frontend-benchmarking.md`, 2026-08-06,
 "name the route the classifier picks, not the route the source looks like").
 
 The discipline that would have caught it on day one is one assertion:

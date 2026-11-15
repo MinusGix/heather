@@ -14,7 +14,7 @@ undefined that the x86 model cannot express: its determinism theory
 `_io`, `_sim`, `_sim_co`, `_sim_paid`) erases only AF, which is all `TEST`
 and the one-bit shifts leave undefined.
 
-Found in the i64 round 3 (docs/runtime-fn-setups-design.md §16.13): shifts
+Found in the i64 round 3 (docs/native/runtime-fn-setups-design.md §16.13): shifts
 went through as chains of one-bit shifts instead (`Instruction::ShiftOne`), a
 shift by `k` costing `k` instructions. Signed division (`SInt::div`/`rem`,
 [[runtime-signed-extend-divide]]) has no such escape.
@@ -38,4 +38,4 @@ shift by `k` costing `k` instructions. Signed division (`SInt::div`/`rem`,
 
 ## Log
 
-- 2026-11-08: Built the mask (docs/runtime-fn-setups-design.md §16.13, round 5): `DefinedFlags` in `Flags`, `SameDefinedState` erases undefined flags, reading one has no `Execute`, compiler blocks pass `block_reads` from no flag defined (`Prog::laid_out`'s `blocks_read_own`); the five linux determinism files check unchanged. Shifts by k are one `ShiftImm` (C1 ib). The IDIV acceptance moves to [[x86-idiv-signed-division]], which owns the value-level fault admission and the rt/FunctionIR division.
+- 2026-11-08: Built the mask (docs/native/runtime-fn-setups-design.md §16.13, round 5): `DefinedFlags` in `Flags`, `SameDefinedState` erases undefined flags, reading one has no `Execute`, compiler blocks pass `block_reads` from no flag defined (`Prog::laid_out`'s `blocks_read_own`); the five linux determinism files check unchanged. Shifts by k are one `ShiftImm` (C1 ib). The IDIV acceptance moves to [[x86-idiv-signed-division]], which owns the value-level fault admission and the rt/FunctionIR division.

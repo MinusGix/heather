@@ -1,7 +1,7 @@
 //! The `positivity` tactic: `:= infer`'s proposition search (locals,
 //! computation, `evidence theorem` rules) run at an expected goal, with
 //! `omega` as the fallback at every subgoal the rules cannot close
-//! (`issues/positivity-tactic.md`, `docs/positivity-evidence-design.md` §10).
+//! (`issues/positivity-tactic.md`, `docs/library/positivity-evidence-design.md` §10).
 //!
 //! What the tactic produces is a generated term, so the axes of
 //! `docs/testing-generated-terms.md` are varied: a literal and a **neutral**
@@ -189,7 +189,7 @@ fn a_local_named_positivity_is_an_ordinary_name() {
 }
 
 
-// -- as a parameter or field default (docs/named-arguments-design.md §9.6) --
+// -- as a parameter or field default (docs/language/named-arguments-design.md §9.6) --
 
 const DEFAULTS: &str = "theorem by_omega(n: Nat, h: 0 < n := omega): 0 < n { h }
 theorem by_positivity(n: Nat, h: 0 < n := positivity): 0 < n { h }
@@ -239,7 +239,7 @@ fn make(k: Nat) -> Positive { Positive(k) }
 }
 
 /// A value default with a tactic inside it runs that tactic where the
-/// default is written (docs/named-arguments-design.md §9.7), with only the
+/// default is written (docs/language/named-arguments-design.md §9.7), with only the
 /// earlier parameters' facts as hypotheses; the default itself is still
 /// elaborated again at each call.
 #[test]

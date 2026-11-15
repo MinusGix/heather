@@ -9,7 +9,7 @@ updated: 2026-11-10
 ---
 
 The integral of a uniformly continuous function on `[a, b]` as the limit of
-the step program `x += f(t)·dt` (`docs/continuous-time-survey.md` §5.2 item
+the step program `x += f(t)·dt` (`docs/surveys/continuous-time-survey.md` §5.2 item
 2). `math-reals` has no integration yet, and ODE solutions, expectations
 against a density and the fundamental theorem all wait on it.
 

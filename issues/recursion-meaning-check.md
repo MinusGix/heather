@@ -14,7 +14,7 @@ equation: [[recursion-let-reads-changing-parameter]] (`u(1, x) = x + 1` where
 the source says `x + 11`), [[recursive-arm-reads-outer-scrutinee]], and the
 branch-on-varied-parameter bug of PR #389 (`v2(1, [3, 0, 4])` compiled to 7,
 the source says 0). This is the only class of elaborator bug the kernel
-cannot catch (docs/elaborator-principles-survey.md §6).
+cannot catch (docs/elaborator/elaborator-principles-survey.md §6).
 
 ## Proposal (P4 of the survey)
 
@@ -25,7 +25,7 @@ conversion at declaration. A correct compilation should convert (both sides
 reach the same arm, with self-calls as `F(k, …)`); each of the three bugs
 above differs at an open argument and is refused, located at the definition.
 The `decreases` lowering already generates `f_unfold` with a proof
-(docs/decreases-unfolding-design.md); structural recursion needs only
+(docs/language/recursion/decreases-unfolding-design.md); structural recursion needs only
 conversion.
 
 ## Plan

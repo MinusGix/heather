@@ -62,7 +62,7 @@ theorem mt(P: Type, Q: Type, f: P → Q, nq: ¬Q): ¬P {
 // and needs no lemma.
 //
 // Type parameters rather than value parameters of type `Type`: parameters are
-// monomorphized per instantiation (docs/inductive-tier0-lowering.md §2), which
+// monomorphized per instantiation (docs/inductives/inductive-tier0-lowering.md §2), which
 // is exactly right for a connective — `And<P, Q>` at each pair of propositions
 // is its own record, and none of them is level-inflated by carrying a `Type`.
 
@@ -70,7 +70,7 @@ record And<P, Q> { left: P, right: Q }
 
 // The two fields are *transposed*, and at `P = Q` no type would catch a
 // mistake — so the argument names say which is which
-// (docs/named-arguments-design.md).
+// (docs/language/named-arguments-design.md).
 theorem and_swap<P, Q>(h: P ∧ Q): Q ∧ P { And(left := h.right, right := h.left) }
 
 theorem and_curry<P, Q, R>(f: P ∧ Q → R): P → Q → R {
@@ -183,7 +183,7 @@ theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
 theorem iff_of<P, Q>(mp: P → Q, mpr: Q → P): P ↔ Q { Iff(mp := mp, mpr := mpr) }
 
 // `↔` is a congruence for every connective: what lets a law `P ↔ Q` rewrite
-// an occurrence of `P` inside a statement (`simp_only`, docs/simp-design.md
+// an occurrence of `P` inside a statement (`simp_only`, docs/tactics/simp-design.md
 // §12). One lemma per former, each taking both operands' steps; an operand
 // that does not change takes `iff_refl()`.
 theorem iff_and_congr<P, Q, R, S>(h1: P ↔ Q, h2: R ↔ S): P ∧ R ↔ Q ∧ S {
@@ -221,7 +221,7 @@ theorem iff_forall_congr<A>(P, Q: A → Type, h: (x: A) → (P(x) ↔ Q(x))): ((
 // ---------------------------------------------------------------------------
 // The existential: a record whose second field's type depends on its first,
 // with the predicate arriving as a value parameter
-// (docs/surface-value-parameters.md, issues/surface-existential.md — the same
+// (docs/language/surface-value-parameters.md, issues/surface-existential.md — the same
 // shape `lib/certgen/ir_v1.hthr`'s `Converges` is written in, generalized).
 //
 // The type argument infers from the predicate's binder, so
@@ -240,7 +240,7 @@ theorem iff_exists_congr<A>(P, Q: A → Type, h: (x: A) → (P(x) ↔ Q(x))): Ex
 // ---------------------------------------------------------------------------
 // Decidable equality at a CARRIER, which `Decide` cannot express. A `Decide`
 // instance is keyed by the endpoints' resolved type
-// (docs/decidable-equation-carrier-design.md), so it says "equality at *this*
+// (docs/language/classes/decidable-equation-carrier-design.md), so it says "equality at *this*
 // type decides" and a generic consumer — a decider for `List<A>`, a count of
 // occurrences in a list — has no goal to backchain on at an abstract `A`. That
 // is what this class is: equality decided as a property of the carrier, which

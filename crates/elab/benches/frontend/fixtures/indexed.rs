@@ -1,5 +1,5 @@
 //! Route 1 — the family by large elimination on the index
-//! (`docs/inductive-indexed-lowering.md`), whose cost seam is §10.3: the whole
+//! (`docs/inductives/inductive-indexed-lowering.md`), whose cost seam is §10.3: the whole
 //! `elim_Nat`/`Case`/`elim_Wf` that *is* the family is inlined at every type
 //! occurrence, and an indexed type appears inside other types.
 //!

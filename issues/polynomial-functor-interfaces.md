@@ -14,7 +14,7 @@ wired together.
 ## Why
 
 - Heather's branching data is already containers (`W`, `Wf`), and
-  `docs/interaction-trees-fit.md` §2 recommends container events
+  `docs/itrees/interaction-trees-fit.md` §2 recommends container events
   (`Cmd`, `Resp`). Polynomial functors are the algebra of containers:
   composition, parallel product ⊗, and **dependent lenses** (morphisms of
   interfaces, forward on commands and backward on responses). Those are the
@@ -49,4 +49,4 @@ pre/postconditions more compositionally than the current records.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[cost-aware-semantics]] (`docs/interaction-trees-fit.md`).
+- 2026-11-05: gardener: cites a file it shares with [[cost-aware-semantics]] (`docs/itrees/interaction-trees-fit.md`).

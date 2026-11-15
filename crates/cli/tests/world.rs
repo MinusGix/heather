@@ -1,5 +1,5 @@
 //! A module checked by two processes shares one image whatever else either
-//! process loads (`docs/module-dag-design.md`): it is checked over its own
+//! process loads (`docs/infrastructure/module-dag-design.md`): it is checked over its own
 //! import closure, keyed by that closure, under its own lint profile.
 //! `--world`, which made the prefixes equal instead
 //! (`docs/archive/library-world-design.md`), is accepted and changes nothing.
@@ -103,7 +103,7 @@ fn a_library_module_keeps_its_profile_under_any_root() {
 
 /// `--build-jobs` elaborates every module without an image, one process
 /// each, before the check, which then replays all of them; with every image
-/// present it builds nothing (`docs/module-dag-design.md` §12).
+/// present it builds nothing (`docs/infrastructure/module-dag-design.md` §12).
 #[test]
 fn build_jobs_build_every_missing_module_ahead() {
     let root = library("build", LIB);
@@ -181,7 +181,7 @@ fn a_module_that_fails_to_build_leaves_the_check_to_report_it() {
 
 /// A replay that passed once is vouched for whole the next time over the
 /// same worlds: none of its declarations is asked about
-/// (`docs/module-dag-design.md` §13). That holds for an import moved into
+/// (`docs/infrastructure/module-dag-design.md` §13). That holds for an import moved into
 /// another module's world as well as for one replayed over its own. An edit
 /// below a module changes its world's identity, so its replay is rechecked
 /// again.

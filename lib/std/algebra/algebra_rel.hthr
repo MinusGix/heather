@@ -1,5 +1,5 @@
 // The relation-indexed one-operation algebra: the source theory
-// (docs/relation-indexed-algebra-design.md). Every law is modulo the
+// (docs/library/relation-indexed-algebra-design.md). Every law is modulo the
 // structure relation `≈`, an index like the operation, so a carrier with
 // unreduced representations (`Rat` modulo `Rat::Same`) and one compared by
 // identity are instances of one class. `algebra`'s `Semigroup`, `Monoid`,
@@ -32,7 +32,7 @@ theorem respects2_relid<A>(op: A → A → A):
 
 // Every operation respects identity, at any three carriers: the
 // `Respects2` a relation rewrite crosses a binary context by when both its
-// arguments changed by `=` (docs/equation-rewrite-design.md §11.6).
+// arguments changed by `=` (docs/tactics/equation-rewrite-design.md §11.6).
 fn relid_respects2<A, B, C>(op: A → B → C) → Respects2<A, B, C>(RelId<A>, RelId<B>, RelId<C>, op) {
     Respects2(λ x x2 hx y y2 hy => j(hx, λ w q => op(x, y) = op(w, y2), j(hy, λ w q => op(x, y) = op(x, w), refl)))
 }

@@ -42,7 +42,7 @@ hand with the same command (`scripts/test -p heather-cli --test library`).
 The one module that failed, under `== lib/_tests/std/core (exit status: 1)`:
 
 ```
-error: a `When` is wanted here, so this call of `at` tests its condition `∥nat::Nat::Lt(bitvec::BitVec::toNat(i), n)∥`, which has no decision (`Decide<∥nat::Nat::Lt(bitvec::BitVec::toNat(i), n)∥>`) here: give `inside := …` and take the value, or call a function whose own work decides it and returns a `When` (docs/when-design.md §3)
+error: a `When` is wanted here, so this call of `at` tests its condition `∥nat::Nat::Lt(bitvec::BitVec::toNat(i), n)∥`, which has no decision (`Decide<∥nat::Nat::Lt(bitvec::BitVec::toNat(i), n)∥>`) here: give `inside := …` and take the value, or call a function whose own work decides it and returns a `When` (docs/language/when-design.md §3)
   --> lib/_tests/std/core/when_tests.hthr:26:89
    |
 26 | fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64) → When<BitVec(w), i.toNat() < n> { v.at(i) }

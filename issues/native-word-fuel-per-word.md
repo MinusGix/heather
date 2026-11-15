@@ -10,7 +10,7 @@ updated: 2026-11-14
 A closed verdict over word-level code ran out of fuel at a fraction of the
 work fuel allows anything else, because a native bit-transducer run charged
 one fuel unit per bit it read or produced (`spend_n(read)` in
-`eval/transduce.rs`, design §8 of `docs/native-bitvector-values-design.md`).
+`eval/transduce.rs`, design §8 of `docs/kernel/native-bitvector-values-design.md`).
 A run is at most one word (`BIT_RUN_WIDTH_CAP`) and is a bounded number of
 native operations, so the charge counted 64 units for one operation's
 work. A literal's entry already charged one unit for the same reason.

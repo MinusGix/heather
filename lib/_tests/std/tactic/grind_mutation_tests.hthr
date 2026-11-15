@@ -1,4 +1,4 @@
-// Mutation controls (docs/grind-design.md §9.6): goals of grind_tests with
+// Mutation controls (docs/tactics/grind-design.md §9.6): goals of grind_tests with
 // their lemmas reordered or beside lemmas they do not need. grind visits
 // nodes in order under per-round budgets, so closing again is not
 // automatic: a proof that survives these is one a growing library is less

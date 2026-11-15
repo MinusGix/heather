@@ -10,7 +10,7 @@ updated: 2026-11-06
 Tier-2 declarations (lowered on `W` with a leaf predicate, such as `Tac`)
 and codata register no `D#tycode_fn` (`inductive.rs`: "Tier 2 names its
 leaf predicate and nothing else"). Since the higher-kinded-classes round
-(`docs/higher-kinded-classes-design.md` §3.1, §5 item 4), that has two
+(`docs/language/classes/higher-kinded-classes-design.md` §3.1, §5 item 4), that has two
 visible costs:
 
 - a bare `Tac` at `Type → Type` is spelled `λ A. ⌜Tac<El A>⌝` rather than
@@ -45,7 +45,7 @@ comparison are recorded here.
   own declarations roughly double their gate counters (`mono_with` 10.7k →
   100k steps) and the run's total seconds rise by a few percent. Landing the
   code function should return the ported modules to their old counts.
-- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/higher-kinded-classes-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/language/classes/higher-kinded-classes-design.md`).
 - 2026-11-06: The same β-redex is why seven tactic metaprograms' meaning
   checks ([[recursion-meaning-check]]) run out of fuel (`mono_prove`,
   `mono_class_carrier`, `solutions`, `rt_go`, `Act::traced`,

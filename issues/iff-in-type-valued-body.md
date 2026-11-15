@@ -109,7 +109,7 @@ exactly as this issue asked.
   `every_bracket_inside_a_codomain_admits_a_connective` (meaning, both
   directions against the named spelling, with an open carrier and the binder
   used in both operands) in `crates/elab/tests/logic.rs`.
-  `docs/manual-mergeable-round.md`'s gap table row is closed.
+  `docs/showcase/manual-mergeable-round.md`'s gap table row is closed.
   Two adjacent findings were filed rather than folded in, both confirmed
   pre-existing by rebuilding the parent commit:
   [[binder-headed-arrow-as-connective-operand]] (`(a: A) → P(a) ↔ R` is a

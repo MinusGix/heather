@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer G and the meeting point of `docs/analysis-foundations-design.md`
+Layer G and the meeting point of `docs/library/analysis-foundations-design.md`
 (§3.3, §11): research, not scheduled. Differential-valued fields
 (Rosenlicht), H-fields and newtonian fields (Aschenbrenner–van den
 Dries–van der Hoeven), with grid-based transseries as the main instance.
@@ -35,4 +35,4 @@ Questions to settle when it is picked up:
 
 ## Log
 
-- 2026-10-27: Divergent series (docs/analysis-foundations-design.md §3.8): resurgence (Borel-transform singularities as the exponentially small terms), the Stokes phenomenon as a jump by such a term, multisummation and Écalle's accelero-summation as the summation methods on transseries. [[borel-laplace-summation]] owns the Gevrey-1 case.
+- 2026-10-27: Divergent series (docs/library/analysis-foundations-design.md §3.8): resurgence (Borel-transform singularities as the exponentially small terms), the Stokes phenomenon as a jump by such a term, multisummation and Écalle's accelero-summation as the summation methods on transseries. [[borel-laplace-summation]] owns the Gevrey-1 case.

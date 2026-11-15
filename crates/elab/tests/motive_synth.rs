@@ -122,7 +122,7 @@ fn only_one_arm_has_to_bind_nothing() {
 }
 
 // Every arm binds, and an arm's type that lives outside its binders names the
-// motive (docs/dependent-match-compiler-design.md §6). The probe this
+// motive (docs/language/matching/dependent-match-compiler-design.md §6). The probe this
 // replaces asked for a motive here.
 #[test]
 fn an_arm_that_binds_names_the_motive_when_its_type_does_not_mention_its_binders() {
@@ -174,7 +174,7 @@ fn the_dependent_synthesis_is_not_disturbed() {
 
 // ---------------------------------------------------------------------------
 // Abstracting the scrutinee TERM, and reducing the goal to find it
-// (docs/goal-motive-synthesis-design.md; issues/goal-motive-by-scrutinee-
+// (docs/elaborator/goal-motive-synthesis-design.md; issues/goal-motive-by-scrutinee-
 // abstraction.md and issues/nested-match-on-field-binder-motive.md, both
 // 2026-08-17).
 //

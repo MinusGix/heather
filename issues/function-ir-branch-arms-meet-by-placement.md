@@ -22,7 +22,7 @@ The heuristic (`StructuredRegion::plan_in`) arranges it by picking a
 target register for each output (`pick_targets`) and asking each arm's
 node for that output to take it if it is free. It is not free when another
 live value was put there first. Met in U3c step 3c
-([[native-one-compiler]], `docs/native-one-compiler-design.md` §2.3): the
+([[native-one-compiler]], `docs/native/native-one-compiler-design.md` §2.3): the
 reflector writes a self-call's arguments left to right, so a loop over a
 span makes its next index before it reads the byte, the tally then took
 the register the next index was wanted in, and the generated loop was

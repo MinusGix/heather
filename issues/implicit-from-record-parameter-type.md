@@ -49,7 +49,7 @@ arguments first.
   record type has no head to match (it lowers inline to its Σ tower), and
   `unify_tm` had no case for projections, so `fst@(snd@(?x))` against
   `fst@(snd@(x))` paired nothing. It now pairs `fst`/`snd` (either spelling)
-  and recurses into the receivers (docs/unifier-completeness-design.md §10.3).
+  and recurses into the receivers (docs/elaborator/unifier-completeness-design.md §10.3).
   The type speller's instance matcher (`Holes::tm`) lacked the checked
   projections too, so a mismatch between two instances printed the bare name
   and reached the kernel; it now spells `Other(y)` against `Other(x)`.

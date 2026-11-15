@@ -1,4 +1,4 @@
-//! Classes and instances, layer 1 (`docs/traits-layer1-design.md`).
+//! Classes and instances, layer 1 (`docs/language/classes/traits-layer1-design.md`).
 //!
 //! Nothing here reaches the kernel on its own. A `class` builds the
 //! `InductiveDecl` that the equivalent `record` would have built and hands it
@@ -48,7 +48,7 @@ pub(crate) struct ClassInfo {
     /// head's argument there.
     pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the declared **value indices**
-    /// (docs/operation-indexed-classes-design.md §3), types written in terms
+    /// (docs/language/classes/operation-indexed-classes-design.md §3), types written in terms
     /// of `params`. Empty for an unindexed class. Their names are what a
     /// constraint binder binds the index under (§4).
     pub valparams: Vec<Param>,
@@ -77,20 +77,20 @@ impl ClassInfo {
 }
 
 /// A registered instance: one canonical value per (class, resolved carrier)
-/// (design §4.1, `docs/instance-resolved-key-design.md`).
+/// (design §4.1, `docs/elaborator/instance-resolved-key-design.md`).
 #[derive(Clone)]
 pub(crate) struct InstanceInfo {
     /// The global that *is* the instance, **module-qualified** —
     /// `main::Rat::Monoid`, `int::Le::Decide`. Qualified because it is emitted
     /// as a `Var` at a *use* site, in a module that may see two `Le::Decide`s
-    /// (`docs/instance-resolved-key-design.md` §4): the unqualified string was
+    /// (`docs/elaborator/instance-resolved-key-design.md` §4): the unqualified string was
     /// a name that resolved by luck of visibility, and the registry has to
     /// name the very declaration it registered.
     pub global: String,
     /// The instance head as written, for diagnostics (`Monoid<Rat>`).
     pub written: String,
     /// The **index spelling** this instance is keyed at
-    /// (docs/operation-indexed-classes-design.md §3.1) — the resolved global
+    /// (docs/language/classes/operation-indexed-classes-design.md §3.1) — the resolved global
     /// key of each index argument, joined. Empty at an unindexed class. It is
     /// part of the registry key and it is what a value-slot refusal lists.
     pub index: String,
@@ -101,7 +101,7 @@ pub(crate) struct InstanceInfo {
 }
 
 /// A registered **designation**: what one operator symbol means at one
-/// carrier head (docs/operators-onto-classes-design.md §3).
+/// carrier head (docs/language/classes/operators-onto-classes-design.md §3).
 #[derive(Clone)]
 pub(crate) struct DesignationInfo {
     /// The designated operation, as a bare global name. Emitted bare at each
@@ -121,7 +121,7 @@ pub(crate) struct DesignationInfo {
 
 /// The key a designation is registered under: **(fixity, symbol,
 /// carrier-head key)**, the third component a *resolved* declaration reference and not a surface
-/// spelling — `docs/instance-resolved-key-design.md` §3's rule applied one
+/// spelling — `docs/elaborator/instance-resolved-key-design.md` §3's rule applied one
 /// table over (issues/designation-key-collides-across-modules.md).
 ///
 /// `("++", "list::List")` and `("++", "seq::List")` are two designations that
@@ -157,7 +157,7 @@ mod designation_key_tests {
 /// The key an instance is registered under: **(class key, carrier-head key,
 /// index spelling)**, every component a *resolved* declaration reference and
 /// no component a surface spelling
-/// (`docs/instance-resolved-key-design.md` §3).
+/// (`docs/elaborator/instance-resolved-key-design.md` §3).
 ///
 /// The first component is the class's qualified key, the second the carrier
 /// head's — `("bool::Decide", "int::Int::Le", "")` and `("bool::Decide",
@@ -166,7 +166,7 @@ mod designation_key_tests {
 /// (issues/instance-key-collides-across-modules.md).
 ///
 /// The third is the **index spelling**
-/// (docs/operation-indexed-classes-design.md §3.1): each index argument's own
+/// (docs/language/classes/operation-indexed-classes-design.md §3.1): each index argument's own
 /// resolved global key, joined. Two instances at one key are the
 /// duplicate-declaration error they always were, two at different indices
 /// coexist as equals. Empty at an unindexed class, so every key that predates
@@ -201,11 +201,11 @@ pub(crate) struct Traits {
     derived: Vec<DerivedInst>,
     /// Evidence rules by the qualified key of their conclusion's relation
     /// (`nat::Nat::Lt`), each list in canonical (global-name) order
-    /// (docs/positivity-evidence-design.md §6 A).
+    /// (docs/library/positivity-evidence-design.md §6 A).
     evidence: HashMap<String, Vec<EvidenceRule>>,
     /// Registered values (`register def x: T = e;`) by the qualified key of
     /// their type `T`, each list in canonical (global-name) order: what
-    /// `registered(T)` reads (docs/registered-values-design.md).
+    /// `registered(T)` reads (docs/metaprogramming/registered-values-design.md).
     registered: HashMap<String, Vec<String>>,
 }
 
@@ -314,13 +314,13 @@ impl Traits {
     }
 
     /// The candidates of a class in the order resolution tries them
-    /// (`docs/traits-layer2-design.md` §3.1): sorted by canonical name, except
+    /// (`docs/language/classes/traits-layer2-design.md` §3.1): sorted by canonical name, except
     /// that the instances keyed at `prefer` — the head of the goal's carrier,
     /// when the caller could read it off the solver parameter's written type —
     /// come first, in that same order. A head-keyed instance is the specific
     /// one; a candidate at another head can still fit by unfolding the goal,
     /// and building it costs that unfolding whether or not it wins
-    /// (docs/reflection-through-decide-instances-design.md §3).
+    /// (docs/tactics/reflection-through-decide-instances-design.md §3).
     pub(crate) fn candidates(
         &self,
         class_key: &str,
@@ -345,7 +345,7 @@ impl Traits {
 
     /// Every instance of a class: its head key and its index spelling, in
     /// key order. The cast edges are read this way
-    /// (`Elaborator::cast_edges`, docs/casting-design.md §14).
+    /// (`Elaborator::cast_edges`, docs/language/casting-design.md §14).
     pub(crate) fn instances_of_class(&self, class_key: &str) -> Vec<(String, String)> {
         let mut out: Vec<_> = self
             .instances
@@ -502,7 +502,7 @@ fn head_name(t: &Ty) -> Option<&str> {
         TyKind::Fin(_) => Some("Fin"),
         TyKind::Named { name, .. } => Some(name),
         // An **applied type former** — `Le(n, m)`, `Not(P)` — whose head is the
-        // former's own name (widened 2026-08-17, docs/decide-class-design.md §2).
+        // former's own name (widened 2026-08-17, docs/language/classes/decide-class-design.md §2).
         // A proposition stated by recursion into `Type` is the carrier a
         // decidability class is *for*, and it arrives here as an ordinary
         // application rather than as a `Named` type, because `Le` is a `fn`.
@@ -525,7 +525,7 @@ fn head_name(t: &Ty) -> Option<&str> {
             ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => spine_head(head),
             // A λ carrier's head is its body's: `λ (A: Type) => Result<A, E>`
             // keys and names its instances as `Result`'s
-            // (docs/lambda-carrier-instances-design.md §7.3).
+            // (docs/language/classes/lambda-carrier-instances-design.md §7.3).
             ExprKind::Lam { binders, body } if binders.len() == 1 => match &body.kind {
                 ExprKind::TyApp { head, .. } => spine_head(head),
                 // `λ (R: Type) => CoTree<R>(E)`: the value arguments are
@@ -574,7 +574,7 @@ pub(crate) fn render_ty(t: &Ty) -> String {
         TyKind::Vec { elem, .. } => format!("[{}; _]", render_ty(elem)),
         TyKind::Fin(_) => "Fin(_)".into(),
         // `Monoid<A>(op)` — a class at its index, which arrives applied
-        // (docs/operation-indexed-classes-design.md §3). Rendering it as `_`
+        // (docs/language/classes/operation-indexed-classes-design.md §3). Rendering it as `_`
         // would empty out every diagnostic the indexed classes produce.
         TyKind::OfExpr(e) => match &e.kind {
             ExprKind::App { head, args, .. } => {
@@ -855,16 +855,16 @@ fn var(name: &str, span: Span) -> Expr {
 pub(crate) struct Expanded {
     pub params: Vec<Param>,
     /// Index names a *repeated* constraint left bound to nothing
-    /// (docs/operation-indexed-classes-design.md §5.2), with the refusal each
+    /// (docs/language/classes/operation-indexed-classes-design.md §5.2), with the refusal each
     /// one owes.
     pub ambiguous: Vec<(String, String)>,
     /// Operator symbols a `C(+)` slot installed, as (symbol, binder name)
-    /// (docs/operators-onto-classes-design.md §5).
+    /// (docs/language/classes/operators-onto-classes-design.md §5).
     pub symbols: Vec<(String, String)>,
 }
 
 /// The generated name of an index binder a SYMBOL slot introduced
-/// (docs/operators-onto-classes-design.md §5.1).
+/// (docs/language/classes/operators-onto-classes-design.md §5.1).
 ///
 /// The **symbol is in the name**, because a call site fills this slot from the
 /// designation table and the only thing that reaches it about the callee's
@@ -914,7 +914,7 @@ pub(crate) fn render_goal_symbols(written: &Ty, params: &[crate::ParamMeta]) -> 
 /// A parent's instantiation. `names` is the rename the layer-1 restriction
 /// makes enough for type parameters and for an index passed up unchanged;
 /// `exprs` holds an index a child computes (`extends MonoidRel<A>(RelId<A>,
-/// op)`, docs/relation-indexed-algebra-design.md §3), and `tys` a type
+/// op)`, docs/library/relation-indexed-algebra-design.md §3), and `tys` a type
 /// parameter instantiated at a composite type, which only an *instance* does
 /// (its ancestors at `List<A>`). A name in `exprs`/`tys` is replaced by the
 /// image whole; every other name is renamed or kept.
@@ -1452,7 +1452,7 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
         ExprKind::Var(name) => (name == v) as usize,
         ExprKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
         // A λ carrier, `λ (A: Type) => Result<A, E>`
-        // (docs/lambda-carrier-instances-design.md §7.3): its body's free
+        // (docs/language/classes/lambda-carrier-instances-design.md §7.3): its body's free
         // occurrences, unless a binder shadows `v`.
         ExprKind::Lam { binders, body } => {
             if binders.iter().any(|b| b.name == v) {
@@ -1480,7 +1480,7 @@ fn index_var_count(c: &ClassRef, v: &str) -> usize {
 }
 
 /// The instance's telescope after its type parameters
-/// (docs/value-generic-instances-design.md §3): the **value binders** first,
+/// (docs/language/classes/value-generic-instances-design.md §3): the **value binders** first,
 /// then the solver parameters.
 ///
 /// Value binders lead because a `requires` type may mention one —
@@ -1779,7 +1779,7 @@ impl ClassesMut<'_> {
             owner.push(None);
         }
         // The record. One constructor named after the class, exactly as
-        // `record` desugars (docs/surface-records.md §2.1).
+        // `record` desugars (docs/language/surface-records.md §2.1).
         let ctor = CtorDecl {
             name: d.name.clone(),
             fields: fields.clone(),
@@ -1843,7 +1843,7 @@ impl ClassesMut<'_> {
 
 impl Elaborator {
     /// A carrier head as the registry keys it: the **declaration** the head
-    /// names, qualified (`docs/instance-resolved-key-design.md` §3).
+    /// names, qualified (`docs/elaborator/instance-resolved-key-design.md` §3).
     ///
     /// The fallback is the bare name, and it is reached by exactly the three
     /// names [`Carriers::names_a_type`] claims with no declaration behind
@@ -1860,7 +1860,7 @@ impl Classes<'_> {
     /// site, read off the parameter's **written** type — `Decide<P>` with
     /// `P` a type parameter the call has already solved, or `Decide<Le(n, m)>`
     /// spelled out — so that resolution can try the instances keyed there
-    /// first (`docs/reflection-through-decide-instances-design.md` §3).
+    /// first (`docs/tactics/reflection-through-decide-instances-design.md` §3).
     /// `None` whenever the head is not one identifier: the order then stays
     /// the plain canonical one, and nothing is decided here either way.
     ///
@@ -1999,7 +1999,7 @@ impl Classes<'_> {
     }
 
     /// The **index spelling** of an instance head
-    /// (docs/operation-indexed-classes-design.md §3.1): each index argument's
+    /// (docs/language/classes/operation-indexed-classes-design.md §3.1): each index argument's
     /// resolved global key, joined. A direct generic binder instead contributes
     /// its alpha-stable binder position. Both are *keys* computed from the
     /// declaration alone. An arbitrary λ is refused here, and the alternative
@@ -2031,7 +2031,7 @@ impl Classes<'_> {
             };
             // A global applied to the instance's own value binders,
             // `Eutt::Rel<R>(E)`: a relation family at a value parameter
-            // (docs/equation-rewrite-design.md §11). The binders are
+            // (docs/tactics/equation-rewrite-design.md §11). The binders are
             // determined by unifying the head with the goal, as a bare
             // binder index is, so the key is the global's and their
             // positions.
@@ -2065,7 +2065,7 @@ impl Classes<'_> {
                              designation says what a symbol means at a carrier \
                              (`designation {s} at … := …`); the registry key is the \
                              operation, so the two stay separable \
-                             (docs/operators-onto-classes-design.md §3.3)"
+                             (docs/language/classes/operators-onto-classes-design.md §3.3)"
                         ),
                         a.span,
                     );
@@ -2075,7 +2075,7 @@ impl Classes<'_> {
                         "the index `{}` of this instance is not spellable: `{}` must be a \
                          global reference (possibly at this instance's own type \
                          parameters, or applied to its own binders), because the registry key is computed from the \
-                         declaration alone (docs/operation-indexed-classes-design.md \
+                         declaration alone (docs/language/classes/operation-indexed-classes-design.md \
                          §3.1). A structure built from an unnamed operation is a `let`-bound \
                          value, found by scope rather than registered",
                         p.name,
@@ -2127,7 +2127,7 @@ impl Classes<'_> {
                             "an `extends` argument must be one of `{}`'s own type parameters \
                              (`{}`), and `{}` is not: instantiating a parent at a composite \
                              type is refused at layer 1 rather than half-supported \
-                             (docs/traits-layer1-design.md §3)",
+                             (docs/language/classes/traits-layer1-design.md §3)",
                             d.name,
                             d.params.join(", "),
                             render_ty(a)
@@ -2139,7 +2139,7 @@ impl Classes<'_> {
             rename.insert(p.clone(), arg);
         }
         // The parent's **index**, at the child's own spelling
-        // (docs/operation-indexed-classes-design.md §3): a single-op chain
+        // (docs/language/classes/operation-indexed-classes-design.md §3): a single-op chain
         // passes its index up unchanged, so an `extends` index argument is
         // restricted exactly as an `extends` type argument is — to one of the
         // child's own value parameters — which keeps instantiating the parent
@@ -2167,7 +2167,7 @@ impl Classes<'_> {
             // instantiating the parent substitutes it. It is written in the
             // child's names, which every later instantiation substitutes in
             // turn (`Ren::at_use`): the identity theories are the relational
-            // ones at `RelId` this way (docs/relation-indexed-algebra-design.md
+            // ones at `RelId` this way (docs/library/relation-indexed-algebra-design.md
             // §3). A bare name that is no index parameter of the child stays
             // the slip it always was.
             let ExprKind::Var(n) = &a.kind else {
@@ -2282,7 +2282,7 @@ impl Classes<'_> {
     /// literal), with the record it lowers to: found whenever its declaring
     /// module is in this module's closure, whether or not the module can
     /// name it (issues/numerals-without-algebra-import.md). Its instances
-    /// are visible by the closure already (docs/module-dag-design.md §2), so
+    /// are visible by the closure already (docs/infrastructure/module-dag-design.md §2), so
     /// requiring the class's *name* in scope as well was the only gap, and
     /// it is the one `[…]` never had: `CollectionLiteral` is read by key.
     /// The registry digest covers class events, so an image that read one
@@ -2661,7 +2661,7 @@ impl ClassesMut<'_> {
 
 impl Classes<'_> {
     /// The constraint binders' desugaring
-    /// (docs/operation-indexed-classes-design.md §4, §4.1).
+    /// (docs/language/classes/operation-indexed-classes-design.md §4, §4.1).
     ///
     /// At an **indexed** class a solver parameter with an EMPTY index slot
     /// grows the index binders in front of it, under the class's own declared
@@ -2764,7 +2764,7 @@ impl Classes<'_> {
                         p.span,
                     );
                 }
-                // SYMBOL (docs/operators-onto-classes-design.md §5): a slot
+                // SYMBOL (docs/language/classes/operators-onto-classes-design.md §5): a slot
                 // written as an operator binds the index like an EMPTY slot
                 // does — an ordinary implicit, filled by unification — and
                 // additionally *installs* the symbol as that binder's local
@@ -2811,7 +2811,7 @@ impl Classes<'_> {
                              of the index slot's three referents binds one spelling — the \
                              empty slot binds `{}`, a linked slot binds your parameter's \
                              name, and a symbol binds the symbol \
-                             (docs/operators-onto-classes-design.md §5.1)",
+                             (docs/language/classes/operators-onto-classes-design.md §5.1)",
                             v.name, r.name, r.name, v.name
                         ),
                     ));
@@ -3017,7 +3017,7 @@ impl ClassesMut<'_> {
     // -- designations -------------------------------------------------------
 
     /// `designation + at Nat := add`
-    /// (docs/operators-onto-classes-design.md §3).
+    /// (docs/language/classes/operators-onto-classes-design.md §3).
     ///
     /// A table entry and nothing else: no global is minted, no value is
     /// assembled, nothing reaches Ψ. What it buys is that the symbol `+` has a
@@ -3062,7 +3062,7 @@ impl ClassesMut<'_> {
                      is not: it is emitted bare at each use site and instantiated there, \
                      so a written type application — or anything unnamed — would pin this \
                      declaration's arguments rather than the caller's \
-                     (docs/operators-onto-classes-design.md §3.2). Name the operation, or \
+                     (docs/language/classes/operators-onto-classes-design.md §3.2). Name the operation, or \
                      declare one that wraps it",
                     d.symbol
                 ),
@@ -3107,7 +3107,7 @@ impl ClassesMut<'_> {
                      per (symbol, carrier), refused rather than silently overwritten. Two \
                      operations at one carrier are two *symbols* — which is how `+` is \
                      `or` and `*` is `and` at `Bool` \
-                     (docs/instance-resolved-key-design.md §3)",
+                     (docs/elaborator/instance-resolved-key-design.md §3)",
                     d.symbol, prev.op, prev.written
                 ),
                 d.span,
@@ -3162,7 +3162,7 @@ impl ClassesMut<'_> {
             // Through `restore_from_clone`, never `*self = snapshot`: the
             // kernel gate is the module's, not this declaration's, and a
             // clone's is inline and empty (`lib.rs`, and
-            // `docs/parallel-kernel-gate-design.md` §5.1).
+            // `docs/kernel/parallel-kernel-gate-design.md` §5.1).
             self.restore_from_clone(snapshot);
         }
         r
@@ -3232,7 +3232,7 @@ impl ClassesMut<'_> {
                 return err(
                     format!(
                         "the carrier `{}` has no head type name, so this instance has no \
-                         canonical name (docs/traits-layer1-design.md §4.1)",
+                         canonical name (docs/language/classes/traits-layer1-design.md §4.1)",
                         render_ty(carrier)
                     ),
                     carrier.span,
@@ -3252,7 +3252,7 @@ impl ClassesMut<'_> {
             let key = self.carrier_key(&head);
             (head, key, "")
         };
-        // The index (docs/operation-indexed-classes-design.md §3.1). Its
+        // The index (docs/language/classes/operation-indexed-classes-design.md §3.1). Its
         // spelling joins the registry key, so it is computed from the
         // declaration alone and an unspellable one is refused here.
         if class.valparams.len() != d.class.index.len() {
@@ -3291,7 +3291,7 @@ impl ClassesMut<'_> {
         };
         // The carrier as the registry keys it: the *declaration* the head
         // names, not the head's spelling
-        // (docs/instance-resolved-key-design.md §3). `head` itself stays the
+        // (docs/elaborator/instance-resolved-key-design.md §3). `head` itself stays the
         // written string, because it is what the canonical name is built from
         // and what a diagnostic should print.
         let key = instance_key(&class_key, &head_key, &index);
@@ -3302,7 +3302,7 @@ impl ClassesMut<'_> {
                      instance is keyed on its class and its **resolved** carrier, so this \
                      is the same carrier declaration and not merely the same written name \
                      — refused rather than silently overwritten \
-                     (docs/instance-resolved-key-design.md §3)",
+                     (docs/elaborator/instance-resolved-key-design.md §3)",
                     head_key,
                     class_key,
                     if index.is_empty() {
@@ -3332,7 +3332,7 @@ impl ClassesMut<'_> {
             !d.tyvars.is_empty() || !d.requires.is_empty() || !d.valparams.is_empty();
         let written = class_ref_written(&d.class);
         // Termination, checked here rather than detected when it hangs
-        // (docs/traits-layer2-design.md §6).
+        // (docs/language/classes/traits-layer2-design.md §6).
         Classes(self).check_decrease(d, &written)?;
 
         // The class type as a surface type: `Monoid<Rat>`, or `Monoid<Nat>(add)`
@@ -3451,7 +3451,7 @@ impl ClassesMut<'_> {
         let span = d.class.span;
         // A reference to one of this instance's members no longer applies the
         // `requires` binders: they are **solver parameters**
-        // (docs/traits-layer2-design.md §1, §9.3), so the reference leaves
+        // (docs/language/classes/traits-layer2-design.md §1, §9.3), so the reference leaves
         // them to resolution, which finds them where they are — as locals of
         // this very declaration, the first ascending scope. Layer 1 passed
         // them by hand, and that is exactly the rule this round retires.
@@ -3460,11 +3460,11 @@ impl ClassesMut<'_> {
         // written *explicitly* rather than left implicit because the reference
         // is a partial application — the member still wants its own arguments
         // — and mixing partial application with implicit insertion is refused
-        // by the applicator (docs/unifier-completeness-design.md §5.3). Under
+        // by the applicator (docs/elaborator/unifier-completeness-design.md §5.3). Under
         // `f<A, B>` the leading type parameters are consumed by the
         // `param_offset` route and the remainder may be a prefix — which at
         // layer 2 is exactly the solver parameters, filled by resolution from
-        // this declaration's own binders (docs/traits-layer2-design.md §9.3).
+        // this declaration's own binders (docs/language/classes/traits-layer2-design.md §9.3).
         let tyargs: Vec<Ty> = d
             .tyvars
             .iter()
@@ -3527,7 +3527,7 @@ impl ClassesMut<'_> {
         // parameters (design §3), so instantiating the class at `T⃗`
         // instantiates its ancestors by the same substitution, and their
         // index by the instance's: a computed ancestor index (`RelId<A>`)
-        // becomes `RelId<Nat>` at `Nat` (docs/relation-indexed-algebra-design.md
+        // becomes `RelId<Nat>` at `Nat` (docs/library/relation-indexed-algebra-design.md
         // §3).
         let anc_args = |a: &ClassRef| -> Vec<Ty> {
             ancestor_args_at(&class, &d.class.args, &d.class.index, a)
@@ -3569,7 +3569,7 @@ impl ClassesMut<'_> {
             // deciding what to apply it to is resolution, which does not exist
             // yet. It is skipped rather than refused — the consequence is an
             // honest missing-field error if the child leaves the field out
-            // (docs/traits-layer1-design.md §8).
+            // (docs/language/classes/traits-layer1-design.md §8).
             if inst.parameterized {
                 continue;
             }
@@ -3700,7 +3700,7 @@ impl ClassesMut<'_> {
                         "`instance {written}` overrides `{fname}`, which the canonical \
                          `{aname}` at `{head}` already holds, and the two are not \
                          convertible: an override owes agreement \
-                         (docs/traits-layer1-design.md §4.5). The kernel said: {}",
+                         (docs/language/classes/traits-layer1-design.md §4.5). The kernel said: {}",
                         e
                     ),
                     span,
@@ -4035,7 +4035,7 @@ impl Classes<'_> {
 
     /// Every binder of an instance has to be **recoverable**: a binder the goal
     /// cannot determine is a metavariable nothing can ever solve
-    /// (docs/value-generic-instances-design.md §4,
+    /// (docs/language/classes/value-generic-instances-design.md §4,
     /// issues/instance-binder-occurrence.md).
     ///
     /// Left unchecked, such an instance still *declares*, and the consequences
@@ -4117,7 +4117,7 @@ impl Classes<'_> {
     /// A kinded class's carrier written as a λ must be one a use site can
     /// learn: the constructor at a declaration's **declared slot**,
     /// `λ (A: Type) => Result<A, E>` for `inductive Result<A, E> varies A`
-    /// (docs/lambda-carrier-instances-design.md §7.3). The unifier only ever
+    /// (docs/language/classes/lambda-carrier-instances-design.md §7.3). The unifier only ever
     /// solves `?M(a) ≟ D<…>` to that constructor, so an instance at any
     /// other λ would be an entry no inferred goal reaches — the same
     /// unreachability [`Self::check_binders`] refuses for a binder.
@@ -4200,7 +4200,7 @@ impl Classes<'_> {
     }
 
     /// Structural decrease of the `requires` subgoals against the instance
-    /// head (docs/traits-layer2-design.md §6, record §6.3): Paterson's
+    /// head (docs/language/classes/traits-layer2-design.md §6, record §6.3): Paterson's
     /// condition, checked at the declaration over the *written* types.
     ///
     /// A `requires` binder whose type is not a class is not a subgoal at all —
@@ -4237,7 +4237,7 @@ impl Classes<'_> {
                          `{}: {}` {why}, so a search that used this instance could \
                          feed itself forever. Each `requires` subgoal must be \
                          structurally smaller than the instance head \
-                         (docs/traits-layer2-design.md §6); the escape is a named \
+                         (docs/language/classes/traits-layer2-design.md §6); the escape is a named \
                          instance value, applied by hand.",
                         p.name,
                         render_ty(&p.ty)

@@ -12,7 +12,7 @@ updated: 2026-10-26
 offset)` (`Layout::word_at`, `buffer_at`, `scratch_at`), and `next_rip` is
 `iterate_increment`: `offset` increments, each matching on the one before.
 Evaluating such an address's bits re-enters the kernel's evaluator once per
-increment (docs/native-depth-budget-design.md §1), so at an offset of about
+increment (docs/kernel/native-depth-budget-design.md §1), so at an offset of about
 1024 (`NATIVE_DEPTH_LIMIT`) it is `OutOfFuel` before any fuel is spent, and
 below that each address costs a large share of a declaration's fuel (an
 offset of 768: ~100k steps for its eight bytes; 400: ~50k).

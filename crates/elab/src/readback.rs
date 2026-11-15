@@ -23,7 +23,7 @@
 //! predecessor, an eliminator's induction hypothesis) are spelled as the
 //! reducer's β spells them. Every form the readback does not know (any other
 //! computed value, a binder over globals or universes) declines with `None`, and the caller spells the reduct with the reducer as
-//! before. The kernel's own invariant (docs/nbe-conversion-design.md §7: no
+//! before. The kernel's own invariant (docs/kernel/nbe-conversion-design.md §7: no
 //! value is converted back into syntax that the kernel then evaluates) is a
 //! statement about the kernel, which still has no readback; this is the
 //! elaborator's, and what it produces is the reducer's spelling.
@@ -526,7 +526,7 @@ impl<'v, 'g> Readback<'v, 'g> {
     /// that definition's stored node. The step closure names the definition:
     /// the value machine reads a definition's body in the environment made
     /// for it (`Env::of_binding`: a variable's offset `v + 1`,
-    /// `docs/lazy-global-offset-design.md`, or a constant's position), and
+    /// `docs/kernel/lazy-global-offset-design.md`, or a constant's position), and
     /// the call's arguments are the closure's innermost entries, the body's
     /// λs. The step itself is read back, and compared with the body's
     /// eliminator at those arguments, only the first time a body is met
@@ -702,7 +702,7 @@ fn under_tm(body: &Rc<Term>, k: u32, sigma: &LocalSubst) -> Term {
 /// at the kernel's slow-check rate (`heather_kernel::checks`: one in
 /// [`SAMPLE_EVERY`] by default, every one under `Full`). A disagreement is
 /// not unsound — the kernel re-checks every term — but the elaborator
-/// anchors on spellings in places (docs/nbe-conversion-design.md §7), so a
+/// anchors on spellings in places (docs/kernel/nbe-conversion-design.md §7), so a
 /// readback that respells is a defect here and fails loudly.
 #[cfg(debug_assertions)]
 pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: impl FnOnce() -> Option<Type>) {

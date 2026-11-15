@@ -11,7 +11,7 @@ updated: 2026-10-25
 list in the query arena: `push` is one allocation, a closure captures the
 spine by pointer, and `lookup(i)` walks `i` nodes. Rocq's kernel stores its
 explicit substitutions in an Okasaki skew binary random-access list instead
-(`esubst.ml`; `docs/segmap-survey.md` §4), which keeps `O(1)` push, persistence
+(`esubst.ml`; `docs/surveys/segmap-survey.md` §4), which keeps `O(1)` push, persistence
 and shared tails, and makes lookup `O(min(i, log n))`: never asymptotically
 worse than the list.
 
@@ -42,4 +42,4 @@ puller.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[signature-rescope-multiplicity]] (`docs/segmap-survey.md`); [[type-value-memo-hit-rate]] (`crates/kernel/src/value.rs`).
+- 2026-11-05: gardener: cites a file it shares with [[signature-rescope-multiplicity]] (`docs/surveys/segmap-survey.md`); [[type-value-memo-hit-rate]] (`crates/kernel/src/value.rs`).

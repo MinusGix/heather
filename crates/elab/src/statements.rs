@@ -6,7 +6,7 @@
 //! contributes only the term synthesized or checked for its result.
 //!
 //! A `have` is the one statement that *is* a kernel binder
-//! (docs/have-design.md): the rest of its block elaborates under `x : T` and
+//! (docs/language/have-design.md): the rest of its block elaborates under `x : T` and
 //! the block becomes the redex `(λ x: T. rest)(v)`, so the kernel checks `v`
 //! once however often `x` is used.
 //!
@@ -138,7 +138,7 @@ pub(crate) fn elaborate<'s>(
             Stmt::LetCode { span, .. } => {
                 return err(
                     "`let code` is meta-layer syntax: it binds code inside a \
-                     `meta fn` body (docs/in-language-map-design.md §3)",
+                     `meta fn` body (docs/metaprogramming/in-language-map-design.md §3)",
                     *span,
                 );
             }
@@ -147,7 +147,7 @@ pub(crate) fn elaborate<'s>(
     Ok((cx, values, &[]))
 }
 
-/// A method call on a mutable local (docs/sequencing-surface-design.md §8.2,
+/// A method call on a mutable local (docs/language/sequencing-surface-design.md §8.2,
 /// [`heather_syntax::MUTCALL`]): the call, and whether the local's own block
 /// claimed it.
 fn method_on_mutable(e: &Expr) -> Option<(&Expr, bool)> {
@@ -485,7 +485,7 @@ pub(crate) fn check_block(
 /// [`check_block`] over a suffix of a block's statements. At a `have` the
 /// rest is checked under the new binder against the expected type weakened
 /// past it, which keeps the block checking-transparent
-/// (docs/have-design.md §4).
+/// (docs/language/have-design.md §4).
 #[allow(clippy::too_many_arguments)]
 fn check_statements(
     elab: &impl BlockCheckingElab,
@@ -539,7 +539,7 @@ pub(crate) fn infer_block(
 
 /// [`infer_block`] over a suffix of a block's statements. At a `have` the
 /// rest is inferred under the new binder, and the block's type is the rest's
-/// with the value substituted back in (docs/have-design.md §4).
+/// with the value substituted back in (docs/language/have-design.md §4).
 fn infer_statements(
     elab: &impl StatementElab,
     cx: &Cx,
@@ -946,7 +946,7 @@ mod tests {
 
     /// The alias pass stops at a `have` and hands back the statements from it
     /// on, since only the caller holding the block's result can scope the
-    /// binder over the rest (docs/have-design.md §5).
+    /// binder over the rest (docs/language/have-design.md §5).
     #[test]
     fn the_alias_pass_stops_at_the_first_have() {
         let number = |name: &str, opaque| Stmt::Let {

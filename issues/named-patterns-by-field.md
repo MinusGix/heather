@@ -124,7 +124,7 @@ would be a control-flow feature rather than destructuring sugar.
   `field := pattern`; the right side is a general subpattern, which makes the
   call-site operator coherent and leaves `:` exclusively type-directed.
 - 2026-08-20: Landed and closed
-  (`docs/named-patterns-by-field-design.md`). Record `let` maps fields to
+  (`docs/language/matching/named-patterns-by-field-design.md`). Record `let` maps fields to
   renamed binders or `_`, validates and then projects in declaration order,
   so an open dependent `Exists` may be written in reverse field order while
   `hx` still checks at `P(x)`. Constructor patterns retain named wrappers only

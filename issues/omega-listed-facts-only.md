@@ -13,7 +13,7 @@ its cost still grows with every fact in scope. The 2026-10-16 data point from
 the regular Cauchy reals stands: one `omega` over `j <= n` cost about three
 times more with three unrelated `Rat` inequalities in scope, because each is
 unfolded and inspected before relevance filtering drops it
-(docs/regular-cauchy-reals-round.md, "Cost").
+(docs/library/regular-cauchy-reals-round.md, "Cost").
 
 A mode that reads only the listed facts would bound the cost by what the
 proof names, and would make every load-bearing fact visible at the call. The
@@ -34,4 +34,4 @@ question is its spelling and its relation to binders:
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[theorem-witness-unfolding]] (`docs/regular-cauchy-reals-round.md`).
+- 2026-11-05: gardener: cites a file it shares with [[theorem-witness-unfolding]] (`docs/library/regular-cauchy-reals-round.md`).

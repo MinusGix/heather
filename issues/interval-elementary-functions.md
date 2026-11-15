@@ -10,9 +10,9 @@ updated: 2026-10-27
 Interval enclosures of `exp`, `log`, `sin` and friends at a precision, by
 Taylor series with a remainder bound, over `Interval`
 (`lib/std/num/float/interval.hthr`). This is CoqInterval's next layer
-(`docs/coq-hardware-floats-survey.md` §6.1) and the enclosure that
+(`docs/surveys/coq-hardware-floats-survey.md` §6.1) and the enclosure that
 `float-transcendental`'s Ziv loop refines until it misses every rounding
-breakpoint (`docs/floating-point-design.md` §6): correctly rounded `exp`
+breakpoint (`docs/library/floating-point-design.md` §6): correctly rounded `exp`
 is a refinement of `exp`'s enclosure plus an apartness proof.
 
 Shape: argument reduction (`exp(x) = exp(x/2^k)^(2^k)`), a partial sum
@@ -30,7 +30,7 @@ rational arguments first.
 
 ## Log
 
-- 2026-10-27: LANDED (design `docs/floating-point-design.md` §16, "Series and
+- 2026-10-27: LANDED (design `docs/library/floating-point-design.md` §16, "Series and
   elementary functions"). `lib/std/num/float/series.hthr`: a `Series` with
   ratios at most 1/2 past `start`, the tail and decay bounds, its limit as a
   `CReal` (`Series::real`, index `start + width(scale·(n+1) + n)` by

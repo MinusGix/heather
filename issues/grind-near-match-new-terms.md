@@ -9,7 +9,7 @@ updated: 2026-11-02
 ---
 
 A near match with free binders asks `Defeq` with holes and looks each
-solution up among the graph's nodes (docs/grind-design.md §13.4). Two cases
+solution up among the graph's nodes (docs/tactics/grind-design.md §13.4). Two cases
 end the question though the instance exists:
 
 - The solution is a term the graph does not hold (`?ys := g(zs)` where no

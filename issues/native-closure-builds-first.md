@@ -11,7 +11,7 @@ This round started as "split the longest `lib/native` modules": the
 belief was that they were the cold gate's critical path and over the
 300 s budget. A measurement on master f9c6e9d says neither holds any more.
 Since #291 every module builds in a process of its own
-(`docs/module-dag-design.md` §12), so the 300 s rail is per module, and the
+(`docs/infrastructure/module-dag-design.md` §12), so the 300 s rail is per module, and the
 `lib/native` folder child only replays (3 s over a built store).
 
 ## Measured

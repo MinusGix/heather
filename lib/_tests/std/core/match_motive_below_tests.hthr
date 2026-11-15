@@ -1,5 +1,5 @@
 // Probes of the motive synthesis' last rung
-// (docs/goal-motive-synthesis-design.md §4.5,
+// (docs/elaborator/goal-motive-synthesis-design.md §4.5,
 // issues/case-split-on-a-definitions-tests.md): `match h: test` in a proof
 // reaches a test its goal is stuck on below binders, under a defined
 // proposition or an `↔`, so a function that branches

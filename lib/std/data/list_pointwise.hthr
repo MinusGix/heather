@@ -6,9 +6,9 @@
 // not an instance of congruence. Each is stated twice: as the lemma a proof
 // cites (`List::map_ext`), and as the evidence a rewrite crosses the λ by
 // (`PreservesRelation(Pointwise(RelId), RelId, …)`,
-// docs/equation-rewrite-design.md §10), which is what lets `simp_only`
+// docs/tactics/equation-rewrite-design.md §10), which is what lets `simp_only`
 // reach an instance in the body of a λ handed to one of these
-// (docs/simp-design.md §13).
+// (docs/tactics/simp-design.md §13).
 //
 // A module of its own because the evidence is stated with
 // `relation_props`, which `list` is below.

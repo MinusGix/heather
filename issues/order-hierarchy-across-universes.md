@@ -27,7 +27,7 @@ between a frame and a small lattice has no class to be stated against.
   them in the library.
 - The presentation mismatch: `frame.hthr` is presented by `≤` alone,
   `lattice.hthr` by `(≈, ≤)` with antisymmetry into `≈`
-  (`docs/lattice-structure-design.md`). Decide which the unified classes
+  (`docs/library/lattice-structure-design.md`). Decide which the unified classes
   take, and whether frames gain `≈` as the symmetric part of `≤`.
 - Whether set-indexed joins (`sup: (I: Type) → (I → A) → A`) sit above
   `JoinSemilattice` in the one hierarchy.

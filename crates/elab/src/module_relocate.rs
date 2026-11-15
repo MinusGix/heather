@@ -1,6 +1,6 @@
 //! Moving a module delta onto another dependency world: the early cutoff for
 //! an upstream edit the module never observed
-//! (`docs/module-interface-cutoff-design.md`).
+//! (`docs/infrastructure/module-interface-cutoff-design.md`).
 //!
 //! A delta's Ψ references are de Bruijn indices counted from the Ψ length a
 //! term is scoped at, so the same module elaborated over a world with one
@@ -313,7 +313,7 @@ impl ModuleDelta {
 
     /// The same delta over another dependency prefix of the same length,
     /// unrewritten: for an image decoded against a placeholder prefix
-    /// (`docs/module-dag-design.md` §4) when the world it is loaded into puts
+    /// (`docs/infrastructure/module-dag-design.md` §4) when the world it is loaded into puts
     /// every module of its closure where its own canonical world did, so the
     /// move is the identity. The caller vouches for that; the replay
     /// rechecks every binding against the prefix it is given either way.
@@ -511,7 +511,7 @@ pub fn source_identifiers(src: &str) -> BTreeSet<String> {
 /// The world's names as they stood at one moment, kept so that what a
 /// module's elaboration could observe of them is computed over the world
 /// *under* the module once the elaboration has said what it looked up
-/// (`docs/module-interface-cutoff-design.md` §2).
+/// (`docs/infrastructure/module-interface-cutoff-design.md` §2).
 pub struct NameWorld(crate::names::Names);
 
 impl crate::Elaborator {

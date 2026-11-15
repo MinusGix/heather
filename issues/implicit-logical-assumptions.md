@@ -16,7 +16,7 @@ one concrete provider for that context. An `axiom` remains separate: it is a
 named, irreducible trust leaf used only when somebody deliberately closes a
 conditional world.
 
-The earlier sketch in `docs/implicit-logical-assumptions-design.md` proposed
+The earlier sketch in `docs/language/implicit-logical-assumptions-design.md` proposed
 an axiom-specific fallback for selected `:= infer` parameters. This issue
 supersedes that part of the sketch: there is only `infer`. Axioms are never an
 ambient candidate set merely because they are visible or imported. Evidence

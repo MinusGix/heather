@@ -171,7 +171,7 @@ theorem norm_num_real_body(): ∑ k < 3, (rup(k) * rup(k) - 1) ≈ 11 { by norm_
 theorem norm_num_real_empty(): ∑ k < 0, rup(k) ≈ 0 { by norm_num() }
 theorem norm_num_real_false(): ¬(∑ k < 3, rup(k) ≈ 7) { by norm_num() }
 
-// Setoid `rewrite` under the binder of `∑`/`∏` (docs/equation-rewrite-design.md
+// Setoid `rewrite` under the binder of `∑`/`∏` (docs/tactics/equation-rewrite-design.md
 // §10): the body is rewritten below the binder, the two λs are related
 // pointwise, and the sum crosses that relation by `MonoidRel::range_pointwise`.
 theorem rewrite_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y, e: ∑ k < n, f(k) * y ≈ y): ∑ k < n, f(k) * x ≈ y { rewrite(h, e) }
@@ -220,7 +220,7 @@ theorem rewrite_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h:
 }
 // A sum that leaves the carrier, as an argument of a `Nat`-valued count,
 // changes by `=` at `Nat` when no evidence names a relation there
-// (docs/equation-rewrite-design.md §11.4, §11.6): the obligation is what
+// (docs/tactics/equation-rewrite-design.md §11.4, §11.6): the obligation is what
 // that asks of the count.
 // expect-error: ?compatibility : PreservesRelation(Pointwise(Same), RelId, λ (z: Nat -> Rat) => size(z))
 theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) → Nat, back: Nat → Rat, e: back(size(λ k => y)) ≈ 0):
@@ -228,7 +228,7 @@ theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) �
 { rewrite(h, e) }
 
 // `rel_cong` and `rel_derive` cross the same binders
-// (docs/equation-rewrite-design.md §10.6): two λs whose bodies differ are
+// (docs/tactics/equation-rewrite-design.md §10.6): two λs whose bodies differ are
 // walked below the binder to a pointwise proof, and their consumer crosses it
 // by the evidence `rewrite` asks for.
 theorem rel_cong_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, f(k) * x ≈ ∑ k < n, f(k) * y { rel_cong(h) }
@@ -258,7 +258,7 @@ theorem rel_derive_sum(n: Nat, f: Nat → Rat): PreservesRelation(Rat::Same, Rat
 // A law stated in a class's section is instantiated unapplied: its left side
 // `c * ∑ k < n, f(k)` is headed by the class's `*`, an argument of the law,
 // so it is keyed by the sum; the dictionary is resolved, and the body pattern
-// `λ k. f(k)` is `f` (docs/equation-rewrite-design.md §6.1).
+// `λ k. f(k)` is `f` (docs/tactics/equation-rewrite-design.md §6.1).
 theorem class_law_open<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c {
     rewrite(Semiring::mul_range_l, e)
 }

@@ -228,7 +228,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Spine<T> {
 
 /// One binder's surface data, parallel to its `gamma.entries` entry: the
 /// name it was written under and the implicitness skeleton of its written
-/// type, where it had one (docs/implicit-binders-design.md §3.1).
+/// type, where it had one (docs/language/implicit-binders-design.md §3.1).
 pub(crate) struct Binder {
     pub(crate) name: Arc<str>,
     pub(crate) skel: Option<Rc<crate::Skel>>,

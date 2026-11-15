@@ -1,5 +1,5 @@
 //! Type-level dot projection — `A.unit`, `G.plus(x, y)`, `Nat.zero`
-//! (`docs/traits-type-projection-design.md`, candidate 23 of
+//! (`docs/language/classes/traits-type-projection-design.md`, candidate 23 of
 //! `issues/requires-placement-syntax.md` §R2-C).
 //!
 //! The feature is receiver dispatch with one word changed: the **subject is a
@@ -132,7 +132,7 @@ fn an_inherited_member_projects_at_its_owner() {
     // `sop` is declared by `Sem` and the constraint is a `Mon`, so the goal is
     // built at the ancestor and answered by the resolver's **upcast** — at an
     // open carrier, where no synthesized parent exists to be found instead
-    // (docs/traits-owner-dispatch-design.md §3).
+    // (docs/language/classes/traits-owner-dispatch-design.md §3).
     ok(&format!(
         "{P}
 fn twice<A: Mon>(x: A) -> A {{ A.sop(x, x) }}
@@ -159,7 +159,7 @@ theorem at_z(x: Z): Z.sop(x, Z.unit) = x {{ right_unit(x) }}
 fn a_bare_operation_field_is_a_value() {
     // The consequence of the subject not being an argument: a class member is
     // partially applicable through a type, where through a receiver it is not
-    // (`docs/traits-receiver-dispatch-design.md` §8). Recorded as residue
+    // (`docs/language/classes/traits-receiver-dispatch-design.md` §8). Recorded as residue
     // there; pinned as behaviour here.
     ok(&format!(
         "{P}
@@ -465,7 +465,7 @@ fn wrong<S, A> requires d: Swapped<S, A> (s: S) → A { S.send(s) }
     assert!(wrong_carrier.contains("type parameters"), "{wrong_carrier}");
 }
 
-// -- open derivations (docs/traits-layer2-design.md §8.1) -------------------
+// -- open derivations (docs/language/classes/traits-layer2-design.md §8.1) -------------------
 
 #[test]
 fn an_upcast_at_an_open_carrier_is_minted_once_over_its_prefix() {

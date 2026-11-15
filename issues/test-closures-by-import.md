@@ -20,7 +20,7 @@ every `include_str!` relinks its test binary on any edit to the file.
 uses) in place of the hand-ordered `MODULES` lists. The prefix key becomes
 the root set and the image layer orders it. Loading at runtime means a
 library edit stops relinking every binary that `include_str!`s the file
-(`docs/testing-architecture-design.md` §2.2). The sentinel's exact lane
+(`docs/infrastructure/testing-architecture-design.md` §2.2). The sentinel's exact lane
 should see one run of it, since it touches image keys.
 
 Split out of [[hthr-test-corpus]] when the corpus runner landed

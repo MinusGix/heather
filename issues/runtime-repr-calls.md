@@ -10,7 +10,7 @@ updated: 2026-11-08
 
 Since [[sint-native-lowering]] a runtime fn's own boundary may pass a type
 held by its `datarepr` in one word (`i64_add(a, b: SInt(64)) → SInt(64)`,
-docs/runtime-fn-setups-design.md §16.13), but a *call* of such a function is
+docs/native/runtime-fn-setups-design.md §16.13), but a *call* of such a function is
 refused: `Tm::judge` asks every callee's `Sig::is_words`, which is words or
 counts only. `lib/_tests/native/runtime/runtime_sint_tests.hthr`'s
 `i64_twice` is the refusal.
@@ -36,7 +36,7 @@ expected to be a judgment change plus the table above.
 
 ### 2026-11-08 — done (round 2 of [[sint-native-lowering]])
 
-docs/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
+docs/native/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
 types as it meets them (`rt_with_reprs`), calls pass and return a record
 held in one word (`Sig::Words` over the table, `RecInfo::back`), and each
 function keeps its own table, linking by conversion. Probes in

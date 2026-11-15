@@ -9,7 +9,7 @@ updated: 2026-11-10
 ---
 
 A vocabulary for a program written against a step, and what its limit says
-about any one run (`docs/continuous-time-survey.md` §3 reading (A), §5.2
+about any one run (`docs/surveys/continuous-time-survey.md` §3 reading (A), §5.2
 item 1). Probes of the shape, at `Rat`:
 `lib/_tests/std/analysis/continuous_time_tests.hthr` (`dt_linear_error`,
 `dt_transfer_le`, `fall_richardson`).

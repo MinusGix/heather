@@ -14,7 +14,7 @@ Native proofs represent sets of identifiers as lists (`List<Nat>` with
 `lib/native`, arch and os there are about 1,080 such citations (`Mem(` 257,
 `absent(` 237, `union(` 81, `Inside(` 64, `minus(` 55, …), and `lib/native`
 keeps about 30 set lemmas of its own. `grind` does not prove membership goals
-(probe P4, `docs/native-mathematics-survey.md` §9). Survey rank: 1.
+(probe P4, `docs/surveys/native-mathematics-survey.md` §9). Survey rank: 1.
 
 Membership in a set expression built from atoms by ∪, ∖, ∩, `++`, `Cons`
 and a filter is a Boolean function of the atoms' memberships (the Boolean

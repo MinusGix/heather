@@ -48,7 +48,7 @@ Cons(b, rest) => match rest as λ r => list_len(Cons(b, r)) <= Succ(k) → Stric
 — made the same proof check, so the terms differ only in the motive a nested
 `match` on a tier-1 arm's alias is given. A synthesized motive abstracts the
 alias (a projection `nth(cs; ι₀)`, tier 0 §5.1) out of a goal spelled at
-`sup(ℓ; cs)`, where it is not a subterm; `docs/list-course-of-values-design.md`
+`sup(ℓ; cs)`, where it is not a subterm; `docs/language/recursion/list-course-of-values-design.md`
 §7.3 records the same limit on the window path ("synthesis has to recover it
 from a reduced goal, and at depth three it does not") and §7.4 the cure there
 (spell the arm's goal at the constructor rebuilt around the child). This is
@@ -77,4 +77,4 @@ with `strict_below`'s four `as` motives deleted.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[cov-window-in-theorem-arms]] (`docs/list-course-of-values-design.md`); [[string-char-spec-types]] (`lib/std/text/utf8.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[cov-window-in-theorem-arms]] (`docs/language/recursion/list-course-of-values-design.md`); [[string-char-spec-types]] (`lib/std/text/utf8.hthr`).

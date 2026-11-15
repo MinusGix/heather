@@ -43,7 +43,7 @@ subtraction split is one more scope kind.
 gives the branches `b <= a ∧ (a - b) + b = a` and `a < b ∧ a - b = 0`, each
 closed by `omega` again, the subtraction kept one atom
 (`split_nat_subtraction`, the last fallback of the attempt that answers).
-Design: `docs/omega-measure-reduction-design.md` §16. Probes
+Design: `docs/tactics/omega-measure-reduction-design.md` §16. Probes
 `sub_add_cancel_bare`, `sub_le_bare`, `sub_zero_past`, `sub_in_fact`,
 `sub_nested`, `sub_checking` and the control `sub_add_cancel_truncated`
 (refused, its report naming `__omega_sub0_case: Lt(a, b)`) are in

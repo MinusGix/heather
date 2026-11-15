@@ -1,21 +1,21 @@
 // `algebra` — the library's first classes, and the instances the other
-// `std` modules' carriers earn (docs/traits-design.md, issues/traits.md).
+// `std` modules' carriers earn (docs/language/classes/traits-design.md, issues/traits.md).
 //
 // Everything here is sugar over records and globals: a `class` is the record
 // its fields describe, an `instance` is a namespace of ordinary declarations
 // with the record assembled at the end. Nothing new reaches the kernel.
 //
 // The operation is an INDEX, not a field
-// (docs/operation-indexed-classes-design.md): `Monoid<Bool>(and)` and
+// (docs/language/classes/operation-indexed-classes-design.md): `Monoid<Bool>(and)` and
 // `Monoid<Bool>(or)` are different types, so both register as equals and
 // nothing here has to nominate one.
 //
 // A `designation` says what an operator SYMBOL means at a carrier
-// (docs/operators-onto-classes-design.md), never which structure a carrier
+// (docs/language/classes/operators-onto-classes-design.md), never which structure a carrier
 // has. The symbol is a spelling of the index, so `sum_all` and `mconcat` are
 // one fold reached two ways. Applied, a symbol reads its carrier off its
 // operand; passed — `mconcat(++, xss)` — off the carrier the position expects
-// (docs/bare-symbol-checking-carrier-design.md). One sentence, two directions.
+// (docs/language/classes/bare-symbol-checking-carrier-design.md). One sentence, two directions.
 
 import bool;
 import logic;
@@ -44,7 +44,7 @@ import algebra_rel;
 // commutativity over `append`.
 //
 // Each class here is its relational counterpart in `algebra_rel` at the
-// identity relation `RelId` (docs/relation-indexed-algebra-design.md): a child
+// identity relation `RelId` (docs/library/relation-indexed-algebra-design.md): a child
 // at a computed index, with no field of its own. Its laws are the relational
 // ones, read at `RelId`, which is `=` by unfolding, so `A.assoc(x, y, z)` is
 // an equation; and every relational theorem (`MonoidRel::fold_append`,
@@ -96,7 +96,7 @@ class Numeral<A> {
 }
 
 // A decided order — and as of 2026-08-16 a **propositional** one
-// (docs/nat-order-design.md §3). `le` returns a `Type`, the law is the
+// (docs/library/nat-order-design.md §3). `le` returns a `Type`, the law is the
 // relation itself rather than an equation with `True`, and the decision moved
 // into its own field.
 //
@@ -112,7 +112,7 @@ class Numeral<A> {
 // about `Cmp`'s own `le`, an abstract relation with no instance to resolve
 // through, so nothing here has a goal for `Decide` to answer. What changed for
 // `Decide` is at the concrete relations — `std/nat`'s `Le` now has an instance
-// generic in both its values (docs/value-generic-instances-design.md) — and
+// generic in both its values (docs/language/classes/value-generic-instances-design.md) — and
 // none of the consumers below moved, as promised.
 //
 // The field is `le` and NOT `leb`, the name `std/nat` gives its decision
@@ -135,7 +135,7 @@ class Cmp<A> {
 //
 // Every one of these is written in LITERAL form — `field := global` — because
 // every fact it needs was already proved in the module that owns the carrier
-// (docs/traits-design.md §3). Where a field is a one-liner nobody would name
+// (docs/language/classes/traits-design.md §3). Where a field is a one-liner nobody would name
 // (`unit_r` for `add`, which is `refl`), it is written inline.
 //
 // Both `Bool` monoids register, as equals. Neither is "the" one, because no
@@ -197,7 +197,7 @@ instance CommMonoid<Bool>(Bool::or) {
 // The generic instance: one declaration, an instance at every element type.
 // The chain is one class per law, and `append` stops at `Monoid`. Its setoid
 // and congruence are written inline: a generic parent instance offers no
-// fill by reference (docs/traits-layer1-design.md §8), and a bare type
+// fill by reference (docs/language/classes/traits-layer1-design.md §8), and a bare type
 // variable has no carrier head to own one (`relid_equivalence`).
 instance<A> Monoid<List<A>>(List::append) {
     rel_refl := λ (xs: List<A>) => refl,
@@ -287,7 +287,7 @@ theorem mconcat_single<A: Monoid(op)>(self x: A, op: A → A → A):
 // `A.le_refl` is on a **type** subject, which is what keeps it unambiguous
 // against `std/nat`'s ambient `le_refl` global: the receiver reading would put
 // a type in `le_refl`'s `Nat` slot, and the declaration refuses that
-// (docs/traits-type-projection-design.md §4).
+// (docs/language/classes/traits-type-projection-design.md §4).
 fn max_of<A: Cmp>(x, y: A) → A { or_pick(A.le_dec(x, y), x, y) }
 
 // `max_of_true`'s successor, and the rename is the content: the hypothesis is
@@ -321,7 +321,7 @@ fn or_default<A: Default>(self o: Option<A>) → A { o.unwrap_or(A.default) }
 // The chain's generic consequence: a right unit follows from commutativity and
 // the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
 // monoid*. Written in the SYMBOL form
-// (docs/operators-onto-classes-design.md §5): the `+` here is the bound index,
+// (docs/language/classes/operators-onto-classes-design.md §5): the `+` here is the bound index,
 // not an ambient operator, and every corollary below pins it **by unification**
 // from its own goal — one proof, three structures, two of them on one carrier.
 // A designation supplies an index nothing else pinned; it never overrides one,
@@ -334,7 +334,7 @@ theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
 // The specializations, one per way an instance can be found.
 
 // The fold under whatever `+` means here
-// (docs/operators-onto-classes-design.md §5). Inside this declaration `+` IS
+// (docs/language/classes/operators-onto-classes-design.md §5). Inside this declaration `+` IS
 // the bound index, so the two folds are one term; at a call site the index is
 // filled from the designation at the caller's carrier.
 fn sum_all<A: Monoid(+)>(self xs: List<A>) → A { xs.mconcat(+) }
@@ -348,7 +348,7 @@ fn sum(self ns: List<Nat>) → Nat { ns.sum_all() }
 // The monoid here is at `List<A>`, which is no tyvar, so no constraint slot
 // could ever name a symbol for it — and yet `++` is passed bare, because the
 // slot's own type says the carrier is `List<A>` and the generic designation
-// answers there (docs/bare-symbol-checking-carrier-design.md). Same term as
+// answers there (docs/language/classes/bare-symbol-checking-carrier-design.md). Same term as
 // `mconcat(append, xss)`, which is what `concat_single` below still proves.
 fn concat<A>(self xss: List<List<A>>) → List<A> { xss.mconcat(++) }
 

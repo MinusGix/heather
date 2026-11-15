@@ -22,7 +22,7 @@ written, which leaves these as the conspicuous remainder.
 Wanted: the speller recognises a numeral's elaborated form at each carrier
 that has numerals (`OfNat(k)` and `NegSucc(k)` at `Int`, `ofInt(…)` at
 `Rat`, and whatever the carrier-directed numeral route emits elsewhere,
-docs/carrier-directed-numerals-design.md) and prints the numeral, `-k` for a
+docs/language/carrier-directed-numerals-design.md) and prints the numeral, `-k` for a
 negative one (`operand_at` already parenthesizes a spelling that starts with
 `-` as a prefix form). The inverse must be exact in the same sense as the
 operator one: print the numeral only where the numeral written at that
@@ -38,7 +38,7 @@ carrier would elaborate to this term, and never reduce to find out.
 ## Log
 
 - 2026-11-07: Done. The speller reads the `Numeral` instance table backwards
-  (`Speller::carrier_numeral`, docs/surface-type-display-design.md §5.3): each
+  (`Speller::carrier_numeral`, docs/elaborator/surface-type-display-design.md §5.3): each
   closed instance's `ofNat` body is a template over the literal, read off the
   dictionary's definition without reducing anything, and a term spells as the
   numeral `k` exactly when it is that template at `k` in its own scope. Int,

@@ -24,7 +24,7 @@ divergence.
 
 ## Shape
 
-`docs/kernel-coinduction-design.md` §6.1 names the two routes.
+`docs/kernel/kernel-coinduction-design.md` §6.1 names the two routes.
 
 1. **Kernel-free: a `Tau` costs the machine a step** (non-stuttering
    simulation, CompCert's measure in its simplest form). A tree with `n`

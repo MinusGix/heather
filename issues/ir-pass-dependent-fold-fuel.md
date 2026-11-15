@@ -7,7 +7,7 @@ updated: 2026-08-18
 ---
 
 Filed by the first certified-pass algebra probe
-(`docs/certified-pass-algebra-probe.md`). The intended architecture is one
+(`docs/metaprogramming/certified-pass-algebra-probe.md`). The intended architecture is one
 `IrAlgLaws(R, alg)` field per constructor and one generic theorem
 
 ```heather

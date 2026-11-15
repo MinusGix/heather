@@ -1,4 +1,4 @@
-//! The surface indexing layer (`docs/surface-fin-indexing-design.md`):
+//! The surface indexing layer (`docs/language/surface-fin-indexing-design.md`):
 //! `Fin(n)` as a type, `FZ`/`FS(i)` and numerals as its indices, `match` on a
 //! `Fin`, and the postfix `xs[i]`.
 //!
@@ -178,7 +178,7 @@ fn indexing_at_an_open_element_type() {
 /// when this test was first added — `let x: T = e;` did not parse for any `T`
 /// reaching `ty_atom`'s expression fall-through, `let x: Nat = 0;` included —
 /// and the caveat recorded here is retired by
-/// `docs/let-and-blocks-design.md` §3, which fixed it. It is exercised below,
+/// `docs/language/let-and-blocks-design.md` §3, which fixed it. It is exercised below,
 /// at an **open** length, so the annotation must convert with the built index
 /// rather than compute away.
 #[test]
@@ -311,7 +311,7 @@ fn a_match_on_fin_at_a_literal_length_computes() {
 /// the index becomes matchable while the scrutinee itself stays neutral.
 ///
 /// The predecessor binder is `j`, the natural spelling, and it is the
-/// **acceptance test of rule 1** (docs/let-and-blocks-design.md §5.5). Until
+/// **acceptance test of rule 1** (docs/language/let-and-blocks-design.md §5.5). Until
 /// 2026-08-02 a *use* of a binder named `j` parsed as a `j`-expression and
 /// failed at the missing `(`, so this suite spelled it `jx`; `atom` now
 /// recognizes the form only when a `(` follows, and the workaround is
@@ -468,7 +468,7 @@ fn a_numeral_at_a_fin_emits_the_folded_iterated_index() {
 
 // With no template registered — these fixtures never load the lib — `xs[i]`
 // and `elab_container_ih` take their Rust/kernel paths: the *silent decline*
-// (docs/meta-def-registration-design.md §2.4's use-row). The pins above are
+// (docs/metaprogramming/meta-def-registration-design.md §2.4's use-row). The pins above are
 // half of that claim — they assert the kernel schema verbatim, which is only
 // true while the hook declines — and `container_proofs.rs`,
 // `container_recursion.rs` and `container_fields.rs` staying green is the

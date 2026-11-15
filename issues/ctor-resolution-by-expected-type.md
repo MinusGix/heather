@@ -10,7 +10,7 @@ updated: 2026-08-16
 the way out is a *different* subsystem and left with its own owner
 ([[deep-pattern-ctor-needs-column-type]]) rather than keeping this open.
 
-The follow-up `docs/modules-design.md` §4 promised an owner for: in
+The follow-up `docs/language/modules-design.md` §4 promised an owner for: in
 checking position the expected type names the inductive, so a bare `None`
 at expected `Option<A>` is unambiguous whatever is in scope — the
 bidirectional elaborator already holds the evidence. Synthesis position
@@ -66,7 +66,7 @@ first cut got it wrong in a way a test caught:
    *not* evidence between them; firing anyway would take a file that means the
    function today and silently make it mean the constructor the moment a second
    `None` became visible — precisely the reinterpretation
-   `docs/modules-design.md` §8's second invariant forbids. The route is worth
+   `docs/language/modules-design.md` §8's second invariant forbids. The route is worth
    having only because it is honest about when it does not apply.
 3. **A binder still wins**, at every expected type. The shadowing check is
    repeated inside the route rather than inherited, so the type evidence cannot

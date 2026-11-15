@@ -1,5 +1,5 @@
 // `rt` over a span it writes: computations over the file
-// (docs/native-one-compiler-design.md §2.6, U4 step 4c).
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4c).
 //
 // `rt`'s terms (`Tm`) are values: total and pure, their meaning a function
 // of their words in a world, and the spans a function is lent are part of

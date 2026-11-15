@@ -256,7 +256,7 @@ surface.
   prerequisite. Full `scripts/test`: suite 1923, 0 failed (count unchanged;
   the focused acceptance and mutation control extend the existing IR test).
 - 2026-08-18: **Rung 4's first certified-pass probe landed, with an honest
-  split verdict** (`docs/certified-pass-algebra-probe.md`). `TreePassLaws`
+  split verdict** (`docs/metaprogramming/certified-pass-algebra-probe.md`). `TreePassLaws`
   indexes a structural `TreeAlg<A,Tree<A>>` by an arbitrary relation and asks
   for one law per constructor; `tree_pass_sound` is the one generic induction.
   The concrete mirror pass visibly changes the tree and preserves `tree_size`:
@@ -281,5 +281,5 @@ surface.
   is refused. [[ir-pass-dependent-fold-fuel]] is closed. The remaining rung-4
   work is semantic—a non-equality execution refinement—not mechanical scale.
   Full `scripts/test`: suite 1925 -> 1926, 0 failed; kernel bench 106/106.
-- 2026-10-28: **Proof repair survey (2026-10-28, `docs/proof-repair-algebra-survey.md`).** Plante et al., *Proof Repair and (Co)algebra Equivalences* (arXiv:2610.36669), is the theory of this issue's design question 2 (law boundary). Pointwise fold uniqueness and fusion need no funext at `Wf`, because each child's hypothesis is an ordinary equation. At `W` the fold of the identity algebra is not provably the identity, so the paper's isomorphism theorem stops at tier 2 (survey §4). Its Lemma 3.10 (a signature as one polynomial: label × non-recursive args, recursive positions) is the public presentation question 1 asks about, and the lowering already builds it. The coinductive dual of `list_fold_unique` holds only up to `Bisim`, since the kernel's `M` has no η (survey §5).
-- 2026-11-05: gardener: cites a file it shares with [[datarepr-separation]] (`docs/proof-repair-algebra-survey.md`); [[reprgen-recursive-child-via-embedding]] (`docs/proof-repair-algebra-survey.md`).
+- 2026-10-28: **Proof repair survey (2026-10-28, `docs/surveys/proof-repair-algebra-survey.md`).** Plante et al., *Proof Repair and (Co)algebra Equivalences* (arXiv:2610.36669), is the theory of this issue's design question 2 (law boundary). Pointwise fold uniqueness and fusion need no funext at `Wf`, because each child's hypothesis is an ordinary equation. At `W` the fold of the identity algebra is not provably the identity, so the paper's isomorphism theorem stops at tier 2 (survey §4). Its Lemma 3.10 (a signature as one polynomial: label × non-recursive args, recursive positions) is the public presentation question 1 asks about, and the lowering already builds it. The coinductive dual of `list_fold_unique` holds only up to `Bisim`, since the kernel's `M` has no η (survey §5).
+- 2026-11-05: gardener: cites a file it shares with [[datarepr-separation]] (`docs/surveys/proof-repair-algebra-survey.md`); [[reprgen-recursive-child-via-embedding]] (`docs/surveys/proof-repair-algebra-survey.md`).

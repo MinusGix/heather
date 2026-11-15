@@ -1,5 +1,5 @@
 //! `lib/std/algebra/ordered_field.hthr`
-//! (`docs/constructive-ordered-field-design.md`): the refusals that need the
+//! (`docs/library/constructive-ordered-field-design.md`): the refusals that need the
 //! checker. What the language can state is a theorem: every layer resolving
 //! at `Rat` and `CReal` with the carriers' own operations as fields, each
 //! layer's theorems at its own layer, predicates meeting their unfoldings,

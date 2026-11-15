@@ -1,4 +1,4 @@
-# Probe benchmark cases for scripts/bench-probes (docs/cloud-benchmarks.md; why each: perf/bench/targets.md).
+# Probe benchmark cases for scripts/bench-probes (docs/infrastructure/cloud-benchmarks.md; why each: perf/bench/targets.md).
 # kind: only = --only the target items (comma list) | cert = --only over today's write-elf certificate of SYMBOL, its items matching GLOB (target SYMBOL:GLOB) | warm = check after a priming run | elf-warm / elf-cold = write-elf the target symbol
 name	kind	file	target	flags	why
 native/world-replay	warm	perf/bench/fixtures/native_world.hthr	-		fixed cost of loading the native world warm: every native process pays it

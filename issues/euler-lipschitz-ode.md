@@ -10,7 +10,7 @@ updated: 2026-11-10
 
 Solutions of `x' = f(t, x)`, `x(0) = x₀` for a Lipschitz field as the limit
 of Euler's step program, so that an ODE solution is a term that computes
-(`docs/continuous-time-survey.md` §5.2 item 3).
+(`docs/surveys/continuous-time-survey.md` §5.2 item 3).
 
 Scope, scalar first, at a `CauchyComplete` ordered field:
 
@@ -31,7 +31,7 @@ with Grönwall needs neither and matches the step-program reading, so it
 goes first.
 
 Not in scope: systems (vector state), guards and events
-(`docs/continuous-time-survey.md` §5.4), higher-order methods.
+(`docs/surveys/continuous-time-survey.md` §5.4), higher-order methods.
 
 ## What it assumes from elsewhere
 

@@ -60,7 +60,7 @@ enum GoalState {
     /// the declaration at the gate.
     Solved(Rc<Term>),
     /// A tactic's proof lifted into a lemma of its own
-    /// (`docs/bv-omega-design.md` §6).
+    /// (`docs/tactics/bv-omega-design.md` §6).
     Proved(Rc<Term>),
     /// A value a tactic names instead of spelling it at every use
     /// (`omega`'s atom list): a *definition* both while the declaration

@@ -1,5 +1,5 @@
 //! The surface vector type `[T; n]` and generic collection literals
-//! (docs/container-fields.md §2), the surface half of container fields.
+//! (docs/language/container-fields.md §2), the surface half of container fields.
 
 use heather_elab::{ElabError, Elaborator};
 

@@ -48,6 +48,6 @@ to be interchangeable ([[std-logic-module]]'s claim), and here they are not.
 
 ## Log
 
-- 2026-08-16: Filed from the [[nat-order-kit]] round (`docs/nat-order-design.md`
+- 2026-08-16: Filed from the [[nat-order-kit]] round (`docs/library/nat-order-design.md`
   §4), which hit it writing `le_iff_exists_add` and took the call spelling.
-- 2026-11-05: gardener: cites a file it shares with [[class-ops-prop-vs-bool]] (`docs/nat-order-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[class-ops-prop-vs-bool]] (`docs/library/nat-order-design.md`).

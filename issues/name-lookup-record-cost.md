@@ -7,7 +7,7 @@ created: 2026-11-11
 updated: 2026-11-11
 ---
 
-While a module is elaborated under `--cache`, the session records the last `::` segment of every name the elaborator looks up (`names::note`, `QUERIED`): the early cutoff's account of what the elaboration could have observed of the world's names beyond what its source spells (`docs/module-interface-cutoff-design.md` §2). Every lookup in the name tables notes its name, and resolution asks the tables about one name several times, so the record is consulted far more often than it grows.
+While a module is elaborated under `--cache`, the session records the last `::` segment of every name the elaborator looks up (`names::note`, `QUERIED`): the early cutoff's account of what the elaboration could have observed of the world's names beyond what its source spells (`docs/infrastructure/module-interface-cutoff-design.md` §2). Every lookup in the name tables notes its name, and resolution asks the tables about one name several times, so the record is consulted far more often than it grows.
 
 ## What it cost
 

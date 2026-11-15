@@ -2,7 +2,7 @@
 // S3.2): its inputs read from their homes, S4's lowering run over them
 // (`Region::lower_correct`, proved once), and each result put in its home,
 // so the environment after is the source's `Env::compute`
-// (docs/native-register-allocation-design.md).
+// (docs/native/native-register-allocation-design.md).
 //
 // The leaf's registers are ones no word lives in (`Layout::leaf_pool`), so
 // loading the inputs keeps every live word where it is, and S4's code is

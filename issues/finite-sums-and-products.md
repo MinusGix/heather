@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer A of `docs/analysis-foundations-design.md` (§4): finite sums and
+Layer A of `docs/library/analysis-foundations-design.md` (§4): finite sums and
 products as folds over a commutative monoid modulo its relation, with one
 theorem serving `∑` and `∏` through the semiring layers' `multiplicative` tag.
 
@@ -80,5 +80,5 @@ Cauchy-product coefficient identity at `Rat`.
   `(∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs()`.
 - 2026-10-27: Nested calls under `∑` no longer need annotated λ binders:
   `MonoidRel::antidiag(+, n, λ i k => …)` infers `i`, `k` from `f`'s domain
-  (docs/unifier-completeness-design.md, amendment 2026-10-27); the
+  (docs/elaborator/unifier-completeness-design.md, amendment 2026-10-27); the
   big_operator probes are written unannotated.

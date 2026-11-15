@@ -1,4 +1,4 @@
-// Probes of `rt_loop` (docs/runtime-fn-setups-design.md §16.10): a fuel
+// Probes of `rt_loop` (docs/native/runtime-fn-setups-design.md §16.10): a fuel
 // recursion and a measured one, each lowered to a loop, their agreement read
 // off the once-proved theorems with the hypotheses discharged as the
 // generator does: the fuel equations by `refl`, `Guarded` from the

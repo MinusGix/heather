@@ -5,7 +5,7 @@
 // call (its registers and memory), what Linux needs of it (the buffers it
 // writes are writable), and the states Linux resumes it in; `LinuxRuns`
 // reads those definitions, and so does `linux_x86_64_sim`'s `RunsAs`
-// (docs/native-program-logic-design.md §5). The rest of the model is
+// (docs/native/native-program-logic-design.md §5). The rest of the model is
 // issues/linux-syscall-trace-model.md. Syscall delivery and Linux itself are
 // environment assumptions, not theorems here.
 import linux_calls;

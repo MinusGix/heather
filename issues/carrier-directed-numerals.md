@@ -72,7 +72,7 @@ prefix designation; there is no separate negative-literal semantic path.
   semantic equation `-3 = -(3)`, and refused an Int-only parser lowering:
   positive and negative numeral notation should gain carriers together.
 - 2026-08-19: Landed as the single-operation `Numeral<A>` class described in
-  `docs/carrier-directed-numerals-design.md`. Checking at a non-Nat/non-Fin
+  `docs/language/carrier-directed-numerals-design.md`. Checking at a non-Nat/non-Fin
   carrier resolves `ofNat : Nat -> A`; inference still defaults to the exact
   historical Nat term. Expected results, non-numeral operator siblings, and an
   equation's right endpoint provide the bounded bidirectional anchors needed
@@ -97,7 +97,7 @@ prefix designation; there is no separate negative-literal semantic path.
   non-numeral leaf under operator notation, used by both operator probing
   and equation endpoint order. Ordinary calls remain leaves and all-numeral
   inference keeps the Nat default. Design and boundaries updated in
-  `docs/carrier-directed-numerals-design.md`; acceptance is covered by
+  `docs/language/carrier-directed-numerals-design.md`; acceptance is covered by
   `carrier_numerals.rs` and the actual Int consumer in `lib_std_int.rs`.
   Compatibility controls caught why a non-numeral leaf is not sufficient:
   `one<A: Numeral>()` needs an expected result, and `identity(one())` hides

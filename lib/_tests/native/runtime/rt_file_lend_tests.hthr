@@ -1,5 +1,5 @@
 // Probes of a computation called over views (`FTm::Lend`,
-// lib/native/runtime/rt_file.hthr; docs/native-library-exports-design.md
+// lib/native/runtime/rt_file.hthr; docs/native/native-library-exports-design.md
 // §3.1, step V5a): a callee that writes a span and reads another, called
 // over a window of each of its caller's spans, and over the whole written
 // span and a window of the read one. The reflections are written by hand

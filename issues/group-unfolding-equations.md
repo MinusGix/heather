@@ -10,7 +10,7 @@ updated: 2026-09-05
 
 
 Residue of [[mutual-recursion-declarations]] (landed 2026-09-05,
-docs/mutual-recursion-design.md §6). A group member gets no `f_unfold`; a
+docs/language/recursion/mutual-recursion-design.md §6). A group member gets no `f_unfold`; a
 citation reports the deferral through `unfold_refusals`. What it needs, per
 §6: `g#ext` with one hypothesis per product component, and bound
 irrelevance for `f#grp_rec` as a tuple-level equality (`pair::pair_ext`

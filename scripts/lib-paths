@@ -2,10 +2,10 @@
 """Find and rewrite stale `lib/…/<stem>.hthr` paths.
 
 Module names are file stems and the loader searches every folder below the
-library (docs/modules-design.md §3.2), so moving a module between folders
+library (docs/language/modules-design.md §3.2), so moving a module between folders
 changes no `import`, but every place that cites the file by *path* goes
 stale: a Rust `include_str!` stops building, a doc link dies
-(docs/lib-layout-design.md). This finds each cited path that no longer
+(docs/library/lib-layout-design.md). This finds each cited path that no longer
 exists, in tracked files, and rewrites it to the stem's one file under
 `lib/`. A branch that predates a move runs `scripts/lib-paths --fix` after
 rebasing.

@@ -53,7 +53,7 @@ this bounded round. Their existing owners retain those deliverables.
   by the new four-test target, including an identity control and a checked
   length-compatibility refutation. Exact parent-proof reuse and refusal at the
   wrong relation are tested. Implementation gaps are in
-  `docs/manual-mergeable-round.md`; no kernel/frontend changes were necessary.
+  `docs/showcase/manual-mergeable-round.md`; no kernel/frontend changes were necessary.
 - 2026-09-04: Final validation: focused new + existing relation targets 9/9;
   plain `furnace run -- scripts/test` completed with 2,319 passed, 0 failed,
   and 5 ignored (433 seconds total including warmups). Rust formatting,

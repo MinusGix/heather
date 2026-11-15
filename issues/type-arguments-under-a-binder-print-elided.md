@@ -18,7 +18,7 @@ arguments by strengthening each candidate back to the display's root
 context, where it re-lowers the declaration to verify them; an argument
 that mentions the binder does not strengthen, and the honest ellipsis is
 printed. A `simp_show` result under a `∀` or an `∃` is mostly such types
-(`docs/simp-design.md` §12, §13), and the route's own lines, which are
+(`docs/tactics/simp-design.md` §12, §13), and the route's own lines, which are
 spelled in the binder's context, show what the result line hides.
 
 Wanted: the recovery and its re-lowering run in the context the display

@@ -1,5 +1,5 @@
 // Traces of interaction trees, and refinement between programs
-// (docs/itree-refinement-round.md; issues/interaction-trees-container-model.md
+// (docs/itrees/itree-refinement-round.md; issues/interaction-trees-container-model.md
 // Q2 and Q3, milestone `it-refinement`).
 //
 // A trace is a finite record of one interaction: the commands issued, the

@@ -10,7 +10,7 @@ updated: 2026-10-25
 
 The `IWf` route's no-confusion (`absurd` between constructors, `inj` of a
 payload field) reads the kernel `IWf`'s `Supi`. A family on the `IWf`-on-`W`
-route (`docs/iwf-infinitary-design.md`, an indexed family with a recursive
+route (`docs/kernel/iwf-infinitary-design.md`, an indexed family with a recursive
 function field) is `Σ(t : W₀). El(ok t m)`, so each needs a `W` twin: the
 tag lives in `fst` of the shape under `fst` of the value. `inj` at a
 *recursive* field stays out for tier 2 §9's reason.

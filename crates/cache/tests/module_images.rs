@@ -328,7 +328,7 @@ fn an_image_past_the_node_budget_is_refused_at_publication_not_at_every_load() {
 /// The declaration slices ride in the image, the newest image of a module
 /// over a dependency world is found again whatever its source, and its
 /// warnings are attached so the slices can replay
-/// (`docs/declaration-slice-replay-design.md` §7).
+/// (`docs/infrastructure/declaration-slice-replay-design.md` §7).
 #[test]
 fn the_previous_image_of_a_module_replays_its_unchanged_declarations() {
     let dir = temp("previous");

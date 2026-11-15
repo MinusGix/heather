@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-11-01
 ---
 
-Layer A′ of `docs/analysis-foundations-design.md` (§4): the exact discrete
+Layer A′ of `docs/library/analysis-foundations-design.md` (§4): the exact discrete
 calculus, at a commutative ring and without division.
 
 Scope:

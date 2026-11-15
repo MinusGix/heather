@@ -1,5 +1,5 @@
 //! Classifying a width fold as a **bit transducer**, and running it over a
-//! word (`docs/native-bitvector-values-design.md` §§4, 5, 6).
+//! word (`docs/kernel/native-bitvector-values-design.md` §§4, 5, 6).
 //!
 //! There is no eliminator for `Vec`. Every bitvector operation in the
 //! library is `elim_Nat` **on the width**, whose motive at `Succ k` is a
@@ -31,7 +31,7 @@
 //! §4.2 says each domain "whnfs to a `Vec` at a successor length". It does
 //! not: the library's vectors arrive inside a *record*, and a record is a
 //! one-constructor tier-0 inductive — a Σ-nest whose other components are
-//! proof-irrelevant tags (`docs/inductive-tier0-lowering.md` §3). So a
+//! proof-irrelevant tags (`docs/inductives/inductive-tier0-lowering.md` §3). So a
 //! peeled argument's type is a `Vec` **in a unit-like Σ-context**, and this
 //! module works with the projection path to it ([`Slot`]) rather than with
 //! the vector alone. That is still an annotation of the eliminator and not a
@@ -197,7 +197,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         self.probe_nat_state(step, &shape)
     }
 
-    /// The **`Nat`-state** output (`docs/bitvector-literal-entry-design.md`
+    /// The **`Nat`-state** output (`docs/kernel/bitvector-literal-entry-design.md`
     /// §4.4, §10.10): one carried argument `x`, and one application of the
     /// step is `cons(f(x), ih(g(x)))` — `bitvec::ofNat`'s shape — with `f`
     /// and `g` neutrals at `x` whose spines are classified `Nat` folds and
@@ -1829,7 +1829,7 @@ mod tests {
     }
 
     /// `Tag_D`: the nominal tag `sEq⁰(Nat; k; k)` the tier-0 lowering puts
-    /// first in every constructor (`docs/inductive-tier0-lowering.md` §3.3) —
+    /// first in every constructor (`docs/inductives/inductive-tier0-lowering.md` §3.3) —
     /// proof-irrelevant, one value, and not `Unit` itself.
     fn tag() -> Rc<Type> {
         let k = Rc::new(Term::NatLit(7u64.into()));

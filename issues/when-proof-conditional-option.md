@@ -8,10 +8,10 @@ updated: 2026-11-14
 ---
 
 `When<T, P>`: a value that is there exactly when `P` holds. Minus's
-"proof-conditional Option" (2026-11-14), designed in `docs/when-design.md`,
+"proof-conditional Option" (2026-11-14), designed in `docs/language/when-design.md`,
 which owns the type, the tested call, the flow facts, `?` and the coercion.
 
-The issue tracks the build, one PR per stage (`docs/when-design.md` §9):
+The issue tracks the build, one PR per stage (`docs/language/when-design.md` §9):
 
 1. The type and its library, `lib/std/core/when.hthr`, probes in
    `lib/_tests/std/core/when_tests.hthr`.

@@ -1,5 +1,5 @@
 //! The **value domain**: weak head normal forms with environments and
-//! closures (docs/nbe-conversion-design.md §3).
+//! closures (docs/kernel/nbe-conversion-design.md §3).
 //!
 //! A value is a term (or type) reduced to weak head normal form, with every
 //! sub-structure kept as an *environment plus syntax* rather than as a
@@ -89,7 +89,7 @@ use program::ContextProgram;
 /// The handle also carries the **global-index offset** `gshift` of the syntax
 /// read under it: the amount to add to a free global index of a body paired
 /// with this environment to name the same Ψ binding ambiently
-/// (`docs/lazy-global-offset-design.md`). It rides here rather than on the
+/// (`docs/kernel/lazy-global-offset-design.md`). It rides here rather than on the
 /// closure because every site in the kernel that pairs syntax with an
 /// environment does so through this handle, because it fits in the padding
 /// (a closure is four words and its memo), and because [`Env::ident`]/[`Env::ptr_eq`] are
@@ -377,7 +377,7 @@ pub struct ValueArena<'v> {
     /// the address it is keyed on stays that annotation's.
     closed_formers: RefCell<PtrMap<(usize, u32, u32), (Rc<Type>, &'v VTy<'v>)>>,
     /// Whether each element type satisfies the bit criterion, and with what
-    /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
+    /// injections (`docs/kernel/native-bitvector-values-design.md` §3.1), by the
     /// element closure's identity. Decided once per type, beside the fold
     /// classes and for the same reason: the verdict depends on nothing but
     /// the closure and the definitions, both fixed for one arena.
@@ -1449,7 +1449,7 @@ pub type CloId = (usize, usize, u32, u32);
 ///
 /// [`TyClo::Syn`] is the ordinary case — an environment plus unevaluated
 /// syntax. The other two exist because *conversion* builds
-/// types the evaluator never does (docs/nbe-conversion-design.md §13, stage
+/// types the evaluator never does (docs/kernel/nbe-conversion-design.md §13, stage
 /// 2b): the comparison rules synthesize `Π`, `Vec`, `El` … whose children are
 /// **domain objects** rather than syntax, and there is no environment in
 /// which a domain object could be written down.
@@ -1766,7 +1766,7 @@ impl<'v> VTy<'v> {
 // ---------------------------------------------------------------------------
 
 /// The widest `Vec` prefix one [`Val::BitRun`] holds
-/// (`docs/native-bitvector-values-design.md` §3.4, corrected by §11.1).
+/// (`docs/kernel/native-bitvector-values-design.md` §3.4, corrected by §11.1).
 ///
 /// §3.4 preferred 128, so that round 3's widening shape operations
 /// (`concat`, `zero_extend`) could not silently fall off the fast path at 64.
@@ -1779,10 +1779,10 @@ impl<'v> VTy<'v> {
 pub const BIT_RUN_WIDTH_CAP: u32 = 64;
 
 /// An element type that satisfies the **bit criterion**
-/// (`docs/native-bitvector-values-design.md` §3.1): its whnf is `Sum(L, R)`
+/// (`docs/kernel/native-bitvector-values-design.md` §3.1): its whnf is `Sum(L, R)`
 /// with both halves *unit-like* — `Unit`, or a Σ-nest ending in `Unit`,
 /// which is exactly what a `Tag_D`-prefixed nullary constructor lowers to
-/// (`docs/inductive-tier0-lowering.md` §3) and is proof-irrelevant in
+/// (`docs/inductives/inductive-tier0-lowering.md` §3) and is proof-irrelevant in
 /// `conv.rs` by Unit and Σ η.
 ///
 /// The two injections are built **once**, when the criterion is decided, and
@@ -1884,7 +1884,7 @@ pub enum Val<'v> {
         tail: &'v TmClo<'v>,
     },
     /// A closed prefix of a `Vec` over a two-valued element type, held as a
-    /// machine word (`docs/native-bitvector-values-design.md` §3.1). Its
+    /// machine word (`docs/kernel/native-bitvector-values-design.md` §3.1). Its
     /// one-step view is the right-nested Σ-chain it stands for:
     /// [`Val::bit_run_unpack`] produces the `Pair` the `Vec` type rule
     /// itself builds, one bit at a time, so every consumer that matched on
@@ -2111,7 +2111,7 @@ impl<'v> Val<'v> {
         }
     }
 
-    /// One step of a bitvector run (`docs/native-bitvector-values-design.md`
+    /// One step of a bitvector run (`docs/kernel/native-bitvector-values-design.md`
     /// §3.3): the `Pair` its first bit sits in.
     ///
     /// The bit is the element type's own injection at its canonical payload,
@@ -2376,7 +2376,7 @@ pub struct SumAnn<'v> {
 
 /// A Π's annotation as an application elimination carries; see
 /// [`SigAnn`]. `None` for a checked application `app@(f; a)`, which stores
-/// none (`docs/app-by-head-type-design.md` §5): nothing reads the closures
+/// none (`docs/elaborator/app-by-head-type-design.md` §5): nothing reads the closures
 /// but the sites that copy an existing elimination, and conversion takes the
 /// Π from the head it infers.
 #[derive(Clone)]
@@ -2798,7 +2798,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<EnvNode<'_>>(), 16);
         assert_eq!(std::mem::size_of::<TmClo<'_>>(), 40);
         assert_eq!(std::mem::size_of::<TyClo<'_>>(), 40);
-        // The bitvector run (`docs/native-bitvector-values-design.md` §11.1)
+        // The bitvector run (`docs/kernel/native-bitvector-values-design.md` §11.1)
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.

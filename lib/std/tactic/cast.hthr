@@ -1,4 +1,4 @@
-// The cast edges the tactics read (docs/casting-design.md §5.6, §6): each
+// The cast edges the tactics read (docs/language/casting-design.md §5.6, §6): each
 // edge is an `OrderedRingHom` value declared beside its target type, and
 // its laws are read through `morphism`'s field theorems, so what an edge
 // covers is fixed by the record's type.
@@ -200,7 +200,7 @@ fn cast_edge_of(f: CastKey, es: List<EdgeRef>) → Option<EdgeRef> {
 
 // ---------------------------------------------------------------------------
 // A morphism in scope as an edge (issue cast-reading-through-local-morphism):
-// generic code takes its morphism as a parameter (docs/casting-design.md
+// generic code takes its morphism as a parameter (docs/language/casting-design.md
 // §5.6), and a local whose type is `OrderedRingHom<A, B>(map, …)` or
 // `OrderedSemiringHom<A, B>(map, …)` is an edge for the goals it is in scope
 // of, read the way a registered one is. Its map and the source carrier's
@@ -520,7 +520,7 @@ fn cast_premise_among(es: List<EdgeRef>, prove: Tac<Expr>) → Tac<Expr> {
 
 // ---------------------------------------------------------------------------
 // Reading a side to its cast-normal form, and `cast_from` / `cast_to`
-// (docs/casting-design.md §6.4): every image pushed to the leaves along the
+// (docs/language/casting-design.md §6.4): every image pushed to the leaves along the
 // edges' laws, through the target carrier's operations by their `respects`
 // lemmas. Two statements that agree there are the same statement read
 // through the casts, and the proof of one is the other's carried along
@@ -1008,7 +1008,7 @@ fn cast_differ_notes(d: Differ, side: String) → List<Note> {
 
 // Why `h` does not prove the goal: where a fact of the goal's relation
 // differs from the goal once both are in cast-normal form, the first
-// differing subterm of each side (docs/casting-design.md §12).
+// differing subterm of each side (docs/language/casting-design.md §12).
 fn cast_explain(h: Expr, msg: String, notes: List<Note>) → Tac<Expr> {
     goal().bind(λ g => cast_sides(g.target).bind(λ gs => infer(h).bind(λ c => match gs {
         None => fail(msg, notes),

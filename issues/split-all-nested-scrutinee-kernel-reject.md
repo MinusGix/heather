@@ -62,5 +62,5 @@ check is lenient. The loop certificates write their case splits as explicit
   does not recur is the splitter checking its own output: each split's
   motive at its scrutinee and each simplified goal must convert to the goal
   it stands for, and a `refl` leaf is converted where it stands, refused
-  with its goal and case equations (docs/goal-combinators.md). Probes:
+  with its goal and case equations (docs/tactics/goal-combinators.md). Probes:
   `crates/elab/tests/bv_omega.rs`, `splits_comparisons_a_split_decides`.

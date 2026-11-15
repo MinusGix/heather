@@ -9,7 +9,7 @@ updated: 2026-11-10
 ---
 
 The algebraic core of PDLT chapter 1, constructively
-(`docs/wick-survey.md` §3.4). A moment family is a state `φ : A → R` on a
+(`docs/surveys/wick-survey.md` §3.4). A moment family is a state `φ : A → R` on a
 commutative algebra of observables (Wick's thread T20 refoundation, which
 removed its ordered-tuple `Fin.cast` plumbing at the root). A centred
 Gaussian with covariance `C` is the state on polynomials whose `2k`-th mixed
@@ -31,5 +31,5 @@ waits for measure theory and nothing here depends on it.
 
 ## Log
 
-- 2026-10-27: Alternative characterisation filed as [[gaussian-state-by-stein]]: the state defined by Stein's identity E[x_i f] = Σ_j C_ij E[∂_j f], with Wick's matching formula as a theorem (docs/analysis-foundations-design.md §13). This issue keeps ownership of Wick's theorem and cumulants.
-- 2026-11-10: A convergence statement that lands on this state without measure theory: [[random-walk-gaussian-state]] (docs/continuous-time-survey.md §5.3).
+- 2026-10-27: Alternative characterisation filed as [[gaussian-state-by-stein]]: the state defined by Stein's identity E[x_i f] = Σ_j C_ij E[∂_j f], with Wick's matching formula as a theorem (docs/library/analysis-foundations-design.md §13). This issue keeps ownership of Wick's theorem and cumulants.
+- 2026-11-10: A convergence statement that lands on this state without measure theory: [[random-walk-gaussian-state]] (docs/surveys/continuous-time-survey.md §5.3).

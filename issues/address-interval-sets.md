@@ -15,7 +15,7 @@ offset below the top is addition and that two spans are apart:
 `Layout::buffer_apart` with `List::total_take_nth`/`total_take_apart`
 (prefix sums by hand), `scratch_below_stack`, `Homes::Apart`,
 `arena_cells_within`. About 140 citations.
-`docs/native-mathematics-survey.md` §4; survey rank 4.
+`docs/surveys/native-mathematics-survey.md` §4; survey rank 4.
 
 ## Scope
 

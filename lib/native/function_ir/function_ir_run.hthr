@@ -1,5 +1,5 @@
 // What a region's run with the file threaded is, proved
-// (docs/native-one-compiler-design.md §2.6, U4 steps 4a-5 and 4b).
+// (docs/native/native-one-compiler-design.md §2.6, U4 steps 4a-5 and 4b).
 //
 // `function_ir_writes` says what a program may do to the file as a
 // relation (`program_effects`), which is what the function compiler is

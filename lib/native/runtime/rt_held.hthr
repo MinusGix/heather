@@ -1,5 +1,5 @@
 // A computation over a span, read as a computation over what the span
-// holds (docs/layout-design.md §9.2): a second meaning of the terms of
+// holds (docs/native/layout-design.md §9.2): a second meaning of the terms of
 // `rt_file.hthr`, and the theorem that the two agree.
 //
 // A `runtime fn` whose receiver is a laid record is a function of the

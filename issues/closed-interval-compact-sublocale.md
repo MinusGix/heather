@@ -24,4 +24,4 @@ lib/std/locale/nucleus.hthr), and compactness as a statement about its frame
 - Needs fine covers ([[localic-real-points-are-cauchy]] step 1) and benefits
   from [[interval-cover-decision]].
 
-Design: docs/localic-reals-design.md §7.
+Design: docs/library/localic-reals-design.md §7.

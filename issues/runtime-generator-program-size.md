@@ -90,7 +90,7 @@ budgets, and `crates/linked/src/scanner.rs`'s `step` is one call
 
 - 2026-11-10: Done: the automaton is one program. `scan_step` is a `runtime fn` calling `scan_family` and `scan_choose`, which calls the twenty-three families; `scan_step::agrees` checks inside the ordinary budgets (10,000 requests, 2^14 reply nodes, 2^20 steps a conversion), and `crates/linked/src/scanner.rs`'s `step` is one call of one export.
 
-  The direction above is what was built (`docs/runtime-fn-setups-design.md` §16.14):
+  The direction above is what was built (`docs/native/runtime-fn-setups-design.md` §16.14):
 
   - `Compile` has a field `fits`: the code's calls fit its own world's arities, read from the signatures (`World::callee_arity`). The setup checks it with the lowering (`Setup::checked`), once, in the function's declaration.
   - `Function::relabel_calls_fit` carries it through the renaming, from a hypothesis about the table and the link list alone (`Sig::links_fit`).

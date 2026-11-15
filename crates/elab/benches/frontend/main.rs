@@ -20,7 +20,7 @@
 //! regression names its layer, and the forded families, which exist to give
 //! `docs/archive/inductive-fording-lowering.md` §14.2 and §14.9 a number.
 //!
-//! See `docs/frontend-benchmarking.md`.
+//! See `docs/infrastructure/frontend-benchmarking.md`.
 
 mod harness;
 mod fixtures;

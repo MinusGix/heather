@@ -55,7 +55,7 @@ theorem cong<A, B>({f: A -> B}, {a: A}, {b: A}, p: a = b): f(a) = f(b) {
 }
 
 // The carrier protocol of binding statements
-// (docs/sequencing-surface-design.md §2, §13):
+// (docs/language/sequencing-surface-design.md §2, §13):
 // `let x <- e; rest` is `Bind::seq(e, λ x => rest)`, and a value a block
 // must inject into its carrier is `Pointed::ret(v)`. Two classes over a type
 // constructor, so that any type with a `bind` is a carrier, and in the
@@ -63,7 +63,7 @@ theorem cong<A, B>({f: A -> B}, {a: A}, {b: A}, p: a = b): f(a) = f(b) {
 // as `CollectionLiteral` is for `[…]`. The second class is `Pointed`, not
 // `Pure`: a class's record constructor is named after it, and `Pure` is
 // `Tac`'s constructor in every module that writes tactics
-// (docs/higher-kinded-classes-design.md §5.2). Laws are not fields.
+// (docs/language/classes/higher-kinded-classes-design.md §5.2). Laws are not fields.
 class Bind<M: Type → Type> { bind: {A, B: Type} → M(A) → (A → M(B)) → M(B) }
 class Pointed<M: Type → Type> { pure: {A: Type} → A → M(A) }
 
@@ -77,7 +77,7 @@ fn Pointed::ret<A>({M: Type → Type}, a: A, d: Pointed<M> := infer) → M(A) {
     d.pure(a)
 }
 
-// What a `mut self` method returns (docs/sequencing-surface-design.md §8.2):
+// What a `mut self` method returns (docs/language/sequencing-surface-design.md §8.2):
 // its receiver after the call, and the call's value. `let p = x.m(a);` on a
 // `let mut` local `x` binds `p` to the value and `x` to the receiver after
 // it, so a capability is a local the calls on it update, and the code stays

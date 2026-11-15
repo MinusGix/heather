@@ -56,7 +56,7 @@ pub struct OutOfFuel;
 ///
 /// Fuel bounds the *steps* a reduction takes; it does not bound the frames a
 /// reduction stands on, and the two are unrelated when a value nests
-/// scrutinees (docs/native-depth-budget-design.md). The account is shared
+/// scrutinees (docs/kernel/native-depth-budget-design.md). The account is shared
 /// across conversion's recursion and the evaluator's re-entries for the same
 /// reason fuel is: they interleave on one native stack.
 ///
@@ -72,7 +72,7 @@ pub struct OutOfFuel;
 pub const NATIVE_DEPTH_LIMIT: u32 = 2048;
 
 /// [`NATIVE_DEPTH_LIMIT`] for the small-step reducer's own account
-/// (`Frames`, docs/native-depth-budget-design.md §7).
+/// (`Frames`, docs/kernel/native-depth-budget-design.md §7).
 ///
 /// Separate because the reducer's frame is separate: a counted step stands
 /// on `step_term_frame`, whose one match holds every rule's temporaries and
@@ -141,7 +141,7 @@ pub(crate) struct Sig {
 /// Ψ's identity, and [`Defs::transparent_cached`] uses it only beside the
 /// same Ψ. Every change to Ψ's bindings gives them a fresh identity, so a
 /// cache paired with any other Ψ, by a caller that forgot to rebuild it, is
-/// not consulted (docs/kernel-implicit-state-review.md §4).
+/// not consulted (docs/kernel/kernel-implicit-state-review.md §4).
 pub struct GlobalCache {
     /// The identity of the Ψ this cache is for ([`GlobalBindings`]' token).
     psi: Rc<()>,
@@ -264,7 +264,7 @@ impl<'a> Defs<'a> {
     /// [`Defs::body_unshifted`] or [`Defs::is_defined`]: it unfolds only
     /// through [`Defs::withheld_body`] at a call of this many arguments none
     /// of which reads a free local variable
-    /// (`docs/interface-definitions-design.md` §3).
+    /// (`docs/language/interface-definitions-design.md` §3).
     pub fn withheld(&self, v: GlobalVar) -> Option<u32> {
         let psi = self.psi?;
         let w = psi.withheld.as_ref()?;
@@ -299,7 +299,7 @@ impl<'a> Defs<'a> {
     /// The body of `v` **as it is stored**, in its own Ψ-prefix rather than
     /// in the ambient Ψ: the value machine reads it under the global offset
     /// `v + 1` instead of paying for a copy per gate call
-    /// (`docs/lazy-global-offset-design.md`). `None` on the same three
+    /// (`docs/kernel/lazy-global-offset-design.md`). `None` on the same three
     /// conditions as [`Defs::body`].
     pub(crate) fn body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
         if self.withheld(v).is_some() {
@@ -593,7 +593,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 arity: Rc::clone(arity),
             }),
             // El^l (DVec^l(k; i. f)) ⇝ DVec^l(k; i. El^l f)
-            // (docs/iwf-former-design.md §6).
+            // (docs/kernel/iwf-former-design.md §6).
             Term::TmDVec { level: l, len, fam } => Some(Type::DVec {
                 level: l.clone(),
                 len: Rc::clone(len),
@@ -606,7 +606,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 index: Rc::clone(index),
             }),
             // El(TmM …) ⇝ M(El idx; El shape; El pos; next)(index)
-            // (docs/kernel-m-codes-design.md §1).
+            // (docs/kernel/kernel-m-codes-design.md §1).
             Term::TmM { level: l, pos_level, idx_level, idx, shape, pos, next, index } => Some(Type::M {
                 sig: Rc::new(crate::term::m_sig_of_code(l, pos_level, idx_level, idx, shape, pos, next)),
                 index: Rc::clone(index),
@@ -616,12 +616,12 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         },
         // Vec^l(T; 0) ⇝ Unit^l, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
         // The tail is under the Σ's binder, so the length is shifted; `T`
-        // and the tail's `T` likewise (docs/wf-former-design.md §1.1).
+        // and the tail's `T` likewise (docs/kernel/wf-former-design.md §1.1).
         //
         // **The nullary reduct carries `l`.** It did not until 2026-07-25,
         // which broke ch. 06's Preservation for every `l ≠ 0` and left the
         // nullary constructor of a level-`l` `Wf` uninhabitable — the defect
-        // route (a) exists to close (docs/unit-empty-level-indexing.md §1).
+        // route (a) exists to close (docs/kernel/unit-empty-level-indexing.md §1).
         Type::Vec { level, elem, len } => match &**len {
             t if crate::term::is_nat_zero(t) => Some(Type::Unit { level: level.clone() }),
             Term::Succ(pred) => Some(Type::Sigma {
@@ -655,7 +655,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         },
         // DVec^l(0; i. F) ⇝ Unit^l,
         // DVec^l(S k; i. F) ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])
-        // (docs/iwf-former-design.md §1.1). The nullary reduct carries `l`,
+        // (docs/kernel/iwf-former-design.md §1.1). The nullary reduct carries `l`,
         // as `Vec`'s does.
         Type::DVec { level, len, fam } => match &**len {
             t if crate::term::is_nat_zero(t) => Some(Type::Unit { level: level.clone() }),
@@ -749,7 +749,7 @@ fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
 
 /// The withheld definition at the head of `t` when `t` is a call of it that
 /// may unfold: saturated (at least its arity of term arguments) and closed
-/// (those arguments read no free local variable). `docs/interface-definitions-design.md` §3; the value machine's
+/// (those arguments read no free local variable). `docs/language/interface-definitions-design.md` §3; the value machine's
 /// rule is `Eval::glue_withheld`, and the two agree on every argument the
 /// value machine can classify.
 pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
@@ -880,8 +880,8 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // fst (pair a b) ⇝ a; else reduce the pair   (extension)
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             // β fires on **either** pair spelling and reads nothing from the
-            // pair's annotations (docs/intro-by-type-design.md §2.4; the same
-            // statement docs/delam-extensions.md §16.2 already makes for the
+            // pair's annotations (docs/elaborator/intro-by-type-design.md §2.4; the same
+            // statement docs/kernel/delam-extensions.md §16.2 already makes for the
             // component form). This is why the checked spellings need no
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
@@ -895,7 +895,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 pair: Rc::new(p),
             }),
         },
-        // fst@ / snd@ (extension; docs/intro-by-type-design.md). β as above,
+        // fst@ / snd@ (extension; docs/elaborator/intro-by-type-design.md). β as above,
         // on either pair spelling; otherwise step the pair, then the
         // annotation. Stepping `T` is what eventually exposes its former and
         // it is the only thing these arms use it for — nothing here spells
@@ -929,7 +929,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 scrut: Rc::new(s),
             })
         }
-        // elim_sEmpty likewise (extension; docs/sprop-design.md §5.1).
+        // elim_sEmpty likewise (extension; docs/kernel/sprop-design.md §5.1).
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
             step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimSEmpty {
                 level: level.clone(),
@@ -1153,7 +1153,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         },
         // elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs] — at a
         // `sup_i` of any annotations and at any index `m`, open data included
-        // (docs/iwf-former-design.md §4; heather-coq `red_elimIWf_supi`). The
+        // (docs/kernel/iwf-former-design.md §4; heather-coq `red_elimIWf_supi`). The
         // ih is `term::iwf_ih`, shared with the value machine.
         Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => match &**scrut {
             Term::Supi { label, children, .. } => {
@@ -1174,7 +1174,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             }),
         },
         // out(…; corec^{k}(…; X; c; j; x)) ⇝ m_out_corec(…) — one step, only
-        // under `out` (docs/kernel-coinduction-design.md §1.4). The reduct
+        // under `out` (docs/kernel/kernel-coinduction-design.md §1.4). The reduct
         // writes `c[j, x]` twice; this rewriter duplicates it (design §7).
         Term::Out { sig, index, scrut } => match &**scrut {
             Term::Corec { sig: csig, carrier_level, carrier, step, index: cindex, seed } => {
@@ -1200,7 +1200,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 arg: Rc::clone(arg),
             }),
         },
-        // app@ (extension; docs/app-by-head-type-design.md): β reads nothing
+        // app@ (extension; docs/elaborator/app-by-head-type-design.md): β reads nothing
         // from the application, so it fires as on `app`; the congruence step
         // has no annotation to carry.
         Term::AppAt { fun, arg } => match &**fun {
@@ -1354,7 +1354,7 @@ pub(crate) struct Rec<'a> {
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
     /// evaluator shares these functions rather than transcribing the 65
-    /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
+    /// branch telescopes a sixth time (docs/kernel/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
         tm_motive_level: &'a Level,
@@ -1426,7 +1426,7 @@ fn fire(
 
 /// The signature pieces of an `M` branch, `U_I, U_S, U_P, u_o` as global
 /// payloads and `x_I, x_S, x_P, x_o` as recursive calls, each at the
-/// context its piece lives in (docs/kernel-m-codes-design.md §2). The
+/// context its piece lives in (docs/kernel/kernel-m-codes-design.md §2). The
 /// pieces are the *types* of a boxed `M`/`corec`/`out`; [`tm_m_pieces`] is
 /// the code former's.
 fn m_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &MSig) -> (Vec<GlobalEntry>, Vec<Rc<Term>>) {
@@ -1456,7 +1456,7 @@ fn m_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &MSig) -> (Vec<GlobalEntry>, V
 
 /// The signature pieces of an `IWf` branch, `U_I, U_S, u_n, u_o, u_c` as
 /// global payloads and `x_I, x_S, x_n, x_o, x_c` as recursive calls, each at
-/// the context its piece lives in (docs/iwf-former-design.md §6). The pieces
+/// the context its piece lives in (docs/kernel/iwf-former-design.md §6). The pieces
 /// are a boxed `IWf`/`sup_i`/`elim_IWf`'s; `TmIWf`'s are codes and are
 /// recursed at `Ty`.
 fn iwf_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &IWfSig) -> (Vec<GlobalEntry>, Vec<Rc<Term>>) {
@@ -1697,7 +1697,7 @@ pub(crate) fn beta_elim_ty(
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
         // (ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_sEq) — mirrors ty_id.
-        // (extension; docs/sprop-design.md §6)
+        // (extension; docs/kernel/sprop-design.md §6)
         Type::SEq { level, ty, lhs, rhs } => {
             let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
             let s_lhs =
@@ -1736,7 +1736,7 @@ pub(crate) fn beta_elim_ty(
             ))
         }
         // (l, l', li, g, U_I, U_S, U_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
-        // t_M)   (docs/kernel-m-codes-design.md §2)
+        // t_M)   (docs/kernel/kernel-m-codes-design.md §2)
         Type::M { sig, index } => {
             let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
             globals.push(GlobalEntry::Tm(Rc::clone(index)));
@@ -1749,7 +1749,7 @@ pub(crate) fn beta_elim_ty(
             Some(fire(&b.ty_m, &m_univs(sig), globals, locals, gamma))
         }
         // (ℓ, g, u_n, U_F, x_n, x_F. t_DVec) — the length at the *term*
-        // motive, the family under `i : Fin u_n`.   (docs/iwf-former-design.md §6)
+        // motive, the family under `i : Fin u_n`.   (docs/kernel/iwf-former-design.md §6)
         Type::DVec { level, len, fam } => {
             let di = extend(delta, Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
             let s_len = rec.elim_tm(Level::Zero, delta.clone(), Rc::new(Type::Nat), Rc::clone(len));
@@ -2226,7 +2226,7 @@ pub(crate) fn beta_elim_tm(
         // motive; mirrors tm_elim_nat minus the base/step branches.   (extension)
         // (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elimE) — ℓ the motive's, ℓ' the
         // scrutinee's `Empty` level. Two universes as of
-        // docs/unit-empty-level-indexing.md §3.
+        // docs/kernel/unit-empty-level-indexing.md §3.
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
             let empty = || Rc::new(Type::Empty { level: scrut_level.clone() });
             let dx_empty = extend(delta, empty(), scrut_level.clone());
@@ -2246,7 +2246,7 @@ pub(crate) fn beta_elim_tm(
                 gamma,
             ))
         }
-        // -- strict equality (extension; docs/sprop-design.md §6) ----------
+        // -- strict equality (extension; docs/kernel/sprop-design.md §6) ----------
         // (ℓ, g, u_S, u_t, u_u, x_S, x_t, x_u. t'_sEq) — mirrors tm_id.
         Term::TmSEq { level, ty, lhs, rhs } => {
             let s_ty = rec.elim_tm(
@@ -2847,7 +2847,7 @@ pub(crate) fn beta_elim_tm(
         }
         // (l, l', li, g, u_I, u_S, u_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
         // t'_M) — the encoding; the pieces recurse at `Ty`, under `El` of
-        // the earlier ones, as tm_wf's do.   (docs/kernel-m-codes-design.md §2)
+        // the earlier ones, as tm_wf's do.   (docs/kernel/kernel-m-codes-design.md §2)
         Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => {
             let el = |level: &Level, tm: &Rc<Term>| {
                 Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) })
@@ -2882,7 +2882,7 @@ pub(crate) fn beta_elim_tm(
         // (l, l', li, k, g, U_I, U_S, U_P, u_o, U_X, u_c, u_j, u_x, x_I, …,
         // x_x. t_corec) — the step recurses at `m_step_ty`, as in the typing
         // rule. A boxed corec is inert: this is the only thing the code
-        // recursor does with one.   (docs/kernel-m-codes-design.md §2)
+        // recursor does with one.   (docs/kernel/kernel-m-codes-design.md §2)
         Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
             let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
             let di = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
@@ -2917,7 +2917,7 @@ pub(crate) fn beta_elim_tm(
             Some(fire(&b.tm_corec, &univs, globals, locals, gamma))
         }
         // (l, l', li, g, U_I, U_S, U_P, u_o, u_j, u_m, x_I, …, x_m. t_out)
-        //   (docs/kernel-m-codes-design.md §2)
+        //   (docs/kernel/kernel-m-codes-design.md §2)
         Term::Out { sig, index, scrut } => {
             let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
             locals.push(rec.elim_tm(
@@ -2936,7 +2936,7 @@ pub(crate) fn beta_elim_tm(
             Some(fire(&b.tm_out, &m_univs(sig), globals, locals, gamma))
         }
         // (ℓ, g, u_n, u_f, x_n, x_f. t'_DVec) — the encoding; the family
-        // recurses at `Ty` under `i : Fin u_n`.   (docs/iwf-former-design.md §6)
+        // recurses at `Ty` under `i : Fin u_n`.   (docs/kernel/iwf-former-design.md §6)
         Term::TmDVec { level, len, fam } => {
             let di = extend(delta, Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
             let s_len = rec.elim_tm(Level::Zero, delta.clone(), Rc::new(Type::Nat), Rc::clone(len));
@@ -3059,8 +3059,8 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::CodeTm { .. } => true,
         Type::El { .. } | Type::GlobalTy { .. } => is_neutral_type(t),
         // Vec/Fin step on a *canonical* length, so they are normal exactly
-        // when the length is stuck (extension; docs/wf-former-design.md §1).
-        // `DVec` likewise (docs/iwf-former-design.md §1.1).
+        // when the length is stuck (extension; docs/kernel/wf-former-design.md §1).
+        // `DVec` likewise (docs/kernel/iwf-former-design.md §1.1).
         Type::Vec { len, .. } | Type::Fin { len } | Type::DVec { len, .. } => {
             is_neutral_term(len)
         }
@@ -3173,7 +3173,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Inl { .. }
         | Term::Inr { .. }
         // The checked spellings are introduction forms and are whnf exactly
-        // as the forms they spell (docs/intro-by-type-design.md).
+        // as the forms they spell (docs/elaborator/intro-by-type-design.md).
         | Term::PairAt { .. }
         | Term::VecLit { .. }
         | Term::VecItems { .. }

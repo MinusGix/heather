@@ -12,7 +12,7 @@ The kernel re-checks a shared subterm once per path to it: `Tc::tm_infer` and
 A transparent `let` chain in which each let uses the previous one twice
 therefore costs 2^k in the gate, and at k = 16 a correct proof is rejected
 with `OutOfFuel` ([[proof-let-substitution-cost]]'s `dep` family). `have`
-(docs/have-design.md) fixes the opaque case. This issue is the case where a
+(docs/language/have-design.md) fixes the opaque case. This issue is the case where a
 later proof needs the value, such as a state `s1 = w.after` that proofs about
 `s1` must see through.
 
@@ -61,14 +61,14 @@ later proof needs the value, such as a state `s1 = w.after` that proofs about
 
 ## Log
 
-- 2026-10-26: mengine (a λ-DAG proof engine, docs/mengine-survey.md §3.1) types every node at construction and stores the type, so a proof costs its distinct nodes: this issue's property across a whole engine. Two transferable details: it caches an application's type by the pair of child pointers (`g_app_type_cache`), so separately built `f a` nodes with shared children share the work; and it has no fuel, which is why it never meets this issue's determinism constraint, and why it offers no help with it. The shift residue named under Reach is filed as [[subst-shared-node-memo]]; the 2026-10-26 probe (survey §4.2) shows a let-shared statement at 2^k gate queries and [[tactic-scaling-bench-families]] asks for it as a bench family.
+- 2026-10-26: mengine (a λ-DAG proof engine, docs/surveys/mengine-survey.md §3.1) types every node at construction and stores the type, so a proof costs its distinct nodes: this issue's property across a whole engine. Two transferable details: it caches an application's type by the pair of child pointers (`g_app_type_cache`), so separately built `f a` nodes with shared children share the work; and it has no fuel, which is why it never meets this issue's determinism constraint, and why it offers no help with it. The shift residue named under Reach is filed as [[subst-shared-node-memo]]; the 2026-10-26 probe (survey §4.2) shows a let-shared statement at 2^k gate queries and [[tactic-scaling-bench-families]] asks for it as a bench family.
 - 2026-10-26: Reach (shift residue) resolved by [[subst-shared-node-memo]]: every pure substitution traversal memoizes shared nodes per call, and an alias is shifted once per depth, so a let alias used under a binder now reaches the gate as a shared node. The gate's own per-path walk is unchanged (the 2^k queries of the fan-under-λ probe stand), which is this issue.
 - 2026-10-26: LANDED. `typing.rs` §The typing memo: one gate's `Tc` keeps, per node and scope, an elimination form's inferred type and the expected types an intro form checked against (`Judged`, keyed by `Scope`).
     - **Key**: the node's address plus Ψ's and Γ's identity tokens, Γ's base, the layer, `|L|` and the `box` bit, which are everything a rule reads besides the node. Each entry owns the node and both tokens. `tm_check`/`tm_infer` now take the node as `Rc<Term>`, which is what the entry keeps alive (every recursive call site already held one; the five public entry points wrap their root).
     - **Which nodes**: by kind, never by count. Inference is kept for the eliminations (applications, projections, the recursors, `UApp`/`CtxApp`/`TyApp`, `letbox`, `out`), which are also how checking reaches a shared value; checks are kept for the structural check forms (the four λs, `box`, the unannotated `pair@`/`inl@`/`inr@`), up to four expected types per node and scope. Nothing is evicted and failures are not kept, so whether a lookup hits is a function of the input. The unit test `reference_counts_do_not_move_the_counters` holds an extra reference to every node and asserts identical counters.
     - **Trusted base**: debug builds re-judge a sample of hits on the `checks.rs` stride and assert the memo's answer. The re-judging runs under the new `stats::unobserved`, so debug and release builds count alike. Off under the spelling record (`spell_checked_in_code`). Recorded in `crates/kernel/DESIGN.md`.
     - **Counter**: `typing_memo_hits` (raw column; one per second or later path into a node in one scope).
-    - **Acceptance 1** (release, width one, `--timings` queries; probes as in `docs/mengine-survey.md` §4.2 and [[subst-shared-node-memo]]):
+    - **Acceptance 1** (release, width one, `--timings` queries; probes as in `docs/surveys/mengine-survey.md` §4.2 and [[subst-shared-node-memo]]):
 
       | family | k = 8 | 16 | 32 | 64 | master (at k) |
       |---|---|---|---|---|---|

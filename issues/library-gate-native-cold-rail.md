@@ -39,7 +39,7 @@ worker, `--timings`.
 
 ## What changed
 
-- Images are DAGs (`docs/semantic-module-images-design.md`, Stage 4a): a
+- Images are DAGs (`docs/infrastructure/semantic-module-images-design.md`, Stage 4a): a
   term or type is written once and later occurrences of an equal one are a
   back-reference, numbered by structure so the bytes stay a function of the
   terms. Format bumped.

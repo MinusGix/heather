@@ -8,7 +8,7 @@ updated: 2026-09-05
 ---
 
 Follow-on to [[ih-generalization]] (landed 2026-09-05,
-docs/ih-generalization-design.md). The landing round uncurried the six
+docs/tactics/ih-generalization-design.md). The landing round uncurried the six
 definitions the issue named — `Le`, `leb`, `sub` (lib/std/num/nat.hthr),
 `foldl`, `take`, `drop`, plus `List::nth` (lib/std/data/list.hthr) — and rewrote
 `le_succ_r`, `le_trans`, `le_antisym`, `le_total`, `le_dec`, `le_add` in the

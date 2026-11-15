@@ -1,11 +1,11 @@
 // `tac` and `sort` as ordinary Heather over the `Io` capability: the first
 // customers whose data is recursive, a list of the input's lines
-// (issues/runtime-fn-arena-lists.md; docs/native-heap-arena-design.md §7).
+// (issues/runtime-fn-arena-lists.md; docs/native/native-heap-arena-design.md §7).
 //
 // They are written in the shapes the default `runtime fn` setup lowers
-// (docs/runtime-fn-setups-design.md §7.4): `for` over a list, `let mut`
+// (docs/native/runtime-fn-setups-design.md §7.4): `for` over a list, `let mut`
 // locals, statement `if` and `match`, and `mut self` calls on the world
-// (docs/effects-capabilities-design.md). A loop that goes round until the
+// (docs/language/effects-capabilities-design.md). A loop that goes round until the
 // input ends, or until every byte is sent, has no bound: it is a `while`
 // with no measure, so the function means `Io → Partial(Mutated<Io, R>)`,
 // the world threaded over the delay monad (design §4). Reading until the
@@ -33,7 +33,7 @@
 // arena is a defined exit of the lowered program ("memory exhausted", GNU's
 // failing status), not a value of the function: the lowering's theorem is
 // partial correctness with that exit as one of the outcomes
-// (docs/native-heap-arena-design.md §2), so the function is what the
+// (docs/native/native-heap-arena-design.md §2), so the function is what the
 // program does whenever the input fits.
 
 import logic;

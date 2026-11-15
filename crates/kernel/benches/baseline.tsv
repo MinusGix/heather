@@ -1,4 +1,4 @@
-# Heather kernel benchmark baseline — see docs/benchmarking.md
+# Heather kernel benchmark baseline — see docs/infrastructure/benchmarking.md
 # Regenerate with: scripts/bench --save
 env	host	vm
 env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz

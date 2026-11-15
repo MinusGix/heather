@@ -1,14 +1,14 @@
 # `wc`: a program the `wc -l` template can't express — design
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1); `wc -l` moved onto the state process 2026-09-29 (§9).** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md@4acf2fe` (the read loop and its
 additive contract), `docs/archive/native-syscall-failures-design.md` (failure paths),
-`docs/fetched-step-determinism-design.md` (claims universal over runs) and
-`docs/function-ir-readonly-loops.md` (the loop contract and its generator).
+`docs/native/fetched-step-determinism-design.md` (claims universal over runs) and
+`docs/native/function-ir-readonly-loops.md` (the loop contract and its generator).
 
 ## 1. Why this program
 

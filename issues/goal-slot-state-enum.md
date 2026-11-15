@@ -11,7 +11,7 @@ Replace `Goal`'s `solution`/`proved`/`transparent` triple with one state enum.
 
 ## Problem
 
-`goals::Goal` (`crates/elab/src/goals.rs` ~29) holds `solution: Option<Rc<Term>>`, `proved: bool` and `transparent: Option<Transparent>`. Of eight combinations four mean something: Open, Solved (by an `on` clause), Proved (a tactic proof lifted to a lemma) and Transparent (a value lifted to a definition). Readers re-derive which: `lifted()` filters `proved || transparent.is_some()` then `expect("a lifted slot is solved")`; `outstanding()` and `reports()` filter `solution.is_none()`; `delta_world` matches `transparent: Some(..)`. Survey: `docs/implicit-state-machines-survey.md` §5.
+`goals::Goal` (`crates/elab/src/goals.rs` ~29) holds `solution: Option<Rc<Term>>`, `proved: bool` and `transparent: Option<Transparent>`. Of eight combinations four mean something: Open, Solved (by an `on` clause), Proved (a tactic proof lifted to a lemma) and Transparent (a value lifted to a definition). Readers re-derive which: `lifted()` filters `proved || transparent.is_some()` then `expect("a lifted slot is solved")`; `outstanding()` and `reports()` filter `solution.is_none()`; `delta_world` matches `transparent: Some(..)`. Survey: `docs/elaborator/implicit-state-machines-survey.md` §5.
 
 ## Proposal
 
@@ -23,7 +23,7 @@ Replace `Goal`'s `solution`/`proved`/`transparent` triple with one state enum.
 
 ## Related
 
-Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[decl-attempt-lifecycle]], [[kernel-checker-mode-enum]].
+Filed together from the implicit-state-machines survey (`docs/elaborator/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[decl-attempt-lifecycle]], [[kernel-checker-mode-enum]].
 
 ## Log
 

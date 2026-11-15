@@ -1,5 +1,5 @@
 // The reflected language `rt` that every `runtime fn` setup reads, and its
-// typed meaning (docs/runtime-fn-setups-design.md §4,
+// typed meaning (docs/native/runtime-fn-setups-design.md §4,
 // issues/runtime-fn-reflected-language.md).
 //
 // A runtime fn's elaborated body is reflected into a `Program`, and the
@@ -23,10 +23,10 @@
 //   value is a `Let`. So `Tm` is a plain inductive (no `List<Tm>`, which the
 //   kernel route does not have yet, `nested-inductives-container-fields`),
 //   and a subterm the elaborated body shares (a block's `let` is an alias,
-//   docs/let-and-blocks-design.md §4.4) is one `Let`, read once.
+//   docs/language/let-and-blocks-design.md §4.4) is one `Let`, read once.
 //
 // Records are named, not structural: a record type's kernel lowering carries
-// a nominal tag no surface term can spell (docs/inductive-tier0-lowering.md
+// a nominal tag no surface term can spell (docs/inductives/inductive-tier0-lowering.md
 // §3.3), so `Named(i)` reads its type, constructor and fields from a table
 // of `RecInfo`s the program's meaning takes, as calls read their callees'
 // meanings from a table. A record's fields are flat (words, bits, bytes).
@@ -51,7 +51,7 @@ inductive Ty {
     Bytes(cap: Nat),
     // `List<List<BitVec(8)>>`, a list of byte strings (a file's lines), laid
     // out as the name of its first cell in an arena (N4,
-    // docs/native-heap-arena-design.md §7; the cells are `native_arena`'s).
+    // docs/native/native-heap-arena-design.md §7; the cells are `native_arena`'s).
     Lines,
     // The record of the type table's entry `i`.
     Named(i: Nat),
@@ -159,7 +159,7 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
 }
 
 // A value read as a count: a word's `toNat` (how a count held in a word
-// crosses a call, docs/runtime-fn-setups-design.md §16.11), 0 for the rest.
+// crosses a call, docs/native/runtime-fn-setups-design.md §16.11), 0 for the rest.
 fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
     match a as λ x => x.sem(tys) → Nat {
         Word(_) => λ v => v.toNat(),
@@ -464,7 +464,7 @@ inductive Tm {
     // file the function is run over (`World.spans`), read at the word
     // variable `i` under the length word variable `length`. The span is not
     // a value of the term: a function lent spans takes each as two words,
-    // where it lies and how long it is (docs/native-one-compiler-design.md
+    // where it lies and how long it is (docs/native/native-one-compiler-design.md
     // §2.3), and reads through the second.
     Byte(k: Nat, i: Nat, length: Nat),
 }
@@ -641,7 +641,7 @@ fn RecInfo::cons(r: RecInfo, rest: Nat → RecInfo) → Nat → RecInfo { λ i =
 fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl, λ t => refl) }
 
 // A type held in one 64-bit word by its `datarepr` (`SInt(64)` at
-// `BitVec(64)`, docs/runtime-fn-setups-design.md §16.13): the spec type
+// `BitVec(64)`, docs/native/runtime-fn-setups-design.md §16.13): the spec type
 // `S`, built from the word by the repr's `abs` and read back by its `emb`,
 // with the round trip `emb(abs(x)) = x` (`refl` at a repr whose images
 // are its constructors' fields).

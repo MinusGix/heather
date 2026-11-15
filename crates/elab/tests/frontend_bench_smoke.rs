@@ -1,5 +1,5 @@
 //! Smoke test for the frontend benchmark suite
-//! (`issues/frontend-benchmarks.md`, `docs/frontend-benchmarking.md`).
+//! (`issues/frontend-benchmarks.md`, `docs/infrastructure/frontend-benchmarking.md`).
 //!
 //! A benchmark suite nobody runs between rounds rots silently: a generated
 //! fixture stops elaborating, a family name drifts from the `--list` table,

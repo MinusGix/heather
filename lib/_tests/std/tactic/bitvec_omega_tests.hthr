@@ -1,5 +1,5 @@
 // Probes of `bv_omega` (`lib/std/tactic/bitvec_omega.hthr`,
-// `docs/bv-omega-design.md`) and of the `decreases` discharge that falls
+// `docs/tactics/bv-omega-design.md`) and of the `decreases` discharge that falls
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).

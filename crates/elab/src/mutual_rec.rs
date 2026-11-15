@@ -1,5 +1,5 @@
 //! Mutual structural recursion over a mutual family
-//! (`docs/mutual-inductive-design.md` §6): a group of `fn`s (or of
+//! (`docs/inductives/mutual-inductive-design.md` §6): a group of `fn`s (or of
 //! `theorem`s), each one `match` on a member of one mutual family, lowered to
 //! **one** structural recursion on the whole family, so one `elim_IWf`.
 //!
@@ -436,7 +436,7 @@ impl Group<'_> {
 
     /// The family member a constructor field is a child at: the family's
     /// rewritten occurrence `D#mutual<p̄>(E#member(e))`
-    /// (docs/mutual-inductive-design.md §2), read back to `E`.
+    /// (docs/inductives/mutual-inductive-design.md §2), read back to `E`.
     fn field_member(&self, ty: &Ty) -> Option<usize> {
         let TyKind::OfExpr(e) = &ty.kind else {
             return None;
@@ -565,7 +565,7 @@ impl MutualRec<'_> {
                 format!(
                     "`{}` recurses on the mutual member `{mname}` in a group, whose \
                      recursion is one `match` on the whole family; an explicit motive or \
-                     equation binder on it is not lowered (docs/mutual-inductive-design.md \
+                     equation binder on it is not lowered (docs/inductives/mutual-inductive-design.md \
                      §7)",
                     d.name
                 ),
@@ -587,7 +587,7 @@ impl MutualRec<'_> {
                                 "`{}` recurses on `{p}` at an index that is not one of its \
                                  parameters: the group's motive binds a member's index, so \
                                  take it as a parameter, `(n: …, {p}: {mname}(n))` \
-                                 (docs/mutual-inductive-design.md §7)",
+                                 (docs/inductives/mutual-inductive-design.md §7)",
                                 d.name
                             ),
                             e.span,
@@ -627,7 +627,7 @@ impl MutualRec<'_> {
                              mutual family: such a group is one structural recursion, so each \
                              member's body is one `match` on a parameter whose type is a member \
                              of the family, and `{}`'s is not. Write it as one, or give every \
-                             member a `decreases` measure (docs/mutual-inductive-design.md §6)",
+                             member a `decreases` measure (docs/inductives/mutual-inductive-design.md §6)",
                             base_name(&d.name)
                         ),
                         d.span,
@@ -643,7 +643,7 @@ impl MutualRec<'_> {
                                 format!(
                                     "{names} are mutually recursive over two different mutual \
                                      families, `{}` and `{}`: one structural recursion is on one \
-                                     family (docs/mutual-inductive-design.md §6)",
+                                     family (docs/inductives/mutual-inductive-design.md §6)",
                                     f.members[0].name, fam.members[0].name
                                 ),
                                 d.span,
@@ -663,7 +663,7 @@ impl MutualRec<'_> {
                     format!(
                         "`{}` and `{}` both recurse on `{}`: a structural group has one member \
                          per member of the family, which is what the recursion's motive is \
-                         indexed by (docs/mutual-inductive-design.md §6)",
+                         indexed by (docs/inductives/mutual-inductive-design.md §6)",
                         base_name(&o.decl.name),
                         base_name(&d.name),
                         fam.members[r.member].name
@@ -675,7 +675,7 @@ impl MutualRec<'_> {
                 return err(
                     format!(
                         "{names} are one structural recursion, so they are all `fn`s or all \
-                         `theorem`s; `{}` and `{}` differ (docs/mutual-inductive-design.md §6)",
+                         `theorem`s; `{}` and `{}` differ (docs/inductives/mutual-inductive-design.md §6)",
                         base_name(&first.name),
                         base_name(&d.name)
                     ),
@@ -688,7 +688,7 @@ impl MutualRec<'_> {
                 return err(
                     format!(
                         "the members of a structural group declare the same type parameters, \
-                         in the same order: `{}` and `{}` differ (docs/mutual-inductive-design.md \
+                         in the same order: `{}` and `{}` differ (docs/inductives/mutual-inductive-design.md \
                          §6)",
                         base_name(&first.name),
                         base_name(&d.name)
@@ -701,7 +701,7 @@ impl MutualRec<'_> {
                     format!(
                         "`{}` is a member of the structural group {names}, whose members take \
                          explicit parameters only; `{}` is implicit or has a default \
-                         (docs/mutual-inductive-design.md §7)",
+                         (docs/inductives/mutual-inductive-design.md §7)",
                         base_name(&d.name),
                         p.name
                     ),
@@ -718,7 +718,7 @@ impl MutualRec<'_> {
                         format!(
                             "`{}`'s type mentions `{}`: the group's motive binds `{}` first, \
                              at the member's index, so its type is over the index alone \
-                             (docs/mutual-inductive-design.md §6)",
+                             (docs/inductives/mutual-inductive-design.md §6)",
                             p.name, x.name, p.name
                         ),
                         p.ty.span,
@@ -751,7 +751,7 @@ impl Elaborator {
                     return err(
                         format!(
                             "`{}`'s result is at a universe-polymorphic level; a structural \
-                             group's motive is at a numeral level (docs/mutual-inductive-design.md \
+                             group's motive is at a numeral level (docs/inductives/mutual-inductive-design.md \
                              §6)",
                             r.base()
                         ),
@@ -882,7 +882,7 @@ impl MutualRec<'_> {
             }
         }
         // A bare constructor name in a field position is a pattern, not a
-        // binder (docs/nested-match-patterns-design.md §3.5).
+        // binder (docs/language/matching/nested-match-patterns-design.md §3.5).
         let is_ctor = |n: &str| n != "_" && self.lookup_ctor(n).is_some();
         for &k in own {
             let c = &g.fam.ctors[k];
@@ -1174,7 +1174,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             self.fail(
                 format!(
                     "a call to `{}` within its structural group passes its arguments by \
-                     position (docs/mutual-inductive-design.md §6)",
+                     position (docs/inductives/mutual-inductive-design.md §6)",
                     r.base()
                 ),
                 span,
@@ -1185,7 +1185,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             self.fail(
                 format!(
                     "a call to `{}` within its structural group passes all {arity} argument(s), \
-                     found {} (docs/mutual-inductive-design.md §6)",
+                     found {} (docs/inductives/mutual-inductive-design.md §6)",
                     r.base(),
                     args.len()
                 ),
@@ -1297,7 +1297,7 @@ impl<'a, 'g> Calls<'a, 'g> {
                         format!(
                             "`{}` recurses structurally with {}: within the group it is \
                              called, with all its arguments, not passed as a value \
-                             (docs/mutual-inductive-design.md §6)",
+                             (docs/inductives/mutual-inductive-design.md §6)",
                             self.g.recs[at].base(),
                             self.g.describe()
                         ),
@@ -1512,7 +1512,7 @@ fn binder_names(
                 "a deep pattern is not available in this `match`: it descends on `{}`, a \
                  parameter of `{}`, so its arm binders are what the termination guard matches \
                  a recursive call's argument against. Match the field in a nested `match` \
-                 inside the arm instead (docs/nested-match-patterns-design.md §6)",
+                 inside the arm instead (docs/language/matching/nested-match-patterns-design.md §6)",
                 r.scrut_name(),
                 r.base()
             ),

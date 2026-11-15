@@ -1,5 +1,5 @@
 //! The Rust side of an export `crates/linked` links: its declaration,
-//! generated (docs/native-library-exports-design.md §6).
+//! generated (docs/native/native-library-exports-design.md §6).
 //!
 //! `compile-x86` states what its code takes in the assembly it writes
 //! ([`header`]: which arguments are words and which are spans, and the stack

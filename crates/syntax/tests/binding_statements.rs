@@ -1,4 +1,4 @@
-//! Parse-level facts of binding statements (docs/sequencing-surface-design.md
+//! Parse-level facts of binding statements (docs/language/sequencing-surface-design.md
 //! §3): the lexer's `<-`, and the refusals a whole file's parse owns, which a
 //! Heather probe cannot state (a parse error refuses the file). What the
 //! lowered forms mean is probed in Heather,
