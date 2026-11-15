@@ -1,0 +1,57 @@
+import logic;
+import bool;
+import simp;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import nat;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// A word function the compiler takes: `heather compile-x86 words.hthr clamp`.
+runtime fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo { lo } else if hi < x { hi } else { x }
+}
+
+// Inside the bounds, clamping changes nothing.
+theorem clamp_inside(x, lo, hi: u64, above: lo <= x, below: x <= hi): clamp(x, lo, hi) = x {
+    clamp::False::False(x, lo, hi, λ _ => bv_omega, λ _ => bv_omega)
+}
+
+// Whatever `x` is, the answer is within the bounds.
+theorem clamp_at_least(x, lo, hi: u64, ordered: lo <= hi): lo <= clamp(x, lo, hi) {
+    if h1: x < lo {
+        rewrite(clamp::True(x, lo, hi, h1), bv_omega)
+    } else if h2: hi < x {
+        rewrite(clamp::False::True(x, lo, hi, h1, h2), bv_omega)
+    } else {
+        rewrite(clamp::False::False(x, lo, hi, h1, h2), bv_omega)
+    }
+}
+
+theorem clamp_at_most(x, lo, hi: u64, ordered: lo <= hi): clamp(x, lo, hi) <= hi {
+    if h1: x < lo {
+        rewrite(clamp::True(x, lo, hi, h1), ordered)
+    } else if h2: hi < x {
+        rewrite(clamp::False::True(x, lo, hi, h1, h2), bv_omega)
+    } else {
+        rewrite(clamp::False::False(x, lo, hi, h1, h2), bv_omega)
+    }
+}
+
+theorem clamp_within(x, lo, hi: u64, ordered: lo <= hi): lo <= clamp(x, lo, hi) ∧ clamp(x, lo, hi) <= hi {
+    ⟨clamp_at_least(x, lo, hi, ordered), clamp_at_most(x, lo, hi, ordered)⟩
+}
+
+// Clamping twice is clamping once.
+theorem clamp_twice(x, lo, hi: u64, ordered: lo <= hi): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
+    clamp_inside(clamp(x, lo, hi), lo, hi, clamp_at_least(x, lo, hi, ordered), clamp_at_most(x, lo, hi, ordered))
+}
