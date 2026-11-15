@@ -46,29 +46,30 @@ import function_ir_lower;
 import function_ir_lower_calls;
 import x86_64_asm;
 
-// Inserts `x` into the sorted bytes before `j`, whose place `j` is free:
-// each larger byte moves up one, and `x` goes where the first one not larger
-// was. Answers where `x` went.
-runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
+// Opens a hole for `key` in the sorted bytes before `j`, whose place `j` is
+// free: each byte above `key` moves up one. Answers where the hole is.
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
     if h: 0 < j {
         let below = s.byte_within(n, j - 1);
-        if larger: x < below.zero_extend(56) {
+        if larger: key < below.zero_extend(56) {
             s.put_within(n, j, below);
-            s.insert_below(n, j - 1, x)
+            s.sift(n, j - 1, key)
         } else {
-            s.put_within(n, j, x.truncate(8, 56));
             j
         }
     } else {
-        s.put_within(n, j, x.truncate(8, 56));
         j
     }
 }
 
-// Sorts the span from `i` on into the sorted prefix before it.
+// Sorts the span from `i` on into the sorted prefix before it: the byte at
+// `i` is taken out, the larger ones before it move up, and it goes back
+// into the hole they leave.
 runtime fn List::sort_from(mut self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
     if h: i < n {
-        s.insert_below(n, i, s.byte_within(n, i).zero_extend(56));
+        let key = s.byte_within(n, i);
+        let hole = s.sift(n, i, key.zero_extend(56));
+        s.put_within(n, hole, key);
         s.sort_from(n, i + 1)
     } else {
         i
@@ -104,15 +105,19 @@ theorem write_split(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, v: u8, sized
 }
 
 // ---------------------------------------------------------------------------
-// One insertion: with the bytes before `j` sorted, `insert_below` leaves
+// One insertion as the outer loop makes it: `sift` opens a hole for `b`
+// below `j`, and `b` goes into it.
+fn fill(m: Mutated<List<u8>, u64>, n: u64, b: u8) → List<u8> { List::put_within(m.after, n, m.value, b).after }
+fn List::insert_at(self s: List<u8>, n, j: u64, b: u8) → List<u8> { fill(List::sift(s, n, j, b.zero_extend(56)), n, b) }
+
+// With the bytes before `j` sorted, inserting `b` at `j` leaves
 // them with `b` inserted, and the bytes after `j` as they were.
 
-theorem insert_below_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
+theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
     sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted(BitVec::unsigned_le)):
-    List::insert_below(ys ++ Cons(z, rest), n, j, b.zero_extend(56)).after = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
+    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
     decreases j.toNat()
 {
-    let stored: (BitVec::truncate(8, 56, b.zero_extend(56)) = b) = BitVec::truncate_zero_extend(8, 56, b);
     let s = ys ++ Cons(z, rest);
     if h: 0 < j {
         let k = (j - 1).toNat();
@@ -127,9 +132,7 @@ theorem insert_below_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: 
         let read: (s.byte_within(n, j - 1) = a) = rewrite(span, read_split(init, a, Cons(z, rest), n, j - 1, sized0, init_len));
         let one: (b.zero_extend(56).toNat() = b.toNat()) = BitVec::toNat_zero_extend(8, 56, b);
         let two: (a.zero_extend(56).toNat() = a.toNat()) = BitVec::toNat_zero_extend(8, 56, a);
-        match larger: decide_bit<b.zero_extend(56) < a.zero_extend(56)>() {
-            True => {
-                let lt = decide_bit_true<b.zero_extend(56) < a.zero_extend(56)>(larger);
+        if larger: b.zero_extend(56) < a.zero_extend(56) {
                 let ba: BitVec::unsigned_le(b, a) = omega;
                 let moved: (List::put_within(s, n, j, a).after = init ++ Cons(a, Cons(a, rest))) =
                     trans(write_split(ys, z, rest, n, j, a, sized, at),
@@ -138,41 +141,38 @@ theorem insert_below_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: 
                 let l2 = init.len_append(Cons(a, Cons(z, rest)));
                 let sized1: ((init ++ Cons(a, Cons(a, rest))).len() = n.toNat()) = omega;
                 let sorted1: init.Sorted(BitVec::unsigned_le) = init.sorted_append_left(BitVec::unsigned_le, [a], rewrite(sym(cut), sorted));
-                let ih = insert_below_inserts(init, a, Cons(a, rest), n, j - 1, b, sized1, init_len, sorted1);
+                let ih = insert_at_inserts(init, a, Cons(a, rest), n, j - 1, b, sized1, init_len, sorted1);
                 calc {
-                    List::insert_below(s, n, j, b.zero_extend(56)).after
-                        = List::insert_below(init ++ Cons(a, Cons(a, rest)), n, j - 1, b.zero_extend(56)).after
-                        := rewrite(List::insert_below::True::True(s, n, j, b.zero_extend(56), h, rewrite(read, lt)), read, moved, refl),
+                    s.insert_at(n, j, b) = (init ++ Cons(a, Cons(a, rest))).insert_at(n, j - 1, b)
+                        := trans(cong_fn(λ m => fill(m, n, b), List::sift::True::True(s, n, j, b.zero_extend(56), h, rewrite(read, larger))),
+                            rewrite(read, moved, refl)),
                     = init.insert_ordered(BitVec::unsigned_le, b) ++ Cons(a, rest) := ih,
                     = (init.insert_ordered(BitVec::unsigned_le, b) ++ [a]) ++ rest := sym(init.insert_ordered(BitVec::unsigned_le, b).append_assoc([a], rest)),
                     = (init ++ [a]).insert_ordered(BitVec::unsigned_le, b) ++ rest
                         := cong_fn(λ (l: List<u8>) => l ++ rest, sym(init.insert_ordered_snoc(BitVec::unsigned_le, b, a, ba))),
                     = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest := cong_fn(λ (l: List<u8>) => l.insert_ordered(BitVec::unsigned_le, b) ++ rest, sym(cut)),
                 }
-            },
-            False => {
-                let not = decide_bit_false<b.zero_extend(56) < a.zero_extend(56)>(larger);
+        } else {
                 let ab: BitVec::unsigned_le(a, b) = omega;
                 let ends: (ys ++ [b] = init ++ [a, b]) = trans(cong_fn(λ (l: List<u8>) => l ++ [b], cut), init.append_assoc([a], [b]));
                 let sorted_out: (ys ++ [b]).Sorted(BitVec::unsigned_le) =
                     rewrite(ends, init.sorted_snoc(BitVec::unsigned_le, a, b, rewrite(sym(cut), sorted), ab));
                 let moved: Perm(Cons(b, ys), ys ++ [b]) = j(ys.append_nil(), λ l _ => Perm(Cons(b, l), ys ++ [b]), ys.perm_middle(b, Nil));
                 calc {
-                    List::insert_below(s, n, j, b.zero_extend(56)).after = s.with_byte_within(n, j, b)
-                        := rewrite(List::insert_below::True::False(s, n, j, b.zero_extend(56), h, rewrite(read, not)), stored, refl),
+                    s.insert_at(n, j, b) = s.with_byte_within(n, j, b)
+                        := cong_fn(λ m => fill(m, n, b), List::sift::True::False(s, n, j, b.zero_extend(56), h, rewrite(read, larger))),
                     = ys ++ Cons(b, rest) := write_split(ys, z, rest, n, j, b, sized, at),
                     = (ys ++ [b]) ++ rest := sym(ys.append_assoc([b], rest)),
                     = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
                         := cong_fn(λ (l: List<u8>) => l ++ rest, ys.insert_ordered_unique(BitVec::unsigned_le, b, ys ++ [b], sorted, sorted_out, moved)),
                 }
-            },
         }
     } else {
         let none: ¬(0 < j.toNat()) = h;
         let empty: (ys.len() = 0) = omega;
         calc {
-            List::insert_below(s, n, j, b.zero_extend(56)).after = s.with_byte_within(n, j, b)
-                := rewrite(List::insert_below::False(s, n, j, b.zero_extend(56), h), stored, refl),
+            s.insert_at(n, j, b) = s.with_byte_within(n, j, b)
+                := cong_fn(λ m => fill(m, n, b), List::sift::False(s, n, j, b.zero_extend(56), h)),
             = ys ++ Cons(b, rest) := write_split(ys, z, rest, n, j, b, sized, at),
             = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest := (match ys as λ u => u.len() = 0 → u ++ Cons(b, rest) = u.insert_ordered(BitVec::unsigned_le, b) ++ rest {
                 Nil => λ _ => refl,
@@ -198,9 +198,9 @@ theorem sort_from_step(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorte
     let taken: (ys.len() = k) = s.len_take(k, Nat::le_of_lt(k, s.len(), below));
     let sized0: ((ys ++ Cons(z, more)).len() = n.toNat()) = trans(cong_fn(λ (l: List<u8>) => l.len(), sym(cut)), sized);
     let read: (s.byte_within(n, i) = z) = j(sym(cut), λ l _ => l.byte_within(n, i) = z, read_split(ys, z, more, n, i, sized0, taken));
-    let inserted: (List::insert_below(s, n, i, z.zero_extend(56)).after = ys.insert_ordered(BitVec::unsigned_le, z) ++ more) =
-        j(sym(cut), λ l _ => List::insert_below(l, n, i, z.zero_extend(56)).after = ys.insert_ordered(BitVec::unsigned_le, z) ++ more,
-            insert_below_inserts(ys, z, more, n, i, z, sized0, taken, sorted));
+    let inserted: (s.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more) =
+        j(sym(cut), λ l _ => l.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more,
+            insert_at_inserts(ys, z, more, n, i, z, sized0, taken, sorted));
     let ys1 = ys.insert_ordered(BitVec::unsigned_le, z);
     let s1 = ys1 ++ more;
     let picks = ys.insert_ordered_picks(BitVec::unsigned_le, z);
@@ -212,8 +212,9 @@ theorem sort_from_step(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorte
     let sorted1: s1.take((i + 1).toNat()).Sorted(BitVec::unsigned_le) =
         rewrite(next, ys1.take_append_len(more), ys.insert_ordered_sorted(BitVec::unsigned_le, z, sorted));
     let ih = later(s1, sized1, sorted1);
+    let taken_out: (s.insert_at(n, i, s.byte_within(n, i)) = s1) = rewrite(read, inserted);
     let after: (List::sort_from(s, n, i).after = List::sort_from(s1, n, i + 1).after) =
-        rewrite(List::sort_from::True(s, n, i, h), read, inserted, refl);
+        trans(cong_fn(λ m => m.after, List::sort_from::True(s, n, i, h)), cong_fn(λ (l: List<u8>) => List::sort_from(l, n, i + 1).after, taken_out));
     let moved: Perm(s, s1) = j(sym(cut), λ l _ => Perm(l, s1), (ys ++ Cons(z, more)).perm_trans(Cons(z, ys ++ more), s1,
         Cons(z, ys ++ more).perm_sym(ys ++ Cons(z, more), ys.perm_middle(z, more)),
         Cons(z, ys).perm_append_l(ys1, more, List::perm_of_picks(z, ys1, ys, picks))));
@@ -235,16 +236,16 @@ theorem sort_from_done(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorte
 }
 
 // The outer loop: with the bytes before `i` sorted, `sort_from` leaves the
-// span sorted, holding the bytes it held. By induction on what is left.
-theorem sort_from_sorts(left: Nat): (s: List<u8>) → (n, i: u64) → (n - i).toNat() = left → s.len() = n.toNat() →
-    s.take(i.toNat()).Sorted(BitVec::unsigned_le) → s.SortedPerm(BitVec::unsigned_le, List::sort_from(s, n, i).after)
+// span sorted, holding the bytes it held. By induction on what is left,
+// `n - i`, as the loop runs.
+theorem sort_from_sorts(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorted: s.take(i.toNat()).Sorted(BitVec::unsigned_le)):
+    s.SortedPerm(BitVec::unsigned_le, List::sort_from(s, n, i).after)
+    decreases (n - i).toNat()
 {
-    match left {
-        Zero => λ s n i gone sized sorted => sort_from_done(s, n, i, sized, sorted, λ (lt: i < n) => { let no: False = bv_omega; no }),
-        Succ(m) => λ s n i more sized sorted => match i.toNat().lt_or_ge(n.toNat()) {
-            Inl(h) => sort_from_step(s, n, i, sized, sorted, h, λ t tl ts => sort_from_sorts(m, t, n, i + 1, bv_omega, tl, ts)),
-            Inr(past) => sort_from_done(s, n, i, sized, sorted, λ (lt: i < n) => { let reached = past; let no: False = omega; no }),
-        },
+    if h: i < n {
+        sort_from_step(s, n, i, sized, sorted, h, λ t tl ts => sort_from_sorts(t, n, i + 1, tl, ts))
+    } else {
+        sort_from_done(s, n, i, sized, sorted, h)
     }
 }
 
@@ -258,7 +259,7 @@ theorem sort_from_sorts(left: Nat): (s: List<u8>) → (n, i: u64) → (n - i).to
 theorem sort_in_place_sorts(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
     s.SortedPerm(BitVec::unsigned_le, sort_in_place(s, n).after)
 {
-    sort_from_sorts((n - 0).toNat(), s, n, 0, refl, sized, rewrite(s.take_zero(), trivial))
+    sort_from_sorts(s, n, 0, sized, rewrite(s.take_zero(), trivial))
 }
 
 theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
