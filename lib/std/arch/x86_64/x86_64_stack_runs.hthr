@@ -231,6 +231,61 @@ theorem Site::moves_absurd<M>(self site: Site<M>, writes: ByteWrites<M>, from, t
     λ s here resident holds => false_elim(never(s, holds))
 }
 
+// A test and its JCC, each way to `to`: falling through where the JCC is
+// not taken, from the jump's target where it is.
+theorem Site::moves_test_on<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, test: Test, else_name: Nat,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.tested(test),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branched(test, else_name),
+    else_to: Nat, else_lands: JumpsForward(prog_len(start.tested(test)), 6,
+        asm_jump_of(asm_labels(site.program), prog_len(start.tested(test)), Jcc(test.cc(), else_name)), else_to),
+    to: Nat, pre: Gprs → M → Type, post: MachineState<M> → Type,
+    yes: site.Moves(writes, prog_len(start.branched(test, else_name)), to,
+        λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False, post),
+    no: site.Moves(writes, else_to, to, λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True, post)):
+    site.Moves(writes, prog_len(start), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), post) {
+    λ s here resident holds => {
+        let instruction = test.instruction();
+        let tested = start.tested(test);
+        let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([instruction]), test_at);
+        let ran = block_steps(site.fetch, site.data, [instruction], s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item),
+            test.reads(s));
+        let u = execute_block_normal([instruction], s);
+        let stepped = test.steps<M>(s);
+        let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
+            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([instruction])), here),
+            rip_compose(site.origin, prog_len(start), block_length([instruction]))));
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(tested), Jcc(test.cc(), else_name));
+        let control = JumpIfNear(test.cc(), displacement);
+        let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(test.cc(), else_name), branch_at);
+        let step = near_fetched_step(site.fetch, site.data, control, u,
+            resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
+                ran.right.right, u_rip, jcc), test.jcc_reads(s));
+        let v = execute_near_control(control, u);
+        let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
+            fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));
+        let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>
+            j(sym(stepped.left), λ g _ => pre(g, s.memory) ∧ test.taken(g) = b, ⟨holds, taken⟩);
+        match nonzero: test.taken(s.gprs) {
+            False => {
+                let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
+                    trans(near_if_not_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
+                            rip_compose(site.origin, prog_len(tested), 6)));
+                site.arrives_after(writes, s, v, to, post, entry, yes(v, v_rip, resident, kept(False, nonzero)))
+            },
+            True => {
+                let v_rip: (v.rip = next_rip(site.origin, else_to)) =
+                    trans(near_if_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
+                            jumps_forward(site.origin, prog_len(tested), 6, displacement, else_to, else_lands)));
+                site.arrives_after(writes, s, v, to, post, entry, no(v, v_rip, resident, kept(True, nonzero)))
+            },
+        }
+    }
+}
+
 // TEST of a register with itself and JE, each way to `to`: falling through
 // where the register is nonzero, from the jump's target where it is zero.
 theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()),
@@ -244,42 +299,8 @@ theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fil
         λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = False, post),
     no: site.Moves(writes, else_to, to, λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = True, post)):
     site.Moves(writes, prog_len(start), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), post) {
-    λ s here resident holds => {
-        let test = TestRR(register, register);
-        let tested = start.test_label(register);
-        let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([test]), test_at);
-        let ran = block_steps(site.fetch, site.data, [test], s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([test]), address), item), refl);
-        let u = execute_block_normal([test], s);
-        let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
-            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([test])), here),
-            rip_compose(site.origin, prog_len(start), block_length([test]))));
-        let displacement = asm_jump_of(asm_labels(site.program), prog_len(tested), Jcc(E, else_name));
-        let control = JumpIfNear(E, displacement);
-        let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(E, else_name), branch_at);
-        let step = near_fetched_step(site.fetch, site.data, control, u,
-            resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
-                ran.right.right, u_rip, jcc), refl);
-        let v = execute_near_control(control, u);
-        let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
-            fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));
-        match nonzero: register.tests_zero(s.gprs) {
-            False => {
-                let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
-                    trans(near_if_not_taken_rip(E, displacement, u, nonzero),
-                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
-                            rip_compose(site.origin, prog_len(tested), 6)));
-                site.arrives_after(writes, s, v, to, post, entry, yes(v, v_rip, resident, ⟨holds, nonzero⟩))
-            },
-            True => {
-                let v_rip: (v.rip = next_rip(site.origin, else_to)) =
-                    trans(near_if_taken_rip(E, displacement, u, nonzero),
-                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
-                            jumps_forward(site.origin, prog_len(tested), 6, displacement, else_to, else_lands)));
-                site.arrives_after(writes, s, v, to, post, entry, no(v, v_rip, resident, ⟨holds, nonzero⟩))
-            },
-        }
-    }
+    site.moves_test_on(writes, fits, start, Nonzero(register), else_name, test_k, test_at, branch_k, branch_at, else_to, else_lands,
+        to, pre, post, yes, no)
 }
 
 // The item at a label, fetched at the state's RIP.
@@ -515,7 +536,7 @@ theorem indexed_address_at(load: IndexedWordLoad, gprs: Gprs, start: BitVec(64),
 
 // The word at entry `index` of a table at `base` (`IndexedWordLoad`), as a
 // piece: no `Asm` constructor of its own.
-fn asm_indexed_load(load: IndexedWordLoad) → Asm { Piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
+fn asm_indexed_load(load: IndexedWordLoad) → Asm { Asm::piece(indexed_word_load_bytes(load), 4, indexed_word_load_length(load)) }
 
 // The indexed load at a label: the eight bytes at the address read as a
 // word, below the canonical boundary.
@@ -545,11 +566,11 @@ theorem Site::moves_indexed_load<M>(self site: Site<M>, writes: ByteWrites<M>, f
 // of its entry at the index register into the register the LEA wrote. No
 // label is named, so the program's labels say nothing of it.
 fn table_lea(destination: Gpr) → Asm {
-    Piece(lea_rip_bytes(LeaRip(destination := destination, displacement := BitVec::ofNat(5))), 7,
+    Asm::piece(lea_rip_bytes(LeaRip(destination := destination, displacement := BitVec::ofNat(5))), 7,
         lea_rip_length(LeaRip(destination := destination, displacement := BitVec::ofNat(5))))
 }
-fn table_jump(length: Nat) → Asm { Piece(near_control_bytes(JumpNear(BitVec::ofNat(length))), 5, refl) }
-fn table_piece(entries: List<Nat>) → Asm { Piece(table_bytes(entries), 8 * entries.len(), table_bytes_length(entries)) }
+fn table_jump(length: Nat) → Asm { Asm::piece(near_control_bytes(JumpNear(BitVec::ofNat(length))), 5, refl) }
+fn table_piece(entries: List<Nat>) → Asm { Asm::piece(table_bytes(entries), 8 * entries.len(), table_bytes_length(entries)) }
 fn table_read_load(base: SibBase, index: SibIndex) → IndexedWordLoad { IndexedWordLoad(destination := base.gpr(), base := base, index := index) }
 fn table_read_prog(prog: Prog, base: SibBase, index: SibIndex, entries: List<Nat>) → Prog {
     At(At(At(At(prog, 0, table_lea(base.gpr())), 0, table_jump(8 * entries.len())), 0, table_piece(entries)), 0,
@@ -661,8 +682,8 @@ theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fit
 
 // MOV r32, [base] and MOV [base], r32 as pieces: neither needs its own
 // `Asm` item, since what a run over one does is the theorem below.
-fn asm_dword_load(load: DwordLoad) → Asm { Piece(dword_load_bytes(load), dword_load_bytes(load).len(), refl) }
-fn asm_dword_store(store: DwordStore) → Asm { Piece(dword_store_bytes(store), 3, refl) }
+fn asm_dword_load(load: DwordLoad) → Asm { Asm::piece(dword_load_bytes(load), dword_load_bytes(load).len(), refl) }
+fn asm_dword_store(store: DwordStore) → Asm { Asm::piece(dword_store_bytes(store), 3, refl) }
 
 // The doubleword load at a label: the four bytes at the base read low
 // first, below the canonical boundary, the destination's upper half cleared.
@@ -876,11 +897,6 @@ fn restore(registers: List<Gpr>, saved, gprs: Gprs) → Gprs {
         Nil => gprs,
         Cons(register, rest) => restore(rest, saved, write_gpr(register, read_gpr(register, saved), gprs)),
     }
-}
-
-// No register of the list is `query`.
-fn List::spare(self registers: List<Gpr>, query: Gpr) → Bool {
-    match registers { Nil => True, Cons(register, rest) => !register.same(query) && rest.spare(query) }
 }
 
 // Slot `k` of the frame at offset `d`, the stack pointer there.

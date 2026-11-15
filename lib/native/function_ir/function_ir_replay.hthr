@@ -1,0 +1,1748 @@
+// The replayer over a list of nodes (docs/native/optimizer-design.md §3.1, §3.2):
+// the one function of the optimizer at this level that is proved, and what
+// it takes from an untrusted searcher.
+//
+// - A fact is something known of the activation's valuation and the
+//   buffers as they stand (`Fact`): a node's equation, that a word lies
+//   between two numbers, an order between two words (`Order`:
+//   `low + add ≤ high + more`, the words read as naturals), a load made
+//   since the last store, or that a word is bytes of a buffer joined
+//   (`Memory::Bytes`, over `buffer_join`). Every node of the old body that touches no
+//   buffer is one once the sweep has passed it, kept or dropped
+//   (`Facts::learn`), and an arm starts with its conditional's bit as a
+//   constant. The facts are keyed by the id they are about, so asking for
+//   one is a lookup; a range is known where a range inside it is, and an
+//   order where a stronger one between the same two words is.
+// - What is kept of the buffers (`Memory`: a load, or a word that is
+//   bytes of one) is known until something may store: a store forgets all
+//   of it and remembers its own read-back, and a call, a lend, a
+//   conditional and a loop forget (`Facts::forget`, `Facts::Remembered`).
+// - A rule is a clause over facts with its proof (`Clause`, `Rule`): made
+//   from an instance's ids and literals, premises and a conclusion, and a
+//   theorem that a valuation and buffers satisfying the premises satisfy
+//   the conclusion. Applying one is finding its premises among the facts.
+// - A plan is a list of steps (`Step`): keep the next node, drop it (never
+//   a store), derive a rule's conclusion into the facts, emit a node that
+//   is among the facts, have the next node read other ids, which the
+//   facts say are copies of the ones it read (`Node::reading`), or write
+//   the next node as a move of an id the facts say the same computation
+//   wrote (`Step::Again`). A call's
+//   arguments and a loop's inputs are read through copies the same way
+//   (`Plan::Args`, `Plan::Inputs`). A conditional whose bit the facts say
+//   is a constant is the arm that constant takes (`Plan::Arm`).
+// - A loop's body is replayed from what the loop does not change: a
+//   parameter that is its own next has in every pass the range of the
+//   input it started from (`Facts::carry`, `loop_kept`).
+// - `replay_sound`: whatever the plan, the nodes returned run wherever the
+//   old ones ran, over the same valuation and files, and the facts returned
+//   hold there. A function's meaning is taken by its code's contract as a
+//   premise (`Stack::CalledOver`), so this direction is the one a compiled
+//   program needs: what the old body admits, the new one does.
+//
+// Nothing here says a dropped node was dead. A body that reads an id no
+// node writes is refused by the lowering, as a wrong placement is.
+//
+// A node among the facts may be emitted beside the node that already
+// writes its id: a function's meaning is the valuations that satisfy its
+// equations, and one the others imply changes none of them. That is how a
+// fact a plan proved reaches the lowering (docs/native/optimizer-design.md §5.1).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_stage;
+import bitvec;
+import bitvec_rotate;
+import bitvec_bytes;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import omega;
+import option;
+
+// ---------------------------------------------------------------------------
+// Node equality
+
+fn same2(a, b, c, d: Nat) → Bool { a.same(c) && b.same(d) }
+fn same3(a, b, c, x, y, z: Nat) → Bool { a.same(x) && (b.same(y) && c.same(z)) }
+fn same4(a, b, c, d, w, x, y, z: Nat) → Bool { a.same(w) && (b.same(x) && (c.same(y) && d.same(z))) }
+
+// A table's entries, one by one.
+fn entries_same(xs, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys { Nil => False, Cons(y, others) => x.same(y) && entries_same(rest, others) },
+    }
+}
+
+fn Node::same(self a: Node, b: Node) → Bool {
+    match a {
+        Const(w, o, v) => match b { Const(w2, o2, v2) => same3(w, o, v, w2, o2, v2), _ => False },
+        Move(w, o, s) => match b { Move(w2, o2, s2) => same3(w, o, s, w2, o2, s2), _ => False },
+        Add(w, o, l, r) => match b { Add(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        Sub(w, o, l, r) => match b { Sub(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        BitAnd(w, o, l, r) => match b { BitAnd(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        BitOr(w, o, l, r) => match b { BitOr(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        BitXor(w, o, l, r) => match b { BitXor(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        ShiftLeft(w, o, l, r) => match b { ShiftLeft(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        LogicalShiftRight(w, o, l, r) => match b { LogicalShiftRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        RotateRight(w, o, l, r) => match b { RotateRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        ArithmeticShiftRight(w, o, l, r) => match b { ArithmeticShiftRight(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        UnsignedLessThan(w, o, l, r) => match b { UnsignedLessThan(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        SignedLessThan(w, o, l, r) => match b { SignedLessThan(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        Equal(w, o, l, r) => match b { Equal(w2, o2, l2, r2) => same4(w, o, l, r, w2, o2, l2, r2), _ => False },
+        BufferLoad(o, f, i) => match b { BufferLoad(o2, f2, i2) => same3(o, f, i, o2, f2, i2), _ => False },
+        BufferStore(o, f, i, v) => match b { BufferStore(o2, f2, i2, v2) => same4(o, f, i, v, o2, f2, i2, v2), _ => False },
+        Resize(f, t, o, s) => match b { Resize(f2, t2, o2, s2) => same4(f, t, o, s, f2, t2, o2, s2), _ => False },
+        SignResize(f, t, o, s) => match b { SignResize(f2, t2, o2, s2) => same4(f, t, o, s, f2, t2, o2, s2), _ => False },
+        TableRead(w, o, n, i, es) => match b { TableRead(w2, o2, n2, i2, es2) => same4(w, o, n, i, w2, o2, n2, i2) && entries_same(es, es2), _ => False },
+        WideLoad(n, o, f, i) => match b { WideLoad(n2, o2, f2, i2) => same4(n, o, f, i, n2, o2, f2, i2), _ => False },
+        WideStore(n, o, f, i, v) => match b { WideStore(n2, o2, f2, i2, v2) => same4(n, o, f, i, n2, o2, f2, i2) && v.same(v2), _ => False },
+        ByteSwap(w, o, s) => match b { ByteSwap(w2, o2, s2) => same3(w, o, s, w2, o2, s2), _ => False },
+    }
+}
+
+theorem same3_sound(a, b, c, x, y, z: Nat, h: same3(a, b, c, x, y, z) = True): (a = x) ∧ ((b = y) ∧ (c = z)) {
+    let p = Bool::and_true_parts(a.same(x), b.same(y) && c.same(z), h);
+    let q = Bool::and_true_parts(b.same(y), c.same(z), p.right);
+    ⟨a.same_sound(x, p.left), ⟨b.same_sound(y, q.left), c.same_sound(z, q.right)⟩⟩
+}
+theorem same4_sound(a, b, c, d, w, x, y, z: Nat, h: same4(a, b, c, d, w, x, y, z) = True): (a = w) ∧ ((b = x) ∧ ((c = y) ∧ (d = z))) {
+    let p = Bool::and_true_parts(a.same(w), b.same(x) && (c.same(y) && d.same(z)), h);
+    ⟨a.same_sound(w, p.left), same3_sound(b, c, d, x, y, z, p.right)⟩
+}
+
+theorem con3(f: Nat → Nat → Nat → Node, a, b, c, x, y, z: Nat, e: (a = x) ∧ ((b = y) ∧ (c = z))): f(a, b, c) = f(x, y, z) {
+    trans(cong_fn<Nat, Node>(λ n => f(n, b, c), e.left), trans(cong_fn<Nat, Node>(λ n => f(x, n, c), e.right.left), cong_fn<Nat, Node>(λ n => f(x, y, n), e.right.right)))
+}
+theorem con4(f: Nat → Nat → Nat → Nat → Node, a, b, c, d, w, x, y, z: Nat, e: (a = w) ∧ ((b = x) ∧ ((c = y) ∧ (d = z)))): f(a, b, c, d) = f(w, x, y, z) {
+    trans(cong_fn<Nat, Node>(λ n => f(n, b, c, d), e.left), con3(λ p q r => f(w, p, q, r), b, c, d, x, y, z, e.right))
+}
+
+theorem entries_same_sound(xs: List<Nat>): (ys: List<Nat>) → entries_same(xs, ys) = True → xs = ys {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ => refl, Cons(_, _) => λ h => absurd(h) },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ h => absurd(h),
+            Cons(y, others) => λ h => {
+                let p = Bool::and_true_parts(x.same(y), entries_same(rest, others), h);
+                trans(cong_fn<Nat, List<Nat>>(λ n => Cons(n, rest), x.same_sound(y, p.left)), cong_fn<List<Nat>, List<Nat>>(λ l => Cons(y, l), entries_same_sound(rest, others, p.right)))
+            },
+        },
+    }
+}
+
+theorem Node::same_sound(self a: Node): (b: Node) → a.same(b) = True → a = b {
+    match a {
+        Const(w, o, v) => λ b => match b { Const(w2, o2, v2) => λ h => con3(λ p q r => Const(p, q, r), w, o, v, w2, o2, v2, same3_sound(w, o, v, w2, o2, v2, h)), _ => λ h => absurd(h) },
+        Move(w, o, v) => λ b => match b { Move(w2, o2, v2) => λ h => con3(λ p q r => Move(p, q, r), w, o, v, w2, o2, v2, same3_sound(w, o, v, w2, o2, v2, h)), _ => λ h => absurd(h) },
+        Add(w, o, l, r) => λ b => match b { Add(w2, o2, l2, r2) => λ h => con4(λ p q s t => Add(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        Sub(w, o, l, r) => λ b => match b { Sub(w2, o2, l2, r2) => λ h => con4(λ p q s t => Sub(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        BitAnd(w, o, l, r) => λ b => match b { BitAnd(w2, o2, l2, r2) => λ h => con4(λ p q s t => BitAnd(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        BitOr(w, o, l, r) => λ b => match b { BitOr(w2, o2, l2, r2) => λ h => con4(λ p q s t => BitOr(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        BitXor(w, o, l, r) => λ b => match b { BitXor(w2, o2, l2, r2) => λ h => con4(λ p q s t => BitXor(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        ShiftLeft(w, o, l, r) => λ b => match b { ShiftLeft(w2, o2, l2, r2) => λ h => con4(λ p q s t => ShiftLeft(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        LogicalShiftRight(w, o, l, r) => λ b => match b { LogicalShiftRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => LogicalShiftRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        RotateRight(w, o, l, r) => λ b => match b { RotateRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => RotateRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        ArithmeticShiftRight(w, o, l, r) => λ b => match b { ArithmeticShiftRight(w2, o2, l2, r2) => λ h => con4(λ p q s t => ArithmeticShiftRight(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        UnsignedLessThan(w, o, l, r) => λ b => match b { UnsignedLessThan(w2, o2, l2, r2) => λ h => con4(λ p q s t => UnsignedLessThan(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        SignedLessThan(w, o, l, r) => λ b => match b { SignedLessThan(w2, o2, l2, r2) => λ h => con4(λ p q s t => SignedLessThan(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        Equal(w, o, l, r) => λ b => match b { Equal(w2, o2, l2, r2) => λ h => con4(λ p q s t => Equal(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        BufferLoad(w, o, v) => λ b => match b { BufferLoad(w2, o2, v2) => λ h => con3(λ p q r => BufferLoad(p, q, r), w, o, v, w2, o2, v2, same3_sound(w, o, v, w2, o2, v2, h)), _ => λ h => absurd(h) },
+        BufferStore(w, o, l, r) => λ b => match b { BufferStore(w2, o2, l2, r2) => λ h => con4(λ p q s t => BufferStore(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        Resize(w, o, l, r) => λ b => match b { Resize(w2, o2, l2, r2) => λ h => con4(λ p q s t => Resize(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        SignResize(w, o, l, r) => λ b => match b { SignResize(w2, o2, l2, r2) => λ h => con4(λ p q s t => SignResize(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        TableRead(w, o, l, r, es) => λ b => match b {
+            TableRead(w2, o2, l2, r2, es2) => λ h => {
+                let parts = Bool::and_true_parts(same4(w, o, l, r, w2, o2, l2, r2), entries_same(es, es2), h);
+                trans(con4(λ p q s t => TableRead(p, q, s, t, es), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, parts.left)),
+                    cong_fn<List<Nat>, Node>(λ l => TableRead(w2, o2, l2, r2, l), entries_same_sound(es, es2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        WideLoad(w, o, l, r) => λ b => match b { WideLoad(w2, o2, l2, r2) => λ h => con4(λ p q s t => WideLoad(p, q, s, t), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, h)), _ => λ h => absurd(h) },
+        WideStore(w, o, l, r, v) => λ b => match b {
+            WideStore(w2, o2, l2, r2, v2) => λ h => {
+                let parts = Bool::and_true_parts(same4(w, o, l, r, w2, o2, l2, r2), v.same(v2), h);
+                trans(con4(λ p q s t => WideStore(p, q, s, t, v), w, o, l, r, w2, o2, l2, r2, same4_sound(w, o, l, r, w2, o2, l2, r2, parts.left)),
+                    cong_fn<Nat, Node>(λ n => WideStore(w2, o2, l2, r2, n), v.same_sound(v2, parts.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        ByteSwap(w, o, v) => λ b => match b { ByteSwap(w2, o2, v2) => λ h => con3(λ p q r => ByteSwap(p, q, r), w, o, v, w2, o2, v2, same3_sound(w, o, v, w2, o2, v2, h)), _ => λ h => absurd(h) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Facts: nodes that hold of the activation's valuation, by the id written
+
+fn nodes_have(nodes: List<Node>, node: Node) → Bool {
+    match nodes { Nil => False, Cons(fact, rest) => fact.same(node) || nodes_have(rest, node) }
+}
+
+theorem nodes_have_holds(values: Valuation(), node: Node, nodes: List<Node>): NodesHold(values, nodes) → nodes_have(nodes, node) = True →
+    NodeHolds(values, node) {
+    match nodes {
+        Nil => λ _ h => absurd(h),
+        Cons(fact, rest) => λ held h => match Bool::or_true_parts(fact.same(node), nodes_have(rest, node), h) {
+            Inl(here) => j(fact.same_sound(node, here), λ n _ => NodeHolds(values, n), held.left),
+            Inr(there) => nodes_have_holds(values, node, rest, held.right, there),
+        },
+    }
+}
+
+// What a replay remembers of the buffers as they are where it stands: a
+// node that read them, or a word that is bytes of one joined, the first
+// byte the most significant, and then shifted (`buffer_join`).
+inductive Memory { Read(node: Node), Bytes(id: Nat, buffer: Nat, index: Nat, count: Nat, shift: Nat) }
+
+fn Memory::Holds(self memory: Memory, values: Valuation(), buffers: Buffers()) → Type {
+    match memory {
+        Read(node) => NodeHolds(values, node, buffers := buffers),
+        Bytes(id, buffer, index, count, shift) => values(64, id) = buffer_join(buffers, buffer, values(64, index).toNat(), count).shift_left(shift),
+    }
+}
+
+fn MemoriesHold(values: Valuation(), buffers: Buffers(), memories: List<Memory>) → Type {
+    match memories { Nil => True, Cons(memory, rest) => memory.Holds(values, buffers) ∧ MemoriesHold(values, buffers, rest) }
+}
+
+fn Memory::same(self a: Memory, b: Memory) → Bool {
+    match a {
+        Read(node) => match b { Read(other) => node.same(other), _ => False },
+        Bytes(id, buffer, index, count, shift) => match b {
+            Bytes(id2, buffer2, index2, count2, shift2) => id.same(id2) && same4(buffer, index, count, shift, buffer2, index2, count2, shift2),
+            _ => False,
+        },
+    }
+}
+
+theorem Memory::same_sound(self a: Memory): (b: Memory) → a.same(b) = True → a = b {
+    match a {
+        Read(node) => λ b => match b {
+            Read(other) => λ h => cong_fn<Node, Memory>(λ n => Read(n), node.same_sound(other, h)),
+            _ => λ h => absurd(h),
+        },
+        Bytes(id, buffer, index, count, shift) => λ b => match b {
+            Bytes(id2, buffer2, index2, count2, shift2) => λ h => {
+                let p = Bool::and_true_parts(id.same(id2), same4(buffer, index, count, shift, buffer2, index2, count2, shift2), h);
+                let e = same4_sound(buffer, index, count, shift, buffer2, index2, count2, shift2, p.right);
+                trans(cong_fn<Nat, Memory>(λ n => Bytes(n, buffer, index, count, shift), id.same_sound(id2, p.left)),
+                    trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, n, index, count, shift), e.left),
+                        trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, n, count, shift), e.right.left),
+                            trans(cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, index2, n, shift), e.right.right.left),
+                                cong_fn<Nat, Memory>(λ n => Bytes(id2, buffer2, index2, count2, n), e.right.right.right)))))
+            },
+            _ => λ h => absurd(h),
+        },
+    }
+}
+
+fn memories_have(memories: List<Memory>, memory: Memory) → Bool {
+    match memories { Nil => False, Cons(known, rest) => known.same(memory) || memories_have(rest, memory) }
+}
+
+theorem memories_have_hold(values: Valuation(), buffers: Buffers(), memory: Memory, memories: List<Memory>): MemoriesHold(values, buffers, memories) →
+    memories_have(memories, memory) = True → memory.Holds(values, buffers) {
+    match memories {
+        Nil => λ _ h => absurd(h),
+        Cons(known, rest) => λ held h => match Bool::or_true_parts(known.same(memory), memories_have(rest, memory), h) {
+            Inl(here) => j(known.same_sound(memory, here), λ m _ => m.Holds(values, buffers), held.left),
+            Inr(there) => memories_have_hold(values, buffers, memory, rest, held.right, there),
+        },
+    }
+}
+
+// A word, as a number, lies between two numbers.
+record Range { low: Nat, high: Nat }
+
+fn Range::Holds(self range: Range, word: BitVec(64)) → Type { (range.low <= word.toNat()) ∧ (word.toNat() <= range.high) }
+
+// The greatest word, and the range every word is in.
+fn word_top() → Nat { 18446744073709551615 }
+fn Range::any() → Range { Range(0, word_top()) }
+
+theorem Range::any_holds(word: BitVec(64)): Range::any().Holds(word) {
+    ⟨trivial, word.toNat().lt_succ_iff_le(word_top()).mp(BitVec::toNat_lt_pow(64, word))⟩
+}
+
+// Both of two ranges.
+fn Range::meet(self a: Range, b: Range) → Range {
+    Range(match a.low.leb(b.low) { True => b.low, False => a.low }, match a.high.leb(b.high) { True => a.high, False => b.high })
+}
+
+theorem Range::meet_holds(self a: Range, b: Range, word: BitVec(64), first: a.Holds(word), second: b.Holds(word)): a.meet(b).Holds(word) {
+    ⟨(match a.low.leb(b.low) as λ c => (match c { True => b.low, False => a.low }) <= word.toNat() { True => second.left, False => first.left }),
+        (match a.high.leb(b.high) as λ c => word.toNat() <= (match c { True => a.high, False => b.high }) { True => first.right, False => second.right })⟩
+}
+
+// `a` says at least what `b` does.
+fn Range::inside(self a: Range, b: Range) → Bool { b.low.leb(a.low) && a.high.leb(b.high) }
+
+theorem Range::inside_holds(self a: Range, b: Range, word: BitVec(64), inside: a.inside(b) = True, held: a.Holds(word)): b.Holds(word) {
+    let both = Bool::and_true_parts(b.low.leb(a.low), a.high.leb(b.high), inside);
+    ⟨Nat::le_trans(b.low, a.low, word.toNat(), b.low.leb_sound(a.low, Bool::is_true_of_eq(both.left)), held.left),
+        Nat::le_trans(word.toNat(), a.high, b.high, held.right, a.high.leb_sound(b.high, Bool::is_true_of_eq(both.right)))⟩
+}
+
+// A word and a number at most another word and a number, the words as
+// numbers: `low + add ≤ high + more`. What a comparison's bit says of its
+// operands where no range of either is known, and what a sum with a
+// constant is to its operand.
+record Order { low: Nat, add: Nat, high: Nat, more: Nat }
+
+fn Order::Holds(self order: Order, values: Valuation()) → Type {
+    values(64, order.low).toNat() + order.add <= values(64, order.high).toNat() + order.more
+}
+
+// `known` says at least what `wanted` does: of the same two words, with no
+// less between them.
+fn Order::gives(self known: Order, wanted: Order) → Bool {
+    known.low.same(wanted.low) && (known.high.same(wanted.high) && (wanted.add + known.more).leb(known.add + wanted.more))
+}
+
+theorem order_weaker(x, y, m, n, p, q: Nat, known: x + m <= y + n, slack: p + n <= m + q): x + p <= y + q { omega(known, slack) }
+
+theorem Order::gives_holds(self known: Order, wanted: Order, values: Valuation(), gives: known.gives(wanted) = True, held: known.Holds(values)):
+    wanted.Holds(values) {
+    let c1 = Bool::and_true_parts(known.low.same(wanted.low), known.high.same(wanted.high) && (wanted.add + known.more).leb(known.add + wanted.more), gives);
+    let c2 = Bool::and_true_parts(known.high.same(wanted.high), (wanted.add + known.more).leb(known.add + wanted.more), c1.right);
+    j(known.low.same_sound(wanted.low, c1.left), λ id _ => values(64, id).toNat() + wanted.add <= values(64, wanted.high).toNat() + wanted.more,
+        j(known.high.same_sound(wanted.high, c2.left), λ id _ => values(64, known.low).toNat() + wanted.add <= values(64, id).toNat() + wanted.more,
+            order_weaker(values(64, known.low).toNat(), values(64, known.high).toNat(), known.add, known.more, wanted.add, wanted.more, held,
+                (wanted.add + known.more).leb_sound(known.add + wanted.more, Bool::is_true_of_eq(c2.right)))))
+}
+
+fn OrdersHold(values: Valuation(), orders: List<Order>) → Type {
+    match orders { Nil => True, Cons(order, rest) => order.Holds(values) ∧ OrdersHold(values, rest) }
+}
+
+fn orders_give(orders: List<Order>, wanted: Order) → Bool {
+    match orders { Nil => False, Cons(known, rest) => known.gives(wanted) || orders_give(rest, wanted) }
+}
+
+theorem orders_give_holds(values: Valuation(), wanted: Order, orders: List<Order>): OrdersHold(values, orders) → orders_give(orders, wanted) = True →
+    wanted.Holds(values) {
+    match orders {
+        Nil => λ _ h => absurd(h),
+        Cons(known, rest) => λ held h => match Bool::or_true_parts(known.gives(wanted), orders_give(rest, wanted), h) {
+            Inl(here) => known.gives_holds(wanted, values, here, held.left),
+            Inr(there) => orders_give_holds(values, wanted, rest, held.right, there),
+        },
+    }
+}
+
+// What a replay knows. Of the valuation: a node's equation, a word's
+// range, or two words' order. Of the buffers as they are where the replay
+// stands: a node that read them, or a word that is bytes of one joined,
+// each known until something stores.
+inductive Fact {
+    Is(node: Node),
+    Within(id: Nat, low: Nat, high: Nat),
+    AtMost(low: Nat, add: Nat, high: Nat, more: Nat),
+    Loaded(node: Node),
+    Joined(id: Nat, buffer: Nat, index: Nat, count: Nat, shift: Nat),
+}
+
+fn Fact::Holds(self fact: Fact, values: Valuation(), buffers: Buffers()) → Type {
+    match fact {
+        Is(node) => NodeHolds(values, node),
+        Within(id, low, high) => Range(low, high).Holds(values(64, id)),
+        AtMost(low, add, high, more) => Order(low, add, high, more).Holds(values),
+        Loaded(node) => Read(node).Holds(values, buffers),
+        Joined(id, buffer, index, count, shift) => Bytes(id, buffer, index, count, shift).Holds(values, buffers),
+    }
+}
+
+fn FactsHold(values: Valuation(), buffers: Buffers(), facts: List<Fact>) → Type {
+    match facts { Nil => True, Cons(fact, rest) => fact.Holds(values, buffers) ∧ FactsHold(values, buffers, rest) }
+}
+
+record Facts { by: NatMap<List<Node>>, within: NatMap<Range>, orders: List<Order>, loaded: List<Memory> }
+
+fn Facts::none() → Facts { Facts(NatMap::empty(), NatMap::empty(), [], []) }
+
+// The facts about the word `id`.
+fn Facts::about(self facts: Facts, id: Nat) → List<Node> { match nat_map_get(facts.by, id) { None => [], Some(nodes) => nodes } }
+
+fn Facts::has(self facts: Facts, node: Node) → Bool { nodes_have(facts.about(node_output(node).id), node) }
+
+fn Facts::has_all(self facts: Facts, nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => facts.has(node) && facts.has_all(rest) }
+}
+
+fn Facts::add(self facts: Facts, node: Node) → Facts {
+    Facts(nat_map_set(facts.by, node_output(node).id, Cons(node, facts.about(node_output(node).id))), facts.within, facts.orders, facts.loaded)
+}
+
+// The range known of the word `id`.
+fn Facts::range(self facts: Facts, id: Nat) → Range { match nat_map_get(facts.within, id) { None => Range::any(), Some(range) => range } }
+
+// The word `id` is in `range` too.
+fn Facts::bound(self facts: Facts, id: Nat, range: Range) → Facts {
+    Facts(facts.by, nat_map_set(facts.within, id, facts.range(id).meet(range)), facts.orders, facts.loaded)
+}
+
+// Two words are in `order` too.
+fn Facts::rank(self facts: Facts, order: Order) → Facts { Facts(facts.by, facts.within, Cons(order, facts.orders), facts.loaded) }
+
+// Something more of the buffers as they are.
+fn Facts::keep(self facts: Facts, memory: Memory) → Facts { Facts(facts.by, facts.within, facts.orders, Cons(memory, facts.loaded)) }
+
+// A node that read the buffers as they are.
+fn Facts::recall(self facts: Facts, node: Node) → Facts { facts.keep(Read(node)) }
+
+// The buffers may have changed: what was read of them is known no longer.
+fn Facts::forget(self facts: Facts) → Facts { Facts(facts.by, facts.within, facts.orders, []) }
+
+// Everything kept of the buffers holds of `values` over `buffers`.
+fn Facts::Remembered(self facts: Facts, values: Valuation(), buffers: Buffers()) → Type { MemoriesHold(values, buffers, facts.loaded) }
+
+// Every fact about the valuation holds of `values`.
+fn Facts::Hold(self facts: Facts, values: Valuation()) → Type {
+    ((id: Nat) → (nodes: List<Node>) → nat_map_get(facts.by, id) = Some(nodes) → NodesHold(values, nodes)) ∧
+        (((id: Nat) → (range: Range) → nat_map_get(facts.within, id) = Some(range) → range.Holds(values(64, id))) ∧ OrdersHold(values, facts.orders))
+}
+
+theorem Facts::none_hold(values: Valuation()): Facts::none().Hold(values) {
+    ⟨λ id nodes got => absurd(got), ⟨λ id range got => absurd(got), trivial⟩⟩
+}
+
+theorem Facts::range_holds(self facts: Facts, values: Valuation(), held: facts.Hold(values), id: Nat): facts.range(id).Holds(values(64, id)) {
+    (match nat_map_get(facts.within, id) as λ o => nat_map_get(facts.within, id) = o →
+        (match o { None => Range::any(), Some(range) => range }).Holds(values(64, id)) {
+        None => λ _ => Range::any_holds(values(64, id)),
+        Some(range) => λ got => held.right.left(id, range, got),
+    })(refl)
+}
+
+theorem Facts::bound_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), id: Nat, range: Range,
+    holds: range.Holds(values(64, id))): facts.bound(id, range).Hold(values) {
+    let met = facts.range(id).meet(range);
+    ⟨held.left, ⟨λ other found got => match id.eq_dec(other) {
+        Inl(same) => {
+            let here: (nat_map_get(nat_map_set(facts.within, id, met), other) = Some(met)) =
+                j(same, λ i _ => nat_map_get(nat_map_set(facts.within, id, met), i) = Some(met), nat_map_get_set_same(facts.within, id, met));
+            j(same, λ i _ => found.Holds(values(64, i)),
+                j(Option::some_inj(met, found, trans(sym(here), got)), λ r _ => r.Holds(values(64, id)),
+                    facts.range(id).meet_holds(range, values(64, id), facts.range_holds(values, held, id), holds)))
+        },
+        Inr(differs) => held.right.left(other, found, trans(sym(nat_map_get_set_other(facts.within, id, met, other, differs)), got)),
+    }, held.right.right⟩⟩
+}
+
+theorem Facts::rank_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), order: Order, holds: order.Holds(values)):
+    facts.rank(order).Hold(values) {
+    ⟨held.left, ⟨held.right.left, ⟨holds, held.right.right⟩⟩⟩
+}
+
+theorem Facts::about_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), id: Nat): NodesHold(values, facts.about(id)) {
+    (match nat_map_get(facts.by, id) as λ o => nat_map_get(facts.by, id) = o →
+        NodesHold(values, match o { None => [], Some(nodes) => nodes }) {
+        None => λ _ => trivial,
+        Some(nodes) => λ got => held.left(id, nodes, got),
+    })(refl)
+}
+
+theorem Facts::has_holds(self facts: Facts, values: Valuation(), held: facts.Hold(values), node: Node, h: facts.has(node) = True):
+    NodeHolds(values, node) {
+    nodes_have_holds(values, node, facts.about(node_output(node).id), facts.about_hold(values, held, node_output(node).id), h)
+}
+
+theorem Facts::has_all_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), nodes: List<Node>):
+    facts.has_all(nodes) = True → NodesHold(values, nodes) {
+    match nodes {
+        Nil => λ _ => trivial,
+        Cons(node, rest) => λ h => {
+            let both = Bool::and_true_parts(facts.has(node), facts.has_all(rest), h);
+            ⟨facts.has_holds(values, held, node, both.left), facts.has_all_hold(values, held, rest, both.right)⟩
+        },
+    }
+}
+
+theorem Facts::add_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), node: Node, holds: NodeHolds(values, node)):
+    facts.add(node).Hold(values) {
+    let k = node_output(node).id;
+    let bucket = Cons(node, facts.about(k));
+    ⟨λ id nodes got => match k.eq_dec(id) {
+        Inl(same) => {
+            let here: (nat_map_get(nat_map_set(facts.by, k, bucket), id) = Some(bucket)) =
+                j(same, λ i _ => nat_map_get(nat_map_set(facts.by, k, bucket), i) = Some(bucket), nat_map_get_set_same(facts.by, k, bucket));
+            j(Option::some_inj(bucket, nodes, trans(sym(here), got)), λ ns _ => NodesHold(values, ns),
+                ⟨holds, facts.about_hold(values, held, k)⟩)
+        },
+        Inr(other) => held.left(id, nodes, trans(sym(nat_map_get_set_other(facts.by, k, bucket, id, other)), got)),
+    }, held.right⟩
+}
+
+// A fact is known: a node among the facts, a range a known one is inside,
+// an order a known one gives, or something among what is kept of the
+// buffers.
+fn Facts::knows(self facts: Facts, fact: Fact) → Bool {
+    match fact {
+        Is(node) => facts.has(node),
+        Within(id, low, high) => facts.range(id).inside(Range(low, high)),
+        AtMost(low, add, high, more) => orders_give(facts.orders, Order(low, add, high, more)),
+        Loaded(node) => memories_have(facts.loaded, Read(node)),
+        Joined(id, buffer, index, count, shift) => memories_have(facts.loaded, Bytes(id, buffer, index, count, shift)),
+    }
+}
+
+theorem Facts::knows_holds(self facts: Facts, values: Valuation(), buffers: Buffers(), held: facts.Hold(values), loaded: facts.Remembered(values, buffers),
+    fact: Fact): facts.knows(fact) = True → fact.Holds(values, buffers) {
+    match fact {
+        Is(node) => λ h => facts.has_holds(values, held, node, h),
+        Within(id, low, high) => λ h => facts.range(id).inside_holds(Range(low, high), values(64, id), h, facts.range_holds(values, held, id)),
+        AtMost(low, add, high, more) => λ h => orders_give_holds(values, Order(low, add, high, more), facts.orders, held.right.right, h),
+        Loaded(node) => λ h => memories_have_hold(values, buffers, Read(node), facts.loaded, loaded, h),
+        Joined(id, buffer, index, count, shift) => λ h => memories_have_hold(values, buffers, Bytes(id, buffer, index, count, shift), facts.loaded, loaded, h),
+    }
+}
+
+fn Facts::knows_all(self facts: Facts, wanted: List<Fact>) → Bool {
+    match wanted { Nil => True, Cons(fact, rest) => facts.knows(fact) && facts.knows_all(rest) }
+}
+
+theorem Facts::knows_all_hold(self facts: Facts, values: Valuation(), buffers: Buffers(), held: facts.Hold(values),
+    loaded: facts.Remembered(values, buffers), wanted: List<Fact>): facts.knows_all(wanted) = True → FactsHold(values, buffers, wanted) {
+    match wanted {
+        Nil => λ _ => trivial,
+        Cons(fact, rest) => λ h => {
+            let both = Bool::and_true_parts(facts.knows(fact), facts.knows_all(rest), h);
+            ⟨facts.knows_holds(values, buffers, held, loaded, fact, both.left), facts.knows_all_hold(values, buffers, held, loaded, rest, both.right)⟩
+        },
+    }
+}
+
+fn Facts::with(self facts: Facts, fact: Fact) → Facts {
+    match fact {
+        Is(node) => facts.add(node),
+        Within(id, low, high) => facts.bound(id, Range(low, high)),
+        AtMost(low, add, high, more) => facts.rank(Order(low, add, high, more)),
+        Loaded(node) => facts.recall(node),
+        Joined(id, buffer, index, count, shift) => facts.keep(Bytes(id, buffer, index, count, shift)),
+    }
+}
+
+theorem Facts::with_hold(self facts: Facts, values: Valuation(), buffers: Buffers(), held: facts.Hold(values), fact: Fact):
+    fact.Holds(values, buffers) → facts.with(fact).Hold(values) {
+    match fact {
+        Is(node) => λ holds => facts.add_hold(values, held, node, holds),
+        Within(id, low, high) => λ holds => facts.bound_hold(values, held, id, Range(low, high), holds),
+        AtMost(low, add, high, more) => λ holds => facts.rank_hold(values, held, Order(low, add, high, more), holds),
+        Loaded(_) => λ _ => held,
+        Joined(_, _, _, _, _) => λ _ => held,
+    }
+}
+
+theorem Facts::with_remembered(self facts: Facts, values: Valuation(), buffers: Buffers(), loaded: facts.Remembered(values, buffers), fact: Fact):
+    fact.Holds(values, buffers) → facts.with(fact).Remembered(values, buffers) {
+    match fact {
+        Is(_) => λ _ => loaded,
+        Within(_, _, _) => λ _ => loaded,
+        AtMost(_, _, _, _) => λ _ => loaded,
+        Loaded(_) => λ holds => ⟨holds, loaded⟩,
+        Joined(_, _, _, _, _) => λ holds => ⟨holds, loaded⟩,
+    }
+}
+
+// A node that touches no buffer holds where it ran, and runs where it holds.
+theorem Node::pure_holds(self node: Node, values: Valuation(), before, after: Buffers()): node.pure() = True →
+    node.Runs(values, before, after) → NodeHolds(values, node) {
+    match node {
+        Const(_, _, _) => λ _ ran => ran.left,
+        Move(_, _, _) => λ _ ran => ran.left,
+        Add(_, _, _, _) => λ _ ran => ran.left,
+        Sub(_, _, _, _) => λ _ ran => ran.left,
+        BitAnd(_, _, _, _) => λ _ ran => ran.left,
+        BitOr(_, _, _, _) => λ _ ran => ran.left,
+        BitXor(_, _, _, _) => λ _ ran => ran.left,
+        ShiftLeft(_, _, _, _) => λ _ ran => ran.left,
+        LogicalShiftRight(_, _, _, _) => λ _ ran => ran.left,
+        RotateRight(_, _, _, _) => λ _ ran => ran.left,
+        ArithmeticShiftRight(_, _, _, _) => λ _ ran => ran.left,
+        UnsignedLessThan(_, _, _, _) => λ _ ran => ran.left,
+        SignedLessThan(_, _, _, _) => λ _ ran => ran.left,
+        Equal(_, _, _, _) => λ _ ran => ran.left,
+        BufferLoad(_, _, _) => λ p _ => absurd(p),
+        BufferStore(_, _, _, _) => λ p _ => absurd(p),
+        Resize(_, _, _, _) => λ _ ran => ran.left,
+        SignResize(_, _, _, _) => λ _ ran => ran.left,
+        TableRead(_, _, _, _, _) => λ _ ran => ran.left,
+        WideLoad(_, _, _, _) => λ p _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ ran => ran.left,
+    }
+}
+theorem Node::pure_runs(self node: Node, values: Valuation(), file: Buffers()): node.pure() = True →
+    NodeHolds(values, node) → node.Runs(values, file, file) {
+    match node {
+        Const(_, _, _) => λ _ holds => ⟨holds, refl⟩,
+        Move(_, _, _) => λ _ holds => ⟨holds, refl⟩,
+        Add(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        Sub(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        BitAnd(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        BitOr(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        BitXor(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        ShiftLeft(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        LogicalShiftRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        RotateRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        ArithmeticShiftRight(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        UnsignedLessThan(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        SignedLessThan(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        Equal(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        BufferLoad(_, _, _) => λ p _ => absurd(p),
+        BufferStore(_, _, _, _) => λ p _ => absurd(p),
+        Resize(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        SignResize(_, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        TableRead(_, _, _, _, _) => λ _ holds => ⟨holds, refl⟩,
+        WideLoad(_, _, _, _) => λ p _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ holds => ⟨holds, refl⟩,
+    }
+}
+
+// A byte read as a word is below 256.
+theorem byte_word_within(byte: BitVec(8)): Range(0, 255).Holds(byte_word(byte)) {
+    ⟨trivial, j(BitVec::ofNat_toNat_zero_extend(8, 56, byte), λ w _ => w.toNat() <= 255,
+        Nat::le_trans(BitVec::ofNat(byte.toNat(), n := 64).toNat(), byte.toNat(), 255, BitVec::toNat_ofNat_le(64, byte.toNat()),
+            BitVec::toNat_lt_pow(8, byte)))⟩
+}
+
+// The word a load or a store writes: a byte of a buffer.
+fn Node::byte_output(self node: Node) → Option<Nat> {
+    match node { BufferLoad(output, _, _) => Some(output), BufferStore(output, _, _, _) => Some(output), _ => None }
+}
+
+theorem Node::byte_output_within(self node: Node, values: Valuation(), before, after: Buffers(), output: Nat):
+    node.byte_output() = Some(output) → node.Runs(values, before, after) → Range(0, 255).Holds(values(64, output)) {
+    match node {
+        BufferLoad(o, buffer, index) => λ is ran => j(Option::some_inj(o, output, is), λ id _ => Range(0, 255).Holds(values(64, id)),
+            j(sym(ran.left), λ w _ => Range(0, 255).Holds(w), byte_word_within(buffer_byte(before, buffer, values(64, index).toNat())))),
+        BufferStore(o, buffer, index, _) => λ is ran => j(Option::some_inj(o, output, is), λ id _ => Range(0, 255).Holds(values(64, id)),
+            j(sym(ran.right), λ w _ => Range(0, 255).Holds(w), byte_word_within(buffer_byte(after, buffer, values(64, index).toNat())))),
+        _ => λ is _ => absurd(is),
+    }
+}
+
+// What a node of the old body leaves known of the valuation: its
+// equation, where it touches no buffer, and of a load or a store that the
+// word it writes is a byte.
+fn Facts::know(self facts: Facts, node: Node) → Facts {
+    match node.pure() {
+        True => facts.add(node),
+        False => match node.byte_output() { None => facts, Some(output) => facts.bound(output, Range(0, 255)) },
+    }
+}
+
+theorem Facts::know_hold(self facts: Facts, values: Valuation(), node: Node, before, after: Buffers(), held: facts.Hold(values),
+    ran: node.Runs(values, before, after)): facts.know(node).Hold(values) {
+    (match node.pure() as λ b => node.pure() = b →
+        (match b { True => facts.add(node), False => match node.byte_output() { None => facts, Some(output) => facts.bound(output, Range(0, 255)) } }).Hold(values) {
+        True => λ p => facts.add_hold(values, held, node, node.pure_holds(values, before, after, p, ran)),
+        False => λ _ => (match node.byte_output() as λ found => node.byte_output() = found →
+            (match found { None => facts, Some(output) => facts.bound(output, Range(0, 255)) }).Hold(values) {
+            None => λ _ => held,
+            Some(output) => λ is => facts.bound_hold(values, held, output, Range(0, 255), node.byte_output_within(values, before, after, output, is, ran)),
+        })(refl),
+    })(refl)
+}
+
+theorem Facts::know_remembered(self facts: Facts, values: Valuation(), buffers: Buffers(), node: Node, loaded: facts.Remembered(values, buffers)):
+    facts.know(node).Remembered(values, buffers) {
+    (match node.pure() as λ b =>
+        (match b { True => facts.add(node), False => match node.byte_output() { None => facts, Some(output) => facts.bound(output, Range(0, 255)) } })
+            .Remembered(values, buffers) {
+        True => loaded,
+        False => (match node.byte_output() as λ found =>
+            (match found { None => facts, Some(output) => facts.bound(output, Range(0, 255)) }).Remembered(values, buffers) {
+            None => loaded,
+            Some(_) => loaded,
+        }),
+    })
+}
+
+// What a node of the old body leaves known of the buffers. A store leaves
+// the byte it read back and nothing from before it; a node that read them
+// is recalled; one that touches no buffer changes nothing.
+fn Facts::see(self facts: Facts, node: Node) → Facts {
+    match node.stores() {
+        True => match node { BufferStore(output, buffer, index, _) => facts.forget().recall(BufferLoad(output, buffer, index)), _ => facts.forget() },
+        False => match node.pure() { True => facts, False => facts.recall(node) },
+    }
+}
+
+theorem Facts::see_hold(self facts: Facts, values: Valuation(), node: Node, held: facts.Hold(values)): facts.see(node).Hold(values) {
+    (match node.stores() as λ b => (match b {
+        True => match node { BufferStore(output, buffer, index, _) => facts.forget().recall(BufferLoad(output, buffer, index)), _ => facts.forget() },
+        False => match node.pure() { True => facts, False => facts.recall(node) },
+    }).Hold(values) {
+        True => (match node as λ n =>
+            (match n { BufferStore(output, buffer, index, _) => facts.forget().recall(BufferLoad(output, buffer, index)), _ => facts.forget() }).Hold(values) {
+            BufferStore(_, _, _, _) => held,
+            _ => held,
+        }),
+        False => (match node.pure() as λ p => (match p { True => facts, False => facts.recall(node) }).Hold(values) { True => held, False => held }),
+    })
+}
+
+// The reads known before a node are known after it where it stores
+// nothing, since the buffers are then the same; where it stores, what is
+// known after it is its own.
+theorem Facts::see_remembered(self facts: Facts, values: Valuation(), node: Node, before, after: Buffers(),
+    loaded: node.stores() = False → facts.Remembered(values, before), ran: node.Runs(values, before, after)): facts.see(node).Remembered(values, after) {
+    (match node.stores() as λ b => node.stores() = b → (match b {
+        True => match node { BufferStore(output, buffer, index, _) => facts.forget().recall(BufferLoad(output, buffer, index)), _ => facts.forget() },
+        False => match node.pure() { True => facts, False => facts.recall(node) },
+    }).Remembered(values, after) {
+        True => λ _ => (match node as λ n => n.Runs(values, before, after) →
+            (match n { BufferStore(output, buffer, index, _) => facts.forget().recall(BufferLoad(output, buffer, index)), _ => facts.forget() })
+                .Remembered(values, after) {
+            BufferStore(_, _, _, _) => λ stored => ⟨stored.right, trivial⟩,
+            _ => λ _ => trivial,
+        })(ran),
+        False => λ quiet => {
+            let still = node.runs_still(values, before, after, j(sym(quiet), λ b _ => (!b).IsTrue(), trivial), ran);
+            j(sym(still.left), λ file _ => (match node.pure() { True => facts, False => facts.recall(node) }).Remembered(values, file),
+                (match node.pure() as λ p => (match p { True => facts, False => facts.recall(node) }).Remembered(values, before) {
+                    True => loaded(quiet),
+                    False => ⟨still.right, loaded(quiet)⟩,
+                }))
+        },
+    })(refl)
+}
+
+// The facts after a node of the old body.
+fn Facts::learn(self facts: Facts, node: Node) → Facts { facts.see(node).know(node) }
+
+theorem Facts::learn_hold(self facts: Facts, values: Valuation(), node: Node, before, after: Buffers(), held: facts.Hold(values),
+    ran: node.Runs(values, before, after)): facts.learn(node).Hold(values) {
+    facts.see(node).know_hold(values, node, before, after, facts.see_hold(values, node, held), ran)
+}
+
+theorem Facts::learn_remembered(self facts: Facts, values: Valuation(), node: Node, before, after: Buffers(),
+    loaded: node.stores() = False → facts.Remembered(values, before), ran: node.Runs(values, before, after)): facts.learn(node).Remembered(values, after) {
+    facts.see(node).know_remembered(values, after, node, facts.see_remembered(values, node, before, after, loaded, ran))
+}
+
+fn Facts::learn_all(self facts: Facts, nodes: List<Node>) → Facts {
+    match nodes { Nil => facts, Cons(node, rest) => facts.learn(node).learn_all(rest) }
+}
+
+theorem Facts::learn_all_hold(values: Valuation(), nodes: List<Node>): (facts: Facts) → (before, after: Buffers()) →
+    facts.Hold(values) → NodesRun(nodes, values, before, after) → facts.learn_all(nodes).Hold(values) {
+    match nodes {
+        Nil => λ facts before after held _ => held,
+        Cons(node, rest) => λ facts before after held ran =>
+            Facts::learn_all_hold(values, rest, facts.learn(node), ran.witness, after,
+                facts.learn_hold(values, node, before, ran.witness, held, ran.proof.left), ran.proof.right),
+    }
+}
+
+theorem Facts::learn_all_remembered(values: Valuation(), nodes: List<Node>): (facts: Facts) → (before, after: Buffers()) →
+    facts.Remembered(values, before) → NodesRun(nodes, values, before, after) → facts.learn_all(nodes).Remembered(values, after) {
+    match nodes {
+        Nil => λ facts before after loaded ran => j(sym(ran), λ file _ => facts.Remembered(values, file), loaded),
+        Cons(node, rest) => λ facts before after loaded ran =>
+            Facts::learn_all_remembered(values, rest, facts.learn(node), ran.witness, after,
+                facts.learn_remembered(values, node, before, ran.witness, λ _ => loaded, ran.proof.left), ran.proof.right),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A node reading other ids
+
+// Whether `new` may be read where `old` is, at `width`: it is the same id,
+// or the facts say `old` is a move of it.
+fn Facts::reads(self facts: Facts, width, old, new: Nat) → Bool { old.same(new) || facts.has(Move(width, old, new)) }
+
+theorem Facts::reads_same(self facts: Facts, values: Valuation(), held: facts.Hold(values), width, old, new: Nat,
+    h: facts.reads(width, old, new) = True): values(width, old) = values(width, new) {
+    match Bool::or_true_parts(old.same(new), facts.has(Move(width, old, new)), h) {
+        Inl(same) => cong_fn<Nat, BitVec(width)>(λ id => values(width, id), old.same_sound(new, same)),
+        Inr(moved) => facts.has_holds(values, held, Move(width, old, new), moved),
+    }
+}
+
+// The same of a list of words.
+fn Facts::reads_all(self facts: Facts, old, new: List<Nat>) → Bool {
+    match old {
+        Nil => match new { Nil => True, Cons(_, _) => False },
+        Cons(id, rest) => match new { Nil => False, Cons(other, more) => facts.reads(64, id, other) && facts.reads_all(rest, more) },
+    }
+}
+
+theorem Facts::reads_all_same(self facts: Facts, values: Valuation(), held: facts.Hold(values), old: List<Nat>): (new: List<Nat>) →
+    facts.reads_all(old, new) = True → words_of(values, old) = words_of(values, new) {
+    match old {
+        Nil => λ new => match new { Nil => λ _ => refl, Cons(_, _) => λ h => absurd(h) },
+        Cons(id, rest) => λ new => match new {
+            Nil => λ h => absurd(h),
+            Cons(other, more) => λ h => {
+                let both = Bool::and_true_parts(facts.reads(64, id, other), facts.reads_all(rest, more), h);
+                eq2(λ (word: BitVec(64)) (words: List<BitVec(64)>) => Cons(word, words), facts.reads_same(values, held, 64, id, other, both.left),
+                    facts.reads_all_same(values, held, rest, more, both.right))
+            },
+        },
+    }
+}
+
+// The node reading `a`, and `b` if it reads two ids, where it read its
+// own: made only where the facts say each is what the node read, at the
+// width the node reads it.
+fn Node::reading(self node: Node, facts: Facts, a, b: Nat) → Option<Node> {
+    match node {
+        Const(_, _, _) => None,
+        Move(w, o, s) => facts.reads(w, s, a).then(Some(Move(w, o, a))),
+        Add(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(Add(w, o, a, b))),
+        Sub(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(Sub(w, o, a, b))),
+        BitAnd(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(BitAnd(w, o, a, b))),
+        BitOr(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(BitOr(w, o, a, b))),
+        BitXor(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(BitXor(w, o, a, b))),
+        ShiftLeft(w, o, v, n) => facts.reads(w, v, a).then(Some(ShiftLeft(w, o, a, n))),
+        LogicalShiftRight(w, o, v, n) => facts.reads(w, v, a).then(Some(LogicalShiftRight(w, o, a, n))),
+        RotateRight(w, o, v, n) => facts.reads(w, v, a).then(Some(RotateRight(w, o, a, n))),
+        ArithmeticShiftRight(w, o, v, n) => facts.reads(w, v, a).then(Some(ArithmeticShiftRight(w, o, a, n))),
+        UnsignedLessThan(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(UnsignedLessThan(w, o, a, b))),
+        SignedLessThan(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(SignedLessThan(w, o, a, b))),
+        Equal(w, o, l, r) => (facts.reads(w, l, a) && facts.reads(w, r, b)).then(Some(Equal(w, o, a, b))),
+        BufferLoad(o, f, i) => facts.reads(64, i, a).then(Some(BufferLoad(o, f, a))),
+        BufferStore(o, f, i, v) => (facts.reads(64, i, a) && facts.reads(64, v, b)).then(Some(BufferStore(o, f, a, b))),
+        Resize(from, to, o, s) => facts.reads(from, s, a).then(Some(Resize(from, to, o, a))),
+        SignResize(from, to, o, s) => facts.reads(from, s, a).then(Some(SignResize(from, to, o, a))),
+        TableRead(w, o, n, i, es) => facts.reads(n, i, a).then(Some(TableRead(w, o, n, a, es))),
+        WideLoad(n, o, f, i) => facts.reads(64, i, a).then(Some(WideLoad(n, o, f, a))),
+        WideStore(n, o, f, i, v) => (facts.reads(64, i, a) && facts.reads(8 * n, v, b)).then(Some(WideStore(n, o, f, a, b))),
+        ByteSwap(w, o, s) => facts.reads(w, s, a).then(Some(ByteSwap(w, o, a))),
+    }
+}
+
+theorem Facts::reads_one(self facts: Facts, values: Valuation(), held: facts.Hold(values), width, old, a: Nat, made, new: Node,
+    h: facts.reads(width, old, a).then(Some(made)) = Some(new)): (values(width, old) = values(width, a)) ∧ (made = new) {
+    let got = Bool::then_some(facts.reads(width, old, a), Some(made), new, h);
+    ⟨facts.reads_same(values, held, width, old, a, got.left), Option::some_inj(made, new, got.right)⟩
+}
+
+theorem Facts::reads_two(self facts: Facts, values: Valuation(), held: facts.Hold(values), width, left, right, a, b: Nat, made, new: Node,
+    h: (facts.reads(width, left, a) && facts.reads(width, right, b)).then(Some(made)) = Some(new)):
+    ((values(width, left) = values(width, a)) ∧ (values(width, right) = values(width, b))) ∧ (made = new) {
+    let got = Bool::then_some(facts.reads(width, left, a) && facts.reads(width, right, b), Some(made), new, h);
+    let both = Bool::and_true_parts(facts.reads(width, left, a), facts.reads(width, right, b), got.left);
+    ⟨⟨facts.reads_same(values, held, width, left, a, both.left), facts.reads_same(values, held, width, right, b, both.right)⟩,
+        Option::some_inj(made, new, got.right)⟩
+}
+
+// The same of two ids read at two widths, as a wide store reads its index
+// and its word.
+theorem Facts::reads_apart(self facts: Facts, values: Valuation(), held: facts.Hold(values), width, left, other, right, a, b: Nat, made, new: Node,
+    h: (facts.reads(width, left, a) && facts.reads(other, right, b)).then(Some(made)) = Some(new)):
+    ((values(width, left) = values(width, a)) ∧ (values(other, right) = values(other, b))) ∧ (made = new) {
+    let got = Bool::then_some(facts.reads(width, left, a) && facts.reads(other, right, b), Some(made), new, h);
+    let both = Bool::and_true_parts(facts.reads(width, left, a), facts.reads(other, right, b), got.left);
+    ⟨⟨facts.reads_same(values, held, width, left, a, both.left), facts.reads_same(values, held, other, right, b, both.right)⟩,
+        Option::some_inj(made, new, got.right)⟩
+}
+
+// It runs wherever the node ran: what it reads is what the node read.
+theorem Node::reading_runs(self node: Node, facts: Facts, values: Valuation(), held: facts.Hold(values), a, b: Nat, before, after: Buffers()):
+    (new: Node) → node.reading(facts, a, b) = Some(new) → node.Runs(values, before, after) → new.Runs(values, before, after) {
+    match node {
+        Const(_, _, _) => λ new made ran => absurd(made),
+        Move(w, o, s) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, s, a, Move(w, o, a), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after), ⟨trans(ran.left, got.left), ran.right⟩)
+        },
+        Add(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, Add(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.add(y), got.left.left, got.left.right)), ran.right⟩)
+        },
+        Sub(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, Sub(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.sub(y), got.left.left, got.left.right)), ran.right⟩)
+        },
+        BitAnd(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, BitAnd(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.band(y), got.left.left, got.left.right)), ran.right⟩)
+        },
+        BitOr(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, BitOr(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bor(y), got.left.left, got.left.right)), ran.right⟩)
+        },
+        BitXor(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, BitXor(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bxor(y), got.left.left, got.left.right)), ran.right⟩)
+        },
+        ShiftLeft(w, o, v, n) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, v, a, ShiftLeft(w, o, a, n), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.shift_left(n), got.left)), ran.right⟩)
+        },
+        LogicalShiftRight(w, o, v, n) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, v, a, LogicalShiftRight(w, o, a, n), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.shift_right(n), got.left)), ran.right⟩)
+        },
+        RotateRight(w, o, v, n) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, v, a, RotateRight(w, o, a, n), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.rotr(n), got.left)), ran.right⟩)
+        },
+        ArithmeticShiftRight(w, o, v, n) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, v, a, ArithmeticShiftRight(w, o, a, n), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(n), got.left)), ran.right⟩)
+        },
+        UnsignedLessThan(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, UnsignedLessThan(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => BitVec::ofBool(x.unsigned_lt_bit(y)), got.left.left, got.left.right)), ran.right⟩)
+        },
+        SignedLessThan(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, SignedLessThan(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => BitVec::ofBool(x.signed_lt_bit(y)), got.left.left, got.left.right)), ran.right⟩)
+        },
+        Equal(w, o, l, r) => λ new made ran => {
+            let got = facts.reads_two(values, held, w, l, r, a, b, Equal(w, o, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => BitVec::ofBool(x.eq_bit(y)), got.left.left, got.left.right)), ran.right⟩)
+        },
+        BufferLoad(o, f, i) => λ new made ran => {
+            let got = facts.reads_one(values, held, 64, i, a, BufferLoad(o, f, a), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(64)) => byte_word(buffer_byte(before, f, x.toNat())), got.left)), ran.right⟩)
+        },
+        BufferStore(o, f, i, v) => λ new made ran => {
+            let got = facts.reads_two(values, held, 64, i, v, a, b, BufferStore(o, f, a, b), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                j(got.left.left, λ x _ => (after = store_byte(before, f, x.toNat(), low_byte(values(64, b)))) ∧
+                        (values(64, o) = byte_word(buffer_byte(after, f, x.toNat()))),
+                    j(got.left.right, λ y _ => (after = store_byte(before, f, values(64, i).toNat(), low_byte(y))) ∧
+                        (values(64, o) = byte_word(buffer_byte(after, f, values(64, i).toNat()))), ran)))
+        },
+        Resize(from, to, o, s) => λ new made ran => {
+            let got = facts.reads_one(values, held, from, s, a, Resize(from, to, o, a), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := to), got.left)), ran.right⟩)
+        },
+        SignResize(from, to, o, s) => λ new made ran => {
+            let got = facts.reads_one(values, held, from, s, a, SignResize(from, to, o, a), new, made);
+            j(got.right, λ n _ => n.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(from)) => x.sresize(to), got.left)), ran.right⟩)
+        },
+        TableRead(w, o, bits, i, es) => λ new made ran => {
+            let got = facts.reads_one(values, held, bits, i, a, TableRead(w, o, bits, a, es), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(bits)) => BitVec::ofNat(table_entry(es, x.toNat()), n := w), got.left)), ran.right⟩)
+        },
+        WideLoad(bytes, o, f, i) => λ new made ran => {
+            let got = facts.reads_one(values, held, 64, i, a, WideLoad(bytes, o, f, a), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                ⟨trans(ran.left, cong_fn(λ (x: BitVec(64)) => buffer_word(before, f, x.toNat(), bytes), got.left)), ran.right⟩)
+        },
+        WideStore(bytes, o, f, i, v) => λ new made ran => {
+            let got = facts.reads_apart(values, held, 64, i, 8 * bytes, v, a, b, WideStore(bytes, o, f, a, b), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after),
+                j(got.left.left, λ x _ => (after = store_word(before, f, x.toNat(), bytes, values(8 * bytes, b))) ∧
+                        (values(8 * bytes, o) = buffer_word(after, f, x.toNat(), bytes)),
+                    j(got.left.right, λ y _ => (after = store_word(before, f, values(64, i).toNat(), bytes, y)) ∧
+                        (values(8 * bytes, o) = buffer_word(after, f, values(64, i).toNat(), bytes)), ran)))
+        },
+        ByteSwap(w, o, s) => λ new made ran => {
+            let got = facts.reads_one(values, held, w, s, a, ByteSwap(w, o, a), new, made);
+            j(got.right, λ m _ => m.Runs(values, before, after), ⟨trans(ran.left, cong_fn(λ (x: BitVec(w)) => x.swap_bytes(), got.left)), ran.right⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A node computed before
+
+// The node writing another id.
+fn Node::at(self node: Node, id: Nat) → Node {
+    match node {
+        Const(w, _, v) => Const(w, id, v),
+        Move(w, _, s) => Move(w, id, s),
+        Add(w, _, l, r) => Add(w, id, l, r),
+        Sub(w, _, l, r) => Sub(w, id, l, r),
+        BitAnd(w, _, l, r) => BitAnd(w, id, l, r),
+        BitOr(w, _, l, r) => BitOr(w, id, l, r),
+        BitXor(w, _, l, r) => BitXor(w, id, l, r),
+        ShiftLeft(w, _, x, n) => ShiftLeft(w, id, x, n),
+        LogicalShiftRight(w, _, x, n) => LogicalShiftRight(w, id, x, n),
+        RotateRight(w, _, x, n) => RotateRight(w, id, x, n),
+        ArithmeticShiftRight(w, _, x, n) => ArithmeticShiftRight(w, id, x, n),
+        UnsignedLessThan(w, _, l, r) => UnsignedLessThan(w, id, l, r),
+        SignedLessThan(w, _, l, r) => SignedLessThan(w, id, l, r),
+        Equal(w, _, l, r) => Equal(w, id, l, r),
+        BufferLoad(_, f, i) => BufferLoad(id, f, i),
+        BufferStore(_, f, i, x) => BufferStore(id, f, i, x),
+        Resize(from, to, _, x) => Resize(from, to, id, x),
+        SignResize(from, to, _, x) => SignResize(from, to, id, x),
+        TableRead(w, _, n, i, es) => TableRead(w, id, n, i, es),
+        WideLoad(n, _, f, i) => WideLoad(n, id, f, i),
+        WideStore(n, _, f, i, x) => WideStore(n, id, f, i, x),
+        ByteSwap(w, _, x) => ByteSwap(w, id, x),
+    }
+}
+
+// The word a node writes, as a move of the word `id`.
+fn Node::as_move(self node: Node, id: Nat) → Node { Move(node_output(node).width, node_output(node).id, id) }
+
+// Two nodes that differ in their output alone and touch no buffer write
+// the same word.
+theorem Node::at_agrees(self node: Node, id: Nat, values: Valuation()): node.pure() = True → NodeHolds(values, node) → NodeHolds(values, node.at(id)) →
+    NodeHolds(values, node.as_move(id)) {
+    match node {
+        Const(_, _, _) => λ _ here there => trans(here, sym(there)),
+        Move(_, _, _) => λ _ here there => trans(here, sym(there)),
+        Add(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        Sub(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        BitAnd(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        BitOr(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        BitXor(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        ShiftLeft(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        LogicalShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        RotateRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        ArithmeticShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        UnsignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        SignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        Equal(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        BufferLoad(_, _, _) => λ p _ _ => absurd(p),
+        BufferStore(_, _, _, _) => λ p _ _ => absurd(p),
+        Resize(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        SignResize(_, _, _, _) => λ _ here there => trans(here, sym(there)),
+        TableRead(_, _, _, _, _) => λ _ here there => trans(here, sym(there)),
+        WideLoad(_, _, _, _) => λ p _ _ => absurd(p),
+        WideStore(_, _, _, _, _) => λ p _ _ => absurd(p),
+        ByteSwap(_, _, _) => λ _ here there => trans(here, sym(there)),
+    }
+}
+
+theorem Node::pure_quiet(self node: Node): node.pure() = True → (!node.stores()).IsTrue() {
+    match node { BufferStore(_, _, _, _) => λ p => absurd(p), WideStore(_, _, _, _, _) => λ p => absurd(p), _ => λ _ => trivial }
+}
+
+// The node reading `a` and `b` as `reading` has it, or as it is where it
+// reads nothing.
+fn Node::rereading(self node: Node, facts: Facts, a, b: Nat) → Option<Node> {
+    match node { Const(_, _, _) => Some(node), _ => node.reading(facts, a, b) }
+}
+
+theorem Node::rereading_runs(self node: Node, facts: Facts, values: Valuation(), held: facts.Hold(values), a, b: Nat, before, after: Buffers()):
+    (new: Node) → node.rereading(facts, a, b) = Some(new) → node.Runs(values, before, after) → new.Runs(values, before, after) {
+    match node {
+        Const(w, o, v) => λ new made ran => j(Option::some_inj(Const(w, o, v), new, made), λ n _ => n.Runs(values, before, after), ran),
+        Move(w, o, s) => λ new made ran => Move(w, o, s).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        Add(w, o, l, r) => λ new made ran => Add(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        Sub(w, o, l, r) => λ new made ran => Sub(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        BitAnd(w, o, l, r) => λ new made ran => BitAnd(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        BitOr(w, o, l, r) => λ new made ran => BitOr(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        BitXor(w, o, l, r) => λ new made ran => BitXor(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        ShiftLeft(w, o, x, n) => λ new made ran => ShiftLeft(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        LogicalShiftRight(w, o, x, n) => λ new made ran => LogicalShiftRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        RotateRight(w, o, x, n) => λ new made ran => RotateRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        ArithmeticShiftRight(w, o, x, n) => λ new made ran => ArithmeticShiftRight(w, o, x, n).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        UnsignedLessThan(w, o, l, r) => λ new made ran => UnsignedLessThan(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        SignedLessThan(w, o, l, r) => λ new made ran => SignedLessThan(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        Equal(w, o, l, r) => λ new made ran => Equal(w, o, l, r).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        BufferLoad(o, f, i) => λ new made ran => BufferLoad(o, f, i).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        BufferStore(o, f, i, x) => λ new made ran => BufferStore(o, f, i, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        Resize(from, to, o, x) => λ new made ran => Resize(from, to, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        SignResize(from, to, o, x) => λ new made ran => SignResize(from, to, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        TableRead(w, o, n, i, es) => λ new made ran => TableRead(w, o, n, i, es).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        WideLoad(n, o, f, i) => λ new made ran => WideLoad(n, o, f, i).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        WideStore(n, o, f, i, x) => λ new made ran => WideStore(n, o, f, i, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+        ByteSwap(w, o, x) => λ new made ran => ByteSwap(w, o, x).reading_runs(facts, values, held, a, b, before, after, new, made, ran),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rules: a clause over nodes, made from an instance's ids and literals,
+// with its proof at every instance
+
+record Clause { premises: List<Fact>, conclusion: Fact }
+
+fn Clause::Sound(self clause: Clause) → Type {
+    (values: Valuation()) → (buffers: Buffers()) → FactsHold(values, buffers, clause.premises) → clause.conclusion.Holds(values, buffers)
+}
+
+record Rule {
+    make: List<Nat> → Option<Clause>,
+    sound: (args: List<Nat>) → (clause: Clause) → make(args) = Some(clause) → clause.Sound(),
+}
+
+// ---------------------------------------------------------------------------
+// The replayer
+
+inductive Step {
+    // The next node of the old body, as it is.
+    Keep,
+    // The next node of the old body, left out (never a store).
+    Drop,
+    // A node that is among the facts, written here.
+    Emit(node: Node),
+    // A rule's conclusion at an instance whose premises are among the facts.
+    Derive(rule: Nat, args: List<Nat>),
+    // The next node of the old body reading `a`, and `b` if it reads two
+    // ids, where the facts say they are what it read.
+    Swap(a: Nat, b: Nat),
+    // The next node of the old body, which so read is a node the facts have
+    // at the output `at`: a move of that word is written for it.
+    Again(at: Nat, a: Nat, b: Nat),
+}
+
+record Replayed { nodes: List<Node>, facts: Facts }
+
+fn Facts::derive(self facts: Facts, table: List<Rule>, rule: Nat, args: List<Nat>) → Option<Facts> {
+    table.nth(rule).and_then(λ found => found.make(args).and_then(λ clause =>
+        facts.knows_all(clause.premises).then(Some(facts.with(clause.conclusion)))))
+}
+
+fn Replayed::after(node: Node, rest: Option<Replayed>) → Option<Replayed> {
+    rest.and_then(λ r => Some(Replayed(Cons(node, r.nodes), r.facts)))
+}
+
+fn replay(table: List<Rule>, facts: Facts, nodes: List<Node>, steps: List<Step>) → Option<Replayed> {
+    match steps {
+        Nil => Some(Replayed(nodes, facts.learn_all(nodes))),
+        Cons(step, later) => match step {
+            Keep => match nodes {
+                Nil => None,
+                Cons(node, rest) => Replayed::after(node, replay(table, facts.learn(node), rest, later)),
+            },
+            Drop => match nodes {
+                Nil => None,
+                Cons(node, rest) => (!node.stores()).then(replay(table, facts.learn(node), rest, later)),
+            },
+            Emit(node) => (node.pure() && facts.has(node)).then(Replayed::after(node, replay(table, facts, nodes, later))),
+            Derive(rule, args) => match facts.derive(table, rule, args) {
+                None => None,
+                Some(more) => replay(table, more, nodes, later),
+            },
+            Swap(a, b) => match nodes {
+                Nil => None,
+                Cons(node, rest) => node.reading(facts, a, b).and_then(λ new =>
+                    Replayed::after(new, replay(table, facts.learn(node).learn(new), rest, later))),
+            },
+            Again(at, a, b) => match nodes {
+                Nil => None,
+                Cons(node, rest) => node.rereading(facts, a, b).and_then(λ new => (new.pure() && facts.has(new.at(at))).then(
+                    Replayed::after(new.as_move(at), replay(table, facts.learn(node).add(new.as_move(at)), rest, later)))),
+            },
+        },
+    }
+}
+
+theorem Replayed::after_some(node: Node, rest: Option<Replayed>, r: Replayed, h: Replayed::after(node, rest) = Some(r)):
+    Exists<Replayed>(λ r0 => (rest = Some(r0)) ∧ (Replayed(Cons(node, r0.nodes), r0.facts) = r)) {
+    let got = Option::and_then_some(rest, λ (r0: Replayed) => Some(Replayed(Cons(node, r0.nodes), r0.facts)), r, h);
+    Exists(got.witness, ⟨got.proof.left, Option::some_inj(Replayed(Cons(node, got.witness.nodes), got.witness.facts), r, got.proof.right)⟩)
+}
+
+theorem Facts::derive_hold(self facts: Facts, table: List<Rule>, values: Valuation(), buffers: Buffers(), rule: Nat, args: List<Nat>, more: Facts,
+    held: facts.Hold(values), loaded: facts.Remembered(values, buffers), h: facts.derive(table, rule, args) = Some(more)):
+    more.Hold(values) ∧ more.Remembered(values, buffers) {
+    let a = Option::and_then_some(table.nth(rule), λ (found: Rule) => found.make(args).and_then(λ clause =>
+        facts.knows_all(clause.premises).then(Some(facts.with(clause.conclusion)))), more, h);
+    let found = a.witness;
+    let b = Option::and_then_some(found.make(args), λ (clause: Clause) => facts.knows_all(clause.premises).then(Some(facts.with(clause.conclusion))), more, a.proof.right);
+    let clause = b.witness;
+    let c = Bool::then_some(facts.knows_all(clause.premises), Some(facts.with(clause.conclusion)), more, b.proof.right);
+    let sound = found.sound(args, clause, b.proof.left);
+    let concluded = sound(values, buffers, facts.knows_all_hold(values, buffers, held, loaded, clause.premises, c.left));
+    j(Option::some_inj(facts.with(clause.conclusion), more, c.right), λ m _ => m.Hold(values) ∧ m.Remembered(values, buffers),
+        ⟨facts.with_hold(values, buffers, held, clause.conclusion, concluded), facts.with_remembered(values, buffers, loaded, clause.conclusion, concluded)⟩)
+}
+
+// Whatever the plan, what the replayer returns runs wherever the old nodes
+// ran, over the same valuation and files, and its facts hold there: those
+// of the valuation, and those of the file the nodes left.
+theorem replay_sound(table: List<Rule>, values: Valuation(), steps: List<Step>): (facts: Facts) → (nodes: List<Node>) → (r: Replayed) →
+    replay(table, facts, nodes, steps) = Some(r) → (before, after: Buffers()) → facts.Hold(values) → facts.Remembered(values, before) →
+    NodesRun(nodes, values, before, after) → NodesRun(r.nodes, values, before, after) ∧ (r.facts.Hold(values) ∧ r.facts.Remembered(values, after)) {
+    match steps {
+        Nil => λ facts nodes r made before after held loaded ran =>
+            j(Option::some_inj(Replayed(nodes, facts.learn_all(nodes)), r, made),
+                λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                ⟨ran, ⟨Facts::learn_all_hold(values, nodes, facts, before, after, held, ran),
+                    Facts::learn_all_remembered(values, nodes, facts, before, after, loaded, ran)⟩⟩),
+        Cons(step, later) => match step {
+            Keep => λ facts nodes => match nodes {
+                Nil => λ r made before after held loaded ran => absurd(made),
+                Cons(node, rest) => λ r made before after held loaded ran => {
+                    let got = Replayed::after_some(node, replay(table, facts.learn(node), rest, later), r, made);
+                    let ih = replay_sound(table, values, later, facts.learn(node), rest, got.witness, got.proof.left, ran.witness, after,
+                        facts.learn_hold(values, node, before, ran.witness, held, ran.proof.left),
+                        facts.learn_remembered(values, node, before, ran.witness, λ _ => loaded, ran.proof.left), ran.proof.right);
+                    j(got.proof.right, λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                        ⟨Exists(ran.witness, ⟨ran.proof.left, ih.left⟩), ih.right⟩)
+                },
+            },
+            Drop => λ facts nodes => match nodes {
+                Nil => λ r made before after held loaded ran => absurd(made),
+                Cons(node, rest) => λ r made before after held loaded ran => {
+                    let got = Bool::then_some(!node.stores(), replay(table, facts.learn(node), rest, later), r, made);
+                    let here = node.runs_still(values, before, ran.witness, Bool::is_true_of_eq(got.left), ran.proof.left);
+                    let ih = replay_sound(table, values, later, facts.learn(node), rest, r, got.right, ran.witness, after,
+                        facts.learn_hold(values, node, before, ran.witness, held, ran.proof.left),
+                        facts.learn_remembered(values, node, before, ran.witness, λ _ => loaded, ran.proof.left), ran.proof.right);
+                    ⟨j(here.left, λ m _ => NodesRun(r.nodes, values, m, after), ih.left), ih.right⟩
+                },
+            },
+            Emit(node) => λ facts nodes r made before after held loaded ran => {
+                let ok = Bool::then_some(node.pure() && facts.has(node), Replayed::after(node, replay(table, facts, nodes, later)), r, made);
+                let both = Bool::and_true_parts(node.pure(), facts.has(node), ok.left);
+                let got = Replayed::after_some(node, replay(table, facts, nodes, later), r, ok.right);
+                let ih = replay_sound(table, values, later, facts, nodes, got.witness, got.proof.left, before, after, held, loaded, ran);
+                j(got.proof.right, λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                    ⟨Exists(before, ⟨node.pure_runs(values, before, both.left, facts.has_holds(values, held, node, both.right)), ih.left⟩),
+                        ih.right⟩)
+            },
+            Derive(rule, args) => λ facts nodes r => (match facts.derive(table, rule, args) as λ o =>
+                facts.derive(table, rule, args) = o → (match o { Some(more) => replay(table, more, nodes, later), None => None }) = Some(r) →
+                (before, after: Buffers()) → facts.Hold(values) → facts.Remembered(values, before) → NodesRun(nodes, values, before, after) →
+                NodesRun(r.nodes, values, before, after) ∧ (r.facts.Hold(values) ∧ r.facts.Remembered(values, after)) {
+                None => λ _ made before after held loaded ran => absurd(made),
+                Some(more) => λ derived made before after held loaded ran => {
+                    let known = facts.derive_hold(table, values, before, rule, args, more, held, loaded, derived);
+                    replay_sound(table, values, later, more, nodes, r, made, before, after, known.left, known.right, ran)
+                },
+            })(refl),
+            Swap(a, b) => λ facts nodes => match nodes {
+                Nil => λ r made before after held loaded ran => absurd(made),
+                Cons(node, rest) => λ r made before after held loaded ran => {
+                    let read = Option::and_then_some(node.reading(facts, a, b), λ (new: Node) =>
+                        Replayed::after(new, replay(table, facts.learn(node).learn(new), rest, later)), r, made);
+                    let new = read.witness;
+                    let runs = node.reading_runs(facts, values, held, a, b, before, ran.witness, new, read.proof.left, ran.proof.left);
+                    let got = Replayed::after_some(new, replay(table, facts.learn(node).learn(new), rest, later), r, read.proof.right);
+                    // Where the new node stores nothing the file is the
+                    // one before it, so what the old node left known of
+                    // the file after is known of that one.
+                    let first = facts.learn_remembered(values, node, before, ran.witness, λ _ => loaded, ran.proof.left);
+                    let ih = replay_sound(table, values, later, facts.learn(node).learn(new), rest, got.witness, got.proof.left, ran.witness, after,
+                        facts.learn(node).learn_hold(values, new, before, ran.witness,
+                            facts.learn_hold(values, node, before, ran.witness, held, ran.proof.left), runs),
+                        facts.learn(node).learn_remembered(values, new, before, ran.witness,
+                            λ quiet => j(new.runs_still(values, before, ran.witness, j(sym(quiet), λ s _ => (!s).IsTrue(), trivial), runs).left,
+                                λ file _ => facts.learn(node).Remembered(values, file), first), runs),
+                        ran.proof.right);
+                    j(got.proof.right, λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                        ⟨Exists(ran.witness, ⟨runs, ih.left⟩), ih.right⟩)
+                },
+            },
+            Again(at, a, b) => λ facts nodes => match nodes {
+                Nil => λ r made before after held loaded ran => absurd(made),
+                Cons(node, rest) => λ r made before after held loaded ran => {
+                    let read = Option::and_then_some(node.rereading(facts, a, b), λ (new: Node) => (new.pure() && facts.has(new.at(at))).then(
+                        Replayed::after(new.as_move(at), replay(table, facts.learn(node).add(new.as_move(at)), rest, later))), r, made);
+                    let new = read.witness;
+                    let ok = Bool::then_some(new.pure() && facts.has(new.at(at)),
+                        Replayed::after(new.as_move(at), replay(table, facts.learn(node).add(new.as_move(at)), rest, later)), r, read.proof.right);
+                    let both = Bool::and_true_parts(new.pure(), facts.has(new.at(at)), ok.left);
+                    let runs = node.rereading_runs(facts, values, held, a, b, before, ran.witness, new, read.proof.left, ran.proof.left);
+                    // The node touches no buffer, so the file after it is
+                    // the one before, and its word is the one the facts
+                    // have the same computation at.
+                    let still = new.runs_still(values, before, ran.witness, new.pure_quiet(both.left), runs);
+                    let same = new.at_agrees(at, values, both.left, new.pure_holds(values, before, ran.witness, both.left, runs),
+                        facts.has_holds(values, held, new.at(at), both.right));
+                    let moved: new.as_move(at).Runs(values, before, ran.witness) =
+                        j(sym(still.left), λ file _ => new.as_move(at).Runs(values, before, file), new.as_move(at).pure_runs(values, before, refl, same));
+                    let got = Replayed::after_some(new.as_move(at), replay(table, facts.learn(node).add(new.as_move(at)), rest, later), r, ok.right);
+                    let ih = replay_sound(table, values, later, facts.learn(node).add(new.as_move(at)), rest, got.witness, got.proof.left, ran.witness, after,
+                        facts.learn(node).add_hold(values, facts.learn_hold(values, node, before, ran.witness, held, ran.proof.left), new.as_move(at), same),
+                        facts.learn_remembered(values, node, before, ran.witness, λ _ => loaded, ran.proof.left), ran.proof.right);
+                    j(got.proof.right, λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                        ⟨Exists(ran.witness, ⟨moved, ih.left⟩), ih.right⟩)
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// A plan for a region, in the region's shape. `Same` leaves a region as it
+// is and learns nothing from it; a list of no steps keeps every node and
+// learns each.
+inductive Plan {
+    Same,
+    // A dataflow region's nodes.
+    Nodes(steps: List<Step>),
+    // A sequence: its prefix's nodes, then its continuation.
+    Then(steps: List<Step>, rest: Plan),
+    // A composition's two parts, the second with the facts the first left.
+    Both(first: Plan, second: Plan),
+    // A conditional's arms, each from the facts before it and its bit: one
+    // where it is taken set, zero where clear.
+    Arms(when_true: Plan, when_false: Plan),
+    // A conditional whose bit the facts say is one (`taken`) or zero, as
+    // the arm that takes.
+    Arm(taken: Bool, arm: Plan),
+    // A loop's body, from the ranges of the inputs its passes do not
+    // change: a pass has a valuation of its own.
+    Body(body: Plan),
+    // The same after derivations, which those ranges may be from (what a
+    // step emits here has no place and is dropped).
+    Derived(steps: List<Step>, body: Plan),
+    // A call on other arguments, which the facts say are the words it took.
+    Args(arguments: List<Nat>),
+    // A loop from other inputs, which the facts say are the words it
+    // started from, and its body.
+    Inputs(inputs: List<Nat>, body: Plan),
+}
+
+record Regioned { region: StructuredRegion, facts: Facts }
+
+// ---------------------------------------------------------------------------
+// What a loop does not change
+
+// Runs whose passes satisfy a weaker condition, where each pass from a
+// state `kept` holds of satisfies it and leaves such a state; and the
+// loop ends in one.
+theorem loop_runs_over_kept(pass, weaker: Valuation() → Buffers() → Buffers() → Type, parameters, next: List<Nat>, kept: List<BitVec(64)> → Type,
+    step: (values: Valuation()) → (before, after: Buffers()) → kept(words_of(values, parameters)) → pass(values, before, after) →
+        weaker(values, before, after) ∧ kept(words_of(values, next)),
+    count, exit: Nat, remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → (before, after: Buffers()) → kept(state) →
+    LoopRunsOver(pass, parameters, count, exit, next, remaining, state, final, exhausted, before, after) →
+    LoopRunsOver(weaker, parameters, count, exit, next, remaining, state, final, exhausted, before, after) ∧ kept(final) {
+    match remaining {
+        Zero => λ state final exhausted before after holds ran => ⟨ran, j(sym(ran.left), λ s _ => kept(s), holds)⟩,
+        Succ(rest) => λ state final exhausted before after holds ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            let here = step(values, before, mid, j(sym(held.left), λ s _ => kept(s), holds), held.right.right.left);
+            let tail = (match values(1, exit).head_bit() as λ b =>
+                (match b {
+                    False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) →
+                (match b {
+                    False => LoopRunsOver(weaker, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
+                    True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
+                }) ∧ kept(final) {
+                False => λ later => loop_runs_over_kept(pass, weaker, parameters, next, kept, step, count, exit, rest,
+                    words_of(values, next), final, exhausted, mid, after, here.right, later),
+                True => λ done => ⟨done, j(sym(done.left), λ s _ => kept(s), here.right)⟩,
+            })(held.right.right.right);
+            ⟨Exists(values, Exists(mid, ⟨held.left, ⟨held.right.left, ⟨here.left, tail.left⟩⟩⟩)), tail.right⟩
+        },
+    }
+}
+
+fn carried(same: Bool, range: Range) → Option<Range> { match same { True => Some(range), False => None } }
+
+fn Marked(mark: Option<Range>, word: BitVec(64)) → Type { match mark { None => True, Some(range) => range.Holds(word) } }
+
+// A parameter that is its own next has, in every pass, the value its input
+// had: the ranges known of such inputs, by place.
+fn Facts::carry(self facts: Facts, inputs, parameters, next: List<Nat>) → List<Option<Range>> {
+    match inputs {
+        Nil => [],
+        Cons(input, more) => match parameters {
+            Nil => [],
+            Cons(parameter, others) => match next {
+                Nil => [],
+                Cons(after, later) => Cons(carried(parameter.same(after), facts.range(input)), facts.carry(more, others, later)),
+            },
+        },
+    }
+}
+
+fn Kept(marks: List<Option<Range>>, state: List<BitVec(64)>) → Type {
+    match marks {
+        Nil => True,
+        Cons(mark, rest) => match state {
+            Nil => True,
+            Cons(word, words) => Marked(mark, word) ∧ Kept(rest, words),
+        },
+    }
+}
+
+// The loop starts from such a state.
+theorem Facts::carry_start(self facts: Facts, values: Valuation(), held: facts.Hold(values), inputs: List<Nat>): (parameters, next: List<Nat>) →
+    Kept(facts.carry(inputs, parameters, next), words_of(values, inputs)) {
+    match inputs {
+        Nil => λ parameters next => trivial,
+        Cons(input, more) => λ parameters => match parameters {
+            Nil => λ next => trivial,
+            Cons(parameter, others) => λ next => match next {
+                Nil => trivial,
+                Cons(after, later) => ⟨(match parameter.same(after) as λ b => Marked(carried(b, facts.range(input)), values(64, input)) {
+                    True => facts.range_holds(values, held, input),
+                    False => trivial,
+                }), facts.carry_start(values, held, more, others, later)⟩,
+            },
+        },
+    }
+}
+
+// And a pass leaves one.
+theorem Facts::carry_next(self facts: Facts, pass: Valuation(), inputs: List<Nat>): (parameters, next: List<Nat>) →
+    Kept(facts.carry(inputs, parameters, next), words_of(pass, parameters)) → Kept(facts.carry(inputs, parameters, next), words_of(pass, next)) {
+    match inputs {
+        Nil => λ parameters next kept => trivial,
+        Cons(input, more) => λ parameters => match parameters {
+            Nil => λ next kept => trivial,
+            Cons(parameter, others) => λ next => match next {
+                Nil => λ kept => trivial,
+                Cons(after, later) => λ kept => ⟨(match parameter.same(after) as λ b => parameter.same(after) = b →
+                    Marked(carried(b, facts.range(input)), pass(64, parameter)) → Marked(carried(b, facts.range(input)), pass(64, after)) {
+                    True => λ same holds => j(parameter.same_sound(after, same), λ id _ => facts.range(input).Holds(pass(64, id)), holds),
+                    False => λ _ _ => trivial,
+                })(refl, kept.left), facts.carry_next(pass, more, others, later, kept.right)⟩,
+            },
+        },
+    }
+}
+
+// Facts with those ranges of `ids`: of a loop's parameters, what a pass's
+// valuation is known to satisfy; of its outputs, what the loop leaves.
+fn Facts::kept(self facts: Facts, marks: List<Option<Range>>, ids: List<Nat>) → Facts {
+    match marks {
+        Nil => facts,
+        Cons(mark, rest) => match ids {
+            Nil => facts,
+            Cons(id, others) => match mark { None => facts.kept(rest, others), Some(range) => facts.kept(rest, others).bound(id, range) },
+        },
+    }
+}
+
+theorem Facts::kept_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), marks: List<Option<Range>>): (ids: List<Nat>) →
+    Kept(marks, words_of(values, ids)) → facts.kept(marks, ids).Hold(values) {
+    match marks {
+        Nil => λ ids kept => held,
+        Cons(mark, rest) => λ ids => match ids {
+            Nil => λ kept => held,
+            Cons(id, others) => match mark {
+                None => λ kept => facts.kept_hold(values, held, rest, others, kept.right),
+                Some(range) => λ kept => facts.kept(rest, others).bound_hold(values, facts.kept_hold(values, held, rest, others, kept.right), id, range, kept.left),
+            },
+        },
+    }
+}
+
+// A loop whose body is rewritten under those facts runs where it ran, and
+// leaves its outputs in those ranges.
+theorem loop_kept(effects: Effects(), facts: Facts, values: Valuation(), held: facts.Hold(values), inputs, parameters, next: List<Nat>,
+    body, new: StructuredRegion,
+    sound: (pass: Valuation()) → (from, to: Buffers()) → Facts::none().kept(facts.carry(inputs, parameters, next), parameters).Hold(pass) →
+        StructuredRegionRunsOver(effects, pass, body, from, to) → StructuredRegionRunsOver(effects, pass, new, from, to),
+    count, exit: Nat, remaining: Nat, final: List<BitVec(64)>, exhausted: Bool, before, after: Buffers(),
+    ran: LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after)):
+    LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, new, from, to),
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, before, after) ∧
+    Kept(facts.carry(inputs, parameters, next), final) {
+    loop_runs_over_kept(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+        λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, new, from, to),
+        parameters, next, λ (state: List<BitVec(64)>) => Kept(facts.carry(inputs, parameters, next), state),
+        λ pass from to kept old => ⟨sound(pass, from, to,
+                Facts::none().kept_hold(pass, Facts::none_hold(pass), facts.carry(inputs, parameters, next), parameters, kept), old),
+            facts.carry_next(pass, inputs, parameters, next, kept)⟩,
+        count, exit, remaining, words_of(values, inputs), final, exhausted, before, after, facts.carry_start(values, held, inputs, parameters, next), ran)
+}
+
+// A conditional's bit in the arm taken where it is `taken`.
+fn bit_fact(condition: Nat, taken: Bool) → Node { Const(1, condition, match taken { True => 1, False => 0 }) }
+
+theorem bit_set(): BitVec::ofBool(True) = BitVec::ofNat(1, n := 1) { refl }
+theorem bit_clear(): BitVec::ofBool(False) = BitVec::ofNat(0, n := 1) { refl }
+
+theorem bit_fact_holds(values: Valuation(), condition: Nat, taken: Bool, bit: values(1, condition).head_bit() = taken):
+    NodeHolds(values, bit_fact(condition, taken)) {
+    (match taken as λ t => values(1, condition).head_bit() = t → values(1, condition) = BitVec::ofNat(match t { True => 1, False => 0 }) {
+        True => λ set => trans(trans(BitVec::one_bit_eq_ofBool(values(1, condition)), cong_fn(λ (h: Bool) => BitVec::ofBool(h), set)), bit_set()),
+        False => λ clear => trans(trans(BitVec::one_bit_eq_ofBool(values(1, condition)), cong_fn(λ (h: Bool) => BitVec::ofBool(h), clear)), bit_clear()),
+    })(bit)
+}
+
+theorem bit_fact_head(values: Valuation(), condition: Nat, taken: Bool, holds: NodeHolds(values, bit_fact(condition, taken))):
+    values(1, condition).head_bit() = taken {
+    (match taken as λ t => values(1, condition) = BitVec::ofNat(match t { True => 1, False => 0 }) → values(1, condition).head_bit() = t {
+        True => λ one => cong_fn(λ (b: BitVec(1)) => b.head_bit(), one),
+        False => λ zero => cong_fn(λ (b: BitVec(1)) => b.head_bit(), zero),
+    })(holds)
+}
+
+fn replay_region(table: List<Rule>, region: StructuredRegion) → Facts → Plan → Option<Regioned> {
+    match region {
+        Dataflow(body) => λ facts plan => match plan {
+            Same => Some(Regioned(Dataflow(body), facts.forget())),
+            Nodes(steps) => replay(table, facts, body.nodes, steps).and_then(λ r =>
+                Some(Regioned(Dataflow(Region(body.inputs, r.nodes, body.outputs)), r.facts))),
+            _ => None,
+        },
+        Sequence(prefix, continuation) => λ facts plan => match plan {
+            Same => Some(Regioned(Sequence(prefix, continuation), facts.forget())),
+            Then(steps, rest) => replay(table, facts, prefix.nodes, steps).and_then(λ r =>
+                replay_region(table, continuation, r.facts, rest).and_then(λ c =>
+                    Some(Regioned(Sequence(Region(prefix.inputs, r.nodes, prefix.outputs), c.region), c.facts)))),
+            _ => None,
+        },
+        Compose(prefix, continuation) => λ facts plan => match plan {
+            Same => Some(Regioned(Compose(prefix, continuation), facts.forget())),
+            Both(first, second) => replay_region(table, prefix, facts, first).and_then(λ a =>
+                replay_region(table, continuation, a.facts, second).and_then(λ b =>
+                    Some(Regioned(Compose(a.region, b.region), b.facts)))),
+            _ => None,
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ facts plan => match plan {
+            Same => Some(Regioned(Conditional(inputs, condition, arguments, outputs, when_true, when_false), facts.forget())),
+            Arms(yes, no) => replay_region(table, when_true, facts.add(bit_fact(condition, True)), yes).and_then(λ a =>
+                replay_region(table, when_false, facts.add(bit_fact(condition, False)), no).and_then(λ b =>
+                    Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts.forget())))),
+            Arm(taken, inner) => facts.has(bit_fact(condition, taken)).then(match taken {
+                True => replay_region(table, when_true, facts, inner),
+                False => replay_region(table, when_false, facts, inner),
+            }),
+            _ => None,
+        },
+        Call(callee, arguments, result) => λ facts plan => match plan {
+            Same => Some(Regioned(Call(callee, arguments, result), facts.forget())),
+            Args(others) => facts.reads_all(arguments, others).then(Some(Regioned(Call(callee, others, result), facts.forget()))),
+            _ => None,
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ facts plan => match plan {
+            Same => Some(Regioned(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), facts.forget())),
+            Body(inner) => replay_region(table, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(), inner).and_then(λ b =>
+                Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget()))),
+            Derived(steps, inner) => replay(table, facts, [], steps).and_then(λ d =>
+                replay_region(table, body, Facts::none().kept(d.facts.carry(inputs, parameters, next), parameters).forget(), inner).and_then(λ b =>
+                    Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), d.facts.kept(d.facts.carry(inputs, parameters, next), outputs).forget())))),
+            Inputs(others, inner) => facts.reads_all(inputs, others).then(
+                replay_region(table, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(), inner).and_then(λ b =>
+                    Some(Regioned(Loop(others, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget())))),
+            _ => None,
+        },
+        Lend(views, callee, arguments, result) => λ facts plan => match plan {
+            Same => Some(Regioned(Lend(views, callee, arguments, result), facts.forget())),
+            _ => None,
+        },
+    }
+}
+
+// What a replayed region owes: it runs where the old one ran, and its
+// facts hold, those of the buffers of the buffers it leaves. What a plan
+// does not walk node by node may store, so after it nothing is recalled.
+fn Regioned::Sound(self r: Regioned, effects: Effects(), values: Valuation(), before, after: Buffers()) → Type {
+    StructuredRegionRunsOver(effects, values, r.region, before, after) ∧ (r.facts.Hold(values) ∧ r.facts.Remembered(values, after))
+}
+
+theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: StructuredRegion): (facts: Facts) → (plan: Plan) → (r: Regioned) →
+    replay_region(table, region, facts, plan) = Some(r) → (values: Valuation()) → (before, after: Buffers()) → facts.Hold(values) →
+    facts.Remembered(values, before) →
+    StructuredRegionRunsOver(effects, values, region, before, after) → r.Sound(effects, values, before, after) {
+    match region {
+        Dataflow(body) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Dataflow(body), facts.forget()), r, made), λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
+            Nodes(steps) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(replay(table, facts, body.nodes, steps), λ (n: Replayed) => Some(Regioned(Dataflow(Region(body.inputs, n.nodes, body.outputs)), n.facts)), r, made);
+                let n = got.witness;
+                let ok = replay_sound(table, values, steps, facts, body.nodes, n, got.proof.left, before, after, held, loaded, ran);
+                j(Option::some_inj(Regioned(Dataflow(Region(body.inputs, n.nodes, body.outputs)), n.facts), r, got.proof.right),
+                    λ x _ => x.Sound(effects, values, before, after), ok)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Sequence(prefix, continuation) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Sequence(prefix, continuation), facts.forget()), r, made), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨ran, ⟨held, trivial⟩⟩),
+            Then(steps, rest) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(replay(table, facts, prefix.nodes, steps), λ (n: Replayed) => replay_region(table, continuation, n.facts, rest).and_then(λ c =>
+                    Some(Regioned(Sequence(Region(prefix.inputs, n.nodes, prefix.outputs), c.region), c.facts))), r, made);
+                let n = got.witness;
+                let more = Option::and_then_some(replay_region(table, continuation, n.facts, rest), λ (c: Regioned) =>
+                    Some(Regioned(Sequence(Region(prefix.inputs, n.nodes, prefix.outputs), c.region), c.facts)), r, got.proof.right);
+                let c = more.witness;
+                let first = replay_sound(table, values, steps, facts, prefix.nodes, n, got.proof.left, before, ran.witness, held, loaded, ran.proof.left);
+                let second = replay_region_sound(table, effects, continuation, n.facts, rest, c, more.proof.left, values, ran.witness, after,
+                    first.right.left, first.right.right, ran.proof.right);
+                j(Option::some_inj(Regioned(Sequence(Region(prefix.inputs, n.nodes, prefix.outputs), c.region), c.facts), r, more.proof.right),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨Exists(ran.witness, ⟨first.left, second.left⟩), second.right⟩)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Compose(prefix, continuation) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Compose(prefix, continuation), facts.forget()), r, made), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨ran, ⟨held, trivial⟩⟩),
+            Both(first, second) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(replay_region(table, prefix, facts, first), λ (a: Regioned) => replay_region(table, continuation, a.facts, second).and_then(λ b =>
+                    Some(Regioned(Compose(a.region, b.region), b.facts))), r, made);
+                let a = got.witness;
+                let more = Option::and_then_some(replay_region(table, continuation, a.facts, second), λ (b: Regioned) => Some(Regioned(Compose(a.region, b.region), b.facts)), r, got.proof.right);
+                let b = more.witness;
+                let one = replay_region_sound(table, effects, prefix, facts, first, a, got.proof.left, values, before, ran.witness, held, loaded,
+                    ran.proof.left);
+                let two = replay_region_sound(table, effects, continuation, a.facts, second, b, more.proof.left, values, ran.witness, after,
+                    one.right.left, one.right.right, ran.proof.right);
+                j(Option::some_inj(Regioned(Compose(a.region, b.region), b.facts), r, more.proof.right),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨Exists(ran.witness, ⟨one.left, two.left⟩), two.right⟩)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Conditional(inputs, condition, arguments, outputs, when_true, when_false), facts.forget()), r, made),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
+            Arms(yes, no) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(replay_region(table, when_true, facts.add(bit_fact(condition, True)), yes), λ (a: Regioned) =>
+                    replay_region(table, when_false, facts.add(bit_fact(condition, False)), no).and_then(λ b =>
+                        Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts.forget()))), r, made);
+                let a = got.witness;
+                let more = Option::and_then_some(replay_region(table, when_false, facts.add(bit_fact(condition, False)), no), λ (b: Regioned) =>
+                    Some(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts.forget())), r, got.proof.right);
+                let b = more.witness;
+                let taken = (match values(1, condition).head_bit() as λ h => values(1, condition).head_bit() = h →
+                    (match h {
+                        False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                        True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                    }) →
+                    (match h {
+                        False => StructuredRegionRunsOver(effects, values, b.region, before, after),
+                        True => StructuredRegionRunsOver(effects, values, a.region, before, after),
+                    }) {
+                    False => λ bit arm => replay_region_sound(table, effects, when_false, facts.add(bit_fact(condition, False)), no, b, more.proof.left,
+                        values, before, after, facts.add_hold(values, held, bit_fact(condition, False), bit_fact_holds(values, condition, False, bit)), loaded, arm).left,
+                    True => λ bit arm => replay_region_sound(table, effects, when_true, facts.add(bit_fact(condition, True)), yes, a, got.proof.left,
+                        values, before, after, facts.add_hold(values, held, bit_fact(condition, True), bit_fact_holds(values, condition, True, bit)), loaded, arm).left,
+                })(refl, ran);
+                j(Option::some_inj(Regioned(Conditional(inputs, condition, arguments, outputs, a.region, b.region), facts.forget()), r, more.proof.right),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨taken, ⟨held, trivial⟩⟩)
+            },
+            Arm(taken, inner) => λ r made values before after held loaded ran => {
+                let ok = Bool::then_some(facts.has(bit_fact(condition, taken)), match taken {
+                    True => replay_region(table, when_true, facts, inner),
+                    False => replay_region(table, when_false, facts, inner),
+                }, r, made);
+                let bit = bit_fact_head(values, condition, taken, facts.has_holds(values, held, bit_fact(condition, taken), ok.left));
+                (match taken as λ t => values(1, condition).head_bit() = t →
+                    (match t { True => replay_region(table, when_true, facts, inner), False => replay_region(table, when_false, facts, inner) }) = Some(r) →
+                    r.Sound(effects, values, before, after) {
+                    True => λ set arm => replay_region_sound(table, effects, when_true, facts, inner, r, arm, values, before, after, held, loaded,
+                        j(set, λ h _ => match h {
+                            False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                            True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                        }, ran)),
+                    False => λ clear arm => replay_region_sound(table, effects, when_false, facts, inner, r, arm, values, before, after, held, loaded,
+                        j(clear, λ h _ => match h {
+                            False => StructuredRegionRunsOver(effects, values, when_false, before, after),
+                            True => StructuredRegionRunsOver(effects, values, when_true, before, after),
+                        }, ran)),
+                })(bit, ok.right)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Call(callee, arguments, result) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Call(callee, arguments, result), facts.forget()), r, made), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨ran, ⟨held, trivial⟩⟩),
+            Args(others) => λ r made values before after held loaded ran => {
+                let got = Bool::then_some(facts.reads_all(arguments, others), Some(Regioned(Call(callee, others, result), facts.forget())), r, made);
+                let called: effects(before, callee, words_of(values, others), values(64, result), after) =
+                    j(facts.reads_all_same(values, held, arguments, others, got.left),
+                        λ words _ => effects(before, callee, words, values(64, result), after), ran);
+                j(Option::some_inj(Regioned(Call(callee, others, result), facts.forget()), r, got.right), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨called, ⟨held, trivial⟩⟩)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), facts.forget()), r, made),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
+            Body(inner) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(replay_region(table, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(), inner), λ (b: Regioned) =>
+                    Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget())), r, made);
+                let b = got.witness;
+                let passes = loop_kept(effects, facts, values, held, inputs, parameters, next, body, b.region,
+                    λ pass from to known old => replay_region_sound(table, effects, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(),
+                        inner, b, got.proof.left, pass, from, to, known, trivial, old).left,
+                    count, exit, values(64, bound).toNat(), words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran);
+                j(Option::some_inj(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget()), r,
+                    got.proof.right), λ x _ => x.Sound(effects, values, before, after), ⟨passes.left, ⟨facts.kept_hold(values, held, facts.carry(inputs, parameters, next), outputs, passes.right), trivial⟩⟩)
+            },
+            Derived(steps, inner) => λ r made values before after held loaded ran => {
+                let first = Option::and_then_some(replay(table, facts, [], steps), λ (d: Replayed) =>
+                    replay_region(table, body, Facts::none().kept(d.facts.carry(inputs, parameters, next), parameters).forget(), inner).and_then(λ b =>
+                        Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), d.facts.kept(d.facts.carry(inputs, parameters, next), outputs).forget()))), r, made);
+                let d = first.witness;
+                let more = replay_sound(table, values, steps, facts, [], d, first.proof.left, before, before, held, loaded, refl).right.left;
+                let got = Option::and_then_some(replay_region(table, body, Facts::none().kept(d.facts.carry(inputs, parameters, next), parameters).forget(), inner), λ (b: Regioned) =>
+                    Some(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), d.facts.kept(d.facts.carry(inputs, parameters, next), outputs).forget())), r, first.proof.right);
+                let b = got.witness;
+                let passes = loop_kept(effects, d.facts, values, more, inputs, parameters, next, body, b.region,
+                    λ pass from to known old => replay_region_sound(table, effects, body, Facts::none().kept(d.facts.carry(inputs, parameters, next), parameters).forget(),
+                        inner, b, got.proof.left, pass, from, to, known, trivial, old).left,
+                    count, exit, values(64, bound).toNat(), words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran);
+                j(Option::some_inj(Regioned(Loop(inputs, bound, parameters, count, b.region, exit, next, outputs, exhausted), d.facts.kept(d.facts.carry(inputs, parameters, next), outputs).forget()), r,
+                    got.proof.right), λ x _ => x.Sound(effects, values, before, after), ⟨passes.left, ⟨d.facts.kept_hold(values, more, d.facts.carry(inputs, parameters, next), outputs, passes.right), trivial⟩⟩)
+            },
+            Inputs(others, inner) => λ r made values before after held loaded ran => {
+                let ok = Bool::then_some(facts.reads_all(inputs, others),
+                    replay_region(table, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(), inner).and_then(λ b =>
+                        Some(Regioned(Loop(others, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget()))), r, made);
+                let got = Option::and_then_some(replay_region(table, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(), inner), λ (b: Regioned) =>
+                    Some(Regioned(Loop(others, bound, parameters, count, b.region, exit, next, outputs, exhausted), facts.kept(facts.carry(inputs, parameters, next), outputs).forget())), r, ok.right);
+                let b = got.witness;
+                let passes = loop_kept(effects, facts, values, held, inputs, parameters, next, body, b.region,
+                    λ pass from to known old => replay_region_sound(table, effects, body, Facts::none().kept(facts.carry(inputs, parameters, next), parameters).forget(),
+                        inner, b, got.proof.left, pass, from, to, known, trivial, old).left,
+                    count, exit, values(64, bound).toNat(), words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran);
+                let fed = j(facts.reads_all_same(values, held, inputs, others, ok.left), λ words _ =>
+                    LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, b.region, from, to),
+                        parameters, count, exit, next, values(64, bound).toNat(), words, words_of(values, outputs), values(1, exhausted).head_bit(),
+                        before, after), passes.left);
+                j(Option::some_inj(Regioned(Loop(others, bound, parameters, count, b.region, exit, next, outputs, exhausted),
+                    facts.kept(facts.carry(inputs, parameters, next), outputs).forget()), r, got.proof.right), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨fed, ⟨facts.kept_hold(values, held, facts.carry(inputs, parameters, next), outputs, passes.right), trivial⟩⟩)
+            },
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Lend(views, callee, arguments, result) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Lend(views, callee, arguments, result), facts.forget()), r, made),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+fn replay_function(table: List<Rule>, function: Function, plan: Plan) → Option<Function> {
+    replay_region(table, function.body, Facts::none(), plan).and_then(λ r =>
+        Some(Function(function.parameters, r.region, function.result, function.lent)))
+}
+
+theorem replay_function_sound(table: List<Rule>, function: Function, plan: Plan, replayed: Function,
+    made: replay_function(table, function, plan) = Some(replayed), effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64),
+    before, after: Buffers(), ran: function.Runs(effects, arguments, result, before, after)):
+    replayed.Runs(effects, arguments, result, before, after) {
+    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, function.lent)), replayed, made);
+    let r = got.witness;
+    let values = ran.witness;
+    let ok = replay_region_sound(table, effects, function.body, Facts::none(), plan, r, got.proof.left, values, before, after,
+        Facts::none_hold(values), trivial, ran.proof.right.left);
+    j(Option::some_inj(Function(function.parameters, r.region, function.result, function.lent), replayed, got.proof.right),
+        λ g _ => g.Runs(effects, arguments, result, before, after), Exists(values, ⟨ran.proof.left, ⟨ok.left, ran.proof.right.right⟩⟩))
+}
+
+// The replayer as a stage: no function's rewriting reads its callees.
+fn replay_stage(table: List<Rule>) → Stage<Plan> {
+    Stage(λ callees function plan => replay_function(table, function, plan),
+        λ callees old plan new made arguments result before after ran =>
+            replay_function_sound(table, old, plan, new, made, program_effects(callees), arguments, result, before, after, ran))
+}

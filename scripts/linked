@@ -81,7 +81,7 @@ while IFS=$'\t' read -r module function symbol entries; do
     stem=$(basename "$module" .hthr)
     closure_of[$module]=$(scripts/lib-closures --files "$stem" | xargs sha256sum | sha256sum | cut -d' ' -f1)
   fi
-  key[$symbol]=$(printf '%s\n%s\t%s\t%s\n%s\n%s\n' "$binary_hash" "$module" "$function" "$symbol" "$entries" "${closure_of[$module]}" |
+  key[$symbol]=$(printf '%s\n%s\t%s\t%s\n%s\n%s\n%s\n' "$binary_hash" "$module" "$function" "$symbol" "$entries" "${closure_of[$module]}" "${HEATHER_OPTIMIZE:-}" |
                  sha256sum | cut -d' ' -f1)
   if [[ -n "${HEATHER_LINKED_NO_CACHE:-}" || ! -f "$memo/${key[$symbol]}.s" ]]; then
     misses+=("$module"$'\t'"$symbol")

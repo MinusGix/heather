@@ -85,7 +85,7 @@ fn nested_region() → StructuredRegion {
 fn nested_program() → Prog {
     Start.put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
         .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 1))
-        .put(Block([MovRI(Rax, BitVec::ofNat(10)), XorRR(Rcx, Rcx), CmpRR(Rsi, Rax), SetBelow(Cl)]))
+        .put(Block([MovRI32(Rax, BitVec::ofNat(10)), XorRR(Rcx, Rcx), CmpRR(Rsi, Rax), SetBelow(Cl)]))
             .put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 3))
             .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)])).put(Jmp(4))
             .label(3).put(Block([MovRR(Rax, Rsi), XorRR(Rax, Rdi)]))

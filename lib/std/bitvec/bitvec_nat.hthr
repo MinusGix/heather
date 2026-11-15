@@ -83,6 +83,33 @@ theorem BitVec::toNat_band_le_right(n: Nat, x, y: BitVec(n)): x.band(y).toNat() 
     j(sym(BitVec::band_comm(n, x, y)), λ w _ => w.toNat() <= y.toNat(), BitVec::toNat_band_le_left(n, y, x))
 }
 
+// An or is at most its operands added: a bit of `x | y` is set where one of
+// them has it, and where both do the sum carries. Exact where no bit is
+// set in both, which is what bytes joined by shifts are.
+theorem BitVec::of_bit_or_le(a, b: Bool): Nat::of_bit(a || b) <= Nat::of_bit(a) + Nat::of_bit(b) {
+    match a {
+        False => match b { False => trivial, True => trivial },
+        True => match b { False => trivial, True => trivial },
+    }
+}
+
+theorem BitVec::toNat_bor_le_add(n: Nat): (x, y: BitVec(n)) → x.bor(y).toNat() <= x.toNat() + y.toNat() {
+    match n {
+        Zero => λ x y => trivial,
+        Succ(_, ih) => λ x y => {
+            let t = x.tail_bits().bor(y.tail_bits()).toNat();
+            let u = x.tail_bits().toNat();
+            let v = y.tail_bits().toNat();
+            let tails: (t.twice() <= u.twice() + v.twice()) =
+                j(Nat::twice_add(u, v), λ w _ => t.twice() <= w, Nat::twice_le_twice_iff(t, u + v).mpr(ih(x.tail_bits(), y.tail_bits())));
+            j(Nat::add_swap_middle(Nat::of_bit(x.head_bit()), Nat::of_bit(y.head_bit()), u.twice(), v.twice()),
+                λ w _ => Nat::of_bit(x.head_bit() || y.head_bit()) + t.twice() <= w,
+                Nat::add_le_mono(Nat::of_bit(x.head_bit() || y.head_bit()), Nat::of_bit(x.head_bit()) + Nat::of_bit(y.head_bit()),
+                    t.twice(), u.twice() + v.twice(), BitVec::of_bit_or_le(x.head_bit(), y.head_bit()), tails))
+        },
+    }
+}
+
 // With the mask a numeral: `(x & 15).toNat() <= 15`, the form `bv_omega`
 // states, the literal's value read past the width (`toNat_ofNat_le`).
 theorem BitVec::toNat_band_ofNat_le(n: Nat, x: BitVec(n), m: Nat): x.band(BitVec::ofNat(m)).toNat() <= m {

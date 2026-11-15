@@ -1,0 +1,369 @@
+// Probes of the replayer (lib/native/function_ir/function_ir_replay.hthr,
+// docs/native/optimizer-design.md §3.2): a plan followed over a list of nodes, a
+// plan refused, a program of two functions rewritten as a stage, with
+// what its theorem says of the rewritten program, loads remembered, orders
+// between words, bytes joined into a word, and what a range says of a sum,
+// a difference and an or of bits. Tests, not library:
+// nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_replay;
+import function_ir_rules;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// 1 := 0; 2 := x + 1; 3 := 2 + 1, with x the word 0: two sums with zero.
+fn sums() → List<Node> { [Const(64, 1, 0), Add(64, 2, 0, 1), Add(64, 3, 2, 1)] }
+
+// Every node dropped once its fact is learned; `add_zero` twice, then
+// `move_move`, and the one node the facts now hold is written.
+fn sums_plan() → List<Step> {
+    [Drop, Drop, Derive(0, [64, 2, 0, 1]), Drop, Derive(0, [64, 3, 2, 1]), Derive(1, [64, 3, 2, 0]), Emit(Move(64, 3, 0))]
+}
+
+theorem sums_replayed(): replay(rules(), Facts::none(), sums(), sums_plan()).map(λ r => r.nodes) = Some([Move(64, 3, 0)]) { refl }
+
+// No steps keep every node.
+theorem sums_kept(): replay(rules(), Facts::none(), sums(), []).map(λ r => r.nodes) = Some(sums()) { refl }
+
+// A rule whose premise is not among the facts is a refusal: the sum has not
+// been passed yet.
+theorem premise_missing(): replay(rules(), Facts::none(), sums(), [Drop, Derive(0, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+
+// So is a node that no fact gives, a rule the table does not have, and a
+// store dropped.
+theorem emit_unknown(): replay(rules(), Facts::none(), sums(), [Emit(Move(64, 3, 0))]).map(λ r => r.nodes) = None { refl }
+
+theorem rule_unknown(): replay(rules(), Facts::none(), sums(), [Drop, Drop, Derive(9, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+
+theorem store_dropped(): replay(rules(), Facts::none(), [BufferStore(2, 0, 0, 1)], [Drop]).map(λ r => r.nodes) = None { refl }
+
+// A leaf of nodes.
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), nodes, Ports(Nil))) }
+
+// A program of two functions, last first: function 1 is the sums and then
+// a call of function 0 on the result, function 0 its argument plus zero.
+fn two() → List<Function> {
+    [Function([0], Compose(leaf(sums()), Call(0, [3], 4)), 4), Function([0], leaf([Const(64, 1, 0), Add(64, 2, 0, 1)]), 2)]
+}
+
+fn two_plans() → List<Plan> {
+    [Both(Nodes(sums_plan()), Same), Nodes([Drop, Drop, Derive(0, [64, 2, 0, 1]), Emit(Move(64, 2, 0))])]
+}
+
+fn two_replayed() → List<Function> {
+    [Function([0], Compose(leaf([Move(64, 3, 0)]), Call(0, [3], 4)), 4), Function([0], leaf([Move(64, 2, 0)]), 2)]
+}
+
+theorem two_run(): replay_stage(rules()).run(two(), two_plans()) = Some(two_replayed()) { refl }
+
+// What the program may do, the rewritten one may.
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    did: program_effects(two(), before, f, arguments, result, after)): program_effects(two_replayed(), before, f, arguments, result, after) {
+    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, after, did)
+}
+
+// A plan in the wrong shape for its region, and too few plans.
+theorem shape_refused(): replay_stage(rules()).run(two(), [Nodes([]), Same]) = None { refl }
+
+theorem plans_short(): replay_stage(rules()).run(two(), [Same]) = None { refl }
+
+// A node reads what a copy copies: 1 is a move of 0, so the sum of 1 and 1
+// is the sum of 0 and 0, and a load at 1 is a load at 0.
+theorem copy_read(): replay(rules(), Facts::none(), [Move(64, 1, 0), Add(64, 2, 1, 1), BufferLoad(3, 0, 1), BufferStore(4, 0, 1, 2)],
+    [Keep, Swap(0, 0), Swap(0, 0), Swap(0, 2)]).map(λ r => r.nodes) =
+    Some([Move(64, 1, 0), Add(64, 2, 0, 0), BufferLoad(3, 0, 0), BufferStore(4, 0, 0, 2)]) { refl }
+
+// Through two copies, by the fact the first swap left.
+theorem copy_chain(): replay(rules(), Facts::none(), [Move(64, 1, 0), Move(64, 2, 1), Add(64, 3, 2, 2)], [Keep, Swap(0, 0), Swap(0, 0)]).map(λ r => r.nodes) =
+    Some([Move(64, 1, 0), Move(64, 2, 0), Add(64, 3, 0, 0)]) { refl }
+
+// Refused: an id that is no copy of the one read; a copy at another width
+// than the node reads at; a node that reads nothing.
+theorem swap_unknown(): replay(rules(), Facts::none(), [Const(64, 1, 5), Add(64, 2, 1, 1)], [Keep, Swap(0, 0)]).map(λ r => r.nodes) = None { refl }
+theorem swap_width(): replay(rules(), Facts::none(), [Move(64, 1, 0), Add(32, 2, 1, 1)], [Keep, Swap(0, 0)]).map(λ r => r.nodes) = None { refl }
+theorem swap_const(): replay(rules(), Facts::none(), [Move(64, 1, 0), Const(64, 2, 1)], [Keep, Swap(0, 0)]).map(λ r => r.nodes) = None { refl }
+
+// A call on what its argument copies, and a loop from what its input
+// copies; neither on an id the facts say nothing of.
+theorem call_read(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2)), Facts::none(), Both(Nodes([]), Args([0, 0]))).map(λ r => r.region) =
+    Some(Compose(leaf([Move(64, 1, 0)]), Call(0, [0, 0], 2))) { refl }
+theorem call_unknown(): replay_region(rules(), Compose(leaf([Const(64, 1, 0)]), Call(0, [1], 2)), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
+theorem call_short(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2)), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
+theorem loop_read(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loop([2], 1, [3], 4, leaf([Const(1, 5, 1)]), 5, [3], [6], 7)), Facts::none(),
+    Both(Nodes([]), Inputs([0], Same))).map(λ r => r.region) =
+    Some(Compose(leaf([Move(64, 2, 0)]), Loop([0], 1, [3], 4, leaf([Const(1, 5, 1)]), 5, [3], [6], 7))) { refl }
+
+// A copy made in a loop's pass is no fact after the loop, nor one made
+// before it a fact in the pass.
+theorem pass_apart(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loop([2], 1, [3], 4, leaf([Add(64, 8, 2, 2), Const(1, 5, 1)]), 5, [3], [6], 7)),
+    Facts::none(), Both(Nodes([]), Body(Nodes([Swap(0, 0)])))).map(λ r => r.region) = None { refl }
+
+// ---------------------------------------------------------------------------
+// What was loaded since the last store
+
+// A byte loaded twice: the second load is a move of the first
+// (`load_again`, rule 19).
+fn again() → List<Step> { [Drop, Derive(19, [2, 1, 0, 0]), Emit(Move(64, 2, 1))] }
+
+theorem loaded_twice(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) =
+    Some([BufferLoad(1, 0, 0), Move(64, 2, 1)]) { refl }
+
+// What a store read back is such a load, so a load after a store at its
+// index is a move of that.
+theorem stored_then_loaded(): replay(rules(), Facts::none(), [BufferStore(1, 0, 0, 5), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) =
+    Some([BufferStore(1, 0, 0, 5), Move(64, 2, 1)]) { refl }
+
+// A store between the two is a refusal, wherever it stores: nothing is
+// said of which bytes it left alone.
+theorem stored_between(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferStore(3, 1, 7, 5), BufferLoad(2, 0, 0)],
+    Cons(Keep, Cons(Keep, again()))).map(λ r => r.nodes) = None { refl }
+
+// So is another index, another buffer, and a load not passed yet.
+theorem loaded_elsewhere(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 3), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) = None { refl }
+
+theorem loaded_of_another(): replay(rules(), Facts::none(), [BufferLoad(1, 1, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) = None { refl }
+
+theorem loaded_later(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)],
+    [Keep, Derive(19, [2, 1, 0, 0])]).map(λ r => r.nodes) = None { refl }
+
+// Between two leaves a plan walks node by node the loads are still known.
+fn apart(between: StructuredRegion) → StructuredRegion { Compose(leaf([BufferLoad(1, 0, 0)]), Compose(between, leaf([BufferLoad(2, 0, 0)]))) }
+
+fn apart_plan(between: Plan) → Plan { Both(Nodes([]), Both(between, Nodes(again()))) }
+
+fn regioned(region: StructuredRegion, plan: Plan) → Option<StructuredRegion> { replay_region(rules(), region, Facts::none(), plan).map(λ r => r.region) }
+
+theorem across_nodes(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Nodes([]))) =
+    Some(Compose(leaf([BufferLoad(1, 0, 0)]), Compose(leaf([Add(64, 3, 1, 1)]), leaf([Move(64, 2, 1)])))) { refl }
+
+// A region the plan leaves as it is may store, so nothing loaded before it
+// is known after: the same leaf under `Same`, a call, a conditional and a
+// loop.
+theorem across_same(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Same)) = None { refl }
+
+theorem across_call(): regioned(apart(Call(0, [1], 4)), apart_plan(Same)) = None { refl }
+
+theorem across_arms(): regioned(apart(Conditional(Ports(Nil), 5, Ports(Nil), Ports(Nil), leaf([]), leaf([]))), apart_plan(Arms(Nodes([]), Nodes([])))) = None { refl }
+
+theorem across_loop(): regioned(apart(Loop([], 6, [], 7, leaf([Const(1, 8, 1)]), 8, [], [], 9)), apart_plan(Body(Nodes([])))) = None { refl }
+
+// A function that loads a byte twice and adds the two, and what its
+// theorem says of the one that loads it once.
+fn doubled() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0), BufferLoad(2, 0, 0), Add(64, 3, 1, 2)]), 3)] }
+
+fn doubled_once() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0), Move(64, 2, 1), Add(64, 3, 1, 2)]), 3)] }
+
+theorem doubled_run(): replay_stage(rules()).run(doubled(), [Nodes(Cons(Keep, again()))]) = Some(doubled_once()) { refl }
+
+theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
+    did: program_effects(doubled(), before, f, arguments, result, after)): program_effects(doubled_once(), before, f, arguments, result, after) {
+    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, after, did)
+}
+
+// ---------------------------------------------------------------------------
+// A computation repeated
+
+// A sum computed twice: the second is a move of the first (`Step::Again`),
+// read through the copy before it.
+theorem summed_twice(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Move(64, 3, 0), Add(64, 4, 3, 1)], [Keep, Keep, Again(2, 0, 1)]).map(λ r => r.nodes) =
+    Some([Add(64, 2, 0, 1), Move(64, 3, 0), Move(64, 4, 2)]) { refl }
+
+// So is a constant written twice, and a comparison, whose word is a bit.
+theorem constant_twice(): replay(rules(), Facts::none(), [Const(64, 1, 7), Const(64, 2, 7)], [Keep, Again(1, 0, 0)]).map(λ r => r.nodes) =
+    Some([Const(64, 1, 7), Move(64, 2, 1)]) { refl }
+
+theorem compared_twice(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 2, 0, 1), UnsignedLessThan(64, 3, 0, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) =
+    Some([UnsignedLessThan(64, 2, 0, 1), Move(1, 3, 2)]) { refl }
+
+// Refused: another computation; the same one at an id no node wrote; a
+// load, which is no repeat while a store may come between (its rule is
+// `load_again`); a sum of words the facts do not say are the same.
+theorem again_other(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Sub(64, 4, 0, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_nowhere(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Add(64, 4, 0, 1)], [Keep, Again(3, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_loaded(): replay(rules(), Facts::none(), [BufferLoad(2, 0, 1), BufferLoad(4, 0, 1)], [Keep, Again(2, 1, 0)]).map(λ r => r.nodes) = None { refl }
+
+theorem again_unread(): replay(rules(), Facts::none(), [Add(64, 2, 0, 1), Add(64, 4, 3, 1)], [Keep, Again(2, 0, 1)]).map(λ r => r.nodes) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Orders
+
+// The words 0 and 1 are an index and a length nothing is known of. One
+// test of the index and 4: the sum did not wrap (4 is not below 0) and
+// fits (1 is not below it).
+fn span_test() → List<Node> { [Const(64, 2, 4), Add(64, 3, 0, 2), UnsignedLessThan(64, 4, 3, 0), UnsignedLessThan(64, 5, 1, 3), BitOr(1, 6, 4, 5)] }
+
+// Where the test's bit is clear: both comparisons are (rules 13, 14); the
+// sum is at least the index (21), so it is the index and 4 (25); the sum is
+// at most the length (21); so the index and 4 are at most the length (24).
+fn span_known() → List<Step> {
+    [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]), Derive(21, [5, 1, 3]),
+        Derive(24, [0, 4, 3, 0, 0, 1, 0, 4, 0])]
+}
+
+// The byte two past the index is below the length: its index is the index
+// and 2, which cannot wrap with room for 4 (28), so it and 1 are at most
+// the length (24), and the comparison is one (22).
+fn span_byte() → List<Node> { [Const(64, 7, 2), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)] }
+
+fn span_decided() → List<Step> { [Derive(28, [8, 0, 7, 2, 4, 1, 0]), Derive(24, [8, 0, 0, 2, 4, 1, 0, 1, 0]), Derive(22, [9, 8, 1]), Emit(Const(1, 9, 1))] }
+
+fn span_clear() → Facts { Facts::none().learn_all(span_test()).add(Const(1, 6, 0)) }
+
+theorem span_within(): replay(rules(), span_clear(), span_byte(), span_known() ++ ([Keep, Keep, Keep] ++ span_decided())).map(λ r => r.nodes) =
+    Some(span_byte() ++ [Const(1, 9, 1)]) { refl }
+
+// And the index itself is, by the order alone.
+theorem span_first(): replay(rules(), span_clear(), [UnsignedLessThan(64, 9, 0, 1)], span_known() ++ [Keep, Derive(22, [9, 0, 1]), Emit(Const(1, 9, 1))])
+    .map(λ r => r.nodes) = Some([UnsignedLessThan(64, 9, 0, 1), Const(1, 9, 1)]) { refl }
+
+// Not the byte four past it: there is room for 4, and it needs 5.
+theorem span_past(): replay(rules(), span_clear(), [Const(64, 7, 4), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)],
+    span_known() ++ [Keep, Keep, Keep, Derive(28, [8, 0, 7, 4, 4, 1, 0]), Derive(24, [8, 0, 0, 4, 4, 1, 0, 1, 0])]).map(λ r => r.nodes) = None { refl }
+
+// Nor anything where the test's bit is not known clear, nor from an order
+// claimed with more between the words than the two joined have.
+theorem span_untested(): replay(rules(), Facts::none().learn_all(span_test()), span_byte(), span_known()).map(λ r => r.nodes) = None { refl }
+
+theorem span_overclaimed(): replay(rules(), span_clear(), [], [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]),
+    Derive(21, [5, 1, 3]), Derive(24, [0, 4, 3, 0, 0, 1, 0, 5, 0])]).map(λ r => r.nodes) = None { refl }
+
+// A set comparison orders its operands, and that order decides the same
+// comparison made again; a clear one decides it the other way.
+theorem order_from_set(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 1)), [UnsignedLessThan(64, 3, 0, 1)],
+    [Derive(20, [2, 0, 1]), Keep, Derive(22, [3, 0, 1]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 1)]) { refl }
+
+theorem order_from_clear(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 0)), [UnsignedLessThan(64, 3, 0, 1)],
+    [Derive(21, [2, 0, 1]), Keep, Derive(23, [3, 0, 1]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 0)]) { refl }
+
+// ---------------------------------------------------------------------------
+// Bytes joined into a word (rules 29 to 33)
+
+// Two bytes of buffer 0, at the index 0 and at the word 3, the first
+// shifted past the second and the two or'd.
+fn pair_nodes() → List<Node> { [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 5, 4)] }
+
+// The word 3 is the index and one, both ways.
+fn pair_beside() → Facts { Facts::none().with(AtMost(0, 1, 3, 0)).with(AtMost(3, 0, 0, 1)) }
+
+// Each load starts a join, the shift moves the first, and the or of the
+// two is the join of both bytes.
+fn pair_steps(count: Nat) → List<Step> {
+    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(31, [6, 5, 4, 0, 0, 3, count, 1, 0])]
+}
+
+theorem pair_joined(): replay(rules(), pair_beside(), pair_nodes(), pair_steps(1)).map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
+
+// Not where the second byte's index is not known to be the next one, in
+// either direction; nor as a join longer than the bytes it has.
+theorem pair_anywhere(): replay(rules(), Facts::none(), pair_nodes(), pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+theorem pair_not_before(): replay(rules(), Facts::none().with(AtMost(0, 1, 3, 0)), pair_nodes(), pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+theorem pair_overclaimed(): replay(rules(), pair_beside(), pair_nodes(), pair_steps(2)).map(λ r => r.nodes) = None { refl }
+
+// The or's operands the other way round are rule 32's, and not rule 31's.
+theorem pair_turned(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
+    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(32, [6, 5, 4, 0, 0, 3, 1, 1, 0])])
+    .map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
+
+theorem pair_turned_wrong(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
+    pair_steps(1)).map(λ r => r.nodes) = None { refl }
+
+// A store after the loads: what they read is known no longer, so nothing
+// is a join of it.
+theorem pair_stored(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferStore(7, 0, 0, 1)], [Keep, Keep, Derive(29, [1, 0, 0])])
+    .map(λ r => r.nodes) = None { refl }
+
+// A word that is four bytes joined and unshifted is the word one load of
+// four bytes at the same index reads, swapped and widened (rule 33).
+fn wide_nodes() → List<Node> { [WideLoad(4, 7, 0, 0), ByteSwap(32, 8, 7), Resize(32, 64, 9, 8)] }
+
+fn wide_steps() → List<Step> { [Keep, Keep, Keep, Derive(33, [6, 7, 8, 9, 0, 0]), Emit(Move(64, 6, 9))] }
+
+theorem word_of_join(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) =
+    Some(wide_nodes() ++ [Move(64, 6, 9)]) { refl }
+
+// Not three bytes, not a join still shifted, not one at another index or
+// of another buffer; and not a load taken unswapped.
+theorem word_of_three(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 3, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_shifted(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 8)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_elsewhere(): replay(rules(), Facts::none().with(Joined(6, 0, 1, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_of_another(): replay(rules(), Facts::none().with(Joined(6, 1, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
+
+theorem word_unswapped(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), [WideLoad(4, 7, 0, 0), Resize(32, 64, 9, 7)],
+    [Keep, Keep, Derive(33, [6, 7, 7, 9, 0, 0]), Emit(Move(64, 6, 9))]).map(λ r => r.nodes) = None { refl }
+
+// ---------------------------------------------------------------------------
+// What a range says of a sum, of a difference and of an or of bits (rules
+// 34 to 39)
+
+// The word 0 is any word; 2 is its low five bits, so at most 31 (rules 2
+// and 18). The sum of 2 and 4 cannot wrap, so it is the two as numbers
+// (34), and the test that it wrapped is clear (23): what a function's test
+// at its entry is where the function is inlined at an index with a range.
+fn roomy() → List<Node> { [Const(64, 1, 31), BitAnd(64, 2, 0, 1), Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2)] }
+fn roomy_ranged() → List<Step> { [Keep, Keep, Keep, Keep, Keep, Derive(2, [1, 31]), Derive(18, [2, 0, 1, 31])] }
+
+theorem sum_in_range(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 31]), Derive(23, [5, 4, 2]), Emit(Const(1, 5, 0))])
+    .map(λ r => r.nodes) = Some(roomy() ++ [Const(1, 5, 0)]) { refl }
+
+// The other way (35), and the two orders are the sum's equation: the sum
+// is at most itself through its operand (24).
+theorem sum_in_range_high(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 31]), Derive(35, [4, 2, 3, 4, 0, 31]),
+    Derive(24, [4, 0, 2, 4, 4, 4, 0, 0, 0])]).map(λ r => r.nodes) = Some(roomy()) { refl }
+
+// Not of an operand no range is known of, nor with a range claimed for it
+// that the facts do not have, nor where the range reaches a word's top.
+theorem sum_unranged(): replay(rules(), Facts::none(), roomy(), [Keep, Keep, Keep, Keep, Keep, Derive(34, [4, 2, 3, 4, 0, 31])]).map(λ r => r.nodes) = None { refl }
+theorem sum_range_claimed(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 15])]).map(λ r => r.nodes) = None { refl }
+theorem sum_to_the_top(): replay(rules(), Facts::none(), [Const(64, 3, 4), Add(64, 4, 0, 3)], [Keep, Keep, Derive(34, [4, 0, 3, 4, 0, 18446744073709551615])])
+    .map(λ r => r.nodes) = None { refl }
+// Not with another constant than the sum adds.
+theorem sum_other_constant(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 5, 0, 31])]).map(λ r => r.nodes) = None { refl }
+
+// A difference that cannot borrow: 6 less the low two bits of a word is
+// from 3 to 6 (39), so it is below 8 (7).
+fn backward(from, bound: Nat) → List<Node> {
+    [Const(64, 1, 3), BitAnd(64, 2, 0, 1), Const(64, 3, from), Sub(64, 4, 3, 2), Const(64, 5, bound), UnsignedLessThan(64, 6, 4, 5)]
+}
+fn backward_ranged(from, bound: Nat) → List<Step> {
+    [Keep, Keep, Keep, Keep, Keep, Keep, Derive(2, [1, 3]), Derive(18, [2, 0, 1, 3]), Derive(2, [3, from]), Derive(2, [5, bound])]
+}
+
+theorem difference_in_range(): replay(rules(), Facts::none(), backward(6, 8), backward_ranged(6, 8) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
+    Derive(7, [6, 4, 5, 6, 8]), Emit(Const(1, 6, 1))]).map(λ r => r.nodes) = Some(backward(6, 8) ++ [Const(1, 6, 1)]) { refl }
+
+// It is at least 3, so not below 3 (8); it may be 3, so it is not known to
+// be at least 4.
+theorem difference_least(): replay(rules(), Facts::none(), backward(6, 3), backward_ranged(6, 3) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
+    Derive(8, [6, 4, 5, 3, 3]), Emit(Const(1, 6, 0))]).map(λ r => r.nodes) = Some(backward(6, 3) ++ [Const(1, 6, 0)]) { refl }
+theorem difference_not_more(): replay(rules(), Facts::none(), backward(6, 4), backward_ranged(6, 4) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
+    Derive(8, [6, 4, 5, 4, 4])]).map(λ r => r.nodes) = None { refl }
+
+// Not where it may borrow: 2 less a word up to 3.
+theorem difference_borrows(): replay(rules(), Facts::none(), backward(2, 8), backward_ranged(2, 8) ++ [Derive(39, [4, 3, 2, 2, 2, 0, 3])]).map(λ r => r.nodes) = None { refl }
+
+// An or of two clear bits is clear (36); an or with a set bit is set,
+// whichever side it is on (37, 38).
+fn or_bits(left, right: Nat) → Facts { Facts::none().learn_all([BitOr(1, 3, 1, 2)]).add(Const(1, 1, left)).add(Const(1, 2, right)) }
+
+theorem or_both_clear(): replay(rules(), or_bits(0, 0), [], [Derive(36, [3, 1, 2]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([Const(1, 3, 0)]) { refl }
+theorem or_left_set(): replay(rules(), or_bits(1, 0), [], [Derive(37, [3, 1, 2]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
+theorem or_right_set(): replay(rules(), or_bits(0, 1), [], [Derive(38, [3, 1, 2]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
+
+// Not clear with one bit set or one unknown, and not set by a clear bit.
+theorem or_not_clear(): replay(rules(), or_bits(0, 1), [], [Derive(36, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }
+theorem or_half_known(): replay(rules(), Facts::none().learn_all([BitOr(1, 3, 1, 2)]).add(Const(1, 1, 0)), [], [Derive(36, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }
+theorem or_not_set(): replay(rules(), or_bits(0, 1), [], [Derive(37, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }

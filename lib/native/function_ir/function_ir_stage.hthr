@@ -1,0 +1,334 @@
+// A stage of the optimizer (docs/native/optimizer-design.md §3.1): a program
+// rewritten a function at a time, and the one theorem every stage shares.
+//
+// A program lists its functions last first, and a function calls only the
+// ones after it in the list (`program_effects`). A stage rewrites the
+// earlier functions first and then each function over its callees as they
+// now are (`Stage::rewrite`), so a stage that reads a callee's body, as
+// inlining does, reads the body the program will have. What it owes is one
+// law, a function at a time (`Rewrites`): whatever the old function may do
+// over those callees, the new one may. `Stage::run_sound` lifts the law to
+// the program, once for every stage: each function of the new program, at
+// its number, may do whatever it did in the old one.
+//
+// That is the direction a compiled program needs. Its code's contract takes
+// the program's meaning as a premise (`Stack::CalledOver`,
+// `compiled_returns_over`): where the functions say a call may return a
+// word and leave a file, the code does. So the theorems of a source program
+// reach the code of the rewritten one through `Stage::run_sound`, and the
+// checks the lowering makes are made of the rewritten program itself.
+//
+// A stage's plan (`P`) comes from a searcher that is not trusted: a plan
+// the stage cannot follow is `None`, never a wrong program.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+import pair;
+
+// Whatever `old` may do over the functions `callees`, `new` may.
+fn Rewrites(callees: List<Function>, old, new: Function) → Type {
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
+        old.Runs(program_effects(callees), arguments, result, before, after) →
+        new.Runs(program_effects(callees), arguments, result, before, after)
+}
+
+record Stage<P> {
+    // A function rewritten by a plan, over its callees as the stage left
+    // them.
+    rewrite: List<Function> → Function → P → Option<Function>,
+    sound: (callees: List<Function>) → (old: Function) → (plan: P) → (new: Function) → rewrite(callees, old, plan) = Some(new) →
+        Rewrites(callees, old, new),
+}
+
+// A program rewritten: a plan a function, last first as the program lists
+// them.
+fn Stage::run<P>(self stage: Stage<P>, functions: List<Function>, plans: List<P>) → Option<List<Function>> {
+    match functions {
+        Nil => Some(Nil),
+        Cons(last, earlier) => match plans {
+            Nil => None,
+            Cons(plan, rest) => stage.run(earlier, rest).and_then(λ callees =>
+                stage.rewrite(callees, last, plan).and_then(λ new => Some(Cons(new, callees)))),
+        },
+    }
+}
+
+// A function at a time: the earlier functions rewritten, and one more over
+// them. A certificate states a program's rewriting this way, each function
+// its own statement.
+theorem Stage::run_next<P>(self stage: Stage<P>, last: Function, earlier: List<Function>, plan: P, rest: List<P>, new: Function,
+    callees: List<Function>, before: stage.run(earlier, rest) = Some(callees), made: stage.rewrite(callees, last, plan) = Some(new)):
+    stage.run(Cons(last, earlier), Cons(plan, rest)) = Some(Cons(new, callees)) {
+    trans(cong_fn<Option<List<Function>>, Option<List<Function>>>(λ o => o.and_then(λ gs =>
+            stage.rewrite(gs, last, plan).and_then(λ g => Some(Cons(g, gs)))), before),
+        cong_fn<Option<Function>, Option<List<Function>>>(λ o => o.and_then(λ g => Some(Cons(g, callees))), made))
+}
+
+theorem Stage::run_len<P>(self stage: Stage<P>, functions: List<Function>): (plans: List<P>) → (new: List<Function>) →
+    stage.run(functions, plans) = Some(new) → new.len() = functions.len() {
+    match functions {
+        Nil => λ plans new made => j(Option::some_inj<List<Function>>([], new, made), λ gs _ => gs.len() = 0, refl),
+        Cons(last, earlier) => λ plans => match plans {
+            Nil => λ new made => absurd(made),
+            Cons(plan, rest) => λ new made => {
+                let a = Option::and_then_some(stage.run(earlier, rest), λ (gs: List<Function>) =>
+                    stage.rewrite(gs, last, plan).and_then(λ g => Some(Cons(g, gs))), new, made);
+                let gs = a.witness;
+                let b = Option::and_then_some(stage.rewrite(gs, last, plan), λ (g: Function) => Some(Cons(g, gs)), new, a.proof.right);
+                let g = b.witness;
+                j(Option::some_inj(Cons(g, gs), new, b.proof.right), λ out _ => out.len() = Succ(earlier.len()),
+                    cong_fn<Nat, Nat>(λ n => Succ(n), stage.run_len(earlier, rest, gs, a.proof.left)))
+            },
+        },
+    }
+}
+
+// The rewritten program does whatever the program does: each function at
+// its number, called on the same arguments over the same file, may return
+// the same result and leave the same file.
+theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (plans: List<P>) → (new: List<Function>) →
+    stage.run(functions, plans) = Some(new) → (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) →
+    (result: BitVec(64)) → (after: Buffers()) → program_effects(functions, before, f, arguments, result, after) →
+    program_effects(new, before, f, arguments, result, after) {
+    match functions {
+        Nil => λ plans new made before f arguments result after ran => false_elim(ran),
+        Cons(last, earlier) => λ plans => match plans {
+            Nil => λ new made before f arguments result after ran => absurd(made),
+            Cons(plan, rest) => λ new made before f arguments result after => {
+                let a = Option::and_then_some(stage.run(earlier, rest), λ (gs: List<Function>) =>
+                    stage.rewrite(gs, last, plan).and_then(λ g => Some(Cons(g, gs))), new, made);
+                let gs = a.witness;
+                let b = Option::and_then_some(stage.rewrite(gs, last, plan), λ (g: Function) => Some(Cons(g, gs)), new, a.proof.right);
+                let g = b.witness;
+                let same = stage.run_len(earlier, rest, gs, a.proof.left);
+                let below = stage.run_sound(earlier, rest, gs, a.proof.left);
+                let at = (match f.eq_dec(earlier.len()) as λ d =>
+                    (match d {
+                        Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                        Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                    }) →
+                    (match d {
+                        Inl(_) => g.Runs(program_effects(gs), arguments, result, before, after),
+                        Inr(_) => program_effects(gs, before, f, arguments, result, after),
+                    }) {
+                    Inl(_) => λ ran => stage.sound(gs, last, plan, g, b.proof.left, arguments, result, before, after,
+                        Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(program_effects(earlier), program_effects(gs), below,
+                            ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩)),
+                    Inr(_) => λ ran => below(before, f, arguments, result, after, ran),
+                });
+                let moved = j(sym(same), λ n _ =>
+                    (match f.eq_dec(earlier.len()) {
+                        Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                        Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                    }) →
+                    (match f.eq_dec(n) {
+                        Inl(_) => g.Runs(program_effects(gs), arguments, result, before, after),
+                        Inr(_) => program_effects(gs, before, f, arguments, result, after),
+                    }), at);
+                j(Option::some_inj(Cons(g, gs), new, b.proof.right), λ out _ =>
+                    program_effects(Cons(last, earlier), before, f, arguments, result, after) →
+                    program_effects(out, before, f, arguments, result, after), moved)
+            },
+        },
+    }
+}
+
+// Two stages, one after the other.
+theorem Stage::run_then<P, Q>(first: Stage<P>, second: Stage<Q>, functions, between, new: List<Function>, plans: List<P>, more: List<Q>,
+    ran: first.run(functions, plans) = Some(between), then: second.run(between, more) = Some(new), before: Buffers(), f: Nat,
+    arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(), did: program_effects(functions, before, f, arguments, result, after)):
+    program_effects(new, before, f, arguments, result, after) {
+    second.run_sound(between, more, new, then, before, f, arguments, result, after,
+        first.run_sound(functions, plans, between, ran, before, f, arguments, result, after, did))
+}
+
+// Two stages as one: a function rewritten by the first and then by the
+// second, both over its callees as the pair left them. So the first reads
+// callees the second has been over already, where two runs one after the
+// other would have it read the first's alone; and a program rewritten by
+// both is stated once a function.
+fn Stage::then<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Pair<P, Q>> {
+    Stage(λ callees old plan => first.rewrite(callees, old, plan.fst).and_then(λ mid => second.rewrite(callees, mid, plan.snd)),
+        λ callees old plan new made arguments result before after ran => {
+            let a = Option::and_then_some(first.rewrite(callees, old, plan.fst), λ (mid: Function) => second.rewrite(callees, mid, plan.snd), new, made);
+            second.sound(callees, a.witness, plan.snd, new, a.proof.right, arguments, result, before, after,
+                first.sound(callees, old, plan.fst, a.witness, a.proof.left, arguments, result, before, after, ran))
+        })
+}
+
+// What two stages make in turn, the stage of both makes: a certificate
+// states each stage's step on a function as a statement of its own, and
+// this joins them.
+theorem Stage::then_made<P, Q>(self first: Stage<P>, second: Stage<Q>, callees: List<Function>, old, mid, new: Function, p: P, q: Q,
+    made: first.rewrite(callees, old, p) = Some(mid), after: second.rewrite(callees, mid, q) = Some(new)):
+    first.then(second).rewrite(callees, old, Pair(p, q)) = Some(new) {
+    trans(cong_fn<Option<Function>, Option<Function>>(λ o => o.and_then(λ m => second.rewrite(callees, m, q)), made), after)
+}
+
+// A stage that may leave a function as it is: no plan is the function
+// itself. A search that finds nothing for a function, or whose finding
+// something later refuses, falls back to this.
+fn Stage::maybe<P>(self stage: Stage<P>) → Stage<Option<P>> {
+    Stage(λ callees old plan => match plan { None => Some(old), Some(p) => stage.rewrite(callees, old, p) },
+        λ callees old plan => match plan {
+            None => λ new made arguments result before after ran =>
+                j(Option::some_inj(old, new, made), λ g _ => g.Runs(program_effects(callees), arguments, result, before, after), ran),
+            Some(p) => stage.sound(callees, old, p),
+        })
+}
+
+// One of two stages, by which of them the plan is for. Under `many`, a
+// function's plans are then moves of either kind in the order the search
+// chose.
+fn Stage::or<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Or<P, Q>> {
+    Stage(λ callees old plan => match plan { Inl(p) => first.rewrite(callees, old, p), Inr(q) => second.rewrite(callees, old, q) },
+        λ callees old plan => match plan { Inl(p) => first.sound(callees, old, p), Inr(q) => second.sound(callees, old, q) })
+}
+
+// A stage as often as there are plans, the function each plan makes being
+// the next plan's: no plan is the function itself. So how many times a
+// stage runs is the search's to choose, a function at a time.
+fn rewrite_many<P>(rewrite: List<Function> → Function → P → Option<Function>, callees: List<Function>, plans: List<P>) → Function → Option<Function> {
+    match plans {
+        Nil => λ old => Some(old),
+        Cons(plan, rest) => λ old => rewrite(callees, old, plan).and_then(rewrite_many(rewrite, callees, rest)),
+    }
+}
+
+theorem Stage::many_sound<P>(self stage: Stage<P>, callees: List<Function>, plans: List<P>): (old, new: Function) →
+    rewrite_many(stage.rewrite, callees, plans, old) = Some(new) → Rewrites(callees, old, new) {
+    match plans {
+        Nil => λ old new made arguments result before after ran =>
+            j(Option::some_inj(old, new, made), λ g _ => g.Runs(program_effects(callees), arguments, result, before, after), ran),
+        Cons(plan, rest) => λ old new made arguments result before after ran => {
+            let a = Option::and_then_some(stage.rewrite(callees, old, plan), rewrite_many(stage.rewrite, callees, rest), new, made);
+            stage.many_sound(callees, rest, a.witness, new, a.proof.right, arguments, result, before, after,
+                stage.sound(callees, old, plan, a.witness, a.proof.left, arguments, result, before, after, ran))
+        },
+    }
+}
+
+fn Stage::many<P>(self stage: Stage<P>) → Stage<List<P>> {
+    Stage(λ callees old plans => rewrite_many(stage.rewrite, callees, plans, old),
+        λ callees old plans new made => stage.many_sound(callees, plans, old, new, made))
+}
+
+// No plan is the function itself.
+theorem Stage::many_none<P>(self stage: Stage<P>, callees: List<Function>, old: Function): stage.many().rewrite(callees, old, []) = Some(old) { refl }
+
+// What a stage makes by a plan, and makes of that by the plans after it, it
+// makes by them all: a certificate states each plan's step as a statement
+// of its own, and this joins them from the last.
+theorem Stage::many_made<P>(self stage: Stage<P>, callees: List<Function>, old, mid, new: Function, plan: P, rest: List<P>,
+    made: stage.rewrite(callees, old, plan) = Some(mid), after: stage.many().rewrite(callees, mid, rest) = Some(new)):
+    stage.many().rewrite(callees, old, Cons(plan, rest)) = Some(new) {
+    trans(cong_fn<Option<Function>, Option<Function>>(λ o => o.and_then(rewrite_many(stage.rewrite, callees, rest)), made), after)
+}
+
+// Whatever `old` may do called at its function `f`, `new` may: what a
+// compiler that lowers `new` owes for a theorem about `old`
+// (`compiled_returns_written_through` and its kin). A stage gives it at
+// every function (`Stage::run_rewrites`); emptying the functions nothing
+// reaches gives it at the ones that are reached (`prune_sound`).
+fn ProgramRewrites(old, new: List<Function>, f: Nat) → Type {
+    (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        program_effects(old, before, f, arguments, result, after) → program_effects(new, before, f, arguments, result, after)
+}
+
+theorem ProgramRewrites::then(old, mid, new: List<Function>, f: Nat, first: ProgramRewrites(old, mid, f), second: ProgramRewrites(mid, new, f)):
+    ProgramRewrites(old, new, f) {
+    λ before arguments result after ran => second(before, arguments, result, after, first(before, arguments, result, after, ran))
+}
+
+theorem Stage::run_rewrites<P>(self stage: Stage<P>, functions: List<Function>, plans: List<P>, new: List<Function>,
+    made: stage.run(functions, plans) = Some(new), f: Nat): ProgramRewrites(functions, new, f) {
+    λ before arguments result after ran => stage.run_sound(functions, plans, new, made, before, f, arguments, result, after, ran)
+}
+
+// ---------------------------------------------------------------------------
+// The function a call names
+
+fn program_function(functions: List<Function>, f: Nat) → Option<Function> {
+    match functions {
+        Nil => None,
+        Cons(last, earlier) => match f.eq_dec(earlier.len()) { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) },
+    }
+}
+
+theorem past_same(n, f: Nat, same: f = n, past: Succ(n) <= f): False { omega }
+theorem past_less(n, f: Nat, past: Succ(n) <= f): n <= f { omega }
+theorem past_of_same(n, f: Nat, same: f = n): n <= f { omega }
+
+// No function answers a call past the program's end.
+theorem program_effects_past(functions: List<Function>): (f: Nat) → functions.len() <= f → (before: Buffers()) →
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+    program_effects(functions, before, f, arguments, result, after) → False {
+    match functions {
+        Nil => λ f _ before arguments result after ran => ran,
+        Cons(last, earlier) => λ f past before arguments result after =>
+            (match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) → False {
+                Inl(same) => λ _ => past_same(earlier.len(), f, same, past),
+                Inr(_) => λ ran => program_effects_past(earlier, f, past_less(earlier.len(), f, past), before, arguments, result, after, ran),
+            }),
+    }
+}
+
+// What a program answers, a program it is the end of answers.
+theorem program_effects_more(last: Function, earlier: List<Function>, before: Buffers(), f: Nat, arguments: List<BitVec(64)>,
+    result: BitVec(64), after: Buffers()):
+    program_effects(earlier, before, f, arguments, result, after) → program_effects(Cons(last, earlier), before, f, arguments, result, after) {
+    (match f.eq_dec(earlier.len()) as λ d => program_effects(earlier, before, f, arguments, result, after) →
+        (match d {
+            Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+            Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+        }) {
+        Inl(same) => λ ran => false_elim(program_effects_past(earlier, f, past_of_same(earlier.len(), f, same), before, arguments, result, after, ran)),
+        Inr(_) => λ ran => ran,
+    })
+}
+
+theorem Function::runs_weaken(self function: Function, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
+        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after),
+    arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(), ran: function.Runs(effects, arguments, result, before, after)):
+    function.Runs(weaker, arguments, result, before, after) {
+    Exists(ran.witness, ⟨ran.proof.left, ⟨function.body.runs_weaken(effects, weaker, implies, ran.witness, before, after, ran.proof.right.left),
+        ran.proof.right.right⟩⟩)
+}
+
+// A call the program answers is a run of the function it names, over the
+// program's own effects.
+theorem program_effects_function(functions: List<Function>): (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) →
+    (result: BitVec(64)) → (after: Buffers()) → program_effects(functions, before, f, arguments, result, after) →
+    Exists<Function>(λ g => (program_function(functions, f) = Some(g)) ∧ g.Runs(program_effects(functions), arguments, result, before, after)) {
+    match functions {
+        Nil => λ before f arguments result after ran => false_elim(ran),
+        Cons(last, earlier) => λ before f arguments result after =>
+            (match f.eq_dec(earlier.len()) as λ d =>
+                (match d {
+                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
+                    Inr(_) => program_effects(earlier, before, f, arguments, result, after),
+                }) →
+                Exists<Function>(λ g => ((match d { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) }) = Some(g)) ∧
+                    g.Runs(program_effects(Cons(last, earlier)), arguments, result, before, after)) {
+                Inl(_) => λ ran => Exists(last, ⟨refl, last.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
+                    λ b g a r e => program_effects_more(last, earlier, b, g, a, r, e), arguments, result, before, after, ran)⟩),
+                Inr(_) => λ ran => {
+                    let found = program_effects_function(earlier, before, f, arguments, result, after, ran);
+                    Exists(found.witness, ⟨found.proof.left, found.witness.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
+                        λ b g a r e => program_effects_more(last, earlier, b, g, a, r, e), arguments, result, before, after, found.proof.right)⟩)
+                },
+            }),
+    }
+}
