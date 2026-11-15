@@ -70,11 +70,8 @@ measured at under a third of the planning.
 
 ## What is left
 
-- The planner runs twice on every function the optimizer keeps: once when
-  the lowering is asked whether it takes the function (`Function::lowers`)
-  and once for the placement the certificate states (`…_plan_k`). Keeping
-  the first answer removes about a quarter of the compile's evaluation, though
-  not its peak.
+- ~~The planner runs twice on every function the optimizer keeps~~: done
+  2026-11-14, the lowering's question answers its placement.
 
 - The margin under the rail is still thin (about 0.7 GiB of address space
   on this program), and it is the allocator's reservations, not use. A
@@ -87,6 +84,57 @@ measured at under a third of the planning.
   it, each a gigabyte resident while it runs.
 - The elaborated library the compile starts from is itself about 2.9 GiB
   resident on a cold store.
+
+## glibc's thread arenas (2026-11-14, thread "Cut the warm compile's cost")
+
+On the tree with the word load (PR #622's branch), cold store, release
+binary, `VmPeak` sampled every half second, `/proc/<pid>/maps` read during
+the optimizer's reads:
+
+| mapped | what |
+|---|---|
+| 5 × 1 GiB | mimalloc's arenas |
+| 16 × 64 MiB | glibc `malloc` arenas, one a thread, almost all of each reserved and never touched |
+| 16 × 8 MiB | thread stacks |
+
+Rust's allocations all go to mimalloc, but glibc `calloc`s a record for
+each thread-local destructor a thread registers, and a thread's first
+`malloc` makes it a 64 MiB arena of its own. `heather` now runs itself
+again with `MALLOC_ARENA_MAX=1` where that is unset (`one_malloc_arena`
+in `crates/cli/src/main.rs`; `mallopt` would be `unsafe`, which the
+workspace forbids, and glibc reads the variable only at start), for every
+command, since the suite's 6 GiB rail meets the same reservations.
+
+| `sha256_compress`, cold | wall | peak mapped | peak resident |
+|---|---|---|---|
+| before | 261 s | 6.3 GiB | 4.4 GiB |
+| one glibc arena | 258 s | 5.3 GiB | 4.4 GiB |
+| one glibc arena, mimalloc arenas of 256 MiB (`MIMALLOC_ARENA_RESERVE`) | 243 s | 5.5 GiB | 4.3 GiB |
+
+A smaller mimalloc reservation does not help: past eight arenas mimalloc
+doubles the size of every eighth one, so many small arenas end larger. The
+7.96 GiB above was measured before the word load; on this tree the peak is
+6.3 GiB, and 5.3 GiB with the fix, 2.7 GiB under the rail.
+
+Planning twice is gone (see [[optimizer-search-answers-memo]]): the
+lowering's question answers its placement and that is the program's. The
+two largest reads are still one function's planning and emission, about
+the same steps as before, so the resident peak is unchanged.
+
+### Where a cold compile goes
+
+Same box, `--timings`, cold store (353 s with the timing on and a build
+beside it; the shape is what matters):
+
+| | share |
+|---|---|
+| elaborating the library the compile imports (120 modules; `function_ir_lower_calls` alone 56 s, `runtime` 17 s, the SHA-256 modules about 48 s together) | about two thirds |
+| the optimizer's and the lowering's reads (398 evaluations, 106 M steps) | about 47 s |
+| elaborating the probe modules those reads stand on (each made function is a literal) | about 30 s |
+| the certificate | 23 s |
+
+A warm store takes the first and last away (image replay), and now the
+middle two.
 
 ## Log
 

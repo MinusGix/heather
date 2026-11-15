@@ -24,6 +24,8 @@ use std::collections::BTreeSet;
 
 use heather_elab::{Elaborator, function_ir_source};
 
+use super::answers::{Answers, Reading};
+
 pub(super) struct Compiled {
     /// The certificate's source.
     pub text: String,
@@ -505,6 +507,11 @@ struct Staged {
 struct Optimized {
     definitions: String,
     statements: String,
+    /// Each function's placement where the optimizer kept a function the
+    /// lowering was asked about with it and the function is reached (it is
+    /// then the function the code is lowered from); `None` where the
+    /// planner is still to be read.
+    placements: Vec<Option<Vec<u64>>>,
 }
 
 /// The text of a spelling (`lib/native/function_ir/function_ir_spelled.hthr`):
@@ -565,33 +572,47 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// nothing, and its code would be emitted all the same. The certificate
 /// states the list of the functions reached as a literal, and that the
 /// program is closed under it (`program_closed`), by evaluation.
-fn optimize(elab: &Elaborator, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
-    let mut fork = elab.fork();
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
+    let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
-    fork.elab_module_source(&source, definitions).map_err(|e| e.render(definitions))?;
-    let read = |fork: &Elaborator, module: &str, item: &str|
-        function_ir_source::evaluate_numbers(fork, &format!("{module}::{prefix}_opt_{item}")).map_err(|e| format!("`{prefix}_opt_{item}`: {e}"));
+    fork.define(&source, definitions);
+    let read = |fork: &mut Reading, module: &str, item: &str|
+        fork.read(&format!("{module}::{prefix}_opt_{item}")).map_err(|e| format!("`{prefix}_opt_{item}`: {e}"));
     let uses = |modules: &[String]| modules.iter().map(|name| format!("import {name};\n")).collect::<String>();
-    let mut modules = vec![source];
+    // Whether the lowering takes a function with the planner's placement
+    // (`Function::lowers`), and the placement where it does: the program's
+    // planning of a function the optimizer keeps is this one, so the
+    // compile reads it once (issues/compile-x86-address-space-margin.md).
+    let placed = format!("{probe}_opt_placed");
+    fork.define(&placed, &format!("{imports}import {source};
+fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List<Nat> {{
+    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts()) {{
+        None => [0],
+        Some(_) => Cons(1, places.map(λ (place: Place) => place.number())),
+    }}
+}}
+"));
+    let mut modules = vec![source, placed];
     let (mut stated, mut statements) = (String::new(), String::new());
+    let mut placements = Vec::with_capacity(m);
     for k in 0..m {
         let below = |stem: &str| if k == 0 { "Nil".to_string() } else { format!("{prefix}_{stem}_{}()", k - 1) };
         let earlier = below("opt_first");
         let original = format!("{prefix}_fn{k}()");
         // A yes or no of the function an expression names, read.
-        let asks = |fork: &mut Elaborator, modules: &[String], item: &str, question: &str| -> Result<bool, String> {
+        let asks = |fork: &mut Reading, modules: &[String], item: &str, question: &str| -> Result<bool, String> {
             let module = format!("{probe}_opt_{item}");
             let text = format!("{imports}{}
 fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False => [0] }} }}
 ", uses(modules));
-            fork.elab_module_source(&module, &text).map_err(|e| e.render(&text))?;
+            fork.define(&module, &text);
             Ok(read(fork, &module, item)? == [1])
         };
         // The stages `searches` name, in turn from the function `from`: each
         // search is asked of the function the one before it made, and what
         // it makes, where that is another function, is defined under a name
         // of its own, `{prefix}_opt_fn{k}_{tag}{stage}`.
-        let run = |fork: &mut Elaborator, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(Stage, String)]|
+        let run = |fork: &mut Reading, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(Stage, String)]|
             -> Result<Vec<Staged>, String> {
             let mut made: Vec<Staged> = Vec::new();
             for (at, (stage, search)) in searches.iter().enumerate() {
@@ -601,7 +622,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False
                 let text = format!("{imports}{}
 fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
 ", uses(modules));
-                fork.elab_module_source(&find, &text).map_err(|e| e.render(&text))?;
+                fork.define(&find, &text);
                 let unread = || format!("function {k}'s `{search}` did not read back");
                 let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
                 if found == "None" { continue; }
@@ -617,7 +638,7 @@ fn {name}() → Function {{
     {function}
 }}
 ", uses(modules));
-                fork.elab_module_source(&module, &text).map_err(|e| e.render(&text))?;
+                fork.define(&module, &text);
                 modules.push(module);
                 before = Some(function.to_string());
                 made.push(Staged { stage: *stage, plan: plan.to_string(), function: function.to_string(), name });
@@ -625,10 +646,24 @@ fn {name}() → Function {{
             Ok(made)
         };
         let named = |made: &[Staged]| made.last().map_or(original.clone(), |last| format!("{}()", last.name));
-        let fits = |fork: &mut Elaborator, modules: &[String], made: &[Staged], item: &str|
+        let fits = |fork: &mut Reading, modules: &[String], made: &[Staged], item: &str|
             asks(fork, modules, &format!("fits_{item}{k}"), &format!("{}.fits(Wanted::usual())", named(made)));
-        let lowers = |fork: &mut Elaborator, modules: &[String], made: &[Staged], item: &str|
-            asks(fork, modules, &format!("taken_{item}{k}"), &format!("{}.lowers({k}, {prefix}_counts())", named(made)));
+        let lowers = |fork: &mut Reading, modules: &[String], made: &[Staged], item: &str| -> Result<Option<Vec<u64>>, String> {
+            let item = format!("taken_{item}{k}");
+            let module = format!("{probe}_opt_{item}");
+            let function = named(made);
+            let text = format!("{imports}{}
+fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {function}.plan()) }}
+", uses(modules));
+            fork.define(&module, &text);
+            match read(fork, &module, &item)?.split_first() {
+                Some((0, [])) => Ok(None),
+                Some((1, places)) => Ok(Some(places.to_vec())),
+                _ => Err(format!("`{prefix}_opt_{item}` did not read back")),
+            }
+        };
+        // The placement of the function kept, where the lowering was asked.
+        let mut placement = None;
         let wanted = format!("{earlier}, Wanted::usual()");
         let replay = |search: &str| (Stage::Replay, search.to_string());
         // With no test: inlined and tidied, within the search's room or
@@ -645,7 +680,10 @@ fn {name}() → Function {{
             tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
                 &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_copied_past()"), replay("find_swept_past()"),
                     replay("find_learned_past()"), replay("find_copied_past()"), replay("find_swept_past()")])?);
-            if fits(&mut fork, &modules, &tested, "tested_")? && lowers(&mut fork, &modules, &tested, "tested_")? { made = tested; }
+            if fits(&mut fork, &modules, &tested, "tested_")? && let Some(places) = lowers(&mut fork, &modules, &tested, "tested_")? {
+                made = tested;
+                placement = Some(places);
+            }
         }
         // With no test: what the function's own tests and ranges decide,
         // of the function tidied; or that function.
@@ -656,9 +694,15 @@ fn {name}() → Function {{
             if learned.len() > tidied.len() {
                 let last = learned.last().map(|last| last.function.clone());
                 learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
-                if lowers(&mut fork, &modules, &learned, "learned_")? { made = learned; }
+                if let Some(places) = lowers(&mut fork, &modules, &learned, "learned_")? {
+                    made = learned;
+                    placement = Some(places);
+                }
             }
-            if made.is_empty() && !tidied.is_empty() && lowers(&mut fork, &modules, &tidied, "")? { made = tidied; }
+            if made.is_empty() && !tidied.is_empty() && let Some(places) = lowers(&mut fork, &modules, &tidied, "")? {
+                made = tidied;
+                placement = Some(places);
+            }
         }
         // Bytes joined into a word, read as one load: the load is put
         // after the last of the byte loads, the walk finds the join a
@@ -676,9 +720,13 @@ fn {name}() → Function {{
                 worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
                     &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
                         replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
-                if lowers(&mut fork, &modules, &worded, "worded_")? { made = worded; }
+                if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
+                    made = worded;
+                    placement = Some(places);
+                }
             }
         }
+        placements.push(placement);
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
         let moves: Vec<&Staged> = made.iter().filter(|staged| staged.stage != Stage::Guard).collect();
@@ -688,7 +736,7 @@ fn {name}() → Function {{
         let text = format!("{imports}{}
 fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
 {lists}", uses(&modules));
-        fork.elab_module_source(&next, &text).map_err(|e| e.render(&text))?;
+        fork.define(&next, &text);
         modules.push(next);
         let plans_before = below("opt_plans");
         if made.is_empty() {
@@ -766,10 +814,10 @@ theorem {prefix}_opt_ran_{k}(): optimize_stage().run({prefix}_first_{k}(), {pref
     let text = format!("{imports}{}
 fn {prefix}_opt_reached() → List<Nat> {{ program_reached({prefix}_opt_first_{last}(), [{}]) }}
 ", uses(&modules), roots.iter().map(|root| root.to_string()).collect::<Vec<_>>().join(", "));
-    fork.elab_module_source(&reach, &text).map_err(|e| e.render(&text))?;
+    fork.define(&reach, &text);
     // The walk lists a function once for each call it finds; the certificate
     // states each once, in order.
-    let mut reached = read(&fork, &reach, "reached")?;
+    let mut reached = read(&mut fork, &reach, "reached")?;
     reached.sort_unstable();
     reached.dedup();
     stated.push_str(&format!("
@@ -809,10 +857,13 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
             prune_rewrites(λ (n: Nat) => n.among({prefix}_opt_live()), {prefix}_opt_program(), {prefix}_cut_closed(), f, alive)))
 }}
 "));
-    Ok(Optimized { definitions: stated, statements })
+    for (k, placement) in placements.iter_mut().enumerate() {
+        if !reached.contains(&(k as u64)) { *placement = None; }
+    }
+    Ok(Optimized { definitions: stated, statements, placements })
 }
 
-pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
@@ -824,11 +875,11 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
     // is the program it made, `{prefix}_cut_…`, and the program published
     // is what the theorems are about.
     let stem = lowered_stem(prefix, program.optimize);
-    let (definitions, rewriting) = if program.optimize {
+    let (definitions, rewriting, placed) = if program.optimize {
         let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
-        let made = optimize(elab, prefix, &probe, &imports, &definitions, m, &roots)?;
-        (format!("{definitions}{}", made.definitions), made.statements)
-    } else { (definitions, String::new()) };
+        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots)?;
+        (format!("{definitions}{}", made.definitions), made.statements, made.placements)
+    } else { (definitions, String::new(), vec![None; m]) };
     // A function's emission after `prog`: under the program's counts of
     // lent buffers where it has them.
     let lent = program.lent.is_some();
@@ -853,14 +904,16 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
 }}
 "));
-    let mut fork = elab.fork();
+    let mut fork = Reading::new(elab, answers);
     let first = format!("{definitions}{plans}");
-    fork.elab_module_source(&probe, &first).map_err(|e| e.render(&first))?;
-    let read = |fork: &Elaborator, module: &str, item: &str|
-        function_ir_source::evaluate_numbers(fork, &format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
+    fork.define(&probe, &first);
+    let read = |fork: &mut Reading, module: &str, item: &str|
+        fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
     for k in 0..m {
-        for n in read(&fork, &probe, &format!("plan_{k}"))? {
+        // The optimizer's question already planned a function it kept.
+        let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
+        for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
                 // What a call saves, a mask, and a function's count of
@@ -907,8 +960,8 @@ fn {prefix}_read_{k}() → List<Nat> {{
     }}
 }}
 ", uses(&modules), emitted = emit(&prog, k, &places, names));
-        fork.elab_module_source(&step, &text).map_err(|e| e.render(&text))?;
-        let numbers = read(&fork, &step, &format!("read_{k}"))?;
+        fork.define(&step, &text);
+        let numbers = read(&mut fork, &step, &format!("read_{k}"))?;
         match numbers[..] {
             // Which function and where in it: the library's mirror of the
             // emitter's tests says (`function_ir_refusal`,
@@ -921,8 +974,8 @@ fn {prefix}_read_{k}() → List<Nat> {{
 fn {prefix}_refused() → List<Nat> {{ {stem}_fn{k}().refusal_bytes({k}, {names}, {counts}) }}
 fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
 ", uses(&modules));
-                let defined = fork.elab_module_source(&why, &text).is_ok();
-                let said = |item: &str| read(&fork, &why, item).ok().filter(|_| defined)
+                let defined = fork.define_now(&why, &text).is_ok();
+                let mut said = |item: &str| (if defined { read(&mut fork, &why, item).ok() } else { None })
                     .map(|bytes| String::from_utf8_lossy(&bytes.iter().map(|&b| b as u8).collect::<Vec<u8>>()).into_owned());
                 let (at, nodes) = (said("refused"), said("shown"));
                 return Err(format!("the verified lowering refused this program with the planner's placement: its function {k} of {m}, callees first{}{}",
@@ -958,9 +1011,9 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
     let text = format!("{imports}{}{}
 fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
 ", uses(&modules), stated(last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
-    fork.elab_module_source(&closing, &text).map_err(|e| e.render(&text))?;
+    fork.define(&closing, &text);
     modules.push(closing.clone());
-    let lens = read(&fork, &closing, "lens")?;
+    let lens = read(&mut fork, &closing, "lens")?;
     if lens.len() != items.len() { return Err("the items' lengths do not cover the code".into()); }
     let offsets = super::labels::offsets(&lens);
     let length = offsets[items.len()] as usize;
@@ -979,10 +1032,10 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     }
     let reading = format!("{probe}_bytes");
     let text = format!("{imports}{}{table}{windows}", uses(&modules));
-    fork.elab_module_source(&reading, &text).map_err(|e| e.render(&text))?;
+    fork.define(&reading, &text);
     let mut bytes = Vec::with_capacity(length);
     for &cut in cuts.iter().filter(|&&cut| cut > 0) {
-        for b in read(&fork, &reading, &format!("bytes_{cut}"))? {
+        for b in read(&mut fork, &reading, &format!("bytes_{cut}"))? {
             bytes.push(u8::try_from(b).map_err(|_| "a byte above 255".to_string())?);
         }
         if bytes.len() as u64 != offsets[cut] { return Err("the items' lengths do not cover the code".into()); }
