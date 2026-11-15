@@ -144,6 +144,12 @@ fn rt_loop_calls(fuel: Nat, k: Known, w: LoopWalk, world: Handle) → Tac<LoopWa
     pure(LoopWalk(walked.st, walked.segs, walked.io, w.under))
 }
 
+// The lent functions' calls the terms `hs` need, made before them.
+fn rt_loop_lends(fuel: Nat, k: Known, w: LoopWalk, hs: List<Handle>) → Tac<LoopWalk> {
+    let walked <- rt_lend_calls(fuel, k, IoWalk(w.st, w.segs, w.io), hs);
+    pure(LoopWalk(walked.st, walked.segs, walked.io, w.under))
+}
+
 // The walk's pure lets moved into its computation.
 fn LoopWalk::settle(self w: LoopWalk) → LoopWalk {
     LoopWalk(RSt(w.st.depth, [], w.st.memo, w.st.handles, w.st.locals, w.st.funs), ESeg::lets(w.st.lets) ++ w.segs, w.io, w.under)
@@ -225,12 +231,12 @@ fn rt_state_value(names: LoopNames, xs: List<LocalInfo>) → Tac<Handle> {
 // each a variable at its level. The reflection state and what it knows.
 record Opened2 { k: Known, st: RSt, io: IoKnown, under: LocalRef, body: Handle, state: LocalRef }
 
-fn rt_open_state(k: Known, names: LoopNames, st: RSt, methods: List<Nat>, h: Handle, tys: List<Handle>, levels: List<Nat>) → Tac<Opened2> {
+fn rt_open_state(k: Known, names: LoopNames, st: RSt, io0: IoKnown, h: Handle, tys: List<Handle>, levels: List<Nat>) → Tac<Opened2> {
     let o <- open(h, "state").bind(λ c => rt_loop_ok("a loop's state", c));
     let xs <- rt_loop_locals(o.local.ref, tys);
     let value <- rt_state_value(names, xs);
     pure(Opened2(k.naming(Cons(FieldWhole(o.local.ref.id, "value", value), k.named)), rt_bind_locals(st, xs, levels),
-        IoKnown(o.local.ref.id, methods, []), rt_last_ref(o.local.ref, xs), o.body, o.local.ref))
+        IoKnown(o.local.ref.id, io0.methods, [], io0.lends, io0.lent), rt_last_ref(o.local.ref, xs), o.body, o.local.ref))
 }
 
 fn rt_types(parts: List<Handle>) → Tac<List<Handle>> {
@@ -303,9 +309,10 @@ fn rt_loop_comps_after(fuel: Nat, k: Known, w: LoopWalk, parts: List<Handle>) �
 // The end: `Mutated(world, value)`.
 fn rt_io_done(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, h: Handle) → Tac<LoopRead> {
     let s <- rt_state_split(fuel, names.io.mutated, 1, h);
-    let w1 <- rt_loop_calls(fuel, k, w, s.fst);
+    let w0 <- rt_loop_calls(fuel, k, w, s.fst);
     match s.snd {
         Cons(value, _) => {
+            let w1 <- rt_loop_lends(fuel, k, w0, [value]);
             let r <- rt_go(fuel, k.at_world(w1.io), w1.st, value, False);
             let t <- k.at_world(w1.io).ty_of(value);
             pure(LoopRead(ELoop::Done(ESeg::close(ESeg::lets(r.fst.lets) ++ w1.segs, ETm::Pure(r.snd))), t, PDone))
@@ -323,7 +330,8 @@ fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle,
     let n <- rt_state_count_of(fuel, mutated, sv);
     let s <- rt_state_split(fuel, mutated, n, init);
     // Before the loop: the calls to its world, then each component.
-    let w1 <- rt_loop_calls(fuel, k, w, s.fst);
+    let w0 <- rt_loop_calls(fuel, k, w, s.fst);
+    let w1 <- rt_loop_lends(fuel, k, w0, s.snd);
     let base = w1.st.depth;
     let comps <- rt_loop_components(fuel, k, w1, base, s.snd, []);
     let before = comps.fst.settle();
@@ -332,7 +340,7 @@ fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle,
     // The step at a state of fresh locals.
     let tys <- rt_types(s.snd);
     let base_st = RSt(d, [], [], before.st.handles, before.st.locals, before.st.funs);
-    let os <- rt_open_state(k, names, base_st, w.io.methods, step, tys, comps.snd);
+    let os <- rt_open_state(k, names, base_st, w1.io, step, tys, comps.snd);
     let m <- arms(os.body).bind(λ c => rt_loop_ok("a loop's test", c));
     let rc <- rt_go(fuel, os.k.at_world(os.io), os.st, m.scrut, False);
     let cond = RSt::wrap(rc.fst.lets, rc.snd);
@@ -341,7 +349,8 @@ fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle,
     let next <- rt_returned(names, yes).bind(λ x => rt_step_payload(x, "Continue"));
     let ns <- rt_state_split(fuel, mutated, n, next);
     let pw <- rt_loop_calls(fuel, os.k, LoopWalk(RSt(d, [], [], os.st.handles, os.st.locals, rc.fst.funs), [], os.io, os.under), ns.fst);
-    let pc <- rt_loop_comps_after(fuel, os.k, pw, ns.snd);
+    let pl <- rt_loop_lends(fuel, os.k, pw, ns.snd);
+    let pc <- rt_loop_comps_after(fuel, os.k, pl, ns.snd);
     let pass_walk = pc.fst.settle();
     let pass = ESeg::close(pass_walk.segs, ETm::Pure(Lit(Word(64), 0)));
     let rebind = rt_rebind(d, pass_walk.st.depth, comps.snd, pc.snd);
@@ -350,7 +359,7 @@ fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle,
     let same <- defeq(Hd(out), Local(os.state));
     let _ <- match same { True => pure(0), False => rt_refuse("a loop's exit that does not leave its state as it is") };
     // The rest of the block, at the state the loop leaves.
-    let ok <- rt_open_state(k, names, RSt(d, [], [], before.st.handles, before.st.locals, pw.st.funs), w.io.methods, kont, tys, comps.snd);
+    let ok <- rt_open_state(k, names, RSt(d, [], [], before.st.handles, before.st.locals, pw.st.funs), w1.io, kont, tys, comps.snd);
     let rest <- rest_of(ok.k, LoopWalk(ok.st, [], ok.io, ok.under), ok.body);
     // For the bridge: the test and the body as functions of the state. The
     // body is read under the `True` arm's payload, which it does not mention.
@@ -396,7 +405,7 @@ record LoopOpened { read: LoopFun, proof: LoopProof, io: LocalRef, params: List<
 
 // An effectful function with loops: its first parameter the world, the
 // rest data.
-fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, g: Nat) → Tac<LoopOpened> {
+fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat>, g: Nat) → Tac<LoopOpened> {
     let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
     let bv <- view(b);
     match bv {
@@ -406,7 +415,7 @@ fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, g: Nat) → Tac<Lo
                 False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
                 True => {
                     let o <- open(b, "io").bind(λ c => rt_accepted("its world", c));
-                    let io = IoKnown(o.local.ref.id, names.io.methods, []);
+                    let io = IoKnown(o.local.ref.id, names.io.methods, [], lends, []);
                     let p <- rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body);
                     let under = match p.fst.fst.locals { Cons(x, _) => LocalRef(x.fst), Nil => o.local.ref };
                     let r <- rt_io_eloop(fuel, k, names, LoopWalk(p.fst.fst, [], io, under), p.snd);
@@ -418,8 +427,8 @@ fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, g: Nat) → Tac<Lo
     }
 }
 
-fn rt_io_reflect_loop_fun(fuel: Nat, k: Known, names: LoopNames, g: Nat) → Tac<LoopFun> {
-    rt_io_read_loop_fun(fuel, k, names, g).bind(λ o => pure(o.read))
+fn rt_io_reflect_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat>, g: Nat) → Tac<LoopFun> {
+    rt_io_read_loop_fun(fuel, k, names, lends, g).bind(λ o => pure(o.read))
 }
 
 fn rt_loop_names() → Tac<LoopNames> {
@@ -433,18 +442,22 @@ fn rt_loop_names() → Tac<LoopNames> {
     pure(LoopNames(IoNames(io, mu, ms), then, ret, state, itself))
 }
 
-fn rt_loop_funs(k: Known, names: LoopNames, gs: List<Nat>) → Tac<List<LoopFun>> {
+fn rt_loop_funs(k: Known, names: LoopNames, lends: List<Nat>, gs: List<Nat>) → Tac<List<LoopFun>> {
     match gs {
         Nil => pure([]),
-        Cons(g, rest) => rt_io_reflect_loop_fun(4096, k, names, g).bind(λ f => rt_loop_funs(k, names, rest).bind(λ fs => pure(Cons(f, fs)))),
+        Cons(g, rest) => rt_io_reflect_loop_fun(4096, k, names, lends, g).bind(λ f => rt_loop_funs(k, names, lends, rest).bind(λ fs => pure(Cons(f, fs)))),
     }
 }
 
-fn rt_io_reflect_loop(efuns: List<String>, funs: List<String>, recs: List<String>) → Tac<List<LoopFun>> {
+// The effectful functions `efuns` read, over the pure functions `funs`, the
+// records `recs`, and the functions `lends` a computation lends a buffer to
+// (the table's order: a call of the `i`-th is `Lend(i, …)`).
+fn rt_io_reflect_loop(efuns: List<String>, funs: List<String>, recs: List<String>, lends: List<String>) → Tac<List<LoopFun>> {
     let k <- rt_known(funs, recs);
     let es <- rt_globals(efuns);
+    let ls <- rt_globals(lends);
     let names <- rt_loop_names();
-    rt_loop_funs(k, names, es)
+    rt_loop_funs(k, names, ls, es)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +508,6 @@ fn rt_loop_compare(got: List<LoopFun>, expected: List<LoopFun>) → Tac<Expr> {
 
 // The check `lib/_tests` runs: the reflection of the effectful functions
 // `efuns`, loops and all, is `expected`, function by function.
-fn reflects_io_loop_as(efuns: List<String>, funs: List<String>, recs: List<String>, expected: List<LoopFun>) → Tac<Expr> {
-    rt_io_reflect_loop(efuns, funs, recs).bind(λ got => rt_loop_compare(got, expected))
+fn reflects_io_loop_as(efuns: List<String>, funs: List<String>, recs: List<String>, lends: List<String>, expected: List<LoopFun>) → Tac<Expr> {
+    rt_io_reflect_loop(efuns, funs, recs, lends).bind(λ got => rt_loop_compare(got, expected))
 }

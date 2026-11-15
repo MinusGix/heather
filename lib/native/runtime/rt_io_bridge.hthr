@@ -234,21 +234,23 @@ fn bridge_env(nm: BridgeNames, params: List<LocalRef>) → Expr { bridge_pairs(n
 
 fn bridge_lams(xs: List<LocalRef>, e: Expr) → Expr { match xs { Nil => e, Cons(x, rest) => Lam(x, bridge_lams(rest, e)) } }
 
-// `io_loop_bridge(f, funs, recs, world, lents)`: a proof of
+// `io_loop_bridge(f, funs, recs, lends, world, lents)`: a proof of
 //
 //     (io: Io) → (p₁ …) → Eutt(Events::none(), f(io, p₁, …),
 //         prog.sem(world, lents, g, env, io))
 //
 // for the function `f` over `Io` with loops, `prog` what the reflector reads
-// it as (`rt_io_reflect_loop`, over the functions `funs` and records
-// `recs`), `g` its parameters' codes the last first, `env` the parameters
-// as an environment. `world` and `lents` name the `rt::World` and the
-// lent spans the reading is at.
-fn io_loop_bridge(fname: String, funs: List<String>, recs: List<String>, world: String, lents: String) → Tac<Expr> {
+// it as (`rt_io_reflect_loop`, over the functions `funs`, the records
+// `recs` and the functions `lends` it lends a buffer to), `g` its
+// parameters' codes the last first, `env` the parameters as an
+// environment. `world` and `lents` name the `rt::World` and the table of
+// lent functions (`List<Lent>`, in `lends`' order) the reading is at.
+fn io_loop_bridge(fname: String, funs: List<String>, recs: List<String>, lends: List<String>, world: String, lents: String) → Tac<Expr> {
     let k <- rt_known(funs, recs);
     let names <- rt_loop_names();
     let g <- rt_global(fname);
-    let r <- rt_io_read_loop_fun(4096, k, names, g);
+    let ls <- rt_globals(lends);
+    let r <- rt_io_read_loop_fun(4096, k, names, ls, g);
     let nm <- bridge_names();
     let q <- io_quoting();
     let wE <- runtime_global(world);

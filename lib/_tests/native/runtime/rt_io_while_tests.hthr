@@ -105,7 +105,7 @@ fn echo_bridge(io: Io, buf: List<BitVec(8)>) →
 
 // The reflector reads the surface method into the program written above.
 theorem echo_reflected(): True {
-    by reflects_io_loop_as(["Io::echo_all"], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
+    by reflects_io_loop_as(["Io::echo_all"], [], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
 }
 
 fn no_lents() → List<Lent> { [] }
@@ -114,7 +114,7 @@ fn no_lents() → List<Lent> { [] }
 theorem echo_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::echo_all(io, buf), echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io))
 {
-    by io_loop_bridge("Io::echo_all", [], [], "wd", "no_lents")
+    by io_loop_bridge("Io::echo_all", [], [], [], "wd", "no_lents")
 }
 
 // Two loops one after the other, and parameters no loop threads: the
@@ -148,13 +148,13 @@ fn twice_prog() → ELoop {
 }
 
 theorem twice_reflected(): True {
-    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [LoopFun([Bytes(0), Word(64)], Word(64), twice_prog())])
+    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [], [LoopFun([Bytes(0), Word(64)], Word(64), twice_prog())])
 }
 
 theorem twice_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_prog().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
 {
-    by io_loop_bridge("Io::write_out_twice", [], [], "wd", "no_lents")
+    by io_loop_bridge("Io::write_out_twice", [], [], [], "wd", "no_lents")
 }
 
 // A negative control: the bridge is checked against the statement, so a
@@ -176,5 +176,5 @@ fn twice_wrong() → ELoop {
 theorem twice_wrong_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_wrong().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
 {
-    by io_loop_bridge("Io::write_out_twice", [], [], "wd", "no_lents")
+    by io_loop_bridge("Io::write_out_twice", [], [], [], "wd", "no_lents")
 }

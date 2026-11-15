@@ -76,8 +76,11 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 
 // What an effectful body's reflection knows of its world: the capability's
 // local, the word-level methods that call Linux, and the calls made so far,
-// in order.
-record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
+// in order; the functions of the program a computation may lend a buffer
+// to (`ETm::Lend`), the table's order, and the calls of them made so far,
+// each with the variables its `Lend` bound the bytes it left (`after`) and
+// its word (`value`) to.
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes>, lends: List<Nat>, lent: List<CallRes> }
 
 // What the body of a function over a span it writes knows of that span
 // (`rt_file_reflect`, docs/native/native-one-compiler-design.md §2.6): the span
@@ -970,6 +973,11 @@ fn IoKnown::is_method(self io: IoKnown, g: GlobalRef) → Bool {
     match Known::index(io.methods, g.id, 0) { Some(_) => True, None => False }
 }
 
+fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
+    match Known::index(io.lends, g.id, 0) { Some(_) => True, None => False }
+}
+
+
 // The calls a world has been through, the first first: the parameter has
 // been through none, and `m(w, …).after` through `w`'s and then `m`.
 fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
@@ -1063,6 +1071,16 @@ fn rt_file_answer_in(cs: List<CallRes>, g: Nat, r: Handle) → Tac<Option<CallRe
     }
 }
 
+// The call of a lent function `r` names among those made so far: the same
+// handle, or a copy of one (the elaborator repeats a call wherever its
+// record is read).
+fn rt_lent_answer(io: IoKnown, r: Handle) → Tac<Option<CallRes>> {
+    match rt_call_by_handle(io.lent, r.id) {
+        Some(a) => pure(Some(a)),
+        None => view(r).bind(λ v => match v { HGlobal(g, _, _) => rt_file_answer_in(io.lent, g.id, r), _ => pure(None) }),
+    }
+}
+
 fn rt_file_answer(fk: FileKnown, r: Handle) → Tac<Option<CallRes>> {
     match rt_call_by_handle(fk.calls, r.id) {
         Some(a) => pure(Some(a)),
@@ -1099,6 +1117,18 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
                 }),
             },
             False => view(r).bind(λ rv => match rv {
+                // A field of a lent function's answer: a variable its `Lend`
+                // bound, once the call is made (`rt_lend_calls`).
+                HGlobal(g, gname, _) => match io.is_lent(g) {
+                    True => rt_lent_answer(io, r).bind(λ found => match found {
+                        Some(a) => match rt_answer_field(a.fields, rt_base_name(name)) {
+                            Some(l) => pure(st.finish(h, operand, Var(l))),
+                            None => rt_refuse("`" ++ name ++ "` is not a field of `" ++ gname ++ "`'s answer: its bytes `after` and its word `value`"),
+                        },
+                        None => rt_refuse("an answer of `" ++ gname ++ "` read where the call is not made: a lent function is called where a call on Linux, a loop's pass or the end needs its answer"),
+                    }),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
                 HLocal(x, _) => match x.id.same(io.world) {
                     // A loop's state holds the world and the locals; a read
                     // of one of its locals names a term (`k.named`).

@@ -209,6 +209,18 @@ The table `ls: List<Lent>` and the `ETm::LentsAgree` premise of
 The generator writes that proof; it is the same few lines for every
 callee, so it is a lemma over the callee's group, not per program.
 
+**As built (2026-11-15).** The reflector is given the lent functions in
+the table's order (`reflects_io_loop_as(…, lends, …)`, `io_loop_bridge(…,
+lends, …)`). A call of one is made where a call on Linux, a loop's pass or
+the end first needs its answer (`rt_lend_calls` scans their operands,
+innermost call first), binding its bytes (`m.after`) and word
+(`m.value`) as a `Lend`; its length argument must be
+`BitVec::ofNat(buf.len())` of the buffer it is lent, else it is refused.
+`Io::tr_upper` reflects to `tr_prog()` exactly (`rt_io_lend_tests`), and
+its bridge is written and checked the same way as echo's, the table
+`tr_lents` taken by name. A reader (answer only a word) is the generator
+round's, with the table.
+
 What it inherits: a program lends a function a **prefix** of its buffers,
 so the buffer lent is the program's first (issue `source-buffers-as-views`).
 One buffer is enough for every program in §0 and the demo thread's three.
