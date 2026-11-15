@@ -99,4 +99,3 @@ theorem cmp8_zero_extended(): sub_flags(w(0x80), b(0x80).zero_extend(56)).bits()
 // would be refused here.
 // expect-error: `refl` needs both sides to be definitionally equal
 theorem mov32_keeps_upper(): mov32(0xffffffffffffffff, 0x1) = w(0xffffffff00000001) { refl }
-

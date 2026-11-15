@@ -73,7 +73,7 @@ fn triangle_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(
 fn triangle_program() → Prog {
     Start
         .label(1).put(Block([frame_allocate()]))
-        .put(Block([MovRI(Rax, w(0))]))
+        .put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .put(Block([MovRR(Rcx, Rdi), MovRR(R8, Rax)]))
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
         .put(Block([AddRR(R8, Rcx), XorRR(R9, R9), CmpRR(Rcx, Rcx), SetBelow(R9b)]))

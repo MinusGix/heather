@@ -686,7 +686,6 @@ fn StructuredRegion::register_reads(self region: StructuredRegion, folds: Reads(
     }
 }
 
-
 // `list` with one `id` taken out, if it has one.
 fn List::without_one(self list: List<Nat>, id: Nat) → List<Nat> {
     match list { Nil => [], Cons(first, rest) => match first.same(id) { True => rest, False => Cons(first, rest.without_one(id)) } }
@@ -717,7 +716,6 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
     }
 }
 
-
 // The nodes of a block the lowering is to know and have no code for. A
 // word's constant nothing reads as a register (an add's immediate). A
 // comparison no register reads: one a single branch tests, where it is the
@@ -725,13 +723,18 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
 // says (the bound of a load whose test was decided,
 // docs/optimizer-design.md §5.1). A bit's constant nothing reads, which
 // says that of a comparison before it.
+// Whether a comparison folds: no register reads it, and a single branch
+// tests it where it is the last of its block, or no branch does.
+fn compare_folds(output: Nat, rest: List<Node>, reads, conditions: Reads()) → Bool {
+    !reads_has(reads, output) && ((reads_count(conditions, output).same(1) && rest.is_empty()) || !reads_has(conditions, output))
+}
+
 fn node_folds(nodes: List<Node>, reads, conditions: Reads()) → List<Nat> {
     match nodes {
         Nil => [],
         Cons(node, rest) => {
             let later = node_folds(rest, reads, conditions);
-            let compared = λ (output: Nat) => match !reads_has(reads, output)
-                && ((reads_count(conditions, output).same(1) && rest.is_empty()) || !reads_has(conditions, output)) {
+            let compared = λ (output: Nat) => match compare_folds(output, rest, reads, conditions) {
                 False => later,
                 True => Cons(output, later),
             };
@@ -745,6 +748,27 @@ fn node_folds(nodes: List<Node>, reads, conditions: Reads()) → List<Nat> {
                 UnsignedLessThan(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
                 SignedLessThan(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
                 Equal(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
+                _ => later,
+            }
+        },
+    }
+}
+
+// The right operands of the comparisons that fold: their branches CMP with
+// the operand where it is a constant, so no register need read it.
+fn folded_right(width, output, right: Nat, rest: List<Node>, reads, conditions: Reads()) → List<Nat> {
+    match width.same(64) && compare_folds(output, rest, reads, conditions) { True => [right], False => [] }
+}
+
+fn node_folded_rights(nodes: List<Node>, reads, conditions: Reads()) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => {
+            let later = node_folded_rights(rest, reads, conditions);
+            match node {
+                UnsignedLessThan(width, output, _, right) => folded_right(width, output, right, rest, reads, conditions) ++ later,
+                SignedLessThan(width, output, _, right) => folded_right(width, output, right, rest, reads, conditions) ++ later,
+                Equal(width, output, _, right) => folded_right(width, output, right, rest, reads, conditions) ++ later,
                 _ => later,
             }
         },
@@ -765,15 +789,28 @@ fn StructuredRegion::folds_in(self region: StructuredRegion, reads, conditions: 
     }
 }
 
+fn StructuredRegion::folded_rights(self region: StructuredRegion, reads, conditions: Reads()) → List<Nat> {
+    match region {
+        Dataflow(body) => node_folded_rights(body.nodes, reads, conditions),
+        Sequence(prefix, continuation) => node_folded_rights(prefix.nodes, reads, conditions) ++ continuation.folded_rights(reads, conditions),
+        Compose(prefix, continuation) => prefix.folded_rights(reads, conditions) ++ continuation.folded_rights(reads, conditions),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.folded_rights(reads, conditions) ++ when_false.folded_rights(reads, conditions),
+        Lend(_, _, _, _) => [],
+        Call(_, _, _) => [],
+        Loop(_, _, _, _, body, _, _, _, _) => body.folded_rights(reads, conditions),
+    }
+}
+
 // What to fold in `region`, `outputs` read after it.
 //
-// Twice: the comparisons that fold say which constants are only their
-// right operands, so the constants are chosen over the reads the first
-// choice leaves.
+// The comparisons that fold say which constants are only their right
+// operands, so the constants are chosen over the reads less those. Which
+// comparisons fold does not depend on it: a comparison's output is a bit,
+// and no 64-bit comparison reads a bit.
 fn StructuredRegion::folds(self region: StructuredRegion, outputs: List<Nat>) → List<Nat> {
     shared(reads_from(region.conditions()), λ (conditions: Reads()) =>
-        shared(region.folds_in(reads_from(region.register_reads(MEmpty) ++ outputs), conditions), λ (first: List<Nat>) =>
-            region.folds_in(reads_from(region.register_reads(reads_from(first)) ++ outputs), conditions)))
+        shared(reads_from(region.register_reads(MEmpty) ++ outputs), λ (reads: Reads()) =>
+            region.folds_in(reads_drop(reads, region.folded_rights(reads, conditions)), conditions)))
 }
 
 // A node's placement entry: folded where the planner chose to, else the
