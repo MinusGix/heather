@@ -27,8 +27,18 @@ heather-cache = { path = "../cache" }
 [target.'cfg(all(target_arch = "x86_64", target_os = "linux"))'.dependencies]
 heather-linked = { path = "../linked" }
 
+# `--limits` / `HEATHER_LIMITS` set the process's own resource limits with
+# `setrlimit` (`src/limits.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 value-metrics = ["heather-elab-lib/value-metrics"]
 
-[lints]
-workspace = true
+# `deny` where the workspace says `forbid`, for one reason: `--limits` calls
+# `getrlimit`/`setrlimit` (`src/limits.rs`, `lower`), and `forbid` admits no
+# `allow` beneath it. That function is the crate's only
+# `#[allow(unsafe_code)]`; everything else is still refused, as in
+# `crates/cache` and `crates/linked`.
+[lints.rust]
+unsafe_code = "deny"

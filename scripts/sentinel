@@ -337,10 +337,10 @@ def relocation_audit(base):
     # Capped like every heather run (CLAUDE.md); the CPU rail counts all
     # eight kernel workers.
     def check(lib, env):
-        cmd = (f"ulimit -v 8388608 -t 7200 -c 0; exec target/release/heather check --cache "
-               f"--cache-dir {work / 'images'} {lib}")
+        cmd = ["target/release/heather", "check", "--limits", "dev,cpu=7200", "--cache",
+               "--cache-dir", str(work / "images"), str(lib)]
         with open(work / "check.log", "a") as log:
-            return subprocess.run(["bash", "-c", cmd], cwd=ROOT, env=env, stdout=log,
+            return subprocess.run(cmd, cwd=ROOT, env=env, stdout=log,
                                   stderr=subprocess.STDOUT).returncode == 0
     env = {k: v for k, v in os.environ.items() if k != "HEATHER_RELOCATION_AUDIT"}
     if not check(work / "old" / "lib" / "std", env):

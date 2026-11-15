@@ -52,6 +52,7 @@ use heather_cli::{expect, loader, semantic::SemanticSession};
 mod color;
 mod eval;
 mod fmt;
+mod limits;
 mod native;
 
 /// Where the standard library lives when nobody says otherwise
@@ -123,19 +124,23 @@ fn choose_kernel_self_checks() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(msg) = limits::choose(&mut args).and_then(|limits| limits.apply()) {
+        eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
+        return ExitCode::from(2);
+    }
     if let Err(msg) = choose_kernel_self_checks() {
         eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
         return ExitCode::from(2);
     }
     choose_lexer();
-    let code = run();
+    let code = run(args);
     report_lexer();
     code
 }
 
-fn run() -> ExitCode {
+fn run(args: Vec<String>) -> ExitCode {
     let stderr_color = color::stderr_enabled();
-    let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {
         Some((cmd, rest)) if cmd == "check" => match parse_check_args(rest) {
             Ok((opts, files)) if !files.is_empty() => check(&opts, &files),
@@ -187,7 +192,10 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\
                      \x20      heather warm-native <file.hthr>... (--cache-dir <dir> [--through <module> | --unbuilt] | --list) [-L <dir>]... [--kernel-workers <n>]\n\
                      \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>]\n\
-                     \x20      heather linked-exports <generated dir> [--check | --rows]";
+                     \x20      heather linked-exports <generated dir> [--check | --rows]\n\
+                     \n\
+                     \x20      Every command also takes --limits <dev | off | memory=<size>,cpu=<seconds>,core=<size>> (or HEATHER_LIMITS):\n\
+                     \x20      resource limits for development runs, off unless asked for (`dev` is memory=8G,cpu=120,core=0).";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
