@@ -124,9 +124,10 @@ and the byte is below the key", whose answer is the call at `mid + 1`.
 The theorems are checked with the rest of the file:
 `heather check examples/binary-search/search.hthr`.
 
-Two range lemmas, `next_le` and `le_of_lt_next`, are stated over `toNat` or
-kept small because `bv_omega` does not yet take a word comparison with a
-composite operand apart (`issues/bv-omega-word-comparison-goal-composite.md`).
+Two range lemmas, `next_le` and `le_of_lt_next`, are kept apart from the
+invariant. In its context `bv_omega` reads `mid` through its `let`, and then
+cannot show that the midpoint's addition does not overflow, where `mid` as a
+plain word would do (`issues/bv-omega-let-alias-taken-apart.md`).
 
 ## What the proof does not cover
 

@@ -107,10 +107,8 @@ fn Above(s: List<u8>, n, key, r: u64) → Type { (j: u64) → r <= j → j < n �
 // Below the next word is at most this one, when the next does not wrap.
 theorem le_of_lt_next(j, m, hi: u64, room: m < hi, before: j < m + 1): j <= m { bv_omega }
 
-// Stated over the numbers: `bv_omega` does not yet take apart `m + 1` in
-// the word comparison `m + 1 <= hi`, the same type
-// (issues/bv-omega-word-comparison-goal-composite.md).
-theorem next_le(m, hi: u64, room: m < hi): (m + 1).toNat() <= hi.toNat() { bv_omega }
+// The word after one below `hi` is at most `hi`: it does not wrap.
+theorem next_le(m, hi: u64, room: m < hi): m + 1 <= hi { bv_omega }
 
 // The loop keeps both sides: what lies below `lo` is below `key`, what lies
 // from `hi` on is not, and the answer stays in the range.

@@ -1,6 +1,6 @@
 ---
 title: bv_omega does not take apart a composite word in a word-comparison goal
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 created: 2026-11-15
@@ -19,3 +19,7 @@ reason (`examples/binary-search/search.hthr`, `next_le`). In a large context
 `bv_omega` also lost `j <= m` from `j < m + 1` and `m < hi`; a two-line lemma
 with only those facts in scope (`le_of_lt_next`) proves it, which suggests the
 walk's generalisation of a word restated by several facts is the cause.
+
+## Log
+
+- 2026-11-15: Done by #660 (word comparison goals): `m + 1 <= hi` from `m < hi` is proved as stated, so the binary search's `next_le` is a word comparison again. The large-context loss is now a different refusal: [[bv-omega-let-alias-taken-apart]].

@@ -29,5 +29,5 @@ and `conjunct_fact_restated` in `lib/_tests/std/tactic/bitvec_omega_tests.hthr`;
 both refused before.
 
 Left open from the same rounds: [[bv-omega-word-comparison-goal-composite]]
-(binary search), `runtime-mut-self-let-read-walk` and
+(binary search, since closed; its successor is [[bv-omega-let-alias-taken-apart]]), `runtime-mut-self-let-read-walk` and
 `theorem-branch-on-measured-fn-goal` (sort; each filed and fixed in its own PR).

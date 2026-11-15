@@ -30,25 +30,25 @@ uint64_t sort_in_place(uint8_t *bytes, uint64_t length);
 ## The program
 
 ```text
-runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
     if h: 0 < j {
         let below = s.byte_within(n, j - 1);
-        if larger: x < below.zero_extend(56) {
+        if larger: key < below.zero_extend(56) {
             s.put_within(n, j, below);
-            s.insert_below(n, j - 1, x)
+            s.sift(n, j - 1, key)
         } else {
-            s.put_within(n, j, x.truncate(8, 56));
             j
         }
     } else {
-        s.put_within(n, j, x.truncate(8, 56));
         j
     }
 }
 
 runtime fn List::sort_from(mut self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
     if h: i < n {
-        s.insert_below(n, i, s.byte_within(n, i).zero_extend(56));
+        let key = s.byte_within(n, i);
+        let hole = s.sift(n, i, key.zero_extend(56));
+        s.put_within(n, hole, key);
         s.sort_from(n, i + 1)
     } else {
         i
@@ -65,12 +65,14 @@ runtime fn sort_in_place(s: List<u8>, n: u64) → Mutated<List<u8>, u64> {
 `mut self` makes the span a place the function writes: `s.put_within(n, j, b)`
 stores byte `b` at offset `j`, and the compiled code writes the caller's
 buffer. `sort_from` walks `i` up the span; everything before `i` is already
-sorted. `insert_below` takes the byte that was at `i` and walks down, moving
-each larger byte up one place, and drops it where the first byte that is not
-larger was. The usual inner loop of insertion sort, as a recursion that the
-compiler turns into a loop.
+sorted. It takes the byte at `i` out as `key`. `sift` walks down from `i`,
+moving each byte above `key` up one place, and answers where the first byte
+that is not larger was: the hole. `key` goes into it. This is the textbook
+insertion sort, with each loop written as a recursion that the compiler turns
+into a loop. `key` is read before `sift` writes over its place, and the
+compiler keeps it in a register across the call.
 
-Both loops are measured. `insert_below` stops because `j` falls, and
+Both loops are measured. `sift` stops because `j` falls, and
 `sort_from` because `n - i` does. Unlike the binary search, Heather discharges
 both decreases on its own.
 
@@ -95,23 +97,25 @@ function on lists, to the textbook functional insertion sort.
 
 The proof has two layers, one per loop.
 
-**One insertion.** Split the span at `j` as `ys ++ [z] ++ rest`: the sorted
-bytes before `j`, the free place, and the rest. Then
+**One insertion.** `s.insert_at(n, j, b)` is what one pass does to the span:
+`sift` opens the hole for `b`, and `b` goes into it. Split the span at `j` as
+`ys ++ [z] ++ rest`: the sorted bytes before `j`, the free place, and the
+rest. Then
 
 ```text
-theorem insert_below_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
+theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
     sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted(BitVec::unsigned_le)):
-    List::insert_below(ys ++ Cons(z, rest), n, j, b.zero_extend(56)).after = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
+    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
 ```
 
-The loop that shuffles bytes up a buffer is the functional `insert_ordered` on
-the prefix. It goes by induction on `j`, one case per branch, each a `calc`
+The loop that shuffles bytes up a buffer, followed by the store into the hole,
+is the functional `insert_ordered` on the prefix. It goes by induction on `j`, one case per branch, each a `calc`
 chain:
 
 - When the byte below `j` is larger, it moves up, and the induction
   hypothesis inserts `b` into what is left. Inserting below the last element
   is inserting before it (`insert_ordered_snoc`).
-- When it is not larger, `b` lands at `j`. The prefix with `b` at its end is
+- When it is not larger, the hole is `j`, and `b` lands there. The prefix with `b` at its end is
   sorted, and it holds `b` and `ys`, so it is the insertion
   (`insert_ordered_unique`).
 - When `j` is `0`, the prefix is empty.
@@ -119,9 +123,10 @@ chain:
 **The outer loop.** `sort_from_sorts` is the invariant: if the bytes before
 `i` are sorted, `sort_from` leaves a sorted permutation. Each pass
 (`sort_from_step`) splits the span at `i`, reads the byte there, uses
-`insert_below_inserts` to see the longer sorted prefix, and chains the
-permutations (`perm_middle`, `perm_of_picks`). It goes by induction on what
-is left, `n - i`.
+`insert_at_inserts` to see the longer sorted prefix, and chains the
+permutations (`perm_middle`, `perm_of_picks`). The invariant is proved by
+`decreases (n - i).toNat()`, the measure of the loop it is about, with one
+`if h: i < n` that matches the program's.
 
 The general facts the proof needed went into the library rather than staying
 here: list splits and updates in `lib/std/data/list_window.hthr`
@@ -144,15 +149,7 @@ The theorems are checked with the rest of the file:
 
 ## Rough edges
 
-- The key goes to `insert_below` as a word, `x: u64`, and is stored with
-  `x.truncate(8, 56)`. The natural spelling reads the byte at `j` inside the
-  loop, then stores over it, and the compiler does not yet allow a read
-  before a store to the same span within one function
-  (`issues/rt-file-read-before-store.md`).
 - The proofs cite the generated branch equations by name
-  (`List::insert_below::True::True` and so on). A tactic that unfolds a
-  measured function at its hypotheses would remove them.
-- The outer loop's invariant goes by induction on a `Nat` standing for
-  `n - i`, with the step as its own lemma. The direct `decreases` proof that
-  `if h: i < n` would give is refused by the kernel today
-  (`issues/theorem-branch-on-measured-fn-goal.md`).
+  (`List::sift::True::True` and so on). A tactic that unfolds a measured
+  function at the hypotheses in scope (`simp_only(List::sift, discharge :=
+  bv_omega)`) is being built, and would remove them.
