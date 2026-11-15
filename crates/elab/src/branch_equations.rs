@@ -447,7 +447,9 @@ pub(crate) fn candidate(decl: &Decl) -> bool {
         return false;
     }
     let mut e = &*decl.body.result;
-    let mut ons = !decl.body.ons.is_empty();
+    // A measured body's own `on`s discharge its obligations, which are no
+    // part of its equations, as they are none of `f_unfold`'s.
+    let mut ons = decl.decreases.is_none() && !decl.body.ons.is_empty();
     while let ExprKind::Block(b) = &e.kind {
         ons |= !b.ons.is_empty();
         e = &b.result;
@@ -477,16 +479,23 @@ pub(crate) fn head_names(decl: &Decl) -> Vec<String> {
 
 /// The equations of `decl`'s branches, at `reading`. `Err` says why there
 /// are none.
-pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, fields: FieldTypes<'_>) -> Result<Vec<BranchEquation>, String> {
-    if recursive(decl, self_name) {
-        return Err("the body calls the function again".into());
-    }
+///
+/// A body that calls the function again has them only where it is measured
+/// and `unfolded` names its `f_unfold`: `f(x̄)` is then not its body by
+/// computation but by that equation, which each proof starts from. A leaf's
+/// recursive call stays a call, as the source wrote it.
+pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, fields: FieldTypes<'_>, unfolded: Option<&str>) -> Result<Vec<BranchEquation>, String> {
+    let unfolded = match unfolded {
+        Some(u) if decl.decreases.is_some() => Some(u),
+        _ if recursive(decl, self_name) => return Err("the body calls the function again".into()),
+        _ => None,
+    };
     let span = decl.body.span;
     let mut taken = taken_names(decl);
     let result_name = ["result", "result2", "result3"].into_iter().find(|n| !taken.iter().any(|t| t == n)).unwrap_or("result_").to_string();
     taken.push(result_name.clone());
     let mut w = Walk { decl, reading, fields, result_name, taken, leaves: Vec::new(), too_many: false };
-    let top = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
+    let top = Expr { kind: ExprKind::Block(Box::new(Block { ons: Vec::new(), ..decl.body.clone() })), span };
     w.walk(&top, Vec::new(), Vec::new());
     if w.too_many {
         return Err(format!("the body has more than {MAX_LEAVES} branches"));
@@ -501,7 +510,8 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
         span,
     };
     let args: Vec<Expr> = decl.params.iter().map(|p| var(&p.name, span)).collect();
-    let lhs = call(companion_ref(decl, &decl.name, span), args);
+    let lhs = call(companion_ref(decl, &decl.name, span), args.clone());
+    let unfolding = unfolded.map(|u| call(companion_ref(decl, u, span), args));
     let mut out = Vec::new();
     for (path, lets, leaf) in std::mem::take(&mut w.leaves) {
         let names: Vec<&str> = path.iter().map(|s| s.arm.as_str()).collect();
@@ -516,6 +526,10 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
                 Some(rest) => app(var("trans", span), vec![step, rest], span),
             });
         }
+        let proof = match (&unfolding, proof) {
+            (Some(u), Some(rest)) => Some(app(var("trans", span), vec![u.clone(), rest], span)),
+            (_, proof) => proof,
+        };
         let mut params = decl.params.clone();
         for (name, ty) in path.iter().flat_map(|s| s.params.iter()) {
             params.push(Param {

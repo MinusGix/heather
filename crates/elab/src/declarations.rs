@@ -121,7 +121,8 @@ impl DeclarationsMut<'_> {
                 let at: Vec<(String, Ty)> = ind.params.iter().cloned().zip(args.iter().cloned()).collect();
                 Some(ctor.fields.iter().map(|(n, t)| (n.clone(), measure::instantiate_ty(t, &at))).collect())
             };
-            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields) {
+            let unfolded = decl.decreases.is_some().then(|| measure::unfold_name(&decl.name));
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, unfolded.as_deref()) {
                 Ok(e) => e,
                 Err(e) => {
                     why = e;
@@ -780,7 +781,7 @@ impl DeclarationsMut<'_> {
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
         if lifted {
-            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto) {
+            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
                 }
@@ -808,6 +809,11 @@ impl DeclarationsMut<'_> {
                         // companions, skipped with the reason recorded where
                         // the checker refuses one.
                         self.elab_step_equations(decl, &self_name);
+                        // `f::True`, `f::False::True`, …: every branch, from
+                        // `f_unfold` (issues/definition-branch-equations.md).
+                        if branch_equations::candidate(decl) && !loops::has_loop(decl) {
+                            self.elab_branch_equations(decl);
+                        }
                     }
                 }
             }

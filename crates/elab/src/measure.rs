@@ -52,6 +52,7 @@ use crate::{R, err};
 /// order: the call's span, the hole's name, the obligation rendered for a
 /// diagnostic, and — for a group site the rank rule explains —
 /// `docs/language/recursion/mutual-recursion-design.md` §8's sentence.
+#[derive(Clone)]
 pub(crate) struct Obligations {
     pub(crate) sites: Vec<(Span, String, String, Option<String>)>,
 }
@@ -98,6 +99,7 @@ const H: &str = "__dec_h";
 const Z: &str = "__dec_z";
 
 /// One generated declaration and the obligations its own body owes.
+#[derive(Clone)]
 pub(crate) struct Lowered {
     pub(crate) decl: Decl,
     pub(crate) obligations: Obligations,
@@ -440,6 +442,7 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
         obls: Vec::new(),
         found_only: true,
         found: Vec::new(),
+        known: &[],
         error: None,
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -757,6 +760,7 @@ pub(crate) fn lower(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        known: &[],
         error: None,
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -1125,6 +1129,7 @@ pub(crate) fn lower_group(
             obls: Vec::new(),
             found_only: false,
             found: Vec::new(),
+            known: &[],
             error: None,
         };
         let stmts: Vec<Stmt> = m.decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -1779,6 +1784,11 @@ struct Rewrite<'a> {
     /// `found`.
     found_only: bool,
     found: Vec<Lowered>,
+    /// The body's own lifted `f#obl_N`, where this walk is a companion's:
+    /// its reference passes the binders the body's declaration quantified,
+    /// so the two spellings are one term even where the companion's walk
+    /// (its `let`s inlined) would select differently.
+    known: &'a [Lowered],
     error: Option<crate::ElabError>,
 }
 
@@ -2159,6 +2169,21 @@ impl<'a> Rewrite<'a> {
         hint: Option<String>,
         span: Span,
     ) -> Option<Expr> {
+        let name = obl_name(&self.decl.name, site);
+        // A companion's site cites the body's declaration, over the binders
+        // it quantified, wherever each is in scope here too.
+        if let Some(known) = self.known.iter().find(|l| l.decl.name == name) {
+            let names: Vec<&str> = known.decl.params.iter().map(|p| p.name.as_str()).collect();
+            if names.iter().all(|n| self.scope.iter().any(|b| b.name == *n)) {
+                self.obls.push(Some(known.clone()));
+                let head = companion_ref(self.decl, &name, span);
+                return Some(if names.is_empty() {
+                    head
+                } else {
+                    app(head, names.iter().map(|n| var(n, span)).collect(), span)
+                });
+            }
+        }
         let mut params = Vec::new();
         let mut args = Vec::new();
         let goal = lt_ty(at_args.clone(), refined.clone(), span);
@@ -2191,7 +2216,6 @@ impl<'a> Rewrite<'a> {
             lets.extend(body.stmts);
             Block { stmts: lets, ..body }
         };
-        let name = obl_name(&self.decl.name, site);
         let decl = Decl {
             kind: DeclKind::Theorem,
             is_meta: false,
@@ -2429,6 +2453,7 @@ impl<'a> Rewrite<'a> {
             obls: self.obls.iter().map(|_| None).collect(),
             found_only: self.found_only,
             found: Vec::new(),
+            known: self.known,
             error: None,
         }
     }
@@ -4410,6 +4435,7 @@ pub(crate) fn companions(
     omega_available: bool,
     tys: &dyn BinderTys,
     auto: &AutoEqs,
+    lifted: &[Lowered],
 ) -> Result<Vec<Lowered>, String> {
     let span = measure.span;
     // §7: `fn` only. A `theorem` is opaque, so `f(ȳ)` in the equation's
@@ -4473,6 +4499,7 @@ pub(crate) fn companions(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        known: lifted,
         error: None,
     };
     let arg_vars: Vec<Expr> = params.iter().map(|p| var(&p.name, span)).collect();
