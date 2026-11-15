@@ -741,6 +741,51 @@ impl Parser {
         out
     }
 
+    /// Whether an `on` discharge of a block enclosing this point names
+    /// `name`: those blocks' goals are raised inside the branches being
+    /// parsed, so their proofs see what the branches bind. Read ahead over
+    /// the tokens: an `on` counts when it sits at the shallowest bracket
+    /// depth reached so far, which is an enclosing block's own level (a
+    /// later sibling's or a later item's `on`s are deeper). Conservative
+    /// like [`Self::names_from`].
+    fn names_in_enclosing_ons(&self, name: Option<&str>) -> bool {
+        let Some(name) = name else { return false };
+        let (mut depth, mut floor) = (0i64, 0i64);
+        let mut j = self.pos;
+        while j < self.toks.len() {
+            match &self.toks[j].kind {
+                TokKind::LBrace | TokKind::LParen | TokKind::LBracket => depth += 1,
+                TokKind::RBrace | TokKind::RParen | TokKind::RBracket => {
+                    depth -= 1;
+                    floor = floor.min(depth);
+                }
+                TokKind::Ident(word) if word == "on" && depth == floor => {
+                    // The discharge runs to its `;` at this level.
+                    let mut inner = 0i64;
+                    j += 1;
+                    while j < self.toks.len() {
+                        match &self.toks[j].kind {
+                            TokKind::LBrace | TokKind::LParen | TokKind::LBracket => inner += 1,
+                            TokKind::RBrace | TokKind::RParen | TokKind::RBracket => {
+                                if inner == 0 { break }
+                                inner -= 1;
+                            }
+                            TokKind::Semi if inner == 0 => break,
+                            TokKind::Ident(n) if n == name => return true,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    continue;
+                }
+                TokKind::Eof => break,
+                _ => {}
+            }
+            j += 1;
+        }
+        false
+    }
+
     fn hygienic(&mut self, kind: &str) -> String {
         let id = self.next_hygienic;
         self.next_hygienic += 1;
@@ -930,6 +975,12 @@ impl Parser {
     /// Is the next token the identifier `kw`?
     fn at_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
+    }
+
+    /// `induct f(…)`: the word followed by a name, so `induct` stays an
+    /// ordinary identifier everywhere else (`induct(x)`, `let induct = …`).
+    fn at_induct(&self) -> bool {
+        self.at_kw("induct") && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
     }
 
     /// `op as ∙` — the **body spelling** a declaring binder installs
@@ -3502,6 +3553,66 @@ impl Parser {
             let close = self.expect(&TokKind::RBrace, "`}`")?;
             return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
         }
+        // `induct f(x̄); all_goals { … }` and `induct f(x̄) { C => e, … }`:
+        // induction along `f`'s own recursion at the goal, every case with
+        // the same block or each with its own arm. Packaged like `split_all`,
+        // since the cases are only known once `f::induct` is resolved.
+        if self.at_induct() {
+            let start = self.bump().span;
+            let call = self.with_record_lit(true, |p| p.expr())?;
+            let result = if matches!(self.peek(), TokKind::Semi) {
+                self.bump();
+                if !self.eat_kw("all_goals") {
+                    return self.err("`induct f(…);` must be followed by `all_goals { ... }`");
+                }
+                let goals = self.block()?;
+                if !goals.ons.is_empty() {
+                    return Err(ParseError {
+                        msg: "an `all_goals` block cannot contain declaration-scoped `on` discharges".into(),
+                        span: goals.span,
+                    });
+                }
+                let span = start.join(goals.span);
+                Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(INDUCT_ALL_GOALS.into()), span: start }),
+                        args: vec![call, Expr { kind: ExprKind::Block(Box::new(goals)), span }],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                }
+            } else {
+                let open_cases = self.expect(&TokKind::LBrace, "`{` with one arm per case, or `; all_goals { … }`, after `induct f(…)`")?;
+                let arms = self.match_arms()?;
+                let close_cases = self.expect(&TokKind::RBrace, "`}` after the cases")?;
+                let span = start.join(close_cases);
+                let cases = Expr {
+                    kind: ExprKind::Match {
+                        form: MatchForm::Match,
+                        generated: false,
+                        scrut: Box::new(call),
+                        eqbind: None,
+                        motive: None,
+                        arms,
+                    },
+                    span: open_cases.join(close_cases),
+                };
+                Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(INDUCT_CASES.into()), span: start }),
+                        args: vec![cases],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                }
+            };
+            let close = self.expect(&TokKind::RBrace, "`}` after `induct`")?;
+            return Ok(Block { stmts, result: Box::new(result), ons: Vec::new(), span: open.join(close) });
+        }
         // Goal combinators are statement-shaped: `split_all` replaces the
         // current goal by one goal per finite branch, then `all_goals` checks
         // the same block in every resulting branch. The parser packages the
@@ -3956,6 +4067,7 @@ impl Parser {
             if matches!(self.peek(), TokKind::RBrace | TokKind::Eof)
                 || self.at_kw("split")
                 || self.at_kw("split_all")
+                || self.at_induct()
                 || self.at_kw("on")
                 || self.at_sequent_binders()
             {
@@ -6411,7 +6523,9 @@ impl Parser {
     /// }
     /// ```
     ///
-    /// (a branch that never names `h` binds none), so `h: P` and `h: ¬P` as
+    /// (a branch that never names `h` binds none, unless an enclosing
+    /// block's `on` discharge names it: its goal is raised in the branch),
+    /// so `h: P` and `h: ¬P` as
     /// before, and the `runtime fn` reflector, the
     /// measure obligations and `split_all` read the bit the code tests, never
     /// the `P ∨ ¬P` decision.
@@ -6480,7 +6594,11 @@ impl Parser {
             return self.err("an `if` needs an `else { … }` branch");
         };
 
-        let no_names = self.names_from(no_from, evidence.as_deref());
+        // An enclosing block's `on ?decN := …` proves a goal raised inside
+        // a branch, so a name it uses is bound in both.
+        let in_ons = self.names_in_enclosing_ons(evidence.as_deref());
+        let yes_names = yes_names || in_ons;
+        let no_names = self.names_from(no_from, evidence.as_deref()) || in_ons;
         let ev_span = condition.span;
         // The condition's own span on every lowered call's head: it is what
         // marks the call as a lowered condition for the elaborator's

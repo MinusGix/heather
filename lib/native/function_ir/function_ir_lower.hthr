@@ -14,6 +14,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bitvec_resize;
 import bool;
@@ -514,12 +515,43 @@ fn File::place_found(self file: File, held: Held, destination: Gpr, found: Found
     }
 }
 
+// A word loaded as an immediate: `MOV r32, imm32` (six bytes; writing the
+// low half clears the high one) where its high half is zero, else the
+// ten-byte `MOV r64, imm64`.
+fn mov_constant(destination: Gpr, word: BitVec(64)) → Instruction {
+    match word.resize(32).zero_extend(32).eq_bit(word) {
+        True => MovRI32(destination, word.resize(32)),
+        False => MovRI(destination, word),
+    }
+}
+
+theorem mov_constant_gprs<M>(destination: Gpr, word: BitVec(64), s: MachineState<M>):
+    execute_block_normal([mov_constant(destination, word)], s).gprs = write_gpr(destination, word, s.gprs)
+{
+    (match word.resize(32).zero_extend(32).eq_bit(word) as λ b => word.resize(32).zero_extend(32).eq_bit(word) = b →
+        execute_block_normal([match b { True => MovRI32(destination, word.resize(32)), False => MovRI(destination, word) }], s).gprs =
+            write_gpr(destination, word, s.gprs) {
+        True => λ fits => cong_fn(λ (w: BitVec(64)) => write_gpr(destination, w, s.gprs),
+            BitVec::eq_of_eq_bit(64, word.resize(32).zero_extend(32), word, fits)),
+        False => λ _ => refl,
+    })(refl)
+}
+
+// What a file says of the registers `mov_constant` leaves, it says of the
+// registers with the word written.
+theorem File::represents_mov_constant<M>(self file: File, values: Valuation(), s: MachineState<M>, destination: Gpr,
+    word: BitVec(64), held: file.Represents(values, write_gpr(destination, word, s.gprs))):
+    file.Represents(values, execute_block_normal([mov_constant(destination, word)], s).gprs)
+{
+    j(sym(mov_constant_gprs<M>(destination, word, s)), λ g _ => file.Represents(values, g), held)
+}
+
 // A word no register holds but the file knows, loaded: a folded constant
 // that something reads from a register after all.
 fn File::load_known(self file: File, id: Nat, destination: Gpr) → Option<Lowered> {
     match known_value(file.known, id) {
         None => None,
-        Some(value) => Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+        Some(value) => Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
             file.write(destination, Some(Held(id, Word))))),
     }
 }
@@ -529,9 +561,10 @@ theorem File::load_known_keeps<M>(self file: File, values: Valuation(), id: Nat,
 {
     (match known: known_value(file.known, id) {
         None => trivial,
-        Some(value) => λ s represents _ =>
+        Some(value) => λ s represents _ => file.write(destination, Some(Held(id, Word))).represents_mov_constant<M>(values, s,
+            destination, BitVec::ofNat(value),
             file.represents_write(values, s.gprs, destination, Some(Held(id, Word)), BitVec::ofNat(value),
-                represents, known_value_holds(values, id, value, file.known, known, represents.right)),
+                represents, known_value_holds(values, id, value, file.known, known, represents.right))),
     })
 }
 
@@ -950,7 +983,7 @@ theorem File::bits_keeps<M>(self file: File, values: Valuation(), op: BinaryOp,
 
 // A one-bit constant, zero-extended.
 fn File::bit_constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := 1).zero_extend(63))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value, n := 1).zero_extend(63))],
         file.write(destination, Some(Held(output, Bit)))))
 }
 
@@ -959,10 +992,11 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
     MayKeep<M>(values, file, values(1, output) = BitVec::ofNat(value),
         file.bit_constant(destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Bit))).represents_mov_constant<M>(values, s, destination,
+        BitVec::ofNat(value, n := 1).zero_extend(63),
         file.represents_write(values, s.gprs, destination, Some(Held(output, Bit)),
             BitVec::ofNat(value, n := 1).zero_extend(63), represents,
-            cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds))
+            cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds)))
 }
 
 // ---------------------------------------------------------------------------
@@ -973,7 +1007,7 @@ theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destin
 // (`known_value`: an ADD's immediate once the register is gone, a view from
 // its buffer's start, `File::zero`) reads it wherever the placement put it.
 fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
         file.write(destination, Some(Held(output, Word))).know(Constant(output, value))))
 }
 
@@ -982,11 +1016,12 @@ theorem File::constant_keeps<M>(self file: File, values: Valuation(), destinatio
     MayKeep<M>(values, file, values(64, output) = BitVec::ofNat(value),
         file.constant(destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Word))).know(Constant(output, value))
+        .represents_mov_constant<M>(values, s, destination, BitVec::ofNat(value),
         file.write(destination, Some(Held(output, Word))).represents_know(values, write_gpr(destination, BitVec::ofNat(value), s.gprs),
             Constant(output, value),
             file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-                BitVec::ofNat(value), represents, holds), holds)
+                BitVec::ofNat(value), represents, holds), holds))
 }
 
 fn File::copy_found(self file: File, destination: Gpr, output, source: Nat, found: Found(file, Held(source, Word)),
@@ -1004,7 +1039,7 @@ fn File::copy_from(self file: File, destination: Gpr, output, source: Nat,
     match found {
         None => match known_value(file.known, source) {
             None => None,
-            Some(value) => Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
+            Some(value) => Some(Lowered([mov_constant(destination, BitVec::ofNat(value))],
                 file.write(destination, Some(Held(output, Word))))),
         },
         Some(here) => Some(file.copy_found(destination, output, source, here, destination.same(here.register))),
@@ -1043,9 +1078,10 @@ theorem File::copy_from_keeps<M>(self file: File, values: Valuation(), destinati
     match found {
         None => (match known: known_value(file.known, source) {
             None => trivial,
-            Some(value) => λ s represents holds =>
+            Some(value) => λ s represents holds => file.write(destination, Some(Held(output, Word))).represents_mov_constant<M>(values,
+                s, destination, BitVec::ofNat(value),
                 file.represents_write(values, s.gprs, destination, Some(Held(output, Word)), BitVec::ofNat(value),
-                    represents, trans(holds, known_value_holds(values, source, value, file.known, known, represents.right))),
+                    represents, trans(holds, known_value_holds(values, source, value, file.known, known, represents.right)))),
         }),
         Some(here) => file.copy_found_keeps<M>(values, destination, output, source, here),
     }
@@ -1103,6 +1139,62 @@ theorem add_immediate_adds<M>(destination: Gpr, value: Nat, s: MachineState<M>, 
             False => λ absent => absurd(absent),
         }),
     })(refl)
+}
+
+// CMP of a register with a constant the file knows: the same sign
+// extension decides the immediate, and the form is taken where it gives
+// the constant back.
+fn cmp_immediate(value: Nat) → Option<CmpRight> {
+    match BitVec::ofNat(value, n := 8).sign_extend(56).eq_bit(BitVec::ofNat(value, n := 64)) {
+        True => Some(RightImm8(BitVec::ofNat(value))),
+        False => match BitVec::ofNat(value, n := 32).sign_extend(32).eq_bit(BitVec::ofNat(value, n := 64)) {
+            True => Some(RightImm32(BitVec::ofNat(value))),
+            False => None,
+        },
+    }
+}
+
+theorem cmp_immediate_reads(value: Nat, right: CmpRight, g: Gprs):
+    cmp_immediate(value) = Some(right) → right.read(g) = BitVec::ofNat(value)
+{
+    let word = BitVec::ofNat(value, n := 64);
+    let short = BitVec::ofNat(value, n := 8);
+    let long = BitVec::ofNat(value, n := 32);
+    (match short.sign_extend(56).eq_bit(word) as λ b => short.sign_extend(56).eq_bit(word) = b →
+        (match b {
+            True => Some(RightImm8(short)),
+            False => match long.sign_extend(32).eq_bit(word) { True => Some(RightImm32(long)), False => None },
+        }) = Some(right) → right.read(g) = word {
+        True => λ fits chosen => j(chosen, λ o _ => o.All(λ (r: CmpRight) => r.read(g) = word),
+            BitVec::eq_of_eq_bit(64, short.sign_extend(56), word, fits)),
+        False => λ _ => (match fits: long.sign_extend(32).eq_bit(word) {
+            True => λ chosen => j(chosen, λ o _ => o.All(λ (r: CmpRight) => r.read(g) = word),
+                BitVec::eq_of_eq_bit(64, long.sign_extend(32), word, fits)),
+            False => λ absent => absurd(absent),
+        }),
+    })(refl)
+}
+
+// A comparison's right operand: the register that holds it, else the
+// immediate of the constant the file knows it to be.
+record RightAt(file: File, id: Nat) {
+    right: CmpRight,
+    rep: (values: Valuation()) → (g: Gprs) → file.Represents(values, g) → values(64, id) = right.read(g),
+}
+
+fn File::cmp_right(self file: File, id: Nat) → Option<RightAt(file, id)> {
+    match file.find(Held(id, Word)) {
+        Some(b) => Some(RightAt(RightRegister(b.register), λ values g represents => b.at.rep(values, g, represents))),
+        None => match known: known_value(file.known, id) {
+            None => None,
+            Some(value) => match chosen: cmp_immediate(value) {
+                None => None,
+                Some(right) => Some(RightAt(right, λ values g represents =>
+                    trans(known_value_holds(values, id, value, file.known, known, represents.right),
+                        sym(cmp_immediate_reads(value, right, g, chosen))))),
+            },
+        },
+    }
 }
 
 // `operand` moved to the destination, then the immediate ADD.
@@ -1670,7 +1762,7 @@ theorem ShiftOp::legalize_sound(self op: ShiftOp, x: BitVec(64), count: Nat):
 fn File::select_shift(self file: File, op: ShiftOp, destination: Gpr, output, value: Nat, legal: ShiftLegal) → Option<Lowered> {
     match legal {
         ShiftsBy(by) => file.shift_by(op, destination, output, value, by),
-        ShiftsToZero => Some(Lowered([MovRI(destination, BitVec::zero())],
+        ShiftsToZero => Some(Lowered([mov_constant(destination, BitVec::zero())],
             file.write(destination, Some(Held(output, Word))))),
     }
 }
@@ -1689,8 +1781,9 @@ theorem File::select_shift_keeps<M>(self file: File, values: Valuation(), op: Sh
             file.shift_by(op, destination, output, value, by),
             λ holds => trans(holds, same),
             file.shift_by_keeps<M>(values, op, destination, output, value, by)),
-        ShiftsToZero => λ zero s represents holds => file.represents_write(values, s.gprs, destination,
-            Some(Held(output, Word)), BitVec::zero(), represents, trans(holds, zero)),
+        ShiftsToZero => λ zero s represents holds => file.write(destination, Some(Held(output, Word))).represents_mov_constant<M>(
+            values, s, destination, BitVec::zero(), file.represents_write(values, s.gprs, destination,
+            Some(Held(output, Word)), BitVec::zero(), represents, trans(holds, zero))),
     })(means)
 }
 
@@ -1865,21 +1958,52 @@ theorem in_place_same<M>(code: List<Instruction>, destination: Gpr, f, g: BitVec
         λ y _ => GprsAgree(execute_block_normal(code, s).gprs, write_gpr(destination, y, s.gprs)), runs(s))
 }
 
-// The destination cleared above its low `width` bits.
-fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+fn settle_shifts(destination: Gpr, width: Nat) → List<Instruction> {
     shift_code(OpShl, destination, 64 - width) ++ shift_code(OpShr, destination, 64 - width)
 }
 
-theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
-    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+// The destination cleared above its low `width` bits: at 32 a 32-bit move
+// of the register onto itself, which clears the upper half as every 32-bit
+// destination's is; at another width SHL then SHR by what is left of the
+// register.
+fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+    match width.eq_dec(32) {
+        Inl(_) => [MovSelf32(destination)],
+        Inr(_) => settle_shifts(destination, width),
+    }
+}
+
+// What the 32-bit move leaves is the low half widened again.
+theorem mov_self32_resize(x: BitVec(64)): mov_self32_value(x) = x.resize(32).resize(64) {
+    trans(cong_fn(λ (y: BitVec(32)) => y.zero_extend(32), sym(BitVec::ofNat_toNat_truncate(32, 32, x))),
+        sym(BitVec::resize_zero_extend(32, 32, x.resize(32))))
+}
+
+theorem in_place_mov_self32<M>(destination: Gpr): InPlace<M>([MovSelf32(destination)], destination, mov_self32_value) {
+    λ s query => refl
+}
+
+theorem in_place_settle_shifts<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_shifts(destination, width), destination, λ x => x.resize(width).resize(64))
 {
-    in_place_same<M>(settle_code(destination, width), destination,
+    in_place_same<M>(settle_shifts(destination, width), destination,
         λ x => x.shift_left(64 - width).shift_right(64 - width), λ x => x.resize(width).resize(64),
         λ x => BitVec::shift_pair_resize(width, 64, high, x),
         in_place_then<M>(shift_code(OpShl, destination, 64 - width), shift_code(OpShr, destination, 64 - width),
             destination, λ x => x.shift_left(64 - width), λ x => x.shift_right(64 - width),
             in_place_shift<M>(OpShl, destination, 64 - width, fits),
             in_place_shift<M>(OpShr, destination, 64 - width, fits)))
+}
+
+theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+{
+    match width.eq_dec(32) {
+        Inl(at) => j(sym(at), λ v _ => InPlace<M>([MovSelf32(destination)], destination, λ x => x.resize(v).resize(64)),
+            in_place_same<M>([MovSelf32(destination)], destination, mov_self32_value, λ x => x.resize(32).resize(64),
+                mov_self32_resize, in_place_mov_self32<M>(destination))),
+        Inr(_) => in_place_settle_shifts<M>(destination, width, high, fits),
+    }
 }
 
 // What in-place code leaves, at the kinds the file holds its operand and
@@ -2184,7 +2308,7 @@ theorem File::narrow_copy_keeps<M>(self file: File, values: Valuation(), width: 
 }
 
 fn File::narrow_constant(self file: File, width: Nat, destination: Gpr, output, value: Nat) → Option<Lowered> {
-    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := width).resize(64))],
+    Some(Lowered([mov_constant(destination, BitVec::ofNat(value, n := width).resize(64))],
         file.write(destination, Some(Held(output, Narrow(width))))))
 }
 
@@ -2193,10 +2317,11 @@ theorem File::narrow_constant_keeps<M>(self file: File, values: Valuation(), wid
     MayKeep<M>(values, file, values(width, output) = BitVec::ofNat(value),
         file.narrow_constant(width, destination, output, value))
 {
-    λ s represents holds =>
+    λ s represents holds => file.write(destination, Some(Held(output, Narrow(width)))).represents_mov_constant<M>(values, s,
+        destination, BitVec::ofNat(value, n := width).resize(64),
         file.represents_write(values, s.gprs, destination, Some(Held(output, Narrow(width))),
             BitVec::ofNat(value, n := width).resize(64), represents,
-            cong_fn(λ (c: BitVec(width)) => c.resize(64), holds))
+            cong_fn(λ (c: BitVec(width)) => c.resize(64), holds)))
 }
 
 // A comparison of two registers at the kind the file holds them: the bit
@@ -2562,6 +2687,65 @@ theorem File::byte_swap_keeps<M>(self file: File, values: Valuation(), destinati
 }
 
 // ---------------------------------------------------------------------------
+// A rotate: `ROR r32, imm8` on a 32-bit value held narrow, by a count below
+// 32, which the five-bit mask leaves alone. The low half is rotated and the
+// upper half left zero, so the result is held narrow again.
+
+theorem ror32_count_of(count: Nat, fits: count <= 31): ror32_count(BitVec::ofNat(count)) = count {
+    let small: (count < Nat::pow(2, 8)) = Nat::le_trans(count, 31, 255, fits, trivial);
+    trans(cong_fn(λ (n: Nat) => n.mod(32), BitVec::toNat_ofNat(8, count, small)),
+        Nat::mod_of_lt(count, 32, fits))
+}
+
+// A narrow word's rotation, zero-extended, is what `ROR r32` leaves of the
+// word that holds it.
+theorem ror_narrow(x: BitVec(32), count: Nat): ror32_value(x.zero_extend(32), count) = x.rotr(count).zero_extend(32) {
+    cong_fn(λ (y: BitVec(32)) => y.rotr(count).zero_extend(32), BitVec::truncate_zero_extend(32, 32, x))
+}
+
+theorem in_place_ror32<M>(destination: Gpr, immediate: BitVec(8)):
+    InPlace<M>([RorRI32(destination, immediate)], destination, λ x => ror32_value(x, ror32_count(immediate)))
+{
+    λ s query => refl
+}
+
+fn File::rotate_right(self file: File, destination: Gpr, output, value, amount: Nat) → Option<Lowered> {
+    match amount.le_dec(31) {
+        Inr(_) => None,
+        Inl(_) => file.reshaped([RorRI32(destination, BitVec::ofNat(amount))], Narrow(32), Narrow(32), destination, output, value),
+    }
+}
+
+theorem File::rotate_right_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, value, amount: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, RotateRight(32, output, value, amount)),
+        file.rotate_right(destination, output, value, amount))
+{
+    match amount.le_dec(31) {
+        Inr(_) => trivial,
+        Inl(fits) => {
+            let g = λ (x: BitVec(64)) => ror32_value(x, ror32_count(BitVec::ofNat(amount, n := 8)));
+            let code: List<Instruction> = [RorRI32(destination, BitVec::ofNat(amount))];
+            keeps_given<M>(values, file, Reshapes(values, Narrow(32), Narrow(32), output, value, g),
+                NodeHolds(values, RotateRight(32, output, value, amount)),
+                file.reshaped(code, Narrow(32), Narrow(32), destination, output, value),
+                λ gprs represents holds => λ a (rep: values(32, value).resize(64) = a) => {
+                    let x = values(32, value);
+                    let rotated: (values(32, output).resize(64) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (y: BitVec(32)) => y.resize(64), holds),
+                            BitVec::resize_zero_extend(32, 32, x.rotr(amount)));
+                    let counted: (g(x.zero_extend(32)) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (c: Nat) => ror32_value(x.zero_extend(32), c), ror32_count_of(amount, fits)),
+                            ror_narrow(x, amount));
+                    trans(rotated, trans(sym(counted),
+                        cong_fn(g, trans(sym(BitVec::resize_zero_extend(32, 32, x)), rep))))
+                },
+                file.reshaped_keeps<M>(values, code, g, Narrow(32), Narrow(32), destination, output, value,
+                    in_place_ror32<M>(destination, BitVec::ofNat(amount))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 // What only the word has yet (a signed comparison, an arithmetic right
@@ -2665,6 +2849,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         WideStore(_, _, _, _, _) => None,
         // A swap of 32 bits held narrow; the 64-bit swap is not lowered yet.
         ByteSwap(width, output, source) => at_width(32, width, width.eq_dec(32), file.byte_swap(destination, output, source), None),
+        RotateRight(width, output, value, amount) => at_width(32, width, width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None),
     }
 }
 
@@ -2767,6 +2953,10 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(width, output, source) => at_width_keeps<M>(values, file, 32, width, λ w => NodeHolds(values, ByteSwap(w, output, source)),
             width.eq_dec(32), file.byte_swap(destination, output, source), None, file.byte_swap_keeps<M>(values, destination, output, source), trivial),
+        RotateRight(width, output, value, amount) => at_width_keeps<M>(values, file, 32, width,
+            λ w => NodeHolds(values, RotateRight(w, output, value, amount)), width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None,
+            file.rotate_right_keeps<M>(values, destination, output, value, amount), trivial),
     }
 }
 
@@ -2780,12 +2970,25 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // how many of them, in `kept_order` (function_ir_lower_reads,
 // `placement_saves` in function_ir_lower_calls). Where a node's place is
 // wanted it is a refusal.
-inductive Place { Into(register: Gpr), Folded, Saving(count: Nat) }
+// `Spilling(mask)` is a call's: which of the eight registers a caller saves
+// the call saves round itself, bit `k` the `k`th (function_ir_lower_calls,
+// `call_saves`).
+inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), Spilling(mask: Nat) }
+
+// A bit that is a constant is known true or false, which is what an arm
+// taken on it knows: a decided comparison's bit written after it
+// (docs/native/optimizer-design.md §5.1) is read here.
+fn File::know_bit(self file: File, output, value: Nat) → Option<Lowered> {
+    match value {
+        Zero => Some(Lowered([], file.know(Falsity(output)))),
+        Succ(more) => match more { Zero => Some(Lowered([], file.know(Truth(output)))), Succ(_) => None },
+    }
+}
 
 fn Node::fold(self node: Node, file: File) → Option<Lowered> {
     match node {
-        Const(width, output, value) => word_only(width, width.eq_dec(64),
-            Some(Lowered([], file.know(Constant(output, value))))),
+        Const(width, output, value) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            Some(Lowered([], file.know(Constant(output, value)))), file.know_bit(output, value), None),
         UnsignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
             Some(Lowered([], file.know(Compared(output, Below, left, right))))),
         SignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
@@ -2802,14 +3005,28 @@ theorem File::know_keeps<M>(self file: File, values: Valuation(), known: Known):
     λ s represents holds => file.represents_know(values, s.gprs, known, represents, holds)
 }
 
+theorem File::know_bit_keeps<M>(self file: File, values: Valuation(), output, value: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, Const(1, output, value)), file.know_bit(output, value))
+{
+    match value {
+        Zero => λ s represents holds => file.represents_know(values, s.gprs, Falsity(output), represents,
+            cong_fn(λ (b: BitVec(1)) => b.head_bit(), holds)),
+        Succ(more) => match more {
+            Zero => λ s represents holds => file.represents_know(values, s.gprs, Truth(output), represents,
+                cong_fn(λ (b: BitVec(1)) => b.head_bit(), holds)),
+            Succ(_) => trivial,
+        },
+    }
+}
+
 theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
     MayKeep<M>(values, file, NodeHolds(values, node), node.fold(file))
 {
     match node {
-        Const(width, output, value) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64),
-            Some(Lowered([], file.know(Constant(output, value)))),
-            file.know_keeps<M>(values, Constant(output, value))),
+        Const(width, output, value) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64), width.eq_dec(1),
+            Some(Lowered([], file.know(Constant(output, value)))), file.know_bit(output, value), None,
+            file.know_keeps<M>(values, Constant(output, value)), file.know_bit_keeps<M>(values, output, value), λ _ => trivial),
         Move(_, _, _) => trivial,
         Add(_, _, _, _) => trivial,
         Sub(_, _, _, _) => trivial,
@@ -2839,11 +3056,12 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         WideLoad(_, _, _, _) => trivial,
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(_, _, _) => trivial,
+        RotateRight(_, _, _, _) => trivial,
     }
 }
 
 fn Node::lower_at(self node: Node, place: Place, file: File) → Option<Lowered> {
-    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None }
+    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None, Spilling(_) => None }
 }
 
 theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
@@ -2853,6 +3071,7 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
         Into(destination) => node.lower_keeps<M>(values, destination, file),
         Folded => node.fold_keeps<M>(values, file),
         Saving(_) => trivial,
+        Spilling(_) => trivial,
     }
 }
 
@@ -3257,6 +3476,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         WideLoad(_, _, _, index) => [index],
         WideStore(_, _, _, index, value) => [index, value],
         ByteSwap(_, _, source) => [source],
+        RotateRight(_, _, value, _) => [value],
     }
 }
 
@@ -3366,7 +3586,7 @@ fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
         BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
-        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, _ => False,
+        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, RotateRight(_, _, _, _) => True, _ => False,
     }
 }
 
@@ -3455,13 +3675,23 @@ fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool
 // what `crowded_in` finds; else the first free callee-saved register of
 // `pool`, which costs its function a save (`Saving`,
 // function_ir_lower_calls); else RAX.
-fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
-    match file.first_spare(live, pool_unsaved(pool), kept) {
+//
+// A value `keeps` names (read after a later call, on a path every run of
+// the function takes) tries the callee-saved ones first: in a caller-saved register it costs a store and a load at every
+// call it lives across, in a saved one a store and a load for the whole
+// function, which its frame already has room for
+// (issues/function-ir-values-in-kept-registers.md).
+fn Node::fresh(self node: Node, file: File, live, later, crossed, keeps: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
+    let unsaved_first = match file.first_spare(live, pool_unsaved(pool), kept) {
         Some(register) => register,
         None => match node.crowded_in(file, live, later, crossed, pool) {
             Some(register) => register,
             None => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(register) => register },
         },
+    };
+    match keeps(node.output_id()) {
+        False => unsaved_first,
+        True => match file.first_spare(live, pool_saved(pool), kept) { None => unsaved_first, Some(register) => register },
     }
 }
 
@@ -3472,11 +3702,14 @@ fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, 
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
-fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+// The values that prefer a callee-saved register are `keeps` (`Node::fresh`).
+fn Node::choose_keeping(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed, keeps: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = node.fresh(file, live, later, crossed, pool, kept);
-    let reuse = match prefers_operand(node) {
+    let fresh = node.fresh(file, live, later, crossed, keeps, pool, kept);
+    // A value that prefers a saved register keeps the one `fresh` found
+    // rather than its operand's, which a call would store round.
+    let reuse = match prefers_operand(node) && !(keeps(node.output_id()) && !fresh.save_rank().same(0)) {
         False => fresh,
         True => match node.in_place(file, later) {
             None => fresh,
@@ -3490,6 +3723,14 @@ fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entri
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
+}
+
+// `choose_keeping` where every value read after a later call prefers a
+// callee-saved register.
+fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+{
+    node.choose_keeping(file, live, later, entries, registers, pool, crossed, crossed, kept)
 }
 
 // `choose_by` with what is read later, and after a later call, as lists.

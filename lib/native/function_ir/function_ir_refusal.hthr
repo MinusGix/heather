@@ -22,6 +22,7 @@ import function_ir_lower_views;
 import function_ir_lower_calls;
 import function_ir_compile;
 import function_ir_writes;
+import function_ir_spelled;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -36,10 +37,11 @@ import logic;
 import nat;
 import option;
 import string;
-import derive;
 import utf8;
 
-fn refusal_number(n: Nat) → String { decimal_name(20, n) }
+// By long division (`decimal`): a loop's bound is a number of sixty-four
+// bits, and `decimal_name` divides by counting up to it.
+fn refusal_number(n: Nat) → String { decimal(n) }
 
 fn refusal_numbers(ns: List<Nat>) → String {
     match ns {
@@ -56,7 +58,7 @@ fn Gpr::shown(self register: Gpr) → String {
 }
 
 fn Place::shown(self place: Place) → String {
-    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count) }
+    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count), Spilling(mask) => "spilling " ++ refusal_number(mask) }
 }
 
 // What is wrong with a place whatever the node: a callee-saved register
@@ -73,6 +75,7 @@ fn Place::unsaved(self place: Place, saves: Nat) → String {
         },
         Folded => "",
         Saving(_) => " (a count of saves, which is no node's place)",
+        Spilling(_) => " (what a call saves, which is no node's place)",
     }
 }
 
@@ -92,6 +95,7 @@ fn Node::shown(self node: Node) → String {
         BitXor(w, o, a, b) => binary_shown("xor", w, o, a, b),
         ShiftLeft(w, o, a, b) => binary_shown("shl", w, o, a, b),
         LogicalShiftRight(w, o, a, b) => binary_shown("shr", w, o, a, b),
+        RotateRight(w, o, a, b) => binary_shown("ror", w, o, a, b),
         ArithmeticShiftRight(w, o, a, b) => binary_shown("sar", w, o, a, b),
         UnsignedLessThan(w, o, a, b) => binary_shown("below", w, o, a, b),
         SignedLessThan(w, o, a, b) => binary_shown("less", w, o, a, b),

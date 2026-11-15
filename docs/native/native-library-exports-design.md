@@ -602,12 +602,20 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
 
     What that costs, and what it does not buy yet. Every function's
     frame is 112 bytes, whatever it saves, so the stack an export states
-    is 120 bytes a level where it was 72. And a call still stores all
-    eight caller-saved registers round itself, so a value in a saved
-    register is capacity and not fewer stores: storing only what is live
-    across the call is `issues/function-ir-verified-live-spills.md`, and
-    a frame of the size a function uses is
-    `issues/function-frame-sized-by-use.md`.
+    is 120 bytes a level where it was 72. A frame of the size a function
+    uses is `issues/function-frame-sized-by-use.md`.
+
+    A call stores only what is read after it. A call's place may be
+    `Spilling(mask)`, a mask over the eight caller-saved registers
+    (`saved_registers`, bit i for the ith), and the call stores and loads
+    those alone (`call_saves`, `File::emit_call`). A register the mask
+    leaves out is no word of the file after the call (`File::called`), so
+    a read of a value that was not saved is a refusal and never a wrong
+    program; with no such place the call saves all eight, which is what
+    every earlier placement meant. The planner names the registers whose
+    values the rest of the function reads (`File::plan_call`, from the
+    `Reads` after the call). The probes are
+    `lib/_tests/native/function_ir/function_ir_spills_tests.hthr`.
   - *V5b, the arena's line and `rt`'s `Bytes` as views*, so a slice costs
     no copy. Not built: it is the arena round's
     (`issues/runtime-fn-arena-lists.md` has what it meets).
@@ -1177,10 +1185,10 @@ the part that faces a caller who is not a Heather program.
   (`runtime_span_tests.hthr`: `clear_from`, `clear_line`, `clear_text`).
 
 Limits, each refused by name or filed: one span written per function
-(it may read the spans after it, in a loop or out of one, §3.1 V5a), six
-words in registers with each span's address and length among them, and a
-byte read before a store and used after it
-(`issues/rt-file-read-before-store.md`). In-place `Set` under `Unique`
+(it may read the spans after it, in a loop or out of one, §3.1 V5a), and six
+words in registers with each span's address and length among them. A
+byte read before a store and used after it, once a limit here, is
+reflected (`issues/rt-file-read-before-store.md`, closed). In-place `Set` under `Unique`
 (the third point of the outline) was not needed: a writer's meaning
 threads the span, and the store leaf is proved against the file the run
 leaves. SHA-256's state as a customer waits on

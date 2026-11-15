@@ -1,0 +1,161 @@
+// The compiler's theorem, stated to be read (docs/native/compiler-theorem.md).
+//
+// `function_ir_compile.hthr` proves what `compile-x86` instantiates:
+// `compiled_returns` and its forms over lent spans. Their statements spell
+// the machine out (`Site::Returns`, a label, a precondition and a
+// postcondition over states), which is what a certificate needs and not
+// what a reader needs. This module names the pieces and restates the
+// theorem through the names. Nothing here is proved anew: every theorem is
+// `compiled_returns` or `compiled_returns_written` at its own premises,
+// and every name unfolds to what those theorems state.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_state;
+import function_ir_run;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// The machine
+
+// What compiled code runs on: a memory of any type `M`, how the processor
+// fetches instruction bytes out of it and reads data bytes out of it, and
+// a process stack. Nothing about `M` is fixed. The stack is given by its
+// laws (`Stack`, x86_64_stack): a span of words below a canonical address
+// that can be stored to and read back, that holds no code, and above which
+// code reads as data. These laws are the theorem's premises about the
+// platform; no theorem here proves them of Linux.
+record Machine<M> {
+    fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>,
+    stack: Stack<M>(fetch, data),
+}
+
+// ---------------------------------------------------------------------------
+// What a compiled function does
+
+// The stack room function `f` of a program asks for below its return
+// address: 136 bytes a level, for itself and every function it may call
+// (a function calls only functions before it).
+fn stack_room(f: Nat) → Nat { 136 * Succ(f) }
+
+// Function `f` of `code`, loaded at `origin` with the bytes `last` after it,
+// returns `answer` when called with `arguments`. Entered at its label with
+// the arguments in RDI, RSI, RDX, RCX, R8, R9 and past the sixth on the
+// stack just above the return address (`Stack::Passed`), with
+// `stack_room(f)` bytes of stack below that address, the machine runs to
+// the return address and arrives with
+//   - `answer` in RAX,
+//   - RBX, RBP and R12 to R15 as they were, and RSP just above the
+//     return address it popped,
+//   - memory as it was but for stores into the function's own room below
+//     the return address (`Stack::Wrote`): the caller's frame, the return
+//     address and the code itself are untouched,
+//   - the code still where it was.
+// It is total correctness: the run defined and ends there, it does not
+// merely end there if it ends.
+fn Prog::Returns<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat,
+    arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
+    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i,
+        machine.stack.CalleePost(answer))
+}
+
+// The same wherever the code is loaded and whatever follows it: the
+// statement a position-independent function is held to.
+fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.Returns(machine, origin, last, f, arguments, answer)
+}
+
+// ---------------------------------------------------------------------------
+// The theorem
+
+// The compiler is correct. Whenever `lower_program` turns a program's
+// functions into machine code, and the functions are evaluable (every
+// node one the evaluator gives a meaning, every call to an earlier
+// function of the right arity), the code of each function computes what
+// the program's evaluator says that function returns, at every list of
+// arguments of its arity, on every machine, wherever the code is loaded.
+//
+// The placement (which register holds which value) is the planner's, and
+// the planner is not trusted: the theorem holds for any placement the
+// lowering accepts, and the lowering checks the code it writes.
+theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, code: Prog,
+    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
+    code.Computes(machine, f, arguments, program_eval(functions, f, arguments)) {
+    λ origin last => compiled_returns<M>(functions, placement, code, lowered, evaluable, machine.fetch, machine.data, last, origin,
+        machine.stack, f, defined, arguments, arity, program_eval(functions, f, arguments), refl)
+}
+
+// What a certificate cites. The program a `runtime fn` compiles to comes
+// with an equation from its generator (`f::agrees`): the program evaluates
+// function `f` to the source function's value. Composed with the compiler's
+// theorem, the machine code computes the source function.
+theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, code: Prog,
+    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
+    agrees: program_eval(functions, f, arguments) = value):
+    code.Computes(machine, f, arguments, value) {
+    j(agrees, λ x _ => code.Computes(machine, f, arguments, x),
+        compiler_correct<M>(functions, placement, code, lowered, evaluable, machine, f, defined, arguments, arity))
+}
+
+// ---------------------------------------------------------------------------
+// Functions of a span
+
+// The same for a function its caller lends byte spans to, as Rust does with
+// `&[u8]` and `&mut [u8]`. Function `f` of `code`, its buffers `before`
+// lying at `addresses` with those `marks` marks lent to be written
+// (`Lending::writing`), all of them beyond the stack below `top` (`Loan`),
+// called with `arguments` (each span's address and length first, then its
+// words), returns `answer.word` in RAX and leaves the buffers as
+// `answer.buffers`, with the registers and stack as `Prog::Returns` says,
+// and stores nowhere but its own room and the bytes of the spans it may
+// write (`Stack::AnsweredOver`).
+fn Prog::ReturnsOver<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat,
+    lending: Lending, f: Nat, arguments: List<BitVec(64)>, before: Buffers(), answer: Ending) → Type {
+    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i) ∧
+            machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
+        machine.stack.AnsweredOver(lending, answer.word, answer.buffers))
+}
+
+// The compiler is correct over spans. Whenever `lower_program_lent` turns
+// a program's functions into code, the functions are evaluable, and every
+// store they make is into a buffer `marks` marks (checked by evaluation),
+// the code of each function, lent buffers lying anywhere the stack does
+// not reach, returns the word the program's run over those buffers ends in
+// and leaves the buffers as the run leaves them.
+theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, marks: List<Bool>, code: Prog,
+    lowered: lower_program_lent(functions, placement, counts) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    within: program_stores_within(functions, marks).IsTrue(),
+    machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, before: Buffers(),
+    loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing(counts, addresses, before, marks).spans()),
+    f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), origin: BitVec(64), last: List<BitVec(8)>):
+    code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, arguments, before,
+        program_run(functions, before, f, arguments)) {
+    compiled_returns_written<M>(functions, placement, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
+        machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
+        program_run(functions, before, f, arguments), refl)
+}

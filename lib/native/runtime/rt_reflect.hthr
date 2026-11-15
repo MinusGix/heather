@@ -76,16 +76,48 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 
 // What an effectful body's reflection knows of its world: the capability's
 // local, the word-level methods that call Linux, and the calls made so far,
-// in order.
-record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
+// in order; the functions of the program a computation may lend a buffer
+// to (`ETm::Lend`), the table's order, and the calls of them made so far,
+// each with the variables its `Lend` bound the bytes it left (`after`) and
+// its word (`value`) to.
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes>, lends: List<Nat>, lent: List<CallRes> }
 
 // What the body of a function over a span it writes knows of that span
 // (`rt_file_reflect`, docs/native/native-one-compiler-design.md §2.6): the span
 // parameter's local, the span as it is now (`None` while nothing has
 // written it: the parameter itself; after a store or a call that writes,
 // that link of the chain), and the calls that wrote it so far, in order,
-// each with the variable its word is bound to.
-record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes> }
+// each with the variable its word is bound to. `was` is the links walked
+// so far, in order (the span after `was[j]` is state `j + 1`, the
+// parameter state 0, the last link the span now), and `olds` the bytes of
+// earlier states bound before the store or call that ended their state
+// (`rt_file_reflect`'s plan, issues/rt-file-read-before-store.md).
+record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes>, was: List<Handle>, olds: List<OldByte> }
+
+// A byte of the written span as it was at state `state`, read at the word
+// variable `index` and bound to the variable `level` before the link that
+// ended that state: what a read of that state after the link stands for.
+record OldByte { state: Nat, index: Nat, level: Nat }
+
+// The span at a function's start: the parameter, nothing walked.
+fn FileKnown::start(span: Nat, calls: List<CallRes>) → FileKnown { FileKnown(span, None, calls, [], []) }
+
+// The span after `link`, with the calls that wrote it so far.
+fn FileKnown::past(self fk: FileKnown, link: Handle, calls: List<CallRes>) → FileKnown {
+    FileKnown(fk.span, Some(link), calls, fk.was ++ [link], fk.olds)
+}
+
+fn FileKnown::keeping(self fk: FileKnown, old: OldByte) → FileKnown {
+    FileKnown(fk.span, fk.now, fk.calls, fk.was, Cons(old, fk.olds))
+}
+
+// The variable a byte of state `s` at the index variable `i` was bound to.
+fn OldByte::find(olds: List<OldByte>, s: Nat, i: Nat) → Option<Nat> {
+    match olds {
+        Nil => None,
+        Cons(o, rest) => match o.state.same(s).and(o.index.same(i)) { True => Some(o.level), False => OldByte::find(rest, s, i) },
+    }
+}
 
 // A recursion the walk is inside (design §16.11): a fuel recursion's `Succ`
 // arm, or a measured function's step (`f::body`). `ih` is the local the
@@ -576,7 +608,9 @@ fn rt_field_of_value(k: Known, r: Handle, name: String) → Tac<Option<Handle>> 
             Some(_) => pure(None),
             None => k.is_repr_typed(r).bind(λ held => match held {
                 True => pure(None),
-                False => as_type(Global(ty)).bind(λ ct => match ct {
+                // The value's own type, so a type with parameters
+                // (`Mutated<A, B>`, a loop's state) has its constructor.
+                False => infer(Hd(r)).bind(λ ct => match ct {
                     Refused(_) => pure(None),
                     Accepted(t) => ctors(t).bind(λ cc => match cc {
                         Refused(_) => pure(None),
@@ -820,6 +854,25 @@ fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
     rt_named_record(k, r).bind(λ x => pure(x.and_then(λ id => Known::named_at(k.named, id, rt_base_name(name)))))
 }
 
+// A record that is a field of a local whose fields name terms (a loop's
+// state, `z.value`, rt_io_reflect_loop): the term, which is the record
+// written out, so a read of its field is the field's term.
+fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> {
+    match k.named {
+        Nil => pure(r),
+        Cons(_, _) => rt_field_read(r).bind(λ read => match read {
+            None => pure(r),
+            Some(p) => view(p.fst).bind(λ bv => match bv {
+                HLocal(x, xs) => match xs {
+                    Nil => pure(Known::named_at(k.named, x.id, rt_base_name(p.snd)).unwrap_or(r)),
+                    Cons(_, _) => pure(r),
+                },
+                _ => pure(r),
+            }),
+        }),
+    }
+}
+
 fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
@@ -837,7 +890,7 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
                 pure(kept.finish(h, operand, rr.snd))
             }),
         },
-        None => rt_field_of_value(k, r, name).bind(λ value => match value {
+        None => rt_settle_named(k, r).bind(λ r2 => rt_field_of_value(k, r2, name)).bind(λ value => match value {
             Some(e) => step(st, e).bind(λ rr => pure(rr.fst.finish(h, operand, rr.snd))),
             None => rt_field_at(f, k, st, h, operand, r, name, step),
         }),
@@ -949,6 +1002,10 @@ fn IoKnown::is_method(self io: IoKnown, g: GlobalRef) → Bool {
     match Known::index(io.methods, g.id, 0) { Some(_) => True, None => False }
 }
 
+fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
+    match Known::index(io.lends, g.id, 0) { Some(_) => True, None => False }
+}
+
 // The calls a world has been through, the first first: the parameter has
 // been through none, and `m(w, …).after` through `w`'s and then `m`.
 fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
@@ -961,6 +1018,13 @@ fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
+                    // The world of a loop's state (`z.after`, where the
+                    // world is the state `z`, rt_io_reflect_loop): where
+                    // the pass's chain starts.
+                    HLocal(x, _) => match x.id.same(io.world) {
+                        True => pure([]),
+                        False => rt_refuse("a world read out of a record that is not the loop's state"),
+                    },
                     HGlobal(g, cname, args) => match io.is_method(g) {
                         True => match args {
                             Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => pure(cs ++ [c])),
@@ -1035,6 +1099,16 @@ fn rt_file_answer_in(cs: List<CallRes>, g: Nat, r: Handle) → Tac<Option<CallRe
     }
 }
 
+// The call of a lent function `r` names among those made so far: the same
+// handle, or a copy of one (the elaborator repeats a call wherever its
+// record is read).
+fn rt_lent_answer(io: IoKnown, r: Handle) → Tac<Option<CallRes>> {
+    match rt_call_by_handle(io.lent, r.id) {
+        Some(a) => pure(Some(a)),
+        None => view(r).bind(λ v => match v { HGlobal(g, _, _) => rt_file_answer_in(io.lent, g.id, r), _ => pure(None) }),
+    }
+}
+
 fn rt_file_answer(fk: FileKnown, r: Handle) → Tac<Option<CallRes>> {
     match rt_call_by_handle(fk.calls, r.id) {
         Some(a) => pure(Some(a)),
@@ -1071,8 +1145,28 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
                 }),
             },
             False => view(r).bind(λ rv => match rv {
+                // A field of a lent function's answer: a variable its `Lend`
+                // bound, once the call is made (`rt_lend_calls`).
+                HGlobal(g, gname, _) => match io.is_lent(g) {
+                    True => rt_lent_answer(io, r).bind(λ found => match found {
+                        Some(a) => match rt_answer_field(a.fields, rt_base_name(name)) {
+                            Some(l) => pure(st.finish(h, operand, Var(l))),
+                            None => rt_refuse("`" ++ name ++ "` is not a field of `" ++ gname ++ "`'s answer: its bytes `after` and its word `value`"),
+                        },
+                        None => rt_refuse("an answer of `" ++ gname ++ "` read where the call is not made: a lent function is called where a call on Linux, a loop's pass or the end needs its answer"),
+                    }),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
                 HLocal(x, _) => match x.id.same(io.world) {
-                    True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    // A loop's state holds the world and the locals; a read
+                    // of one of its locals names a term (`k.named`).
+                    True => match Known::named_at(k.named, x.id, rt_base_name(name)) {
+                        Some(_) => match Known::str_same(name, "after") {
+                            True => rt_refuse("the world after a loop's pass used as a value: it is threaded on to the next call, never runtime data"),
+                            False => rt_field(f, k, st, h, operand, r, name, step),
+                        },
+                        None => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    },
                     False => rt_field(f, k, st, h, operand, r, name, step),
                 },
                 HField(c, inner, _) => match Known::str_same(inner, "value") {
@@ -1242,8 +1336,76 @@ fn rt_same_span(fk: FileKnown, h: Handle) → Tac<Bool> {
     }
 }
 
+fn rt_file_copy_of(latest: List<Handle>, s: Nat, h: Handle) → Tac<Option<Nat>> {
+    match latest {
+        Nil => pure(None),
+        Cons(l, rest) => defeq(Hd(h), Hd(l)).bind(λ same => match same { True => pure(Some(s)), False => rt_file_copy_of(rest, s - 1, h) }),
+    }
+}
+
+fn rt_file_link_of(links: List<Handle>, h: Handle) → Tac<Option<Nat>> {
+    match Known::index(links.map(λ l => l.id), h.id, 1) {
+        Some(s) => pure(Some(s)),
+        None => rt_file_copy_of(links.rev(), links.len(), h),
+    }
+}
+
+// Which of the states `links` reach `h` is: the parameter `span` (state 0),
+// or the span after `links[j]` (state `j + 1`), by the same handle or else
+// a copy of one, the latest first.
+fn rt_file_state_in(span: Nat, links: List<Handle>, h: Handle) → Tac<Option<Nat>> {
+    view(h).bind(λ v => match v {
+        HLocal(x, args) => match args {
+            Nil => pure(match x.id.same(span) { True => Some(0), False => None }),
+            Cons(_, _) => pure(None),
+        },
+        HGlobal(_, _, _) => rt_file_link_of(links, h),
+        HField(_, _, _) => rt_file_link_of(links, h),
+        _ => pure(None),
+    })
+}
+
+// Which earlier state of the written span `h` is, if it is one: the
+// parameter (state 0) once something has written the span, or a link
+// walked before the last.
+fn rt_file_was(fk: FileKnown, h: Handle) → Tac<Option<Nat>> {
+    match fk.now {
+        None => pure(None),
+        Some(_) => rt_file_state_in(fk.span, fk.was.take(fk.was.len() - 1), h),
+    }
+}
+
+// A byte of the written span as it was at state `s`: the variable it was
+// bound to before the link that ended the state, found by its index.
+fn rt_old_byte(f: Nat, k: Known, fk: FileKnown, st: RSt, h: Handle, operand: Bool, s: Nat, length: Handle, i: Handle,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>> {
+    let rl <- step(st, length);
+    match RSt::level(rl.snd).same(1) {
+        False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
+        True => {
+            let ri <- step(rl.fst, i);
+            match OldByte::find(fk.olds, s, RSt::level(ri.snd)) {
+                Some(l) => pure(ri.fst.finish(h, operand, Var(l))),
+                None => rt_refuse("a byte of the span as it was before a store or a call that wrote it, at an index not known before that store: the byte is read before the store, so its index must be (issues/rt-file-read-before-store.md)"),
+            }
+        },
+    }
+}
+
 fn rt_old_span<A>() → Tac<A> {
     rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
+}
+
+// In a computation, the earlier state of the written span `h` is, with
+// what the walk knows of the span.
+fn rt_was_of(k: Known, h: Handle) → Tac<Option<Pair<FileKnown, Nat>>> {
+    match k.file {
+        None => pure(None),
+        Some(fk) => rt_same_span(fk, h).bind(λ same => match same {
+            True => pure(None),
+            False => rt_file_was(fk, h).bind(λ was => pure(was.map(λ s => Pair(fk, s)))),
+        }),
+    }
 }
 
 // A span parameter, by number.
@@ -1429,12 +1591,17 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         // `span.byte_within(length, i)`: a byte of a lent span,
                         // under the span's own length word.
                         PWithin => match args {
-                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_span(k, st, bytes).bind(λ j =>
+                            // Of the written span as it was before a store, the
+                            // byte bound before that store.
+                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_was_of(k, bytes).bind(λ was => match was {
+                              Some(fs) => rt_old_byte(f, k, fs.fst, st, h, operand, fs.snd, length, i, λ s a => rt_go(f, k, s, a, True)),
+                              None => rt_span(k, st, bytes).bind(λ j =>
                                 rt_go(f, k, st, length, True).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
                                     False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
                                     True => rt_go(f, k, rl.fst, i, True).bind(λ ri =>
                                         pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
                                 })),
+                            }),
                             _ => rt_refuse("`byte_within` without its span, length word and index"),
                         },
                         // `~x`: all ones, then `all_ones ⊕ x` (the literal on

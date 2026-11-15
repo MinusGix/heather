@@ -14,7 +14,7 @@ const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 // leaves (x86_64_kept): what the lowering imports, and nothing B2 burns.
 const PREFIX: &[&str] = &[
     "logic", "bool", "nat", "option", "pair", "list", "relation", "relation_props", "algebra_rel",
-    "algebra", "morphism", "int", "omega", "bitvec", "location", "certified_lookup", "x86_64", "x86_64_block",
+    "algebra", "morphism", "int", "omega", "bitvec", "bitvec_rotate", "location", "certified_lookup", "x86_64", "x86_64_block",
     "vector", "list_window", "bitvec_nat", "bitvec_resize", "bitvec_bytes", "function_ir",
 ];
 

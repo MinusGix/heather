@@ -221,6 +221,7 @@ pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
 mod branch_equations;
+mod function_induction;
 mod meaning;
 mod measure_context;
 mod metaprograms;
@@ -1194,6 +1195,13 @@ impl matching::MotiveSynthesisElab for Elaborator {
                         .convert_type(&cx.gamma, Layer::Prog, &ty, scrutinee_type, scrutinee_level)
                         .is_ok()
                 })
+    }
+
+    fn motive_well_formed(&self, cx: &Cx, motive: &Type, scrutinee_type: &Type, scrutinee_level: &Level) -> bool {
+        let mut inner = cx.clone();
+        inner.push("__motive_z".to_string(), scrutinee_type.clone(), scrutinee_level.clone());
+        let oracle = self.goal_oracle();
+        typing::infer_type(oracle.world(), 0, Layer::Prog, &inner.gamma, motive, self.policy.fuel).is_ok()
     }
 }
 

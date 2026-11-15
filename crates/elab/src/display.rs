@@ -986,6 +986,15 @@ impl Speller<'_> {
         // `if h:` lower to, as the reader wrote it: a lowered `decreases`
         // body's test, read back in a goal or an unfolding equation, is not
         // `app@(case[0,0,0](M Π…`.
+        // A case on an injection, as its contractum: the instance of a
+        // motive at an arm is the goal with the arm's constructor where the
+        // scrutinee stood, and the arm proves what that reduces to.
+        if !self.qualified
+            && !self.annotations
+            && let Some(r) = crate::spelling::iota_case(t)
+        {
+            return self.tm(&crate::spelling::contract_projections(&Rc::new(r)), d + 1);
+        }
         if self.rough.is_none() && !self.qualified {
             if let Some(shown) = self.convoy(t, d) {
                 return shown;
@@ -1816,8 +1825,11 @@ impl Speller<'_> {
             CallHead::Field(name) => {
                 let receiver = args[0];
                 let shown = self.tm(receiver, d + 1);
-                return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
-                    && self.form(receiver).bare_receiver()
+                // An arm's binder is a projection of the scrutinee and reads
+                // as its name, so it is as bare as a variable.
+                return if (matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+                    && self.form(receiver).bare_receiver())
+                    || self.alias(receiver).is_some()
                 {
                     format!("{shown}.{name}")
                 } else {
@@ -2103,6 +2115,20 @@ impl Speller<'_> {
             if !NameLookup(self.el).base_name_resolves_to(&name, abs) {
                 return None;
             }
+        }
+        // A generated name (`sum#step`, `f#True`) is minted with a `#` no
+        // source can write: spelled for re-parsing, it is its designed path
+        // (`sum::step`) where that path still names it, and otherwise
+        // declines like any other unspellable node, so `omega` abstracts it.
+        if self.qualified && name.contains('#') {
+            // Designed paths are not module-qualified.
+            let declared = NameLookup(self.el).global_declared_name_at(abs)?;
+            let designed = self.el.display_paths(&declared);
+            let back = self.el.access_alias(&designed) == Some(declared.as_str());
+            if designed.contains('#') || !back {
+                return None;
+            }
+            name = designed;
         }
         let params = NameLookup(self.el).params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written

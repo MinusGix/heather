@@ -5,7 +5,7 @@ labels: [native,x86,machine-model,ir]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 A comparison against a constant puts the constant in a register first: `MOV r, imm64; XOR d, d; CMP a, r; SETcc d`. The scanner's loop tests its state against two constants on every pass (`lib/lang/lexer/lexer_span.hthr`), and each costs a register for the length of the comparison and ten bytes of immediate. An ADD's constant operand is already folded into the instruction (`AddRI8`, `AddRI32`, `File::add_known`, the planner's `Folded` place); a comparison's is not, because the machine model has no CMP with an immediate.
@@ -21,3 +21,7 @@ Found fixing [[function-ir-planner-register-pressure]], where the register was t
 ## Done when
 
 `scan_from`'s test has no `MOV r, imm64` for `FAIL` or `DEAD`, with a control that a constant too wide for the immediate still takes a register.
+
+## Log
+
+- 2026-11-15: Built in PR #651: `CmpRI8`/`CmpRI32` with `CmpRight` and `File::cmp_right`, the planner leaving a folded comparison's right operand out of the reads, and `MOV r32, imm32` for constants. `scan_token`'s 64-bit immediates went from 933 to 5. A constant too wide for the immediate keeps its register: `cmp_immediate` returns `None` and `cmp_right` falls back to `find`.

@@ -1,0 +1,757 @@
+// The optimizer's rules over facts (docs/native/optimizer-design.md §4): each a
+// clause made from an instance's numbers, with the theorem that a valuation
+// and buffers satisfying its premises satisfy its conclusion. A fact is a
+// node's equation, a word's range, an order between two words
+// (`low + add ≤ high + more`, read as naturals), a load made since the
+// last store, or that a word is bytes of a buffer joined. The replayer
+// (function_ir_replay) applies a rule by its place in `rules()` where its
+// premises are among the facts, so adding one is a clause, its proof and a
+// line of the table, and no change to anything proved about the replayer.
+//
+// A rule's numbers are ids, widths and literals, as the clause reads them.
+// One that needs a side condition of its numbers (a width no wider than
+// another) answers `None` where it fails.
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import bitvec;
+import bitvec_bytes;
+import bitvec_nat;
+import bitvec_resize;
+import bitvec_ring;
+import bitvec_shift_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+
+// ---------------------------------------------------------------------------
+// Rules by how many numbers they take
+
+fn four_of<A>(f: Nat → Nat → Nat → Nat → A, args: List<Nat>) → Option<A> {
+    match args { Nil => None, Cons(a, r1) => match r1 { Nil => None, Cons(b, r2) => match r2 { Nil => None,
+        Cons(c, r3) => match r3 { Nil => None, Cons(d, r4) => match r4 { Nil => Some(f(a, b, c, d)), Cons(_, _) => None } } } } }
+}
+
+theorem four_of_all<A>(f: Nat → Nat → Nat → Nat → A, P: A → Type, all: (a, b, c, d: Nat) → P(f(a, b, c, d)), x: A, args: List<Nat>):
+    four_of(f, args) = Some(x) → P(x) {
+    match args { Nil => λ h => absurd(h), Cons(a, r1) => match r1 { Nil => λ h => absurd(h), Cons(b, r2) => match r2 { Nil => λ h => absurd(h),
+        Cons(c, r3) => match r3 { Nil => λ h => absurd(h), Cons(d, r4) => match r4 {
+            Nil => λ h => j(Option::some_inj(f(a, b, c, d), x, h), λ y _ => P(y), all(a, b, c, d)),
+            Cons(_, _) => λ h => absurd(h) } } } } }
+}
+
+// A rule that holds at every four numbers.
+fn Rule::four(clause: Nat → Nat → Nat → Nat → Clause, sound: (a, b, c, d: Nat) → clause(a, b, c, d).Sound()) → Rule {
+    Rule(λ args => four_of(clause, args), λ args c made => four_of_all(clause, λ (k: Clause) => k.Sound(), sound, c, args, made))
+}
+
+// ---------------------------------------------------------------------------
+// The rules
+
+// x + 0 is x: `o` the sum at width `w` of `x` and `z`, `z` the literal 0.
+fn add_zero(w, o, x, z: Nat) → Clause { Clause([Is(Const(w, z, 0)), Is(Add(w, o, x, z))], Is(Move(w, o, x))) }
+
+theorem add_zero_sound(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() {
+    λ values _ held => trans(held.right.left,
+        trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), BitVec::add_zero(w, values(w, x))))
+}
+
+// A move of a move: `o` moved from `s`, `s` from `t`, at width `w`.
+fn move_move(w, o, s, t: Nat) → Clause { Clause([Is(Move(w, s, t)), Is(Move(w, o, s))], Is(Move(w, o, t))) }
+
+theorem move_move_sound(w, o, s, t: Nat): move_move(w, o, s, t).Sound() {
+    λ values _ held => trans(held.right.left, held.left)
+}
+
+// ---------------------------------------------------------------------------
+// Ranges (docs/native/optimizer-design.md §5.1): what a word's value lies between,
+// from the node that makes it and the ranges of what it reads, and what a
+// comparison's bit says of its operands. A rule is made where its literals
+// allow it (a sum that cannot wrap), so none has a condition left to prove.
+
+// The `i`th of a rule's numbers, zero past the end.
+fn num(args: List<Nat>, i: Nat) → Nat {
+    match args { Nil => 0, Cons(a, rest) => match i { Zero => a, Succ(k) => num(rest, k) } }
+}
+
+// A rule made where `ok` of its numbers holds.
+fn Rule::when(ok: List<Nat> → Bool, clause: List<Nat> → Clause, sound: (args: List<Nat>) → ok(args) = True → clause(args).Sound()) → Rule {
+    Rule(λ args => ok(args).then(Some(clause(args))), λ args c made => {
+        let got = Bool::then_some(ok(args), Some(clause(args)), c, made);
+        j(Option::some_inj(clause(args), c, got.right), λ k _ => k.Sound(), sound(args, got.left))
+    })
+}
+
+theorem leb_below(n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound(m, Bool::is_true_of_eq(h)) }
+
+// A constant is within itself.
+fn within_const(o, v: Nat) → Clause { Clause([Is(Const(64, o, v))], Within(o, v, v)) }
+
+theorem within_const_sound(o, v: Nat, fits: v.leb(word_top()) = True): within_const(o, v).Sound() {
+    λ values _ held => {
+        let is: (values(64, o).toNat() = v) = trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), held.left),
+            BitVec::toNat_ofNat(64, v, leb_below(v, word_top(), fits)));
+        j(sym(is), λ n _ => (v <= n) ∧ (n <= v), ⟨v.le_refl(), v.le_refl()⟩)
+    }
+}
+
+// A copy is within what it copies.
+fn within_move(o, s, a, b: Nat) → Clause { Clause([Is(Move(64, o, s)), Within(s, a, b)], Within(o, a, b)) }
+
+theorem within_move_sound(o, s, a, b: Nat): within_move(o, s, a, b).Sound() {
+    λ values _ held => j(sym(held.left), λ w _ => Range(a, b).Holds(w), held.right.left)
+}
+
+// A sum that cannot wrap is within the sums of its parts' bounds.
+fn within_add(o, l, r, a, b, c, d: Nat) → Clause {
+    Clause([Is(Add(64, o, l, r)), Within(l, a, b), Within(r, c, d)], Within(o, a + c, b + d))
+}
+
+theorem within_add_sound(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let high: (x.toNat() + y.toNat() <= b + d) = Nat::add_le_mono(x.toNat(), b, y.toNat(), d, held.right.left.right, held.right.right.left.right);
+        let sum: (values(64, o).toNat() = x.toNat() + y.toNat()) = trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), held.left),
+            trans(BitVec::toNat_add_mod(64, x, y), (x.toNat() + y.toNat()).mod_of_lt(Nat::pow(2, 64),
+                Nat::le_trans(x.toNat() + y.toNat(), b + d, word_top(), high, leb_below(b + d, word_top(), fits)))));
+        j(sym(sum), λ n _ => (a + c <= n) ∧ (n <= b + d),
+            ⟨Nat::add_le_mono(a, x.toNat(), c, y.toNat(), held.right.left.left, held.right.right.left.left), high⟩)
+    }
+}
+
+// A difference that cannot borrow is within its parts' bounds, crossed.
+fn within_sub(o, l, r, a, b, c, d: Nat) → Clause {
+    Clause([Is(Sub(64, o, l, r)), Within(l, a, b), Within(r, c, d)], Within(o, a - d, b - c))
+}
+
+theorem within_sub_sound(o, l, r, a, b, c, d: Nat, fits: d.leb(a) = True): within_sub(o, l, r, a, b, c, d).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let under: (y.toNat() <= x.toNat()) = omega(held.right.left.left, held.right.right.left.right, leb_below(d, a, fits));
+        let difference: (values(64, o).toNat() = x.toNat() - y.toNat()) = trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), held.left), toNat_sub(64, x, y, under));
+        j(sym(difference), λ n _ => (a - d <= n) ∧ (n <= b - c),
+            ⟨omega(held.right.left.left, held.right.right.left.right, leb_below(d, a, fits)), omega(held.right.left.right, held.right.right.left.left, under)⟩)
+    }
+}
+
+// A left shift that loses no bit is within its operand's bounds, shifted.
+fn within_shift(o, v, n, a, b: Nat) → Clause {
+    Clause([Is(ShiftLeft(64, o, v, n)), Within(v, a, b)], Within(o, a * Nat::pow(2, n), b * Nat::pow(2, n)))
+}
+
+theorem within_shift_sound(o, v, n, a, b: Nat, fits: (b * Nat::pow(2, n)).leb(word_top()) = True): within_shift(o, v, n, a, b).Sound() {
+    λ values _ held => {
+        let x = values(64, v);
+        let high: (x.toNat() * Nat::pow(2, n) <= b * Nat::pow(2, n)) = Nat::mul_le_mono_r(Nat::pow(2, n), x.toNat(), b, held.right.left.right);
+        let shifted: (values(64, o).toNat() = x.toNat() * Nat::pow(2, n)) = trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), held.left),
+            BitVec::toNat_shift_left(64, x, n, Nat::le_trans(x.toNat() * Nat::pow(2, n), b * Nat::pow(2, n), word_top(), high,
+                leb_below(b * Nat::pow(2, n), word_top(), fits))));
+        j(sym(shifted), λ m _ => (a * Nat::pow(2, n) <= m) ∧ (m <= b * Nat::pow(2, n)),
+            ⟨Nat::mul_le_mono_r(Nat::pow(2, n), a, x.toNat(), held.right.left.left), high⟩)
+    }
+}
+
+// A word made from a narrower value is below that width's power: `high`
+// is any number that power is at most one more than.
+fn within_narrow(o, s, from, high: Nat) → Clause { Clause([Is(Resize(from, 64, o, s))], Within(o, 0, high)) }
+
+theorem within_narrow_sound(o, s, from, high: Nat, fits: Nat::pow(2, from).leb(Succ(high)) = True): within_narrow(o, s, from, high).Sound() {
+    λ values _ held => {
+        let narrow = values(from, s);
+        let word: (values(64, o).toNat() <= narrow.toNat()) =
+            j(sym(held.left), λ w _ => w.toNat() <= narrow.toNat(), BitVec::toNat_ofNat_le(64, narrow.toNat()));
+        ⟨trivial, Nat::le_trans(values(64, o).toNat(), narrow.toNat(), high, word,
+            Nat::le_trans(Succ(narrow.toNat()), Nat::pow(2, from), Succ(high), BitVec::toNat_lt_pow(from, narrow),
+                leb_below(Nat::pow(2, from), Succ(high), fits)))⟩
+    }
+}
+
+// A word narrowed and widened again is itself where it was within the
+// narrow width: the two resizes are a move.
+fn narrow_back(b, a, s, from, high: Nat) → Clause {
+    Clause([Is(Resize(64, from, a, s)), Is(Resize(from, 64, b, a)), Within(s, 0, high)], Is(Move(64, b, s)))
+}
+
+theorem narrow_back_sound(b, a, s, from, high: Nat, fits: Succ(high).leb(Nat::pow(2, from)) = True): narrow_back(b, a, s, from, high).Sound() {
+    λ values _ held => {
+        let x = values(64, s);
+        let below: (x.toNat() < Nat::pow(2, from)) = Nat::le_trans(Succ(x.toNat()), Succ(high), Nat::pow(2, from), held.right.right.left.right,
+            leb_below(Succ(high), Nat::pow(2, from), fits));
+        let narrow: (values(from, a).toNat() = x.toNat()) =
+            trans(cong_fn(λ (w: BitVec(from)) => w.toNat(), held.left), BitVec::toNat_ofNat(from, x.toNat(), below));
+        trans(held.right.left, trans(cong_fn(λ (n: Nat) => BitVec::ofNat(n, n := 64), narrow), BitVec::ofNat_toNat(64, x)))
+    }
+}
+
+// An or is at most its operands added, which is exact where they share no
+// bit: bytes joined by shifts stay within the word they make.
+fn within_or(o, l, r, a, b: Nat) → Clause {
+    Clause([Is(BitOr(64, o, l, r)), Within(l, 0, a), Within(r, 0, b)], Within(o, 0, a + b))
+}
+
+theorem within_or_sound(o, l, r, a, b: Nat): within_or(o, l, r, a, b).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let sum: (x.bor(y).toNat() <= a + b) = Nat::le_trans(x.bor(y).toNat(), x.toNat() + y.toNat(), a + b, BitVec::toNat_bor_le_add(64, x, y),
+            Nat::add_le_mono(x.toNat(), a, y.toNat(), b, held.right.left.right, held.right.right.left.right));
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= a + b), ⟨trivial, sum⟩)
+    }
+}
+
+// An and is at most either operand.
+fn within_and(o, l, r, a: Nat) → Clause { Clause([Is(BitAnd(64, o, l, r)), Within(l, 0, a)], Within(o, 0, a)) }
+
+theorem within_and_sound(o, l, r, a: Nat): within_and(o, l, r, a).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= a),
+            ⟨trivial, Nat::le_trans(x.band(y).toNat(), x.toNat(), a, BitVec::toNat_band_le_left(64, x, y), held.right.left.right)⟩)
+    }
+}
+
+fn within_and_right(o, l, r, b: Nat) → Clause { Clause([Is(BitAnd(64, o, l, r)), Within(r, 0, b)], Within(o, 0, b)) }
+
+theorem within_and_right_sound(o, l, r, b: Nat): within_and_right(o, l, r, b).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        j(sym(held.left), λ w _ => (0 <= w.toNat()) ∧ (w.toNat() <= b),
+            ⟨trivial, Nat::le_trans(x.band(y).toNat(), y.toNat(), b, BitVec::toNat_band_le_right(64, x, y), held.right.left.right)⟩)
+    }
+}
+
+// What an unsigned comparison's bit is, as a statement of its operands.
+theorem below_bit(values: Valuation(), c, l, r: Nat, holds: NodeHolds(values, UnsignedLessThan(64, c, l, r)), bit: Bool,
+    is: values(1, c) = BitVec::ofBool(bit)): values(64, l).unsigned_lt_bit(values(64, r)) = bit {
+    trans(sym(BitVec::head_bit_ofBool(values(64, l).unsigned_lt_bit(values(64, r)))),
+        trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), trans(sym(holds), is)), BitVec::head_bit_ofBool(bit)))
+}
+
+// A comparison of a word below another's least value is one.
+fn below_yes(c, l, r, a, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Within(l, 0, a), Within(r, b, word_top())], Is(Const(1, c, 1)))
+}
+
+theorem below_yes_sound(c, l, r, a, b: Nat, apart: Succ(a).leb(b) = True): below_yes(c, l, r, a, b).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let lt: (x.toNat() < y.toNat()) = Nat::le_trans(Succ(x.toNat()), b, y.toNat(),
+            Nat::le_trans(Succ(x.toNat()), Succ(a), b, held.right.left.right, leb_below(Succ(a), b, apart)), held.right.right.left.left);
+        trans(held.left, cong_fn(λ (bit: Bool) => BitVec::ofBool(bit), BitVec::borrow_sub_bit_true_iff(64, x, y).mpr(lt)))
+    }
+}
+
+// A comparison of a word at least another's greatest value is zero.
+fn below_no(c, l, r, a, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Within(l, a, word_top()), Within(r, 0, b)], Is(Const(1, c, 0)))
+}
+
+theorem below_no_sound(c, l, r, a, b: Nat, apart: b.leb(a) = True): below_no(c, l, r, a, b).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let ge: (y.toNat() <= x.toNat()) = Nat::le_trans(y.toNat(), b, x.toNat(), held.right.right.left.right,
+            Nat::le_trans(b, a, x.toNat(), leb_below(b, a, apart), held.right.left.left));
+        let clear: (x.unsigned_lt_bit(y) = False) = (match x.unsigned_lt_bit(y) as λ bit => x.unsigned_lt_bit(y) = bit → bit = False {
+            False => λ _ => refl,
+            True => λ set => false_elim(x.toNat().lt_irrefl(Nat::lt_of_lt_of_le(x.toNat(), y.toNat(), x.toNat(),
+                BitVec::borrow_sub_bit_true_iff(64, x, y).mp(set), ge))),
+        })(refl);
+        trans(held.left, cong_fn(λ (bit: Bool) => BitVec::ofBool(bit), clear))
+    }
+}
+
+// Where a comparison's bit is one, its left is below its right's bound,
+// and its right above its left's.
+fn below_left(c, l, r, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, Succ(b))], Within(l, 0, b))
+}
+
+theorem below_left_sound(c, l, r, b: Nat): below_left(c, l, r, b).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let lt: (x.toNat() < y.toNat()) = BitVec::borrow_sub_bit_true_iff(64, x, y).mp(below_bit(values, c, l, r, held.left, True, held.right.left));
+        ⟨trivial, Nat::le_trans(Succ(x.toNat()), y.toNat(), Succ(b), lt, held.right.right.left.right)⟩
+    }
+}
+
+fn below_right(c, l, r, a: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(l, a, word_top())], Within(r, Succ(a), word_top()))
+}
+
+theorem below_right_sound(c, l, r, a: Nat): below_right(c, l, r, a).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let lt: (x.toNat() < y.toNat()) = BitVec::borrow_sub_bit_true_iff(64, x, y).mp(below_bit(values, c, l, r, held.left, True, held.right.left));
+        ⟨Nat::le_trans(Succ(a), Succ(x.toNat()), y.toNat(), held.right.right.left.left, lt), Range::any_holds(y).right⟩
+    }
+}
+
+// Where it is zero, its left is at least its right's least value, and
+// its right at most its left's greatest.
+theorem not_below(values: Valuation(), c, l, r: Nat, holds: NodeHolds(values, UnsignedLessThan(64, c, l, r)),
+    clear: values(1, c) = BitVec::ofNat(0)): values(64, r).toNat() <= values(64, l).toNat() {
+    values(64, l).toNat().le_of_not_lt(values(64, r).toNat(), λ lt =>
+        absurd(trans(sym(BitVec::borrow_sub_bit_true_iff(64, values(64, l), values(64, r)).mpr(lt)),
+            below_bit(values, c, l, r, holds, False, clear))))
+}
+
+fn above_left(c, l, r, a: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 0)), Within(r, a, word_top())], Within(l, a, word_top()))
+}
+
+theorem above_left_sound(c, l, r, a: Nat): above_left(c, l, r, a).Sound() {
+    λ values _ held => ⟨Nat::le_trans(a, values(64, r).toNat(), values(64, l).toNat(), held.right.right.left.left,
+        not_below(values, c, l, r, held.left, held.right.left)), Range::any_holds(values(64, l)).right⟩
+}
+
+fn above_right(c, l, r, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 0)), Within(l, 0, b)], Within(r, 0, b))
+}
+
+theorem above_right_sound(c, l, r, b: Nat): above_right(c, l, r, b).Sound() {
+    λ values _ held => ⟨trivial, Nat::le_trans(values(64, r).toNat(), values(64, l).toNat(), b,
+        not_below(values, c, l, r, held.left, held.right.left), held.right.right.left.right)⟩
+}
+
+// A one-bit or that is clear has both its bits clear: what the arm of a
+// test of several bounds starts from.
+theorem or_clear_bools(p, q: Bool): BitVec::ofBool(p).bor(BitVec::ofBool(q)) = BitVec::ofNat(0, n := 1) → (p = False) ∧ (q = False) {
+    match p {
+        True => λ h => absurd(cong_fn(λ (b: BitVec(1)) => b.head_bit(), h)),
+        False => match q {
+            True => λ h => absurd(cong_fn(λ (b: BitVec(1)) => b.head_bit(), h)),
+            False => λ _ => ⟨refl, refl⟩,
+        },
+    }
+}
+
+theorem or_clear(x, y: BitVec(1), clear: x.bor(y) = BitVec::ofNat(0)): (x = BitVec::ofNat(0)) ∧ (y = BitVec::ofNat(0)) {
+    let as_bools: (BitVec::ofBool(x.head_bit()).bor(BitVec::ofBool(y.head_bit())) = BitVec::ofNat(0, n := 1)) =
+        j(BitVec::one_bit_eq_ofBool(y), λ w _ => BitVec::ofBool(x.head_bit()).bor(w) = BitVec::ofNat(0, n := 1),
+            j(BitVec::one_bit_eq_ofBool(x), λ w _ => w.bor(y) = BitVec::ofNat(0, n := 1), clear));
+    let bits = or_clear_bools(x.head_bit(), y.head_bit(), as_bools);
+    ⟨trans(trans(BitVec::one_bit_eq_ofBool(x), cong_fn(λ (h: Bool) => BitVec::ofBool(h), bits.left)), bit_clear()),
+        trans(trans(BitVec::one_bit_eq_ofBool(y), cong_fn(λ (h: Bool) => BitVec::ofBool(h), bits.right)), bit_clear())⟩
+}
+
+fn or_clear_left(o, a, b: Nat) → Clause { Clause([Is(BitOr(1, o, a, b)), Is(Const(1, o, 0))], Is(Const(1, a, 0))) }
+
+theorem or_clear_left_sound(o, a, b: Nat): or_clear_left(o, a, b).Sound() {
+    λ values _ held => or_clear(values(1, a), values(1, b), trans(sym(held.left), held.right.left)).left
+}
+
+fn or_clear_right(o, a, b: Nat) → Clause { Clause([Is(BitOr(1, o, a, b)), Is(Const(1, o, 0))], Is(Const(1, b, 0))) }
+
+theorem or_clear_right_sound(o, a, b: Nat): or_clear_right(o, a, b).Sound() {
+    λ values _ held => or_clear(values(1, a), values(1, b), trans(sym(held.left), held.right.left)).right
+}
+
+// The other way: an or of two clear bits is clear, and an or with a set
+// bit is set. A test of several bounds is decided where each of them is.
+theorem or_of_clear_bits(x, y: BitVec(1), left: x = BitVec::ofNat(0), right: y = BitVec::ofNat(0)): x.bor(y) = BitVec::ofNat(0) {
+    j(sym(left), λ w _ => w.bor(y) = BitVec::ofNat(0, n := 1), j(sym(right), λ w _ => BitVec::ofNat(0, n := 1).bor(w) = BitVec::ofNat(0, n := 1), refl))
+}
+
+theorem set_or_bool(q: Bool): BitVec::ofNat(1, n := 1).bor(BitVec::ofBool(q)) = BitVec::ofNat(1, n := 1) { match q { True => refl, False => refl } }
+theorem bool_or_set(p: Bool): BitVec::ofBool(p).bor(BitVec::ofNat(1, n := 1)) = BitVec::ofNat(1, n := 1) { match p { True => refl, False => refl } }
+
+theorem or_of_set_bit(x, y: BitVec(1), set: x = BitVec::ofNat(1)): x.bor(y) = BitVec::ofNat(1) {
+    j(sym(set), λ w _ => w.bor(y) = BitVec::ofNat(1, n := 1),
+        j(sym(BitVec::one_bit_eq_ofBool(y)), λ w _ => BitVec::ofNat(1, n := 1).bor(w) = BitVec::ofNat(1, n := 1), set_or_bool(y.head_bit())))
+}
+
+theorem or_of_set_bit_right(x, y: BitVec(1), set: y = BitVec::ofNat(1)): x.bor(y) = BitVec::ofNat(1) {
+    j(sym(set), λ w _ => x.bor(w) = BitVec::ofNat(1, n := 1),
+        j(sym(BitVec::one_bit_eq_ofBool(x)), λ w _ => w.bor(BitVec::ofNat(1, n := 1)) = BitVec::ofNat(1, n := 1), bool_or_set(x.head_bit())))
+}
+
+fn or_of_clear(o, a, b: Nat) → Clause { Clause([Is(BitOr(1, o, a, b)), Is(Const(1, a, 0)), Is(Const(1, b, 0))], Is(Const(1, o, 0))) }
+
+theorem or_of_clear_sound(o, a, b: Nat): or_of_clear(o, a, b).Sound() {
+    λ values _ held => trans(held.left, or_of_clear_bits(values(1, a), values(1, b), held.right.left, held.right.right.left))
+}
+
+fn or_of_set(o, a, b: Nat) → Clause { Clause([Is(BitOr(1, o, a, b)), Is(Const(1, a, 1))], Is(Const(1, o, 1))) }
+
+theorem or_of_set_sound(o, a, b: Nat): or_of_set(o, a, b).Sound() {
+    λ values _ held => trans(held.left, or_of_set_bit(values(1, a), values(1, b), held.right.left))
+}
+
+fn or_of_set_right(o, a, b: Nat) → Clause { Clause([Is(BitOr(1, o, a, b)), Is(Const(1, b, 1))], Is(Const(1, o, 1))) }
+
+theorem or_of_set_right_sound(o, a, b: Nat): or_of_set_right(o, a, b).Sound() {
+    λ values _ held => trans(held.left, or_of_set_bit_right(values(1, a), values(1, b), held.right.left))
+}
+
+// ---------------------------------------------------------------------------
+// Orders: a word and a number at most another word and a number, where no
+// range of either is known (`Fact::AtMost`). A comparison's bit gives one
+// and one decides a comparison; a sum with a constant that did not wrap is
+// its operand and the constant, both ways; two that meet at a word join.
+// What a path of them from an index to a length says is that the index is
+// below the length, with no range of either (the inequality graph of
+// Bodik, Gupta and Sarkar's ABCD, here with the path as the proof).
+
+theorem order_joined(x, y, z, m, n, p, q, u, v: Nat, first: x + m <= y + n, second: y + p <= z + q, slack: u + (n + q) <= v + (m + p)):
+    x + u <= z + v {
+    omega(first, second, slack)
+}
+
+fn order_set(c, l, r: Nat) → Clause { Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1))], AtMost(l, 1, r, 0)) }
+
+theorem order_set_sound(c, l, r: Nat): order_set(c, l, r).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let lt: (x.toNat() < y.toNat()) = BitVec::borrow_sub_bit_true_iff(64, x, y).mp(below_bit(values, c, l, r, held.left, True, held.right.left));
+        omega(lt)
+    }
+}
+
+fn order_clear(c, l, r: Nat) → Clause { Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 0))], AtMost(r, 0, l, 0)) }
+
+theorem order_clear_sound(c, l, r: Nat): order_clear(c, l, r).Sound() {
+    λ values _ held => {
+        let ge: (values(64, r).toNat() <= values(64, l).toNat()) = not_below(values, c, l, r, held.left, held.right.left);
+        omega(ge)
+    }
+}
+
+// A comparison of two words in order is decided.
+fn ordered_below(c, l, r: Nat) → Clause { Clause([Is(UnsignedLessThan(64, c, l, r)), AtMost(l, 1, r, 0)], Is(Const(1, c, 1))) }
+
+theorem ordered_below_sound(c, l, r: Nat): ordered_below(c, l, r).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let lt: (x.toNat() < y.toNat()) = omega(held.right.left);
+        trans(held.left, cong_fn(λ (bit: Bool) => BitVec::ofBool(bit), BitVec::borrow_sub_bit_true_iff(64, x, y).mpr(lt)))
+    }
+}
+
+fn ordered_not_below(c, l, r: Nat) → Clause { Clause([Is(UnsignedLessThan(64, c, l, r)), AtMost(r, 0, l, 0)], Is(Const(1, c, 0))) }
+
+theorem ordered_not_below_sound(c, l, r: Nat): ordered_not_below(c, l, r).Sound() {
+    λ values _ held => {
+        let x = values(64, l);
+        let y = values(64, r);
+        let ge: (y.toNat() <= x.toNat()) = omega(held.right.left);
+        let clear: (x.unsigned_lt_bit(y) = False) = (match x.unsigned_lt_bit(y) as λ bit => x.unsigned_lt_bit(y) = bit → bit = False {
+            False => λ _ => refl,
+            True => λ set => false_elim(x.toNat().lt_irrefl(Nat::lt_of_lt_of_le(x.toNat(), y.toNat(), x.toNat(),
+                BitVec::borrow_sub_bit_true_iff(64, x, y).mp(set), ge))),
+        })(refl);
+        trans(held.left, cong_fn(λ (bit: Bool) => BitVec::ofBool(bit), clear))
+    }
+}
+
+// Two orders that meet at a word, and any order their sum gives.
+fn order_join(a, m, b, n, p, c, q, u, v: Nat) → Clause { Clause([AtMost(a, m, b, n), AtMost(b, p, c, q)], AtMost(a, u, c, v)) }
+
+theorem order_join_sound(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v + (m + p)) = True): order_join(a, m, b, n, p, c, q, u, v).Sound() {
+    λ values _ held => order_joined(values(64, a).toNat(), values(64, b).toNat(), values(64, c).toNat(), m, n, p, q, u, v, held.left, held.right.left,
+        leb_below(u + (n + q), v + (m + p), slack))
+}
+
+// A sum with a constant, as a number: the operand and the constant, to
+// the word's modulus.
+theorem sum_mod(values: Valuation(), t, i, k, v: Nat, fits: v < Nat::pow(2, 64), constant: NodeHolds(values, Const(64, k, v)),
+    sum: NodeHolds(values, Add(64, t, i, k))): values(64, t).toNat() = (values(64, i).toNat() + v).mod(Nat::pow(2, 64)) {
+    let is: (values(64, k).toNat() = v) = trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), constant), BitVec::toNat_ofNat(64, v, fits));
+    trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), sum),
+        trans(BitVec::toNat_add_mod(64, values(64, i), values(64, k)), cong_fn(λ (n: Nat) => (values(64, i).toNat() + n).mod(Nat::pow(2, 64)), is)))
+}
+
+// A sum to a modulus that is at least its left operand did not wrap.
+theorem sum_kept(x, k, n: Nat, low: x < n, small: k < n, kept: x <= (x + k).mod(n)): (x + k).mod(n) = x + k {
+    match (x + k).lt_or_ge(n) {
+        Inl(under) => (x + k).mod_of_lt(n, under),
+        Inr(over) => {
+            let parts: (1 * n + (x + k - n) = x + k) = omega(over);
+            let bound: (x + k - n < n) = omega(low, small);
+            let wrapped: ((x + k).mod(n) = x + k - n) = (x + k).div_mod_unique(n, 1, x + k - n, parts, bound).right;
+            false_elim(omega(wrapped, kept, small, over))
+        },
+    }
+}
+
+// Where the sum is at least its operand, which a test may say: the sum is
+// the operand and the constant.
+theorem sum_tested(values: Valuation(), t, i, k, v: Nat, fits: v.leb(word_top()) = True, constant: NodeHolds(values, Const(64, k, v)),
+    sum: NodeHolds(values, Add(64, t, i, k)), kept: Order(i, 0, t, 0).Holds(values)): values(64, t).toNat() = values(64, i).toNat() + v {
+    let is = sum_mod(values, t, i, k, v, leb_below(v, word_top(), fits), constant, sum);
+    let above: (values(64, i).toNat() <= (values(64, i).toNat() + v).mod(Nat::pow(2, 64))) = j(is, λ n _ => values(64, i).toNat() <= n, omega(kept));
+    trans(is, sum_kept(values(64, i).toNat(), v, Nat::pow(2, 64), BitVec::toNat_lt_pow(64, values(64, i)), leb_below(v, word_top(), fits), above))
+}
+
+fn sum_tested_low(t, i, k, v: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), AtMost(i, 0, t, 0)], AtMost(i, v, t, 0)) }
+
+theorem sum_tested_low_sound(t, i, k, v: Nat, fits: v.leb(word_top()) = True): sum_tested_low(t, i, k, v).Sound() {
+    λ values _ held => {
+        let is = sum_tested(values, t, i, k, v, fits, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+fn sum_tested_high(t, i, k, v: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), AtMost(i, 0, t, 0)], AtMost(t, 0, i, v)) }
+
+theorem sum_tested_high_sound(t, i, k, v: Nat, fits: v.leb(word_top()) = True): sum_tested_high(t, i, k, v).Sound() {
+    λ values _ held => {
+        let is = sum_tested(values, t, i, k, v, fits, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+// Where the operand and at least the constant are at most a word, which
+// is below the modulus: the same.
+theorem sum_under(x, v, m, y, n, top: Nat, room: x + m <= y + n, word: y < top, least: v + n <= m): x + v < top { omega(room, word, least) }
+theorem sum_part(x, v, top: Nat, under: x + v < top): v < top { omega(under) }
+
+theorem sum_roomed(values: Valuation(), t, i, k, v, m, x, n: Nat, least: (v + n).leb(m) = True, constant: NodeHolds(values, Const(64, k, v)),
+    sum: NodeHolds(values, Add(64, t, i, k)), room: Order(i, m, x, n).Holds(values)): values(64, t).toNat() = values(64, i).toNat() + v {
+    let under: (values(64, i).toNat() + v < Nat::pow(2, 64)) = sum_under(values(64, i).toNat(), v, m, values(64, x).toNat(), n, Nat::pow(2, 64), room,
+        BitVec::toNat_lt_pow(64, values(64, x)), leb_below(v + n, m, least));
+    let small: (v < Nat::pow(2, 64)) = sum_part(values(64, i).toNat(), v, Nat::pow(2, 64), under);
+    trans(sum_mod(values, t, i, k, v, small, constant, sum), (values(64, i).toNat() + v).mod_of_lt(Nat::pow(2, 64), under))
+}
+
+fn sum_roomed_low(t, i, k, v, m, x, n: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), AtMost(i, m, x, n)], AtMost(i, v, t, 0)) }
+
+theorem sum_roomed_low_sound(t, i, k, v, m, x, n: Nat, least: (v + n).leb(m) = True): sum_roomed_low(t, i, k, v, m, x, n).Sound() {
+    λ values _ held => {
+        let is = sum_roomed(values, t, i, k, v, m, x, n, least, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+fn sum_roomed_high(t, i, k, v, m, x, n: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), AtMost(i, m, x, n)], AtMost(t, 0, i, v)) }
+
+theorem sum_roomed_high_sound(t, i, k, v, m, x, n: Nat, least: (v + n).leb(m) = True): sum_roomed_high(t, i, k, v, m, x, n).Sound() {
+    λ values _ held => {
+        let is = sum_roomed(values, t, i, k, v, m, x, n, least, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+// Where the operand's range has room for the constant below the word's
+// top: the same. So a sum is known not to wrap by a test of it, by an
+// order with room, or by a range with room.
+theorem sum_within(values: Valuation(), t, i, k, v, a, b: Nat, fits: (b + v).leb(word_top()) = True, constant: NodeHolds(values, Const(64, k, v)),
+    sum: NodeHolds(values, Add(64, t, i, k)), range: Range(a, b).Holds(values(64, i))): values(64, t).toNat() = values(64, i).toNat() + v {
+    let under: (values(64, i).toNat() + v <= word_top()) = omega(range.right, leb_below(b + v, word_top(), fits));
+    let small: (v < Nat::pow(2, 64)) = sum_part(values(64, i).toNat(), v, Nat::pow(2, 64), under);
+    trans(sum_mod(values, t, i, k, v, small, constant, sum), (values(64, i).toNat() + v).mod_of_lt(Nat::pow(2, 64), under))
+}
+
+fn sum_within_low(t, i, k, v, a, b: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), Within(i, a, b)], AtMost(i, v, t, 0)) }
+
+theorem sum_within_low_sound(t, i, k, v, a, b: Nat, fits: (b + v).leb(word_top()) = True): sum_within_low(t, i, k, v, a, b).Sound() {
+    λ values _ held => {
+        let is = sum_within(values, t, i, k, v, a, b, fits, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+fn sum_within_high(t, i, k, v, a, b: Nat) → Clause { Clause([Is(Const(64, k, v)), Is(Add(64, t, i, k)), Within(i, a, b)], AtMost(t, 0, i, v)) }
+
+theorem sum_within_high_sound(t, i, k, v, a, b: Nat, fits: (b + v).leb(word_top()) = True): sum_within_high(t, i, k, v, a, b).Sound() {
+    λ values _ held => {
+        let is = sum_within(values, t, i, k, v, a, b, fits, held.left, held.right.left, held.right.right.left);
+        omega(is)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory. A premise `Loaded` is a node that read the buffers as they are
+// where the rule is used: nothing stored between it and there.
+
+// The byte a load read is the byte an earlier one read at the same index
+// of the same buffer. The earlier one may be what a store read back.
+fn load_again(b, a, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(a, f, i)), Loaded(BufferLoad(b, f, i))], Is(Move(64, b, a))) }
+
+theorem load_again_sound(b, a, f, i: Nat): load_again(b, a, f, i).Sound() {
+    λ values buffers held => trans(held.right.left, sym(held.left))
+}
+
+// ---------------------------------------------------------------------------
+// Bytes joined. `Joined(o, f, i, n, sh)` says the word `o` is the `n`
+// bytes of buffer `f` from the index `i`, the first the most significant,
+// shifted left by `sh` (`buffer_join`). A byte load starts one, a shift
+// moves it, an or of two that are side by side in the buffer and in the
+// word is the longer one, and four bytes unshifted are the word one load
+// reads, swapped. However the bytes were joined, the rules meet at the
+// same fact.
+
+fn join_byte(b, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(b, f, i))], Joined(b, f, i, 1, 0)) }
+
+theorem join_byte_sound(b, f, i: Nat): join_byte(b, f, i).Sound() {
+    λ values buffers held => trans(held.left, sym(buffer_join_one(buffers, f, values(64, i).toNat())))
+}
+
+fn join_shift(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }
+
+theorem join_shift_sound(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() {
+    λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: BitVec(64)) => z.shift_left(c), held.left),
+        sym(buffer_join(buffers, f, values(64, i).toNat(), n).shift_left_add(sh, c))))
+}
+
+// Two joins side by side: the second starts where the first ends, which
+// the two orders say of the indexes as numbers, and the first is shifted
+// past the second's bytes.
+theorem joins_meet(buffers: Buffers(), f, x, y, n, m, sh: Nat, after: x + n <= y + 0, before: y + 0 <= x + n):
+    buffer_join(buffers, f, x, n).shift_left(8 * m + sh).bor(buffer_join(buffers, f, y, m).shift_left(sh)) =
+        buffer_join(buffers, f, x, n + m).shift_left(sh) {
+    let a = buffer_join(buffers, f, x, n);
+    let at: (y = x + n) = omega(after, before);
+    trans(cong_fn(λ (k: Nat) => a.shift_left(8 * m + sh).bor(buffer_join(buffers, f, k, m).shift_left(sh)), at),
+        trans(cong_fn(λ (z: BitVec(64)) => z.bor(buffer_join(buffers, f, x + n, m).shift_left(sh)), a.shift_left_add(8 * m, sh)),
+            trans(sym(a.shift_left(8 * m).shift_left_bor(buffer_join(buffers, f, x + n, m), sh)),
+                cong_fn(λ (z: BitVec(64)) => z.shift_left(sh), sym(buffer_join_split(buffers, f, x, n, m))))))
+}
+
+fn join_or(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, a, b))], Joined(o, f, i, n + m, sh))
+}
+
+theorem join_or_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or(o, a, b, f, i, j, n, m, sh).Sound() {
+    λ values buffers held => {
+        let first = held.left;
+        let second = held.right.left;
+        let or = held.right.right.right.right.left;
+        trans(or, trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
+            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
+                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left))))
+    }
+}
+
+// The same with the or's operands the other way round.
+fn join_or_right(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, b, a))], Joined(o, f, i, n + m, sh))
+}
+
+theorem join_or_right_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or_right(o, a, b, f, i, j, n, m, sh).Sound() {
+    λ values buffers held => {
+        let first = held.left;
+        let second = held.right.left;
+        let or = held.right.right.right.right.left;
+        trans(or, trans(BitVec::bor_comm(64, values(64, b), values(64, a)), trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
+            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
+                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left)))))
+    }
+}
+
+// Four bytes joined and unshifted are what one four-byte load reads at
+// the same index, swapped and widened: the word is that one's.
+fn join_word(o, w, s, r, f, i: Nat) → Clause {
+    Clause([Joined(o, f, i, 4, 0), Loaded(WideLoad(4, w, f, i)), Is(ByteSwap(32, s, w)), Is(Resize(32, 64, r, s))], Is(Move(64, o, r)))
+}
+
+theorem join_word_sound(o, w, s, r, f, i: Nat): join_word(o, w, s, r, f, i).Sound() {
+    λ values buffers held => {
+        let word = buffer_word(buffers, f, values(64, i).toNat(), 4);
+        let swapped: (values(32, s) = word.swap_bytes()) = trans(held.right.right.left, cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), held.right.left));
+        trans(held.left, trans(buffer_join_four(buffers, f, values(64, i).toNat()),
+            sym(trans(held.right.right.right.left, cong_fn(λ (z: BitVec(32)) => BitVec::ofNat(z.toNat(), n := 64), swapped)))))
+    }
+}
+
+fn always(args: List<Nat>) → Bool { True }
+
+// The table a plan's `Derive` steps index. A rule keeps its place: new
+// ones are added at the end.
+fn rules() → List<Rule> {
+    [
+        Rule::four(add_zero, add_zero_sound),
+        Rule::four(move_move, move_move_sound),
+        // 2
+        Rule::when(λ n => num(n, 1).leb(word_top()), λ n => within_const(num(n, 0), num(n, 1)), λ n ok => within_const_sound(num(n, 0), num(n, 1), ok)),
+        Rule::four(within_move, within_move_sound),
+        Rule::when(λ n => (num(n, 4) + num(n, 6)).leb(word_top()),
+            λ n => within_add(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n ok => within_add_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+        Rule::when(λ n => (num(n, 4) * Nat::pow(2, num(n, 2))).leb(word_top()),
+            λ n => within_shift(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n ok => within_shift_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), ok)),
+        Rule::when(λ n => Nat::pow(2, num(n, 2)).leb(Succ(num(n, 3))), λ n => within_narrow(num(n, 0), num(n, 1), num(n, 2), num(n, 3)),
+            λ n ok => within_narrow_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), ok)),
+        // 7
+        Rule::when(λ n => Succ(num(n, 3)).leb(num(n, 4)), λ n => below_yes(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n ok => below_yes_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), ok)),
+        Rule::when(λ n => num(n, 4).leb(num(n, 3)), λ n => below_no(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n ok => below_no_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), ok)),
+        // 9
+        Rule::four(below_left, below_left_sound),
+        Rule::four(below_right, below_right_sound),
+        Rule::four(above_left, above_left_sound),
+        Rule::four(above_right, above_right_sound),
+        // 13
+        Rule::when(always, λ n => or_clear_left(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_clear_left_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => or_clear_right(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_clear_right_sound(num(n, 0), num(n, 1), num(n, 2))),
+        // 15
+        Rule::when(λ n => Succ(num(n, 4)).leb(Nat::pow(2, num(n, 3))), λ n => narrow_back(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n ok => narrow_back_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), ok)),
+        Rule::when(always, λ n => within_or(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n _ => within_or_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4))),
+        Rule::four(within_and, within_and_sound),
+        Rule::four(within_and_right, within_and_right_sound),
+        // 19
+        Rule::four(load_again, load_again_sound),
+        // 20
+        Rule::when(always, λ n => order_set(num(n, 0), num(n, 1), num(n, 2)), λ n _ => order_set_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => order_clear(num(n, 0), num(n, 1), num(n, 2)), λ n _ => order_clear_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => ordered_below(num(n, 0), num(n, 1), num(n, 2)), λ n _ => ordered_below_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => ordered_not_below(num(n, 0), num(n, 1), num(n, 2)), λ n _ => ordered_not_below_sound(num(n, 0), num(n, 1), num(n, 2))),
+        // 24
+        Rule::when(λ n => (num(n, 7) + (num(n, 3) + num(n, 6))).leb(num(n, 8) + (num(n, 1) + num(n, 4))),
+            λ n => order_join(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
+            λ n ok => order_join_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8), ok)),
+        // 25
+        Rule::when(λ n => num(n, 3).leb(word_top()), λ n => sum_tested_low(num(n, 0), num(n, 1), num(n, 2), num(n, 3)),
+            λ n ok => sum_tested_low_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), ok)),
+        Rule::when(λ n => num(n, 3).leb(word_top()), λ n => sum_tested_high(num(n, 0), num(n, 1), num(n, 2), num(n, 3)),
+            λ n ok => sum_tested_high_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), ok)),
+        Rule::when(λ n => (num(n, 3) + num(n, 6)).leb(num(n, 4)),
+            λ n => sum_roomed_low(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n ok => sum_roomed_low_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+        Rule::when(λ n => (num(n, 3) + num(n, 6)).leb(num(n, 4)),
+            λ n => sum_roomed_high(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n ok => sum_roomed_high_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+        // 29
+        Rule::when(always, λ n => join_byte(num(n, 0), num(n, 1), num(n, 2)), λ n _ => join_byte_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => join_shift(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n _ => join_shift_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6))),
+        Rule::when(always, λ n => join_or(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
+            λ n _ => join_or_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
+        Rule::when(always, λ n => join_or_right(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
+            λ n _ => join_or_right_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
+        // 33
+        Rule::when(always, λ n => join_word(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
+            λ n _ => join_word_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
+        // 34
+        Rule::when(λ n => (num(n, 5) + num(n, 3)).leb(word_top()),
+            λ n => sum_within_low(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
+            λ n ok => sum_within_low_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), ok)),
+        Rule::when(λ n => (num(n, 5) + num(n, 3)).leb(word_top()),
+            λ n => sum_within_high(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
+            λ n ok => sum_within_high_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), ok)),
+        // 36
+        Rule::when(always, λ n => or_of_clear(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_of_clear_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => or_of_set(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_of_set_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => or_of_set_right(num(n, 0), num(n, 1), num(n, 2)), λ n _ => or_of_set_right_sound(num(n, 0), num(n, 1), num(n, 2))),
+        // 39
+        Rule::when(λ n => num(n, 6).leb(num(n, 3)),
+            λ n => within_sub(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n ok => within_sub_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+    ]
+}

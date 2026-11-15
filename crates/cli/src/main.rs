@@ -123,7 +123,32 @@ fn choose_kernel_self_checks() -> Result<(), String> {
     Ok(())
 }
 
+/// One arena for glibc's `malloc`, by running this binary again with
+/// `MALLOC_ARENA_MAX=1` where it was not set.
+///
+/// Rust's allocations go to mimalloc, but glibc still `calloc`s a record
+/// for every thread-local destructor a thread registers, and a thread's
+/// first `malloc` makes it an arena of its own: 64 MiB of address space
+/// reserved for a few bytes. A kernel gate of eight workers and the pools
+/// beside it held sixteen of them, a gibibyte of the 8 GiB `ulimit -v` the
+/// scripts run `compile-x86` under, and of the suite's 6 GiB rail
+/// (issues/compile-x86-address-space-margin.md). glibc reads the setting
+/// when the process starts, so it cannot be set from here, and `mallopt`
+/// is `unsafe`, which the workspace forbids. `exec` returns only when it
+/// failed, and then this process goes on as it is.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn one_malloc_arena() {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("MALLOC_ARENA_MAX").is_some() { return; }
+    let (Ok(exe), Some(name)) = (std::env::current_exe(), std::env::args_os().next()) else { return };
+    let _ = std::process::Command::new(exe).arg0(name).args(std::env::args_os().skip(1)).env("MALLOC_ARENA_MAX", "1").exec();
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn one_malloc_arena() {}
+
 fn main() -> ExitCode {
+    one_malloc_arena();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if let Err(msg) = limits::choose(&mut args).and_then(|limits| limits.apply()) {
         eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));

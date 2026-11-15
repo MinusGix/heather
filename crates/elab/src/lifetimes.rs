@@ -116,6 +116,10 @@ pub(crate) struct ModulePass {
     /// (`docs/language/recursion/decreases-unfolding-design.md` §3): a reference to one reports
     /// the body shape that stopped the walk rather than an unknown name.
     pub(crate) unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
+    /// The recursive `fn`s this module declared, as written and with the
+    /// route their equations take, for `f::induct` to be built from when a
+    /// declaration first asks for it (crates/elab/src/function_induction.rs).
+    pub(crate) recursions: RefCell<std::collections::HashMap<String, (Rc<heather_syntax::Decl>, crate::branch_equations::Recursion)>>,
     /// Every theorem's proof, by absolute Ψ index, when an exporter asked
     /// for them ([`Elaborator::keep_proofs_for_export`](crate::Elaborator::keep_proofs_for_export)); `None` otherwise. Kept
     /// beside Ψ and never sealed: sealing would let conversion unseal the
@@ -141,6 +145,7 @@ impl ModulePass {
             omega_failure_reports: RefCell::new(Vec::new()),
             pending_derived: RefCell::new(Vec::new()),
             unfold_refusals: RefCell::new(std::collections::HashMap::new()),
+            recursions: RefCell::new(std::collections::HashMap::new()),
             export_proofs: None,
         }
     }
@@ -178,6 +183,7 @@ impl ModulePass {
             omega_failure_reports,
             pending_derived,
             unfold_refusals,
+            recursions,
             export_proofs,
         } = snapshot;
         let live = self.module_journal.take();
@@ -191,6 +197,7 @@ impl ModulePass {
         self.omega_failure_reports = omega_failure_reports;
         self.pending_derived = pending_derived;
         self.unfold_refusals = unfold_refusals;
+        self.recursions = recursions;
         self.export_proofs = export_proofs;
     }
 }
@@ -229,6 +236,7 @@ impl ModulePass {
             pending_derived,
             // Written by the `decreases` walk, on `&mut` paths.
             unfold_refusals: _,
+            recursions: _,
             // A plain field.
             export_proofs: _,
         } = self;
@@ -283,6 +291,7 @@ impl Clone for ModulePass {
             omega_failure_reports: self.omega_failure_reports.clone(),
             pending_derived: self.pending_derived.clone(),
             unfold_refusals: self.unfold_refusals.clone(),
+            recursions: self.recursions.clone(),
             export_proofs: self.export_proofs.clone(),
         }
     }

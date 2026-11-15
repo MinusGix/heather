@@ -30,9 +30,14 @@
 //    them with `Let`s, and emits the `Put` or the `Call`;
 // 3. reads a later `.value` of a call as the variable its `Call` or its
 //    `Lend` bound;
-// 4. refuses a read of the span as it was before a store, the span used as
-//    a value, and a span that branches and joins again (a statement `if`
-//    that stores, with code after it): an `FTm` cannot name any of them.
+// 4. reads a byte of the span as it was before a link, used after it, as
+//    the variable it was bound to before that link: the path's later
+//    steps are scanned for such reads first, and each is bound where its
+//    state ends (`rt_file_plan`, `rt_file_hoist`);
+// 5. refuses a read of the span as it was at an index known only after
+//    the link, the span used as a value, and a span that branches and
+//    joins again (a statement `if` that stores, with code after it): an
+//    `FTm` cannot name any of them.
 //
 // Untrusted like every producer: the pin of the reflection's meaning to
 // the function is what a `runtime fn` publishes, and a wrong reflection
@@ -183,7 +188,7 @@ fn rt_file_store(fuel: Nat, k: Known, w: FWalk, link: Handle, ops: List<Handle>)
                     let st = rv.fst;
                     pure(FWalk(st.written(st.depth),
                         Cons(FPut(st.index(RSt::level(ri.snd)), st.index(1), st.index(RSt::level(rv.snd))), FSeg::lets(st.lets) ++ w.segs),
-                        FileKnown(w.fk.span, Some(link), w.fk.calls), Succ(w.done), w.cfuns))
+                        w.fk.past(link, w.fk.calls), Succ(w.done), w.cfuns))
                 },
             }
         },
@@ -252,7 +257,7 @@ fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: Globa
                     let st = r.fst;
                     pure(FWalk(st.written(Succ(st.depth)),
                         Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(r.snd)))), FSeg::lets(st.lets) ++ w.segs),
-                        FileKnown(w.fk.span, Some(link), w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
+                        w.fk.past(link, w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
                         Succ(w.done), found.fst))
                 },
             }
@@ -419,7 +424,7 @@ fn rt_file_lend(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, a
                                         let st = r.fst;
                                         pure(FWalk(st.written(Succ(st.depth)),
                                             Cons(FLend(found.snd, LentView::views(st, vs.fst.snd), st.indices(r.snd)), FSeg::lets(st.lets) ++ w.segs),
-                                            FileKnown(w.fk.span, Some(link), w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
+                                            w.fk.past(link, w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
                                             Succ(w.done), found.fst))
                                     },
                                 }
@@ -453,16 +458,211 @@ fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) �
     }
 }
 
-fn rt_file_run(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>) → Tac<FWalk> {
-    match links {
-        Nil => pure(w),
-        Cons(link, rest) => rt_file_link(fuel, k, names, w, link).bind(λ w1 => rt_file_run(fuel, k, names, w1, rest)),
+// ---------------------------------------------------------------------------
+// A byte read before a store and used after it
+
+// A `let` is an alias, so a byte read before a store and used after it is
+// read where it is used: `byte_within(span₀, …)` after the store, a read
+// of the span as it was, which no `FTm` names. A path's links and the
+// values after them are all in hand at its end (`rt_file_upto`), so the
+// walk first finds the reads of a state that a step after that state
+// reads (`rt_file_plan`), binds each before the link that ends its state
+// (`rt_file_hoist`), and reads the later one as that variable
+// (`rt_old_byte`, by its state and its index). A read made only while its
+// state is current is bound where it is read, as before.
+
+// A read to bind before the link that ends state `state`.
+record Planned { state: Nat, read: Handle }
+
+fn Planned::has(plan: List<Planned>, h: Handle) → Bool {
+    match plan { Nil => False, Cons(p, rest) => match p.read.id.same(h.id) { True => True, False => Planned::has(rest, h) } }
+}
+
+// Whether `c` is a call that writes the span: its first operand is the
+// span the walk threads, or a window of it. Its `.value` is the variable
+// its `Call` binds, so nothing in it is read again.
+fn rt_file_writes(names: FileNames, span: Nat, c: Handle) → Tac<Bool> {
+    view(c).bind(λ v => match v {
+        HGlobal(_, _, args) => match args {
+            Cons(a0, _) => view(a0).bind(λ av => match av {
+                HLocal(x, more) => pure(x.id.same(span).and(match more { Nil => True, Cons(_, _) => False })),
+                HGlobal(g, _, _) => pure(g.id.same(names.with_byte).or(FileNames::names(names.put_window, g.id)).or(FileNames::names(names.window, g.id))),
+                HField(_, name, _) => pure(Known::str_same(name, "after")),
+                _ => pure(False),
+            }),
+            Nil => pure(False),
+        },
+        _ => pure(False),
+    })
+}
+
+// The bodies of a `match`'s arms, opened; an arm that does not open is
+// left out.
+fn rt_file_arm_bodies(m: MatchInfo, todo: List<ArmInfo>) → Tac<List<Handle>> {
+    match todo {
+        Nil => pure([]),
+        Cons(a, rest) => attempt(rt_arm_body(m, a)).bind(λ o => rt_file_arm_bodies(m, rest).bind(λ more => match o {
+            Done(b) => pure(Cons(b, more)),
+            Failed(_, _) => pure(more),
+        })),
     }
 }
 
-// The walk up to the span `target`: the stores and calls not yet read.
-fn rt_file_upto(fuel: Nat, k: Known, names: FileNames, w: FWalk, target: Handle) → Tac<FWalk> {
-    rt_file_links(fuel, names, w, target).bind(λ links => rt_file_run(fuel, k, names, w, links))
+// The reads in `todo` of a state from `w.done` up to (not with) `now`,
+// added to `found`: a `byte_within` of the written span as one of `links`
+// left it (`rt_file_state_in`'s numbering), and those inside its index or
+// anywhere else the walk may read. The spans the walk threads (stores,
+// spans put back, a call's span after it) and a writing call's value are
+// not entered: their reads are the links' own. `fuel` counts the nodes
+// looked at; past it the rest is not scanned, and a read it would have
+// found is refused where it is used.
+fn rt_file_scan(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>, now: Nat, todo: List<Handle>, found: List<Planned>)
+    → Tac<List<Planned>> {
+    match fuel {
+        Zero => pure(found),
+        Succ(f) => match todo {
+            Nil => pure(found),
+            Cons(h, rest) => view(h).bind(λ v => match v {
+                HLocal(x, args) => match x.id.same(w.fk.span) {
+                    True => rt_file_scan(f, k, names, w, links, now, rest, found),
+                    False => rt_file_scan(f, k, names, w, links, now, args ++ rest, found),
+                },
+                HGlobal(g, _, args) => match g.id.same(names.with_byte).or(FileNames::names(names.put_window, g.id)) {
+                    True => rt_file_scan(f, k, names, w, links, now, rest, found),
+                    False => match Known::prim(k.prims, g.id) {
+                        Some(p) => match p {
+                            PWithin => match args {
+                                Cons(bytes, operands) => rt_file_state_in(w.fk.span, (w.fk.was ++ links).take(now), bytes).bind(λ at => {
+                                    let more: List<Planned> = match at {
+                                        Some(s) => match w.done.leb(s).and(Succ(s).leb(now)).and(!Planned::has(found, h)) {
+                                            True => found ++ [Planned(s, h)],
+                                            False => found,
+                                        },
+                                        None => found,
+                                    };
+                                    rt_file_scan(f, k, names, w, links, now, operands ++ rest, more)
+                                }),
+                                Nil => rt_file_scan(f, k, names, w, links, now, rest, found),
+                            },
+                            _ => rt_file_scan(f, k, names, w, links, now, args ++ rest, found),
+                        },
+                        None => rt_file_scan(f, k, names, w, links, now, args ++ rest, found),
+                    },
+                },
+                HField(of, name, args) => match Known::str_same(name, "after") {
+                    True => rt_file_scan(f, k, names, w, links, now, rest, found),
+                    False => rt_file_writes(names, w.fk.span, of).bind(λ writes => match writes.and(Known::str_same(name, "value")) {
+                        True => rt_file_scan(f, k, names, w, links, now, rest, found),
+                        False => rt_file_scan(f, k, names, w, links, now, Cons(of, args) ++ rest, found),
+                    }),
+                },
+                HCtor(_, _, _, fields) => rt_file_scan(f, k, names, w, links, now, fields ++ rest, found),
+                HMatch(_) => arms(h).bind(λ c => match c {
+                    Accepted(m) => rt_file_arm_bodies(m, m.arms).bind(λ bodies => rt_file_scan(f, k, names, w, links, now, Cons(m.scrut, bodies) ++ rest, found)),
+                    Refused(_) => rt_file_scan(f, k, names, w, links, now, rest, found),
+                }),
+                _ => rt_file_scan(f, k, names, w, links, now, rest, found),
+            }),
+        },
+    }
+}
+
+// The nodes a path's scan looks at, at most.
+fn rt_file_scan_fuel() → Nat { 65536 }
+
+// What a link reads besides the span it is of: a store's length word,
+// index and byte; a call's operands after its span; and for a call over
+// windows put back, where it is put and the call's operands (its windows'
+// spans are threaded, their bounds read).
+fn rt_file_operands(names: FileNames, link: Handle) → Tac<List<Handle>> {
+    view(link).bind(λ v => match v {
+        HGlobal(g, _, args) => match FileNames::names(names.put_window, g.id) {
+            True => match args.rev() {
+                Cons(part, Cons(at, _)) => view(part).bind(λ pv => match pv {
+                    HField(c, _, _) => view(c).bind(λ cv => match cv { HGlobal(_, _, cargs) => pure(Cons(at, cargs)), _ => pure([at]) }),
+                    _ => pure([at]),
+                }),
+                _ => pure([]),
+            },
+            False => pure(args.drop(1)),
+        },
+        HField(c, _, _) => view(c).bind(λ cv => match cv { HGlobal(_, _, args) => pure(args.drop(1)), _ => pure([]) }),
+        _ => pure([]),
+    })
+}
+
+// The reads to bind early on a path: each link's operands are read at the
+// state before it, and `uses`, what the path ends in, at the last.
+fn rt_file_plan_links(k: Known, names: FileNames, w: FWalk, links: List<Handle>, now: Nat, left: List<Handle>, found: List<Planned>)
+    → Tac<List<Planned>> {
+    match left {
+        Nil => pure(found),
+        Cons(link, rest) => rt_file_operands(names, link).bind(λ ops =>
+            rt_file_scan(rt_file_scan_fuel(), k, names, w, links, now, ops, found)).bind(λ more =>
+            rt_file_plan_links(k, names, w, links, Succ(now), rest, more)),
+    }
+}
+
+fn rt_file_plan(k: Known, names: FileNames, w: FWalk, links: List<Handle>, uses: List<Handle>) → Tac<List<Planned>> {
+    rt_file_plan_links(k, names, w, links, w.done, links, []).bind(λ found =>
+        rt_file_scan(rt_file_scan_fuel(), k, names, w, links, w.done + links.len(), uses, found))
+}
+
+// A byte of the span as it is now, which a step after the next link
+// reads: bound now, and kept as the state's byte at its index.
+fn rt_file_keep(fuel: Nat, k: Known, w: FWalk, read: Handle) → Tac<FWalk> {
+    let v <- view(read);
+    match v {
+        HGlobal(_, _, args) => match args {
+            Cons(_, Cons(length, Cons(i, Nil))) => {
+                let kk = k.at_file(w.fk);
+                let rl <- rt_go(fuel, kk, w.st, length, True);
+                match RSt::level(rl.snd).same(1) {
+                    False => rt_file_length("a read kept past a store"),
+                    True => {
+                        let ri <- rt_go(fuel, kk, rl.fst, i, True);
+                        let r = ri.fst.finish(read, True, Byte(0, RSt::level(ri.snd), 1));
+                        pure(FWalk(r.fst, w.segs, w.fk.keeping(OldByte(w.done, RSt::level(ri.snd), RSt::level(r.snd))), w.done, w.cfuns))
+                    },
+                }
+            },
+            _ => rt_refuse("`byte_within` without its span, length word and index"),
+        },
+        _ => rt_refuse("a read kept past a store that is not `byte_within`"),
+    }
+}
+
+// The planned reads of the state the next link ends. One whose index the
+// walk cannot read here is left: where it is used, that is refused with
+// the reason (`rt_old_byte`); a read only a proof makes is never used.
+fn rt_file_hoist(fuel: Nat, k: Known, w: FWalk, plan: List<Planned>) → Tac<FWalk> {
+    match plan {
+        Nil => pure(w),
+        Cons(p, rest) => match p.state.same(w.done) {
+            False => rt_file_hoist(fuel, k, w, rest),
+            True => attempt(rt_file_keep(fuel, k, w, p.read)).bind(λ o => match o {
+                Done(w1) => rt_file_hoist(fuel, k, w1, rest),
+                Failed(_, _) => rt_file_hoist(fuel, k, w, rest),
+            }),
+        },
+    }
+}
+
+fn rt_file_run(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>, plan: List<Planned>) → Tac<FWalk> {
+    match links {
+        Nil => pure(w),
+        Cons(link, rest) => rt_file_hoist(fuel, k, w, plan).bind(λ w0 => rt_file_link(fuel, k, names, w0, link)).bind(λ w1 =>
+            rt_file_run(fuel, k, names, w1, rest, plan)),
+    }
+}
+
+// The walk up to the span `target`: the stores and calls not yet read,
+// each after the reads of the span as it was before it that a later step
+// or `uses` (what the path ends in) makes.
+fn rt_file_upto(fuel: Nat, k: Known, names: FileNames, w: FWalk, target: Handle, uses: List<Handle>) → Tac<FWalk> {
+    let links <- rt_file_links(fuel, names, w, target);
+    let plan <- rt_file_plan(k, names, w, links, uses);
+    rt_file_run(fuel, k, names, w, links, plan)
 }
 
 // What a body's walk leaves: its computation, and the program's pure
@@ -484,7 +684,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 False => rt_file_ends(),
                 True => match fields.rev() {
                     Cons(value, Cons(after, _)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after);
+                        let w1 <- rt_file_upto(f, k, names, w, after, [value]);
                         let r <- rt_go(f, k.at_file(w1.fk), w1.st, value, False);
                         pure(FileEnd(FSeg::close(FSeg::lets(r.fst.lets) ++ w1.segs, FTm::Pure(r.snd)), r.fst.funs, w1.cfuns))
                     },
@@ -513,7 +713,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 False => rt_file_ends(),
                 True => match args.take(arity) {
                     Cons(after, Cons(length, rest)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after);
+                        let w1 <- rt_file_upto(f, k, names, w, after, rest);
                         let kk = k.at_file(w1.fk);
                         let rl <- rt_go(f, kk, w1.st, length, True);
                         match RSt::level(rl.snd).same(1) {
@@ -587,7 +787,7 @@ fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>
     let p <- rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
-    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns), p.snd);
+    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd);
     pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }
 
@@ -605,7 +805,7 @@ fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<N
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
-    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown(span, None, []), 0, cfuns),
+    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns),
         o3.body);
     pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }

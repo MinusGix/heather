@@ -12,7 +12,7 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalS
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, InstanceDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::{
-    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, branch_equations, datarepr,
+    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, branch_equations, function_induction, datarepr,
     emission_walk, err, gate, inductive, loops, meaning, measure, names, partial, pool, recursion,
     recursion_at_top_hoisted, sealing, statements, stats,
 };
@@ -70,13 +70,27 @@ impl DeclarationsMut<'_> {
     }
 
     pub(crate) fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
+        // The induction principles the declaration's `induct` steps and
+        // `f::induct` references name, built first (`demand_principles`).
+        self.demand_principles(decl);
         self.scoped(|s| &mut s.member_owner, owner, |me| {
             DeclarationsMut(me).elab_decl_owned(decl)?;
             // A definition's own equations, one per branch of the test its
             // body is (`branch_equations`): beside every `fn` that has one,
             // so a proof cites `f::True` and never restates `f`.
             if decl.decreases.is_none() && decl.partial.is_none() && branch_equations::candidate(decl) && !loops::has_loop(decl) {
-                DeclarationsMut(me).elab_branch_equations(decl);
+                let self_name = base_name(&decl.name).to_string();
+                // A recursion's equations and principle are built on demand
+                // (`demand_principles`): most recursive functions are never
+                // proved about by induction, and the generators' are large.
+                // One lowered by a measure was recorded by that route.
+                if branch_equations::recursive(decl, &self_name) {
+                    if decl.kind == DeclKind::Fn && !me.pass.recursions.borrow().contains_key(&decl.name) {
+                        me.pass.recursions.borrow_mut().insert(decl.name.clone(), (Rc::new(decl.clone()), branch_equations::Recursion::Structural));
+                    }
+                } else {
+                    DeclarationsMut(me).elab_branch_equations(decl, branch_equations::Recursion::None, true);
+                }
             }
             Ok(())
         })
@@ -88,10 +102,13 @@ impl DeclarationsMut<'_> {
     /// spelling for a reference to report. A condition read as a `Bool`
     /// where it is not a proposition (`if xs.is_empty()`) is tried second,
     /// as the elaborator tries it.
-    fn elab_branch_equations(&mut self, decl: &Decl) {
+    /// Returns the equations built, which are designated only where
+    /// `designate` says so: a recursion's principle (`function_induction`)
+    /// is elaborated from them first, and spells them by their minted names.
+    fn elab_branch_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion, designate: bool) -> Option<Vec<branch_equations::BranchEquation>> {
         let needs = ["bool::Bool::convoy_true", "bool::Bool::picked_true", "bool::decide_bit_of", "bool::decide_bit_of_not"];
         if needs.iter().any(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
-            return;
+            return None;
         }
         let self_name = base_name(&decl.name).to_string();
         let warn_mark = self.pass.warnings.borrow().len();
@@ -121,8 +138,7 @@ impl DeclarationsMut<'_> {
                 let at: Vec<(String, Ty)> = ind.params.iter().cloned().zip(args.iter().cloned()).collect();
                 Some(ctor.fields.iter().map(|(n, t)| (n.clone(), measure::instantiate_ty(t, &at))).collect())
             };
-            let unfolded = decl.decreases.is_some().then(|| measure::unfold_name(&decl.name));
-            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, unfolded.as_deref()) {
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, recursion) {
                 Ok(e) => e,
                 Err(e) => {
                     why = e;
@@ -140,12 +156,10 @@ impl DeclarationsMut<'_> {
             self.pass.warnings.borrow_mut().truncate(warn_mark);
             match built {
                 Ok(()) => {
-                    for eq in &equations {
-                        if !matches!(NameLookup(self).resolve_declared(&eq.designed), NameRes::Found(_)) {
-                            self.designate_access(&eq.designed, &eq.decl.name);
-                        }
+                    if designate {
+                        self.designate_equations(&equations);
                     }
-                    return;
+                    return Some(equations);
                 }
                 // The proposition reading's refusal is the one to report: the
                 // `Bool` reading is a fallback for conditions that are not one.
@@ -155,6 +169,162 @@ impl DeclarationsMut<'_> {
         }
         for name in branch_equations::head_names(decl) {
             self.pass.unfold_refusals.borrow_mut().insert(name, why.clone());
+        }
+        None
+    }
+
+    fn designate_equations(&mut self, equations: &[branch_equations::BranchEquation]) {
+        for eq in equations {
+            let free = match self.access_alias(&eq.designed) {
+                Some(minted) => minted == eq.decl.name,
+                None => !matches!(NameLookup(self).resolve_declared(&eq.designed), NameRes::Found(_)),
+            };
+            if free {
+                self.designate_access(&eq.designed, &eq.decl.name);
+            }
+        }
+    }
+
+    /// A recursive `fn`'s branch equations and its induction principle
+    /// `f::induct` (`function_induction`), both from the tests its body is.
+    /// Never an error: what the checker refuses is recorded under the
+    /// designed spelling for a reference to report.
+    /// `f::induct` and the equations it is proved from, for every `f` the
+    /// declaration does induction along (`induct f(…)`, or `f::induct`
+    /// named), built before it the first time one is asked for
+    /// (docs/tactics/functional-induction-design.md §6). Built in the
+    /// module that asks, where `f` is declared or imported; a later
+    /// declaration, or an importer, finds it by its designed name. A
+    /// function that has none gets the reason recorded once, for the step
+    /// to report.
+    fn demand_principles(&mut self, decl: &Decl) {
+        let mut heads: Vec<String> = Vec::new();
+        // The heads an `induct` or an `f::induct` names, whose refusal is
+        // reported; an equation's path asks only of a recorded recursion.
+        let mut asked: Vec<String> = Vec::new();
+        let mut note = |e: &Expr| {
+            let head = match &e.kind {
+                ExprKind::App { head, args, .. } => match &head.kind {
+                    ExprKind::Var(n) if n == heather_syntax::INDUCT_ALL_GOALS || n == heather_syntax::INDUCT_CASES => {
+                        let call = match args.first().map(|a| &a.kind) {
+                            Some(ExprKind::Match { scrut, .. }) => Some(&**scrut),
+                            _ => args.first(),
+                        };
+                        call.and_then(|c| c.as_named()).map(|(h, _, _)| {
+                            if !asked.iter().any(|a| a == h) {
+                                asked.push(h.to_string());
+                            }
+                            h.to_string()
+                        })
+                    }
+                    _ => None,
+                },
+                // `f::induct`, or a branch equation `f::True`, `f::Cons`:
+                // a structural recursion's are built with its principle.
+                ExprKind::Var(n) => n.rsplit_once("::")
+                    .filter(|(_, last)| *last == "induct" || last.starts_with(char::is_uppercase))
+                    .map(|(f, last)| {
+                        if last == "induct" && !asked.iter().any(|a| a == f) {
+                            asked.push(f.to_string());
+                        }
+                        f.to_string()
+                    }),
+                _ => None,
+            };
+            if let Some(h) = head && !heads.contains(&h) {
+                heads.push(h);
+            }
+        };
+        for st in &decl.body.stmts {
+            match st {
+                heather_syntax::ast::Stmt::Let { expr, .. }
+                | heather_syntax::ast::Stmt::LetRecord { expr, .. }
+                | heather_syntax::ast::Stmt::LetCode { expr, .. } => crate::surface::walk_expr(expr, &mut note),
+            }
+        }
+        crate::surface::walk_expr(&decl.body.result, &mut note);
+        decl.body.ons.iter().for_each(|o| crate::surface::walk_expr(&o.expr, &mut note));
+        for head in heads {
+            let designed = format!("{head}::induct");
+            let lookup = NameLookup(self);
+            if lookup.key_of_kinds(&designed, crate::names::ANY_KIND).is_some() || self.pass.unfold_refusals.borrow().contains_key(&designed) {
+                continue;
+            }
+            let Some((module, base)) = lookup.key_of_kinds(&head, crate::names::ANY_KIND)
+                .and_then(|key| crate::names::split_qual(&key).map(|(m, b)| (m.to_string(), b.to_string()))) else { continue };
+            let recorded = self.pass.recursions.borrow().get(&base).cloned();
+            // A path that only looked like an equation (`Nat::Succ`) names
+            // no recorded recursion and asks for nothing.
+            if recorded.is_none() && !asked.contains(&head) {
+                continue;
+            }
+            let Some((function, recursion)) = recorded.filter(|_| module == self.names.module()) else {
+                let why = if module == self.names.module() {
+                    format!("`{head}` is not a recursive function whose body is a tree of tests")
+                } else {
+                    format!("`{head}` is declared in `{module}`, and a principle is built in the module that declares its function, at the first `induct` there (issues/function-induction-across-modules.md)")
+                };
+                self.pass.unfold_refusals.borrow_mut().insert(designed, why);
+                continue;
+            };
+            let owner = function.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
+            self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_recursion_equations(&function, recursion));
+        }
+    }
+
+    fn elab_recursion_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion) {
+        let designed = format!("{}::induct", decl.name);
+        let self_name = base_name(&decl.name).to_string();
+        // The calls a principle follows are read as calls, as the measure
+        // route reads them.
+        let normalized;
+        let decl = if recursion == branch_equations::Recursion::Structural {
+            match measure::method_calls_as_calls(&measure::deshadowed(decl), &self_name, self.0) {
+                Ok(d) => {
+                    normalized = d;
+                    &normalized
+                }
+                Err(e) => {
+                    self.pass.unfold_refusals.borrow_mut().insert(designed, e.to_string());
+                    return;
+                }
+            }
+        } else {
+            decl
+        };
+        let Some(equations) = self.elab_branch_equations(decl, recursion, false) else {
+            let why = branch_equations::head_names(decl)
+                .first()
+                .and_then(|n| self.pass.unfold_refusals.borrow().get(n).cloned())
+                .unwrap_or_else(|| "the body has no branch equations".to_string());
+            self.pass.unfold_refusals.borrow_mut().insert(designed, format!("its branch equations were not built: {why}"));
+            return;
+        };
+        let principle = match function_induction::induct(decl, &self_name, &equations, recursion) {
+            Ok(p) => p,
+            Err(why) => {
+                self.designate_equations(&equations);
+                self.pass.unfold_refusals.borrow_mut().insert(designed, why);
+                return;
+            }
+        };
+        let warn_mark = self.pass.warnings.borrow().len();
+        let built = self.session_transaction(|me| {
+            let r = if recursion == branch_equations::Recursion::Measure {
+                DeclarationsMut(me).elab_measure_decl_as(&principle, false)
+            } else {
+                DeclarationsMut(me).elab_decl_owned(&principle)
+            };
+            r.map_err(|e| ElabError::Elab { msg: format!("the generated `{designed}` was refused ({e})"), span: principle.span })
+        });
+        self.pass.warnings.borrow_mut().truncate(warn_mark);
+        self.designate_equations(&equations);
+        match built {
+            Ok(()) if self.access_alias(&designed).is_none_or(|m| m == principle.name) => self.designate_access(&designed, &principle.name),
+            Ok(()) => {}
+            Err(e) => {
+                self.pass.unfold_refusals.borrow_mut().insert(designed, e.to_string());
+            }
         }
     }
 
@@ -681,6 +851,13 @@ impl DeclarationsMut<'_> {
     /// `f` — elaborated in order. Each member is an ordinary declaration
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
+        self.elab_measure_decl_as(decl, true)
+    }
+
+    /// `companions: false` builds the recursion alone, with no unfolding
+    /// equations and nothing generated from them: a generated principle's
+    /// own recursion (`function_induction`) is cited, never unfolded.
+    fn elab_measure_decl_as(&mut self, decl: &Decl, companions: bool) -> R<()> {
         // The lowering reads names by their last binding, so a `let m = m - 1`
         // would shadow the measure's `m` (issues/decreases-shadowed-let.md).
         let decl = &measure::deshadowed(decl);
@@ -780,7 +957,7 @@ impl DeclarationsMut<'_> {
         // term it got wrong must not take `f` down with it. The recorded
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
-        if lifted {
+        if lifted && companions {
             match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
@@ -809,10 +986,15 @@ impl DeclarationsMut<'_> {
                         // companions, skipped with the reason recorded where
                         // the checker refuses one.
                         self.elab_step_equations(decl, &self_name);
-                        // `f::True`, `f::False::True`, …: every branch, from
-                        // `f_unfold` (issues/definition-branch-equations.md).
-                        if branch_equations::candidate(decl) && !loops::has_loop(decl) {
-                            self.elab_branch_equations(decl);
+                        // `f::True`, `f::False`, … and `f::induct`: the
+                        // equations at every leaf, and induction along the
+                        // recursion (`function_induction`). Built with the
+                        // loop, so a module that imports it can do induction
+                        // along it; a structural recursion's are built on
+                        // demand (`demand_principles`).
+                        if decl.kind == DeclKind::Fn {
+                            self.pass.recursions.borrow_mut().insert(decl.name.clone(), (Rc::new(decl.clone()), branch_equations::Recursion::Measure));
+                            self.elab_recursion_equations(decl, branch_equations::Recursion::Measure);
                         }
                     }
                 }

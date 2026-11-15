@@ -121,11 +121,9 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
 {
     if h: lo < hi {
         let mid = lo + ((hi - lo) >> 1);
-        let from = midpoint_from(lo, hi, h);
-        let inside = midpoint_below(lo, hi, h);
-        let start: (lo <= mid) = bv_omega;
-        let end: (mid < hi) = bv_omega;
-        let real: (mid < n) = bv_omega;
+        let start: (lo <= mid) = midpoint_from(lo, hi, h);
+        let end: (mid < hi) = midpoint_below(lo, hi, h);
+        let real: (mid < n) = omega;
         if less: s.byte_within(n, mid).zero_extend(56) < key {
             let smaller = right_smaller(lo, hi, h);
             let below2: Below(s, n, key, mid + 1) = λ j before => {
@@ -140,7 +138,7 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
                 let up = asc(mid, j, after, within);
                 less(bv_omega)
             };
-            let ih = lower_bound_in_splits(s, n, key, lo, mid, asc, start, bv_omega, below, above2);
+            let ih = lower_bound_in_splits(s, n, key, lo, mid, asc, start, omega, below, above2);
             let r = lower_bound_in(s, n, key, lo, mid);
             let within: (r <= hi) = r.toNat().le_trans(mid.toNat(), hi.toNat(), ih.left, mid.toNat().le_of_lt(hi.toNat(), end));
             rewrite(lower_bound_in::True::False(s, n, key, lo, hi, h, less), ⟨within, ih.right⟩)

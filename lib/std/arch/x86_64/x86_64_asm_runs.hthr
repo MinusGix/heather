@@ -570,11 +570,12 @@ fn Prog::join_label(self no_end: Prog, join_name: Nat) → Prog { At(no_end, joi
 // What a branch tests: an instruction that writes only the flags, and the
 // condition on them its JCC takes to the second arm. A bit in a register is
 // TESTed, the first arm taken where it is nonzero; a comparison is CMPed,
-// the second arm taken where it fails.
-inductive Test { Nonzero(register: Gpr), Compare(cc: ConditionCode, left: Gpr, right: Gpr) }
+// the second arm taken where it fails, its right operand a register or an
+// immediate the processor sign-extends (`CmpRight`).
+inductive Test { Nonzero(register: Gpr), Compare(cc: ConditionCode, left: Gpr, right: CmpRight) }
 
 fn Test::instruction(self test: Test) → Instruction {
-    match test { Nonzero(register) => TestRR(register, register), Compare(_, left, right) => CmpRR(left, right) }
+    match test { Nonzero(register) => TestRR(register, register), Compare(_, left, right) => right.compare(left) }
 }
 
 fn Test::cc(self test: Test) → ConditionCode { match test { Nonzero(_) => E, Compare(cc, _, _) => cc } }
@@ -583,24 +584,37 @@ fn Test::cc(self test: Test) → ConditionCode { match test { Nonzero(_) => E, C
 fn Test::taken(self test: Test, gprs: Gprs) → Bool {
     match test {
         Nonzero(register) => register.tests_zero(gprs),
-        Compare(cc, left, right) => condition_holds(cc, sub_flags(read_gpr(left, gprs), read_gpr(right, gprs))),
+        Compare(cc, left, right) => condition_holds(cc, sub_flags(read_gpr(left, gprs), right.read(gprs))),
     }
 }
 
 theorem Test::steps<M>(self test: Test, s: MachineState<M>):
     execute_block_normal([test.instruction()], s).gprs = s.gprs ∧
     condition_holds(test.cc(), execute_block_normal([test.instruction()], s).flags) = test.taken(s.gprs) {
-    match test { Nonzero(_) => ⟨refl, refl⟩, Compare(_, _, _) => ⟨refl, refl⟩ }
+    match test {
+        Nonzero(_) => ⟨refl, refl⟩,
+        Compare(_, _, right) => match right { RightRegister(_) => ⟨refl, refl⟩, RightImm8(_) => ⟨refl, refl⟩, RightImm32(_) => ⟨refl, refl⟩ },
+    }
 }
 
 // A test reads no flags, and its JCC reads only flags the test defined.
 theorem Test::reads<M>(self test: Test, s: MachineState<M>): block_reads([test.instruction()], s.flags.defined) = True {
-    match test { Nonzero(_) => refl, Compare(_, _, _) => refl }
+    match test {
+        Nonzero(_) => refl,
+        Compare(_, _, right) => match right { RightRegister(_) => refl, RightImm8(_) => refl, RightImm32(_) => refl },
+    }
 }
 
 theorem Test::jcc_reads<M>(self test: Test, s: MachineState<M>):
     condition_defined(test.cc(), execute_block_normal([test.instruction()], s).flags.defined) = True {
-    match test { Nonzero(_) => refl, Compare(cc, _, _) => condition_defined_all(cc) }
+    match test {
+        Nonzero(_) => refl,
+        Compare(cc, _, right) => match right {
+            RightRegister(_) => condition_defined_all(cc),
+            RightImm8(_) => condition_defined_all(cc),
+            RightImm32(_) => condition_defined_all(cc),
+        },
+    }
 }
 
 fn Prog::tested(self start: Prog, test: Test) → Prog { At(start, 0, Block([test.instruction()])) }

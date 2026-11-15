@@ -624,8 +624,21 @@ fn absolute(term: &Term, caller: usize) -> Option<usize> {
 /// A nullary global of type `List<Nat>`, evaluated and read back: how the
 /// compiler learns the bytes and offsets `lower_program` computed, which
 /// the certificate then states as literals and the kernel checks.
+///
+/// With `HEATHER_READ_TRACE` set, each read reports on stderr the evaluator
+/// steps it took, its time, and the process's peak resident and mapped
+/// memory during it: a read keeps what it evaluates until it ends, so the
+/// one that holds a compile's memory is the one with the steps.
 pub fn evaluate_numbers(elaborator: &Elaborator, name: &str) -> Result<Vec<u64>, SourceError> {
-    with_reads(elaborator, |reads| reads.numbers(name))
+    if std::env::var_os("HEATHER_READ_TRACE").is_none() { return with_reads(elaborator, |reads| reads.numbers(name)); }
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    let (started, steps) = (std::time::Instant::now(), heather_kernel::stats::snapshot().eval_steps);
+    let out = with_reads(elaborator, |reads| reads.numbers(name));
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let field = |key: &str| status.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).unwrap_or(0) / 1024;
+    eprintln!("read {name}: {} steps, {} ms, peak {} MB resident, {} MB mapped", heather_kernel::stats::snapshot().eval_steps - steps,
+        started.elapsed().as_millis(), field("VmHWM"), field("VmSize"));
+    out
 }
 
 /// Reads of one world that share what they force: `read` is given a

@@ -1407,6 +1407,33 @@ impl Run {
         }
     }
 
+    /// The deepest scope enclosing both `a` and `b`.
+    fn common_scope(&self, a: usize, b: usize) -> usize {
+        let mut c = a;
+        while !self.encloses(c, b) {
+            c = self.scopes[c].parent.expect("the root scope encloses every scope");
+        }
+        c
+    }
+
+    /// A handle's term and type moved out from under the binders of its
+    /// scope `s` that `at` is not under: scoped in the deepest scope
+    /// enclosing both, which `lift` then weakens to `at`. Refused when it
+    /// mentions one of those binders' locals. A handle is usable wherever
+    /// what it mentions is in scope, not only under the binders it was
+    /// found beneath: an arm's body read under its payload's binder is a
+    /// function of the outer locals once it does not mention the payload
+    /// (`rt_io_bridge`'s loop body under a `Bool` arm).
+    fn strengthened(&self, s: usize, at: usize, term: &Term, ty: &Type) -> Result<(usize, Term, Type), Fault> {
+        let c = self.common_scope(s, at);
+        let d = (self.len(s) - self.len(c)) as u32;
+        let gamma = self.cx(c)?.gamma;
+        match (crate::unification::strengthen_tm(&gamma, term, d), crate::unification::strengthen_ty(&gamma, ty, d)) {
+            (Some(t), Some(y)) => Ok((c, t, y)),
+            _ => Err(Fault::Protocol("a handle is used outside the binder it lives under, and it mentions that binder's local".into())),
+        }
+    }
+
     /// A handle's type or term, weakened from its scope to `to`.
     fn lift<T>(&self, from: usize, to: usize, shift: impl FnOnce(u32) -> T) -> Result<T, Fault> {
         if !self.encloses(from, to) {
@@ -3689,11 +3716,10 @@ impl Host<'_> {
                         self.shown_ty(run, s, &ty)
                     ))),
                 },
-                (s, Held::Term(term, ty, level)) => Ok(Reified {
-                    term: run.lift(s, at, |k| term.shift_local(k))?,
-                    ty: run.lift(s, at, |k| ty.shift_local(k))?,
-                    level,
-                }),
+                (s, Held::Term(term, ty, level)) => {
+                    let (s, term, ty) = if run.encloses(s, at) { (s, term, ty) } else { run.strengthened(s, at, &term, &ty)? };
+                    Ok(Reified { term: run.lift(s, at, |k| term.shift_local(k))?, ty: run.lift(s, at, |k| ty.shift_local(k))?, level })
+                }
             },
             RExpr::Local(x) if run.let_local(*x).is_some() => {
                 let value = run.let_local(*x).expect("a `let` local").value;

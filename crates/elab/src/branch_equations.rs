@@ -44,6 +44,12 @@ pub(crate) enum Reading {
 pub(crate) struct BranchEquation {
     pub(crate) designed: String,
     pub(crate) decl: Decl,
+    /// The tests on the way to the leaf, the `let`s in force at it, and the
+    /// leaf as the body spells it: what an induction principle that follows
+    /// the body is built from (`function_induction`).
+    pub(crate) path: Vec<PathStep>,
+    pub(crate) lets: Vec<Stmt>,
+    pub(crate) leaf: Expr,
 }
 
 /// `f#True`, `f#False#True`: the minted name of the equation at `path`.
@@ -65,6 +71,44 @@ struct Step {
     arm: String,
     params: Vec<(String, Ty)>,
     chosen: Expr,
+    test: PathTest,
+}
+
+/// How a proof that follows the body decides one test on the way to a leaf
+/// (`function_induction`): what to match on, and how the arm's hypothesis
+/// is read off the match's equation.
+#[derive(Clone)]
+pub(crate) enum PathTest {
+    /// A match on a `Bool`: `scrut` (stated outside the `let`s), and where
+    /// the test decides a proposition `P`, `P` itself, whose evidence is
+    /// `decide_true<P>(e)`/`decide_false<P>(e)` at the equation `e`; where it
+    /// does not, the equation `scrut = True` is the hypothesis.
+    Bool { scrut: Expr, prop: Option<Ty> },
+    /// A `match` on the parameter `param`, at the arm `ctor`.
+    Ctor { param: String, ctor: String },
+}
+
+/// One test on the way to an equation's leaf, as `function_induction` reads
+/// it: the arm's name, the parameters taking it (a constructor's fields,
+/// then the hypothesis), and the test.
+#[derive(Clone)]
+pub(crate) struct PathStep {
+    pub(crate) arm: String,
+    pub(crate) params: Vec<(String, Ty)>,
+    pub(crate) test: PathTest,
+}
+
+/// How `f` itself reaches its body, which decides the first step of every
+/// equation's proof.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Recursion {
+    /// Not recursive: `f(x̄)` unfolds to its body by definition.
+    None,
+    /// A `decreases` recursion: `f_unfold(x̄)` states `f(x̄)` as its body.
+    Measure,
+    /// A structural recursion on a parameter the body's first test matches:
+    /// `f` at that parameter's constructor computes to the arm.
+    Structural,
 }
 
 /// What a constructor's fields are, at the scrutinee's written type: the
@@ -190,7 +234,7 @@ fn inline_ty(lets: &[Stmt], ty: &Ty) -> Option<Ty> {
     Some(ty)
 }
 
-fn inline_expr(lets: &[Stmt], e: &Expr) -> Option<Expr> {
+pub(crate) fn inline_expr(lets: &[Stmt], e: &Expr) -> Option<Expr> {
     let span = e.span;
     let ty = inline_ty(lets, &Ty { kind: TyKind::OfExpr(Box::new(e.clone())), span })?;
     match ty.kind {
@@ -206,6 +250,10 @@ struct Walk<'a> {
     /// The name the arm is checked at the result type under, `result`.
     result_name: String,
     taken: Vec<String>,
+    recursion: Recursion,
+    /// `f(x̄)`, the equations' left side: a structural recursion's first
+    /// test is proved at it rather than at the body.
+    lhs: Expr,
     /// Each leaf: the tests on the way, the statements in force, the leaf.
     leaves: Vec<(Vec<Step>, Vec<Stmt>, Expr)>,
     too_many: bool,
@@ -262,7 +310,7 @@ impl Walk<'_> {
 
     /// The hypothesis an arm is taken under, and the bit's equation over it;
     /// `None` where the condition cannot be stated before the test.
-    fn hypothesis(&mut self, lets: &[Stmt], t: &Test<'_>, truth: bool) -> Option<(String, Ty, Expr, Expr)> {
+    fn hypothesis(&mut self, lets: &[Stmt], t: &Test<'_>, truth: bool) -> Option<(String, Ty, Expr, Expr, PathTest)> {
         let span = t.scrut.span;
         let arm = if truth { t.yes } else { t.no };
         if let Some(cond) = lowered_condition(t.scrut)
@@ -274,7 +322,8 @@ impl Walk<'_> {
                 let b = inline_expr(lets, cond.expr.as_ref()?)?;
                 let name = self.fresh("h");
                 let ty = eq_ty(b.clone(), var(if truth { "True" } else { "False" }, span), span);
-                return Some((name.clone(), ty, var(&name, span), cond.expr.clone()?));
+                let test = PathTest::Bool { scrut: b, prop: None };
+                return Some((name.clone(), ty, var(&name, span), cond.expr.clone()?, test));
             }
             // `if P`/`if h: P` (and `if h: b`, read as `b.IsTrue()`).
             let prop = if bool_reading {
@@ -287,14 +336,15 @@ impl Walk<'_> {
             let name = self.fresh(evidence_name(arm).unwrap_or("h"));
             let ty = if truth { stated.clone() } else { not_ty(stated.clone()) };
             let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
-            let bit_eq = ty_app_call(lemma, stated, vec![var(&name, span)], span);
-            return Some((name, ty, bit_eq, (*t.scrut).clone()));
+            let bit_eq = ty_app_call(lemma, stated.clone(), vec![var(&name, span)], span);
+            let test = PathTest::Bool { scrut: (*t.scrut).clone(), prop: Some(stated) };
+            return Some((name, ty, bit_eq, (*t.scrut).clone(), test));
         }
         // A `match` on a `Bool`.
         let b = inline_expr(lets, t.scrut)?;
         let name = self.fresh(t.convoy.map(String::as_str).unwrap_or("h"));
-        let ty = eq_ty(b, var(if truth { "True" } else { "False" }, span), span);
-        Some((name.clone(), ty, var(&name, span), (*t.scrut).clone()))
+        let ty = eq_ty(b.clone(), var(if truth { "True" } else { "False" }, span), span);
+        Some((name.clone(), ty, var(&name, span), (*t.scrut).clone(), PathTest::Bool { scrut: b, prop: None }))
     }
 
     fn walk(&mut self, e: &Expr, mut lets: Vec<Stmt>, path: Vec<Step>) {
@@ -329,23 +379,23 @@ impl Walk<'_> {
         let Some(arms) = arms else {
             return leaf(self, path, lets);
         };
-        for (arm, params, chosen, taken) in arms {
+        for (arm, params, chosen, taken, test) in arms {
             let mut next = path.clone();
-            next.push(Step { lets: lets.clone(), arm, params, chosen });
+            next.push(Step { lets: lets.clone(), arm, params, chosen, test });
             self.walk(&taken, lets.clone(), next);
         }
     }
 
     /// The two arms of a `Bool` test: each one's hypothesis, the proof that
     /// the test is that arm, and the arm with the test's equation given.
-    fn bool_arms(&mut self, lets: &[Stmt], t: &Test<'_>) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr)>> {
+    fn bool_arms(&mut self, lets: &[Stmt], t: &Test<'_>) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr, PathTest)>> {
         let span = t.scrut.span;
         let mut hyps = Vec::new();
         for truth in [true, false] {
             hyps.push(self.hypothesis(lets, t, truth)?);
         }
         let mut out = Vec::new();
-        for (truth, (hyp_name, hyp_ty, bit_eq, scrut)) in [true, false].into_iter().zip(hyps) {
+        for (truth, (hyp_name, hyp_ty, bit_eq, scrut, test)) in [true, false].into_iter().zip(hyps) {
             let arm = if truth { t.yes } else { t.no };
             let chosen = match t.convoy {
                 Some(eq) => {
@@ -361,7 +411,7 @@ impl Walk<'_> {
                 Some(eq) => subst(arm, &[(eq.as_str(), &bit_eq)], &mut Vec::new()),
                 None => arm.clone(),
             };
-            out.push((if truth { "True" } else { "False" }.to_string(), vec![(hyp_name, hyp_ty)], chosen, taken));
+            out.push((if truth { "True" } else { "False" }.to_string(), vec![(hyp_name, hyp_ty)], chosen, taken, test));
         }
         Some(out)
     }
@@ -372,7 +422,7 @@ impl Walk<'_> {
     /// proof rewrites the scrutinee to the constructor, where the `match`
     /// computes (`j`). A `_` arm has no equation: its condition is every
     /// other constructor's failure.
-    fn ctor_arms(&mut self, e: &Expr, lets: &[Stmt], path: &[Step]) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr)>> {
+    fn ctor_arms(&mut self, e: &Expr, lets: &[Stmt], path: &[Step]) -> Option<Vec<(String, Vec<(String, Ty)>, Expr, Expr, PathTest)>> {
         let ExprKind::Match { scrut, eqbind: None, motive: None, arms, .. } = &e.kind else { return None };
         let ExprKind::Var(x) = &scrut.kind else { return None };
         let rebound = lets.iter().any(|st| match st {
@@ -404,7 +454,7 @@ impl Walk<'_> {
             for (binder, (field, ty)) in arm.binders.iter().zip(&fields) {
                 let Pat::Var { name, .. } = binder else { return None };
                 let mut all = path.to_vec();
-                all.push(Step { lets: Vec::new(), arm: String::new(), params: params.clone(), chosen: var("_", span) });
+                all.push(Step { lets: Vec::new(), arm: String::new(), params: params.clone(), chosen: var("_", span), test: PathTest::Ctor { param: String::new(), ctor: String::new() } });
                 let fresh = self.binder_name(name, lets, &all);
                 let mut ty = ty.clone();
                 for (f, v) in &field_names {
@@ -424,10 +474,21 @@ impl Walk<'_> {
             params.push((h.clone(), eq_ty((**scrut).clone(), value, span)));
             let map: Vec<(&str, &Expr)> = renames.iter().map(|(a, b)| (a.as_str(), b)).collect();
             let taken = subst(&arm.body, &map, &mut Vec::new());
-            let motive = lam(&[c.as_str(), "_"], Expr { kind: ExprKind::Eq(Box::new(motive_match.clone()), Box::new(self.at_result(taken.clone()))), span }, span);
+            // A structural recursion's first test is proved at `f` itself:
+            // `f` at the constructor computes to the arm, where its body as
+            // a `match` on a neutral parameter is not `f` by definition.
+            let lhs = if self.recursion == Recursion::Structural && path.is_empty() {
+                let at = var(&c, span);
+                let both = |e: &Expr| subst(e, &[(x.as_str(), &at)], &mut Vec::new());
+                Expr { kind: ExprKind::Eq(Box::new(both(&self.lhs)), Box::new(self.at_result(both(&taken)))), span }
+            } else {
+                Expr { kind: ExprKind::Eq(Box::new(motive_match.clone()), Box::new(self.at_result(taken.clone()))), span }
+            };
+            let motive = lam(&[c.as_str(), "_"], lhs, span);
             let back = app(var("sym", span), vec![var(&h, span)], span);
             let chosen = Expr { kind: ExprKind::J { proof: Box::new(back), motive: Box::new(motive), case: Box::new(Expr { kind: ExprKind::Refl, span }) }, span };
-            out.push((arm.ctor.rsplit("::").next().unwrap_or(&arm.ctor).to_string(), params, chosen, taken));
+            let test = PathTest::Ctor { param: x.clone(), ctor: arm.ctor.clone() };
+            out.push((arm.ctor.rsplit("::").next().unwrap_or(&arm.ctor).to_string(), params, chosen, taken, test));
         }
         if out.is_empty() { None } else { Some(out) }
     }
@@ -435,7 +496,7 @@ impl Walk<'_> {
 
 /// Does the body call the declaration again? Its equations are then its
 /// unfolding's (`f::step`, `f::done` for a `decreases` loop), not these.
-fn recursive(decl: &Decl, self_name: &str) -> bool {
+pub(crate) fn recursive(decl: &Decl, self_name: &str) -> bool {
     let base = self_name.rsplit("::").next().unwrap_or(self_name);
     let body = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span: decl.body.span };
     let mut found = false;
@@ -485,32 +546,31 @@ pub(crate) fn head_names(decl: &Decl) -> Vec<String> {
 }
 
 /// The equations of `decl`'s branches, at `reading`. `Err` says why there
-/// are none.
-///
-/// A body that calls the function again has them only where it is measured
-/// and `unfolded` names its `f_unfold`: `f(x̄)` is then not its body by
-/// computation but by that equation, which each proof starts from. A leaf's
-/// recursive call stays a call, as the source wrote it.
-pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, fields: FieldTypes<'_>, unfolded: Option<&str>) -> Result<Vec<BranchEquation>, String> {
-    let unfolded = match unfolded {
-        Some(u) if decl.decreases.is_some() => Some(u),
-        _ if recursive(decl, self_name) => return Err("the body calls the function again".into()),
-        _ => None,
-    };
+/// are none. `recursion` says how `f` reaches its body: a definition by
+/// unfolding, a `decreases` recursion through `f_unfold`, a structural one
+/// by computing at the constructor its first test matches.
+pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, fields: FieldTypes<'_>, recursion: Recursion) -> Result<Vec<BranchEquation>, String> {
+    if recursion == Recursion::None && recursive(decl, self_name) {
+        return Err("the body calls the function again".into());
+    }
     let span = decl.body.span;
+    // A recursion's own calls are spelled by its full name, as `f_unfold`
+    // spells them, so that an equation's leaf is the unfolding's.
+    let qualified;
+    let decl = if recursion != Recursion::None && decl.name != self_name {
+        let mut d = decl.clone();
+        let full = var(&decl.name, span);
+        let body = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
+        let ExprKind::Block(b) = subst(&body, &[(self_name, &full)], &mut Vec::new()).kind else { unreachable!("a block substitutes to a block") };
+        d.body = *b;
+        qualified = d;
+        &qualified
+    } else {
+        decl
+    };
     let mut taken = taken_names(decl);
     let result_name = ["result", "result2", "result3"].into_iter().find(|n| !taken.iter().any(|t| t == n)).unwrap_or("result_").to_string();
     taken.push(result_name.clone());
-    let mut w = Walk { decl, reading, fields, result_name, taken, leaves: Vec::new(), too_many: false };
-    let top = Expr { kind: ExprKind::Block(Box::new(Block { ons: Vec::new(), ..decl.body.clone() })), span };
-    w.walk(&top, Vec::new(), Vec::new());
-    if w.too_many {
-        return Err(format!("the body has more than {MAX_LEAVES} branches"));
-    }
-    if w.leaves.is_empty() {
-        return Err("the body is not a test whose condition can be stated before it".into());
-    }
-    let decl = w.decl;
     let explicit = decl.params.iter().any(|p| p.implicit);
     let call = |head: Expr, args: Vec<Expr>| Expr {
         kind: ExprKind::App { head: Box::new(head), args, named: Vec::new(), explicit, goal_oriented: false },
@@ -518,13 +578,29 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
     };
     let args: Vec<Expr> = decl.params.iter().map(|p| var(&p.name, span)).collect();
     let lhs = call(companion_ref(decl, &decl.name, span), args.clone());
-    let unfolding = unfolded.map(|u| call(companion_ref(decl, u, span), args));
+    let mut w = Walk { decl, reading, fields, result_name, taken, recursion, lhs: lhs.clone(), leaves: Vec::new(), too_many: false };
+    // A measured body's `on`s discharge its obligations, which are no part
+    // of its equations (`candidate`).
+    let ons = if decl.decreases.is_some() { Vec::new() } else { decl.body.ons.clone() };
+    let top = Expr { kind: ExprKind::Block(Box::new(Block { ons, ..decl.body.clone() })), span };
+    w.walk(&top, Vec::new(), Vec::new());
+    if w.too_many {
+        return Err(format!("the body has more than {MAX_LEAVES} branches"));
+    }
+    if w.leaves.is_empty() {
+        return Err("the body is not a test whose condition can be stated before it".into());
+    }
+    if recursion == Recursion::Structural && w.leaves.iter().any(|(path, _, _)| !matches!(path[0].test, PathTest::Ctor { .. })) {
+        return Err("the body's first test is not a `match` on a parameter, at whose constructors the recursion computes".into());
+    }
+    // `f_unfold(x̄)` takes `f(x̄)` to the body, where the tests are chosen.
+    let unfold = (recursion == Recursion::Measure).then(|| call(companion_ref(decl, &crate::measure::unfold_name(&decl.name), span), args));
     let mut out = Vec::new();
     for (path, lets, leaf) in std::mem::take(&mut w.leaves) {
         let names: Vec<&str> = path.iter().map(|s| s.arm.as_str()).collect();
         // The leaf is stated under every statement on the way to it, at the
         // declaration's result type.
-        let rhs = with_lets(&lets, w.at_result(leaf));
+        let rhs = with_lets(&lets, w.at_result(leaf.clone()));
         let mut proof: Option<Expr> = None;
         for s in path.iter().rev() {
             let step = with_lets(&s.lets, s.chosen.clone());
@@ -533,10 +609,12 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
                 Some(rest) => app(var("trans", span), vec![step, rest], span),
             });
         }
-        let proof = match (&unfolding, proof) {
-            (Some(u), Some(rest)) => Some(app(var("trans", span), vec![u.clone(), rest], span)),
-            (_, proof) => proof,
+        let proof = proof.expect("a leaf is under at least one test");
+        let proof = match &unfold {
+            Some(unfold) => app(var("trans", span), vec![unfold.clone(), proof], span),
+            None => proof,
         };
+        let steps: Vec<PathStep> = path.iter().map(|s| PathStep { arm: s.arm.clone(), params: s.params.clone(), test: s.test.clone() }).collect();
         let mut params = decl.params.clone();
         for (name, ty) in path.iter().flat_map(|s| s.params.iter()) {
             params.push(Param {
@@ -567,9 +645,12 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
                 result: eq_ty(lhs.clone(), rhs, span),
                 decreases: None,
                 unfolding: Vec::new(),
-                body: block(proof.expect("a leaf is under at least one test"), span),
+                body: block(proof, span),
                 span: decl.span,
             },
+            path: steps,
+            lets,
+            leaf,
         });
     }
     Ok(out)

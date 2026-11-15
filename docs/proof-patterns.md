@@ -300,8 +300,18 @@ property of Heather.
   keep the goal as written, say so with `as λ _ => <goal>`: an arm
   proved about the unreduced call is refused by the kernel once the
   split specialises the goal.
-- **A loop counting a word up to a bound is proved by its step equations
-  and `BitVec::loop_up`, not by unfolding.** A `decreases` function whose
+- **A claim about a recursive function is proved by `induct f(x̄)`, not by
+  restating the loop as a fold.** Every recursive `fn` whose body is a tree
+  of tests (`decreases` or structural) has `f::induct`, and `induct f(x̄);
+  all_goals { bv_omega }` does the induction along its own recursion: the
+  hypotheses about `x̄` are reverted, each case gets its test, its equation
+  and an IH at each recursive call, and the leaf proves the IH's premises
+  before it sees the IH. Name the arms (`induct f(x̄) { True => …, False =>
+  … }`) when the cases need different proofs; a `for` loop is
+  `List::foldl_invariant` over its step
+  (`docs/tactics/functional-induction-design.md`).
+- **A loop counting a word up to a closed bound, run to its value, is
+  `BitVec::loop_up`, not unfolding.** A `decreases` function whose
   body is one test with an equation (`if h: P { … } else { … }`, `match h:
   b { True => …, False => … }`) gets `f::step(x̄, h: P)` for the arm that
   calls it again and `f::done(x̄, h: ¬P)` for the one that stops. Give
