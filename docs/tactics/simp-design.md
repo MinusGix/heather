@@ -723,3 +723,28 @@ it; the default discharger reads the locals only.
 Not built: a default discharger for arithmetic side conditions, or for a
 theorem body or a `found` condition with no tactic written; what each would
 need is in `issues/simp-adoption-native-gaps.md`.
+
+## 16. Branches taken by the context, as built (2026-11-15)
+
+A definition named among the laws brings its generated branch equations
+(`clamp::True`, `clamp::False::True`, …, `docs/tactics/program-proof-tactics-design.md`
+§3 D) as conditional laws, so `simp_only(clamp, discharge := bv_omega)`
+takes the branch the context decides and no proof names an equation. Each
+equation's open binders are its tests' hypotheses: they are discharged like
+any side condition, and only for these laws may a discharged binder be one
+a later binder's type mentions (an `if h:` test whose proof the arm uses).
+Discharged proofs are checked in the goal's world. A call whose test
+nothing decides is unfolded as before, and the report says why each branch
+was not taken, "(at the call, which was then unfolded)".
+
+A measured definition (`decreases`) is registered as its lowering, so it is
+known by its `f_unfold`. Where it has branch equations (generated from
+`f_unfold`, which the end-to-end demo's branch adds), a call none of them
+takes stays a call, as its body is the well-founded recursion's
+(`f#body(…, f#rec(…))`), which no law reads. Each side condition is
+discharged once per run at the call's own context: a call's equations share
+their tests' prefixes, and a failing discharger (`bv_omega` finding no
+contradiction) would otherwise fail again at every law and every step.
+`bv_omega` proves `¬P` (and `P → False`) by assuming `P`.
+
+Probes: `lib/_tests/std/tactic/simp_branch_tests.hthr`.

@@ -1,7 +1,8 @@
 # Tactics for proofs about programs
 
-Status: proposal, 2026-11-15. Nothing here is built. Thread "Build tactics
-for program proofs".
+Status: proposal, 2026-11-15; Minus chose "A, then B, then D". A is built
+(PR #657), D is built (simp-design.md §16), B is its own thread. Thread
+"Build tactics for program proofs".
 
 ## 1. The goal
 
@@ -152,6 +153,12 @@ the unfolded body. The SHA-256 step above becomes
 
 This is small, and mostly library (`simp.hthr`'s discharger) plus one
 resolution rule in the host's `Resolve`.
+
+As built (2026-11-15, `docs/tactics/simp-design.md` §16): the rule is in
+the host's `simp_only` (a named definition brings its minted branch
+equations), not in `Resolve`; `bv_omega` proves a negated comparison by
+assuming it; and a measured (`decreases`) definition's calls that nothing
+decides stay calls.
 
 ## 4. Order and what each needs
 
