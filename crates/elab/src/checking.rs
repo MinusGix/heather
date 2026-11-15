@@ -392,6 +392,28 @@ impl Checking<'_> {
                 let split = goal_combinators::split_all(self, cx, body, e.span);
                 self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
+            // `induct f(ā); all_goals { body }` and `induct f(ā) { C => e, … }`
+            // (crates/elab/src/function_induction.rs): the principle applied
+            // at the goal, its leaves the markers below.
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::INDUCT_ALL_GOALS || name == heather_syntax::INDUCT_CASES)
+                    && named.is_empty() =>
+            {
+                let (call, body) = match args.as_slice() {
+                    [call, body] => (call, Ok(body)),
+                    [Expr { kind: ExprKind::Match { scrut, arms, .. }, .. }] => (&**scrut, Err(arms.as_slice())),
+                    _ => return err("internal `induct` form has the wrong arity", e.span),
+                };
+                let (built, inner) = crate::function_induction::FunctionInduction(self).induct_step(cx, call, body, expected, lvl, e.span)?;
+                self.elab_check_skel_slots(&inner, &built, expected, lvl, hint, skel, capture_slots)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF)
+                    && named.is_empty() =>
+            {
+                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL);
+                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
+            }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
                     && named.is_empty() =>
@@ -1026,9 +1048,10 @@ impl Checking<'_> {
                         // Name the side condition that failed, not only the goal
                         // (§5): each one alone, in the context the bundle had.
                         for obligation in &generated.obligations {
+                            let (statement, proof) = obligation.alone();
                             let probe = parse(&format!(
-                                "{{\n{}\nhave __bv_side: ({}) = omega;\n__bv_side\n}}",
-                                generated.prelude, obligation.statement
+                                "{{\n{}\nhave __bv_side: ({statement}) = {proof};\n__bv_side\n}}",
+                                generated.prelude
                             ))?;
                             if let Err(side) = self.generated_scope(|me| me.elab_infer(cx, &probe)) {
                                 return err(

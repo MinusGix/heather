@@ -57,6 +57,10 @@ impl Elaborator {
     /// Record a designed access path and the declaration it resolves to. The
     /// minted name becomes unspellable in user source at the same moment.
     pub(crate) fn designate_access(&mut self, designed: &str, minted: &str) {
+        // Designated again by another module for the same minted name: the
+        // registry already says so, and the event is recorded for this
+        // module's own image.
+        let again = self.access_alias(designed) == Some(minted);
         let access = self.representations.access_mut();
         access
             .alias
@@ -65,11 +69,13 @@ impl Elaborator {
             minted.to_string(),
             Restriction::Designed(designed.to_string()),
         );
-        access
-            .display
-            .push((minted.to_string(), designed.to_string()));
-        access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        if let Some((owner, member)) = designed.rsplit_once("::") {
+        if !again {
+            access
+                .display
+                .push((minted.to_string(), designed.to_string()));
+            access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        }
+        if !again && let Some((owner, member)) = designed.rsplit_once("::") {
             access
                 .owners
                 .entry(owner.to_string())

@@ -353,6 +353,31 @@ theorem List::foldl_len<A>(self xs: List<A>):
     }
 }
 
+// The loop rule for a left fold, which is what a `for` loop lowers to: an
+// invariant `P(done, s)` of the prefix folded so far and the state it
+// reached, kept by every step, holds of the whole list and its fold. `done`
+// and `s` start anywhere the invariant holds; `foldl_invariant` starts them
+// at the empty prefix.
+theorem List::foldl_induct<A, B>(self xs: List<A>, f: B → A → B, P: List<A> → B → Type,
+    step: (done: List<A>) → (x: A) → (s: B) → P(done, s) → P(done ++ Cons(x, Nil), f(s, x)),
+    done: List<A>, z: B, start: P(done, z)): P(done ++ xs, xs.foldl(f, z))
+{
+    match xs {
+        Nil => j(sym(done.append_nil()), λ d _ => P(d, z), start),
+        Cons(h, t) => j(done.append_assoc(Cons(h, Nil), t), λ d _ => P(d, t.foldl(f, f(z, h))),
+            t.foldl_induct(f, P, step, done ++ Cons(h, Nil), f(z, h), step(done, h, z, start))),
+    }
+}
+
+// `foldl_induct` from the empty prefix: the invariant at the start state
+// holds of the list and its fold.
+theorem List::foldl_invariant<A, B>(self xs: List<A>, f: B → A → B, P: List<A> → B → Type,
+    step: (done: List<A>) → (x: A) → (s: B) → P(done, s) → P(done ++ Cons(x, Nil), f(s, x)),
+    z: B, start: P(Nil, z)): P(xs, xs.foldl(f, z))
+{
+    xs.foldl_induct(f, P, step, Nil, z, start)
+}
+
 // ---------------------------------------------------------------------------
 
 fn List::filter<A>(self xs: List<A>, p: A → Bool) → List<A> {

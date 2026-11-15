@@ -2104,6 +2104,20 @@ impl Speller<'_> {
                 return None;
             }
         }
+        // A generated name (`sum#step`, `f#True`) is minted with a `#` no
+        // source can write: spelled for re-parsing, it is its designed path
+        // (`sum::step`) where that path still names it, and otherwise
+        // declines like any other unspellable node, so `omega` abstracts it.
+        if self.qualified && name.contains('#') {
+            // Designed paths are not module-qualified.
+            let declared = NameLookup(self.el).global_declared_name_at(abs)?;
+            let designed = self.el.display_paths(&declared);
+            let back = self.el.access_alias(&designed) == Some(declared.as_str());
+            if designed.contains('#') || !back {
+                return None;
+            }
+            name = designed;
+        }
         let params = NameLookup(self.el).params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written
         // determines: `BitVec::ofNat(5)` alone cannot say its width, so it is

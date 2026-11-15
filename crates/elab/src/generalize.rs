@@ -533,7 +533,7 @@ fn takes_equation_about(ty: &Type, scrutinee: &Term) -> bool {
 }
 
 /// Whether binder `q`'s type mentions the earlier binder `p`.
-fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
+pub(crate) fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
     cx.gamma.entries.get(q).is_some_and(|entry| {
         entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
     })

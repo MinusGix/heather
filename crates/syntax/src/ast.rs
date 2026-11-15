@@ -930,6 +930,13 @@ pub struct Expr {
 /// never collide with this checking-form marker.
 pub const SPLIT_ALL_GOALS: &str = "\0split-all-goals";
 
+/// Parser-generated heads for `induct f(x̄); all_goals { ... }` (arguments:
+/// the call, the block) and `induct f(x̄) { C => e, … }` (argument: a `match`
+/// on the call whose arms are the cases). Unspellable, as
+/// [`SPLIT_ALL_GOALS`] is (docs/tactics/functional-induction-design.md).
+pub const INDUCT_ALL_GOALS: &str = "\0induct-all-goals";
+pub const INDUCT_CASES: &str = "\0induct-cases";
+
 impl Expr {
     /// `f(a, b)` with a *name* at the head — the shape every name-keyed
     /// special form wants (`absurd`, `inj`, constructors, `Succ`, a self-call,
