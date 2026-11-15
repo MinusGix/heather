@@ -418,6 +418,94 @@ theorem ledger_fill_unfolds(l: Ledger, m: Nat):
     Ledger::fill::unfold(l, m)
 }
 
+// A read of the receiver bound by `let` before the branch
+// (issues/runtime-mut-self-let-read-walk.md): the call is claimed, so it
+// rebinds `c` (to itself, `total` not being `mut self`), and the arm's own
+// `mut self` call still reads `c` as the place it updates.
+fn Counter::scan(mut self c: Counter, m: Nat) → Nat decreases m {
+    let x = c.total();
+    match h: decide_bit<1 <= m>() {
+        False => x,
+        True => { c.tick(x); c.scan(m - 1) },
+    }
+}
+theorem scan_lit(): Counter::scan(Counter(1, []), 2) = Mutated(Counter(4, [2, 1]), 4) { refl }
+theorem scan_unfolds(c: Counter, m: Nat):
+    Counter::scan(c, m)
+        = (match h: decide_bit<1 <= m>() {
+            False => Mutated(c, c.total()),
+            True => Counter::scan(Counter::tick(c, c.total()).after, m - 1),
+        }) {
+    Counter::scan::unfold(c, m)
+}
+
+// The read tested by a plain `if` under the loop's own test
+// (issues/measured-loop-inner-if-companions.md): `f#body` gives the inner
+// test an alias where it can type it, and the companions follow its
+// spelling.
+fn Counter::scan_below(mut self c: Counter, m, key: Nat) → Nat decreases m {
+    if h: 1 <= m {
+        let x = c.total();
+        if key < x { c.tick(1); c.scan_below(m - 1, key) } else { m }
+    } else { m }
+}
+theorem scan_below_lit(): Counter::scan_below(Counter(1, []), 2, 0) = Mutated(Counter(3, [1, 1]), 0) { refl }
+theorem scan_below_stops(): Counter::scan_below(Counter(1, []), 2, 1) = Mutated(Counter(1, []), 2) { refl }
+theorem scan_below_unfolds(c: Counter, m, key: Nat):
+    Counter::scan_below(c, m, key)
+        = (if h: 1 <= m {
+            if key < c.total() { Counter::scan_below(Counter::tick(c, 1).after, m - 1, key) } else { Mutated(c, m) }
+        } else { Mutated(c, m) }) {
+    Counter::scan_below::unfold(c, m, key)
+}
+
+// The same test with no `let`, and a `let` shadowing the measured
+// parameter before it.
+fn below_bound(n, j, key: Nat) → Nat decreases j {
+    if h: 1 <= j {
+        if key < n + j { below_bound(n, j - 1, key) } else { j }
+    } else { j }
+}
+theorem below_bound_lit(): below_bound(0, 5, 2) = 2 { refl }
+theorem below_bound_unfolds(n, j, key: Nat):
+    below_bound(n, j, key) = (if h: 1 <= j { if key < n + j { below_bound(n, j - 1, key) } else { j } } else { j }) {
+    below_bound::unfold(n, j, key)
+}
+fn below_shadowed(n, j, key: Nat) → Nat decreases j {
+    if h: 1 <= j {
+        let j = j - 1;
+        let top = n + j;
+        if key < top { below_shadowed(n, j, key) } else { j + 1 }
+    } else { j }
+}
+theorem below_shadowed_lit(): below_shadowed(0, 5, 2) = 3 { refl }
+theorem below_shadowed_unfolds(n, j, key: Nat):
+    below_shadowed(n, j, key)
+        = (if h: 1 <= j { if key < n + (j - 1) { below_shadowed(n, j - 1, key) } else { j - 1 + 1 } } else { j }) {
+    below_shadowed::unfold(n, j, key)
+}
+
+// A `let` the arm's pattern shadows: the arm's `x` is the list's head.
+fn heads_from(x: Nat, xs: List<Nat>, m: Nat) → Nat decreases m {
+    let x = x + 1;
+    match h: decide_bit<1 <= m>() {
+        False => x,
+        True => match xs {
+            Nil => heads_from(x, xs, m - 1),
+            Cons(x, rest) => heads_from(x, rest, m - 1),
+        },
+    }
+}
+theorem heads_from_lit(): heads_from(0, [5, 7], 3) = 9 { refl }
+theorem heads_from_unfolds(x: Nat, xs: List<Nat>, m: Nat):
+    heads_from(x, xs, m)
+        = (match h: decide_bit<1 <= m>() {
+            False => x + 1,
+            True => match xs { Nil => heads_from(x + 1, xs, m - 1), Cons(y, rest) => heads_from(y, rest, m - 1) },
+        }) {
+    heads_from::unfold(x, xs, m)
+}
+
 // Negative control: the method's own call at an arm's end still has to
 // decrease.
 // expect-error: this recursive call must decrease the measure, and `m + 1 < m` was not proved
