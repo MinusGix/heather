@@ -174,6 +174,11 @@ theorem BitVec::toNat_mul_mod(n: Nat, a, b: BitVec(n)): a.mul(b).toNat() = (a.to
     BitVec::toNat_ofNat_mod(n, a.toNat() * b.toNat())
 }
 
+// A sum that does not wrap is the sum of the numbers.
+theorem BitVec::toNat_add_of_lt(n: Nat, a, b: BitVec(n), fits: a.toNat() + b.toNat() < Nat::pow(2, n)): a.add(b).toNat() = a.toNat() + b.toNat() {
+    trans(BitVec::toNat_add_mod(n, a, b), (a.toNat() + b.toNat()).mod_of_lt(Nat::pow(2, n), fits))
+}
+
 theorem BitVec::toNat_sub_mod(n: Nat, a, b: BitVec(n)):
     a.sub(b).toNat() = (a.toNat() + Nat::pow(2, n) - b.toNat()).mod(Nat::pow(2, n))
 {

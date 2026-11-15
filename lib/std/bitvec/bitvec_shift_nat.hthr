@@ -87,6 +87,11 @@ theorem BitVec::toNat_shift_right_shr(n: Nat, x: BitVec(n), k: Nat): x.shift_rig
     }
 }
 
+// Twice the half is at most the whole: `x >> 1` loses at most the low bit.
+theorem BitVec::toNat_half_twice_le(n: Nat, x: BitVec(n)): x.shift_right(1).toNat() + x.shift_right(1).toNat() <= x.toNat() {
+    rewrite(BitVec::toNat_shift_right_shr(n, x, 1), x.toNat().half_add_le())
+}
+
 theorem BitVec::toNat_shift_right(n: Nat, x: BitVec(n), k: Nat): x.shift_right(k).toNat() = x.toNat().div(Nat::pow(2, k)) {
     trans(BitVec::toNat_shift_right_shr(n, x, k), Nat::shr_eq_div(k, x.toNat()))
 }

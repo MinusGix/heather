@@ -1,0 +1,190 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import algebra;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import utf8;
+import bitvec_concat;
+import bitvec_shift_nat;
+import ring;
+import list_window;
+import fintype;
+import bitvec_fintype;
+
+// A difference that does not borrow is the difference of the numbers.
+theorem sub_toNat_fits(a, b: u64, le: b.toNat() <= a.toNat()): (a - b).toNat() + b.toNat() = a.toNat() { bv_omega }
+
+// The gap below `hi`, as a number: no borrow when `lo < hi`.
+theorem gap_toNat(lo, hi: u64, h: lo < hi): (hi - lo).toNat() + lo.toNat() = hi.toNat() { bv_omega }
+
+// The midpoint `lo + (hi - lo) / 2` as a number is `lo` plus the half gap:
+// the sum does not overflow.
+theorem midpoint_toNat(lo, hi: u64, h: lo < hi): (lo + ((hi - lo) >> 1)).toNat() = lo.toNat() + ((hi - lo) >> 1).toNat() {
+    let gap = gap_toNat(lo, hi, h);
+    let twice = BitVec::toNat_half_twice_le(64, hi - lo);
+    let below = BitVec::toNat_lt_pow(64, hi);
+    BitVec::toNat_add_of_lt(64, lo, (hi - lo) >> 1, omega)
+}
+
+// So the midpoint lies in `[lo, hi)`.
+theorem midpoint_from(lo, hi: u64, h: lo < hi): lo.toNat() <= (lo + ((hi - lo) >> 1)).toNat() {
+    let mid = midpoint_toNat(lo, hi, h);
+    omega
+}
+
+theorem midpoint_below(lo, hi: u64, h: lo < hi): (lo + ((hi - lo) >> 1)).toNat() < hi.toNat() {
+    let mid = midpoint_toNat(lo, hi, h);
+    let gap = gap_toNat(lo, hi, h);
+    let twice = BitVec::toNat_half_twice_le(64, hi - lo);
+    omega
+}
+
+// Both halves the search goes on to are smaller than the range it had.
+theorem right_smaller(lo, hi: u64, h: lo < hi): (hi - ((lo + ((hi - lo) >> 1)) + 1)).toNat() < (hi - lo).toNat() {
+    let mid = lo + ((hi - lo) >> 1);
+    let from = midpoint_from(lo, hi, h);
+    let below = midpoint_below(lo, hi, h);
+    let gap = gap_toNat(lo, hi, h);
+    let pow = BitVec::toNat_lt_pow(64, hi);
+    let next: ((mid + 1).toNat() = mid.toNat() + 1) = BitVec::toNat_add_of_lt(64, mid, 1, omega);
+    let rest = sub_toNat_fits(hi, mid + 1, omega);
+    omega
+}
+
+theorem left_smaller(lo, hi: u64, h: lo < hi): ((lo + ((hi - lo) >> 1)) - lo).toNat() < (hi - lo).toNat() {
+    let mid = lo + ((hi - lo) >> 1);
+    let from = midpoint_from(lo, hi, h);
+    let below = midpoint_below(lo, hi, h);
+    let gap = gap_toNat(lo, hi, h);
+    let part = sub_toNat_fits(mid, lo, from);
+    omega
+}
+
+// The first offset from `lo` below `hi` whose byte is at least `key`, or
+// `hi` when there is none: in a sorted span, where `key` would go.
+runtime fn lower_bound_in(s: List<u8>, n, key, lo, hi: u64) → u64 decreases (hi - lo).toNat() {
+    if h: lo < hi {
+        let mid = lo + ((hi - lo) >> 1);
+        if less: s.byte_within(n, mid).zero_extend(56) < key {
+            lower_bound_in(s, n, key, mid + 1, hi)
+        } else {
+            lower_bound_in(s, n, key, lo, mid)
+        }
+    } else {
+        lo
+    }
+    on ?dec1 := { right_smaller(lo, hi, h) };
+    on ?dec2 := { left_smaller(lo, hi, h) };
+}
+
+runtime fn lower_bound(s: List<u8>, n, key: u64) → u64 { lower_bound_in(s, n, key, 0, n) }
+
+// ---------------------------------------------------------------------------
+// What it computes. The span's bytes, as words, read in ascending order:
+
+fn Ascending(s: List<u8>, n: u64) → Type {
+    (i, j: u64) → i <= j → j < n → s.byte_within(n, i).zero_extend(56) <= s.byte_within(n, j).zero_extend(56)
+}
+
+// Every byte before `r` is below `key`, and from `r` to the end none is.
+fn Below(s: List<u8>, n, key, r: u64) → Type { (j: u64) → j < r → s.byte_within(n, j).zero_extend(56) < key }
+fn Above(s: List<u8>, n, key, r: u64) → Type { (j: u64) → r <= j → j < n → ¬(s.byte_within(n, j).zero_extend(56) < key) }
+
+// Below the next word is at most this one, when the next does not wrap.
+theorem le_of_lt_next(j, m, hi: u64, room: m < hi, before: j < m + 1): j <= m { bv_omega }
+
+// Stated over the numbers: `bv_omega` does not yet take apart `m + 1` in
+// the word comparison `m + 1 <= hi`, the same type
+// (issues/bv-omega-word-comparison-goal-composite.md).
+theorem next_le(m, hi: u64, room: m < hi): (m + 1).toNat() <= hi.toNat() { bv_omega }
+
+// The loop keeps both sides: what lies below `lo` is below `key`, what lies
+// from `hi` on is not, and the answer stays in the range.
+theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s, n), order: lo <= hi, fits: hi <= n,
+    below: Below(s, n, key, lo), above: Above(s, n, key, hi)):
+    And<lower_bound_in(s, n, key, lo, hi) <= hi, And<Below(s, n, key, lower_bound_in(s, n, key, lo, hi)), Above(s, n, key, lower_bound_in(s, n, key, lo, hi))>>
+    decreases (hi - lo).toNat()
+{
+    if h: lo < hi {
+        let mid = lo + ((hi - lo) >> 1);
+        let from = midpoint_from(lo, hi, h);
+        let inside = midpoint_below(lo, hi, h);
+        let start: (lo <= mid) = bv_omega;
+        let end: (mid < hi) = bv_omega;
+        let real: (mid < n) = bv_omega;
+        if less: s.byte_within(n, mid).zero_extend(56) < key {
+            let smaller = right_smaller(lo, hi, h);
+            let below2: Below(s, n, key, mid + 1) = λ j before => {
+                let up = asc(j, mid, le_of_lt_next(j, mid, hi, end, before), real);
+                bv_omega
+            };
+            let ih = lower_bound_in_splits(s, n, key, mid + 1, hi, asc, next_le(mid, hi, end), fits, below2, above);
+            rewrite(lower_bound_in::True::True(s, n, key, lo, hi, h, less), ih)
+        } else {
+            let smaller = left_smaller(lo, hi, h);
+            let above2: Above(s, n, key, mid) = λ j after within reached => {
+                let up = asc(mid, j, after, within);
+                less(bv_omega)
+            };
+            let ih = lower_bound_in_splits(s, n, key, lo, mid, asc, start, bv_omega, below, above2);
+            let r = lower_bound_in(s, n, key, lo, mid);
+            let within: (r <= hi) = r.toNat().le_trans(mid.toNat(), hi.toNat(), ih.left, mid.toNat().le_of_lt(hi.toNat(), end));
+            rewrite(lower_bound_in::True::False(s, n, key, lo, hi, h, less), ⟨within, ih.right⟩)
+        }
+    } else {
+        let same: (lo = hi) = bv_omega;
+        rewrite(lower_bound_in::False(s, n, key, lo, hi, h), ⟨order, ⟨below, λ (j: u64) (after: lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The headline: over an ascending span, `lower_bound` splits it at the answer.
+// A byte is below `key` exactly when it comes before the answer, and the
+// answer is at most the length.
+theorem lower_bound_splits(s: List<u8>, n, key: u64, asc: Ascending(s, n)):
+    And<lower_bound(s, n, key) <= n,
+        (j: u64) → j < n → Iff<s.byte_within(n, j).zero_extend(56) < key, j < lower_bound(s, n, key)>>
+{
+    let none_below: Below(s, n, key, 0) = λ (j: u64) (before: j < 0) => bv_omega;
+    let none_above: Above(s, n, key, n) = λ (j: u64) (after: n <= j) (within: j < n) (lt: s.byte_within(n, j).zero_extend(56) < key) => bv_omega;
+    let start: ((0: u64).toNat() <= n.toNat()) = bv_omega;
+    let sides = lower_bound_in_splits(s, n, key, 0, n, asc, start, n.toNat().le_refl(), none_below, none_above);
+    let r = lower_bound(s, n, key);
+    ⟨sides.left, λ (j: u64) (within: j < n) => Iff(
+        mp := λ lt => match c: decide_bit<j < r>() {
+            True => decide_bit_true<j < r>(c),
+            False => {
+                let past: (r <= j) = { let not = decide_bit_false<j < r>(c); omega };
+                false_elim(sides.right.right(j, past, within, lt))
+            },
+        },
+        mpr := λ before => sides.right.left(j, before),
+    )⟩
+}
+
+// The midpoint written the obvious way, `(lo + hi) / 2`, can leave the range:
+// the sum wraps. At `lo = 2^63`, `hi = 2^63 + 1` it is `0`. (The bug Joshua
+// Bloch found in the JDK's binary search in 2006, after nine years.) The
+// program above computes `lo + (hi - lo) / 2`, which `midpoint_from` and
+// `midpoint_below` keep in `[lo, hi)`.
+theorem naive_midpoint_escapes(): ¬((lo, hi: u64) → lo < hi → lo <= (lo + hi) >> 1) {
+    λ claim => {
+        let lo: u64 = 0x8000000000000000;
+        let hi: u64 = 0x8000000000000001;
+        decide_bit_false<lo <= (lo + hi) >> 1>(refl, claim(lo, hi, decide_bit_true<lo < hi>(refl)))
+    }
+}
