@@ -2875,6 +2875,17 @@ impl<'a> Rewrite<'a> {
 
     /// A statement, **extending** the scope with what it binds (the caller
     /// truncates at the block's end).
+    /// What a written `let name: ty = expr` binds in [`Self::scope`]: its
+    /// type, from the source before recursive calls are replaced, and its
+    /// value, unless that reads the recursion. [`Respell`] binds the same
+    /// for a `let` it walks through, so an obligation it re-emits selects
+    /// the binders `f#body`'s did.
+    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr) -> Binder {
+        let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
+        let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+        Binder { name: name.to_string(), ty: inferred, value }
+    }
+
     fn stmt(&mut self, s: &Stmt) -> Stmt {
         match s {
             Stmt::Let {
@@ -2886,10 +2897,9 @@ impl<'a> Rewrite<'a> {
             } => {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
-                let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
-                let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+                let binder = self.let_binder(name, ty, expr);
                 let expr = self.expr(expr);
-                self.scope.push(Binder { name: name.clone(), ty: inferred, value });
+                self.scope.push(binder);
                 Stmt::Let {
                     name: name.clone(),
                     ty: ty.clone(),
@@ -3068,9 +3078,22 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             explicit: *explicit,
             goal_oriented: *goal_oriented,
         },
+        // A type argument can spell an expression too: an `if` on a test is a
+        // `match` on `decide_bit<test>`, whose proposition is one. Left alone,
+        // a `let`'s variable substituted away everywhere else stays free there
+        // (issues/runtime-mut-self-let-read-walk.md).
         ExprKind::TyApp { head, args } => ExprKind::TyApp {
             head: Box::new(go(head, bound)),
-            args: args.clone(),
+            args: args
+                .iter()
+                .map(|t| {
+                    let mut t = t.clone();
+                    for (p, a) in map.iter().filter(|(p, _)| !bound.iter().any(|b| b == p)) {
+                        t = subst_surface_ty(&t, p, a);
+                    }
+                    t
+                })
+                .collect(),
         },
         ExprKind::Lam { binders, body } => {
             let n = bound.len();
@@ -3227,6 +3250,81 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
     Expr { kind, span }
 }
 
+/// A block's statements with each claimed method call on a mutable local
+/// (`\0mutated(x.m(a))`, [`heather_syntax::MUTATED`]) spelled as the plain
+/// `let`s it amounts to: `let p = \0mutated_value(x.m(a));` (none for a
+/// `#seq` statement), then `let x = \0mutated_after(x.m(a));`, or for a call
+/// on a field path `x.f.m(a)` (§20) `x` with that field replaced. An
+/// unclaimed candidate (`\0mutcall`) is an ordinary call. With the receiver's
+/// rebinding a `let`, [`subst`] stops at it like at any other, and the call
+/// keeps its receiver's value before it.
+///
+/// A claimed call whose receiver is no place is refused when `strict`, and
+/// left as written otherwise (the walk refuses it if it reaches it).
+fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<Vec<Stmt>, String> {
+    let mut out = Vec::with_capacity(stmts.len());
+    for st in stmts {
+        let Stmt::Let { name, expr, span: at, .. } = st else {
+            out.push(st.clone());
+            continue;
+        };
+        let marked = match &expr.kind {
+            ExprKind::App { head, args, .. } if args.len() == 1 => match &head.kind {
+                ExprKind::Var(n) if n == heather_syntax::MUTATED || n == heather_syntax::MUTCALL => {
+                    Some((n == heather_syntax::MUTATED, &args[0]))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let plain = |name: &str, expr: Expr| Stmt::Let { name: name.to_string(), ty: None, expr, span: *at, opaque: false };
+        match marked {
+            Some((true, call)) => {
+                // The local rebound: the receiver, or the local it is a
+                // field path of, with that field replaced (§20).
+                let hole = "#after";
+                let place = match &call.kind {
+                    ExprKind::Dot { recv, .. } => heather_syntax::place_update(recv, var(hole, span)),
+                    _ => None,
+                };
+                let Some((receiver, update)) = place else {
+                    if strict {
+                        return Err("a marked call this walk cannot read".into());
+                    }
+                    out.push(st.clone());
+                    continue;
+                };
+                let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
+                if !name.starts_with("#seq") {
+                    out.push(plain(name, part(heather_syntax::MUTATED_VALUE)));
+                }
+                let after = part(heather_syntax::MUTATED_AFTER);
+                out.push(plain(&receiver, subst(&update, &[(hole, &after)], &mut Vec::new())));
+            }
+            // An unclaimed candidate is an ordinary call.
+            Some((false, call)) => out.push(plain(name, call.clone())),
+            None => out.push(st.clone()),
+        }
+    }
+    Ok(out)
+}
+
+/// `e` with [`rebind_marked`] applied to every block in it, so that a
+/// substitution into `e` respects the rebindings its statements make.
+fn explicit_rebinds(e: &Expr) -> Expr {
+    let mut out = e.clone();
+    crate::alpha::walk_expr_mut(&mut out, &mut |x| {
+        if let ExprKind::Block(b) = &mut x.kind {
+            let span = b.span;
+            if let Ok(stmts) = rebind_marked(&b.stmts, span, false) {
+                b.stmts = stmts;
+            }
+        }
+        false
+    });
+    out
+}
+
 // -- the unfolding companions -------------------------------------------------
 //
 // `docs/language/recursion/decreases-unfolding-design.md` §3–§6: a congruence proof over the
@@ -3370,6 +3468,11 @@ struct Respell<'a> {
     /// rewritten one (`f#body`'s spelling, with `__dec_k`/`__dec_ih`/`__dec_h`
     /// still free) and the source one. `None` at the top.
     anchors: Option<(Expr, Expr)>,
+    /// The `let`s walked through, outermost first, each value with the ones
+    /// before it substituted, and the length of the rewrite's scope after
+    /// it: substituted into what the body spells before `sigma` (§3: `let`
+    /// is zeta-transparent), unless a binder after it shadows it.
+    let_env: Vec<(String, Expr, usize)>,
 }
 
 impl Respell<'_> {
@@ -3379,7 +3482,35 @@ impl Respell<'_> {
 
     /// `σ(e)`, optionally with one more substitution appended — the motive's
     /// abstraction of the scrutinee.
+    ///
+    /// `e` is read where the body has it, so the `let`s walked through
+    /// (`let_env`) are substituted first: a `let` may shadow a parameter, so
+    /// the anchors' own arguments are [`Self::refine_ext`]'s alone.
     fn sigma_apply_ext(&self, e: &Expr, ext: Option<(&str, &Expr)>) -> Expr {
+        self.refine_ext(&self.let_apply(e), ext)
+    }
+
+    /// `e` with the `let`s it sees substituted, at once: those not shadowed
+    /// by a binder the rewrite's scope took after them (an arm's pattern or
+    /// equation, a later `let`).
+    fn let_apply(&self, e: &Expr) -> Expr {
+        let map: Vec<(&str, &Expr)> = (0..self.let_env.len())
+            .filter(|&i| self.let_visible(i))
+            .map(|i| (self.let_env[i].0.as_str(), &self.let_env[i].1))
+            .collect();
+        subst(&explicit_rebinds(e), &map, &mut Vec::new())
+    }
+
+    /// Whether `let_env[i]` is what its name means here.
+    fn let_visible(&self, i: usize) -> bool {
+        let (n, _, at) = &self.let_env[i];
+        !self.let_env[i + 1..].iter().any(|(m, _, _)| m == n)
+            && !self.rw.scope.get(*at..).is_some_and(|later| later.iter().any(|b| &b.name == n))
+    }
+
+    /// `σ(e)` for an `e` over the declaration's parameters: the enclosing
+    /// arms' patterns, and `ext`.
+    fn refine_ext(&self, e: &Expr, ext: Option<(&str, &Expr)>) -> Expr {
         let mut out = e.clone();
         for (v, pat) in &self.sigma {
             out = subst(&out, &[(v.as_str(), pat)], &mut Vec::new());
@@ -3394,12 +3525,12 @@ impl Respell<'_> {
         self.rw
             .params
             .iter()
-            .map(|p| self.sigma_apply_ext(&var(&p.name, self.span), ext))
+            .map(|p| self.refine_ext(&var(&p.name, self.span), ext))
             .collect()
     }
 
     fn measure_at(&self, ext: Option<(&str, &Expr)>) -> Expr {
-        self.sigma_apply_ext(self.rw.measure, ext)
+        self.refine_ext(self.rw.measure, ext)
     }
 
     fn cref(&self, name: &str) -> Expr {
@@ -3545,81 +3676,31 @@ impl Respell<'_> {
     /// the elaborator reads as the statement does. Dropping the statement as
     /// a `let` nothing reads would leave `x` the value before the call
     /// (issues/decreases-mut-call-statement-companions.md).
+    ///
+    /// Those rebindings are spelled as plain `let`s ([`explicit_rebinds`])
+    /// in this block and in every block below it *before* anything is
+    /// substituted: a claimed call names its receiver as a place, and a
+    /// substitution from an enclosing block (`let x = c.total();` before the
+    /// branch, which rebinds `c`) would otherwise put a value where the
+    /// place was, and reach past the statement's rebinding into the uses
+    /// after it (issues/runtime-mut-self-let-read-walk.md).
     fn inline_lets(&self, stmts: &[Stmt], result: &Expr) -> Result<Expr, String> {
-        let span = self.span;
         let mut env: Vec<(String, Expr)> = Vec::new();
-        // A `let` is substituted into the types the body spells too: an
-        // `if` on a test of a `let`'s variable is a `match` on
-        // `decide_bit<test>`, whose proposition is a type argument, which
-        // `subst` leaves alone. Left there, the variable would be free in
-        // the companions, where the `let` is gone.
         let apply = |env: &[(String, Expr)], e: &Expr| {
             let map: Vec<(&str, &Expr)> = env.iter().map(|(n, v)| (n.as_str(), v)).collect();
-            let mut out = subst(e, &map, &mut Vec::new());
-            crate::alpha::walk_expr_mut(&mut out, &mut |x| {
-                if let ExprKind::TyApp { args, .. } = &mut x.kind {
-                    for ty in args.iter_mut() {
-                        for (n, v) in &map {
-                            *ty = subst_surface_ty(ty, n, v);
-                        }
-                    }
-                }
-                false
-            });
-            out
+            subst(&explicit_rebinds(e), &map, &mut Vec::new())
         };
-        let bind = |env: &mut Vec<(String, Expr)>, name: &str, value: Expr| match env.iter_mut().find(|(n, _)| n == name) {
-            Some(slot) => slot.1 = value,
-            None => env.push((name.to_string(), value)),
-        };
-        for st in stmts {
-            let Stmt::Let { name, expr, .. } = st else {
+        for st in rebind_marked(stmts, self.span, true)? {
+            let Stmt::Let { name, expr, .. } = &st else {
                 return Err("a destructuring or `code` binding in the body".into());
             };
             if self.has_self_call(expr) {
                 return Err("a recursive call in a `let` right-hand side".into());
             }
-            let marked = match &expr.kind {
-                ExprKind::App { head, args, .. } if args.len() == 1 => match &head.kind {
-                    ExprKind::Var(n) if n == heather_syntax::MUTATED || n == heather_syntax::MUTCALL => {
-                        Some((n == heather_syntax::MUTATED, &args[0]))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            };
-            match marked {
-                Some((true, call)) => {
-                    let ExprKind::Dot { recv, .. } = &call.kind else {
-                        return Err("a marked call this walk cannot read".into());
-                    };
-                    // The local rebound: the receiver, or the local it is a
-                    // field path of, with that field replaced (§20). The
-                    // update is written at a hole so that the call, already
-                    // read in `env`, is not read in it again.
-                    let hole = "#after";
-                    let Some((receiver, update)) = heather_syntax::place_update(recv, var(hole, span)) else {
-                        return Err("a marked call this walk cannot read".into());
-                    };
-                    let call = apply(&env, call);
-                    let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
-                    let mut at = env.clone();
-                    bind(&mut at, hole, part(heather_syntax::MUTATED_AFTER));
-                    let after = apply(&at, &update);
-                    if !name.starts_with("#seq") {
-                        bind(&mut env, name, part(heather_syntax::MUTATED_VALUE));
-                    }
-                    bind(&mut env, &receiver, after);
-                }
-                // An unclaimed candidate is an ordinary call.
-                Some((false, call)) => {
-                    let value = apply(&env, call);
-                    bind(&mut env, name, value);
-                }
-                None => {
-                    let value = apply(&env, expr);
-                    bind(&mut env, name, value);
-                }
+            let value = apply(&env, expr);
+            match env.iter_mut().find(|(n, _)| n == name) {
+                Some(slot) => slot.1 = value,
+                None => env.push((name.clone(), value)),
             }
         }
         Ok(apply(&env, result))
@@ -3645,12 +3726,56 @@ impl Respell<'_> {
             // §3: a `let` whose right-hand side holds no self-call is
             // substituted — `let` is zeta-transparent, so the two sides still
             // reduce alike.
+            //
+            // It is substituted through `let_env`, so the terms this walk builds
+            // read its value, while the walk itself goes on over the body as
+            // written, with the `let` in the rewrite's scope as `f#body` has
+            // it: a test after it, its alias and its equation are then the
+            // ones `f#body` binds, and an obligation re-emitted below selects
+            // the same hypotheses (issues/runtime-mut-self-let-read-walk.md).
+            // A claimed `mut self` call rebinds its receiver by a `let` of its
+            // own ([`rebind_marked`]); the rewrite's scope has the statement
+            // as `f#body` does.
             ExprKind::Block(b) => {
                 if !b.ons.is_empty() {
                     return Err("a nested `on` block".into());
                 }
-                let result = self.inline_lets(&b.stmts, &b.result)?;
-                self.walk(&result, at)
+                let (scope_n, env_n) = (self.rw.scope.len(), self.let_env.len());
+                let mut out = Ok(());
+                for st in &b.stmts {
+                    let Stmt::Let { name, ty, expr, .. } = st else {
+                        out = Err("a destructuring or `code` binding in the body".to_string());
+                        break;
+                    };
+                    if self.has_self_call(expr) {
+                        out = Err("a recursive call in a `let` right-hand side".to_string());
+                        break;
+                    }
+                    let plain = match rebind_marked(std::slice::from_ref(st), span, true) {
+                        Ok(plain) => plain,
+                        Err(e) => {
+                            out = Err(e);
+                            break;
+                        }
+                    };
+                    let values: Vec<(String, Expr)> = plain
+                        .iter()
+                        .filter_map(|p| match p {
+                            Stmt::Let { name, expr, .. } => Some((name.clone(), self.let_apply(expr))),
+                            _ => None,
+                        })
+                        .collect();
+                    let binder = self.rw.let_binder(name, ty, expr);
+                    self.rw.scope.push(binder);
+                    let after = self.rw.scope.len();
+                    // Each value is read before the statement's own
+                    // rebindings: `let p = value(x.m(a)); let x = after(x.m(a))`.
+                    self.let_env.extend(values.into_iter().map(|(n, v)| (n, v, after)));
+                }
+                let r = out.and_then(|()| self.walk(&b.result, at));
+                self.rw.scope.truncate(scope_n);
+                self.let_env.truncate(env_n);
+                r
             }
             ExprKind::App {
                 head,
@@ -3746,7 +3871,11 @@ impl Respell<'_> {
                 // A computed scrutinee with no equation written goes through
                 // the alias the rewrite gave it, which carries its
                 // [`AutoEqs`] equation where an obligation reads one.
-                if eqbind.is_none() && !matches!(scrut.kind, ExprKind::Var(_)) && !self.has_self_call(scrut) {
+                // A `let`'s variable is its value, so a match on it is on a
+                // computed scrutinee too.
+                let let_var = matches!(&scrut.kind, ExprKind::Var(v)
+                    if (0..self.let_env.len()).any(|i| &self.let_env[i].0 == v && self.let_visible(i)));
+                if eqbind.is_none() && (let_var || !matches!(scrut.kind, ExprKind::Var(_))) && !self.has_self_call(scrut) {
                     return self.convoy_at_anchor(e, *form, scrut, None, arms);
                 }
                 if eqbind.is_some() || !matches!(scrut.kind, ExprKind::Var(_)) {
@@ -3796,16 +3925,23 @@ impl Respell<'_> {
                 if self.rw.refining_match(scrut, &None).is_some() {
                     return Err("a `match` below another `match`'s arm on a variable the measure mentions".into());
                 }
-            } else if arms.iter().any(|a| self.rw.calls_member(&a.body)) {
-                // The rewrite numbers this candidate as it renders it.
+            } else if self.rw.scrut_ty(scrut).is_some() && arms.iter().any(|a| self.rw.calls_member(&a.body)) {
+                // The rewrite numbers this candidate as it renders it: a
+                // scrutinee it gives an alias (one whose type it can write),
+                // with an arm that recurses (`Rewrite::auto_candidate`).
                 let n = self.rw.auto_n;
                 self.rw.auto_n += 1;
                 if self.rw.auto_eqs.admits(n) {
-                    return Err(
-                        "a `match` below another `match`'s arm whose recursive call's obligation reads \
-                         the inner scrutinee's equation: bind it as `match g: …`"
-                            .into(),
-                    );
+                    // `f#body` binds the scrutinee's equation where the
+                    // source binds none (issues/measured-loop-inner-if-companions.md):
+                    // each side spells its own, `f_unfold`'s right side the
+                    // source's, without.
+                    let meq = format!("__dec_meq{n}");
+                    let eq_r = match self.mode {
+                        Mode::Ext => Some(meq.as_str()),
+                        Mode::Unfold => None,
+                    };
+                    return self.match_spelled_eqs(node, scrut, Some(&meq), eq_r, arms);
                 }
             }
         }
@@ -3828,7 +3964,22 @@ impl Respell<'_> {
     /// `refl`, obligations) are repeated around its renderings, since the
     /// motive sits outside the arm.
     fn match_spelled(&mut self, whole: &Expr, scrut: &Expr, eqbind: Option<&str>, arms: &[Arm]) -> Result<Triple, String> {
+        self.match_spelled_eqs(whole, scrut, eqbind, eqbind, arms)
+    }
+
+    /// [`Self::match_spelled`] with each side's own equation binding: the
+    /// left side's (`f#body`'s) may bind one the right side's (the source's)
+    /// does not. The proof's arms take the equation where either side does.
+    fn match_spelled_eqs(
+        &mut self,
+        whole: &Expr,
+        scrut: &Expr,
+        eq_l: Option<&str>,
+        eq_r: Option<&str>,
+        arms: &[Arm],
+    ) -> Result<Triple, String> {
         let span = self.span;
+        let eqbind = eq_l.or(eq_r);
         if self.has_self_call(scrut) {
             return Err("a recursive call in a `match` scrutinee".into());
         }
@@ -3887,12 +4038,20 @@ impl Respell<'_> {
             Some(h) => lam(&[h], body, span),
             None => body,
         };
-        // One side's match at scrutinee `at`, its convoy applied to `proof`.
-        let side = |pick: &dyn Fn(&Triple) -> Expr, at: Expr, proof: Option<Expr>| {
+        // One side's match at scrutinee `at`, its convoy applied to `proof`,
+        // binding the equation `eqbind` names.
+        let side = |pick: &dyn Fn(&Triple) -> Expr, at: Expr, proof: Option<Expr>, eqbind: Option<&str>| {
+            let proof = eqbind.and(proof);
             let arms_out: Vec<Arm> = walked.iter().map(|(a, stmts, t)| {
                 // The arm's `let`s travel with its rendering (zeta-transparent,
                 // and typed, which a bare `refl` substituted in would not be).
-                let x = if stmts.is_empty() {
+                // A side that binds no equation where the other does is the
+                // source's, which names none of them: they may read the
+                // equation it does not bind.
+                let unread = eqbind.is_none()
+                    && eq_l.or(eq_r).is_some()
+                    && !stmts.iter().any(|st| matches!(st, Stmt::Let { name, .. } if mentions_context(&pick(t), name)));
+                let x = if stmts.is_empty() || unread {
                     pick(t)
                 } else {
                     Expr {
@@ -3920,8 +4079,8 @@ impl Respell<'_> {
             match proof { Some(p) => app(m, vec![p], span), None => m }
         };
         let e_arg = eqbind.map(|_| var(&e_name, span));
-        let l = side(&|t: &Triple| t.lhs.clone(), sv.clone(), e_arg.clone());
-        let r = side(&|t: &Triple| t.rhs.clone(), sv.clone(), e_arg.clone());
+        let l = side(&|t: &Triple| t.lhs.clone(), sv.clone(), e_arg.clone(), eq_l);
+        let r = side(&|t: &Triple| t.rhs.clone(), sv.clone(), e_arg.clone(), eq_r);
         let goal = match eqbind {
             Some(_) => arrow(Some(e_name.clone()), eq_ty(c.clone(), sv.clone(), span), eq_ty(l, r, span), span),
             None => eq_ty(l, r, span),
@@ -3951,8 +4110,8 @@ impl Respell<'_> {
         };
         let refl_arg = eqbind.map(|_| refl.clone());
         Ok(Triple {
-            lhs: side(&|t: &Triple| t.lhs.clone(), c.clone(), refl_arg.clone()),
-            rhs: side(&|t: &Triple| t.rhs.clone(), c.clone(), refl_arg),
+            lhs: side(&|t: &Triple| t.lhs.clone(), c.clone(), refl_arg.clone(), eq_l),
+            rhs: side(&|t: &Triple| t.rhs.clone(), c.clone(), refl_arg, eq_r),
             proof,
         })
     }
@@ -4527,6 +4686,7 @@ pub(crate) fn companions(
         fresh: 0,
         span,
         anchors: None,
+        let_env: Vec::new(),
     };
     let ext_proof = ext.walk(&source, At::Anchor)?;
     let ext_sites = std::mem::take(&mut ext.rw.sites);
@@ -4821,6 +4981,7 @@ pub(crate) fn companions(
         fresh: 0,
         span,
         anchors: None,
+        let_env: Vec::new(),
     };
     let unfold_proof = unfold.walk(&source, At::Anchor)?;
     let unfold_sites = std::mem::take(&mut unfold.rw.sites);

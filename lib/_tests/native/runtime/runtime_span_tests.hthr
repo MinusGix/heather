@@ -323,6 +323,46 @@ theorem loops_accepted():
     ⟨refl, ⟨refl, refl⟩⟩
 }
 
+// A byte read once, by a `let` before the inner test: insertion sort's inner
+// loop (issues/runtime-mut-self-let-read-walk.md). The read is a claimed
+// call on the receiver, which the companions follow as `f#body` binds it.
+runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        let below = s.byte_within(n, j - 1);
+        if larger: x < below.zero_extend(56) { s.put_within(n, j, below); s.insert_below(n, j - 1, x) }
+        else { s.put_within(n, j, x.truncate(8, 56)); j }
+    } else { s.put_within(n, j, x.truncate(8, 56)); j }
+}
+
+theorem insert_below_runs(): program_run(List::insert_below::program, [[b(1), b(5), b(7), b(0)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(3), b(5), b(7)], [b(7)]]) { refl }
+
+// The inner test a plain `if` (issues/measured-loop-inner-if-companions.md),
+// the read written where it is used…
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        if key < s.byte_within(n, j - 1).zero_extend(56) {
+            s.put_within(n, j, s.byte_within(n, j - 1)); s.sift(n, j - 1, key)
+        } else { j }
+    } else { j }
+}
+
+theorem sift_runs(): program_run(List::sift::program, [[b(1), b(5), b(7), b(3)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(5), b(5), b(7)], [b(7)]]) { refl }
+
+// …and bound by a `let`, after one shadowing the measured index.
+runtime fn List::sift_let(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        let j = j - 1;
+        let prev = s.byte_within(n, j);
+        if key < prev.zero_extend(56) { s.put_within(n, j + 1, prev); s.sift_let(n, j, key) }
+        else { j + 1 }
+    } else { j }
+}
+
+theorem sift_let_runs(): program_run(List::sift_let::program, [[b(1), b(5), b(7), b(3)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(5), b(5), b(7)], [b(7)]]) { refl }
+
 // ---------------------------------------------------------------------------
 // What the generator refuses
 
