@@ -1177,10 +1177,10 @@ the part that faces a caller who is not a Heather program.
   (`runtime_span_tests.hthr`: `clear_from`, `clear_line`, `clear_text`).
 
 Limits, each refused by name or filed: one span written per function
-(it may read the spans after it, in a loop or out of one, §3.1 V5a), six
-words in registers with each span's address and length among them, and a
-byte read before a store and used after it
-(`issues/rt-file-read-before-store.md`). In-place `Set` under `Unique`
+(it may read the spans after it, in a loop or out of one, §3.1 V5a), and six
+words in registers with each span's address and length among them. A
+byte read before a store and used after it, once a limit here, is
+reflected (`issues/rt-file-read-before-store.md`, closed). In-place `Set` under `Unique`
 (the third point of the outline) was not needed: a writer's meaning
 threads the span, and the store leaf is proved against the file the run
 leaves. SHA-256's state as a customer waits on
