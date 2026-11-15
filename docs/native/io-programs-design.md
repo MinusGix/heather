@@ -1,6 +1,6 @@
 # Programs that do their own I/O: a surface `runtime fn` over `Io` to an ELF
 
-Status: **proposed (2026-11-15)**, thread "Compile Heather programs with their
+Status: **proposed (2026-11-15); D1–D3 answered by Minus the same day (§5)**, thread "Compile Heather programs with their
 own I/O". It finishes item 4 of `docs/language/effects-capabilities-design.md`
 §6 ("`runtime fn main` publishing a `Source` that `write-elf` compiles") and
 extends that note's §8 (the computation layer `ETm`/`ELoop`), not re-deriving
@@ -14,9 +14,8 @@ What a user should be able to write, and nothing else:
 
 ```heather
 // Exit 0 when stdin is UTF-8, 1 when it is not.
-runtime fn validate(io: Io, input: [u8; 1048576]) → Partial(Mutated<Io, u64>) {
-    let mut io = io;
-    let mut input = input;
+runtime fn main(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut input: [u8; 1048576] = [0; 1048576];   // static memory (§5 D2)
     let mut n: u64 = 0;
     let mut going = True;
     while going {
@@ -32,19 +31,19 @@ runtime fn validate(io: Io, input: [u8; 1048576]) → Partial(Mutated<Io, u64>) 
 and then
 
 ```
-heather write-elf demo.hthr validate::source -o validate
+heather write-elf demo.hthr -o validate      # `main` by default; `f::source` names another
 ```
 
 gives a standalone x86-64 Linux executable, no C `main`, whose certificate
 states, with no proof written for this program:
 
-- `validate::source_elf_simulates`: the process Linux makes of the file
+- `main::source_elf_simulates`: the process Linux makes of the file
   simulates the `Source` (the compiler's theorem, as for every `write-elf`
   program today, `native_compile_elf`);
-- `validate::reads`: that `Source`'s tree, read against **any** world, is
-  `validate` up to silent steps (`Io::Reads`, the agreement
+- `main::reads`: that `Source`'s tree, read against **any** world, is
+  `main` up to silent steps (`Io::Reads`, the agreement
   `docs/language/effects-capabilities-design.md` §3 states for every program);
-- and whatever the user proved about `validate` itself (that it exits 0
+- and whatever the user proved about `main` itself (that it exits 0
   exactly when the bytes are `utf8::encode(s)` for some `s`) is then a
   statement about the binary.
 
@@ -281,38 +280,56 @@ initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
 
-## 5. Decisions for Minus
+## 5. Decisions (Minus, 2026-11-15)
 
-**D1. What a program is.** Recommended: no special name and no new syntax.
-A `runtime fn` whose first parameter is `io: Io` and whose result is
-`Partial(Mutated<Io, u64>)` is a program; the `u64` is its exit status;
-`write-elf` takes any such `f` as `f::source`. This is the shape every
-customer over `Io` already has (`Io::cat`, `Io::tac`, `Io::tr_upper`), so
-nothing new is learned to write one. The alternative is a reserved
-`runtime fn main(...)` with the wrapping implicit (`→ u64`, the setup
-adding `Partial(Mutated<Io, _>)`, as effects design §4 first sketched);
-that reads better, but it is a second spelling of the same function type
-and the user's theorems would still be about the wrapped one.
+**D1. What a program is.** Any `runtime fn` whose first parameter is the
+world, written `mut io: Io` (a `mut` parameter is threaded as a `let mut`
+is, so no `let mut io = io;`), and whose result is
+`Partial(Mutated<Io, u64>)` compiles as a program; the `u64` is its exit
+status. A function named `main` is the entry point: `write-elf <file> -o
+<out>` builds `main`, and `write-elf <file> f::source -o <out>` any other.
+So `main` is special only as the default, and every effectful function is
+compiled the same way (a program's helper over `Io` is a program too, which
+is what `rt-effectful-callees` will call).
 
-**D2. Where a program's memory comes from.** Recommended: from its
-signature. Parameters after `io` of type `[u8; N]` are the program's
-buffers, zero when the process starts, `N` their size in the data segment,
-and the theorem is stated at all-zero buffers (`f::starts`). That is
-honest (the process does get zeroed pages), puts the size in the type, and
-builds no list in any term the kernel converts. The alternative is a local
-`let mut buf = [0u8; N];`, closer to C; but then the body's meaning
-contains a list of `N` zeros, which conversion of the pin would unfold, so
-it needs the reflector to recognise the literal before the kernel sees it.
-Command-line arguments are not in either (a third parameter kind,
-`args: List<List<u8>>`, when a program needs them).
+**D2. Memory: the meaning and the machine are separate questions.** Two
+things were run together in the first draft:
 
-**D3. Constant bytes in a program.** Recommended: byte-string literals
-`b"valid\n"` of type `[u8; 6]`, and a `Writes` whose buffer is a literal
-reflected as a constant buffer of the `Source` (initial bytes in the data
-segment, never written). The alternative is no literal: the program
-declares a buffer parameter with initial contents. D3 is not needed for
-§0 or the demo thread's programs (exit status carries the answer), so it
-can wait.
+- *The meaning.* A buffer is a value, `List<u8>` (or `[u8; N]`), in the
+  program's world-threading meaning. Nothing about memory appears there:
+  the program reads into a list, lends it to a function, writes a span of
+  it. This is what a theorem about `main` talks about.
+- *The machine.* Where those bytes live: a zero-filled range of the data
+  segment the `Source` declares (`Buffer(capacity, initial)`), which the
+  lowering places (`Loc::InBuffer`). That is operational, like a register
+  placement (vision note §2.5).
+
+The surface question is only how a program says it needs a buffer and
+what it starts as. Both spellings are allowed, and they give the same
+theorem:
+
+- a local, `let mut input: [u8; N] = [0; N];` (or a byte literal, D3),
+  which reflects as a static buffer of the `Source` with those initial
+  bytes;
+- a parameter after `io`, `input: [u8; N]`, which is a buffer the caller
+  (the process start) supplies zeroed.
+
+The generic theorem that makes them one: a program with a buffer local
+initialised to `v` is the program with that local abstracted as a
+parameter, applied to `v` (`f_local(io) = f_param(io, v)`). The
+generator always states `main::reads` in the parameter form at every
+initial content and instantiates it at the declared `v`, so the kernel
+never converts a term holding `N` literal zeros: the zeros appear only as
+the argument of a statement already proved for every list. The same
+abstraction is what a user wants for "pull this constant out as an
+argument" in their own proofs; it is a lemma about the reflected
+`ELoop` (substituting a variable's initial value), proved once, not
+per program.
+
+**D3. Constant bytes.** Agreed: byte-string literals `b"valid\n"` of
+type `[u8; 6]`; a literal reaching a write is a constant buffer of the
+`Source` (initial bytes in the data segment, never written). After the
+demos, which report through the exit status.
 
 **Not a decision, recorded:** §4.1 changes `Io::read_into`'s signature
 (adds `at`). It is the word-level call that effectful runtime code makes,

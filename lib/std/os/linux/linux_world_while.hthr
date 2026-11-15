@@ -1,0 +1,183 @@
+// The surface `while` over a world, and the loop a lowering runs, are the
+// same computation up to silent steps (docs/native/io-programs-design.md
+// §2.2). Proved once here, so a program's own bridge is only that one pass
+// of each is the same pass, a statement about straight code.
+//
+// They differ in two ways, both of shape:
+//
+// - the surface loop's state holds the world among the locals it threads
+//   (`Mutated(io, Mutated(buf, n))`), where the lowering's keeps it beside
+//   the values (`Mutated<Io, V>`); `world` and `vals` read one as the other;
+// - the surface tests and then runs the body, `iter` of `if c { body;
+//   Continue } else { Break }` (sequencing design §18), where the lowering
+//   tests once and then goes round body-then-test
+//   (`if c { do body while c }`, `rt_io_loop`'s `Repeat`). The surface goes
+//   round once more, so the two are not in lockstep: equal up to one
+//   silent step at the end, `Eutt`.
+import logic;
+import bool;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_world;
+import linux_world_co;
+
+// ---------------------------------------------------------------------------
+// The surface loop
+
+// A pass of `while c { body }` as the parser writes it, at the state it is
+// in: `t` the test, `s2` the state the body leaves.
+fn Io::guard<S>(t: Bool, s: S, s2: S) → Partial(Step<S, S>) {
+    match t { True => CRet(Continue(s2)), False => CRet(Break(s)) }
+}
+
+// The surface pass: test `c`, then the straight body `b`.
+fn Io::guarded<S>(c: S → Bool, b: S → S) → S → Partial(Step<S, S>) {
+    λ s => Io::guard(c(s), s, b(s))
+}
+
+// The surface loop from `s`, then the rest of the block `k`: what
+// `Iterate::then(s, Io::guarded(c, b), k)` is at `Partial`.
+fn Io::surface_while<S, X>(c: S → Bool, b: S → S, k: S → Partial(X), s: S) → Partial(X) {
+    CoTree::bind(Events::none(), CoTree::iter(Events::none(), Io::guarded(c, b), s), k)
+}
+
+// What it observes first, by the test: a silent step to the loop at the
+// state the body leaves, or the rest at this one.
+fn Io::surface_obs<S, X>(c: S → Bool, b: S → S, k: S → Partial(X), t: Bool, s: S) → Obs<X>(Events::none()) {
+    match t {
+        True => OTau(Io::surface_while(c, b, k, b(s))),
+        False => CoTree::obs(Events::none(), k(s)),
+    }
+}
+
+theorem Io::surface_obs_at<S, X>(c: S → Bool, b: S → S, k: S → Partial(X), s: S): (t: Bool) →
+    CoTree::obs(Events::none(), CoTree::bind(Events::none(),
+        CoTree::iter_obs(Events::none(), Io::guarded(c, b), CoTree::obs(Events::none(), Io::guard(t, s, b(s)))), k))
+        = Io::surface_obs(c, b, k, t, s)
+{
+    λ t => match t { True => refl, False => refl }
+}
+
+// ---------------------------------------------------------------------------
+// The lowered loop
+
+// Round again at `v` while the test holds.
+fn Io::go<V>(t: Bool, v: V) → Step<V, V> {
+    match t { True => Continue(v), False => Break(v) }
+}
+
+// One pass of the lowered loop: the body `fe` (the world after it and the
+// values it leaves), then the test `ce` of those values.
+fn Io::while_step<V>(ce: V → Bool, fe: V → Io → Mutated<Io, V>) → V → Io → Mutated<Io, Step<V, V>> {
+    λ v io => Mutated(fe(v, io).after, Io::go(ce(fe(v, io).value), fe(v, io).value))
+}
+
+// `if c { do body while c }`: tested once, then passes of body-then-test.
+fn Io::while_from<V>(t: Bool, ce: V → Bool, fe: V → Io → Mutated<Io, V>, v: V, io: Io) → Partial(Mutated<Io, V>) {
+    match t {
+        True => Io::iterate(Io::total(Io::while_step(ce, fe)), v, io),
+        False => CRet(Mutated(io, v)),
+    }
+}
+
+fn Io::while_loop<V>(ce: V → Bool, fe: V → Io → Mutated<Io, V>, v: V, io: Io) → Partial(Mutated<Io, V>) {
+    Io::while_from(ce(v), ce, fe, v, io)
+}
+
+// ---------------------------------------------------------------------------
+// The two agree
+
+// The bridge's premises: the test, the body and the rest of each side
+// agree at every surface state, read through `world` and `vals`.
+record WhileAgrees<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
+    ce: V → Bool, fe: V → Io → Mutated<Io, V>, rest: Mutated<Io, V> → Partial(X), world: S → Io, vals: S → V)
+{
+    same_test: (s: S) → ce(vals(s)) = c(s),
+    same_body: (s: S) → fe(vals(s), world(s)) = Mutated(world(b(s)), vals(b(s))),
+    same_rest: (s: S) → Eutt<X>(Events::none(), k(s), rest(Mutated(world(s), vals(s)))),
+}
+
+// Inside the loop: at a state whose test holds, the surface (about to run
+// the body) and the lowered loop's passes (the test already made) agree.
+// By direct corecursion: a pass round again on both sides is one silent
+// step on both; the last pass is one more on the surface's side.
+fn Io::while_inside<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
+    ce: V → Bool, fe: V → Io → Mutated<Io, V>, rest: Mutated<Io, V> → Partial(X), world: S → Io, vals: S → V,
+    h: WhileAgrees<S, V, X>(c, b, k, ce, fe, rest, world, vals), s: S, holds: c(s) = True) →
+    Eutt<X>(Events::none(), Io::surface_while(c, b, k, s),
+        CoTree::bind(Events::none(), Io::iterate(Io::total(Io::while_step(ce, fe)), vals(s), world(s)), rest))
+{
+    let s2 = b(s);
+    let lhs = Io::surface_while(c, b, k, s);
+    let rhs = CoTree::bind(Events::none(), Io::iterate(Io::total(Io::while_step(ce, fe)), vals(s), world(s)), rest);
+    // The surface runs the body: one silent step to the loop at `s2`.
+    let ol: (CoTree::obs(Events::none(), lhs) = OTau(Io::surface_while(c, b, k, s2))) =
+        j(holds, λ y _ => CoTree::obs(Events::none(), lhs) = Io::surface_obs(c, b, k, y, s), Io::surface_obs_at(c, b, k, s, c(s)));
+    // The lowered pass runs the same body and tests where it ends.
+    let or0: (CoTree::obs(Events::none(), rhs)
+            = Io::loop_obs(Io::while_step(ce, fe), rest, fe(vals(s), world(s)).after,
+                Io::go(ce(fe(vals(s), world(s)).value), fe(vals(s), world(s)).value))) =
+        Io::loop_obs_at(Io::while_step(ce, fe), rest, Io::while_step(ce, fe)(vals(s), world(s)));
+    let or1: (CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(ce(vals(s2)), vals(s2)))) =
+        j(h.same_body(s), λ y _ => CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, y.after, Io::go(ce(y.value), y.value)), or0);
+    let or2: (CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(c(s2), vals(s2)))) =
+        j(h.same_test(s2), λ y _ => CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(y, vals(s2))), or1);
+    match again: c(s2) {
+        True => ETau(0, 0, Io::surface_while(c, b, k, s2),
+            CoTree::bind(Events::none(), Io::iterate(Io::total(Io::while_step(ce, fe)), vals(s2), world(s2)), rest),
+            ol,
+            j(again, λ y _ => CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(y, vals(s2))), or2),
+            Io::while_inside(c, b, k, ce, fe, rest, world, vals, h, s2, again)),
+        False => {
+            // The surface's last pass is a silent step to the rest at `s2`;
+            // the lowered loop is at the rest already.
+            let after: Mutated<Io, V> = Mutated(world(s2), vals(s2));
+            let ok: (CoTree::obs(Events::none(), Io::surface_while(c, b, k, s2)) = CoTree::obs(Events::none(), k(s2))) =
+                j(again, λ y _ => CoTree::obs(Events::none(), Io::surface_while(c, b, k, s2)) = Io::surface_obs(c, b, k, y, s2),
+                    Io::surface_obs_at(c, b, k, s2, c(s2)));
+            let orr: (CoTree::obs(Events::none(), rhs) = CoTree::obs(Events::none(), rest(after))) =
+                j(again, λ y _ => CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(y, vals(s2))), or2);
+            Eutt::trans(Events::none(), lhs, CTau(Io::surface_while(c, b, k, s2)), rhs,
+                Eutt::of_bisim(Events::none(), lhs, CTau(Io::surface_while(c, b, k, s2)),
+                    Bisim::of_obs(Events::none(), lhs, CTau(Io::surface_while(c, b, k, s2)), ol)),
+                Eutt::trans(Events::none(), CTau(Io::surface_while(c, b, k, s2)), Io::surface_while(c, b, k, s2), rhs,
+                    Eutt::tau_l(Events::none(), Io::surface_while(c, b, k, s2)),
+                    Eutt::trans(Events::none(), Io::surface_while(c, b, k, s2), k(s2), rhs,
+                        Eutt::of_bisim(Events::none(), Io::surface_while(c, b, k, s2), k(s2),
+                            Bisim::of_obs(Events::none(), Io::surface_while(c, b, k, s2), k(s2), ok)),
+                        Eutt::trans(Events::none(), k(s2), rest(after), rhs, h.same_rest(s2),
+                            Eutt::of_bisim(Events::none(), rest(after), rhs,
+                                Bisim::of_obs(Events::none(), rest(after), rhs, sym(orr)))))))
+        },
+    }
+}
+
+// The surface `while` over a world, then the rest of its block, is the
+// lowered loop then its rest, up to silent steps, at every state.
+fn Io::while_agrees<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
+    ce: V → Bool, fe: V → Io → Mutated<Io, V>, rest: Mutated<Io, V> → Partial(X), world: S → Io, vals: S → V,
+    h: WhileAgrees<S, V, X>(c, b, k, ce, fe, rest, world, vals), s: S) →
+    Eutt<X>(Events::none(), Io::surface_while(c, b, k, s),
+        CoTree::bind(Events::none(), Io::while_loop(ce, fe, vals(s), world(s)), rest))
+{
+    let rhs = CoTree::bind(Events::none(), Io::while_loop(ce, fe, vals(s), world(s)), rest);
+    match holds: c(s) {
+        True => j(sym(j(holds, λ y _ => ce(vals(s)) = y, h.same_test(s))),
+            λ y _ => Eutt<X>(Events::none(), Io::surface_while(c, b, k, s), CoTree::bind(Events::none(), Io::while_from(y, ce, fe, vals(s), world(s)), rest)),
+            Io::while_inside(c, b, k, ce, fe, rest, world, vals, h, s, holds)),
+        False => {
+            let ol: (CoTree::obs(Events::none(), Io::surface_while(c, b, k, s)) = CoTree::obs(Events::none(), k(s))) =
+                j(holds, λ y _ => CoTree::obs(Events::none(), Io::surface_while(c, b, k, s)) = Io::surface_obs(c, b, k, y, s),
+                    Io::surface_obs_at(c, b, k, s, c(s)));
+            let or: (CoTree::obs(Events::none(), rhs) = CoTree::obs(Events::none(), rest(Mutated(world(s), vals(s))))) =
+                j(sym(j(holds, λ y _ => ce(vals(s)) = y, h.same_test(s))), λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::while_from(y, ce, fe, vals(s), world(s)), rest)) = CoTree::obs(Events::none(), rest(Mutated(world(s), vals(s)))), refl);
+            Eutt::trans(Events::none(), Io::surface_while(c, b, k, s), k(s), rhs,
+                Eutt::of_bisim(Events::none(), Io::surface_while(c, b, k, s), k(s),
+                    Bisim::of_obs(Events::none(), Io::surface_while(c, b, k, s), k(s), ol)),
+                Eutt::trans(Events::none(), k(s), rest(Mutated(world(s), vals(s))), rhs, h.same_rest(s),
+                    Eutt::of_bisim(Events::none(), rest(Mutated(world(s), vals(s))), rhs,
+                        Bisim::of_obs(Events::none(), rest(Mutated(world(s), vals(s))), rhs, sym(or)))))
+        },
+    }
+}
