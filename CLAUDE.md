@@ -10,9 +10,15 @@ Notes for one area sit beside it and load when a session works there:
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
 - **Cap every direct `heather` run too**: deep conversion workloads are
-  memory-superlinear. `(ulimit -v 8388608 -t 120 -c 0; target/release/heather
-  check <file>)`, loosening deliberately per run — never uncapped. Keep
-  `-c 0`: a process killed at the rail otherwise writes a core of its full size.
+  memory-superlinear. `target/release/heather check --limits dev <file>`
+  (8 GiB of address space, 120 CPU-s, no core), loosening deliberately per
+  run (`--limits dev,cpu=600`, `memory=16G`) — never uncapped. Every
+  subcommand takes `--limits`, and `HEATHER_LIMITS=dev` in the environment
+  does the same; it is off unless asked for, so it stays out of commands
+  written for users (`crates/cli/src/limits.rs`). Keep `core=0` (in `dev`):
+  a process killed at the rail otherwise writes a core of its full size.
+  `cargo` and anything that is not `heather` still takes the shell's
+  `ulimit`.
   - **To probe one declaration**: `--cache --only <item> --timings f.tsv`
     elaborates and gates just it over a replayed prefix
     (`docs/infrastructure/check-only-design.md`; the run is labelled and `scripts/timings`
