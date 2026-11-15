@@ -1,0 +1,64 @@
+// Probes of the motive synthesis' check of what it builds
+// (docs/elaborator/goal-motive-synthesis-design.md §4.6). Tests, not library:
+// nothing imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import fintype; import assoc;
+
+// A measured `mut self` method: its `.after`, reduced, is stuck on the
+// test at several spellings, some of which the abstraction reaches and some
+// it does not (the evidence the body passes to its measure's obligation is
+// typed by one it missed). The half-abstracted motive is ill-typed, and the
+// kernel refused every proof by cases on the test, even one whose arms are
+// `refl` (issues/theorem-branch-on-measured-fn-goal.md). It is now refused
+// at synthesis, and the arms keep the goal as written.
+record Counter { n: Nat, log: List<Nat> }
+fn Counter::fill_down(mut self c: Counter, m: Nat) → True decreases m {
+    if 1 <= m {
+        c := Counter(c.n + m, Cons(m, c.log));
+        c.fill_down(m - 1);
+    }
+}
+
+theorem fill_down_if(c: Counter, m: Nat): Counter::fill_down(c, m).after.n = Counter::fill_down(c, m).after.n {
+    if h: 1 <= m { refl } else { refl }
+}
+
+theorem fill_down_match(c: Counter, m: Nat): Counter::fill_down(c, m).after.log = Counter::fill_down(c, m).after.log {
+    match h: decide_bit<1 <= m>() { True => refl, False => refl }
+}
+
+// A well-typed specialisation is still taken: the arms prove the reduced
+// goal at their constructor (§4.4).
+theorem assoc_hit<K: DecEq, V>(row: Pair<K, V>, t: List<Pair<K, V>>, k: K, e: k = row.fst): Cons(row, t).assoc_get(k) = Some(row.snd) {
+    match K.eq_dec(k, row.fst) {
+        Inl(_) => refl,
+        Inr(miss) => false_elim(miss(e)),
+    }
+}
+
+// An arm proved about the goal as written, where the goal is specialised,
+// is refused, and the message spells what the arm is asked to prove: the
+// motive's instance at the arm, its case on the arm's constructor taken
+// (issues/match-arm-accepted-against-unspecialised-goal.md). It used to
+// read "that type has no surface spelling".
+// expect-error: but `Some(row.snd) = Some(row.snd)` is expected here
+theorem assoc_hit_unspecialised<K: DecEq, V>(row: Pair<K, V>, t: List<Pair<K, V>>, k: K, e: k = row.fst): Cons(row, t).assoc_get(k) = Some(row.snd) {
+    match K.eq_dec(k, row.fst) {
+        Inl(hit) => t.assoc_get_hit(row, k, hit),
+        Inr(miss) => false_elim(miss(e)),
+    }
+}
+
+// The same below binders (§4.5), with the arm's binders read by their names.
+// expect-error: but `Some(row.snd) = Some(row.snd)` is expected here
+theorem assoc_present_unspecialised<K: DecEq, V>(xs: List<Pair<K, V>>, k: K): Mem(k, xs.assoc_keys()) → Exists(λ (v: V) => xs.assoc_get(k) = Some(v)) {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(row, t) => λ m => match K.eq_dec(k, row.fst) {
+            Inl(hit) => Exists(row.snd, t.assoc_get_hit(row, k, hit)),
+            Inr(miss) => match m {
+                Inl(e) => false_elim(miss(e)),
+                Inr(later) => t.assoc_get_present(k, later),
+            },
+        },
+    }
+}

@@ -1196,6 +1196,13 @@ impl matching::MotiveSynthesisElab for Elaborator {
                         .is_ok()
                 })
     }
+
+    fn motive_well_formed(&self, cx: &Cx, motive: &Type, scrutinee_type: &Type, scrutinee_level: &Level) -> bool {
+        let mut inner = cx.clone();
+        inner.push("__motive_z".to_string(), scrutinee_type.clone(), scrutinee_level.clone());
+        let oracle = self.goal_oracle();
+        typing::infer_type(oracle.world(), 0, Layer::Prog, &inner.gamma, motive, self.policy.fuel).is_ok()
+    }
 }
 
 impl matching::MatchSpeculationState for Elaborator {

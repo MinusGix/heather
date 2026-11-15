@@ -329,6 +329,23 @@ pub(crate) fn beta_head(t: &Term) -> Option<Term> {
     Some(beta_head(&r).unwrap_or(r))
 }
 
+/// A `Case` on an injection, `case(inl v) { l => a; r => b }`, contracted
+/// to `a[v/x]` (and `inr` to `b`); `None` for any other term. The ι rule
+/// the kernel applies first, and a substitution only: nothing is unfolded.
+/// A reader contracts the projections of literal pairs the substitution
+/// leaves too ([`contract_projections`]): the branch is a reduct, which
+/// reads its constructor's fields off the value it was given.
+/// A motive's instance at an arm is the goal with this redex where the
+/// scrutinee stood (issues/match-arm-accepted-against-unspecialised-goal.md).
+pub(crate) fn iota_case(t: &Term) -> Option<Term> {
+    let Term::Case { case_l, case_r, scrut, .. } = t else { return None };
+    match &**scrut {
+        Term::Inl { val, .. } | Term::InlAt { val, .. } => Some(case_l.inst_top(0, val)),
+        Term::Inr { val, .. } | Term::InrAt { val, .. } => Some(case_r.inst_top(0, val)),
+        _ => None,
+    }
+}
+
 /// `ty` with its `El` term's head β-redexes contracted ([`beta_head`]);
 /// `None` when there was none. A pattern-bound proof is typed so: an
 /// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`, read raw no relation is
