@@ -7,7 +7,7 @@ becomes the specification it is checked against.
 Tracking issue: `issues/compile-typeclass-design.md`. The milestone this
 unblocks is `issues/end-to-end-compile-instance.md`. Adjacent decisions live
 where they are owned: the IR and its `converges` interface in
-`docs/ir-simulate-design.md` (closed round), the representation boundary in
+`docs/archive/ir-simulate-design.md` (closed round), the representation boundary in
 `issues/datarepr-separation.md`, the derived-artifact story in
 `issues/generators-in-the-language.md`.
 
@@ -29,7 +29,7 @@ production and (b) a certificate that the IR simulates to the same result as
 the kerneltime function. The compiler consumes only proof-carrying
 instances — privileged operationally, never logically.
 
-Settled in the sketch rounds (`docs/sketches/surface-v1.md` §6, `v2.md` §1,
+Settled in the sketch rounds (`docs/archive/surface-v1.md` §6, `v2.md` §1,
 `v3.md` §1) and **not reopened here**:
 
 - Dictionaries are first-class ordinary values; trait-vs-typeclass is

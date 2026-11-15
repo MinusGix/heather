@@ -8,7 +8,7 @@
 Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slices landed 2026-09-30: F (§2.4), F′ (§2.5), P's in-place results (§3.1) and `Move` node (§3.2), and I (§4.1). `CodeWhen` (§2.3) landed 2026-10-13 (§2.6).** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
-`docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
+`docs/archive/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
 that filed this), `docs/function-ir-design.md` (regions and the certified
 lowering), `docs/fetched-step-determinism-design.md` §5 (what a new
 instruction form owes the step decoder) and `docs/x86-64-execution-boundary.md`.
@@ -468,7 +468,7 @@ Tests:
   `decimal_line`'s `bv_omega` proofs unfold `times256` into doublings. That
   is a library change with its own proof work.
 - **One formatter copy shared by a call** instead of three inline copies
-  (`docs/native-wc-design.md` §8 Q4's other alternative).
+  (`docs/archive/native-wc-design.md` §8 Q4's other alternative).
 - **Constant folding** (`x + 0`, `x | 0`) in the DAG.
 
 ## 6. Decisions (2026-09-29, with the user: each as recommended)

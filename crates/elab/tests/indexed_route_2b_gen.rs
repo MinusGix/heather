@@ -2,7 +2,7 @@
 //! (`docs/iwf-former-design.md` §8; the route was route 2b's fording until
 //! the 2026-10-22 re-lowering, whose acceptance this file was, and the file
 //! keeps that name and its section numbers from
-//! `docs/inductive-fording-lowering.md`).
+//! `docs/archive/inductive-fording-lowering.md`).
 //!
 //! Every declaration below is lowered to `IWf(I; S; n; o; c)(m)` and
 //! re-checked by the real kernel, so a wrong encoding is a rejection rather
@@ -47,7 +47,7 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 // §13.2 item 8 — the classifier
 // ---------------------------------------------------------------------------
 
-// Fording's F1–F3 (`docs/inductive-fording-lowering.md` §3.3) each rejected
+// Fording's F1–F3 (`docs/archive/inductive-fording-lowering.md` §3.3) each rejected
 // a declaration whose children's indices could not be recomputed from the
 // children. The `IWf` route stores a child's index in the label, so each of
 // them declares, constructs, and computes — with `match` β on open data.

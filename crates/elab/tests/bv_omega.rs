@@ -82,7 +82,7 @@ fn bv_omega_suite() {
 }
 
 /// Byte tests as a program writes them (S3 of
-/// docs/native-programs-read-like-programs-design.md): a numeral or a
+/// docs/archive/native-programs-read-like-programs-design.md): a numeral or a
 /// character at a byte is its `ofNat`, also on the left of an order and before
 /// the argument that fixes the width; `=`, `<` and `<=` at bytes decide, alone
 /// and under connectives; and the decision computes on closed bytes.
@@ -121,7 +121,7 @@ fn byte_tests_read_as_written() {
 }
 
 /// Predicates written as decisions' bits (S4 of
-/// docs/native-programs-read-like-programs-design.md): an equality splits like
+/// docs/archive/native-programs-read-like-programs-design.md): an equality splits like
 /// an order, with its Nat fact (`≠` on the false side, which omega splits); a
 /// helper that *is* a comparison is split at the comparison, under `of_bit`
 /// too; and a recursive definition at a constructor, which reaches the byte

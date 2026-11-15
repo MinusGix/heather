@@ -5,8 +5,8 @@
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1); `wc -l` moved onto the state process 2026-09-29 (§9).** Owner: `issues/native-wc.md`.
-Builds on `docs/native-read-until-eof-design.md` (the read loop and its
-additive contract), `docs/native-syscall-failures-design.md` (failure paths),
+Builds on `docs/native-read-until-eof-design.md@4acf2fe` (the read loop and its
+additive contract), `docs/archive/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
 `docs/function-ir-readonly-loops.md` (the loop contract and its generator).
 
@@ -260,7 +260,7 @@ and three scratch.
 `generate_elaborated_record_loop_x86` (`crates/elab/src/function_ir_source/loop_record.rs`)
 compiles a `bounded_readonly` over a record carry. (Since 2026-09-30 it is the
 only loop generator, `generate_elaborated_loop_x86`, with a Nat or Bool carry
-as a one-field state: docs/native-loop-generator-fold-design.md.) It keeps the Nat/Bool
+as a one-field state: docs/native-loop-generator-fold-design.md@4acf2fe.) It keeps the Nat/Bool
 loop's shape (the same guard, library induction and final theorem) with
 the iteration as a list of typed pieces:
 
@@ -270,7 +270,7 @@ the iteration as a list of typed pieces:
 - the discriminator;
 - the next cursor and budget into freed scratch, then copied home.
 
-(Since 2026-09-30, docs/native-architecture-review.md R5: each field, and
+(Since 2026-09-30, docs/archive/native-architecture-review.md R5: each field, and
 the cursor and the budget, are computed straight into their own registers,
 whose old values are dead once read; the copies are gone.)
 
@@ -542,7 +542,7 @@ The round's success test (§1) asked for `wc -l` to be an instance of what
   `count_room` from `LoopAdvancesByAtMostOne`, `count_word`), with the exit
   claim `read_count_runs` over the program's `ReadEofComputes`. (Since
   2026-09-30 the loop generator emits them, as for a record, and the claims
-  take them as parameters: docs/native-loop-generator-fold-design.md §3.2.)
+  take them as parameters: docs/native-loop-generator-fold-design.md@4acf2fe §3.2.)
 - **The printing tail** is `lib/elf64_count_print.hthr`: elf64_read_print's
   base block, formatter and store restated at the tail's offset
   (`count_tail`, `count_formats`, `count_writes`), then elf64_write_loop's

@@ -6,7 +6,7 @@ created: 2026-09-25
 updated: 2026-09-25
 ---
 
-In a crossing certificate (design `docs/native-first-program-design.md`
+In a crossing certificate (design `docs/archive/native-first-program-design.md`
 §10.1), each link of a composed helper chain costs about 40K kernel steps more
 than the link below it. The continuation's instantiation walks the chain once,
 so a chain of depth `d` costs quadratically in `d`. It is 432K steps at the

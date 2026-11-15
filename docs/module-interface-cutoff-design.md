@@ -113,7 +113,7 @@ collision with an identifier the module wrote. A world with more inductives
 before the module is a registry change and has to be: nominal tags count the
 inductives before them, so the module's kernel terms differ there
 (`issues/nominal-tags-from-declaration-identity.md`). The library gate
-therefore gives every process one prefix (`docs/library-world-design.md`)
+therefore gives every process one prefix (`docs/archive/library-world-design.md`)
 rather than relying on moves between folders.
 
 ## 4. Trust

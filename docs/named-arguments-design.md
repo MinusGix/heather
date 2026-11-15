@@ -593,7 +593,7 @@ filling disciplines on one slot is the error `:= infer` already refuses).
 ### 9.5 As landed for record fields (2026-10-01)
 
 Record **fields** came first, not parameters
-(docs/automatic-author-surface-design.md §2.3): `name: T := e` on a record's
+(docs/automatic-author-surface-design.md@4acf2fe §2.3): `name: T := e` on a record's
 field. §9.2 holds as written. A defaulted field has no positional slot, so
 the other fields fill positionally in order, and a named argument overrides
 it; writing every field positionally also overrides it. §9.4 is answered for

@@ -29,7 +29,8 @@ evidence, not kernel features.
 - `crates/syntax` — lexer/parser/surface AST (untrusted)
 - `crates/lsp` — editor diagnostics and names over the Language Server Protocol
 - `crates/cli` — `heather` driver binary
-- `docs/` — papers; `docs/delam/` is the type-theory reference
+- `docs/` — design docs and guides (`docs/README.md` is the map);
+  `docs/delam/` is the type-theory reference, `docs/papers/` the papers
 - `issues/` — repo-local issue tracker (`scripts/issue`, see `issues/README.md`)
 
 ## Native x86_64 example

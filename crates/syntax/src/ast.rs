@@ -1205,7 +1205,7 @@ pub enum ExprKind {
     },
     /// `match code e as T { zero => …, succ(t) => …, _ => … }` — intensional
     /// analysis of code by the kernel's code recursor
-    /// (docs/certgen-transcriber-in-language-design.md §3).
+    /// (docs/archive/certgen-transcriber-in-language-design.md §3).
     ///
     /// Three things distinguish it from [`ExprKind::Match`], and all three are
     /// what make a 65-branch elimination writable at all:

@@ -8,7 +8,7 @@ updated: 2026-10-26
 ---
 
 Heather has no float literal and no decimal-fraction literal. Numerals are
-the only `Rat`/`CReal` constants, and `docs/radix-numerals-design.md` covers
+the only `Rat`/`CReal` constants, and `docs/archive/radix-numerals-design.md` covers
 only integers. Tests and clients build floats from fields. The Coq
 hardware-float survey (`docs/coq-hardware-floats-survey.md` §5.3) sets out
 the design Coq landed on, and the part Coq could not do that Heather can.

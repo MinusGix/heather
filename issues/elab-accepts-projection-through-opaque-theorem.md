@@ -7,7 +7,7 @@ updated: 2026-09-24
 ---
 
 Found 2026-09-24 while hand-writing the bounded-loop glue
-(`docs/native-bounded-loops-design.md` §6).
+(`docs/archive/native-bounded-loops-design.md` §6).
 
 Shape: `let read = X_read_artifact(...)` binds a `ReadThenArtifact` built by a
 *theorem*, and the proof then uses `read.memory_preserved` (type

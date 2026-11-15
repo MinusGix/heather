@@ -5,7 +5,7 @@ document section by section, and `crates/elab/tests/inductive_tier1.rs` is
 §10's checklist. Written before the code, per the tier's discipline; §7
 records the one place where writing the code corrected the scheme.
 Tracking issue: `issues/wf-former.md` (phase 5). This document replaces
-`docs/inductive-tier1-lowering.md` (exact-height fording) as *the generator's*
+`docs/archive/inductive-tier1-lowering.md` (exact-height fording) as *the generator's*
 scheme — see §9 for what happens to that document and its prototype.
 
 The kernel side is done and is not speculative: `Type::Vec`, `Type::Fin`,
@@ -419,7 +419,7 @@ the surface, not by identifying a user declaration with `Vec`.
 
 ## 9. What retires, and what does not
 
-`docs/inductive-tier1-lowering.md`'s exact-height fording scheme is **not
+`docs/archive/inductive-tier1-lowering.md`'s exact-height fording scheme is **not
 the generator's path**: `List`/`Bits` fold into this one as arity-≤1
 declarations, and the height machinery is not used by any lowering. It stays
 as the costed record of a scheme that was designed, prototyped and not

@@ -7,7 +7,7 @@ created: 2026-10-03
 updated: 2026-10-21
 ---
 
-The full `wc` command (`docs/native-wc-command-design.md`) matches GNU `wc`
+The full `wc` command (`docs/archive/native-wc-command-design.md`) matches GNU `wc`
 9.4 under `LC_ALL=C` except where §2 of that design chooses otherwise. Each
 deviation is a fact about the program its claim states, not a gap in the
 claim. These are the ones deferred:

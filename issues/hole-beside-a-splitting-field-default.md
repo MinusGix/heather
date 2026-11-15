@@ -19,7 +19,7 @@ fn lines_program() → Filter<Nat>(counting(line_step), 0, [λ c => c], Line(λ 
 
 gives `error: internal: more goals than the pre-count reserved` at `?todo`
 (found 2026-10-01 while writing the stream filter's programs,
-docs/native-stream-filter-design.md). With a default that closes without
+docs/archive/native-stream-filter-design.md). With a default that closes without
 splitting (`Filter<Stateless>` with `counts = Nil`) the same hole is
 reported as an unsolved goal, as it should be. The hole's goal slots are
 pre-counted from the source, and the default's tactic run appears to open

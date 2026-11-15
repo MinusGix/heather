@@ -1,6 +1,6 @@
 // Stage-1 prelude: the J lemmas. `sym` and `trans` are polymorphic in the
 // type the equation is at (issues/surface-polymorphism.md). Proofs are
-// ordinary expressions; `refl` is just a value (docs/sketches/surface-v1.md).
+// ordinary expressions; `refl` is just a value (docs/archive/surface-v1.md).
 //
 // `cong`'s function argument is **implicit**, and in *checking* position it
 // is inferred (issues/congruence-by-anti-unification.md): `cong(p)` against

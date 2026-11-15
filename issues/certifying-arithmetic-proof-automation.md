@@ -70,7 +70,7 @@ unary closed computations is compatible with that division.
   feared certificate-checking cost an acceptance measurement rather than an
   assumption.
 - 2026-08-26: The first certifying fragment was implemented
-  (`docs/certifying-arithmetic-automation-design.md`): checking-only `arith`
+  (`docs/certifying-arithmetic-automation-design.md@4acf2fe`): checking-only `arith`
   reifies open Nat equalities containing opaque atoms, `+`, and `twice`, then
   emits an ordinary proof from the Nat AC/congruence kit. Success exposes atom
   and swap counts plus the exact used-lemma list; failure exposes its kind,

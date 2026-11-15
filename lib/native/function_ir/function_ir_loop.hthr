@@ -247,7 +247,7 @@ theorem loop_readable_byte<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: Readon
 }
 
 // ---------------------------------------------------------------------------
-// Folding loops (docs/native-wc-design.md §3). A step that always continues,
+// Folding loops (docs/archive/native-wc-design.md §3). A step that always continues,
 // and the same way at every cursor, makes the loop a left fold of the step
 // over the bytes it reads. Chunks then compose by list reasoning alone,
 // whatever reads split the input into: a program states its specification
@@ -295,7 +295,7 @@ theorem step_fold_advances(region: ReadonlyLoop<Nat>, advance: LoopAdvancesByAtM
 }
 
 // The same bound for one measure of a state that is not a Nat, such as one
-// field of a record (docs/native-wc-design.md §4.8).
+// field of a record (docs/archive/native-wc-design.md §4.8).
 theorem step_fold_measure<C>(region: ReadonlyLoop<C>, measure: C → Nat,
     grows: (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
         measure(loop_step_payload(region.body(needle, cursor, byte, carry))) <= Succ(measure(carry)),
@@ -350,7 +350,7 @@ theorem loop_run_folds<C>(region: ReadonlyLoop<C>, folds: LoopFolds(region), nee
 }
 
 // ---------------------------------------------------------------------------
-// A program: a step folded over its input (docs/native-architecture-review.md
+// A program: a step folded over its input (docs/archive/native-architecture-review.md
 // R6).
 
 // Each of `counts` grows by at most one from `carry` to `next`, one conjunct

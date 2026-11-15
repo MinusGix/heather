@@ -13,7 +13,7 @@ is reported), but a build killed by `ulimit -t` leaves nothing, and a
 certificate that fails to parse is reported by line and column in a file
 that was never written.
 
-Found in the `wc` round (docs/native-wc-design.md §6.1): one declaration
+Found in the `wc` round (docs/archive/native-wc-design.md §6.1): one declaration
 ran for 20+ CPU-minutes, and finding it took a temporary hook that dumped the
 certificate (`HEATHER_DEBUG_CERT`) and cut it at a marker
 (`HEATHER_DEBUG_CUT`), then bisecting by rebuilds. Both were removed before

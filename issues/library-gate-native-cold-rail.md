@@ -31,7 +31,7 @@ worker, `--timings`.
    predicted this for let-shared proofs.
 2. **`write-elf` and the CLI warmup loaded closures in their own order.**
    A module's image is keyed by everything loaded before it
-   (`docs/library-world-design.md` §1), so `write-elf` of cat and of a
+   (`docs/archive/library-world-design.md` §1), so `write-elf` of cat and of a
    tool (`native_tools.hthr`, whose closure is cat's reached through
    `native_build` first) shared almost no image with each other or with
    the gate. Each was one process elaborating its whole closure cold: cat's

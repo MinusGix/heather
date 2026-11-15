@@ -40,7 +40,7 @@ use crate::module_pass::ModulePassMut;
 /// program-layer one (`arity: Nat`), which layer m may bind because Π is
 /// layer-generic and a Ψ global of layer c/p is referenceable at m (`i' ≤ i`).
 /// The ordinary case is what an **analyzer** needs and a template never did
-/// (docs/certgen-transcriber-in-language-design.md §9.1).
+/// (docs/archive/certgen-transcriber-in-language-design.md §9.1).
 enum Sig {
     Ctx,
     Local { ty: Type, level: Level },
@@ -1164,7 +1164,7 @@ impl Quotation<'_> {
     }
 
     /// `match code e as T { branch(x, …) => …, _ => … }` — the surface of the
-    /// kernel's code recursor (docs/certgen-transcriber-in-language-design.md
+    /// kernel's code recursor (docs/archive/certgen-transcriber-in-language-design.md
     /// §3). The elimination is `ElimCodeTm` on a term-code scrutinee and
     /// `ElimCodeTy` on a type-code one (docs/fn-signature-reflection-design.md
     /// §3), and the whole slice exists to make the 65 branches writable:
@@ -1190,7 +1190,7 @@ impl Quotation<'_> {
         if cx.meta.is_none() {
             return err(
                 "`match code` is layer-m machinery: it lives inside a `meta fn` \
-                 (docs/certgen-transcriber-in-language-design.md §3)",
+                 (docs/archive/certgen-transcriber-in-language-design.md §3)",
                 span,
             );
         }

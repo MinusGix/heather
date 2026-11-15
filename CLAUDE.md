@@ -175,6 +175,11 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
   The issue files are the only tracked state: there is no committed index.
   `scripts/issue index` prints the one-line-per-issue overview to stdout and
   `scripts/issue list` the table; never commit an `INDEX.md`.
+- **Docs: `docs/README.md` is the map.** A doc whose code is deleted or
+  replaced leaves in the same change: deleted if nothing live cites it (its
+  mentions become `docs/<name>.md@<rev>`), moved to `docs/archive/` if code
+  still cites its sections. Papers go in `docs/papers/` with a row in its
+  README.
 - Commit a completed issue fix once it is verified. Keep commits narrowly
   scoped, with descriptive messages, so small iterations are easy to resume
   across sessions.

@@ -4315,7 +4315,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
         /// receiver itself — as a **chain** (`fst` of a pair whose first
         /// component is `ty`), because the boundary keeps the inline walk at a
         /// *bare* binder and takes the reference at a chain
-        /// (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5). These probes
+        /// (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5). These probes
         /// are about the reference, so they hold one.
         fn receiver(ty: &Type, l: &Level) -> (Cx, Rc<Term>) {
             let mut cx = Cx::empty();
@@ -4533,7 +4533,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
             let r = GeneratedDefs(&e.el).respell_ty(&acx, &open).expect("the open instance respells");
             let mut cx = acx.clone();
             // A chain, not the bare binder — the boundary keeps the walk at a
-            // bare `Var` (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5).
+            // bare `Var` (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5).
             let unit = || Rc::new(Type::Unit { level: Level::Zero });
             cx.push(
                 "#v".into(),
@@ -4628,7 +4628,7 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
 
         #[test]
         fn the_reference_is_minted_at_a_chain_and_not_at_a_binder() {
-            // `docs/x86-scaling-rail-out-of-fuel-design.md` §2.5: the boundary
+            // `docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5: the boundary
             // is on shapes that survive substitution. A bare binder is exactly
             // what a use site replaces, so it keeps the walk; a chain over one
             // is §13.1's measured payer and keeps the reference; a computed
@@ -4666,7 +4666,7 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
         #[test]
         fn a_record_field_type_and_its_use_site_spell_a_computed_receiver_alike() {
             // The x86 rail's shape in a dozen lines
-            // (`docs/x86-scaling-rail-out-of-fuel-design.md` §1): a record
+            // (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §1): a record
             // whose later field type reads a field of an **earlier** one,
             // constructed at a *computed* state — so the declaration's
             // declaration's spelling meets a global-headed receiver while the

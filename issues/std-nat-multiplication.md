@@ -145,8 +145,8 @@ plus every certgen binary's `nat` prelude). `scripts/bench --check`: 18
 comparisons within thresholds. Both showcase files re-checked by hand.
 
 Design docs that predate today (`docs/opaque-globals-analysis-design.md`,
-`docs/certgen-cert-expression-design.md`, `docs/certgen-transcriber-in-language-design.md`,
-`docs/certgen-non-nat-embeddings-design.md`, `docs/certgen-ctor-fields-design.md`,
+`docs/certgen-cert-expression-design.md@4acf2fe`, `docs/archive/certgen-transcriber-in-language-design.md`,
+`docs/certgen-non-nat-embeddings-design.md@4acf2fe`, `docs/certgen-ctor-fields-design.md@4acf2fe`,
 `docs/fn-signature-reflection-design.md`, `docs/analyzer-evaluation-design.md`)
 call the fixture `mul` and are left alone: they are round records, and
 rewriting them would falsify what those rounds saw. The forwarding note lives

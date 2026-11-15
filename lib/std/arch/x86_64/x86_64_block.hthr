@@ -493,10 +493,10 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 
 // Near (rel32) forms of the same two transfers, for edges a short branch
 // cannot reach: a bounded loop's exit and back edge span its whole body
-// (docs/native-bounded-loops-design.md §2). The displacement is little-endian
+// (docs/archive/native-bounded-loops-design.md §2). The displacement is little-endian
 // after the opcode, relative to the end of the instruction. `JumpSignNear`
 // (JS) is how a program tells a syscall's error return, a negative word,
-// from a count (docs/native-syscall-failures-design.md §4).
+// from a count (docs/archive/native-syscall-failures-design.md §4).
 inductive NearControl {
     JumpIfNear(cc: ConditionCode, displacement: BitVec(32)),
     JumpNear(displacement: BitVec(32)),

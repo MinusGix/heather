@@ -6,7 +6,7 @@
 
 Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 and S5 landed 2026-10-03.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
-of `docs/automatic-author-surface-design.md` (the stream filter) and before
+of `docs/automatic-author-surface-design.md@4acf2fe` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
 
 ## 1. What this round does

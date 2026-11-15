@@ -8,7 +8,7 @@
 
 Design sketch for the migration step named by `issues/generators-in-the-language.md`
 (2026-08-02 verdict, migration order) and staged as item 4 of
-`docs/certifying-generator-design.md` §8: the certifying generator's *fragment
+`docs/certifying-generator-design.md@4acf2fe` §8: the certifying generator's *fragment
 transcriber* stops being Rust that walks a surface AST and becomes a layer-m
 function that walks **code**. Round pattern as usual: this document first, the
 implementing round against §10's acceptance list.
@@ -86,7 +86,7 @@ fragment declines.
 
 **The seam closes later, and the doc says where.** Marking is expressible
 in-language the day two things exist: surface delayed substitution
-(`$u[x := t]`, `docs/sketches/surface-v0.md` finding 2, deferred by the map
+(`$u[x := t]`, `docs/sketches/surface-v0.md@4acf2fe` finding 2, deferred by the map
 round's §8) to mark a branch's sub-code, and a meta-layer re-entry (fuel-driven
 recursion at layer m) to re-walk the marked sub-code, because a branch's
 `box (u^δ)` is neutral until its global is concrete (`reduce.rs:2206`). Both
@@ -103,7 +103,7 @@ are real rounds; neither is this one.
 - **52, not 37.** `rec.rs:208` is the authority: ch. 04's 13+9 branches plus
   the Id/Σ/Unit/Empty/Sum/W/Vec/Fin/Wf/sEq extensions. Every log and sketch
   that says "37 branches" (`issues/certifying-generator.md` 2026-08-02,
-  `docs/sketches/surface-v0.md` §6) is quoting the paper, not the kernel.
+  `docs/sketches/surface-v0.md@4acf2fe` §6) is quoting the paper, not the kernel.
 - **The branch table stays Rust under any plan** — it recurses over the
   *signature* (three binder namespaces, above-`k` shifts) and is consumed by
   both `conv` and `typing`. A surface `match code` is a *client* of that
@@ -139,7 +139,7 @@ are real rounds; neither is this one.
 
 ## 3. The analysis surface: the minimal honest `match code`
 
-`docs/sketches/surface-v0.md` §6 designed `match code` with two default-arm
+`docs/sketches/surface-v0.md@4acf2fe` §6 designed `match code` with two default-arm
 flavors. This round adopts **one**, and the choice makes the 52-branch problem
 disappear:
 
@@ -720,14 +720,14 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
   were already writable, all 52 names, per §10.1's deviation. Sub-code
   binders and dependent motives did not arrive and were not needed.]*
   *[Confirmed again 2026-08-12 by the non-`Nat` embeddings round
-  (`docs/certgen-non-nat-embeddings-design.md`), which IS §8 item 2: it needed
+  (`docs/certgen-non-nat-embeddings-design.md@4acf2fe`), which IS §8 item 2: it needed
   four more **term** arms (`tm_triv`/`tm_pair`/`tm_inl`/`tm_inr`) and three
   more **type** arms (`ty_unit`/`ty_sigma`/`ty_sum`), all already writable
   under the one constant motive. Sub-code binders, dependent motives and
   `CodeTy`/`LetBoxTy` inputs still did not arrive and still were not needed;
   this bullet's prediction can be retired.]*
 - **Fixture fuels and the loopification pass** — unchanged homes
-  (`docs/certifying-generator-design.md` §8 items 1 and 3).
+  (`docs/certifying-generator-design.md@4acf2fe` §8 items 1 and 3).
 - **User-declared analyzer slots** — deferred with user-declared slots
   generally (`docs/meta-def-registration-design.md` §10, first bullet): the
   open question is what the contract is when there is no Rust signature to
@@ -767,14 +767,14 @@ edits.
    variables but cannot distinguish them (§1, with the kernel and ch. 04
    citations). The migration order is unaffected; the *shape* of the step is,
    and this is a fifth blocker in the same family as (1)–(4), narrower than (4).
-2. `docs/certifying-generator-design.md` §8 item 4 — repeats the same sentence;
+2. `docs/certifying-generator-design.md@4acf2fe` §8 item 4 — repeats the same sentence;
    same amendment, plus: the blockers gate the *later* stages **and** the
    variable seam gates this one.
 3. `issues/certifying-generator.md`, 2026-08-02 — two corrections: the surface
    story is 52 branches, not 37; and the transcriber's inputs do **not** need
    `CodeTy` locals letboxed into recursors (§2, last bullet) — the Nat-only
    fragment's recursor annotation is a closed type.
-4. `docs/sketches/surface-v0.md` §6 — "37 fixed branches" is the paper's count,
+4. `docs/sketches/surface-v0.md@4acf2fe` §6 — "37 fixed branches" is the paper's count,
    not the kernel's (`rec.rs:208`); and of the two default-arm flavors this
    round adopts only the constant one.
 5. `docs/meta-def-registration-design.md` — binding here, and missed by this
@@ -786,7 +786,7 @@ edits.
    spine), plus two smaller consequences — ordinary parameters and results on a
    `meta fn`, and globals nameable from a meta body — and the elaborator-held
    staleness fix.
-6. `docs/certifying-generator-design.md` §10, third bullet ("slot-map
+6. `docs/certifying-generator-design.md@4acf2fe` §10, third bullet ("slot-map
    convention: the code comments own the layout") — with two transcribers the
    layout is now an *interface*, and §4's rendering function plus the §5
    cross-check are where it is pinned.

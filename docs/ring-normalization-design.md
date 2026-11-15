@@ -55,7 +55,7 @@ The issue left the choice open between a Rust-side certificate of
 `mul_assoc`/`mul_comm` steps (omega's contract) and an in-language normalizer
 proved once. The retired `arith` measured the first: its cost was dominated
 by reassociation and by composing permutation chains
-([certifying-arithmetic-automation-design](certifying-arithmetic-automation-design.md),
+([certifying-arithmetic-automation-design](https://github.com/MinusGix/heather/blob/4acf2fe/docs/certifying-arithmetic-automation-design.md),
 "Cost anatomy"), and a ring certificate would be the same chains with
 products. So this is the second.
 

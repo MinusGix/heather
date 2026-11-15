@@ -2,14 +2,14 @@
 
 Status: built (§9, §11, §12), measured (§10).
 Issues: `issues/module-dag-build.md`, `issues/nominal-tags-from-declaration-identity.md`.
-Supersedes `docs/library-world-design.md` §2 (the world).
+Supersedes `docs/archive/library-world-design.md` §2 (the world).
 
 ## 1. Why the gate is a chain
 
 The library gate (`crates/cli/tests/library.rs`) runs three `heather check`
 children at a time over one image store, and still keeps only about 1.6 CPUs
 busy (`issues/library-gate-warmup-runs-alone.md`). Each child loads the
-library's world (`docs/library-world-design.md`) up to the last shared module
+library's world (`docs/archive/library-world-design.md`) up to the last shared module
 its folder needs, and a module's image is keyed by every module before it in
 that world. So a module can be built only after every module in front of it
 has been, by some child, and the children spend their time waiting on one
@@ -170,7 +170,7 @@ snapshot extended by the modules of `canon(M)` after `canon(B)`, each loaded
 by §4, and then `M` itself. So a process that loads a closure of `n` modules
 replays about `n` images plus the sum of those remainders, which over the
 library is 166 in all; a folder's closure today replays nearly twice its
-size (`docs/library-world-design.md` §3).
+size (`docs/archive/library-world-design.md` §3).
 
 Each of those loads judges every binding of the image again, by the kernel
 or by a verdict the gate holds (§4). A command given no cache directory

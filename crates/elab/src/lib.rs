@@ -1450,7 +1450,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         // A numeral or character literal waits for a later argument to fix
         // its carrier, and falls back to its own type (`Nat`, `Char`) when
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
-        // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
+        // `9` is a byte (docs/archive/native-programs-read-like-programs-design.md S3).
         let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
         // A binding statement's continuation (`Bind::seq(e, λ #bindN => rest)`,
         // docs/sequencing-surface-design.md §2.2) waits for the expected type:
@@ -2890,7 +2890,7 @@ impl Elaborator {
                     self.attempt.goal_arena.solve_named(name, t);
                 }
                 // `on _: P := e;` — discharge *every* goal whose statement is
-                // `P` (docs/sketches/surface-v2.md §2: one bound proof feeding
+                // `P` (docs/archive/surface-v2.md §2: one bound proof feeding
                 // many sites). `P` is elaborated per goal, in that goal's own
                 // context, since that is where its statement lives.
                 OnTarget::Stmt(pat) => {
@@ -3144,7 +3144,7 @@ impl Elaborator {
                 // after it. A layer-m term *may* name a layer-c global
                 // (`i' ≤ i`, typing.rs:756), which is what lets an analyzer's
                 // arms call ordinary library functions
-                // (docs/certgen-transcriber-in-language-design.md §4).
+                // (docs/archive/certgen-transcriber-in-language-design.md §4).
                 let var = GlobalVar::constant(*abs);
                 let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");

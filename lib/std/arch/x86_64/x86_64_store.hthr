@@ -1,5 +1,5 @@
-// The stores the compiler emits (docs/native-first-program-design.md §10,
-// docs/native-tr-design.md §3.1): `mov qword [base], source`, and
+// The stores the compiler emits (docs/archive/native-first-program-design.md §10,
+// docs/archive/native-tr-design.md §3.1): `mov qword [base], source`, and
 // `mov byte [base], source` for the source's low byte, each for a base that
 // needs neither a SIB byte nor a displacement. A store writes its bytes, low
 // first, through a write model the profile supplies; the model says which

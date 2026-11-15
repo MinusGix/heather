@@ -180,7 +180,7 @@ fn branching_tree_mirror_and_involution() {
 fn rejections_carry_their_messages() {
     // A computed result index and a deep pattern used to be rejections naming
     // route 2b as "not yet generated". Route 2b **is** generated now
-    // (docs/inductive-fording-lowering.md; the observers are
+    // (docs/archive/inductive-fording-lowering.md; the observers are
     // `indexed_route_2b_gen.rs` §13.2 items 9 and 11), so both declarations
     // land — by fording, not by this scheme. What stays a rejection is what
     // neither fragment covers, and the list below is that.

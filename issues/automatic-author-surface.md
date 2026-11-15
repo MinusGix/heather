@@ -11,7 +11,7 @@ specification, and the proofs that are genuinely about it. The language
 should discharge the routine obligations, and a failure should hand the
 author the one goal left over.
 
-Design and as-landed record: `docs/automatic-author-surface-design.md`.
+Design and as-landed record: `docs/automatic-author-surface-design.md@4acf2fe`.
 Three parts:
 
 1. `split_all` splits what blocks the goal: binders, conjunctions, any stuck

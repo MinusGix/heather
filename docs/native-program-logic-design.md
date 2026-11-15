@@ -64,7 +64,7 @@ and each test became infrastructure:
   `filter_events` are a spec language for "read until end of file, write as
   you go": interaction trees, written as history encodings, once per process.
 - **Five execution relations** for overlapping code shapes, each a stage of
-  the stack's history (`docs/native-architecture-review.md` §2.4).
+  the stack's history (`docs/archive/native-architecture-review.md` §2.4).
 - **Performance workarounds became library design.** Much of `Straight`'s
   shape (the caller names every slot, landings spelled in the stretch's own
   form) works around the elaborator's whnf
@@ -337,7 +337,7 @@ The compiler's `iter` lemma is one use of it.
 
 ### 6.3 Cost discipline
 
-From the straight-code rounds (`docs/native-straight-runs-design.md`, "Keep
+From the straight-code rounds (`docs/archive/native-straight-runs-design.md`, "Keep
 the computed type structural"):
 
 - `Wp` reads constructors, registers and labels; numbers are `refl` facts or

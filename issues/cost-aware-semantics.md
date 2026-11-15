@@ -10,7 +10,7 @@ updated: 2026-09-24
 
 Investigate cost as a first-class, provable property of Heather programs,
 starting from calf (Niu, Sterling, Grodin, Harper, *A cost-aware logical
-framework*, POPL 2022; `docs/2107.04663.pdf`) and its successor decalf
+framework*, POPL 2022; `docs/papers/2107.04663.pdf`) and its successor decalf
 (arXiv 2307.05938, not downloaded).
 
 ## Why Heather specifically

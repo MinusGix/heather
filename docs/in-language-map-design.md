@@ -90,7 +90,7 @@ too.
   ch. 04 verbatim ("there is no way to introduce a term at layer p to
   global context" — a fortiori m). This settles §4's central decision.
 - **Surface: greenfield, but designed.** The quotation slice is specified
-  in docs/sketches/surface-v0.md §§4–6 with verdicts already taken:
+  in docs/sketches/surface-v0.md@4acf2fe §§4–6 with verdicts already taken:
   `code { … }` quote blocks, `$ident` auto-hoisting splices (verdict (c)),
   `${expr}` for compounds, `let code`, `Code(Δ |- T)` as an ordinary
   wrapper type. `match code` is designed there too and **stays out** of

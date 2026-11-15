@@ -34,7 +34,7 @@ box's speed drifts that much within an hour, so seconds compare only within
 a row's own ratios. What is stable is the parallelism.
 
 The gate is a **chain**. A module's image is keyed by every module loaded
-before it in its process (`docs/library-world-design.md` §1), so world
+before it in its process (`docs/archive/library-world-design.md` §1), so world
 module *k* can only be built over modules 0..k-1, and every child that
 needs it waits on its build lock. Whatever the three children do, the
 world's shared modules are elaborated one after another; the children only
@@ -69,7 +69,7 @@ reuse of an earlier one.
 
 - The chain itself. Making a module's image independent of modules it does
   not import ([[nominal-tags-from-declaration-identity]], and observing only
-  the closure, `docs/library-world-design.md` §4) would let the world build
+  the closure, `docs/archive/library-world-design.md` §4) would let the world build
   as a DAG instead of a line, which is where the gate's wall really goes.
 - `native_warmup` (`the_bundled_library_checks`, about 85 s on one CPU)
   still runs alone before the parallel phase; it could become a prerequisite
@@ -87,4 +87,4 @@ reuse of an earlier one.
   finished when it did; the tail is now the gate followed by `native_tools`
   (303 s), so the chain is the next lever.
 - 2026-10-30: The world chain is gone ([[module-dag-build]], `docs/module-dag-design.md`): images are keyed by import closures, so the children build independent modules in parallel; cold gate wall drops by about half, peak memory rises by about a third.
-- 2026-11-05: gardener: cites a file it shares with [[early-cutoff-registry-and-order-granularity]] (`docs/library-world-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[early-cutoff-registry-and-order-granularity]] (`docs/archive/library-world-design.md`).

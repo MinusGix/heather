@@ -500,7 +500,7 @@ impl NameLookup<'_> {
     /// the module, so `nat::Nat::add` gives `Nat::add` and `ir_v1::dbl` gives
     /// `dbl`. The split is [`names::split_qual`]'s, at the first `::`, since
     /// module names are single-segment. What certgen derives its generated
-    /// items' stems from (docs/certgen-global-identity-design.md §2).
+    /// items' stems from (docs/archive/certgen-global-identity-design.md §2).
     pub(crate) fn global_declared_name_at(&self, abs: usize) -> Option<String> {
         let key = self.names.global_name_at(abs as u32)?;
         Some(names::split_qual(key).map_or(key, |(_, d)| d).to_string())

@@ -25,7 +25,7 @@ rule CLAUDE.md states for every direct `heather` run, for the same reason:
 whole-file checking is memory-superlinear (an uncapped release check of a
 deep-fuel IR theorem reached ~22 GB), and this suite checks the heaviest file
 in the tree *and* sweeps the forded families towards the fuel cliff of
-`docs/inductive-fording-lowering.md` §14.9. The wrapper is where the `ulimit`
+`docs/archive/inductive-fording-lowering.md` §14.9. The wrapper is where the `ulimit`
 lives: 8 GiB of address space, 30 CPU minutes.
 
 A full run is ~4 minutes and three of them are `lib/certgen/ir_v1.hthr`. `--no-heavy`
@@ -347,7 +347,7 @@ written out afresh at every occurrence — once per `sEq`, per `Lam` domain, per
 `transp` annotation, per motive instantiation, of which there are
 Θ(constructors). Θ(n) copies of a Θ(n) type is the residual quadratic, and the
 same lever does not reach it: `GlobalBinding::Ty` has no body, so a *type*
-cannot be a Ψ definition at all. `docs/inductive-fording-lowering.md` §14.11
+cannot be a Ψ definition at all. `docs/archive/inductive-fording-lowering.md` §14.11
 records that as the successor seam.
 
 The one place the exponent did move is `computed-arms`, and that is consistent

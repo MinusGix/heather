@@ -29,5 +29,5 @@ pub mod semantic;
 // (issues/showcase-harness.md).
 pub mod showcase;
 // One prefix for every process that checks the library
-// (`docs/library-world-design.md`).
+// (`docs/archive/library-world-design.md`).
 pub mod world;

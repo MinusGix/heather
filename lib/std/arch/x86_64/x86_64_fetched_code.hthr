@@ -1,4 +1,4 @@
-// Fetched execution of emitted code (docs/native-first-program-design.md §3).
+// Fetched execution of emitted code (docs/archive/native-first-program-design.md §3).
 // One step fetches the bytes at RIP and runs them as one of the forms the
 // compiler emits; a run is a count of such steps, given code resident where
 // it runs (`CodeResident`). A fetched step never writes memory, so residency

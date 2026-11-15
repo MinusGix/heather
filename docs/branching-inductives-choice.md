@@ -5,7 +5,7 @@ prototype rounds; see §15 for the evidence and `docs/wf-former-design.md`
 for the rules. §§1–14 are kept as written on 2026-07-24 as the decision
 record. Tracking issues: `issues/tier1-branching-constructors.md` (the
 original question), `issues/wf-former.md` (the kernel round). Evidence
-base: `docs/inductive-tier1-lowering.md` §8.1, the validated
+base: `docs/archive/inductive-tier1-lowering.md` §8.1, the validated
 linear-fragment prototype `crates/elab/tests/tier1_fording.rs`, and the
 three branching prototypes of §15.
 
@@ -277,7 +277,7 @@ with correct definitional behaviour.
 ## 7. Route D — canonicalize the embedding in the elaborator
 
 Keep the `D_below` course-of-values scheme from
-`docs/inductive-tier1-lowering.md` §8.1 and have the elaborator emit the
+`docs/archive/inductive-tier1-lowering.md` §8.1 and have the elaborator emit the
 concrete injection when the children's heights are literals, postponing
 otherwise.
 

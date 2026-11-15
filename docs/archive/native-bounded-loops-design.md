@@ -191,7 +191,7 @@ The generator is `generate_elaborated_loop_x86` in
 scratch (address, byte, payload, next cursor, next budget, plus `extra`
 temporaries). (Since 2026-09-30 the placement is the record loop's, head
 registers plus one register per state field and three scratch, and a Nat or
-Bool carry is a one-field state: docs/native-loop-generator-fold-design.md.) Its emission has two parts: `pieces` (the eight typed
+Bool carry is a one-field state: docs/native-loop-generator-fold-design.md@4acf2fe.) Its emission has two parts: `pieces` (the eight typed
 certificates and the reflector's source agreement, elaborated as
 `{prefix}_pieces`) and `text` (code, bytes, layout, the two iteration proofs
 and the final theorem). A change to the composition rechecks only the second.

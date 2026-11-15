@@ -9,7 +9,7 @@ updated: 2026-11-03
 
 To write `10` or `'\n'` at a byte, a program needs `import algebra; import
 char; import byte;` (2026-10-02, S3 of
-docs/native-programs-read-like-programs-design.md):
+docs/archive/native-programs-read-like-programs-design.md):
 
 - `Numeral` is consulted only when the program's own scope can see the class
   (`elab_overloaded_num_check`: "the class is optional at the language level").
@@ -34,5 +34,5 @@ a program writes `import bitvec;` and nothing else for byte literals.
 - 2026-10-28: (native-compile-other-calls) hit again writing `cat FILE…`'s messages in `lib/native/native_tools.hthr` with `utf8::encode("…")`: `import char` was there, `bool` was the missing one, and the error still said `add import char;`. A one-character string elaborates without `bool`, which makes the message harder to read. Naming the missing key's module in `literal_needs_module` would be the cheap half of the fix.
 - 2026-10-29: (proof-patterns audit, [[proof-patterns-audit-2026-10]]) Re-probed on master 4f0ac27. **String half fixed**: since [[literal-needs-module-names-wrong-module]] (PR #250) a string literal needs only `import string;` (`fn hi() → string::String { "hi" }` checks with nothing else). **Byte half still open**: with `import bitvec; import byte;`, `'a'` at `BitVec(8)` says "a literal at `char::Char` needs the type in scope: add `import char;`", and `10` at `BitVec(8)` says "this has type `Nat`, but `BitVec(8)` is expected here" (with `import bitvec;` alone too) until `import algebra;` is added. The 2026-10-21 and 2026-10-28 entries above describe the string case as it was before #250.
 - 2026-11-03: Byte half fixed by [[numerals-without-algebra-import]]: with `import bitvec; import byte;` both `10` and `'\n'` at `BitVec(8)` elaborate (a char literal's `char::Char`/`char::ofNat` are read in `char`'s scope when it is in the closure). Remaining: with `byte` not imported, `'a'` at a byte still says `add import char;` where `import byte;` is the fix.
-- 2026-11-05: gardener: cites a file it shares with [[split-all-revise-hypotheses]] (`docs/native-programs-read-like-programs-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[split-all-revise-hypotheses]] (`docs/archive/native-programs-read-like-programs-design.md`).
 - 2026-11-08: (registered values, docs/registered-values-design.md) a string literal now needs `string` only in the import closure, as a character literal's spec already did (`literals.rs`, `string_intro` reads `closure_key`): `name_of(p)` is a string in modules (`int`, `ordered_field`) that import `mono_laws` and not `string`. The byte half above is unchanged.

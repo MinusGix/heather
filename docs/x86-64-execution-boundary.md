@@ -9,7 +9,7 @@ execution relation. An encoder-owned semantics would exclude raw binaries; a
 decoder-owned semantics would make compilation correctness depend on a second
 meaning for instructions.
 
-The [first certified call profile](x86-64-calls.md) extends the existing state
+The [first certified call profile](https://github.com/MinusGix/heather/blob/4acf2fe/docs/x86-64-calls.md) extends the existing state
 with normal-path near CALL/RET rules and an owned stack page. It checks their
 canonical bytes directly; general CALL/RET decoding and fault outcomes remain
 future work.
@@ -130,7 +130,7 @@ architectural execution fault remain four different outcomes.
 
 The direct executable path now checks a restricted ELF64 image and a typed
 entry/body/exit-request trace. Its exact claims and environmental assumptions
-are owned by [the static ELF design](x86-64-static-elf.md). The restricted loaded-memory bridge is described below.
+are owned by [the static ELF design](https://github.com/MinusGix/heather/blob/4acf2fe/docs/x86-64-static-elf.md). The restricted loaded-memory bridge is described below.
 
 
 ## Exact-span memory fetch (2026-09-07)
@@ -184,6 +184,6 @@ bytes. Each proposed flattened successor state is checked against canonical
 execution; a separately checked instruction-list equality connects the placed
 trace to entry/body/exit instructions. Initial memory and RIP are fixed by the
 image, while initial GPRs and flags remain arbitrary. See
-[x86-64-static-elf.md](x86-64-static-elf.md) for the full contract and remaining
+[x86-64-static-elf.md](https://github.com/MinusGix/heather/blob/4acf2fe/docs/x86-64-static-elf.md) for the full contract and remaining
 OS assumptions. Calls, writable memory, and other ELF profiles remain separate
 extensions.

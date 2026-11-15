@@ -107,7 +107,7 @@ Counted on `3099a7d`.
   `match n.leb(9)` gets no unfolding equation
   (`issues/unfolding-computed-scrutinee.md`, log of 2026-09-25).
 - **Step functions are what the native proofs want.**
-  `docs/native-programs-read-like-programs-design.md` §1.1 proves `wc`'s
+  `docs/archive/native-programs-read-like-programs-design.md` §1.1 proves `wc`'s
   facts with one line per field of `wc_step`. The native loop compiler takes
   folds of a step (`fold_bytes`, `lib/native/function_ir/function_ir_loop.hthr`),
   and `decreases` word functions compile to verified loops against `f#rec`.
@@ -201,7 +201,7 @@ owner-by-head resolution):
   the "identical count columns" check is replaced by "the timings do not
   move beyond noise", read with `scripts/perf ab`. A native setup that
   reflects code has to see through one instance projection. That is the
-  unreduced-projection friction `docs/native-programs-read-like-programs-design.md`
+  unreduced-projection friction `docs/archive/native-programs-read-like-programs-design.md`
   §2 found with `Numeral`, and the setup (R4) owns it.
 
 **The fallback**, if the class work proves larger than it looks: the
@@ -423,7 +423,7 @@ and probe P2 shows that is refused ("`match` in inference position needs a
 motive"). This is why layer 2 runs in the elaborator: the walk knows every
 `mut` local's type. Joining per variable duplicates the condition once per
 assigned local, which `split_all` handles consistently (it splits every
-occurrence of a comparison, `docs/native-programs-read-like-programs-design.md`
+occurrence of a comparison, `docs/archive/native-programs-read-like-programs-design.md`
 §2). The alternative is a join tuple, which proofs would have to project.
 *Amended (2026-11-12):* the join tuple is what is built now (§14 item 3):
 per-variable joins copied each branch's calls along with the condition.

@@ -869,7 +869,7 @@ measured into place by the fix pass rather than argued:
    at every receiver, and minting at one layer of computation — were both
    hand-run on the 2026-09-13 tree and both re-broke
    `caller_native_memory_same_27/28`, so §13.6's rejection of the first has
-   *not* expired. `docs/x86-scaling-rail-out-of-fuel-design.md` carries the
+   *not* expired. `docs/archive/x86-scaling-rail-out-of-fuel-design.md` carries the
    attribution, the table and the argument.
 3. **The closed non-dependent records** (`InstructionBytes`, `Region`,
    `ConditionalJoinRegion`, `LinkedConditionalBlock`) are §13.6's own

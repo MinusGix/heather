@@ -267,7 +267,7 @@ fn the_full_ir_library_checks() {
         "an inversion of a Stuck sub-region",
     );
 
-    // `Compile` v1 controls (docs/compile-typeclass-design.md §7 item 3).
+    // `Compile` v1 controls (docs/archive/compile-typeclass-design.md §7 item 3).
     // A wrong-result SPEC: the instance's certificate is the real theorem, so
     // the failure is precisely the coupling — `cert`'s expected type carries
     // `bad_spec` and the delivered convergence is to `add(b, a)`.
@@ -293,7 +293,7 @@ fn the_full_ir_library_checks() {
 
     // The route-1 spike's item (c), against the REAL kit
     // (issues/in-language-certificate-emission.md; the memo is
-    // docs/certgen-emission-route1-spike.md). It rides here because a suite
+    // docs/archive/certgen-emission-route1-spike.md). It rides here because a suite
     // of its own would re-elaborate the whole corpus: a staged meta fn whose
     // `code` block cites the kit's own `ret_conv`.
     //
@@ -315,7 +315,7 @@ fn the_full_ir_library_checks() {
 
     // …and the boundary route 1 routes *around*, still closed: the same
     // statement with the `Ir` at a meta-level LOCAL rather than a Ψ global is
-    // what docs/certgen-transcriber-in-language-design.md §5 calls unstatable,
+    // what docs/archive/certgen-transcriber-in-language-design.md §5 calls unstatable,
     // and it is unstatable against the real `Converges` too. If this ever
     // starts elaborating, route 3 landed.
     refuted(

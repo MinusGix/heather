@@ -67,7 +67,7 @@ refine each other (`refines_of_same`), so round 1's laws carry over.
 a `Cut` below anything. `iter` grows with fuel (`iter_grows`), a family that
 grows is `Grows`, and along a growing family every trace seen at some fuel is
 seen at every larger fuel (`fuel_monotone`). That is `simulate`'s
-`fuel_monotone` (`docs/ir-simulate-design.md` §6), and `Converges` is its
+`fuel_monotone` (`docs/archive/ir-simulate-design.md` §6), and `Converges` is its
 `converges` with the bound hidden; `Converges::at` raises the bound, and
 `Converges::ret_unique` says a growing program returns at most one value,
 whatever fuel each return was seen at. `refines_shift` is the payoff: a
