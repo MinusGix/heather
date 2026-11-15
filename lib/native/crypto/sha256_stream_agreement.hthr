@@ -22,9 +22,9 @@
 // (`Sha256::digest_bytes`, by `Part::window_of`: the hash value's codec
 // loses nothing).
 //
-// The chains are `simp_only` calls: a function that tests is taken at a
-// branch by its generated equations (`Sha256::push::True`,
-// `Sha256::pad::False`), and a loop is stepped by its own
+// The chains are `simp_only` calls: a function that tests is named, and
+// `simp_only(Sha256::push, discharge := bv_omega)` takes the branch the
+// facts in scope decide; a loop is stepped by its generated equations
 // (`Sha256::zero::step`, `Sha256::zero::done`).
 
 import logic;
@@ -128,10 +128,7 @@ theorem Sha256::push_room(s: Sha256, full: List<List<u8>>, T: List<u8>, k: Nat, 
     And<Sha256Tracks(Sha256::push(s, fill, byte).after, full, T ++ [byte.truncate(8, 56)], k), Sha256::push(s, fill, byte).value.toNat() = Succ(T.len())> {
     let space = t.space;
     let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::put(s, fill, byte).after, fill + 1)) =
-        Sha256::push::False(s, fill, byte, λ same => {
-            let n: (fill.toNat() = 63) = cong_fn(λ (x: u64) => x.toNat(), same);
-            omega
-        });
+        simp_only(Sha256::push, discharge := bv_omega);
     let inside: (fill.toNat() < 64) = omega;
     let longer = T.len_append([byte.truncate(8, 56)]);
     let next: ((fill + 1).toNat() = Succ(T.len())) = bv_omega;
@@ -197,7 +194,7 @@ theorem Sha256::filled_block(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat()
 // The padding where the length still fits the block: the block is the bytes held, the one bit, and zeros.
 theorem Sha256::pad_short(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T.len(), short: T.len() < 56, held: Sha256::block(s).take(T.len()) = T):
     And<Sha256::block(Sha256::pad(s, fill).after) = T ++ Sha2::one_bit(63 - T.len()), Sha256::pad(s, fill).after.hash = s.hash> {
-    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) = simp_only(Sha256::pad::True(s, fill, omega));
+    let is: (Sha256::pad(s, fill).after = Sha256::filled(s, fill)) = simp_only(Sha256::pad, discharge := bv_omega);
     simp_only(is, then := Sha256::filled_block(s, T, fill, at, omega, held))
 }
 
@@ -206,7 +203,7 @@ theorem Sha256::pad_long(s: Sha256, T: List<u8>, fill: u64, at: fill.toNat() = T
     And<Sha256::block(Sha256::pad(s, fill).after) = Sha2::zero_bytes(64),
         Sha256::state(Sha256::pad(s, fill).after.hash) = Sha2::sha256().compress(Sha256::state(s.hash), Sha2::sha256().words(T ++ Sha2::one_bit(63 - T.len())))> {
     let R = Sha256::run(Sha256::filled(s, fill)).after;
-    let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) = simp_only(Sha256::pad::False(s, fill, λ (lt: fill.toNat() < 56) => omega));
+    let is: (Sha256::pad(s, fill).after = Sha256::zero(R, 0).after) = simp_only(Sha256::pad, discharge := bv_omega);
     let filled = Sha256::filled_block(s, T, fill, at, below, held);
     let zeros = Sha256::zero_block(R, 0, Nil, refl, omega, Sha256::block(R).take_zero());
     simp_only(is, zeros.left, zeros.right, Sha256::run_block, filled.right, filled.left)

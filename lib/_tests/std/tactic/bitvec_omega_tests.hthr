@@ -335,3 +335,21 @@ theorem range_checking(x: BitVec(8), k: Nat, h: k = x.toNat()): k < 300 {
 theorem range_not_below_top(x: BitVec(8)): x.toNat() < 255 { omega }
 // A closed word is its value.
 theorem closed_word(k: Nat): BitVec::ofNat(5, n := 64).toNat() + k = k + 5 { omega }
+
+// ---- A word widened by zeros has the narrower word's value ----
+
+// A byte read as a `u64` and compared, as a program spells its tests.
+theorem widened_byte(c: u8, t: c.toNat() < 0x80): c.zero_extend(56) < 0x80 { bv_omega }
+theorem widened_byte_range(c: u8): c.zero_extend(56) < 256 { bv_omega }
+// The test decided by its Boolean, on a byte equal to the one read.
+theorem widened_decided(c, b: u8, read: c = b, t: decide_bit<b.zero_extend(56) < 0x80>() = False): ¬(c.zero_extend(56) < 0x80) { bv_omega }
+// An open width.
+theorem widened_open(n: Nat, x, y: BitVec(n), h: x.toNat() < y.toNat()): x.zero_extend(8) < y.zero_extend(8) { bv_omega }
+// In a checking position: a step of a longer proof.
+theorem widened_step(c: u8, t: c.toNat() < 0x80): c.zero_extend(56).toNat() < 200 {
+    let w: (c.zero_extend(56) < 0x80) = bv_omega;
+    bv_omega
+}
+// Control: a byte reaches 255, so a bound one below it is refused.
+// expect-error: `omega` got stuck
+theorem widened_not_below_top(c: u8): c.zero_extend(56) < 255 { bv_omega }

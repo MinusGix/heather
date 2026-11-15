@@ -745,6 +745,8 @@ takes stays a call, as its body is the well-founded recursion's
 discharged once per run at the call's own context: a call's equations share
 their tests' prefixes, and a failing discharger (`bv_omega` finding no
 contradiction) would otherwise fail again at every law and every step.
-`bv_omega` proves `¬P` (and `P → False`) by assuming `P`.
+`bv_omega` proves `¬P` (and `P → False`) by assuming `P`, and reads a word
+widened by zeros (`b.zero_extend(56) < 0x80`, a byte compared as a `u64`)
+as the narrower word's value (`BitVec::concat_zero_toNat`).
 
 Probes: `lib/_tests/std/tactic/simp_branch_tests.hthr`.
