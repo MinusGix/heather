@@ -123,7 +123,7 @@ fn Io::while_inside<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
     let or0: (CoTree::obs(Events::none(), rhs)
             = Io::loop_obs(Io::while_step(ce, fe), rest, fe(vals(s), world(s)).after,
                 Io::go(ce(fe(vals(s), world(s)).value), fe(vals(s), world(s)).value))) =
-        Io::loop_obs_at(Io::while_step(ce, fe), rest, Io::while_step(ce, fe)(vals(s), world(s)));
+        Io::loop_obs_at(Io::while_step(ce, fe), rest, Io::while_step(ce, fe, vals(s), world(s)));
     let or1: (CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(ce(vals(s2)), vals(s2)))) =
         j(h.same_body(s), λ y _ => CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, y.after, Io::go(ce(y.value), y.value)), or0);
     let or2: (CoTree::obs(Events::none(), rhs) = Io::loop_obs(Io::while_step(ce, fe), rest, world(s2), Io::go(c(s2), vals(s2)))) =
@@ -186,3 +186,25 @@ fn Io::while_agrees<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
         },
     }
 }
+
+// The same, with the premises given one by one: the form a bridge's
+// generated proof writes (`rt_io_bridge`), each premise a `λ` it spells
+// without naming the record.
+fn Io::while_agrees_by<S, V, X>(c: S → Bool, b: S → S, k: S → Partial(X),
+    ce: V → Bool, fe: V → Io → Mutated<Io, V>, rest: Mutated<Io, V> → Partial(X), world: S → Io, vals: S → V,
+    same_test: (s: S) → ce(vals(s)) = c(s),
+    same_body: (s: S) → fe(vals(s), world(s)) = Mutated(world(b(s)), vals(b(s))),
+    same_rest: (s: S) → Eutt<X>(Events::none(), k(s), rest(Mutated(world(s), vals(s)))),
+    s: S) →
+    Eutt<X>(Events::none(), Io::surface_while(c, b, k, s),
+        CoTree::bind(Events::none(), Io::while_loop(ce, fe, vals(s), world(s)), rest))
+{
+    Io::while_agrees(c, b, k, ce, fe, rest, world, vals, WhileAgrees(same_test, same_body, same_rest), s)
+}
+
+// The world of a surface loop's state, `Mutated(io, locals)`.
+fn Io::world_of<A>(m: Mutated<Io, A>) → Io { m.after }
+
+// A state's two parts, as functions a generated term names.
+fn Io::state_first<A, B>(m: Mutated<A, B>) → A { m.after }
+fn Io::state_rest<A, B>(m: Mutated<A, B>) → B { m.value }

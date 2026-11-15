@@ -170,6 +170,23 @@ If the pass's pin does not convert (the encoding's projections against
 a change to `rt`'s environment type, local to this layer, and the slice
 records which it took.
 
+**As built (2026-11-15).** One lemma, not two: `Io::while_agrees`
+(`linux_world_while`) takes the surface's test `c` and body `b` as
+functions of its state, the lowered loop's test and pass, the readings
+`world`/`vals` of a state, and three premises (`WhileAgrees`: same test,
+same body, same rest), and proves the surface loop and its rest `Eutt` to
+the lowered loop and its rest, by direct corecursion. The two shape
+differences are both inside it. The reflector records how it read each
+loop (`LoopProof` in `rt_io_reflect_loop`: the state before it, `c` and
+`b` as `λ`s over the state it opened the step at, the rest's opened body),
+and `io_loop_bridge` (`rt_io_bridge`) writes the proof term: one
+`Io::while_agrees_by` a loop, its test and body premises `refl` at a state
+of the loop, its rest premise the bridge of the rest (`Eutt::refl` at
+`Done`). `rt_io_while_tests` holds it for echo, for two loops in sequence
+with parameters no loop threads, and refuses it against a wrong program.
+No change to `rt::Env` was needed: `vals` spells each component out of the
+state's nested records.
+
 ### 2.3 Calls of span functions: `Lend`
 
 A pass that calls a `runtime fn` lent a span, as `tr`'s does

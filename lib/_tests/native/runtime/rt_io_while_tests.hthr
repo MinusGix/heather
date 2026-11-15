@@ -27,6 +27,8 @@ import linux_world_while;
 import rt_reflect;
 import rt_io_reflect;
 import rt_io_reflect_loop;
+import runtime;
+import rt_io_bridge;
 
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
@@ -104,4 +106,75 @@ fn echo_bridge(io: Io, buf: List<BitVec(8)>) →
 // The reflector reads the surface method into the program written above.
 theorem echo_reflected(): True {
     by reflects_io_loop_as(["Io::echo_all"], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
+}
+
+fn no_lents() → List<Lent> { [] }
+
+// The same bridge, written by the reflector.
+theorem echo_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::echo_all(io, buf), echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io))
+{
+    by io_loop_bridge("Io::echo_all", [], [], "wd", "no_lents")
+}
+
+// Two loops one after the other, and parameters no loop threads: the
+// bridge reads those from the environment before each loop, and the
+// second loop's bridge is the first's rest.
+fn Io::write_out_twice(io: Io, buf: List<BitVec(8)>, k: BitVec(64)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut n: BitVec(64) = k;
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let w = io.write_from(Io::stdout(), buf, BitVec::ofNat(0), n);
+        n := BitVec::ofNat(0);
+    }
+    let mut m: BitVec(64) = k;
+    while BitVec::ofNat(0).unsigned_lt_bit(m) {
+        let w = io.write_from(Io::stdout(), buf, BitVec::ofNat(0), m);
+        m := w;
+    }
+    Pointed::ret(Mutated(io, m))
+}
+
+fn twice_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Var(0), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(),
+            ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 4, 0, 2], ETm::Let(Lit(Word(64), 0), ETm::Pure(Lit(Word(64), 0)))))),
+            [0, 5, 6],
+            ELoop::Seq(ETm::Let(Var(1), ETm::Pure(Lit(Word(64), 0))),
+                ELoop::While(going(),
+                    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 5, 0, 2], ETm::Pure(Lit(Word(64), 0))))),
+                    [0, 4, 5, 6],
+                    ELoop::Done(ETm::Pure(Var(0)))))))
+}
+
+theorem twice_reflected(): True {
+    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [LoopFun([Bytes(0), Word(64)], Word(64), twice_prog())])
+}
+
+theorem twice_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_prog().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
+{
+    by io_loop_bridge("Io::write_out_twice", [], [], "wd", "no_lents")
+}
+
+// A negative control: the bridge is checked against the statement, so a
+// program the function is not (the first loop keeps its old count) is
+// refused.
+fn twice_wrong() → ELoop {
+    ELoop::Seq(ETm::Let(Var(0), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(),
+            ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 4, 0, 2], ETm::Let(Lit(Word(64), 0), ETm::Pure(Lit(Word(64), 0)))))),
+            [3, 5, 6],
+            ELoop::Seq(ETm::Let(Var(1), ETm::Pure(Lit(Word(64), 0))),
+                ELoop::While(going(),
+                    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 5, 0, 2], ETm::Pure(Lit(Word(64), 0))))),
+                    [0, 4, 5, 6],
+                    ELoop::Done(ETm::Pure(Var(0)))))))
+}
+
+// expect-error: the tactic returned a proof of
+theorem twice_wrong_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_wrong().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
+{
+    by io_loop_bridge("Io::write_out_twice", [], [], "wd", "no_lents")
 }
