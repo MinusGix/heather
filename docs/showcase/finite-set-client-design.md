@@ -325,4 +325,4 @@ for seeing whether the basic client experience works.
 
 Validation in this round is mathematical inspection and repository/API/source
 comparison, not a Heather proof check. No runnable counterpart exists yet.
-Sources for the broader design are in [the reading guide](setoid-transfer-references.md).
+Sources for the broader design are in [the reading guide](setoids.md).

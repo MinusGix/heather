@@ -36,7 +36,7 @@ Scope:
 
 ## Log
 
-- 2026-10-31: LANDED the search's end (docs/library/creal-transcendental-round.md,
+- 2026-10-31: LANDED the search's end (docs/library/creal.md,
   "The search ends"). `F.Cell(x, h, k)` / `F.OffGrid(x)` state the gap against
   the half-unit grid, which holds every breakpoint of every mode. That is
   stronger than per-mode `Breakpoint`, and it needs no case split.

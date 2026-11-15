@@ -2,7 +2,7 @@
 
 Date: 2026-10-12. Owner: [ring-normalization](../../issues/ring-normalization.md).
 The client that asked for it is the rationals round
-([setoid-rationals-round](../showcase/setoid-rationals-round.md), "Where the proof text
+([setoid-rationals-round](../showcase/setoids.md), "Where the proof text
 went"): a third of `lib/std/num/rat.hthr` was monomial rearrangement.
 
 - [`lib/std/tactic/ring.hthr`](../../lib/std/tactic/ring.hthr): the syntax, the normalizer and

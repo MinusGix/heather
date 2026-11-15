@@ -15,7 +15,7 @@ the library has no `Prop`, so the witness *is* data. Opacity is the only
 thing hiding it.
 
 The regular Cauchy reals hit this first ([[regular-cauchy-reals]],
-docs/library/regular-cauchy-reals-round.md "Computation"). A `≈` proof's start
+docs/library/creal.md "Computation"). A `≈` proof's start
 index, a `<` proof's gap and `lt_cotrans`'s branch are what a client
 computes with: an inverse reads the gap, and a limit reads moduli. The
 round's workaround is to write every such proof as a `fn`, and to turn
@@ -124,4 +124,4 @@ declarations that unfolded it.
     - Two tests moved by design: `check_reports_mismatch`'s stuck-projection fixture is an axiom now (a theorem's witness computes), and the Nat-suite golden hash moved because Ψ's printed form gained the `sealed` list.
     - Not done, owing nothing: loading kept proofs lazily from the image (not needed at today's sizes), and turning the `fn` deciders back into theorems (design note §6).
 - 2026-10-16: Full suite found the classifier's other failure mode. Spelling a decoded statement to recurse into it re-evaluated `CodeResident` over the wc program's bytes (a conjunction per byte) at every level and ran the wc certificate build out of memory. The classifier now walks the value domain under fresh variables with one fuel budget and a node bound, and **an unsettled statement keeps its proof out**: a kept proof is run wherever an elimination is stuck on it, so "unknown" must mean opaque, not kept. The wc build then passes; it keeps 338 proofs (native run triples, which carry data), none opened, at a peak RSS roughly a tenth above master. Split out: [[sealed-proof-memory]].
-- 2026-11-05: gardener: cites a file it shares with [[native-tool-test-cold-certificate-rail]] (`crates/elab/src/sealing.rs`, `docs/kernel/theorem-witness-unfolding-design.md`); [[omega-listed-facts-only]] (`docs/library/regular-cauchy-reals-round.md`).
+- 2026-11-05: gardener: cites a file it shares with [[native-tool-test-cold-certificate-rail]] (`crates/elab/src/sealing.rs`, `docs/kernel/theorem-witness-unfolding-design.md`); [[omega-listed-facts-only]] (`docs/library/creal.md`).

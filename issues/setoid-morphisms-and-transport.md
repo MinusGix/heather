@@ -45,7 +45,7 @@ are one application of the shared heterogeneous relational calculus.
   relational certificates where appropriate without taking over its compiler
   interface, invariants, outcomes, or cost policy.
 
-Reference guide: `docs/showcase/setoid-transfer-references.md`.
+Reference guide: `docs/showcase/setoids.md`.
 
 ## First interface derivation probe
 

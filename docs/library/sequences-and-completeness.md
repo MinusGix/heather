@@ -6,7 +6,7 @@ Round note for `lib/std/analysis/sequence.hthr` and
 milestone `math-reals`). It records what the round built, how the
 completeness notions relate constructively, and what comes next. The
 analysis layers above it are `docs/library/analysis-foundations-design.md`; the
-Cauchy reals below it are `docs/library/creal-completeness-round.md`.
+Cauchy reals below it are `docs/library/creal.md`.
 
 ## 1. What is built
 

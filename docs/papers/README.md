@@ -47,21 +47,21 @@ row when you add a paper.
 | `LIPIcs.TYPES.2019.6.pdf` | Kaposi et al.: *For finitary induction-induction, induction is enough* | |
 | `LIPIcs.TYPES.2020.8.pdf` | Hugunin: *Why not W?* | |
 | `altenkirch-kaposi-kovacs-von-raumer-iit-to-indexed.pdf` | Altenkirch, Kaposi, Kovács, von Raumer: *Reducing inductive-inductive types to indexed inductive types* (was `main (1).pdf`) | |
-| `autoref-lammich-itp2013.pdf` | Lammich: *Automatic data refinement* (ITP 2013) | `docs/showcase/setoid-transfer-references.md` |
+| `autoref-lammich-itp2013.pdf` | Lammich: *Automatic data refinement* (ITP 2013) | `docs/showcase/setoids.md` |
 | `chapman-uustalu-veltri-delay-quotient.pdf` | Chapman, Uustalu, Veltri: *Quotienting the delay monad by weak bisimilarity* | `docs/itrees/interaction-trees-fit.md`, `issues/effects-direction.md` |
 | `compcerto-koenig-shao-pldi2021.pdf` | Koenig, Shao: *CompCertO: compiling certified open C components* (PLDI 2021) | `issues/open-component-refinement.md` |
-| `coqeal-refinements-for-free-cpp2013.pdf` | Cohen, Dénès, Mörtberg: *Refinements for free!* (CPP 2013) | `docs/showcase/setoid-transfer-references.md` |
-| `fiat-adt-synthesis-popl2015.pdf` | Delaware, Pit-Claudel et al.: *Fiat: deductive synthesis of abstract data types in a proof assistant* (POPL 2015) | `docs/showcase/setoid-transfer-references.md` |
+| `coqeal-refinements-for-free-cpp2013.pdf` | Cohen, Dénès, Mörtberg: *Refinements for free!* (CPP 2013) | `docs/showcase/setoids.md` |
+| `fiat-adt-synthesis-popl2015.pdf` | Delaware, Pit-Claudel et al.: *Fiat: deductive synthesis of abstract data types in a proof assistant* (POPL 2015) | `docs/showcase/setoids.md` |
 | `finitaryqiit.pdf` | Kaposi, Kovács, Altenkirch: *Constructing quotient inductive-inductive types* | |
 | `fpottier-segmap.pdf` | Pottier: *Fast thinnings via segment maps* | `docs/surveys/segmap-survey.md` |
-| `generalized-rewriting-sozeau-2009.pdf` | Sozeau: *A new look at generalized rewriting in type theory* | `docs/showcase/setoid-transfer-references.md` |
+| `generalized-rewriting-sozeau-2009.pdf` | Sozeau: *A new look at generalized rewriting in type theory* | `docs/showcase/setoids.md` |
 | `habil.pdf` | Abel: *Normalization by evaluation: dependent types and impredicativity* (habilitation) | |
 | `hal-04114233.pdf` | Martin-Dorel, Melquiond, Roux: *Enabling floating-point arithmetic in the Coq proof assistant* | `docs/surveys/coq-hardware-floats-survey.md` |
 | `implementing-types-hs.pdf` | Christiansen: *Checking dependent types with normalization by evaluation: a tutorial* (Haskell version) | |
 | `jfp-2023.pdf` | Hu, Jang, Pientka: *Normalization by evaluation for modal dependent type theory* (JFP 2023) | |
-| `lifting-transfer-huffman-kuncar-cpp2013.pdf` | Huffman, Kunčar: *Lifting and transfer: a modular design for quotients in Isabelle/HOL* (CPP 2013) | `docs/showcase/setoid-transfer-references.md` |
+| `lifting-transfer-huffman-kuncar-cpp2013.pdf` | Huffman, Kunčar: *Lifting and transfer: a modular design for quotients in Isabelle/HOL* (CPP 2013) | `docs/showcase/setoids.md` |
 | `popl18.pdf` | Abel, Öhman, Vezzosi: *Decidability of conversion for type theory in type theory* (POPL 2018) | |
-| `proofs-for-free-bernardy-jansson-paterson-2012.pdf` | Bernardy, Jansson, Paterson: *Proofs for free* (JFP 2012) | `docs/showcase/setoid-transfer-references.md`, `issues/certified-parametricity.md` |
+| `proofs-for-free-bernardy-jansson-paterson-2012.pdf` | Bernardy, Jansson, Paterson: *Proofs for free* (JFP 2012) | `docs/showcase/setoids.md`, `issues/certified-parametricity.md` |
 | `thesis.pdf` | Nordvall Forsberg: *Inductive-inductive definitions* (PhD thesis) | |
 | `tlca13-small-ir.pdf` | Hancock, McBride, Ghani, Malatesta, Altenkirch: *Small induction recursion* (TLCA 2013) | |
 | `tlca99.pdf` | Dybjer, Setzer: *A finite axiomatization of inductive-recursive definitions* (TLCA 1999) | |

@@ -381,7 +381,7 @@ where a part is important enough.
 theory, regular Cauchy reals (sum, product, inverse, order, Bishop bridge),
 relation-indexed algebra up to semiring and ring layers, orders, setoids and
 relations, finite sets with list and tree backends, bit-vectors, and
-`x⁻¹`/`xⁿ` notation without junk values (`docs/library/regular-cauchy-reals-round.md`,
+`x⁻¹`/`xⁿ` notation without junk values (`docs/library/creal.md`,
 `docs/creal-*-round.md`, `docs/library/rational-order-round.md`), and point-free
 foundations: frames, locale maps, points, nuclei and formal-topology
 presentations over `Type<1>` carriers (`docs/library/frame-locale-design.md`), and the

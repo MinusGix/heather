@@ -1,6 +1,6 @@
 // Rationals as unreduced fractions: the first serious setoid customer
 // (issues/positive-naturals-and-rationals.md, issues/setoid-core-api.md;
-// docs/showcase/setoid-rationals-round.md).
+// docs/showcase/setoids.md).
 //
 // A rational is an integer numerator over a positive `Nat` denominator
 // (`den: Pos<Nat>`: the number `den` and the fact `den_pos: 0 < den`, read

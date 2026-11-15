@@ -1,4 +1,4 @@
-//! `lib/std/num/rat.hthr` (`docs/showcase/setoid-rationals-round.md`): the refusals
+//! `lib/std/num/rat.hthr` (`docs/showcase/setoids.md`): the refusals
 //! that need the checker. Everything the language can state about rationals
 //! is a theorem: the probes at specific values, the instance and `calc`
 //! checks, and the `¬` theorems for the false claims a reader might expect

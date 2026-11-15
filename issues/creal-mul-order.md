@@ -25,4 +25,4 @@ so their product is at least 1/((k+1)(l+1)), then use `lt_of_term`.
 
 ## Log
 
-- 2026-10-18: Done in docs/library/creal-mul-order-round.md: `mul_pos` is termwise (a product reads both factors at one index past both starts, gap = product of gaps via `Rat::inv_succ_mul`; no `lt_of_term`), `mul_nonneg` refutes a gap below zero through Bishop's form and `Rat::mul_nonneg_approx`, and `mul_le_mono_r/l`, `mul_lt_mono_r/l` are those signs on the difference. Sign of the inverse has no issue yet; file it when a client needs it.
+- 2026-10-18: Done in docs/library/creal.md: `mul_pos` is termwise (a product reads both factors at one index past both starts, gap = product of gaps via `Rat::inv_succ_mul`; no `lt_of_term`), `mul_nonneg` refutes a gap below zero through Bishop's form and `Rat::mul_nonneg_approx`, and `mul_le_mono_r/l`, `mul_lt_mono_r/l` are those signs on the difference. Sign of the inverse has no issue yet; file it when a client needs it.

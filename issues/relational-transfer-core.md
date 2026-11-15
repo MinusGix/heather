@@ -40,7 +40,7 @@ Keep this an ordinary, small mathematical API with explicit evidence first.
 - **[[setoid-morphisms-and-transport]]** owns mathematical transport customers.
 - **[[dependent-relational-transport]]** owns dependent fiber machinery.
 
-Reference guide: `docs/showcase/setoid-transfer-references.md`.
+Reference guide: `docs/showcase/setoids.md`.
 
 ## Log
 

@@ -1,6 +1,6 @@
 // Regular Cauchy reals: the first computational presentation of the real
-// numbers (issues/regular-cauchy-reals.md; docs/library/regular-cauchy-reals-round.md,
-// docs/library/creal-dyadic-round.md).
+// numbers (issues/regular-cauchy-reals.md; docs/library/creal.md,
+// docs/library/creal.md).
 //
 // A real is a sequence of dyadic rationals with its rate of convergence
 // written in: the n-th term is meant to be within 2^-n of the number, so any
@@ -34,7 +34,7 @@
 // reads further out by the bit width of its factors' canonical bound, and an
 // inverse by that of its argument's gap from zero, each then rounded. The
 // reals are complete: a regular sequence of reals converges to its diagonal,
-// a limit given as data (docs/library/creal-completeness-round.md).
+// a limit given as data (docs/library/creal.md).
 //
 // Calling convention: as at `Rat`, a lemma whose every `CReal` is named by
 // one of its hypotheses takes them implicitly; any other takes the first as
@@ -1915,7 +1915,7 @@ theorem CReal::pow_two(self x: CReal): x ^ 2 ≈ x * x { CReal::mul_respects(x.p
 theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(0) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
 
 // ---------------------------------------------------------------------------
-// Order and multiplication (docs/library/creal-mul-order-round.md). A product's
+// Order and multiplication (docs/library/creal.md). A product's
 // term is its factors' product at one index a, at or past its own, within a
 // rounding. A positive product needs no estimate beyond that: past both
 // gaps' starts each factor is at least its gap, the product of the terms
@@ -2480,7 +2480,7 @@ evidence theorem CReal::apart_by_nlinarith({x: CReal}, h: 0 < x := nlinarith): x
 evidence theorem CReal::apart_by_nlinarith_neg({x: CReal}, h: x < 0 := nlinarith): x.Apart(0) { Inl(h) }
 
 // ---------------------------------------------------------------------------
-// Completeness (docs/library/creal-completeness-round.md). A sequence of reals is
+// Completeness (docs/library/creal.md). A sequence of reals is
 // regular when its m-th and n-th reals are within 2^-m + 2^-n, the rate a
 // real's own terms keep, and it converges to y at the same rate. Every
 // regular sequence of reals has a limit, read off the diagonal: the limit's

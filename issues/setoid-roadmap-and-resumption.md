@@ -20,7 +20,7 @@ Keep issues open to record unfinished work. This pause is a prioritization decis
 - Explicit named-function compatibility requests with certificate reuse and resumable obligations; branch support currently uses a checked choice combinator.
 - Computation can take operations while theorems take laws. Large dependent dictionary conversion remains a tracked cost limitation.
 
-Baseline commits: `74acfbd`, `e772feb`, `801b84c`. Latest verified implementation: 2,418 tests passed, 0 failed, 5 ignored, plus both derivation CLI showcases. Entry documents: `docs/showcase/setoid-author-client-round.md`, `docs/showcase/setoid-second-backend-round.md`, `docs/showcase/derive-set-functions-round.md`.
+Baseline commits: `74acfbd`, `e772feb`, `801b84c`. Latest verified implementation: 2,418 tests passed, 0 failed, 5 ignored, plus both derivation CLI showcases. Entry documents: `docs/showcase/setoids.md`, `docs/showcase/setoids.md`, `docs/showcase/derive-set-functions-round.md`.
 
 ## Focused follow-ups captured at the pause
 
@@ -64,7 +64,7 @@ At resumption, record the concrete operation/client, chosen relations, observati
 
 ## Log
 
-- 2026-10-10: Resumed at user direction with rationals as the client (docs/showcase/setoid-rationals-round.md). Recorded per "At resumption": the client is unreduced `Rat` (lib/std/num/rat.hthr) over `Pos` (lib/std/pos.hthr); the relation is cross-multiplication `≈`; the observations that must stay valid are + * - inv ≤ and the `ofInt` embedding, with the denominator proved not to be one; the acceptance measure is a client (docs/showcase/rat_client.hthr) that rewrites with `calc` over `≈` and `rel_cong` and never opens a fraction. The existing setoid tooling needed no change. The cost went to ring rearrangement ([[ring-normalization]]) and omega restatements ([[omega-unfolds-defined-propositions]]). The next native-side client is [[same-defined-state-setoid]], after [[native-straight-code-triples]].
+- 2026-10-10: Resumed at user direction with rationals as the client (docs/showcase/setoids.md). Recorded per "At resumption": the client is unreduced `Rat` (lib/std/num/rat.hthr) over `Pos` (lib/std/pos.hthr); the relation is cross-multiplication `≈`; the observations that must stay valid are + * - inv ≤ and the `ofInt` embedding, with the denominator proved not to be one; the acceptance measure is a client (docs/showcase/rat_client.hthr) that rewrites with `calc` over `≈` and `rel_cong` and never opens a fraction. The existing setoid tooling needed no change. The cost went to ring rearrangement ([[ring-normalization]]) and omega restatements ([[omega-unfolds-defined-propositions]]). The next native-side client is [[same-defined-state-setoid]], after [[native-straight-code-triples]].
 - 2026-10-13: The native client, [[same-defined-state-setoid]], is done. `SameDefinedState` became `=` pulled back along `erase_af`, with an `Equivalence` instance, `≈` designated at `MachineState`, and `evidence theorem` certificates that `rel_cong` finds. The existing tooling needed no change. The cost it surfaced is [[setoid-surface-kernel-cost]].
 - 2026-10-23: For quotients that have normal forms, constructors with conditions (Arend) are a kernel alternative to setoids, on record as [[constructor-conditions]] (docs/surveys/arend-survey.md §3).
 - 2026-11-05: gardener: cites a file it shares with [[class-inherited-field-implementations]] (`lib/std/num/rat.hthr`); [[positivity-evidence]] (`lib/std/pos.hthr`); [[ring-certificate-kernel-cost]] (`lib/std/num/rat.hthr`).

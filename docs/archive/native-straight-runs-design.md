@@ -333,7 +333,7 @@ for the prologue and the spill's setup and fell for the total row.
 Two things decided the shape:
 
 - **`omega` stays out of a phase's term.** It reads every hypothesis in
-  scope (`docs/library/creal-multiplication-round.md` met the same with `Rat`
+  scope (`docs/library/creal.md` met the same with `Rat`
   facts), and inside a stretch's leaf that scope holds the stretch's spelled
   state. In `keep_runs` two `omega`s for the count's bounds were three
   quarters of its kernel steps; as small lemmas (`two_or_more`,

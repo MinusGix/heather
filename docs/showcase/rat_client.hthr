@@ -1,4 +1,4 @@
-// Rationals as a setoid client (docs/showcase/setoid-rationals-round.md).
+// Rationals as a setoid client (docs/showcase/setoids.md).
 //
 // The proofs below never look inside a fraction. They use the laws
 // `std/rat` states modulo `≈` and the same relational tools the finite-set

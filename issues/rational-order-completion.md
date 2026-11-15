@@ -7,7 +7,7 @@ updated: 2026-10-14
 ---
 
 Residue of [[positive-naturals-and-rationals]] (2026-10-10 round,
-docs/showcase/setoid-rationals-round.md). `lib/std/num/rat.hthr` has `≤` (refl, trans,
+docs/showcase/setoids.md). `lib/std/num/rat.hthr` has `≤` (refl, trans,
 antisymmetry modulo `≈`, total, respects `≈`), right addition monotonicity and
 non-negative products. Still missing, and wanted by the real-number probes:
 

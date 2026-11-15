@@ -28,5 +28,5 @@ equality.
 
 ## Log
 
-- 2026-10-17: `≤` landed with the multiplication round (docs/library/creal-multiplication-round.md): `CReal::Le` is `¬(y < x)` with reflexivity, transitivity, the mixed transitivities with `<`, antisymmetry modulo `≈` (tightness), `le_respects`, the embedding both ways, `Preorder` and the mixed `Trans` pairs. Remaining here: the Bishop bridge and `add_lt_mono`/`add_le_mono`/positivity of a sum.
-- 2026-10-17: Bishop bridge both ways for ≈ (`same_of_bishop`/`bishop_of_same`) and for ≤ (`le_of_bishop`/`bishop_of_le`, Bishop's pointwise order), `add_lt_mono`/`add_le_mono` with their mixed forms and cancellation, Bishop's splitting `add_lt_cancel`, and the signs of a sum (docs/library/creal-order-round.md). Products against the order moved to [[creal-mul-order]].
+- 2026-10-17: `≤` landed with the multiplication round (docs/library/creal.md): `CReal::Le` is `¬(y < x)` with reflexivity, transitivity, the mixed transitivities with `<`, antisymmetry modulo `≈` (tightness), `le_respects`, the embedding both ways, `Preorder` and the mixed `Trans` pairs. Remaining here: the Bishop bridge and `add_lt_mono`/`add_le_mono`/positivity of a sum.
+- 2026-10-17: Bishop bridge both ways for ≈ (`same_of_bishop`/`bishop_of_same`) and for ≤ (`le_of_bishop`/`bishop_of_le`, Bishop's pointwise order), `add_lt_mono`/`add_le_mono` with their mixed forms and cancellation, Bishop's splitting `add_lt_cancel`, and the signs of a sum (docs/library/creal.md). Products against the order moved to [[creal-mul-order]].

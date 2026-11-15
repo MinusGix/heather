@@ -10,7 +10,7 @@ The module is `lib/std/algebra/ordered_field.hthr`; its instances are at the end
 
 The two carriers were written before the interface, and the interface is
 what they turned out to have in common
-([regular-cauchy-reals-round](regular-cauchy-reals-round.md), "What the
+([regular-cauchy-reals-round](creal.md), "What the
 ordered-field interface learns"):
 
 - a setoid `≈` that is an `Equivalence`, never `=`;

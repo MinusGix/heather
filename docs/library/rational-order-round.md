@@ -1,6 +1,6 @@
 # The rationals' order, completed
 
-Date: 2026-10-14. Follows [setoid-rationals-round](../showcase/setoid-rationals-round.md),
+Date: 2026-10-14. Follows [setoid-rationals-round](../showcase/setoids.md),
 which left `Rat` with `≤`, its preorder laws modulo `≈`, right addition
 monotonicity and non-negative products. This round adds what the
 real-number probes ([regular-cauchy-reals](../../issues/regular-cauchy-reals.md))
@@ -98,7 +98,7 @@ witnesses. They are `theorem`s whose statements carry data, so a client
 that projects the witness computes it
 ([theorem-witness-unfolding](../../issues/theorem-witness-unfolding.md)).
 Before that landed a `theorem` was opaque and the claim held only of the
-source; [regular-cauchy-reals-round](regular-cauchy-reals-round.md) made
+source; [regular-cauchy-reals-round](creal.md) made
 them `fn`s for a while.
 
 `inv_succ(n)` has its denominator positive by construction (`Pos(n)`), so its

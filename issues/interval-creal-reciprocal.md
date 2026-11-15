@@ -18,7 +18,7 @@ zero (`Interval::below(point(0), I)`) gives `0 < a.eval()` by
 `Interval::lt_of_below_real`, which is `Apart(0)`; so an `RInv(a, h)` node
 whose `h` the tactic builds from a search on `a` alone, and whose
 containment is `recip_has` read at `CReal` (the rational proof's
-`recip_le_recip` with `CReal`'s inverse order facts, `docs/library/creal-inverse-round.md`).
+`recip_le_recip` with `CReal`'s inverse order facts, `docs/library/creal.md`).
 
 Scope:
 
