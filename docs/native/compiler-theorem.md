@@ -100,8 +100,7 @@ because `clamp_within` proved it of the source.
 Today's certificates spell `Prog::Returns` out (their `_returns` theorems are
 `compiled_returns` at the program, which is `Prog::Returns` with no step
 between: `returns_is_compiled_returns`). Stating them through the names is
-a change to `crates/cli/src/native/verified.rs`, left until the optimizer's
-branch (PR #622), which rewrites that file, has merged.
+a change to `crates/cli/src/native/verified.rs` that has not been made.
 
 ## Functions of spans
 
@@ -179,10 +178,28 @@ Beyond the kernel, the theorem rests on these:
 - **Programs the lowering refuses.** The theorem says nothing about them,
   and `compile-x86` writes nothing for them.
 - **Speed.** Nothing here is about how fast the code is.
-- **The optimizer's passes** are proved too (each pass a `Stage` with
-  `run_sound`, composed by `ProgramRewrites`), but they are on PR #622's
-  branch, where the certificate states them through `_through` forms of the
-  theorems above. This note gains a section when that branch merges.
+- **The optimizer is not in this trust list**: it is proved, not trusted
+  (below).
+
+## Through the optimizer
+
+`compile-x86` optimizes a program lent spans before lowering it
+(`docs/native/optimizer-design.md`). Each pass is a `Stage` whose rewrite of
+a function is proved to do nothing the old function could not
+(`Rewrites`, `function_ir_stage.hthr`); `Stage::run_sound` lifts that to the
+program, and pruning the functions nothing reaches is proved at the ones
+reached (`prune_rewrites`, `function_ir_prune.hthr`). The certificate states the composition as
+`ProgramRewrites(source, optimized, f)`: whatever the published program may
+return and leave called at `f`, the optimized one may. The return theorems
+then have `_through` forms (`compiled_returns_lent_through`,
+`compiled_returns_unlent_through`, `Ending::returns_written_through`,
+`Ending::returns_marked_through`) that take both programs: the code is the
+optimized program's lowering, and the answer is the source program's run.
+So the statement a reader quotes is unchanged by optimizing: the bytes still
+compute the source function, and the passes, the search that plans them and
+their plans are not trusted: the kernel checks that each stage makes the
+optimized function from its plan. A function the search finds nothing for
+is kept as it is (`HEATHER_OPTIMIZE=off` turns the optimizer off).
 
 ## Where the pieces are
 
