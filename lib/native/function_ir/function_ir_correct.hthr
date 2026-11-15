@@ -140,6 +140,13 @@ fn Prog::ReturnsOver<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64)
         machine.stack.AnsweredOver(lending, answer.word, answer.buffers))
 }
 
+// The same wherever the code is loaded and whatever follows it: what a
+// certificate states of a function of spans.
+fn Prog::ComputesOver<M>(self code: Prog, machine: Machine<M>, top: Nat, lending: Lending, f: Nat, arguments: List<BitVec(64)>,
+    before: Buffers(), answer: Ending) → Type {
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.ReturnsOver(machine, origin, last, top, lending, f, arguments, before, answer)
+}
+
 // The compiler is correct over spans. Whenever `lower_program_lent` turns
 // a program's functions into code, the functions are evaluable, and every
 // store they make is into a buffer `marks` marks (checked by evaluation),
@@ -159,3 +166,4 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
         machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
         program_run(functions, before, f, arguments), refl)
 }
+
