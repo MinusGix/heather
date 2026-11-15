@@ -705,6 +705,51 @@ impl Parser {
         self.toks[from..self.pos].iter().any(|t| matches!(&t.kind, TokKind::Ident(n) if n == name))
     }
 
+    /// Whether an `on` discharge of a block enclosing this point names
+    /// `name`: those blocks' goals are raised inside the branches being
+    /// parsed, so their proofs see what the branches bind. Read ahead over
+    /// the tokens: an `on` counts when it sits at the shallowest bracket
+    /// depth reached so far, which is an enclosing block's own level (a
+    /// later sibling's or a later item's `on`s are deeper). Conservative
+    /// like [`Self::names_from`].
+    fn names_in_enclosing_ons(&self, name: Option<&str>) -> bool {
+        let Some(name) = name else { return false };
+        let (mut depth, mut floor) = (0i64, 0i64);
+        let mut j = self.pos;
+        while j < self.toks.len() {
+            match &self.toks[j].kind {
+                TokKind::LBrace | TokKind::LParen | TokKind::LBracket => depth += 1,
+                TokKind::RBrace | TokKind::RParen | TokKind::RBracket => {
+                    depth -= 1;
+                    floor = floor.min(depth);
+                }
+                TokKind::Ident(word) if word == "on" && depth == floor => {
+                    // The discharge runs to its `;` at this level.
+                    let mut inner = 0i64;
+                    j += 1;
+                    while j < self.toks.len() {
+                        match &self.toks[j].kind {
+                            TokKind::LBrace | TokKind::LParen | TokKind::LBracket => inner += 1,
+                            TokKind::RBrace | TokKind::RParen | TokKind::RBracket => {
+                                if inner == 0 { break }
+                                inner -= 1;
+                            }
+                            TokKind::Semi if inner == 0 => break,
+                            TokKind::Ident(n) if n == name => return true,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    continue;
+                }
+                TokKind::Eof => break,
+                _ => {}
+            }
+            j += 1;
+        }
+        false
+    }
+
     fn hygienic(&mut self, kind: &str) -> String {
         let id = self.next_hygienic;
         self.next_hygienic += 1;
@@ -6372,7 +6417,9 @@ impl Parser {
     /// }
     /// ```
     ///
-    /// (a branch that never names `h` binds none), so `h: P` and `h: ¬P` as
+    /// (a branch that never names `h` binds none, unless an enclosing
+    /// block's `on` discharge names it: its goal is raised in the branch),
+    /// so `h: P` and `h: ¬P` as
     /// before, and the `runtime fn` reflector, the
     /// measure obligations and `split_all` read the bit the code tests, never
     /// the `P ∨ ¬P` decision.
@@ -6441,7 +6488,11 @@ impl Parser {
             return self.err("an `if` needs an `else { … }` branch");
         };
 
-        let no_names = self.names_from(no_from, evidence.as_deref());
+        // An enclosing block's `on ?decN := …` proves a goal raised inside
+        // a branch, so a name it uses is bound in both.
+        let in_ons = self.names_in_enclosing_ons(evidence.as_deref());
+        let yes_names = yes_names || in_ons;
+        let no_names = self.names_from(no_from, evidence.as_deref()) || in_ons;
         let ev_span = condition.span;
         // The condition's own span on every lowered call's head: it is what
         // marks the call as a lowered condition for the elaborator's

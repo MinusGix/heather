@@ -1011,9 +1011,10 @@ impl Checking<'_> {
                         // Name the side condition that failed, not only the goal
                         // (§5): each one alone, in the context the bundle had.
                         for obligation in &generated.obligations {
+                            let (statement, proof) = obligation.alone();
                             let probe = parse(&format!(
-                                "{{\n{}\nhave __bv_side: ({}) = omega;\n__bv_side\n}}",
-                                generated.prelude, obligation.statement
+                                "{{\n{}\nhave __bv_side: ({statement}) = {proof};\n__bv_side\n}}",
+                                generated.prelude
                             ))?;
                             if let Err(side) = self.generated_scope(|me| me.elab_infer(cx, &probe)) {
                                 return err(

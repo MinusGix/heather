@@ -92,6 +92,21 @@ ranges and comparison bridges in §3 are already available). Balanced, because
 each nesting level costs the kernel's conversion stack; before the arithmetic
 facts, because an `omega` after them would reflect every one of them.
 
+A fact in scope can be about a composite word: `1 < n - i`, or a Nat fact
+over `(n - i).toNat()`. Such a *hypothesis word*'s `toNat` is an atom to an
+`omega` in the entry context, which cannot relate it to `n` and `i`, so a
+side condition that needs it (`i + 2 <= n`, for `n - (i + 2)`'s no-borrow)
+was unprovable there. The side conditions are therefore proved in stages: the
+`k`th hypothesis word's own side conditions given the facts of the hypothesis
+words before it, then the rest given every hypothesis word's fact. A stage
+with facts is stated like the goal, over Nat variables
+(`(w: Nat) → w + Q = P → bridges[w] → conditions`), and proved by `omega`
+before any fact exists; once its words' facts are emitted it is applied to
+them, and its conjunction is projected like the first stage's. A word built
+from a literal is never a hypothesis word: its value is the literal. With no
+hypothesis word there is one stage, as before. A failed proof re-checks each
+side condition as its stage stated it (§5).
+
 ## 3. The walk
 
 From every `toNat(n, t)` in the goal and in the Nat facts in scope, the walk
@@ -135,7 +150,9 @@ A word that appears only in a fact in scope, not in the goal, is optional: it
 may overflow or borrow where the goal's words do not. The first attempt
 restates every such fact untried; only if the checker refuses the proof does
 the careful attempt (§5) try each fact's new side conditions first and leave
-the fact alone when one fails. Trying them first had cost an `omega` per new
+the fact alone when one fails. A fact left alone is tried again once a later
+one is taken, since that one's comparison may be what its side conditions
+needed (`1 < n - i` written before `i < n`). Trying them first had cost an `omega` per new
 side condition on every call, and the bundle then proved each one again.
 
 Byte decomposition is shared by the two halves of a split. Literal widths
@@ -166,7 +183,9 @@ equating the operand's value with the Nat it was built from.
   goals reduce to equality of their Nat values through `ofNat_toNat`;
   equality with `ofNat(c)` uses a value equation directly. An unsigned
   comparison equal to `True` or `False`, in either orientation, reduces to
-  the corresponding Nat order. Each bridge is an ordinary lemma application
+  the corresponding Nat order, as do the `<=` bit equal to a constructor and
+  the propositions `a < b` and `a <= b` at a word (`unsigned_le_of_true`,
+  `unsigned_lt_of_nat`, …). Each bridge is an ordinary lemma application
   over a checking-position `bv_omega` subgoal.
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
   and definitions that step to them. Byte extraction and comparison bridges
