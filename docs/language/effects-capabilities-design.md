@@ -478,8 +478,9 @@ reflector refusing a body that does not thread `io` straight through.
 `Effect` is `Reads(cap)`, `Writes(cap)`, `Opens(cap)`, `Closes`, each with
 operand and result codes (`Effect::params`, `Effect::results`) in `rt`'s
 `Ty`: words and `Bytes(cap)` buffers, as `Source`'s `CallShape`s are. A
-read lands its bytes in a named buffer (`fill`) and returns a count or a
-negated errno; a write names a span. `Effect::sem` is *defined by* the
+read lands its bytes in a named buffer from an offset word (`fill_at`, at
+most what the buffer holds past it) and returns a count or a negated
+errno; a write names a span. `Effect::sem` is *defined by* the
 word-level `mut self` methods effectful code calls (`Io::read_into`,
 `Io::write_from`, `Io::open_path`, `Io::close_fd`), so a pin unfolds onto
 the elaborated body node for node: `echo_reflects`, an `EFun` against the

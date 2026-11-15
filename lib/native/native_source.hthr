@@ -20,7 +20,7 @@
 // nodes read and write the buffers in place (`function_ir_state`'s `run`).
 // A buffer starts as its initial bytes, then zeroes. A call reads
 // and writes buffers whole and never faults: a read asks for at most what
-// its buffer holds and lands at the buffer's start, a write sends the span
+// its buffer holds past its offset and lands there, a write sends the span
 // its buffer holds, and an open or a stat names the path its buffer holds,
 // up to its length or its first NUL. A failed call leaves its errno
 // negated in its result word, as Linux leaves it in RAX. The command line is
@@ -147,7 +147,7 @@ fn Env::compute(self env: Env, call: Writers(), region: StructuredRegion) → En
 // A call to Linux, its operands named by ids in the environment: words, and
 // the buffers it reads from or lands in.
 inductive CallShape {
-    Reads(fd: Nat, buf: Nat, len: Nat, result: Nat),
+    Reads(fd: Nat, buf: Nat, at: Nat, len: Nat, result: Nat),
     Writes(fd: Nat, buf: Nat, from: Nat, len: Nat, result: Nat),
     Opens(path: Nat, len: Nat, result: Nat),
     Closes(fd: Nat, result: Nat),
@@ -164,6 +164,26 @@ fn span(buffer: List<BitVec(8)>, from, len: Nat) → List<BitVec(8)> { buffer.dr
 // Bytes landed at a buffer's start; the buffer keeps its length.
 fn fill(buffer, bytes: List<BitVec(8)>) → List<BitVec(8)> { (bytes ++ buffer.drop(bytes.len())).take(buffer.len()) }
 
+// Bytes landed in a buffer from index `at`, as many as fit past it; the
+// buffer keeps its length, and an offset past its end lands nothing.
+fn fill_at(buffer: List<BitVec(8)>, at: Nat, bytes: List<BitVec(8)>) → List<BitVec(8)> { buffer.take(at) ++ fill(buffer.drop(at), bytes) }
+
+// At offset 0 it is `fill`.
+theorem fill_at_zero(buffer, bytes: List<BitVec(8)>): fill_at(buffer, 0, bytes) = fill(buffer, bytes) {
+    match buffer { Nil => refl, Cons(_, _) => refl }
+}
+
+// An offset past the end lands as the end does.
+theorem fill_at_within(buffer, bytes: List<BitVec(8)>): (at: Nat) → fill_at(buffer, at, bytes) = fill_at(buffer, at.min(buffer.len()), bytes) {
+    match buffer {
+        Nil => λ at => refl,
+        Cons(h, rest) => λ at => match at {
+            Zero => refl,
+            Succ(k) => List::cong_cons(h, fill_at_within(rest, bytes, k)),
+        },
+    }
+}
+
 // A path's bytes up to its first NUL: what Linux reads of it, a C string
 // ending at the NUL (`CStringAt`), so a path the source names past a NUL
 // is the part before it.
@@ -177,7 +197,7 @@ fn List::before_nul(self bytes: List<BitVec(8)>) → List<BitVec(8)> {
 // What the call asks Linux, read off the environment.
 fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
     match shape {
-        Reads(fd, buf, len, _) => ReadCmd(env.word(fd), env.number(len).min(env.buffer(buf).len())),
+        Reads(fd, buf, at, len, _) => ReadCmd(env.word(fd), env.number(len).min(env.buffer(buf).len() - env.number(at))),
         Writes(fd, buf, from, len, _) => WriteCmd(env.word(fd), span(env.buffer(buf), env.number(from), env.number(len))),
         Opens(path, len, _) => OpenCmd(env.buffer(path).take(env.number(len)).before_nul()),
         Closes(fd, _) => CloseCmd(env.word(fd)),
@@ -191,8 +211,8 @@ fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
 // or a stat's bytes landed in its buffer.
 fn CallShape::answer(self shape: CallShape, env: Env) → shape.cmd(env).Resp() → Env {
     match shape {
-        Reads(_, buf, _, result) => λ (r: ReadResult) => match r {
-            ReadBytes(bytes) => env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(bytes.len())),
+        Reads(_, buf, at, _, result) => λ (r: ReadResult) => match r {
+            ReadBytes(bytes) => env.set_buffer(buf, fill_at(env.buffer(buf), env.number(at), bytes)).set_word(result, count_word(bytes.len())),
             ReadFailed(errno) => env.set_word(result, errno_word(errno)),
         },
         Writes(_, _, _, _, result) => λ (r: WriteResult) => match r {
@@ -397,7 +417,7 @@ record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, ma
 // The words a call names: every operand but its buffers.
 fn CallShape::words(self shape: CallShape) → List<Nat> {
     match shape {
-        Reads(fd, _, len, result) => [fd, len, result],
+        Reads(fd, _, at, len, result) => [fd, at, len, result],
         Writes(fd, _, from, len, result) => [fd, from, len, result],
         Opens(_, len, result) => [len, result],
         Closes(fd, result) => [fd, result],

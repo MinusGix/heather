@@ -24,7 +24,7 @@ import rt_io_reflect;
 // Read up to 64 bytes from stdin into the buffer, and write what came back
 // to stdout: the write's result word.
 fn Io::echo_once(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
-    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
     let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
     w
 }
@@ -35,17 +35,19 @@ fn echo_rt() → EFun {
         // buf
         Let(Lit(Word(64), 0),
         // stdin, buf
+        Let(Lit(Word(64), 0),
+        // at, stdin, buf
         Let(Lit(Word(64), 64),
-        // max, stdin, buf
-        Invoke(Reads(0), [1, 2, 0],
-        // result, buf′, max, stdin, buf
+        // max, at, stdin, buf
+        Invoke(Reads(0), [2, 3, 1, 0],
+        // result, buf′, max, at, stdin, buf
         Let(Lit(Word(64), 1),
         // stdout, result, buf′, …
         Let(Lit(Word(64), 0),
         // zero, stdout, result, buf′, …
         Invoke(Writes(0), [1, 3, 0, 2],
         // written, …
-        Pure(Var(0)))))))))
+        Pure(Var(0))))))))))
 }
 
 // The reflector reads it off the elaborated body: the world chain gives the
@@ -71,8 +73,8 @@ theorem echo_result(): echo_rt().meaning(ETm::plain_world(), [])(piped())(zeros(
 // another program: the pin refuses it.
 fn echo_stale_rt() → EFun {
     EFun([Bytes(64)], Word(64),
-        Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(0), [1, 2, 0],
-        Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(64), [1, 7, 0, 2], Pure(Var(0)))))))))
+        Let(Lit(Word(64), 0), Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(0), [2, 3, 1, 0],
+        Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(64), [1, 8, 0, 2], Pure(Var(0))))))))))
 }
 // expect-error(kernel): the kernel rejected `echo_stale_misreflects`: NotConvertible
 theorem echo_stale_misreflects(io: Io, buf: List<BitVec(8)>):
@@ -86,7 +88,7 @@ theorem echo_stale_misreflects(io: Io, buf: List<BitVec(8)>):
 // pure arithmetic over two answers at the end.
 fn Io::read_file(mut self io: Io, path: List<BitVec(8)>, buf: List<BitVec(8)>) → BitVec(64) {
     let fd = io.open_path(path, BitVec::ofNat(16));
-    let r = io.read_into(fd, buf, BitVec::ofNat(64));
+    let r = io.read_into(fd, buf, BitVec::ofNat(0), BitVec::ofNat(64));
     let c = io.close_fd(fd);
     r.result.add(c)
 }
@@ -98,13 +100,15 @@ fn read_file_rt() → EFun {
         // sixteen, buf, path
         Invoke(Opens(0), [2, 0],
         // fd, …
+        Let(Lit(Word(64), 0),
+        // at, fd, sixteen, buf, path
         Let(Lit(Word(64), 64),
-        // max, fd, sixteen, buf, path
-        Invoke(Reads(0), [1, 3, 0],
-        // result, buf′, max, fd, …
-        Invoke(Closes, [3],
+        // max, at, fd, sixteen, buf, path
+        Invoke(Reads(0), [2, 4, 1, 0],
+        // result, buf′, max, at, fd, …
+        Invoke(Closes, [4],
         // closed, result, …
-        Pure(Prim(Add(64), [1, 0]))))))))
+        Pure(Prim(Add(64), [1, 0])))))))))
 }
 
 theorem read_file_reflected(): True { by reflects_io_as(["Io::read_file"], [], [], [read_file_rt()]) }

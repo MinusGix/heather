@@ -644,19 +644,20 @@ theorem ETm::word_at_kept(w: Nat, env: Env, id: Nat, v: BitVec(w), k: env.number
 }
 
 // A read's answer, either way it goes.
-theorem ETm::read_answer(env: Env, locs: List<Loc>, fd, b, m, next: Nat, bufv: List<BitVec(8)>, kb: env.buffers.nth(b) = Some(bufv),
-    below: LocsBelow(locs, next), r: ReadResult):
-    (CallShape::Reads(fd, b, m, next).answer(env, r).buffers.nth(b) = Some(Io::landed(bufv, r).buf)) ∧
-        ((CallShape::Reads(fd, b, m, next).answer(env, r).number(next) = Io::landed(bufv, r).result.toNat()) ∧
-            Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, m, next).answer(env, r))) {
+theorem ETm::read_answer(env: Env, locs: List<Loc>, fd, b, at, m, next: Nat, bufv: List<BitVec(8)>, atv: BitVec(64), kb: env.buffers.nth(b) = Some(bufv),
+    ka: env.number(at) = atv.toNat(), below: LocsBelow(locs, next), r: ReadResult):
+    (CallShape::Reads(fd, b, at, m, next).answer(env, r).buffers.nth(b) = Some(Io::landed(bufv, atv.toNat(), r).buf)) ∧
+        ((CallShape::Reads(fd, b, at, m, next).answer(env, r).number(next) = Io::landed(bufv, atv.toNat(), r).result.toNat()) ∧
+            Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, at, m, next).answer(env, r))) {
     match r {
         ReadBytes(bytes) => {
-            let filled = env.set_buffer(b, fill(env.buffer(b), bytes));
-            ⟨trans(List::put_nth_here(b, env.buffers, fill(env.buffer(b), bytes), Nil),
-                    cong_fn(λ (bs: List<BitVec(8)>) => Some(fill(bs, bytes)), env.buffer_of_nth(b, bufv, kb))),
+            let landed = fill_at(env.buffer(b), env.number(at), bytes);
+            let filled = env.set_buffer(b, landed);
+            ⟨trans(List::put_nth_here(b, env.buffers, landed, Nil),
+                    eq2<List<BitVec(8)>, Nat, Option<List<BitVec(8)>>>(λ bs k => Some(fill_at(bs, k, bytes)), env.buffer_of_nth(b, bufv, kb), ka)),
                 ⟨filled.number_set_here(next, count_word(bytes.len())),
                     Loc::same_trans(Loc::forget_all(locs, b), env, filled, filled.set_word(next, count_word(bytes.len())),
-                        Loc::same_set_buffer(locs, env, b, fill(env.buffer(b), bytes)),
+                        Loc::same_set_buffer(locs, env, b, landed),
                         Loc::same_set_word(Loc::forget_all(locs, b), filled, next, count_word(bytes.len()), locs_below_forget(locs, b, next, below)))⟩⟩
         },
         ReadFailed(errno) => ⟨kb, ⟨env.number_set_here(next, errno_word(errno)),
@@ -664,23 +665,26 @@ theorem ETm::read_answer(env: Env, locs: List<Loc>, fd, b, m, next: Nat, bufv: L
     }
 }
 
-theorem ETm::read_lands(env: Env, io: Io, locs: List<Loc>, fd, b, m, next: Nat, fdv: BitVec(64), bufv: List<BitVec(8)>, maxv: BitVec(64),
-    kfd: env.number(fd) = fdv.toNat(), kb: env.buffers.nth(b) = Some(bufv), km: env.number(m) = maxv.toNat(), below: LocsBelow(locs, next)):
-    (Io::call(io, CallShape::Reads(fd, b, m, next).cmd(env)).after = Io::read_into(io, fdv, bufv, maxv).after) ∧
-        ((CallShape::Reads(fd, b, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, m, next).cmd(env)).value).buffers.nth(b) =
-            Some(Io::read_into(io, fdv, bufv, maxv).value.buf)) ∧
-        ((CallShape::Reads(fd, b, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, m, next).cmd(env)).value).number(next) =
-            Io::read_into(io, fdv, bufv, maxv).value.result.toNat()) ∧
-        Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, m, next).cmd(env)).value)))) {
-    let n = maxv.toNat().min(bufv.len());
-    let e_call: (Io::call(io, ReadCmd(env.word(fd), env.number(m).min(env.buffer(b).len()))) = Io::call(io, ReadCmd(fdv, n))) =
-        eq2<BitVec(64), Nat, Mutated<Io, ReadResult>>(λ f k => Io::call(io, ReadCmd(f, k)), ETm::word_of_kept(env, fd, fdv, kfd),
-            eq2<Nat, List<BitVec(8)>, Nat>(λ x bs => x.min(bs.len()), km, env.buffer_of_nth(b, bufv, kb)));
-    let G = λ (M: Mutated<Io, ReadResult>) => (M.after = Io::read_into(io, fdv, bufv, maxv).after) ∧
-        ((CallShape::Reads(fd, b, m, next).answer(env, M.value).buffers.nth(b) = Some(Io::read_into(io, fdv, bufv, maxv).value.buf)) ∧
-        ((CallShape::Reads(fd, b, m, next).answer(env, M.value).number(next) = Io::read_into(io, fdv, bufv, maxv).value.result.toNat()) ∧
-        Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, m, next).answer(env, M.value))));
-    let answered = ETm::read_answer(env, locs, fd, b, m, next, bufv, kb, below, Io::call(io, ReadCmd(fdv, n)).value);
+theorem ETm::read_lands(env: Env, io: Io, locs: List<Loc>, fd, b, at, m, next: Nat, fdv: BitVec(64), bufv: List<BitVec(8)>, atv, maxv: BitVec(64),
+    kfd: env.number(fd) = fdv.toNat(), kb: env.buffers.nth(b) = Some(bufv), ka: env.number(at) = atv.toNat(), km: env.number(m) = maxv.toNat(),
+    below: LocsBelow(locs, next)):
+    (Io::call(io, CallShape::Reads(fd, b, at, m, next).cmd(env)).after = Io::read_into(io, fdv, bufv, atv, maxv).after) ∧
+        ((CallShape::Reads(fd, b, at, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, at, m, next).cmd(env)).value).buffers.nth(b) =
+            Some(Io::read_into(io, fdv, bufv, atv, maxv).value.buf)) ∧
+        ((CallShape::Reads(fd, b, at, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, at, m, next).cmd(env)).value).number(next) =
+            Io::read_into(io, fdv, bufv, atv, maxv).value.result.toNat()) ∧
+        Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, at, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, at, m, next).cmd(env)).value)))) {
+    let n = maxv.toNat().min(bufv.len() - atv.toNat());
+    let e_n: (env.number(m).min(env.buffer(b).len() - env.number(at)) = n) =
+        trans(eq2<Nat, List<BitVec(8)>, Nat>(λ x bs => x.min(bs.len() - env.number(at)), km, env.buffer_of_nth(b, bufv, kb)),
+            cong_fn<Nat, Nat>(λ y => maxv.toNat().min(bufv.len() - y), ka));
+    let e_call: (Io::call(io, ReadCmd(env.word(fd), env.number(m).min(env.buffer(b).len() - env.number(at)))) = Io::call(io, ReadCmd(fdv, n))) =
+        eq2<BitVec(64), Nat, Mutated<Io, ReadResult>>(λ f k => Io::call(io, ReadCmd(f, k)), ETm::word_of_kept(env, fd, fdv, kfd), e_n);
+    let G = λ (M: Mutated<Io, ReadResult>) => (M.after = Io::read_into(io, fdv, bufv, atv, maxv).after) ∧
+        ((CallShape::Reads(fd, b, at, m, next).answer(env, M.value).buffers.nth(b) = Some(Io::read_into(io, fdv, bufv, atv, maxv).value.buf)) ∧
+        ((CallShape::Reads(fd, b, at, m, next).answer(env, M.value).number(next) = Io::read_into(io, fdv, bufv, atv, maxv).value.result.toNat()) ∧
+        Loc::AllSame(Loc::forget_all(locs, b), env, CallShape::Reads(fd, b, at, m, next).answer(env, M.value))));
+    let answered = ETm::read_answer(env, locs, fd, b, at, m, next, bufv, atv, kb, ka, below, Io::call(io, ReadCmd(fdv, n)).value);
     j(sym(e_call), λ M _ => G(M), ⟨refl, answered⟩)
 }
 
@@ -1031,7 +1035,10 @@ fn ETm::called(e: Effect, next: Nat, locs: List<Loc>, ids: List<Nat>) → Option
                 Nil => None,
                 Cons(b, r2) => match r2 {
                     Nil => None,
-                    Cons(m, _) => Some(Called(CallShape::Reads(fd, b, m, next), Cons(InWord(next), Cons(InBuffer(b), Loc::forget_all(locs, b))))),
+                    Cons(at, r3) => match r3 {
+                        Nil => None,
+                        Cons(m, _) => Some(Called(CallShape::Reads(fd, b, at, m, next), Cons(InWord(next), Cons(InBuffer(b), Loc::forget_all(locs, b))))),
+                    },
                 },
             },
         },
@@ -1102,33 +1109,42 @@ theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>,
                 Nil => λ _ => trivial,
                 Cons(b, r2) => match r2 {
                     Nil => λ _ => trivial,
-                    Cons(m, r3) => λ ok env vals io held below => {
-                        let k = Called(CallShape::Reads(fd, b, m, next), Cons(InWord(next), Cons(InBuffer(b), Loc::forget_all(locs, b))));
-                        match args as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), a, Cons(fd, Cons(b, Cons(m, r3)))) →
-                                ETm::Answered(Effect::Reads(c), w, g, vals, io, a, next, k, env) {
-                            Nil => λ never => false_elim(never),
-                            Cons(x, a1) => match a1 as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), Cons(x, a), Cons(fd, Cons(b, Cons(m, r3)))) →
-                                    ETm::Answered(Effect::Reads(c), w, g, vals, io, Cons(x, a), next, k, env) {
-                                Nil => λ never => false_elim(never.right),
-                                Cons(y, a2) => match a2 as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), Cons(x, Cons(y, a)), Cons(fd, Cons(b, Cons(m, r3)))) →
-                                        ETm::Answered(Effect::Reads(c), w, g, vals, io, Cons(x, Cons(y, a)), next, k, env) {
-                                    Nil => λ never => false_elim(never.right.right),
-                                    Cons(z, _) => λ kept => {
-                                        let fdv = Ty::cast(w.tys, Ty::at(g, x), Word(64), Env::get(w.tys, g, vals, x));
-                                        let bufv = Ty::cast(w.tys, Ty::at(g, y), Bytes(c), Env::get(w.tys, g, vals, y));
-                                        let maxv = Ty::cast(w.tys, Ty::at(g, z), Word(64), Env::get(w.tys, g, vals, z));
-                                        let landed = ETm::read_lands(env, io, locs, fd, b, m, next, fdv, bufv, maxv,
-                                            kept.left, kept.right.left, kept.right.right.left, below);
-                                        let env2 = CallShape::Reads(fd, b, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, m, next).cmd(env)).value);
-                                        ⟨landed.left, ⟨⟨landed.right.right.left, ⟨landed.right.left,
-                                                locs_hold_same(w.tys, env, env2, g, Loc::forget_all(locs, b), vals, landed.right.right.right,
-                                                    locs_hold_forget(w.tys, env, b, g, locs, vals, held))⟩⟩,
-                                            ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, b, Succ(next),
-                                                locs_below_mono(locs, next, Succ(next), Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩⟩
+                    Cons(at, r3) => match r3 {
+                        Nil => λ _ => trivial,
+                        Cons(m, r4) => λ ok env vals io held below => {
+                            let ids4 = Cons(fd, Cons(b, Cons(at, Cons(m, r4))));
+                            let k = Called(CallShape::Reads(fd, b, at, m, next), Cons(InWord(next), Cons(InBuffer(b), Loc::forget_all(locs, b))));
+                            match args as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), a, ids4) →
+                                    ETm::Answered(Effect::Reads(c), w, g, vals, io, a, next, k, env) {
+                                Nil => λ never => false_elim(never),
+                                Cons(x, a1) => match a1 as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), Cons(x, a), ids4) →
+                                        ETm::Answered(Effect::Reads(c), w, g, vals, io, Cons(x, a), next, k, env) {
+                                    Nil => λ never => false_elim(never.right),
+                                    Cons(y, a2) => match a2 as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), Cons(x, Cons(y, a)), ids4) →
+                                            ETm::Answered(Effect::Reads(c), w, g, vals, io, Cons(x, Cons(y, a)), next, k, env) {
+                                        Nil => λ never => false_elim(never.right.right),
+                                        Cons(z, a3) => match a3 as λ a => ETm::OperandsKept(w.tys, env, g, vals, Effect::params(Effect::Reads(c)), Cons(x, Cons(y, Cons(z, a))), ids4) →
+                                                ETm::Answered(Effect::Reads(c), w, g, vals, io, Cons(x, Cons(y, Cons(z, a))), next, k, env) {
+                                            Nil => λ never => false_elim(never.right.right.right),
+                                            Cons(u, _) => λ kept => {
+                                                let fdv = Ty::cast(w.tys, Ty::at(g, x), Word(64), Env::get(w.tys, g, vals, x));
+                                                let bufv = Ty::cast(w.tys, Ty::at(g, y), Bytes(c), Env::get(w.tys, g, vals, y));
+                                                let atv = Ty::cast(w.tys, Ty::at(g, z), Word(64), Env::get(w.tys, g, vals, z));
+                                                let maxv = Ty::cast(w.tys, Ty::at(g, u), Word(64), Env::get(w.tys, g, vals, u));
+                                                let landed = ETm::read_lands(env, io, locs, fd, b, at, m, next, fdv, bufv, atv, maxv,
+                                                    kept.left, kept.right.left, kept.right.right.left, kept.right.right.right.left, below);
+                                                let env2 = CallShape::Reads(fd, b, at, m, next).answer(env, Io::call(io, CallShape::Reads(fd, b, at, m, next).cmd(env)).value);
+                                                ⟨landed.left, ⟨⟨landed.right.right.left, ⟨landed.right.left,
+                                                        locs_hold_same(w.tys, env, env2, g, Loc::forget_all(locs, b), vals, landed.right.right.right,
+                                                            locs_hold_forget(w.tys, env, b, g, locs, vals, held))⟩⟩,
+                                                    ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, b, Succ(next),
+                                                        locs_below_mono(locs, next, Succ(next), Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩⟩
+                                            },
+                                        },
                                     },
                                 },
-                            },
-                        }(ok(env, vals, held))
+                            }(ok(env, vals, held))
+                        },
                     },
                 },
             },

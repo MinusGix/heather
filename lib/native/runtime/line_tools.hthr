@@ -109,7 +109,7 @@ fn Io::read_lines(io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), keep_newli
     let mut failed = False;
     let mut going = True;
     while going {
-        let got = io.read_into(Io::stdin(), held, capacity);
+        let got = io.read_into(Io::stdin(), held, 0, capacity);
         if got.result.signed_lt_bit(0) { failed := True; going := False } else {
             if got.result.eq_bit(0) { going := False } else {
                 held := got.buf;

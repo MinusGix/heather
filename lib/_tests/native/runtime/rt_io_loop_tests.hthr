@@ -43,7 +43,7 @@ fn Io::echo_all(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)
     let mut buf = buf;
     let mut n: BitVec(64) = BitVec::ofNat(1);
     while BitVec::ofNat(0).unsigned_lt_bit(n) {
-        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
         let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
         buf := r.buf;
         n := r.result;
@@ -58,7 +58,7 @@ fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
 // came back. It ends in the context `[w, from, fd, count, buf', max, fd, n,
 // buf]`.
 fn pass_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 3, 1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
     ETm::Pure(Lit(Word(64), 0))))))))
 }

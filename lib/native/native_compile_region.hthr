@@ -403,6 +403,57 @@ theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8
     }⟩
 }
 
+// A read's bytes copied into their buffer from offset `a`, the other cells
+// as they were: the environment with that buffer filled there.
+theorem Layout::keeps_fill_at(self layout: Layout, env: Env, v, w: Nat → BitVec(8), keeps: layout.Keeps(env, v), buf, cap: Nat,
+    found: layout.capacities.nth(buf) = Some(cap), a: Nat, bytes: List<BitVec(8)>, short: a + bytes.len() <= cap,
+    same: (p: Nat) → ((p < layout.buffer_offset(buf) + a) ∨ ((layout.buffer_offset(buf) + a) + bytes.len() <= p)) → w(p) = v(p),
+    copied: (i: Nat) → (c: BitVec(8)) → bytes.nth(i) = Some(c) → w((layout.buffer_offset(buf) + a) + i) = c):
+    layout.Keeps(env.set_buffer(buf, fill_at(env.buffer(buf), a, bytes)), w) {
+    let o = layout.buffer_offset(buf);
+    let n = bytes.len();
+    let ends = layout.buffer_end(buf, cap, found);
+    let a_le: (a <= cap) = omega(short);
+    let n_le: (n <= cap - a) = omega(short);
+    let words = λ (i: Nat) (inside: i < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, layout.frame_cell(i), λ t below =>
+        same(layout.frame_cell(i) + t, Inr(omega(short, ends, layout.scratch_below_size(), layout.frame_cell_at(i)))))), keeps.left(i, inside));
+    let old: (env.buffer(buf) = cells_at(v, o, cap)) = keeps.right(buf, cap, found);
+    // Before the offset, the cells as they were.
+    let head: (env.buffer(buf).take(a) = cells_at(w, o, a)) = trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x.take(a), old),
+        trans(cells_take(v, cap, o, a), trans(cong_fn<Nat, List<BitVec(8)>>(λ k => cells_at(v, o, k), Nat::min_eq_l(a, cap, a_le)),
+            cells_agree(v, w, a, o, λ i below => sym(same(o + i, Inl(omega(below))))))));
+    // Past it, the bytes, then the cells as they were.
+    let tail: (env.buffer(buf).drop(a) = cells_at(v, o + a, cap - a)) = trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x.drop(a), old),
+        cells_drop(v, cap, o, a));
+    let tail_len: (cells_at(v, o + a, cap - a).len() = cap - a) = cells_len(v, cap - a, o + a);
+    let rest: (cells_at(v, o + a, cap - a).drop(n) = cells_at(w, (o + a) + n, (cap - a) - n)) = trans(cells_drop(v, cap - a, o + a, n),
+        sym(cells_agree(w, v, (cap - a) - n, (o + a) + n, λ i below => same(((o + a) + n) + i, Inr(omega())))));
+    let filled_tail: (fill(env.buffer(buf).drop(a), bytes) = cells_at(w, o + a, cap - a)) =
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => fill(x, bytes), tail),
+            trans(fill_short(cells_at(v, o + a, cap - a), bytes, omega(n_le, tail_len)),
+                trans(eq2(λ (x: List<BitVec(8)>) (y: List<BitVec(8)>) => x ++ y, sym(cells_of(w, bytes, o + a, copied)), rest),
+                    sym(cells_split(w, n, o + a, cap - a, n_le)))));
+    let filled: (fill_at(env.buffer(buf), a, bytes) = cells_at(w, o, cap)) =
+        trans(eq2(λ (x: List<BitVec(8)>) (y: List<BitVec(8)>) => x ++ y, head, filled_tail), sym(cells_split(w, a, o, cap, a_le)));
+    ⟨words, λ b c found_b => match b.eq_dec(buf) {
+        Inl(here) => {
+            let cap_same: (c = cap) = Option::some_inj(c, cap, trans(sym(found_b), j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cap), found)));
+            j(sym(here), λ x _ => env.set_buffer(buf, fill_at(env.buffer(buf), a, bytes)).buffer(x) = cells_at(w, layout.buffer_offset(x), c),
+                trans(env.buffer_set_here(buf, fill_at(env.buffer(buf), a, bytes)), j(sym(cap_same), λ k _ => fill_at(env.buffer(buf), a, bytes) = cells_at(w, o, k), filled)))
+        },
+        Inr(other) => {
+            let o_b = layout.buffer_offset(b);
+            let away: ((i: Nat) → i < c → (o_b + i < o + a) ∨ ((o + a) + n <= o_b + i)) = λ i below => match b.lt_or_ge(buf) {
+                Inl(under) => Inl(omega(layout.buffer_apart(b, c, buf, found_b, under), below)),
+                Inr(over) => Inr(omega(layout.buffer_apart(buf, cap, b, found, omega(over, other)), short)),
+            };
+            trans(env.buffer_set_other(buf, fill_at(env.buffer(buf), a, bytes), b, other),
+                trans(keeps.right(b, c, found_b), cells_agree(v, w, c, layout.buffer_offset(b), λ i below =>
+                    sym(same(layout.buffer_offset(b) + i, away(i, below))))))
+        },
+    }⟩
+}
+
 // ---------------------------------------------------------------------------
 // The region in memory: reads, stores, and the code kept resident
 
