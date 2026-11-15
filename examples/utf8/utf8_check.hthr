@@ -693,14 +693,14 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                 let next: ((i + 1).toNat() = k + 1) = bv_omega;
                 let ih = valid_from_decides(s, n, i + 1, left - 1, sized, bv_omega);
                 calc {
-                    utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 1, left - 1).eq_bit(n) := rewrite(utf8_valid_from::True::True(s, n, i, left, inside, lead_below(s, n, i, b, read0, 0x80, t1)), refl),
+                    utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 1, left - 1).eq_bit(n) := simp_only(utf8_valid_from, discharge := bv_omega),
                     = utf8::is_utf8(s.drop(k + 1)) := rewrite(sym(next), ih),
                     = utf8::is_utf8(s.drop(k)) := rewrite(rest0, valid_one(b, s.drop(k + 1), class_one(b, t1)), seq1_is_some(b, s.drop(k + 1)), refl),
                 }
             },
             False => match t2: decide_bit<b.zero_extend(56) < 0xC0>() {
                 True => calc {
-                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_below(s, n, i, b, read0, 0xC0, t2)), stops),
+                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                     = utf8::is_utf8(s.drop(k)) := rewrite(rest0, valid_bad(b, s.drop(k + 1), class_cont(b, t1, t2)), refl),
                 },
                 False => match t3: decide_bit<b.zero_extend(56) < 0xE0>() {
@@ -717,8 +717,9 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                 match ok: utf8::decode_seq(utf8::C2, b, Cons(c1, tail)).holds() {
                                     False => {
                                         let z: (decide_bit<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>() = True) = trans(two_decides(b, c1, tail), cong_fn(λ (x: Bool) => !x, ok));
+                                        let bad: (utf8_two_at(s, n, i) = 0) = rewrite(two_at(s, n, i, b, c1, read0, read1), decide_bit_true<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z));
                                         calc {
-                                            utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_true<1 < left>(g), rewrite(two_at(s, n, i, b, c1, read0, read1), decide_bit_true<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z))), stops),
+                                            utf8_valid_from(s, n, i, left).eq_bit(n) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                                             = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, valid_two(b, c1, tail, class), ok, refl),
                                         }
                                     },
@@ -739,7 +740,7 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                 let last: (k + 1 = s.len()) = omega;
                                 let end: (s.drop(k + 1) = Nil) = rewrite(last, s.drop_len());
                                 calc {
-                                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_false<1 < left>(g)), stops),
+                                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                                     = utf8::is_utf8(s.drop(k)) := rewrite(rest0, end, valid_cut(b, Nil, Inl(class), refl), refl),
                                 }
                             },
