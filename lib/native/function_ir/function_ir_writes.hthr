@@ -148,6 +148,29 @@ theorem nodes_run_still(values: Valuation(), nodes: List<Node>): (before, after:
     }
 }
 
+// Nodes after nodes run where the first run and the rest run from the file
+// they left.
+theorem nodes_run_append(values: Valuation(), first: List<Node>): (rest: List<Node>) → (before, mid, after: Buffers()) →
+    NodesRun(first, values, before, mid) → NodesRun(rest, values, mid, after) → NodesRun(first ++ rest, values, before, after) {
+    match first {
+        Nil => λ rest before mid after ran later => j(ran, λ m _ => NodesRun(rest, values, m, after), later),
+        Cons(node, more) => λ rest before mid after ran later =>
+            Exists(ran.witness, ⟨ran.proof.left, nodes_run_append(values, more, rest, ran.witness, mid, after, ran.proof.right, later)⟩),
+    }
+}
+
+// And only so: there is a file between them.
+theorem nodes_run_split(values: Valuation(), first: List<Node>): (rest: List<Node>) → (before, after: Buffers()) →
+    NodesRun(first ++ rest, values, before, after) → Exists<Buffers()>(λ mid => NodesRun(first, values, before, mid) ∧ NodesRun(rest, values, mid, after)) {
+    match first {
+        Nil => λ rest before after ran => Exists(before, ⟨refl, ran⟩),
+        Cons(node, more) => λ rest before after ran => {
+            let later = nodes_run_split(values, more, rest, ran.witness, after, ran.proof.right);
+            Exists(later.witness, ⟨Exists(ran.witness, ⟨ran.proof.left, later.proof.left⟩), later.proof.right⟩)
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loops
 

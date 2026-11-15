@@ -151,6 +151,13 @@ theorem BitVec::byte_swap_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of
         cong_fn(λ (v: [BitVec(8); k]) => BitVec::of_bytes_le(v), reverse_reverse(k, bytes)))
 }
 
+// A word's low four bytes, the most significant first, are the bytes of
+// its low half swapped, the least significant first: what a store of the
+// swapped half writes, in order.
+theorem BitVec::be_bytes_32(word: u64): word.truncate(32, 32).byte_swap(4).bytes_le(4) = word.truncate(32, 32).bytes_be(4) {
+    BitVec::bytes_le_of_bytes_le(4, word.truncate(32, 32).bytes_be(4))
+}
+
 // Four bytes joined by shifts, the first the most significant, are the
 // swap of the word that holds them low byte first: one load of the four
 // and a `BSWAP` read what compiled code reads a byte at a time.

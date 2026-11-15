@@ -81,6 +81,28 @@ theorem optimize_made(callees: List<Function>, f0, f1, f2: Function, guard: Opti
 // ---------------------------------------------------------------------------
 // Plans spelled for a certificate to state
 
+fn Late::spelled(self late: Late) → List<Nat> → List<Nat> {
+    match late {
+        Wait => spell_text("Wait"),
+        Pass => spell_text("Pass"),
+        Know(rule, args) => spell_call("Know", [spell_number(rule), spell_numbers(args)]),
+    }
+}
+
+fn Stored::spelled(self stored: Stored) → List<Nat> → List<Nat> { spell_of("Stored", [stored.output, stored.index, stored.value]) }
+
+fn Four::spelled(self four: Four) → List<Nat> → List<Nat> {
+    spell_call("Four", [spell_number(four.buffer), spell_number(four.loaded), spell_number(four.word),
+        four.first.spelled(), four.second.spelled(), four.third.spelled(), four.fourth.spelled()])
+}
+
+fn Paid::spelled(self paid: Paid) → List<Nat> → List<Nat> {
+    match paid {
+        Each => spell_text("Each"),
+        Together(four) => spell_call("Together", [four.spelled()]),
+    }
+}
+
 fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
     match step {
         Keep => spell_text("Keep"),
@@ -89,6 +111,7 @@ fn Step::spelled(self step: Step) → List<Nat> → List<Nat> {
         Derive(rule, args) => spell_call("Derive", [spell_number(rule), spell_numbers(args)]),
         Swap(a, b) => spell_of("Swap", [a, b]),
         Again(at, a, b) => spell_of("Again", [at, a, b]),
+        Holding(steps, paid) => spell_call("Holding", [spell_list(steps.map(λ (late: Late) => late.spelled())), paid.spelled()]),
     }
 }
 
@@ -106,6 +129,7 @@ fn Plan::spelled(self plan: Plan) → List<Nat> → List<Nat> {
         Derived(steps, body) => spell_call("Derived", [spell_steps(steps), body.spelled()]),
         Args(arguments) => spell_call("Args", [spell_numbers(arguments)]),
         Inputs(inputs, body) => spell_call("Inputs", [spell_numbers(inputs), body.spelled()]),
+        Flat(steps, sizes) => spell_call("Flat", [spell_steps(steps), spell_numbers(sizes)]),
     }
 }
 
