@@ -1077,7 +1077,9 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
                     return Some(WordFact { args, relation, swapped, lemma, proof });
                 }
             }
-            None
+            // A plain equation of words, `fill = 63`: their values are equal.
+            let width = word_width(elab, cx, ty, lhs)?;
+            Some(WordFact { args: vec![width, Rc::clone(lhs), Rc::clone(rhs)], relation: Relation::Eq, swapped: false, lemma: "toNat_of_eq", proof: name.to_string() })
         }
         Type::El { tm, .. } => {
             for (test, relation, lemma) in [("unsigned_lt", Relation::Lt, "unsigned_lt_prop"), ("unsigned_le", Relation::Le, "unsigned_le_prop")] {
@@ -1089,6 +1091,29 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
         }
         _ => None,
     }
+}
+
+/// The width of the words an equation `ty` relates, when they are words;
+/// `side` is one of them.
+fn word_width(elab: &Elaborator, cx: &Cx, ty: &Type, side: &Rc<Term>) -> Option<Rc<Term>> {
+    let Type::Id { ty, .. } = ty else { return None };
+    let ind = elab.display_tag_of(ty)?;
+    if !elab.lookup_inductive("bitvec::BitVec").is_some_and(|word| word.tag == ind.tag) { return None; }
+    let a = elab.spell_term_source(cx, side)?;
+    // Type spellings include instantiated codes and inline lowerings. Let
+    // the existing method inference recover the width in all those forms.
+    let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
+    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
+    let n = inferred.and_then(|(tm, _, _)| {
+        let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
+        let [width, _] = args.as_slice() else { return None };
+        // Spelled, so the width outlives the probe's goals.
+        elab.spell_term_source(cx, width).map(|_| Rc::clone(width))
+    });
+    elab.pass.warnings.borrow_mut().truncate(mark.0);
+    elab.attempt.goal_arena.rollback(mark.1);
+    n
 }
 
 /// Word equality and comparison goals use the same Nat generator through
@@ -1132,24 +1157,10 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
             return subgoal(statement, if flipped { format!("sym({proof})") } else { proof });
         }
     }
-    let Type::Id { ty, lhs, rhs, .. } = expected else { return None };
-    let ind = elab.display_tag_of(ty)?;
-    if !elab.lookup_inductive("bitvec::BitVec").is_some_and(|word| word.tag == ind.tag) { return None; }
+    let Type::Id { lhs, rhs, .. } = expected else { return None };
+    let n = elab.spell_term_source(cx, &*word_width(elab, cx, expected, lhs)?)?;
     let a = elab.spell_term_source(cx, lhs)?;
     let b = elab.spell_term_source(cx, rhs)?;
-    // Type spellings include instantiated codes and inline lowerings. Let
-    // the existing method inference recover the width in all those forms.
-    let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
-    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
-    let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
-    let n = inferred.and_then(|(tm, _, _)| {
-        let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
-        let [width, _] = args.as_slice() else { return None };
-        elab.spell_term_source(cx, width)
-    });
-    elab.pass.warnings.borrow_mut().truncate(mark.0);
-    elab.attempt.goal_arena.rollback(mark.1);
-    let n = n?;
     for (flipped, word, other) in [(false, &a, rhs), (true, &b, lhs)] {
         if let Some(args) = named_args(elab, other, "bitvec::BitVec::ofNat")
             && let [_, c] = args.as_slice()

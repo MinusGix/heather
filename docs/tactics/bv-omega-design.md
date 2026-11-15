@@ -166,7 +166,10 @@ An unsigned comparison equation in scope, in either orientation, supplies
 The other tests a `match h:` or an `if h:` puts in scope are read the same
 way, each through its `bitvec_omega` lemma: `a.unsigned_le_bit(b)` (`<=`, or
 `>` for `False`), `a.eq_bit(b)` (`=`, or `≠`), and the propositions `a < b`
-and `a <= b` at a word (issues/decreases-word-measures-by-hand.md).
+and `a <= b` at a word (issues/decreases-word-measures-by-hand.md). A plain
+equation of words in scope, `same: fill = 63` either way round, gives
+`fill.toNat() = 63.toNat()` (`toNat_of_eq`), which with the literal's value
+bridge refutes a branch the context rules out.
 These bridge facts are available before side conditions and are restated
 under the same names when the arithmetic goal generalises composite words.
 Words appearing only in a comparison remain optional in the careful attempt.
