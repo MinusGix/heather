@@ -185,8 +185,9 @@ library modules after a compiler edit. They are rewritten to the
 specialised goal, which is shorter, or pinned with `as λ _ => …`. A change
 to this ladder is verified by re-elaborating every library module, not by
 the PR lane alone. In all three the elaborator accepted the old arm and
-only the kernel refused it
-(`issues/match-arm-accepted-against-unspecialised-goal.md`).
+only the kernel refused it, with a message that could not spell the
+arm's expected type; §4.6 says why that was the message and not the
+check.
 
 §4.3's objection to codomains was scope: a scrutinee scoped in `Γ` does not
 occur under a binder unshifted. The abstraction shifts its patterns as it
@@ -216,6 +217,49 @@ What it does not reach, each pinned as a refusal in
   returns, so the call beside it is not specialised. Making the rungs
   cumulative would change motives that are found today, which this round
   does not do.
+
+### 4.6 Every rung past the first is checked
+
+`issues/theorem-branch-on-measured-fn-goal.md`, 2026-11-15. The rungs that
+read the goal reduced (§4.3–§4.5) abstract the positions they find, and a
+reduced goal can spell the scrutinee more ways than they reach. A measured
+function's body is the convoy its `if h:` lowers to, under the recursion's
+eliminator: unfolded in a goal, the test appears where the eliminator is
+stuck (found), in the convoy's motive and its `refl` (found, §4.4's
+`with_scrutinee`), and in a type the body uses the evidence `h` at
+(the kernel's refusal: `h : z = True` where `leb(1, m) = True` is
+expected), which is no position anything is stuck on (not found). Abstracting the first two and not the third leaves a term whose
+type mentions the test at a `z` that replaced it: the motive is ill-typed
+for every arm, and the kernel refused a proof by cases on the test whose
+arms were both `refl`.
+
+So the motive a reduced rung builds is type-checked under `z` before it is
+used (`MotiveSynthesisElab::motive_well_formed`, the kernel's `infer_type`
+over the goal's world), and one that fails is passed over for the next
+rung, and in the end for the goal as written. That is §4.4's rule again,
+half an abstraction is worse than none, enforced where it can be decided
+rather than assumed of the abstraction. The check runs only on the rungs
+that reduce: §4.1's syntactic abstraction is every match that worked
+before them, and it is not paid for there.
+
+The arms then keep the goal as written, and a proof uses the evidence
+against the function's equations (`f::unfold`, its branch equations),
+which is what a proof of a measured function's call does anyway.
+
+**The other "elaborator accepts, kernel refuses".** An arm proved about the
+unspecialised goal where the goal *is* specialised
+(`issues/match-arm-accepted-against-unspecialised-goal.md`) is not the
+same defect: the motive is well-typed, and the arm is wrong. The
+elaborator does not judge a checking position; it records the two types
+and the gate decides (`MismatchNotes::note_check_mismatch`). What read as
+a compiler defect was the message: the arm's expected type is the motive's
+instance at the arm's constructor, `case(inl x) { … }` where the scrutinee
+stood, which the display could not spell. The display now contracts a case
+on an injection to its branch (`spelling::iota_case`, with the
+projections of literal pairs the branch reads its fields through), so the
+refusal says what the arm is asked to prove: ``but `Some(row.snd) =
+Some(row.snd)` is expected here``. Both are pinned in
+`lib/_tests/std/core/match_motive_checked_tests.hthr`.
 
 ## 5. Mechanism B: rebuilding the value around `z`
 

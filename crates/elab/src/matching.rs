@@ -36,6 +36,14 @@ pub(crate) trait MotiveSynthesisElab {
     fn generalizes_an_index(&self, _cx: &Cx, _scrutinee_type: &Type) -> bool {
         false
     }
+    /// Whether `motive`, read under one new binder `z` of the scrutinee's
+    /// type, is a well-formed type. A rung that abstracts the scrutinee at
+    /// some of its spellings and not others can leave a term whose type
+    /// mentions a spelling it missed at a `z` it rewrote (§4.6 of
+    /// `docs/elaborator/goal-motive-synthesis-design.md`).
+    fn motive_well_formed(&self, _cx: &Cx, _motive: &Type, _scrutinee_type: &Type, _scrutinee_level: &Level) -> bool {
+        true
+    }
 }
 
 /// The declaration-local state which must disappear when a motive candidate
@@ -664,6 +672,11 @@ pub(crate) fn synthesize_motive(
     let Some(exposed) = expose(elab, cx, expected, span) else {
         return expected.shift_local(1);
     };
+    // Every rung past the first reads the goal reduced, where the scrutinee
+    // can be spelled in more ways than the abstraction reaches: a motive
+    // that rewrote some and missed others is refused here, where the arms
+    // are still checked against the goal, rather than by the kernel (§4.6).
+    let well_formed = |motive: &Type| elab.motive_well_formed(cx, motive, scrutinee_type, scrutinee_level);
     if let Some(motive) = abstract_stuck(
         elab,
         cx,
@@ -672,13 +685,19 @@ pub(crate) fn synthesize_motive(
         scrutinee_type,
         scrutinee_level,
     ) {
-        return motive;
+        if well_formed(&motive) {
+            return motive;
+        }
     }
     if let Some(motive) = abstract_scrut(&exposed, scrutinee, &rewrap) {
-        return motive;
+        if well_formed(&motive) {
+            return motive;
+        }
     }
     if let Some(motive) = abstract_below(elab, cx, expected, scrutinee, scrutinee_type, scrutinee_level, span) {
-        return motive;
+        if well_formed(&motive) {
+            return motive;
+        }
     }
     expected.shift_local(1)
 }
