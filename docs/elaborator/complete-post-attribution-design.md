@@ -7,8 +7,8 @@ attribute it next"), 2026-09-16. `docs/showcase/calc_parser.hthr` on the
 `--kernel-workers 1`, no `--cache` anywhere.
 
 Every number below was hand-run in this pass on that box. Ten furnace round
-trips and nineteen reproducer files; `probes/cp_*.sh` and `probes/t_cp*.hthr`
-are what a reader re-runs, and `probes/README.md`'s round section says in what
+trips and nineteen reproducer files; `probes/cp_*.sh@ef3961a` and `probes/t_cp*.hthr@ef3961a`
+are what a reader re-runs, and `probes/README.md@ef3961a`'s round section says in what
 order. No source change lands here — **§10 is the implementation pass that
 followed on the same day, and its numbers are the ones a reader compares
 against.**
@@ -27,7 +27,7 @@ nothing. `CompleteSpec` has two of them. That is 16 s of the item's 20 s.
 
 ## 1. The datum, from the trace and not from the hypothesis
 
-The premise first (`probes/cp_premise.sh`), untraced, because a traced run
+The premise first (`probes/cp_premise.sh@ef3961a`), untraced, because a traced run
 inflates this item's `total_ns` 2.6×. `complete_post`'s whole row, the columns
 that are not zero:
 
@@ -56,7 +56,7 @@ proof obligation handed to the kernel once.
 
 ### 1.1 Half the gate is not conversion misses
 
-`probes/cp_trace.sh` runs `HEATHER_CONV_MISS_TRACE=complete_post` and sums the
+`probes/cp_trace.sh@ef3961a` runs `HEATHER_CONV_MISS_TRACE=complete_post` and sums the
 sampler's own clock over the 110 851 records. The sampler brackets exactly
 `conv_type_cached_with_metrics` and nothing else — the excerpt and the
 backtrace it prints are outside the measured window — so the sum is what the
@@ -145,14 +145,14 @@ predicted "nested `s.end.offset` projection chains through `Success` then
 item's top twelve; the projection-chain reading is refuted by §3's `cp3` and
 `cp4`, where the whole chain is present and the item costs 37 ms and 17 ms.
 Those rows were read off the whole-run table rather than off this item's
-trace, which is the error `probes/README.md`'s per-module rule already warns
+trace, which is the error `probes/README.md@ef3961a`'s per-module rule already warns
 about in the other direction.
 
 ---
 
 ## 2. The reproducer is the theorem
 
-`probes/t_cp1.hthr` is `complete_post`'s statement and proof copied verbatim
+`perf/fixtures/matched_type_normal_form/t_cp1.hthr` is `complete_post`'s statement and proof copied verbatim
 under the name `cp_full`, in a twelve-line file that imports `parser`. It does
 not approximate the item; it **is** the item:
 
@@ -292,7 +292,7 @@ they name one thing, and it is the oldest of
 `issues/elaborator-canonical-type-spelling`'s three spellings.
 
 **The decline listing first, because it is a clean negative.**
-`probes/cp_declines.sh` runs `HEATHER_GENDEF_DECLINES=1` on `t_cp1` and on
+`probes/cp_declines.sh@ef3961a` runs `HEATHER_GENDEF_DECLINES=1` on `t_cp1` and on
 `t_cp2` — the base and the 6× cheaper variant — and the two listings are the
 same to two lines out of 252 847, row for row in the same order
 (`respell_ty_at False no-closed-code` 219 428, `instance_match List
@@ -495,7 +495,7 @@ devices** are untouched. The listing says they never fire here.
 Stop and report if any of these fires; each would refute part of this design.
 
 1. **Does `emit_ty` change these components at all?** Before any edit: on
-   `probes/t_cp1.hthr`, confirm that `emit_ty` of `relation(source,begin,end,
+   `perf/fixtures/matched_type_normal_form/t_cp1.hthr`, confirm that `emit_ty` of `relation(source,begin,end,
    value)` and of `rest(source,end) = Nil<T>` at the binder depth
    `CompleteSpec`'s body sits at returns something other than the input. If it
    returns the input, §5's slice cannot help and §5.1's fork is the answer —
@@ -553,7 +553,7 @@ Stop and report if any of these fires; each would refute part of this design.
 **Superseded by §10 on 2026-09-16: the slice landed.** As of the design pass —
 
 Design only. No source change lands in this pass, `crates/` and `lib/` are
-untouched, and `probes/cp_*.sh` plus `probes/t_cp*.hthr` are what a reader
+untouched, and `probes/cp_*.sh@ef3961a` plus `probes/t_cp*.hthr@ef3961a` are what a reader
 needs to reproduce every number above. The open items this round hands on:
 `issues/elaborator-canonical-type-spelling` gains its long-named third-spelling
 slice with a customer worth 16 s; `issues/quote-see-through-bounded-arm`'s
@@ -575,10 +575,10 @@ gained `EmissionElab` as a supertrait to reach the chokepoint. Both callers are
 Nothing else in `crates/` or `lib/` changed. Every number below is one furnace
 E5 box, release `--features value-metrics`, no `--cache`, the parent column
 from `target/heather_parent` — the HEAD (`fb069d5`) binary parked before the
-first edit synced (`probes/cp_park.sh`), because the remote checkout is an
+first edit synced (`probes/cp_park.sh@ef3961a`), because the remote checkout is an
 rsync and not a git repository.
 
-### 10.1 The probes (`probes/cp_slice.sh`), by count
+### 10.1 The probes (`probes/cp_slice.sh@ef3961a`), by count
 
 | probe | item | misses | queries (`conv_shortcut_hits`) | eval steps | total ms |
 |---|---|---|---|---|---|
@@ -659,7 +659,7 @@ Four rows rose, by 288 misses together against 107 559 removed:
 `El^δ/Sum` 25 076 → 25 347, `El(?)/Sum` 4 502 → 4 514, `El^δ/Sigma`
 22 232 → 22 234, `Sum/El(?)` 221 → 224. The brief's rule is that **no**
 head-pair count may rise, so they were attributed rather than waved through
-(`probes/cp_rise.sh`): +161 of the +271 on `El^δ/Sum` is `number_grammar`,
+(`probes/cp_rise.sh@ef3961a`): +161 of the +271 on `El^δ/Sum` is `number_grammar`,
 whose own misses *fell* 14 771 → 14 289 and whose steps fell 499 651 →
 366 547; the rest are single digits spread over `run`, `fail_at` and
 `plus_selected`. The rule's purpose is to catch a spelling put out of step with
@@ -678,7 +678,7 @@ family is still not what this item is about.
 
 - **No item regressed.** The showcase's 944 joined item rows, parent against
   change: **zero** items whose misses rose, zero whose conversion queries rose,
-  zero whose evaluator steps rose (`probes/cp_gate.sh`). That is the reading
+  zero whose evaluator steps rose (`probes/cp_gate.sh@ef3961a`). That is the reading
   of "no head-pair count may rise" that survives §10.3, and it is stronger.
 - **The full `scripts/test`** (not `--fast`: this changes what the frontend
   emits): `== suite: 2696 passed, 0 failed, 5 ignored ==`. So §8 item 3's x86
@@ -693,7 +693,7 @@ family is still not what this item is about.
   thresholds`.
 - Both were run with the spike's env-gated `eprintln!` still in the tree, so
   the tree left for review — with it removed — was re-verified on its own
-  (`probes/cp_final.sh`): the same `== suite: 2696 passed, 0 failed, 5
+  (`probes/cp_final.sh@ef3961a`): the same `== suite: 2696 passed, 0 failed, 5
   ignored ==`, and the showcase serial identical to the counter
   (212 318 misses, 16 762 944 queries, 4 697 239 steps; 64.14 s of item totals
   against 63.34 s, which is this box's repeat spread).

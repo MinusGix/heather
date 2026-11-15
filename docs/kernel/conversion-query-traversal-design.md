@@ -5,14 +5,14 @@ remainder `docs/elaborator/complete-post-attribution-design.md` §10 filed on 20
 the quote slice removed 87 % of `complete_post`'s conversion *misses* and 31×
 its evaluator steps but only 36 % of its conversion *queries*, and the
 showcase still spends 48.9 s of serial kernel gate on 16 762 944 of them.
-`docs/showcase/calc_parser.hthr` and `probes/t_cp*` on the `a6ba37a` tree,
+`docs/showcase/calc_parser.hthr` and `probes/t_cp*@ef3961a` on the `a6ba37a` tree,
 release with `--features value-metrics`, one furnace E5 box,
 `--kernel-workers 1`, no `--cache` anywhere.
 
 Every number below was hand-run in this pass on that box: four furnace round
-trips, one instrument, five new reproducers. `probes/qt_*.sh`,
-`probes/t_qt*.hthr` and `probes/qt_agg.py` are what a reader re-runs, and
-`probes/README.md`'s round section says in what order.
+trips, one instrument, five new reproducers. `probes/qt_*.sh@ef3961a`,
+`probes/t_qt*.hthr@ef3961a` and `probes/qt_agg.py@ef3961a` are what a reader re-runs, and
+`probes/README.md@ef3961a`'s round section says in what order.
 
 **The headline is that the question was posed at the wrong end of the
 pipeline.** The brief asked which kernel walk issues a million queries for one
@@ -71,7 +71,7 @@ below as queries, not as samples.
 
 ## 2. The datum: the site histogram of queries
 
-`probes/qt_trace.sh` and `probes/qt_probe.sh`, on `probes/t_cp1.hthr`
+`probes/qt_trace.sh@ef3961a` and `probes/qt_probe.sh@ef3961a`, on `perf/fixtures/matched_type_normal_form/t_cp1.hthr`
 (`cp_full`, which `docs/elaborator/complete-post-attribution-design.md` §2 establishes
 *is* the library item to the unit — 3 681 039 queries, 14 210 misses, 246 498
 steps on both).
@@ -144,7 +144,7 @@ per-node cost of the checker meeting a node. The count is everything.
 
 The uncollapsed site table is useless here (100 % of stacks sit at the trace's
 frame cap, 6 128 distinct keys at depth 40). Collapsing runs
-(`probes/qt_agg.py`'s `collapse`) gives the shape:
+(`probes/qt_agg.py@ef3961a`'s `collapse`) gives the shape:
 
 ```text
         44 800   1.2%  Var       < App×22 < Pair×12 < Snd×2 < Fst×2 < App
@@ -192,10 +192,10 @@ thing still grows exponentially, so sharing is not the missing idea (§6).
 
 ### 3.1 Component fixed, enclosing proof varied
 
-The brief's step 3. `probes/t_qt1/2/3/5.hthr` hold the component at
+The brief's step 3. `probes/t_qt1/2/3/5.hthr@ef3961a` hold the component at
 `t_cp9`'s `CPAndT = And<relation(source,begin,end,value),True>` — the +1.72 M
 block of §10.1 — and vary only the reply expression the conclusion's `Post` is
-applied to. `probes/qt_probe.sh` and `probes/qt_scale.sh`, untraced, one
+applied to. `probes/qt_probe.sh@ef3961a` and `probes/qt_scale.sh@ef3961a`, untraced, one
 process per file, no cache.
 
 | probe | item | the reply in the conclusion | queries | misses | steps | total ms | gate ms | `decl_emit` ms | `elab_whnf` ms | maxrss |
@@ -218,7 +218,7 @@ memory.
 item.
 
 The same curve with **no** declared former in the body (the plain relation,
-`probes/qt_curve.sh`): `cp_floor` 3 840, `cp_pure` 8 955, `cp_plain` 680 369.
+`probes/qt_curve.sh@ef3961a`): `cp_floor` 3 840, `cp_pure` 8 955, `cp_plain` 680 369.
 Same shape, and the component multiplies it rather than replacing it.
 
 ### 3.2 Every phase pays the same constant
@@ -311,7 +311,7 @@ what it emits is the normal form rather than the application it started from.
 
 ### 4.1 The negative that settles the shape of the fix
 
-`probes/t_qt4.hthr` writes `t_qt3`'s reply **once, as a declaration**, and
+`perf/fixtures/matched_type_normal_form/t_qt4.hthr` writes `t_qt3`'s reply **once, as a declaration**, and
 applies it — the library form of "name it and let the reference stand", the
 lever that worked twice this month (`docs/elaborator/record-projection-reference-design.md`
 §9.8, `docs/elaborator/complete-post-attribution-design.md` §10).
@@ -439,8 +439,8 @@ and the quote layer, whose slice landed yesterday and whose residue
 
 Stop and report if any of these fires; each would refute part of this design.
 
-1. **Confirm the exponent before touching anything.** `probes/qt_curve.sh` and
-   `probes/qt_scale.sh`: `t_cp9` 2 395 753, `t_qt3` 7 928 179, `t_qt5`
+1. **Confirm the exponent before touching anything.** `probes/qt_curve.sh@ef3961a` and
+   `probes/qt_scale.sh@ef3961a`: `t_cp9` 2 395 753, `t_qt3` 7 928 179, `t_qt5`
    29 447 197, with `elab_whnf_ns` and `decl_emit_ns` tracking within the
    ratios of §3.1. Three points, not one — a single pair is a slope, not an
    exponent (`rail-pass-is-a-floor`). If the exponent is not there on the
@@ -456,7 +456,7 @@ Stop and report if any of these fires; each would refute part of this design.
    *shape* of the curve. `t_cp1`'s 3 681 039 and `close_body`'s 2 585 801 are
    the absolute sub-bars; the whole showcase is 16 762 944.
 4. **No item may regress**, across all 944 joined rows of the showcase: not
-   misses, not conversion queries, not evaluator steps. `probes/cp_gate.sh` is
+   misses, not conversion queries, not evaluator steps. `probes/cp_gate.sh@ef3961a` is
    the per-item join and is the reading of the head-pair rule that survived
    `docs/elaborator/complete-post-attribution-design.md` §10.3.
 5. **The x86 rails do not move**, at two sizes, per item:
@@ -492,8 +492,8 @@ item 2 stopped the round, so nothing under `crates/` changed here either. Read
 §5 through §10.3.
 
 The instrument is the one source change; `crates/elab`, `lib/`
-and the fixtures are untouched, no commit is made, and `probes/qt_*.sh`,
-`probes/t_qt*.hthr` and `probes/qt_agg.py` are what a reader needs to
+and the fixtures are untouched, no commit is made, and `probes/qt_*.sh@ef3961a`,
+`probes/t_qt*.hthr@ef3961a` and `probes/qt_agg.py@ef3961a` are what a reader needs to
 reproduce every number above.
 
 What this round hands on:
@@ -527,12 +527,12 @@ requires. Item 1 passed and item 2 **fired its stop condition**: the
 normalization site is one call, the pre-normalization term is in hand at it,
 and it is not a spelling any of the slots that are emitted there can carry.
 Nothing under `crates/` changed. The instrument the spike needed is kept as
-`probes/nf_spike.patch`; `probes/nf_*.sh` and `probes/nf_agg.py` are what a
-reader re-runs, in the order `probes/README.md`'s round section gives.
+`probes/nf_spike.patch@ef3961a`; `probes/nf_*.sh@ef3961a` and `probes/nf_agg.py@ef3961a` are what a
+reader re-runs, in the order `probes/README.md@ef3961a`'s round section gives.
 
 ### 10.1 The exponent, re-confirmed on the current tree (item 1)
 
-`probes/nf_spike.sh`, `d53ec73`, release with `value-metrics`, one furnace
+`probes/nf_spike.sh@ef3961a`, `d53ec73`, release with `value-metrics`, one furnace
 box, `--kernel-workers 1`, no `--cache`, one process per file.
 
 | probe | item | queries | misses | steps | total ms | gate ms | `decl_emit` ms | `elab_whnf` ms | maxrss |
@@ -549,7 +549,7 @@ implementation started from.**
 
 ### 10.2 The site, named (item 2)
 
-`HEATHER_NF_SPIKE=<µs>` (`probes/nf_spike.patch`, `value-metrics` only) prints
+`HEATHER_NF_SPIKE=<µs>` (`probes/nf_spike.patch@ef3961a`, `value-metrics` only) prints
 every `Elaborator::whnf`, `whnf_tm` and `Elaborator::emit_ty` call that costs
 more than the budget, with the item scope, the input's and output's bounded
 `Debug` lengths and the elaborator frames that asked for it. Both clocks are
@@ -559,7 +559,7 @@ column reads; without it every record is attributed to `-`, which cost this
 pass one round trip.
 
 The exponent is **two calls per item**, and it is the same two in the library's
-`complete_post` as in the probes (`probes/nf_site3.sh`, budget 20 µs,
+`complete_post` as in the probes (`probes/nf_site3.sh@ef3961a`, budget 20 µs,
 milliseconds of self time, one record each):
 
 | site | `qt_floor` | `cp_andt` | `qt_deep` | per layer |

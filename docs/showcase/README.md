@@ -134,7 +134,7 @@ The cap above is deliberate and the reason this file is **not yet** in
 `crates/elab/tests/showcase_calculator.rs`: it needs more than 8 GiB cold,
 which the suite's 6 GiB per-process rail refuses. The cost is not the grammar's
 shape — a record token type costs 27× the conversion misses of an inductive one
-in a controlled pair (`probes/str/p10.hthr`), which is
+in a controlled pair (`probes/str/p10.hthr@ef3961a`), which is
 `issues/elaborator-canonical-type-spelling.md` reached from the type-argument
 end, since `Cursor<Char>` and `List<Char>` instantiate the library at a record.
 `issues/sequence-parser-source.md` owns the file and

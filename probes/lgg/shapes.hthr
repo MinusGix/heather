@@ -1,2 +1,0 @@
-inductive Tree { Leaf, Node(l: Tree, r: Tree) }
-theorem t1(a: Tree, b: Tree, p: a = b): Node(a, Leaf) = Node(b, Node(Leaf, Leaf)) { cong(p) }

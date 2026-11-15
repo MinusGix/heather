@@ -16,7 +16,7 @@ work: something materialises `BitVec(width)` (a 64-deep Σ chain) at every case
 step.
 
 Measured 2026-09-25 while making composed certificates scale
-(`docs/archive/native-first-program-design.md` §10.1), with `probes/dec/lookup*.hthr`
+(`docs/archive/native-first-program-design.md` §10.1), with `probes/dec/lookup*.hthr@ef3961a`
 (untracked). A valuation `λ width id => match id { Zero => …, Succ(id_1) => … }`
 looked up at id 51 costs 67 710 steps, at id 200 costs 262 006, and at id 0
 costs 65. Replacing the arms with neutral `values(width, 0)` changes nothing.
@@ -43,7 +43,7 @@ lookup), which is a workaround at one site, not the fix.
 
 ### 2026-09-28 — decline unrelated neutral steps before reading the motive
 
-Reproduced on `6fa7550a`. The original `probes/dec/lookup4.hthr` neutral
+Reproduced on `6fa7550a`. The original `probes/dec/lookup4.hthr@ef3961a` neutral
 lookup at width 64, id 51 still takes **17,609 evaluator steps**, despite
 the intervening reductions from the original report's 67,710.
 
@@ -90,7 +90,7 @@ binaries and generated family beside them. The replayable report is
 `target/perf-ab/valuation-lookup-case-step-cost.json` (all untracked).
 Reproduce with `scripts/perf ab --base 6fa7550a --only valuation-lookup
 --file target/valuation-lookup/family.hthr:lib/std
---file probes/dec/lookup4.hthr:lib/std,lib --samples 3 --kernel-workers 1`.
+--file probes/dec/lookup4.hthr@ef3961a:lib/std,lib --samples 3 --kernel-workers 1`.
 
 Regressions in `annotation_cost.rs` and `lib_std_bitvec.rs` pin **two steps
 per successor**, independent of closed result width, with a public-library

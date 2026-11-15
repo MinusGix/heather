@@ -1,5 +1,0 @@
-import logic;
-import bool;
-import nat;
-import bitvec;
-fn e06(k: Nat, x: BitVec(k + 1)) → Bool { x.head_bit() }

@@ -15,9 +15,9 @@ why the decline is the lever).
 
 Everything below was hand-run on one furnace box before it was written, HEAD
 `1a91fc1`, release with `--features value-metrics`, `--kernel-workers 1`, no
-`--cache`: two jobs with a spelling instrument (`probes/ia_spell.sh`,
-`probes/ia_spell2.sh`, `probes/ia_spell.patch`), two new reproducers
-(`probes/t_ia1.hthr`, `probes/t_ia3.hthr`).
+`--cache`: two jobs with a spelling instrument (`probes/ia_spell.sh@ef3961a`,
+`probes/ia_spell2.sh@ef3961a`, `probes/ia_spell.patch@ef3961a`), two new reproducers
+(`probes/t_ia1.hthr@ef3961a`, `probes/t_ia3.hthr@ef3961a`).
 
 **The headline is that the bound needs no budget.** The refuted arm decoded a
 quote with `decode_deep` — the whole literal materialized at every mismatch
@@ -35,8 +35,8 @@ and is out of scope.
 `HEATHER_IA_SPELL=<decl>` prints, at each of `Holes::ty`'s and `Holes::tm`'s
 former-mismatch arms and at `place_ty`'s disagree arm, the two sides in bounded
 `Debug`, plus a `ROOT` line carrying the whole template and the whole subject
-at the point `instance_match` gives up. `probes/t_ia1.hthr` (16 lines: one
-`Certified<ATok,Nat>` receiver, one `.forward` read) and `probes/t_ia3.hthr`
+at the point `instance_match` gives up. `probes/t_ia1.hthr@ef3961a` (16 lines: one
+`Certified<ATok,Nat>` receiver, one `.forward` read) and `probes/t_ia3.hthr@ef3961a`
 (19 lines: a `Result<Certified…,Failure…>` through `result::fold`).
 
 **A caution the first job paid for.** The listing's large rows are the matcher
@@ -231,8 +231,8 @@ Counts are the bar; seconds are one box.
 2. **The decline listing, before the seconds.** `instance_match Certified
    identity-match-El/Nat` and `hole-match-Sigma/El` go to zero on the family,
    and so does `project_field Certified instance-args`. List what remains.
-3. **The route split.** `HEATHER_CB=1` + `probes/cb_agg.py`
-   (`probes/cb_count.patch` re-applied as an instrument and reverted after):
+3. **The route split.** `HEATHER_CB=1` + `probes/cb_agg.py@ef3961a`
+   (`probes/cb_count.patch@ef3961a` re-applied as an instrument and reverted after):
    `Certified walk` reads fall to **zero**; the surviving `ref` reads' mean
    size is what slice 2 moves.
 4. **The curve is the gate, not the seconds.** `t_cb3`/`t_cb2`/`t_cb1` are
@@ -268,7 +268,7 @@ Counts are the bar; seconds are one box.
 ## 6. Implementation
 
 Landed as designed: one arm, in `Holes::ty`'s former-mismatch arm, after the
-two name arms (`crates/elab/src/gendefs.rs`). `probes/ia_slice.sh` is the
+two name arms (`crates/elab/src/gendefs.rs`). `probes/ia_slice.sh@ef3961a` is the
 measurement, parent (`target/heather_parent`, `1a91fc1`) against the change,
 one furnace box, `--kernel-workers 1`, no `--cache`, release with
 `--features value-metrics`. Both premises re-taken first and both reproduce to
@@ -411,7 +411,7 @@ What remains, named as §5 item 2 asks:
 
 ### 6.6 The gates
 
-- **The route split.** `probes/cb_count.patch` re-applied as an instrument and
+- **The route split.** `probes/cb_count.patch@ef3961a` re-applied as an instrument and
   reverted after: **`Certified walk` is zero** — all 29 of `close_body`'s reads
   and all 22 of `t_cb1`'s take the reference. `close_body`'s `Certified` read
   nodes 2 374 293 → 1 313 697, `t_cb1`'s mean spine 148 516 → 41 212. `Exists`
@@ -426,7 +426,7 @@ What remains, named as §5 item 2 asks:
   tests are `elaborated_source_x86_scaling`, `generated_50_node_…` and
   `slow_acceptance_generated_20_node_…`; a `scripts/test <file-stem>` filter
   therefore matches nothing, and the targeted invocations in
-  `probes/ia_gate.sh` phase (b) reported `0 passed`. The gate they were
+  `probes/ia_gate.sh@ef3961a` phase (b) reported `0 passed`. The gate they were
   standing in for is the **full `scripts/test`**, which runs `crates/cli/tests/
   native*.rs` and both scaling sizes and is phase (c). Read the suite line for
   them; no budget was raised anywhere.
@@ -441,7 +441,7 @@ What remains, named as §5 item 2 asks:
   fixtures, `WALK_RESIDUE`, `annotation_cost.rs`, `parser_library.rs`,
   `showcase_calculator.rs` and the whole-library acceptance load are green.
 - **`scripts/bench --check`** through the `--save`/apply/`--check` dance
-  (`probes/ia.patch`, since the committed baseline is desktop-recorded):
+  (`probes/ia.patch@ef3961a`, since the committed baseline is desktop-recorded):
   **`ok: 112 comparisons within thresholds`**. The headline slopes are
   unmoved — `code/whnf-identity-recursor` 0.01, `check/generated-terms` 1.05,
   `stack/check-numeral` 1 530 levels.
@@ -505,6 +505,6 @@ lowering.
 ## 7. Status
 
 Implemented and measured; the design was written before the edit. The spelling
-instrument is `probes/ia_spell.patch` and is reverted; `probes/ia.patch` is the
-whole change and `probes/ia_base/` holds the pristine `1a91fc1` copies of the
+instrument is `probes/ia_spell.patch@ef3961a` and is reverted; `probes/ia.patch@ef3961a` is the
+whole change and `probes/ia_base/@ef3961a` holds the pristine `1a91fc1` copies of the
 two files it touches. No commit, no issue edit, no `cargo fmt`.

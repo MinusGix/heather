@@ -71,7 +71,7 @@ fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False),
 
 ## 2. What the probes found (2026-10-02)
 
-Probe files are in `probes/ergo/`; byte-path costing is logged on
+Probe files are in `probes/ergo/@ef3961a`; byte-path costing is logged on
 `issues/byte-vocabulary-for-native-programs.md`.
 
 - **Per-byte facts are one line each.** Against wc's current step,
@@ -344,7 +344,7 @@ those facts are real lemmas; the third, `words(Cons(Nil, ps)) = words(ps)`, is
 ### 4.1 Results (2026-10-02)
 
 None refutes the plan. Two amend it: V1 changes S3, and V1 and V2 add a
-`split_all` fix. Probe files are in `probes/ergo/` (`v1_wc_l`, `t_v2_runs`,
+`split_all` fix. Probe files are in `probes/ergo/@ef3961a` (`v1_wc_l`, `t_v2_runs`,
 `t_v3_zf`, `v4_tr`, `t_wc_a`).
 
 - **V1, amended. `&&` reaches the frontend but cannot be lowered.**

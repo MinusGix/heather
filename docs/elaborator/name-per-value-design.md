@@ -37,7 +37,7 @@ Everything below is measured **locally** — the numbers are node counts and are
 machine-independent; no clock is quoted — release with
 `--features value-metrics`, `--kernel-workers 1`, `--timings`, no `--cache`,
 one process per file, under `(ulimit -v 8388608 -t 1800; …)`.
-`probes/nv_table.sh`, `probes/nv_showcase.sh` and `probes/README.md`'s round
+`probes/nv_table.sh@ef3961a`, `probes/nv_showcase.sh@ef3961a` and `probes/README.md@ef3961a`'s round
 section say in what order.
 
 ---
@@ -275,7 +275,7 @@ keyed by a declaration tag, `docs/infrastructure/cache-v1-design.md` §4's cache
 Stop and report if any of these fires.
 
 1. **The instrument's checks before anything is built**
-   (`probes/nv_table.sh`): `naive` in split keying equal to §12.3's column on
+   (`probes/nv_table.sh@ef3961a`): `naive` in split keying equal to §12.3's column on
    all four rows, `naive`/`graph` in depth keying equal to §11.1's,
    `closed = 7` on `complete_post`, `opaque = basevar = decl = 0`. If `naive`
    in split keying is not §12.3's, the walk and the emitter have drifted apart
@@ -309,8 +309,8 @@ is not built; §12's device stays inert behind `HEATHER_RB=name`; the
 instrument is `crates/elab/src/rbcount.rs`'s `HEATHER_RB=fv` mode and is
 **inert** with `HEATHER_RB` unset, with `HEATHER_RB=count`'s line unchanged so
 §11.1's and §12.3's runs are still reproducible from this tree. No commit, no
-fixture moved, no issue edited. `probes/nv_table.sh` and
-`probes/nv_showcase.sh` are the two jobs. `scripts/test --fast -p heather-elab`
+fixture moved, no issue edited. `probes/nv_table.sh@ef3961a` and
+`probes/nv_showcase.sh@ef3961a` are the two jobs. `scripts/test --fast -p heather-elab`
 is `== suite: 1971 passed, 0 failed, 5 ignored ==`; the full suite was not run,
 because the pass adds no test and nothing on the default path moved — the
 control that says so is `HEATHER_RB=count`'s line, which still reads §11.2's
@@ -339,7 +339,7 @@ and §4's mint on its own has a ceiling 1.16–1.74× above it.
 Nothing on the commit path was touched. The only source change is the sort
 of each graph node — its flag, its former — and three threshold columns on
 the instrument (`crates/elab/src/rbcount.rs`), all inert with `HEATHER_RB`
-unset; `probes/np0.sh`, `np0b.sh`, `np0c.sh`, `np0d.sh` and `np0f.sh` are the
+unset; `probes/np0.sh@ef3961a`, `np0b.sh`, `np0c.sh`, `np0d.sh` and `np0f.sh` are the
 jobs, in that order, and `np0e.sh` is the suite.
 
 ### 8.1 §6 items 1–3 and 5, re-confirmed to the unit
@@ -486,8 +486,8 @@ one mechanism with the two spellings of §8.3 — installed at `build_ctor`
 behind `HEATHER_RB_MINT=1`; it stands down whenever `HEATHER_RB` names one of
 the two design passes' instruments, so every run recorded in §1–§8 and in
 `docs/elaborator/projected-tuple-tower-design.md` §11–§12 is still reproducible from this
-tree. `probes/nm0.sh` is step 0 and `probes/nm_slice.sh` is the measurement;
-`probes/README.md`'s round section says in what order.
+tree. `probes/nm0.sh@ef3961a` is step 0 and `probes/nm_slice.sh@ef3961a` is the measurement;
+`probes/README.md@ef3961a`'s round section says in what order.
 
 ### 9.1 Step 0, to the unit
 

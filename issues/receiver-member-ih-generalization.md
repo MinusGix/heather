@@ -12,7 +12,7 @@ type-owned member, because the IH-generalization analysis
 (`docs/tactics/ih-generalization-design.md`) does not recognize a self-call spelled as
 a receiver.
 
-Repro (`probes/str/p13.hthr`, 12 lines, `import logic; nat; list;`):
+Repro (`probes/str/p13.hthr@ef3961a`, 12 lines, `import logic; nat; list;`):
 
 ```heather
 inductive Tree { Leaf(n: Nat), Node(l: Tree, r: Tree) }

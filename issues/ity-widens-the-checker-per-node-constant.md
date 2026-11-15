@@ -35,8 +35,8 @@ that measure the same checker over bigger objects: `wf/check-tree`,
 `code/check-identity-recursor`, and `check/generated-terms` — the broad
 checker-throughput row — all pass. So this is a **per-node constant on the
 narrowest possible workload**, not a slope and not a whole-workload cost. The
-routine corpus agrees: `lib/ir_v1`, `probes/t_cp9`, `probes/t_qt3`,
-`probes/str/p10` all landed inside their own before-against-before spread
+routine corpus agrees: `lib/ir_v1`, `perf/fixtures/matched_type_normal_form/t_cp9.hthr`, `perf/fixtures/matched_type_normal_form/t_qt3.hthr`,
+`probes/str/p10@ef3961a` all landed inside their own before-against-before spread
 (issue log, 2026-09-20).
 
 ## Where it comes from
@@ -92,9 +92,9 @@ time is made of**:
 | file | before CPU-s | after CPU-s | | what dominates it |
 |---|---:|---:|---|---|
 | `lib/certgen/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations — inference per node |
-| `probes/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | ditto, with a record tower |
-| `probes/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | ditto, deeper |
-| `probes/str/p10.hthr` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
+| `perf/fixtures/matched_type_normal_form/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | ditto, with a record tower |
+| `perf/fixtures/matched_type_normal_form/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | ditto, deeper |
+| `probes/str/p10.hthr@ef3961a` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
 | `complete_post` (`--only`) | 17.21 | 14.54 | **−16 %** | conversion, over a replayed prefix |
 
 Peak RSS across the same five: −0.1 % to +4.1 %, no direction.
@@ -265,9 +265,9 @@ file agree to within a per cent):
 | file | median wall | verdict | stage 1b had it at |
 |---|---:|---|---:|
 | `lib/certgen/ir_v1.hthr` | −0.9 % | **no change** | +33 % |
-| `probes/t_cp9.hthr` | +0.2 % | **no change** | +21 % |
-| `probes/t_qt3.hthr` | −0.7 % | **no change** | +26 % |
-| `probes/str/p10.hthr` | +0.3 % | **no change** | −4 % |
+| `perf/fixtures/matched_type_normal_form/t_cp9.hthr` | +0.2 % | **no change** | +21 % |
+| `perf/fixtures/matched_type_normal_form/t_qt3.hthr` | −0.7 % | **no change** | +26 % |
+| `probes/str/p10.hthr@ef3961a` | +0.3 % | **no change** | −4 % |
 
 `kernel_gate` agrees on all four (−0.9 %, +0.4 %, +0.3 %, −0.2 %), and peak
 RSS moves by −0.0 % to +0.0 %. On every file, every sample, both binaries:

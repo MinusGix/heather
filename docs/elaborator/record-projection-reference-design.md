@@ -237,10 +237,10 @@ single item, which is why §5's memo cannot collect it.
 
 ### 2.4 The probe
 
-`probes/t_real_*.hthr` rebuild the certificate's own shape at the certificate's
+`probes/t_real_*.hthr@ef3961a` rebuild the certificate's own shape at the certificate's
 own types: a 24-link chain of `MachineState<CallMemory>` states, each built by a
 named global function out of the previous link's `gprs`, `flags` and `memory`,
-over `probes/arch` (the `lib/std/arch/x86_64/*.hthr` files renamed to the module
+over `probes/arch@ef3961a` (the `lib/std/arch/x86_64/*.hthr` files renamed to the module
 names `crates/cli/src/native.rs`'s `SUPPORT` table bundles them under, so that
 `heather check` can resolve `import x86_64;`), plus `-L lib/std -L lib`. Twenty
 four theorems, one per link. `t_*_named` is the proposed spelling emulated in
@@ -268,7 +268,7 @@ is the cheap `El^δ`/`Sum`-class residue. A round that reports only miss counts
 would call this change a 14 % win. It is not; read the seconds.
 
 The same comparison on a synthetic four-field record with trivial field types
-(`probes/t_proj_app.hthr` / `t_proj_named.hthr` / `t_proj_var.hthr`, 12
+(`probes/t_proj_app.hthr@ef3961a` / `t_proj_named.hthr` / `t_proj_var.hthr`, 12
 theorems) gives 0.0008 / 0.0002 / 0.0002 s of kernel and 36 / 0 / 0 misses: the
 route difference is the same, the *unit* is ~36× smaller, and that is the whole
 reason the probe had to be rebuilt at `MachineState<CallMemory>` before any
@@ -377,7 +377,7 @@ The obvious simplification of §3.1 is to delete the guard rather than widen it
 — always take the reference when one is registered. `project_field`'s comment
 says the telescoped device is *not* asked for a literal receiver on purpose.
 Measured, both ways, on the synthetic record in a computing position
-(`probes/t_proj_lit.hthr` and `probes/t_proj_lit_named.hthr`, 12 theorems each,
+(`probes/t_proj_lit.hthr@ef3961a` and `probes/t_proj_lit_named.hthr@ef3961a`, 12 theorems each,
 `St(i, 0, i, Mem(1, stack)).rip = i` by `refl`):
 
 | probe | route | total s | kernel s | steps | misses |
@@ -407,7 +407,7 @@ principal child — the `Σ`'s `fst`, the `El`'s `tm` — plus the `Ψ`/`Γ`
 identities, the layer and the level. Two structurally equal but separately
 allocated annotations land in different buckets and never meet.
 
-The premise reproduces. `probes/t_proj_repeat.hthr` puts **four identical
+The premise reproduces. `probes/t_proj_repeat.hthr@ef3961a` puts **four identical
 closed projections at one binder depth in one item**, twelve times:
 
 | probe | items | misses | memo hits |
@@ -490,12 +490,12 @@ For the implementing pass's first hour. **If one of these refutes the design,
 STOP and report before working around it.**
 
 1. Reproduce §2.4's split before writing any Rust:
-   `heather check -L probes/arch -L lib/std -L lib --kernel-workers 1 --timings`
-   on `probes/t_real_app.hthr` and `probes/t_real_named.hthr`, wrapped
+   `heather check -L probes/arch@ef3961a -L lib/std -L lib --kernel-workers 1 --timings`
+   on `probes/t_real_app.hthr@ef3961a` and `probes/t_real_named.hthr@ef3961a`, wrapped
    (`ulimit -v 8388608 -t 600`). The 0.0563 s / 0.0061 s gap is the whole basis
    of §3.2. If it is not there on the implementer's instance, the box changed
-   and every projection needs redoing. `probes/arch` is rebuilt by
-   `probes/run_probes4.sh`'s first lines.
+   and every projection needs redoing. `probes/arch@ef3961a` is rebuilt by
+   `probes/run_probes4.sh@ef3961a`'s first lines.
 2. Confirm the guard is what decides, in the compiler rather than in a probe:
    instrument or log `project_field`'s two exits on the certificate and check
    that the fallback branch is taken for `MachineState`, `StackAccess` and
@@ -589,7 +589,7 @@ point, in fuel.
    `Fst`/`Snd` slots to begin with. Not a rise, so not a defect — but not the
    predicted evidence either, and `WALK_RESIDUE` in
    `crates/elab/tests/ir_v1.rs` is therefore **unchanged**.
-6. **`field_rewrap` survives the new input shape.** `probes/t_case_global.hthr`
+6. **`field_rewrap` survives the new input shape.** `probes/t_case_global.hthr@ef3961a`
    — `match b0().tag { … }`, `match b1(n).tag { … }` and a variable-receiver
    control, five theorems — checks with the change applied (c0–c4 ok, 8–12
    evaluator steps each). The one reader with real exposure is fine.

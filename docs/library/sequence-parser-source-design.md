@@ -2,7 +2,7 @@
 
 Status: **design, 2026-09-18**; owner `issues/sequence-parser-source.md`. Every
 shape below was hand-run on the tree at 3d10b94 with a freshly built release
-binary before it was written; the probes are `probes/str/p3`–`p13`.
+binary before it was written; the probes are `probes/str/p3@ef3961a`–`p13`.
 
 ## 1. Position
 
@@ -146,7 +146,7 @@ wired into `crates/elab/tests/showcase_calculator.rs` beside `calc_parser`.
 
 The cause is measured and is not the grammar's shape. A record token type costs
 **27× the conversion misses** of an inductive one in a controlled pair
-(`probes/str/p10.hthr`, 1,527,745 against 56,662 with every other line
+(`probes/str/p10.hthr@ef3961a`, 1,527,745 against 56,662 with every other line
 identical), which is `issues/elaborator-canonical-type-spelling.md`'s group-B
 disagreement reached from the type-argument end: `Cursor<Char>`, `List<Char>`
 and `Certified<Char, List<Char>>` each instantiate the library at a record.

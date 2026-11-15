@@ -15,7 +15,7 @@
 //!
 //! - **Arena-free.** A closure lives in a [`crate::value::ValueArena`], and
 //!   an arena that outlives a conversion query costs +9.3 GB on
-//!   `probes/str/p10.hthr` (the stage-1b measurement on the owning issue).
+//!   `probes/str/p10.hthr@ef3961a` (the stage-1b measurement on the owning issue).
 //!   An [`ITy`] is plain `Rc` and is freed when the rule that formed it
 //!   returns.
 //! - **Linear.** A `Sel` chain of length k over a `Syn` is k nodes,

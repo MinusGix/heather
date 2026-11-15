@@ -1,3 +1,0 @@
-inductive Col { Red, Green }
-fn same(c: Col) -> Col { c }
-theorem t2(a: Col, b: Col, p: a = b): same(a) = Red { cong(p) }

@@ -64,7 +64,7 @@ return, and a person should not meet a quadratic when reading one.
   no annotations. Only the selected field's type is spelled. Component
   projections inside quotations retain their annotation preparation.
 
-  The durable generator `probes/conjunction_projection_chain.py` emits
+  The durable generator `probes/conjunction_projection_chain.py@ef3961a` emits
   `And<A, ... A>` families, projecting the last component from a bare binder
   and from an opaque identity-theorem result bound by `let`. Three interleaved
   cold `scripts/perf ab` pairs against `62b89102`, width one, reproduce these

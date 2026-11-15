@@ -898,7 +898,7 @@ If one refutes the design, stop and amend it before working around it.
   read and store, checked at an open place value. Compare its cost per
   declaration with `elf64_write_loop`'s, which is §9.3's analogue.
   **Holds, at the top of its band (2026-10-04).**
-  `probes/wc_command/digit_emit.hthr`: from n < 10 · place in RDX and the
+  `probes/wc_command/digit_emit.hthr@ef3961a`: from n < 10 · place in RDX and the
   place in RBX, `CMP; JB` out, `SUB; ADD` and `JMP` back, then `'0' + d`
   stored at the cursor, which steps past it, at an open place and an open
   cursor in the page. The table read is left out (it is one `WordLoad`,

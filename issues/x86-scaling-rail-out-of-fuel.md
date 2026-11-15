@@ -16,7 +16,7 @@ Found by the 2026-09-13 checkpoint job (is the perf detour over?). The ignored r
 
 Not a tuning question: raising fuel or depth makes the rail pass and hides a 140× item. The bar is the artifact item back near its five-node cost per node, the rail green at 20 and 50 under the committed budgets, and the rail promoted into a gate that runs (it is `#[ignore]`d, which is how a week passed).
 
-Repro: `HEATHER_FUNCTION_IR_X86_NODES=20 HEATHER_TIMINGS=- cargo test -p heather-elab --test function_ir_x86_scaling generated_20_node_mixed_binary_alu_dag_checks -- --ignored --nocapture --exact` (ulimit-wrapped; probes/bisect_remote.sh is the furnace step).
+Repro: `HEATHER_FUNCTION_IR_X86_NODES=20 HEATHER_TIMINGS=- cargo test -p heather-elab --test function_ir_x86_scaling generated_20_node_mixed_binary_alu_dag_checks -- --ignored --nocapture --exact` (ulimit-wrapped; probes/bisect_remote.sh@ef3961a is the furnace step).
 
 Related: [[per-instantiation-projection-boundaries]] (the residue issue of the culprit; this is a fourth boundary or a failure of the second), [[elaborator-canonical-type-spelling]], [[function-ir-x86-proof-scaling]] (owner of the rail).
 
