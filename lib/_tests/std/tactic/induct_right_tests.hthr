@@ -1,0 +1,14 @@
+// One of two modules that each do induction along `List::foldl`, which
+// `list` declares: each builds the principle itself
+// (docs/tactics/functional-induction-design.md §6).
+// `induct_import_tests` imports both. Tests, not library.
+import logic; import nat; import omega; import list;
+
+theorem foldl_counts_right(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
+    induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+}
+
+// A function of the same name in each module, with a different body: their
+// equations are different theorems.
+fn spread(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(_, t) => Succ(Succ(spread(t))) } }
+theorem spread_cons(h: Nat, t: List<Nat>): spread(List::Cons(h, t)) = Succ(Succ(spread(t))) { spread::Cons(List::Cons(h, t), h, t, refl) }

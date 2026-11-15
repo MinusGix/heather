@@ -252,19 +252,27 @@ impl DeclarationsMut<'_> {
             }
             let Some((module, base)) = lookup.key_of_kinds(&head, crate::names::ANY_KIND)
                 .and_then(|key| crate::names::split_qual(&key).map(|(m, b)| (m.to_string(), b.to_string()))) else { continue };
-            let recorded = self.pass.recursions.borrow().get(&base).cloned();
+            // This module's own recursion, as recorded; an imported one, as
+            // its module's image keeps it. A structural function's stored
+            // declaration is the one written (a `decreases` loop's is its
+            // lowering, and it built its principle with itself), so the
+            // importer builds the principle from it, as the function's own
+            // module would have.
+            let recorded = if module == self.names.module() {
+                self.pass.recursions.borrow().get(&base).cloned()
+            } else {
+                self.names.surface_decl_in(&module, &base).filter(|f| {
+                    f.kind == DeclKind::Fn && f.decreases.is_none() && f.partial.is_none() && branch_equations::candidate(f)
+                        && !loops::has_loop(f) && branch_equations::recursive(f, base_name(&f.name))
+                }).map(|f| (Rc::new(f.clone()), branch_equations::Recursion::Structural))
+            };
             // A path that only looked like an equation (`Nat::Succ`) names
-            // no recorded recursion and asks for nothing.
+            // no recursion and asks for nothing.
             if recorded.is_none() && !asked.contains(&head) {
                 continue;
             }
-            let Some((function, recursion)) = recorded.filter(|_| module == self.names.module()) else {
-                let why = if module == self.names.module() {
-                    format!("`{head}` is not a recursive function whose body is a tree of tests")
-                } else {
-                    format!("`{head}` is declared in `{module}`, and a principle is built in the module that declares its function, at the first `induct` there (issues/function-induction-across-modules.md)")
-                };
-                self.pass.unfold_refusals.borrow_mut().insert(designed, why);
+            let Some((function, recursion)) = recorded else {
+                self.pass.unfold_refusals.borrow_mut().insert(designed, format!("`{head}` is not a recursive function whose body is a tree of tests"));
                 continue;
             };
             let owner = function.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
