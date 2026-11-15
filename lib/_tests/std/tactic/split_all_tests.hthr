@@ -1,0 +1,96 @@
+// Probes of `split_all; all_goals { … }` (crates/elab/src/goal_combinators.rs,
+// docs/tactics/goal-combinators.md) on proofs about programs
+// (docs/tactics/program-proof-tactics-design.md §3 A): a call nested in a call, a
+// precondition that is a call with tests (as a premise and as a
+// hypothesis), a case taken twice, and what a failing leaf reports. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import bitvec; import bitvec_nat; import bitvec_omega;
+
+fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+fn max(a, b: u64) → u64 {
+    if a < b { b } else { a }
+}
+
+// ---- A call nested in a call ----
+
+// The inner call is split first; the outer one meets the same tests again
+// at the inner call's value.
+theorem clamp_twice(x: u64, {lo, hi: u64}, ordered: lo <= hi): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
+    split_all; all_goals { bv_omega }
+}
+theorem max_three(a, b, c: u64): a <= max(max(a, b), c) {
+    split_all; all_goals { bv_omega }
+}
+// A test the inner call decided, met again by the outer one: the case that
+// contradicts it is closed by the split, so `refl` proves every case left.
+theorem max_absorbs(a, b: u64): max(max(a, b), b) = max(a, b) {
+    split_all; all_goals { refl }
+}
+// At literals the calls compute, and nothing is left to split.
+theorem clamp_twice_literal(): clamp(clamp(70, 10, 50), 10, 50) = 50 {
+    split_all; all_goals { refl }
+}
+
+// An open element type: the nested call is a value of `A`, never compared.
+fn choose<A>(x: u64, a, b: A) → A {
+    if x < 10 { a } else { b }
+}
+theorem choose_nested<A>(x: u64, a, b, c: A): choose(x, choose(x, a, b), c) = choose(x, a, c) {
+    split_all; all_goals { refl }
+}
+
+// ---- A precondition that is a call with tests ----
+
+fn is_digit(c: u8) → Bool {
+    if c < 48 {
+        False
+    } else if 57 < c {
+        False
+    } else {
+        True
+    }
+}
+
+// As a premise of the goal: split before it is introduced, and the cases
+// where it reads `False = True` are closed.
+theorem digit_value_premise(c: u8): is_digit(c) = True → c.toNat() - 48 < 10 {
+    split_all; all_goals { bv_omega }
+}
+// As a hypothesis: reverted into the goal and split with it.
+theorem digit_value(c: u8, h: is_digit(c) = True): c.toNat() - 48 < 10 {
+    split_all; all_goals { bv_omega }
+}
+// Its other side, where the leaf needs both facts the split states.
+theorem not_digit(c: u8, h: is_digit(c) = False, low: 48 <= c.toNat()): 57 < c.toNat() {
+    split_all; all_goals { bv_omega }
+}
+// In a checking position, a fact a later step uses.
+theorem digit_below(c: u8, h: is_digit(c) = True): c.toNat() < 58 {
+    let small: (c.toNat() - 48 < 10) = digit_value(c, h);
+    omega
+}
+
+// ---- What a failing leaf reports ----
+
+// Without `lo <= hi` the statement is false where `hi < lo`; the leaf's
+// error names that case as the source tests it.
+// expect-error: in the `split_all` case `lo <= x`, `hi < x`, `hi < lo`
+theorem clamp_twice_unordered(x, lo, hi: u64): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
+    split_all; all_goals { bv_omega }
+}
+// A precondition the leaf cannot use: the digit's value is not 5 in
+// general.
+// expect-error: in the `split_all` case `48 <= c`, `c <= 57`
+theorem digit_five(c: u8, h: is_digit(c) = True): c.toNat() = 53 {
+    split_all; all_goals { bv_omega }
+}

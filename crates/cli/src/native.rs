@@ -12,6 +12,7 @@ use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
 
 mod allocator;
+mod answers;
 mod elf;
 mod emission;
 mod labels;
@@ -421,6 +422,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // checked a second time.
     let gate = verdicts.clone().unwrap_or_else(|| Arc::new(heather_cache::Cache::in_process()));
     elab.set_gate(gate as Arc<dyn heather_elab::gate::KernelGate>);
+    // What the reads answered on an earlier compile over this store, kept
+    // beside its images (`answers.rs`): keyed by this build, the sources
+    // below and the text of every module a read stands on.
+    let answers = answers::Answers::new(cache.as_deref(),
+        SUPPORT.iter().copied().chain(sources.iter().map(|module| (module.name.as_str(), module.src.as_str()))));
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -522,7 +528,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
-    let compiled = verified::compile(&elab, &prefix, &format!("{prefix}_certificate"), &shape)
+    let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape)
         .map_err(|why| format!("verified lowering: {why}"))?;
     let proof = compiled.text;
     eprintln!("checking the lowering, source agreement, bytes and return certificate in {}", unchecked.display());
@@ -568,6 +574,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
     }
     checked?;
+    // The answers the certificate stands on, now that it has checked: a
+    // read that went into a refused one is never remembered.
+    let (remembered, evaluated) = answers.counts();
+    eprintln!("reads: {remembered} answered from the store, {evaluated} evaluated");
+    if let Err(err) = answers.save() {
+        eprintln!("cache: could not write the reads' answers: {err}");
+    }
     write_new(&certificate, proof.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     // The root, then the program's other entries: each a function of words.

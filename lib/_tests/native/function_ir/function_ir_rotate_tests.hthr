@@ -1,0 +1,117 @@
+// Probes of the rotate (`RotateRight`, function_ir) and of the 32-bit
+// settle (function_ir_lower): a rotation's meaning at literal and neutral
+// words, the shift pair it replaces, the clause an optimizer rule would
+// make of that theorem, the code the lowering writes for a rotate and for a
+// settle at width 32 (one instruction each), whole functions run and
+// lowered, and the refusals. Tests, not library: nothing imports this
+// module.
+import function_ir;
+import function_ir_eval;
+import function_ir_run;
+import function_ir_replay;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import bitvec_rotate;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn h(n: Nat) → BitVec(32) { BitVec::ofNat(n) }
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn leaf(inputs: List<Port>, nodes: List<Node>, outputs: List<Port>) → StructuredRegion {
+    Dataflow(Region(Ports(inputs), nodes, Ports(outputs)))
+}
+
+// ---------------------------------------------------------------------------
+// The meaning
+
+// SHA-256's Σ1 rotations at a literal word.
+theorem rotr_6(): h(0x00000041).rotr(6) = h(0x04000001) { refl }
+theorem rotr_25(): h(0x80000001).rotr(25) = h(0x000000c0) { refl }
+
+// The node's equation is the rotation's.
+theorem rotate_holds(values: Valuation(), held: values(32, 1) = values(32, 0).rotr(6)): NodeHolds(values, RotateRight(32, 1, 0, 6)) { held }
+
+// The shift pair, as three nodes, is the rotation at a neutral width, word
+// and count: the theorem a rule cites.
+theorem pair_is_rotation(values: Valuation(), n, k: Nat,
+    r: NodeHolds(values, LogicalShiftRight(n, 2, 0, k)),
+    l: NodeHolds(values, ShiftLeft(n, 3, 0, n - k)),
+    o: NodeHolds(values, BitOr(n, 4, 2, 3))): NodeHolds(values, RotateRight(n, 4, 0, k)) {
+    rotate_right_of_shifts(values, n, 4, 0, k, 2, 3, r, l, o)
+}
+
+// The rule as an optimizer clause would state it (the rule table is the
+// optimizer's to extend; this is the shape it can take): the premises are
+// the three nodes, the conclusion the one rotate.
+fn rotate_of_shifts(w, o, x, k, r, l: Nat) → Clause {
+    Clause([Is(LogicalShiftRight(w, r, x, k)), Is(ShiftLeft(w, l, x, w - k)), Is(BitOr(w, o, r, l))], Is(RotateRight(w, o, x, k)))
+}
+
+theorem rotate_of_shifts_sound(w, o, x, k, r, l: Nat): rotate_of_shifts(w, o, x, k, r, l).Sound() {
+    λ values _ held => rotate_right_of_shifts(values, w, o, x, k, r, l, held.left, held.right.left, held.right.right.left)
+}
+
+// The control: shifts whose counts do not add up to the width are not the
+// rotation (at 32, right by 6 and left by 25 lose a bit).
+theorem uneven_pair_is_not(same: h(0x00000041).shift_right(6).bor(h(0x00000041).shift_left(25)) = h(0x00000041).rotr(6)): False {
+    let verdict: (False = True) = cong_fn<BitVec(32), Bool>(λ x => x.eq_bit(h(0x04000001)), same);
+    absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// What a node lowers to
+
+fn code_of(lowered: Option<Lowered>) → List<Instruction> { match lowered { None => [], Some(l) => l.code } }
+fn narrow_in_rdi() → File { File::empty().write(Rdi, Some(Held(0, Narrow(32)))) }
+fn narrow_pair() → File { narrow_in_rdi().write(Rsi, Some(Held(1, Narrow(32)))) }
+fn word_in_rdi() → File { File::empty().write(Rdi, Some(Held(0, Word))) }
+
+// A rotate is ROR r32, imm8, after the move into the destination.
+theorem rotate_code(): code_of(RotateRight(32, 1, 0, 6).lower(Rax, narrow_in_rdi())) =
+    [MovRR(Rax, Rdi), RorRI32(Rax, BitVec::ofNat(6))] { refl }
+theorem rotate_in_place_code(): code_of(RotateRight(32, 1, 0, 25).lower(Rdi, narrow_in_rdi())) =
+    [RorRI32(Rdi, BitVec::ofNat(25))] { refl }
+// The result is held narrow, so what reads it needs no settle.
+theorem rotate_held_narrow(): (match RotateRight(32, 1, 0, 6).lower(Rdi, narrow_in_rdi()) { None => None, Some(l) => l.file.at(Rdi) }) =
+    Some(Held(1, Narrow(32))) { refl }
+// Refused: a count the five-bit mask would change, another width, and an
+// operand not held narrow.
+theorem rotate_by_32_refused(): RotateRight(32, 1, 0, 32).lower(Rax, narrow_in_rdi()) = None { refl }
+theorem rotate_at_64_refused(): RotateRight(64, 1, 0, 6).lower(Rax, word_in_rdi()) = None { refl }
+theorem rotate_of_a_word_refused(): RotateRight(32, 1, 0, 6).lower(Rax, word_in_rdi()) = None { refl }
+
+// A sum at 32 bits is settled by one 32-bit move of the register onto
+// itself, where it was SHL and SHR by 32.
+theorem add32_code(): code_of(Add(32, 2, 0, 1).lower(Rdi, narrow_pair())) = [AddRR(Rdi, Rsi), MovSelf32(Rdi)] { refl }
+theorem left_shift32_code(): code_of(ShiftLeft(32, 2, 0, 3).lower(Rdi, narrow_in_rdi())) =
+    [ShiftImm(OpShl, Rdi, BitVec::ofNat(3)), MovSelf32(Rdi)] { refl }
+// A word narrowed to 32 bits is the same move.
+theorem narrow_word_code(): code_of(Resize(64, 32, 1, 0).lower(Rdi, word_in_rdi())) = [MovSelf32(Rdi)] { refl }
+// At another width the settle is still the shift pair.
+theorem add16_code(): code_of(Add(16, 2, 0, 1).lower(Rdi, File::empty().write(Rdi, Some(Held(0, Narrow(16)))).write(Rsi, Some(Held(1, Narrow(16)))))) =
+    [AddRR(Rdi, Rsi), ShiftImm(OpShl, Rdi, BitVec::ofNat(48)), ShiftImm(OpShr, Rdi, BitVec::ofNat(48))] { refl }
+
+// ---------------------------------------------------------------------------
+// Whole functions
+
+// spin(x) = (x as u32).rotr(6) + (x as u32), as a word: a rotate, a sum
+// and the settles around them.
+fn spin() → Function {
+    Function(parameters := [0], body := leaf([word(0)], [Resize(64, 32, 1, 0), RotateRight(32, 2, 1, 6), Add(32, 3, 2, 1), Resize(32, 64, 4, 3)], [word(4)]),
+        result := 4)
+}
+
+theorem spin_evaluable(): program_evaluable([spin()]).IsTrue() { trivial }
+theorem spin_runs(): program_run([spin()], [], 0, [w(0xffffffff00000041)]).word = w(0x04000042) { refl }
+// The carry out of bit 31 is dropped, and the upper half of the argument
+// is never read.
+theorem spin_wraps(): program_run([spin()], [], 0, [w(0x12345678ffffffff)]).word = w(0xfffffffe) { refl }
+theorem spin_lowers(): lower_program([spin()], plan_program([spin()])).is_some().IsTrue() { trivial }

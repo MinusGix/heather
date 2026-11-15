@@ -392,6 +392,28 @@ impl Checking<'_> {
                 let split = goal_combinators::split_all(self, cx, body, e.span);
                 self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
+            // `induct f(ā); all_goals { body }` and `induct f(ā) { C => e, … }`
+            // (crates/elab/src/function_induction.rs): the principle applied
+            // at the goal, its leaves the markers below.
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::INDUCT_ALL_GOALS || name == heather_syntax::INDUCT_CASES)
+                    && named.is_empty() =>
+            {
+                let (call, body) = match args.as_slice() {
+                    [call, body] => (call, Ok(body)),
+                    [Expr { kind: ExprKind::Match { scrut, arms, .. }, .. }] => (&**scrut, Err(arms.as_slice())),
+                    _ => return err("internal `induct` form has the wrong arity", e.span),
+                };
+                let (built, inner) = crate::function_induction::FunctionInduction(self).induct_step(cx, call, body, expected, lvl, e.span)?;
+                self.elab_check_skel_slots(&inner, &built, expected, lvl, hint, skel, capture_slots)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF)
+                    && named.is_empty() =>
+            {
+                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL);
+                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
+            }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
                     && named.is_empty() =>
@@ -443,10 +465,25 @@ impl Checking<'_> {
                             }
                         }
                     }
+                    goal_combinators::Step::Revert(positions) => {
+                        let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
+                        let (reverted, reverted_lvl) = generalize::Generalize(self).generalize_expected(cx, &positions, &goal, lvl);
+                        let proof = self.elab_check_skel_slots(cx, e, &reverted, &reverted_lvl, hint, skel, capture_slots)?;
+                        Ok(generalize::Generalize(self).instantiate_generalized(cx, proof, reverted, &positions))
+                    }
                     goal_combinators::Step::Leaf(goal) => {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         goal_combinators::check_refl_leaf(self, cx, body, &goal, e.span)?;
-                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots)
+                        // A leaf that fails says which case it failed in, as
+                        // the source tests it.
+                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots).map_err(|error| match error {
+                            crate::ElabError::Elab { msg, span } if !msg.contains("in the case") => match goal_combinators::case_path(self, cx, e.span) {
+                                Some(cases) => crate::ElabError::Elab { msg: format!("{msg}\n  in the `split_all` case {cases}"), span },
+                                None => crate::ElabError::Elab { msg, span },
+                            },
+                            other => other,
+                        })
                     }
                 }
             }

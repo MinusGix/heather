@@ -38,6 +38,7 @@ import function_ir_writes;
 import function_ir_run;
 import nat_map;
 import bitvec;
+import bitvec_rotate;
 import bool;
 import list;
 import list_window;
@@ -280,6 +281,8 @@ theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Va
             agree(w, right, Inr(Inl(refl)))),
         ShiftLeft(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), agree(w, value, Inl(refl))),
         LogicalShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount),
+            agree(w, value, Inl(refl))),
+        RotateRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount),
             agree(w, value, Inl(refl))),
         ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount),
             agree(w, value, Inl(refl))),

@@ -288,6 +288,7 @@ theorem Node::step_pure(self node: Node, values: Valuation(), buffers: Buffers()
         BitXor(_, _, _, _) => λ _ => refl,
         ShiftLeft(_, _, _, _) => λ _ => refl,
         LogicalShiftRight(_, _, _, _) => λ _ => refl,
+        RotateRight(_, _, _, _) => λ _ => refl,
         ArithmeticShiftRight(_, _, _, _) => λ _ => refl,
         UnsignedLessThan(_, _, _, _) => λ _ => refl,
         SignedLessThan(_, _, _, _) => λ _ => refl,

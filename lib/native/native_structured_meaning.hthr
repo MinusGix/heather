@@ -268,6 +268,7 @@ theorem Node::run_wide_on(self node: Node, values, other: Valuation(), buffers: 
         WideLoad(_, _, _, _) => λ _ never => false_elim(never),
         WideStore(_, _, _, _, _) => λ _ never => false_elim(never),
         ByteSwap(_, _, _) => λ _ never => false_elim(never),
+        RotateRight(_, _, _, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -340,6 +341,7 @@ theorem Scope::clean_coherent(self s: Scope, node: Node, values: Valuation(), en
         BitXor(_, _, _, _) => λ never => false_elim(never),
         ShiftLeft(_, _, _, _) => λ never => false_elim(never),
         LogicalShiftRight(_, _, _, _) => λ never => false_elim(never),
+        RotateRight(_, _, _, _) => λ never => false_elim(never),
         ArithmeticShiftRight(_, _, _, _) => λ never => false_elim(never),
         UnsignedLessThan(width, output, left, right) => λ _ =>
             trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(values, output, UnsignedLessThan(width, output, left, right).value(values), 1)),

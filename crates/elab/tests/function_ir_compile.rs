@@ -39,6 +39,9 @@ fn checker() -> heather_elab::Elaborator {
         ("x86_64_views", include_str!("../../../lib/std/arch/x86_64/x86_64_views.hthr")),
         ("function_ir_lower_views", include_str!("../../../lib/native/function_ir/function_ir_lower_views.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
+        // What a pass owes for a program lowered in another's place
+        // (`ProgramRewrites`), which the return theorems are stated through.
+        ("function_ir_stage", include_str!("../../../lib/native/function_ir/function_ir_stage.hthr")),
         ("function_ir_compile", include_str!("../../../lib/native/function_ir/function_ir_compile.hthr")),
     ])
 }

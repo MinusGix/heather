@@ -1,0 +1,91 @@
+// MOV r32, r32 onto itself (`MovSelf32`) and ROR r/m32, imm8 (`RorRI32`),
+// x86_64: the bytes the model writes are the assembler's for every
+// register, the decoders read them back, and the model's results are the
+// processor's. Tests, not library (docs/test-value-audit.md §4.5).
+//
+// The encodings are `as` (GNU Binutils 2.42) with `{rex}` before each
+// instruction, since the model always writes a REX and `as` omits one the
+// registers do not need, disassembled by `objdump`; the rotate at a count
+// of 7 (`as` writes D1 /1 for a count of one, which the model does not use).
+// The processor's results are from running the same bytes on the x86-64
+// machine these tests were written on (an Intel Xeon, a C harness with the
+// bytes inline): the 8 edge operands below at counts 0, 1, 7, 31, 32, 33 and
+// 255, then 1,000,000 random operands for the move and 300,000 at each count
+// for the rotate checked against the bytes' meaning, with the flags preset
+// two ways. The rotate kept PF, AF, ZF and SF every time, set CF to the
+// result's bit 31 at a nonzero masked count, and at a masked count of zero
+// changed no flag and still cleared the upper half (`ror32_value`'s count-0
+// case). Neither run is repeated by the suite.
+import x86_64; import x86_64_step_forms; import x86_64_fetched_code;
+import bitvec; import bool; import list; import logic; import nat; import option;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn encodings(xs: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { xs }
+fn words(xs: List<BitVec(64)>) → List<BitVec(64)> { xs }
+fn bools(xs: List<Bool>) → List<Bool> { xs }
+
+// ---------------------------------------------------------------------------
+// The encodings
+
+// `{rex} mov %r32, %r32` for every register.
+theorem mov_self32_encodings(): encodings([mov_self32_bytes(Rax), mov_self32_bytes(Rcx), mov_self32_bytes(Rdx), mov_self32_bytes(Rbx), mov_self32_bytes(Rsp), mov_self32_bytes(Rbp), mov_self32_bytes(Rsi), mov_self32_bytes(Rdi), mov_self32_bytes(R8), mov_self32_bytes(R9), mov_self32_bytes(R10), mov_self32_bytes(R11), mov_self32_bytes(R12), mov_self32_bytes(R13), mov_self32_bytes(R14), mov_self32_bytes(R15)]) =
+    [[b(0x40), b(0x89), b(0xc0)], [b(0x40), b(0x89), b(0xc9)], [b(0x40), b(0x89), b(0xd2)], [b(0x40), b(0x89), b(0xdb)], [b(0x40), b(0x89), b(0xe4)], [b(0x40), b(0x89), b(0xed)], [b(0x40), b(0x89), b(0xf6)], [b(0x40), b(0x89), b(0xff)], [b(0x45), b(0x89), b(0xc0)], [b(0x45), b(0x89), b(0xc9)], [b(0x45), b(0x89), b(0xd2)], [b(0x45), b(0x89), b(0xdb)], [b(0x45), b(0x89), b(0xe4)], [b(0x45), b(0x89), b(0xed)], [b(0x45), b(0x89), b(0xf6)], [b(0x45), b(0x89), b(0xff)]] { refl }
+// `{rex} ror $7, %r32` for every register.
+theorem ror32_encodings(): encodings([ror32_bytes(Rax, b(7)), ror32_bytes(Rcx, b(7)), ror32_bytes(Rdx, b(7)), ror32_bytes(Rbx, b(7)), ror32_bytes(Rsp, b(7)), ror32_bytes(Rbp, b(7)), ror32_bytes(Rsi, b(7)), ror32_bytes(Rdi, b(7)), ror32_bytes(R8, b(7)), ror32_bytes(R9, b(7)), ror32_bytes(R10, b(7)), ror32_bytes(R11, b(7)), ror32_bytes(R12, b(7)), ror32_bytes(R13, b(7)), ror32_bytes(R14, b(7)), ror32_bytes(R15, b(7))]) =
+    [[b(0x40), b(0xc1), b(0xc8), b(0x07)], [b(0x40), b(0xc1), b(0xc9), b(0x07)], [b(0x40), b(0xc1), b(0xca), b(0x07)], [b(0x40), b(0xc1), b(0xcb), b(0x07)], [b(0x40), b(0xc1), b(0xcc), b(0x07)], [b(0x40), b(0xc1), b(0xcd), b(0x07)], [b(0x40), b(0xc1), b(0xce), b(0x07)], [b(0x40), b(0xc1), b(0xcf), b(0x07)], [b(0x41), b(0xc1), b(0xc8), b(0x07)], [b(0x41), b(0xc1), b(0xc9), b(0x07)], [b(0x41), b(0xc1), b(0xca), b(0x07)], [b(0x41), b(0xc1), b(0xcb), b(0x07)], [b(0x41), b(0xc1), b(0xcc), b(0x07)], [b(0x41), b(0xc1), b(0xcd), b(0x07)], [b(0x41), b(0xc1), b(0xce), b(0x07)], [b(0x41), b(0xc1), b(0xcf), b(0x07)]] { refl }
+
+// ---------------------------------------------------------------------------
+// Read back: the instruction decoder and the step-form decoder, and the
+// 64-bit forms beside them unchanged (the same bytes with REX.W are MOV r64
+// and, at /1, no shift the model has).
+
+theorem mov_self32_decodes(): decode_instruction(mov_self32_bytes(R13)) = Some(decoded_canonical(MovSelf32(R13))) { refl }
+theorem ror32_decodes(): decode_instruction(ror32_bytes(R13, b(19))) = Some(decoded_canonical(RorRI32(R13, b(19)))) { refl }
+theorem mov_self32_step_form(): decode_step_form(mov_self32_bytes(Rsi)) = Some(FormEmitted(EmitOrdinary(MovSelf32(Rsi)))) { refl }
+theorem ror32_step_form(): decode_step_form(ror32_bytes(R9, b(25))) = Some(FormEmitted(EmitOrdinary(RorRI32(R9, b(25))))) { refl }
+theorem mov64_still_decodes(): decode_instruction([b(0x48), b(0x89), b(0xf6)]) = Some(decoded_rr(MovRR(Rsi, Rsi))) { refl }
+// A 32-bit MOV between two registers is not a form the model has.
+theorem mov32_pair_refused(): decode_instruction([b(0x40), b(0x89), b(0xfe)]) = None { refl }
+// REX.W C1 /1 is a 64-bit ROR, which the model does not have.
+theorem ror64_refused(): decode_instruction([b(0x48), b(0xc1), b(0xc8), b(0x07)]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// The processor's results
+
+theorem mov_self32_on_the_cpu(): words([mov_self32_value(w(0x0000000000000000)), mov_self32_value(w(0xffffffffffffffff)), mov_self32_value(w(0x0000000080000000)), mov_self32_value(w(0x00000000ffffffff)), mov_self32_value(w(0xffffffff00000000)), mov_self32_value(w(0x0123456789abcdef)), mov_self32_value(w(0x0000000000000001)), mov_self32_value(w(0x8000000000000001))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000080000000), w(0x00000000ffffffff), w(0x0), w(0x0000000089abcdef), w(0x0000000000000001), w(0x0000000000000001)] { refl }
+theorem ror32_0_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(0))), ror32_value(w(0xffffffffffffffff), ror32_count(b(0))), ror32_value(w(0x0000000080000000), ror32_count(b(0))), ror32_value(w(0x00000000ffffffff), ror32_count(b(0))), ror32_value(w(0xffffffff00000000), ror32_count(b(0))), ror32_value(w(0x0123456789abcdef), ror32_count(b(0))), ror32_value(w(0x0000000000000001), ror32_count(b(0))), ror32_value(w(0x8000000000000001), ror32_count(b(0)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000080000000), w(0x00000000ffffffff), w(0x0), w(0x0000000089abcdef), w(0x0000000000000001), w(0x0000000000000001)] { refl }
+theorem ror32_0_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(0))), ror32_count(b(0)), clear_flags()).cf]) =
+    [False, False, False, False, False, False, False, False] { refl }
+theorem ror32_1_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(1))), ror32_value(w(0xffffffffffffffff), ror32_count(b(1))), ror32_value(w(0x0000000080000000), ror32_count(b(1))), ror32_value(w(0x00000000ffffffff), ror32_count(b(1))), ror32_value(w(0xffffffff00000000), ror32_count(b(1))), ror32_value(w(0x0123456789abcdef), ror32_count(b(1))), ror32_value(w(0x0000000000000001), ror32_count(b(1))), ror32_value(w(0x8000000000000001), ror32_count(b(1)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000040000000), w(0x00000000ffffffff), w(0x0), w(0x00000000c4d5e6f7), w(0x0000000080000000), w(0x0000000080000000)] { refl }
+theorem ror32_1_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(1))), ror32_count(b(1)), clear_flags()).cf]) =
+    [False, True, False, True, False, True, True, True] { refl }
+theorem ror32_7_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(7))), ror32_value(w(0xffffffffffffffff), ror32_count(b(7))), ror32_value(w(0x0000000080000000), ror32_count(b(7))), ror32_value(w(0x00000000ffffffff), ror32_count(b(7))), ror32_value(w(0xffffffff00000000), ror32_count(b(7))), ror32_value(w(0x0123456789abcdef), ror32_count(b(7))), ror32_value(w(0x0000000000000001), ror32_count(b(7))), ror32_value(w(0x8000000000000001), ror32_count(b(7)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000001000000), w(0x00000000ffffffff), w(0x0), w(0x00000000df13579b), w(0x0000000002000000), w(0x0000000002000000)] { refl }
+theorem ror32_7_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(7))), ror32_count(b(7)), clear_flags()).cf]) =
+    [False, True, False, True, False, True, False, False] { refl }
+theorem ror32_31_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(31))), ror32_value(w(0xffffffffffffffff), ror32_count(b(31))), ror32_value(w(0x0000000080000000), ror32_count(b(31))), ror32_value(w(0x00000000ffffffff), ror32_count(b(31))), ror32_value(w(0xffffffff00000000), ror32_count(b(31))), ror32_value(w(0x0123456789abcdef), ror32_count(b(31))), ror32_value(w(0x0000000000000001), ror32_count(b(31))), ror32_value(w(0x8000000000000001), ror32_count(b(31)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000000000001), w(0x00000000ffffffff), w(0x0), w(0x0000000013579bdf), w(0x0000000000000002), w(0x0000000000000002)] { refl }
+theorem ror32_31_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(31))), ror32_count(b(31)), clear_flags()).cf]) =
+    [False, True, False, True, False, False, False, False] { refl }
+theorem ror32_32_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(32))), ror32_value(w(0xffffffffffffffff), ror32_count(b(32))), ror32_value(w(0x0000000080000000), ror32_count(b(32))), ror32_value(w(0x00000000ffffffff), ror32_count(b(32))), ror32_value(w(0xffffffff00000000), ror32_count(b(32))), ror32_value(w(0x0123456789abcdef), ror32_count(b(32))), ror32_value(w(0x0000000000000001), ror32_count(b(32))), ror32_value(w(0x8000000000000001), ror32_count(b(32)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000080000000), w(0x00000000ffffffff), w(0x0), w(0x0000000089abcdef), w(0x0000000000000001), w(0x0000000000000001)] { refl }
+theorem ror32_32_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(32))), ror32_count(b(32)), clear_flags()).cf]) =
+    [False, False, False, False, False, False, False, False] { refl }
+theorem ror32_33_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(33))), ror32_value(w(0xffffffffffffffff), ror32_count(b(33))), ror32_value(w(0x0000000080000000), ror32_count(b(33))), ror32_value(w(0x00000000ffffffff), ror32_count(b(33))), ror32_value(w(0xffffffff00000000), ror32_count(b(33))), ror32_value(w(0x0123456789abcdef), ror32_count(b(33))), ror32_value(w(0x0000000000000001), ror32_count(b(33))), ror32_value(w(0x8000000000000001), ror32_count(b(33)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000040000000), w(0x00000000ffffffff), w(0x0), w(0x00000000c4d5e6f7), w(0x0000000080000000), w(0x0000000080000000)] { refl }
+theorem ror32_33_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(33))), ror32_count(b(33)), clear_flags()).cf]) =
+    [False, True, False, True, False, True, True, True] { refl }
+theorem ror32_255_on_the_cpu(): words([ror32_value(w(0x0000000000000000), ror32_count(b(255))), ror32_value(w(0xffffffffffffffff), ror32_count(b(255))), ror32_value(w(0x0000000080000000), ror32_count(b(255))), ror32_value(w(0x00000000ffffffff), ror32_count(b(255))), ror32_value(w(0xffffffff00000000), ror32_count(b(255))), ror32_value(w(0x0123456789abcdef), ror32_count(b(255))), ror32_value(w(0x0000000000000001), ror32_count(b(255))), ror32_value(w(0x8000000000000001), ror32_count(b(255)))]) =
+    [w(0x0), w(0x00000000ffffffff), w(0x0000000000000001), w(0x00000000ffffffff), w(0x0), w(0x0000000013579bdf), w(0x0000000000000002), w(0x0000000000000002)] { refl }
+theorem ror32_255_carry_on_the_cpu(): bools([ror32_flags(ror32_value(w(0x0000000000000000), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffffffffffff), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000080000000), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0x00000000ffffffff), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0xffffffff00000000), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0123456789abcdef), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0x0000000000000001), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf, ror32_flags(ror32_value(w(0x8000000000000001), ror32_count(b(255))), ror32_count(b(255)), clear_flags()).cf]) =
+    [False, True, False, True, False, False, False, False] { refl }
+
+// What the model defines after a rotate: CF, and the flags defined before
+// but OF; nothing changes at a masked count of zero.
+theorem ror32_defines_nonzero(): ror32_defines(ror32_count(b(7)), DefinedFlags::all()) =
+    DefinedFlags(cf := True, pf := True, af := True, zf := True, sf := True, of := False) { refl }
+theorem ror32_defines_masked_zero(): ror32_defines(ror32_count(b(32)), DefinedFlags::none()) = DefinedFlags::none() { refl }

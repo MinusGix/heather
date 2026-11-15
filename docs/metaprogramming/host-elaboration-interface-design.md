@@ -547,7 +547,13 @@ Recorded after building it, as the inductive-tier designs do.
   handles from enclosing scopes are weakened into it, and two scopes neither
   of which encloses the other are refused (a local used outside its
   binder). `Lam(x, b)` must sit exactly at `x`'s parent scope. These are
-  protocol errors and end the run, like a forged handle.
+  protocol errors and end the run, like a forged handle. A handle used
+  where its own scope is not in force is moved out from under the binders
+  that are not (strengthened to the deepest scope enclosing both) when it
+  mentions none of their locals, and refused when it does: so a `Bool`
+  arm's body, read under its payload's binder, is a term of the outer
+  locals (`rt_io_bridge` reads a loop's body so; `tactic_tests`'
+  `true_arm`).
 - **Recoverable failure is a library handler, not host rollback.** §6
   planned `Check`/`Attempt` with `SearchMark` rollback. Every request is
   free of side effects on the elaborator (conversion is the kernel's, and

@@ -68,8 +68,12 @@ inductive Asm {
     Spill(store: StackStore),
     Reload(load: StackLoad),
     // A piece measured by its lemma: a library's layout, too long to read
-    // its length off its bytes.
-    Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
+    // its length off its bytes, or an instruction with no item of its own.
+    // The measure is held as a verdict, which is `True` at closed bytes, so
+    // two closed pieces of the same bytes are one item whichever lemma
+    // measured them: a program with pieces can be stated as a literal
+    // (`Asm::numbers`). `Asm::piece` builds one from the equation.
+    Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len().same(len).IsTrue()),
     // A piece whose bytes take the labels' offsets (by name) and its own: a
     // library layout with a jump out of it. Its length does not depend on
     // them.
@@ -77,6 +81,11 @@ inductive Asm {
     // The program's `index`th open piece, `len` long: what it is assembled
     // with (`fills`), a table or a parameter's code.
     Hole(index: Nat, len: Nat),
+}
+
+// A piece from the equation its lemma proves.
+fn Asm::piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len) → Asm {
+    Piece(bytes, len, j(measured, λ w _ => bytes.len().same(w).IsTrue(), Bool::is_true_of_eq(bytes.len().same_self())))
 }
 
 // A program read from its end: the program before its last item, the
@@ -259,7 +268,7 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         Ret => refl,
         Spill(_) => refl,
         Reload(_) => refl,
-        Piece(_, _, measured) => measured,
+        Piece(bytes, len, measured) => bytes.len().same_sound()(len, eq_true_of_is_true(bytes.len().same(len), measured)),
         Refer(_, _, measured) => measured(labels, here),
         Hole(_, _) => fits.left,
     }
@@ -421,6 +430,11 @@ fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
         ShiftImm(op, d, immediate) => [15, match op { OpShl => 0, OpShr => 1, OpSar => 2 }, d.index(),
             immediate.toNat()],
         Bswap32(d) => [16, d.index()],
+        CmpRI8(l, immediate) => [19, l.index(), immediate.toNat()],
+        CmpRI32(l, immediate) => [20, l.index(), immediate.toNat()],
+        MovRI32(d, immediate) => [21, d.index(), immediate.toNat()],
+        MovSelf32(d) => [17, d.index()],
+        RorRI32(d, immediate) => [18, d.index(), immediate.toNat()],
     }
 }
 
@@ -429,8 +443,10 @@ fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
 }
 
 // An item's tag, then its fields; a block's instruction count before them.
-// The memory items and SYSCALL are `native_compile`'s; the items no compiler
-// emits are tag 7, which the readers refuse.
+// The memory items and SYSCALL are `native_compile`'s. A piece is its length
+// and its bytes, whatever instruction they are, so one added as a piece
+// needs nothing here or in a reader. The items no compiler emits are tag 7,
+// which the readers refuse.
 fn Asm::numbers(self item: Asm) → List<Nat> {
     match item {
         Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
@@ -445,7 +461,8 @@ fn Asm::numbers(self item: Asm) → List<Nat> {
         LoadByte(load) => [10, load.destination.index(), load.base.index()],
         StoreByte(store) => [11, store.base.index(), store.source.index()],
         Syscall => [12],
-        Code(_) => [7], Proved(_, _, _, _) => [7], Piece(_, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
+        Piece(bytes, len, _) => Cons(13, Cons(len, bytes.map(λ (b: BitVec(8)) => b.toNat()))),
+        Code(_) => [7], Proved(_, _, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
     }
 }
 

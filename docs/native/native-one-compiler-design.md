@@ -870,12 +870,18 @@ Linux (`rt_io.hthr`, `rt_io_lower.hthr`, `rt_io_loop.hthr`,
   bound for what follows. A branch that ends in a record in each arm is
   an `If`; the function's own call through its recursor's `ih`, last,
   is `Again`. What it refuses, each with its reason:
-  - *The span as it was.* A value whose term reads the span before a
-    link, used after it. No `FTm` names an old file, so there is no
-    reflection to give. A byte read before a store and wanted after it
-    is the case that costs something: the elaborator inlines the `let`,
-    so the read's term is of the old span wherever it is used
-    (issues/rt-file-read-before-store.md).
+  - *The span as it was, read where the byte is not yet known.* No
+    `FTm` names an old file. A byte read before a store and wanted after
+    it is reflected all the same: the elaborator inlines the `let`, so
+    the read's term is of the old span wherever it is used, and the walk,
+    which has a path's links and what the path ends in in hand at its
+    end, first finds the reads of a state that a later step makes
+    (`rt_file_plan`), binds each before the link that ends its state
+    (`rt_file_hoist`), and reads the later one as that variable, by its
+    state and index (`rt_old_byte`). What is still refused is a read of
+    an old state at an index that only a later step computes (a call's
+    answer after the store): there is nothing to read it with before
+    the store (issues/rt-file-read-before-store.md, closed).
   - *A span that branches and joins.* A statement `if` that stores,
     with code after it, makes the span a `match`; `FTm`'s branches each
     run to an end, and a join would duplicate the rest.

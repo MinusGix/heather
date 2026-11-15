@@ -24,6 +24,8 @@ use std::collections::BTreeSet;
 
 use heather_elab::{Elaborator, function_ir_source};
 
+use super::answers::{Answers, Reading};
+
 pub(super) struct Compiled {
     /// The certificate's source.
     pub text: String,
@@ -89,7 +91,22 @@ pub(super) struct Shape {
     /// The program's other functions exported beside its root
     /// ([`runtime_entries`]).
     pub entries: Vec<Entry>,
+    /// Whether the code is lowered from the program the optimizer makes of
+    /// this one ([`optimize`]): its definitions are then `{prefix}_cut_…`,
+    /// and the checks the lowering needs are stated of them.
+    pub optimize: bool,
 }
+
+/// Whether `compile-x86` runs the optimizer over a program that is lent
+/// spans: it does unless `HEATHER_OPTIMIZE=off`, which is there to measure
+/// what the passes buy and to tell a refusal of theirs from the lowering's.
+fn optimizing() -> bool { std::env::var("HEATHER_OPTIMIZE").as_deref() != Ok("off") }
+
+/// The stem the lowered program's definitions are named under: the
+/// program's own, or `{prefix}_cut` where the optimizer has been over it
+/// (`{prefix}_opt_…` is what its stage made, `{prefix}_cut_…` that with the
+/// functions nothing reaches emptied).
+fn lowered_stem(prefix: &str, optimize: bool) -> String { if optimize { format!("{prefix}_cut") } else { prefix.to_string() } }
 
 /// Another function of a program, exported beside the program's root:
 /// `symbol` the name it is linked under, `source` the Heather function,
@@ -124,6 +141,7 @@ impl Shape {
             marks: None,
             tables: None,
             entries: Vec::new(),
+            optimize: false,
         }
     }
 
@@ -153,7 +171,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, tables: None, entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -185,6 +203,12 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 ", functions - 1 - k));
         }
         let typed = typed(&parameters);
+        // Both programs store into no buffer: the source's evaluation is
+        // then what it does over the file, and the lowered one needs
+        // nothing lent to write.
+        let optimize = optimizing();
+        let quiet = if optimize { format!("{}\n\n{}", quiet_text(prefix, functions), quiet_text(&lowered_stem(prefix, true), functions)) }
+            else { quiet_text(prefix, functions) };
         let agreement = format!("{evaluable}
 
 {quiet}
@@ -195,9 +219,9 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix}_program(), {f}, [{list}]) = {answer} {{
     {source}::agrees_over(now, {list})
 }}
-", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), quiet = quiet_text(prefix, functions), f = functions - 1,
+", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, tables: None, entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -255,6 +279,9 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 ", functions - 1 - k));
         }
         let typed = typed(&parameters);
+        // What the program stores into is checked of the functions lowered.
+        let optimize = optimizing();
+        let stem = lowered_stem(prefix, optimize);
         let agreement = format!("{evaluable}
 
 {within}
@@ -268,9 +295,9 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
     {source}::runs_over(span, rest, {list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
-            within = if tables.is_some() { marked_text(prefix) } else { within_text(prefix, functions) }, f = functions - 1,
+            within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new() }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
     }
 }
 
@@ -442,19 +469,424 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     Ok(())
 }
 
-pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
+/// What the optimizer needs besides: its stage, the plans' types, and the
+/// search.
+const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rules", "function_ir_tidy",
+    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
+
+/// The stage a search's answer is a plan of, in the order
+/// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
+/// function's entry, and then moves, each an inlining or a replay, as
+/// often as a search found use for one (reading through copies and
+/// repeats, dropping what nothing reads, deciding tests and writing
+/// narrowings as moves).
+#[derive(Clone, Copy, PartialEq)]
+enum Stage {
+    Guard,
+    Inline,
+    Replay,
+}
+
+/// A search that changed a function: the stage its plan is of, the plan,
+/// the function made as source, and the name the reads know that function
+/// by.
+#[derive(Clone)]
+struct Staged {
+    stage: Stage,
+    plan: String,
+    function: String,
+    name: String,
+}
+
+/// What the optimizer made of a program: the definitions `{prefix}_opt_…`
+/// (each function, the plans that make it, the lists) and `{prefix}_cut_…`
+/// (the same with the functions nothing reaches emptied), which the reads
+/// and the certificate both take, and the statements that the stage and
+/// the emptying make them of the program, which are the certificate's
+/// alone.
+struct Optimized {
+    definitions: String,
+    statements: String,
+    /// Each function's placement where the optimizer kept a function the
+    /// lowering was asked about with it and the function is reached (it is
+    /// then the function the code is lowered from); `None` where the
+    /// planner is still to be read.
+    placements: Vec<Option<Vec<u64>>>,
+}
+
+/// The text of a spelling (`lib/native/function_ir/function_ir_spelled.hthr`):
+/// a number is an ASCII character's code, or the mark and after it a number
+/// written here in decimal. `None` for anything else.
+fn spelled_text(spelling: &[u64]) -> Option<String> {
+    const MARK: u64 = 256;
+    let mut text = String::with_capacity(spelling.len() * 2);
+    let mut numbers = spelling.iter();
+    while let Some(&n) = numbers.next() {
+        match n {
+            MARK => text.push_str(&numbers.next()?.to_string()),
+            10 | 32..=126 => text.push(n as u8 as char),
+            _ => return None,
+        }
+    }
+    Some(text)
+}
+
+/// The optimizer over a program that is lent spans
+/// (`function_ir_optimize`, docs/native/optimizer-design.md §9): a function at a
+/// time, callees first, each over its callees as the stages left them, and
+/// a search at a time, each over the function the searches before it
+/// made. A search is an evaluation and proves nothing: it answers a
+/// plan and the function its stage makes of it, both as source, which are
+/// stated here as literals, and the certificate's statement that the stage
+/// makes the one from the other is the kernel's to check, a plan of a
+/// function a statement; `Stage::many_made` joins those after the test
+/// (the moves: an inlining or a replay each) and `optimize_made` makes
+/// them the statement `Stage::run_next` takes. A search that has nothing,
+/// or answers the function it was given, adds no plan and keeps the
+/// function.
+///
+/// A function is first inlined and tidied with no test, which is where the
+/// search sees what a test of its spans' lengths would decide. Where there
+/// is such a test, the function is made again with the test first: the arm
+/// for a span too short is the function as written, and the searches work
+/// in the other arm alone (those named `…_past`). After inlining, a
+/// function reads through its copies and repeats before its tests are
+/// decided, since that is what makes a word the test computed and the
+/// body's own computation of it one id; and once more after, since what
+/// is decided writes moves of its own (a narrowing of a value already in
+/// range).
+///
+/// Last, where bytes of a span are joined into a word, a load of the word
+/// is put beside them and the join found a move of it (`find_worded`); the
+/// byte loads then go with the sweep.
+///
+/// What the stages made is kept where it is within the search's room
+/// (`Function::fits`) and the lowering takes it with the planner's
+/// placement (`Function::lowers`, a read of its own: a search and the
+/// planner each hold what they evaluate): the function under its test,
+/// else the one with no test and its own tests decided, else the one
+/// inlined and tidied alone, else the function as it is.
+///
+/// Then the functions `roots` (the exported ones) no longer reach are
+/// emptied (`prune`): inlined everywhere, a small function is called by
+/// nothing, and its code would be emitted all the same. The certificate
+/// states the list of the functions reached as a literal, and that the
+/// program is closed under it (`program_closed`), by evaluation.
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
+    let mut fork = Reading::new(elab, answers);
+    let source = format!("{probe}_opt_source");
+    fork.define(&source, definitions);
+    let read = |fork: &mut Reading, module: &str, item: &str|
+        fork.read(&format!("{module}::{prefix}_opt_{item}")).map_err(|e| format!("`{prefix}_opt_{item}`: {e}"));
+    let uses = |modules: &[String]| modules.iter().map(|name| format!("import {name};\n")).collect::<String>();
+    // Whether the lowering takes a function with the planner's placement
+    // (`Function::lowers`), and the placement where it does: the program's
+    // planning of a function the optimizer keeps is this one, so the
+    // compile reads it once (issues/compile-x86-address-space-margin.md).
+    let placed = format!("{probe}_opt_placed");
+    fork.define(&placed, &format!("{imports}import {source};
+fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List<Nat> {{
+    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts()) {{
+        None => [0],
+        Some(_) => Cons(1, places.map(λ (place: Place) => place.number())),
+    }}
+}}
+"));
+    let mut modules = vec![source, placed];
+    let (mut stated, mut statements) = (String::new(), String::new());
+    let mut placements = Vec::with_capacity(m);
+    for k in 0..m {
+        let below = |stem: &str| if k == 0 { "Nil".to_string() } else { format!("{prefix}_{stem}_{}()", k - 1) };
+        let earlier = below("opt_first");
+        let original = format!("{prefix}_fn{k}()");
+        // A yes or no of the function an expression names, read.
+        let asks = |fork: &mut Reading, modules: &[String], item: &str, question: &str| -> Result<bool, String> {
+            let module = format!("{probe}_opt_{item}");
+            let text = format!("{imports}{}
+fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False => [0] }} }}
+", uses(modules));
+            fork.define(&module, &text);
+            Ok(read(fork, &module, item)? == [1])
+        };
+        // The stages `searches` name, in turn from the function `from`: each
+        // search is asked of the function the one before it made, and what
+        // it makes, where that is another function, is defined under a name
+        // of its own, `{prefix}_opt_fn{k}_{tag}{stage}`.
+        let run = |fork: &mut Reading, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(Stage, String)]|
+            -> Result<Vec<Staged>, String> {
+            let mut made: Vec<Staged> = Vec::new();
+            for (at, (stage, search)) in searches.iter().enumerate() {
+                let current = made.last().map_or(from.to_string(), |last| format!("{}()", last.name));
+                let item = format!("found_{k}_{tag}{at}");
+                let find = format!("{probe}_opt_{item}");
+                let text = format!("{imports}{}
+fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
+", uses(modules));
+                fork.define(&find, &text);
+                let unread = || format!("function {k}'s `{search}` did not read back");
+                let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
+                if found == "None" { continue; }
+                let (plan, function) = match found.split_once('\n') {
+                    Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
+                    _ => return Err(unread()),
+                };
+                if before.as_deref() == Some(function) { continue; }
+                let name = format!("{prefix}_opt_fn{k}_{tag}{at}");
+                let module = format!("{probe}_opt_made_{k}_{tag}{at}");
+                let text = format!("{imports}{}
+fn {name}() → Function {{
+    {function}
+}}
+", uses(modules));
+                fork.define(&module, &text);
+                modules.push(module);
+                before = Some(function.to_string());
+                made.push(Staged { stage: *stage, plan: plan.to_string(), function: function.to_string(), name });
+            }
+            Ok(made)
+        };
+        let named = |made: &[Staged]| made.last().map_or(original.clone(), |last| format!("{}()", last.name));
+        let fits = |fork: &mut Reading, modules: &[String], made: &[Staged], item: &str|
+            asks(fork, modules, &format!("fits_{item}{k}"), &format!("{}.fits(Wanted::usual())", named(made)));
+        let lowers = |fork: &mut Reading, modules: &[String], made: &[Staged], item: &str| -> Result<Option<Vec<u64>>, String> {
+            let item = format!("taken_{item}{k}");
+            let module = format!("{probe}_opt_{item}");
+            let function = named(made);
+            let text = format!("{imports}{}
+fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {function}.plan()) }}
+", uses(modules));
+            fork.define(&module, &text);
+            match read(fork, &module, &item)?.split_first() {
+                Some((0, [])) => Ok(None),
+                Some((1, places)) => Ok(Some(places.to_vec())),
+                _ => Err(format!("`{prefix}_opt_{item}` did not read back")),
+            }
+        };
+        // The placement of the function kept, where the lowering was asked.
+        let mut placement = None;
+        let wanted = format!("{earlier}, Wanted::usual()");
+        let replay = |search: &str| (Stage::Replay, search.to_string());
+        // With no test: inlined and tidied, within the search's room or
+        // not at all.
+        let mut tidied = run(&mut fork, &mut modules, "t", &original, None,
+            &[(Stage::Inline, format!("find_inlined({wanted})")), replay("find_copied()"), replay("find_swept()")])?;
+        if !tidied.is_empty() && !fits(&mut fork, &modules, &tidied, "")? { tidied.clear(); }
+        // Under the test that function asks for, where it asks for one: the
+        // test is put on the function as written.
+        let mut made: Vec<Staged> = Vec::new();
+        let mut tested = run(&mut fork, &mut modules, "g", &named(&tidied), None, &[(Stage::Guard, format!("find_guarded({original}, Wanted::usual())"))])?;
+        if !tested.is_empty() {
+            let last = tested[0].function.clone();
+            tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
+                &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_copied_past()"), replay("find_swept_past()"),
+                    replay("find_learned_past()"), replay("find_copied_past()"), replay("find_swept_past()")])?);
+            if fits(&mut fork, &modules, &tested, "tested_")? && let Some(places) = lowers(&mut fork, &modules, &tested, "tested_")? {
+                made = tested;
+                placement = Some(places);
+            }
+        }
+        // With no test: what the function's own tests and ranges decide,
+        // of the function tidied; or that function.
+        if made.is_empty() {
+            let mut learned = tidied.clone();
+            learned.extend(run(&mut fork, &mut modules, "l", &named(&tidied), tidied.last().map(|last| last.function.clone()),
+                &[replay("find_learned()")])?);
+            if learned.len() > tidied.len() {
+                let last = learned.last().map(|last| last.function.clone());
+                learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
+                if let Some(places) = lowers(&mut fork, &modules, &learned, "learned_")? {
+                    made = learned;
+                    placement = Some(places);
+                }
+            }
+            if made.is_empty() && !tidied.is_empty() && let Some(places) = lowers(&mut fork, &modules, &tidied, "")? {
+                made = tidied;
+                placement = Some(places);
+            }
+        }
+        // Bytes joined into a word, read as one load: the load is put
+        // after the last of the byte loads, the walk finds the join a
+        // move of its word, the byte loads are swept, and a last walk
+        // drops the tests no access reads any more. Kept where the
+        // lowering takes it, which asks that the load's span is tested.
+        {
+            let past = if made.iter().any(|staged| staged.stage == Stage::Guard) { "_past" } else { "" };
+            let last = made.last().map(|last| last.function.clone());
+            let put = run(&mut fork, &mut modules, "w", &named(&made), last, &[(Stage::Inline, format!("find_worded{past}({earlier})"))])?;
+            if !put.is_empty() {
+                let mut worded = made.clone();
+                worded.extend(put);
+                let last = worded.last().map(|last| last.function.clone());
+                worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
+                    &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
+                        replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
+                if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
+                    made = worded;
+                    placement = Some(places);
+                }
+            }
+        }
+        placements.push(placement);
+        // The function after the test and after each move, by name.
+        let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
+        let moves: Vec<&Staged> = made.iter().filter(|staged| staged.stage != Stage::Guard).collect();
+        let last_made = moves.last().map_or(tested_name.clone(), |staged| format!("{}()", staged.name));
+        let lists = format!("fn {prefix}_opt_first_{k}() → List<Function> {{ Cons({prefix}_opt_fn{k}(), {earlier}) }}\n");
+        let next = format!("{probe}_opt_{k}");
+        let text = format!("{imports}{}
+fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
+{lists}", uses(&modules));
+        fork.define(&next, &text);
+        modules.push(next);
+        let plans_before = below("opt_plans");
+        if made.is_empty() {
+            stated.push_str(&format!("
+// Function {k} as the optimizer left it: as it is, with no plan.
+fn {prefix}_opt_plan_{k}() → Passes() {{ no_passes() }}
+fn {prefix}_opt_fn{k}() → Function {{ {original} }}
+{lists}fn {prefix}_opt_plans_{k}() → List<Passes()> {{ Cons({prefix}_opt_plan_{k}(), {plans_before}) }}
+"));
+            statements.push_str(&format!("
+theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
+    refl
+}}
+"));
+        } else {
+            stated.push_str(&format!("\n// Function {k} after each plan that changed it, the plans, and the function as the optimizer left it.\n"));
+            let found = made.iter().find(|staged| staged.stage == Stage::Guard);
+            stated.push_str(&format!("fn {prefix}_opt_plan_{k}_g() → Option<Guard> {{{}}}\n",
+                found.map_or(" None ".to_string(), |staged| format!("\n    Some({})\n", staged.plan))));
+            if let Some(staged) = found {
+                stated.push_str(&format!("fn {}() → Function {{\n    {}\n}}\n", staged.name, staged.function));
+            }
+            statements.push_str(&format!("
+theorem {prefix}_opt_made_{k}_g(): guard_stage().maybe().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}_g()) = Some({tested_name}) {{
+    refl
+}}
+"));
+            // The moves, each its own statement, joined from the last:
+            // `{prefix}_opt_moves_{k}_{i}` is the moves from the `i`th on,
+            // and `{prefix}_opt_joined_{k}_{i}` that they make the last
+            // function of the one the `i`th was given.
+            let count = moves.len();
+            let given = |i: usize| if i == 0 { tested_name.clone() } else { format!("{}()", moves[i - 1].name) };
+            let rest = |i: usize| if i == count { "Nil".to_string() } else { format!("{prefix}_opt_moves_{k}_{i}()") };
+            for (i, staged) in moves.iter().enumerate() {
+                let side = if staged.stage == Stage::Inline { "Inl" } else { "Inr" };
+                stated.push_str(&format!("fn {prefix}_opt_plan_{k}_m{i}() → Or<Inlines, Plan> {{\n    {side}({})\n}}\nfn {}() → Function {{\n    {}\n}}\n",
+                    staged.plan, staged.name, staged.function));
+                statements.push_str(&format!("
+theorem {prefix}_opt_made_{k}_m{i}(): move_stage().rewrite({earlier}, {}, {prefix}_opt_plan_{k}_m{i}()) = Some({}) {{
+    refl
+}}
+", given(i), given(i + 1)));
+            }
+            for i in (0..count).rev() {
+                stated.push_str(&format!("fn {prefix}_opt_moves_{k}_{i}() → List<Or<Inlines, Plan>> {{ Cons({prefix}_opt_plan_{k}_m{i}(), {}) }}\n", rest(i + 1)));
+                let later = if i + 1 == count { format!("move_stage().many_none({earlier}, {last_made})") } else { format!("{prefix}_opt_joined_{k}_{}()", i + 1) };
+                statements.push_str(&format!("
+theorem {prefix}_opt_joined_{k}_{i}(): move_stage().many().rewrite({earlier}, {}, {prefix}_opt_moves_{k}_{i}()) = Some({last_made}) {{
+    move_stage().many_made({earlier}, {}, {}, {last_made}, {prefix}_opt_plan_{k}_m{i}(), {}, {prefix}_opt_made_{k}_m{i}(), {later})
+}}
+", given(i), given(i), given(i + 1), rest(i + 1)));
+            }
+            let joined = if count == 0 { format!("move_stage().many_none({earlier}, {last_made})") } else { format!("{prefix}_opt_joined_{k}_0()") };
+            stated.push_str(&format!("fn {prefix}_opt_plan_{k}() → Passes() {{ passes({prefix}_opt_plan_{k}_g(), {}) }}
+fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
+{lists}fn {prefix}_opt_plans_{k}() → List<Passes()> {{ Cons({prefix}_opt_plan_{k}(), {plans_before}) }}
+", rest(0)));
+            statements.push_str(&format!("
+theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
+    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {},
+        {prefix}_opt_made_{k}_g(), {joined})
+}}
+", rest(0)));
+        }
+        statements.push_str(&format!("
+theorem {prefix}_opt_ran_{k}(): optimize_stage().run({prefix}_first_{k}(), {prefix}_opt_plans_{k}()) = Some({prefix}_opt_first_{k}()) {{
+    optimize_stage().run_next({prefix}_fn{k}(), {}, {prefix}_opt_plan_{k}(), {}, {prefix}_opt_fn{k}(), {earlier},
+        {}, {prefix}_opt_made_{k}())
+}}
+", below("first"), plans_before, if k == 0 { "refl".to_string() } else { format!("{prefix}_opt_ran_{}()", k - 1) }));
+    }
+    let last = m - 1;
+    let reach = format!("{probe}_opt_reach");
+    let text = format!("{imports}{}
+fn {prefix}_opt_reached() → List<Nat> {{ program_reached({prefix}_opt_first_{last}(), [{}]) }}
+", uses(&modules), roots.iter().map(|root| root.to_string()).collect::<Vec<_>>().join(", "));
+    fork.define(&reach, &text);
+    // The walk lists a function once for each call it finds; the certificate
+    // states each once, in order.
+    let mut reached = read(&mut fork, &reach, "reached")?;
+    reached.sort_unstable();
+    reached.dedup();
+    stated.push_str(&format!("
+// `{prefix}_program()` as the optimizer's stage left it, and the functions
+// the exported ones reach in it.
+fn {prefix}_opt_program() → List<Function> {{ {prefix}_opt_first_{last}() }}
+fn {prefix}_opt_live() → List<Nat> {{ [{}] }}
+
+// The program the code is lowered from: a function nothing reaches is
+// emptied, and keeps its number.
+", reached.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")));
+    for k in 0..m {
+        let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_cut_first_{}()", k - 1) };
+        let emptied = if reached.contains(&(k as u64)) { "" } else { ".emptied()" };
+        stated.push_str(&format!("fn {prefix}_cut_fn{k}() → Function {{ {prefix}_opt_fn{k}(){emptied} }}
+fn {prefix}_cut_first_{k}() → List<Function> {{ Cons({prefix}_cut_fn{k}(), {earlier}) }}
+"));
+    }
+    stated.push_str(&format!("fn {prefix}_cut_program() → List<Function> {{ {prefix}_cut_first_{last}() }}\n"));
+    statements.push_str(&format!("
+// The program made does at each function whatever the program does: the
+// stage's theorem, at the plans above.
+theorem {prefix}_opt_keeps(f: Nat): ProgramRewrites({prefix}_program(), {prefix}_opt_program(), f) {{
+    optimize_stage().run_rewrites({prefix}_program(), {prefix}_opt_plans_{last}(), {prefix}_opt_program(), {prefix}_opt_ran_{last}(), f)
+}}
+
+theorem {prefix}_cut_made(): prune({prefix}_opt_program(), λ (n: Nat) => n.among({prefix}_opt_live())) = {prefix}_cut_program() {{ refl }}
+
+// Every function reached calls only functions reached.
+theorem {prefix}_cut_closed(): program_closed({prefix}_opt_program(), λ (n: Nat) => n.among({prefix}_opt_live())) = True {{ refl }}
+
+// So the program the code is lowered from does at a function reached
+// whatever the program does.
+theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): ProgramRewrites({prefix}_program(), {prefix}_cut_program(), f) {{
+    ProgramRewrites::then({prefix}_program(), {prefix}_opt_program(), {prefix}_cut_program(), f, {prefix}_opt_keeps(f),
+        j({prefix}_cut_made(), λ made _ => ProgramRewrites({prefix}_opt_program(), made, f),
+            prune_rewrites(λ (n: Nat) => n.among({prefix}_opt_live()), {prefix}_opt_program(), {prefix}_cut_closed(), f, alive)))
+}}
+"));
+    for (k, placement) in placements.iter_mut().enumerate() {
+        if !reached.contains(&(k as u64)) { *placement = None; }
+    }
+    Ok(Optimized { definitions: stated, statements, placements })
+}
+
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
+    if program.optimize { for name in OPTIMIZE_IMPORTS { imports.push_str(&format!("import {name};\n")); } }
     let definitions = format!("{imports}{}", program.definitions);
     let m = program.functions;
+    let probe = format!("{module}_probe");
+    // The optimizer first: what is planned, emitted and lowered from here on
+    // is the program it made, `{prefix}_cut_…`, and the program published
+    // is what the theorems are about.
+    let stem = lowered_stem(prefix, program.optimize);
+    let (definitions, rewriting, placed) = if program.optimize {
+        let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
+        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots)?;
+        (format!("{definitions}{}", made.definitions), made.statements, made.placements)
+    } else { (definitions, String::new(), vec![None; m]) };
     // A function's emission after `prog`: under the program's counts of
     // lent buffers where it has them.
     let lent = program.lent.is_some();
     let emit = |prog: &str, k: usize, places: &str, names: u64| if lent {
-        format!("{prefix}_fn{k}().emit_lent({prog}, {k}, {places}, {names}, {prefix}_counts())")
+        format!("{stem}_fn{k}().emit_lent({prog}, {k}, {places}, {names}, {prefix}_counts())")
     } else {
-        format!("{prefix}_fn{k}().emit({prog}, {k}, {places}, {names})")
+        format!("{stem}_fn{k}().emit({prog}, {k}, {places}, {names})")
     };
     // Evaluated on a fork, which only defines: the certificate's statements
     // are the session's to check. A function at a time, each read from the
@@ -463,27 +895,30 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &S
     // of it at once, and each of them again
     // (issues/compile-x86-certificate-memory.md). The planner runs once per
     // function; a function is emitted onto the code before it as a literal.
-    let probe = format!("{module}_probe");
     let mut plans = String::new();
     for k in 0..m {
-        plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {prefix}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
+        plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {stem}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
     }
     // The last `d` items' numbers, as `Prog::numbers` writes them.
     plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
 }}
 "));
-    let mut fork = elab.fork();
+    let mut fork = Reading::new(elab, answers);
     let first = format!("{definitions}{plans}");
-    fork.elab_module_source(&probe, &first).map_err(|e| e.render(&first))?;
-    let read = |fork: &Elaborator, module: &str, item: &str|
-        function_ir_source::evaluate_numbers(fork, &format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
+    fork.define(&probe, &first);
+    let read = |fork: &mut Reading, module: &str, item: &str|
+        fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
     for k in 0..m {
-        for n in read(&fork, &probe, &format!("plan_{k}"))? {
+        // The optimizer's question already planned a function it kept.
+        let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
+        for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // A function's count of saves (`Place::number`).
+                // What a call saves, a mask, and a function's count of
+                // saves (`Place::number`).
+                n if n >= 32 => format!("Spilling({})", n - 32),
                 n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });
@@ -525,8 +960,8 @@ fn {prefix}_read_{k}() → List<Nat> {{
     }}
 }}
 ", uses(&modules), emitted = emit(&prog, k, &places, names));
-        fork.elab_module_source(&step, &text).map_err(|e| e.render(&text))?;
-        let numbers = read(&fork, &step, &format!("read_{k}"))?;
+        fork.define(&step, &text);
+        let numbers = read(&mut fork, &step, &format!("read_{k}"))?;
         match numbers[..] {
             // Which function and where in it: the library's mirror of the
             // emitter's tests says (`function_ir_refusal`,
@@ -536,11 +971,11 @@ fn {prefix}_read_{k}() → List<Nat> {{
                 let counts = if lent { format!("{prefix}_counts()") } else { "[]".to_string() };
                 let why = format!("{probe}_refusal");
                 let text = format!("{imports}import function_ir_refusal;\n{}
-fn {prefix}_refused() → List<Nat> {{ {prefix}_fn{k}().refusal_bytes({k}, {names}, {counts}) }}
-fn {prefix}_shown() → List<Nat> {{ {prefix}_fn{k}().shown_bytes() }}
+fn {prefix}_refused() → List<Nat> {{ {stem}_fn{k}().refusal_bytes({k}, {names}, {counts}) }}
+fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
 ", uses(&modules));
-                let defined = fork.elab_module_source(&why, &text).is_ok();
-                let said = |item: &str| read(&fork, &why, item).ok().filter(|_| defined)
+                let defined = fork.define_now(&why, &text).is_ok();
+                let mut said = |item: &str| (if defined { read(&mut fork, &why, item).ok() } else { None })
                     .map(|bytes| String::from_utf8_lossy(&bytes.iter().map(|&b| b as u8).collect::<Vec<u8>>()).into_owned());
                 let (at, nodes) = (said("refused"), said("shown"));
                 return Err(format!("the verified lowering refused this program with the planner's placement: its function {k} of {m}, callees first{}{}",
@@ -576,9 +1011,9 @@ fn {prefix}_shown() → List<Nat> {{ {prefix}_fn{k}().shown_bytes() }}
     let text = format!("{imports}{}{}
 fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
 ", uses(&modules), stated(last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
-    fork.elab_module_source(&closing, &text).map_err(|e| e.render(&text))?;
+    fork.define(&closing, &text);
     modules.push(closing.clone());
-    let lens = read(&fork, &closing, "lens")?;
+    let lens = read(&mut fork, &closing, "lens")?;
     if lens.len() != items.len() { return Err("the items' lengths do not cover the code".into()); }
     let offsets = super::labels::offsets(&lens);
     let length = offsets[items.len()] as usize;
@@ -597,10 +1032,10 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     }
     let reading = format!("{probe}_bytes");
     let text = format!("{imports}{}{table}{windows}", uses(&modules));
-    fork.elab_module_source(&reading, &text).map_err(|e| e.render(&text))?;
+    fork.define(&reading, &text);
     let mut bytes = Vec::with_capacity(length);
     for &cut in cuts.iter().filter(|&&cut| cut > 0) {
-        for b in read(&fork, &reading, &format!("bytes_{cut}"))? {
+        for b in read(&mut fork, &reading, &format!("bytes_{cut}"))? {
             bytes.push(u8::try_from(b).map_err(|_| "a byte above 255".to_string())?);
         }
         if bytes.len() as u64 != offsets[cut] { return Err("the items' lengths do not cover the code".into()); }
@@ -621,6 +1056,7 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     let list = format!("[{}]", parameters.join(", "));
     let call = &program.answer;
     let mut text = definitions;
+    text.push_str(&rewriting);
     // The code is stated as the literal the lowering computes, a function at
     // a time, each function's emission its own statement from the literal
     // before it: a declaration's fuel is its own, and the lowering is most
@@ -639,15 +1075,15 @@ fn {prefix}_code_{k}() → Prog {{ {prefix}_at_{count}() }}
 
 fn {prefix}_rest_{k}() → List<Place> {{ {} }}
 ", rest(left)));
-        let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", k - 1) };
+        let earlier = if k == 0 { "Nil".to_string() } else { format!("{stem}_first_{}()", k - 1) };
         let (started, functions, next) = if lent {
             (if k == 0 { format!("emit_functions_lent_start({prefix}_placement(), {m}, {prefix}_counts())") } else { format!("{prefix}_emitted_{}()", k - 1) },
-                format!("emit_functions_after_lent(Start, {prefix}_first_{k}(), {prefix}_placement(), {m}, {prefix}_counts())"),
-                format!("emit_functions_lent_next({prefix}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_counts(), "))
+                format!("emit_functions_after_lent(Start, {stem}_first_{k}(), {prefix}_placement(), {m}, {prefix}_counts())"),
+                format!("emit_functions_lent_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_counts(), "))
         } else {
             (if k == 0 { format!("emit_functions_start({prefix}_placement(), {m})") } else { format!("{prefix}_emitted_{}()", k - 1) },
-                format!("emit_functions({prefix}_first_{k}(), {prefix}_placement(), {m})"),
-                format!("emit_functions_next({prefix}_fn{k}(), {earlier}, {prefix}_placement(), {m}, "))
+                format!("emit_functions({stem}_first_{k}(), {prefix}_placement(), {m})"),
+                format!("emit_functions_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, "))
         };
         text.push_str(&format!("
 theorem {prefix}_emits_{k}(): EmitsAs({emitted}, {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
@@ -678,10 +1114,10 @@ theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
         {prefix}_laid())
 }}
 ", last = m - 1, labels = before.2, count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts),
-        lowered = if lent { format!("lower_program_lent({prefix}_program(), {prefix}_placement(), {prefix}_counts())") }
-            else { format!("lower_program({prefix}_program(), {prefix}_placement())") },
-        lowers = if lent { format!("lower_program_lent_emitted({prefix}_program(), {prefix}_placement(), {prefix}_counts(), ") }
-            else { format!("lower_program_emitted({prefix}_program(), {prefix}_placement(), ") }));
+        lowered = if lent { format!("lower_program_lent({stem}_program(), {prefix}_placement(), {prefix}_counts())") }
+            else { format!("lower_program({stem}_program(), {prefix}_placement())") },
+        lowers = if lent { format!("lower_program_lent_emitted({stem}_program(), {prefix}_placement(), {prefix}_counts(), ") }
+            else { format!("lower_program_emitted({stem}_program(), {prefix}_placement(), ") }));
     text.push_str(&format!("
 {agreement}
 // The published bytes, a piece at a time from the last item: no one
@@ -692,6 +1128,14 @@ theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
 theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ refl }}
 ", label = f + 1));
     let comma = if parameters.is_empty() { "" } else { ", " };
+    // Through the optimizer, a return theorem takes both programs: the run
+    // is the published one's, the lowering and its checks are of the one
+    // made, and `{prefix}_cut_keeps` says the one made does at a function
+    // reached whatever the published one does.
+    let (through, programs, quiet) = if program.optimize {
+        ("_through", format!("{prefix}_program(), {stem}_program()"), format!("{prefix}_quiet(), {stem}_quiet()"))
+    } else { ("", format!("{prefix}_program()"), format!("{prefix}_quiet()")) };
+    let keeps = |function: usize| if program.optimize { format!(" {prefix}_cut_keeps({function}, refl),") } else { String::new() };
     if program.marks.is_some() {
         // A writer: the file is any whose first span is `span`, and the
         // lending lets the marked buffers be written, so `loan` asks of
@@ -724,13 +1168,13 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 }}
 ", label = f + 1, room = 136 * (f + 1), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
-            format!("Ending::returns_marked<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
-        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial, loan,
-        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+            format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
+        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         } else {
-            format!("Ending::returns_written<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
-        {prefix}_lowers(), {prefix}_evaluable(), {prefix}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,
-        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "))
+            format!("Ending::returns_written{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {stem}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,{keeps}
+        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         }));
     } else if lent {
         // The file is any (`now`), lying anywhere (`addresses`) under the
@@ -756,11 +1200,11 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed({list}, i, s) ∧ 136 * {label} <= i) ∧
             stack.LentOver({prefix}_lending(addresses, now), top, {f}, {list}, now)(i, s),
         stack.AnsweredOver({prefix}_lending(addresses, now), {call}, now)) {{
-    compiled_returns_lent<M>({prefix}_program(), {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(), {prefix}_lowers(),
-        {prefix}_evaluable(), {prefix}_quiet(), fetch, data, last, origin, stack, top, loan, {f}, trivial, {list}, trivial, now, {call},
+    compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(), {prefix}_lowers(),
+        {prefix}_evaluable(), {quiet}, fetch, data, last, origin, stack, top, loan, {f}, trivial,{keeps} {list}, trivial, now, {call},
         {prefix}_agrees(now{comma}{arguments}))
 }}
-", label = f + 1, room = 136 * (f + 1), arguments = parameters.join(", ")));
+", label = f + 1, room = 136 * (f + 1), arguments = parameters.join(", "), keeps = keeps(f)));
     } else {
         text.push_str(&format!("
 // Called at its label with its arguments in RDI, RSI, … and past the sixth
@@ -793,9 +1237,9 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
         let comma = if parameters.is_empty() { "" } else { ", " };
         let arguments = parameters.join(", ");
         let proved = if lent {
-            format!("compiled_returns_unlent<M>({prefix}_program(), {prefix}_placement(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
-        {prefix}_evaluable(), {prefix}_quiet(), fetch, data, last, origin, stack, {g}, trivial, refl, {list}, trivial, {call}({arguments}),
-        {symbol}_native_agrees({arguments}))")
+            format!("compiled_returns_unlent{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
+        {prefix}_evaluable(), {quiet}, fetch, data, last, origin, stack, {g}, trivial,{keeps} refl, {list}, trivial, {call}({arguments}),
+        {symbol}_native_agrees({arguments}))", keeps = keeps(g))
         } else {
             format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         fetch, data, last, origin, stack, {g}, trivial, {list}, trivial, {call}({arguments}), {symbol}_native_agrees({arguments}))")
@@ -879,29 +1323,29 @@ theorem {prefix}_quiet_{k}(): program_quiet({program}.drop({d})).IsTrue() {{
 /// of `{prefix}_tables` marks, and every call, over views or not, is of a
 /// callee whose row its caller's meets (`program_marked_needs`). One
 /// evaluation over the program: a call's check reads its callee's row.
-fn marked_text(prefix: &str) -> String {
+fn marked_text(prefix: &str, stem: &str) -> String {
     format!("// Each function stores into the buffers its row of `{prefix}_tables` marks, and calls only callees whose rows its own meets.
-theorem {prefix}_marked(): program_marked({prefix}_program(), {prefix}_tables()).IsTrue() {{ trivial }}")
+theorem {stem}_marked(): program_marked({stem}_program(), {prefix}_tables()).IsTrue() {{ trivial }}")
 }
 
 /// `{prefix}_within`: every store of the program is into a buffer
 /// `{prefix}_marks` marks, so a caller that lends those to write has lent
 /// all the program stores into (`program_stores_marked`). A function at a
 /// time, as [`quiet_text`] is.
-fn within_text(prefix: &str, functions: usize) -> String {
-    let (program, marks) = (format!("{prefix}_program()"), format!("{prefix}_marks()"));
+fn within_text(prefix: &str, stem: &str, functions: usize) -> String {
+    let (program, marks) = (format!("{stem}_program()"), format!("{prefix}_marks()"));
     let mut text = format!("// Every store of the program is into a buffer `{prefix}_marks` marks.
-theorem {prefix}_within_none(): program_stores_within({program}.drop({functions}), {marks}).IsTrue() {{ trivial }}\n");
+theorem {stem}_within_none(): program_stores_within({program}.drop({functions}), {marks}).IsTrue() {{ trivial }}\n");
     for k in 0..functions {
         let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
-        text.push_str(&format!("theorem {prefix}_within_head_{k}(): program_stores_within_head({program}.drop({d}), {marks}).IsTrue() {{ trivial }}
-theorem {prefix}_within_{k}(): program_stores_within({program}.drop({d}), {marks}).IsTrue() {{
-    program_stores_within_drop({program}, {marks}, {d}, {prefix}_within_head_{k}(), {prefix}_within_{below}())
+        text.push_str(&format!("theorem {stem}_within_head_{k}(): program_stores_within_head({program}.drop({d}), {marks}).IsTrue() {{ trivial }}
+theorem {stem}_within_{k}(): program_stores_within({program}.drop({d}), {marks}).IsTrue() {{
+    program_stores_within_drop({program}, {marks}, {d}, {stem}_within_head_{k}(), {stem}_within_{below}())
 }}
 ", d = functions - 1 - k));
     }
-    text.push_str(&format!("theorem {prefix}_within(): program_stores_within({program}, {marks}).IsTrue() {{
-    program_stores_within_drop_zero({program}, {marks}, {prefix}_within_{last}())
+    text.push_str(&format!("theorem {stem}_within(): program_stores_within({program}, {marks}).IsTrue() {{
+    program_stores_within_drop_zero({program}, {marks}, {stem}_within_{last}())
 }}", last = functions - 1));
     text
 }
@@ -1099,6 +1543,11 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                             format!("ShiftImm({op}, {}, {})", gpr(take()?)?, word(8, take()?))
                         }
                         16 => format!("Bswap32({})", gpr(take()?)?),
+                        19 => format!("CmpRI8({}, {})", gpr(take()?)?, word(8, take()?)),
+                        20 => format!("CmpRI32({}, {})", gpr(take()?)?, word(32, take()?)),
+                        21 => format!("MovRI32({}, {})", gpr(take()?)?, word(32, take()?)),
+                        17 => format!("MovSelf32({})", gpr(take()?)?),
+                        18 => format!("RorRI32({}, {})", gpr(take()?)?, word(8, take()?)),
                         _ => return Err(bad()),
                     };
                     instructions.push(instruction);
@@ -1122,6 +1571,17 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
             10 => format!("LoadByte(ByteLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
             11 => format!("StoreByte(ByteStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
             12 => "Syscall".to_string(),
+            // A piece: its length and its bytes, stated as they are. Its
+            // measure is a verdict (x86_64_asm), `True` at a literal's
+            // bytes, so the literal is the lowering's piece whichever
+            // lemma measured that one.
+            13 => {
+                let len = take()?;
+                let mut bytes = Vec::new();
+                for _ in 0..len { bytes.push(word(8, take()?)); }
+                let list = bytes.iter().rev().fold("Nil".to_string(), |rest, b| format!("Cons({b}, {rest})"));
+                format!("Piece({list}, {len}, trivial)")
+            }
             _ => return Err("the lowering emitted an item the compiler does not state".into()),
         };
         items.push((name, item));

@@ -24,7 +24,7 @@ theorem dead_dropped(): two_consts().optimised([1]) = [Const(64, 1, 5)] { refl }
 
 fn code_of(lowered: Option<Lowered>) → List<Instruction> { match lowered { None => [], Some(l) => l.code } }
 
-theorem one_move(): code_of(lower_nodes(two_consts().optimised([1]), [Into(Rax)], File::empty())) = [MovRI(Rax, BitVec::ofNat(5))] { refl }
+theorem one_move(): code_of(lower_nodes(two_consts().optimised([1]), [Into(Rax)], File::empty())) = [MovRI32(Rax, BitVec::ofNat(5))] { refl }
 
 // Whatever that lowering returns, run from any state, ends with its file
 // describing words that agree with the original schedule on id 1.

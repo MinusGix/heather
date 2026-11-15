@@ -59,6 +59,11 @@ fn Instruction::writes(self instruction: Instruction) → Option<Gpr> {
         ShiftOne(_, destination) => Some(destination),
         ShiftImm(_, destination, _) => Some(destination),
         Bswap32(destination) => Some(destination),
+        CmpRI8(_, _) => None,
+        CmpRI32(_, _) => None,
+        MovRI32(destination, _) => Some(destination),
+        MovSelf32(destination) => Some(destination),
+        RorRI32(destination, _) => Some(destination),
     }
 }
 
@@ -124,6 +129,12 @@ theorem execute_spares<M>(instruction: Instruction, s: MachineState<M>, query: G
         ShiftImm(op, destination, immediate) => write_spares(destination, query,
             op.by(read_gpr(destination, s.gprs), shift_count(immediate)), s.gprs),
         Bswap32(destination) => write_spares(destination, query, bswap32_value(read_gpr(destination, s.gprs)), s.gprs),
+        CmpRI8(_, _) => λ _ => refl,
+        CmpRI32(_, _) => λ _ => refl,
+        MovRI32(destination, immediate) => write_spares(destination, query, immediate.zero_extend(32), s.gprs),
+        MovSelf32(destination) => write_spares(destination, query, mov_self32_value(read_gpr(destination, s.gprs)), s.gprs),
+        RorRI32(destination, immediate) => write_spares(destination, query,
+            ror32_value(read_gpr(destination, s.gprs), ror32_count(immediate)), s.gprs),
     }
 }
 
@@ -176,4 +187,11 @@ theorem execute_block_kept<M>(instructions: List<Instruction>, s: MachineState<M
              execute_block_kept<M>(instructions, s, rest, both.right)⟩
         },
     }
+}
+
+// No register of the list is `query`. (Here and not with the stack's runs,
+// which prove what it means for a list of saves, so that a planner can ask
+// it without them.)
+fn List::spare(self registers: List<Gpr>, query: Gpr) → Bool {
+    match registers { Nil => True, Cons(register, rest) => !register.same(query) && rest.spare(query) }
 }

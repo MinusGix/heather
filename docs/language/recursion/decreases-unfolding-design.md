@@ -208,6 +208,38 @@ measured `runtime fn` needs:
   the statement as a `let` nothing reads proved an equation about a body
   without the store, which the kernel refused against `f#body`.
 
+**Amended again (2026-11-15, issues/runtime-mut-self-let-read-walk.md,
+issues/measured-loop-inner-if-companions.md).** A `let` before a branch, and
+a plain `if` under the loop's test: insertion sort's inner loop reads the
+byte below once, `let below = s.byte_within(n, j - 1)`, and tests it.
+
+- **A `let` stays in the walk's scope.** Substituting a block's `let`s into
+  its result and walking that changed what the walk saw from what the
+  rewrite saw building `f#body`: a test after the `let` read the parameters
+  where `f#body`'s read the `let`'s name, so its equation became a fact a
+  lifted obligation selected, and the re-emitted call passed one argument
+  more than `f#obl_N` takes. The walk now goes on over the body as written,
+  with the `let` bound in the rewrite's scope as `Rewrite::stmt` binds it,
+  and substitutes it (`Respell::let_env`, unless a later binder shadows it)
+  only into the terms it builds, before the arms' patterns.
+- **A claimed call's rebinding is a `let` of its own.** `let p = x.m(a)`
+  is spelled `let p = \0mutated_value(x.m(a)); let x = \0mutated_after(x.m(a))`
+  (`rebind_marked`) in every block before anything is substituted. A read
+  `let v = c.total()` rebinds `c` too (to itself), and substituting that
+  into an arm's own `c.tick(v);` used to put a value where the statement's
+  place was.
+- **Type arguments are substituted into.** An `if`'s test is `decide_bit`'s
+  type argument, which `subst` left alone, so a `let`'s variable stayed free
+  in the companions.
+- **An inner plain `if` follows `f#body`'s equation.** The walk numbered a
+  computed inner scrutinee as an `AutoEqs` candidate wherever an arm
+  recurses, but the rewrite numbers only one it gives an alias (one whose
+  type it can write); the two now agree. Where the candidate is admitted,
+  `f#body` matches with an equation the source lacks, and
+  `Respell::match_spelled_eqs` spells each side with its own: both for
+  `f#ext`, only the left for `f_unfold`. The refusal "bind it as `match g:
+  …`" is gone.
+
 A lifted obligation used to quantify over the walk's `__dec_scrut_N` alias as
 if it were a parameter, which made `h: __dec_scrut_N = False` unprovable in
 the lifted statement. It now substitutes the alias's value into the statement

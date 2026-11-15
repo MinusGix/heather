@@ -17,6 +17,7 @@ const MODULES: &[(&str, &str)] = &[
     ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", include_str!("../../../lib/std/num/int.hthr")),
     ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
+    ("bitvec_rotate", include_str!("../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("location", include_str!("../../../lib/std/machine/location.hthr")),
     (
         "certified_lookup",
