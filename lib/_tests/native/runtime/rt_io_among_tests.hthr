@@ -55,12 +55,12 @@ import native_tool_spans;
 // Read up to 64 bytes from stdin into the buffer, and answer the count
 // through `raise_word`.
 fn Io::read_raised(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
-    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
     raise_word(r.result)
 }
 
 // Its computation: the call is of function 0 of the world.
-fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0], ETm::Pure(Call(0, [0]))))) }
+fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 1, 0], ETm::Pure(Call(0, [0]))))) }
 
 // The world: one function, `raise_word`, as `tr`'s program numbers it.
 fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }

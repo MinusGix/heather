@@ -33,16 +33,16 @@ import rt_io_lower;
 // Read up to 64 bytes from stdin into the buffer, and write what came back
 // to stdout: the write's result word.
 fn Io::echo_lowered(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
-    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
     let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
     w
 }
 
 // Its computation (as `reflects_io_as` reads it; rt_io_tests pins that).
 fn echo_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [2, 3, 1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
-    ETm::Pure(Var(0))))))))
+    ETm::Pure(Var(0)))))))))
 }
 
 fn echo_g() → List<Ty> { [Bytes(0)] }
@@ -105,10 +105,11 @@ fn read_file_body() → ETm {
     // buf, path
     ETm::Let(Lit(Word(64), 16),
     ETm::Invoke(Opens(0), [2, 0],
+    ETm::Let(Lit(Word(64), 0),
     ETm::Let(Lit(Word(64), 64),
-    ETm::Invoke(Reads(0), [1, 3, 0],
-    ETm::Invoke(Closes, [3],
-    ETm::Pure(Prim(Add(64), [1, 0])))))))
+    ETm::Invoke(Reads(0), [2, 4, 1, 0],
+    ETm::Invoke(Closes, [4],
+    ETm::Pure(Prim(Add(64), [1, 0]))))))))
 }
 
 // `path` (variable 1) in buffer 0, `buf` (variable 0) in buffer 1.
@@ -119,12 +120,12 @@ theorem read_file_lowers():
 // Refusals: the lowering returns `None`.
 
 // The write names the buffer as it was before the read wrote over it
-// (variable 4, the parameter): it is gone, so the lowering refuses it rather
+// (variable 7, the parameter): it is gone, so the lowering refuses it rather
 // than send what the read left.
 fn stale_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0],
-    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 6, 0, 2],
-    ETm::Pure(Var(0))))))))
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [2, 3, 1, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 7, 0, 2],
+    ETm::Pure(Var(0)))))))))
 }
 
 theorem stale_refused(): lowers(stale_body().lower(ETm::plain_world(), [], echo_g(), echo_locs(), 1)) = False { refl }

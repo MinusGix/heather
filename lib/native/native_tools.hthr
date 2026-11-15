@@ -1,5 +1,6 @@
 // cat and the tools past it (docs/native/native-real-programs-plan.md, rounds 1,
-// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
+// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N` (and over the whole
+// input held in one buffer, read at offsets), `wc -l`, `echo` and
 // `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native/native-procedures-design.md), written with the builder
@@ -110,6 +111,15 @@ fn head_c(count, capacity: Nat) → Tool {
 }
 
 fn head_c10_tool() → Tool { head_c(10, 256) }
+
+// The input read whole into one buffer before anything is written, each
+// read landing where the last one ended, then written: GNU's `head -c
+// capacity`, whatever sizes the reads come in.
+fn head_whole(capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(local(num(0), λ got => read_whole(stdin(), buf, got) ++ write_all(stdout(), buf, got.get()))))
+}
+
+fn head_whole_tool() → Tool { head_whole(4096) }
 
 // ---------------------------------------------------------------------------
 // tail -c +K

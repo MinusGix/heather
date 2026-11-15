@@ -440,13 +440,15 @@ fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
     then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
 }
 
-// The copy's counter and its two walks set, and its loop's label.
+// The copy's counter and its two walks set, RDI past the offset in R9,
+// and its loop's label.
 fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf)), AddRR(Rdi, R9)])).label(head)
 }
 
-// The `count` bytes in RAX copied from the scratch range to the buffer's: R8
-// counts up to RAX, RSI and RDI walk the two ranges, RDX carries each byte.
+// The `count` bytes in RAX copied from the scratch range to the buffer's
+// past the offset in R9: R8 counts up to RAX, RSI and RDI walk the two
+// ranges, RDX carries each byte.
 fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
     let set = p.copy_head(layout, buf, head);
     let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
@@ -457,16 +459,19 @@ fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Pr
 // After the read: the bytes copied in unless it failed (RAX negative), then
 // the result put in its word's home.
 fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
-    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names)))));
-    tested.copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names)))).word_from(layout, out, result, Rax)
+    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(Succ(names))))));
+    tested.copy_in(layout, buf, Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).label(Succ(Succ(Succ(Succ(names))))).word_from(layout, out, result, Rax)
 }
 
-// read(fd, scratch, min(len, capacity)); the result stored; on success the
-// bytes copied into the buffer.
-fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let clamped = then(p.known_to(layout, known, len, Rdx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rdx, R9, Succ(names));
-    let asked = then(then(clamped, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))])).known_to(layout, known, fd, Rdi), Syscall);
-    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(names))))
+// read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
+// offset kept in R9; the result stored; on success the bytes copied into
+// the buffer from the offset.
+fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let start = then(p.known_to(layout, known, at, R8), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
+    let room = then(start, Block([SubRR(R9, R8)])).known_to(layout, known, len, Rdx).clamp(Rdx, R9, Succ(Succ(names)));
+    let asking: List<Instruction> = [MovRR(R9, R8), MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))];
+    let asked = then(then(room, Block(asking)).known_to(layout, known, fd, Rdi), Syscall);
+    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(Succ(names)))))
 }
 
 // write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
@@ -515,11 +520,11 @@ fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, 
 
 fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
     match shape {
-        Reads(fd, buf, len, result) => match layout.words_fit([fd, len, result]) {
+        Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, len, result, capacity, names)),
+                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
             },
         },
         Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
@@ -1494,7 +1499,7 @@ fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → 
 
 fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
     match shape {
-        Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
+        Reads(fd, buf, at, len, result) => buffer_refusal(layout, [fd, at, len, result], buf),
         Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
         Opens(path, len, result) => buffer_refusal(layout, [len, result], path),
         Closes(fd, result) => ids_refusal(layout, [fd, result]),
@@ -1599,7 +1604,7 @@ fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
         Compute(region) => region.names_after(names),
         Invoke(shape) => match shape {
-            Reads(_, _, _, _) => Succ(Succ(Succ(names))),
+            Reads(_, _, _, _, _) => Succ(Succ(Succ(Succ(names)))),
             Writes(_, _, _, _, _) => Succ(Succ(names)),
             Opens(_, _, _) => Succ(Succ(Succ(names))),
             _ => names,

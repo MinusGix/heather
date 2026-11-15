@@ -84,7 +84,7 @@ fn Io::tr_upper(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)
     let mut buf = buf;
     let mut n: BitVec(64) = BitVec::ofNat(1);
     while BitVec::ofNat(0).unsigned_lt_bit(n) {
-        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(tr_capacity()));
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(tr_capacity()));
         let m = raise_span(r.buf, BitVec::ofNat(r.buf.len()), r.result, BitVec::ofNat(0));
         let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
         buf := m.after;
@@ -124,7 +124,7 @@ fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
 // fd, n, buf]`: `left` (4) the bytes the function left, `buf'` (7) the
 // read's, gone once the function has the buffer.
 fn pass_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 1, 0],
     ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 5],
     ETm::Pure(Lit(Word(64), 0))))))))))
@@ -270,7 +270,7 @@ theorem tr_lend_starts(): tr_lend_source().start([]) = start(zeros()) { refl }
 // The write sends the read's bytes (variable 7), which the function has
 // since written over: gone, so refused.
 fn stale_pass() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 1, 0],
     ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 7, 0, 5],
     ETm::Pure(Lit(Word(64), 0))))))))))

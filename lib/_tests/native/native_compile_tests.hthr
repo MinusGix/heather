@@ -38,7 +38,7 @@ fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src)) }
 // `head -c 10`: cat whose read length is a countdown word. Words as cat's;
 // 2 the bytes still to copy, 20 and 21 scratch.
 fn head_pass() → Stmt {
-    Then(Invoke(Reads(0, 0, 2, 3)),
+    Then(Invoke(Reads(0, 0, 16, 2, 3)),
         Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
             Branch(7, Exit(10),
                 Branch(8, Exit(11),
@@ -139,7 +139,7 @@ theorem mixed_leaf_compiles(): refused(mixed_leaf()) = [] { refl }
 // stored, 8 stdout, 9 where the write starts, 10 what it returned.
 fn mixed_bytes() → Source {
     Source::of([Buffer(8)], Then(ops([Const(64, 1, 8), Const(64, 8, 1)]),
-        Then(Invoke(Reads(0, 0, 1, 2)),
+        Then(Invoke(Reads(0, 0, 0, 1, 2)),
             Then(ops([Const(64, 3, 0), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 6, 32), Sub(64, 4, 4, 6), BufferStore(7, 0, 3, 4),
                     Const(64, 3, 1), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 3, 2), BufferLoad(4, 0, 3), Add(64, 5, 5, 4),
                     Const(64, 3, 3), BufferLoad(4, 0, 3), Add(64, 5, 5, 4)]),
@@ -173,8 +173,8 @@ theorem exit3_compiles(): refused(exit3()) = [] { refl }
 // names, and a `Repeat` or `Branch` takes two before its children.
 theorem exit3_shape(): exit3().shape() = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
 
-fn read_then_exit() → Source { Source::of([Buffer(8)], Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
-theorem read_then_exit_shape(): read_then_exit().shape() = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
+fn read_then_exit() → Source { Source::of([Buffer(8)], Then(Invoke(Reads(0, 0, 0, 1, 2)), Exit(2))) }
+theorem read_then_exit_shape(): read_then_exit().shape() = [4, 4, 0, 4, 0, 0, 0, 0, 1] { refl }
 
 fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
 theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
@@ -232,7 +232,7 @@ theorem byte_leaves_shape(): byte_leaves().shape() = [1, 0, 0, 0, 0, 0, 0, 0, 1]
 fn names_emitted(s: Stmt, names: Nat) → Nat {
     match s.emit(Start, Layout::of(low(), 8, byte_leaves().capacities(), Homes([], [])), [], names) { None => 0, Some(c) => c.names }
 }
-theorem read_names_counted(): names_emitted(Invoke(Reads(0, 0, 1, 2)), 5) = Invoke(Reads(0, 0, 1, 2)).leaf_names(5) { refl }
+theorem read_names_counted(): names_emitted(Invoke(Reads(0, 0, 0, 1, 2)), 5) = Invoke(Reads(0, 0, 0, 1, 2)).leaf_names(5) { refl }
 theorem write_names_counted(): names_emitted(Invoke(Writes(0, 0, 1, 2, 3)), 5) = Invoke(Writes(0, 0, 1, 2, 3)).leaf_names(5) { refl }
 theorem load_names_counted(): names_emitted(ops([BufferLoad(1, 0, 0)]), 5) = ops([BufferLoad(1, 0, 0)]).leaf_names(5) { refl }
 theorem store_names_counted(): names_emitted(ops([BufferStore(1, 0, 0, 2)]), 5) = ops([BufferStore(1, 0, 0, 2)]).leaf_names(5) { refl }
