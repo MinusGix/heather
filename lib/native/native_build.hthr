@@ -413,6 +413,7 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
         BitXor(width, _, left, right) => BitXor(width, dest, left, right),
         ShiftLeft(width, _, value, amount) => ShiftLeft(width, dest, value, amount),
         LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, dest, value, amount),
+        RotateRight(width, _, value, amount) => RotateRight(width, dest, value, amount),
         ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, dest, value, amount),
         UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, dest, left, right),
         SignedLessThan(width, _, left, right) => SignedLessThan(width, dest, left, right),

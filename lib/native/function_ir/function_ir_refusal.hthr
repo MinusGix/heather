@@ -95,6 +95,7 @@ fn Node::shown(self node: Node) → String {
         BitXor(w, o, a, b) => binary_shown("xor", w, o, a, b),
         ShiftLeft(w, o, a, b) => binary_shown("shl", w, o, a, b),
         LogicalShiftRight(w, o, a, b) => binary_shown("shr", w, o, a, b),
+        RotateRight(w, o, a, b) => binary_shown("ror", w, o, a, b),
         ArithmeticShiftRight(w, o, a, b) => binary_shown("sar", w, o, a, b),
         UnsignedLessThan(w, o, a, b) => binary_shown("below", w, o, a, b),
         SignedLessThan(w, o, a, b) => binary_shown("less", w, o, a, b),

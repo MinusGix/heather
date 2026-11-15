@@ -61,6 +61,7 @@ fn Node::wide(self node: Node) → Bool {
         WideLoad(_, _, _, _) => False,
         WideStore(_, _, _, _, _) => False,
         ByteSwap(_, _, _) => False,
+        RotateRight(_, _, _, _) => False,
     }
 }
 

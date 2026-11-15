@@ -14,6 +14,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bitvec_rotate;
 import bitvec_bytes;
 import bitvec_resize;
 import bool;
@@ -1957,21 +1958,52 @@ theorem in_place_same<M>(code: List<Instruction>, destination: Gpr, f, g: BitVec
         λ y _ => GprsAgree(execute_block_normal(code, s).gprs, write_gpr(destination, y, s.gprs)), runs(s))
 }
 
-// The destination cleared above its low `width` bits.
-fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+fn settle_shifts(destination: Gpr, width: Nat) → List<Instruction> {
     shift_code(OpShl, destination, 64 - width) ++ shift_code(OpShr, destination, 64 - width)
 }
 
-theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
-    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+// The destination cleared above its low `width` bits: at 32 a 32-bit move
+// of the register onto itself, which clears the upper half as every 32-bit
+// destination's is; at another width SHL then SHR by what is left of the
+// register.
+fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+    match width.eq_dec(32) {
+        Inl(_) => [MovSelf32(destination)],
+        Inr(_) => settle_shifts(destination, width),
+    }
+}
+
+// What the 32-bit move leaves is the low half widened again.
+theorem mov_self32_resize(x: BitVec(64)): mov_self32_value(x) = x.resize(32).resize(64) {
+    trans(cong_fn(λ (y: BitVec(32)) => y.zero_extend(32), sym(BitVec::ofNat_toNat_truncate(32, 32, x))),
+        sym(BitVec::resize_zero_extend(32, 32, x.resize(32))))
+}
+
+theorem in_place_mov_self32<M>(destination: Gpr): InPlace<M>([MovSelf32(destination)], destination, mov_self32_value) {
+    λ s query => refl
+}
+
+theorem in_place_settle_shifts<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_shifts(destination, width), destination, λ x => x.resize(width).resize(64))
 {
-    in_place_same<M>(settle_code(destination, width), destination,
+    in_place_same<M>(settle_shifts(destination, width), destination,
         λ x => x.shift_left(64 - width).shift_right(64 - width), λ x => x.resize(width).resize(64),
         λ x => BitVec::shift_pair_resize(width, 64, high, x),
         in_place_then<M>(shift_code(OpShl, destination, 64 - width), shift_code(OpShr, destination, 64 - width),
             destination, λ x => x.shift_left(64 - width), λ x => x.shift_right(64 - width),
             in_place_shift<M>(OpShl, destination, 64 - width, fits),
             in_place_shift<M>(OpShr, destination, 64 - width, fits)))
+}
+
+theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+{
+    match width.eq_dec(32) {
+        Inl(at) => j(sym(at), λ v _ => InPlace<M>([MovSelf32(destination)], destination, λ x => x.resize(v).resize(64)),
+            in_place_same<M>([MovSelf32(destination)], destination, mov_self32_value, λ x => x.resize(32).resize(64),
+                mov_self32_resize, in_place_mov_self32<M>(destination))),
+        Inr(_) => in_place_settle_shifts<M>(destination, width, high, fits),
+    }
 }
 
 // What in-place code leaves, at the kinds the file holds its operand and
@@ -2655,6 +2687,65 @@ theorem File::byte_swap_keeps<M>(self file: File, values: Valuation(), destinati
 }
 
 // ---------------------------------------------------------------------------
+// A rotate: `ROR r32, imm8` on a 32-bit value held narrow, by a count below
+// 32, which the five-bit mask leaves alone. The low half is rotated and the
+// upper half left zero, so the result is held narrow again.
+
+theorem ror32_count_of(count: Nat, fits: count <= 31): ror32_count(BitVec::ofNat(count)) = count {
+    let small: (count < Nat::pow(2, 8)) = Nat::le_trans(count, 31, 255, fits, trivial);
+    trans(cong_fn(λ (n: Nat) => n.mod(32), BitVec::toNat_ofNat(8, count, small)),
+        Nat::mod_of_lt(count, 32, fits))
+}
+
+// A narrow word's rotation, zero-extended, is what `ROR r32` leaves of the
+// word that holds it.
+theorem ror_narrow(x: BitVec(32), count: Nat): ror32_value(x.zero_extend(32), count) = x.rotr(count).zero_extend(32) {
+    cong_fn(λ (y: BitVec(32)) => y.rotr(count).zero_extend(32), BitVec::truncate_zero_extend(32, 32, x))
+}
+
+theorem in_place_ror32<M>(destination: Gpr, immediate: BitVec(8)):
+    InPlace<M>([RorRI32(destination, immediate)], destination, λ x => ror32_value(x, ror32_count(immediate)))
+{
+    λ s query => refl
+}
+
+fn File::rotate_right(self file: File, destination: Gpr, output, value, amount: Nat) → Option<Lowered> {
+    match amount.le_dec(31) {
+        Inr(_) => None,
+        Inl(_) => file.reshaped([RorRI32(destination, BitVec::ofNat(amount))], Narrow(32), Narrow(32), destination, output, value),
+    }
+}
+
+theorem File::rotate_right_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, value, amount: Nat):
+    MayKeep<M>(values, file, NodeHolds(values, RotateRight(32, output, value, amount)),
+        file.rotate_right(destination, output, value, amount))
+{
+    match amount.le_dec(31) {
+        Inr(_) => trivial,
+        Inl(fits) => {
+            let g = λ (x: BitVec(64)) => ror32_value(x, ror32_count(BitVec::ofNat(amount, n := 8)));
+            let code: List<Instruction> = [RorRI32(destination, BitVec::ofNat(amount))];
+            keeps_given<M>(values, file, Reshapes(values, Narrow(32), Narrow(32), output, value, g),
+                NodeHolds(values, RotateRight(32, output, value, amount)),
+                file.reshaped(code, Narrow(32), Narrow(32), destination, output, value),
+                λ gprs represents holds => λ a (rep: values(32, value).resize(64) = a) => {
+                    let x = values(32, value);
+                    let rotated: (values(32, output).resize(64) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (y: BitVec(32)) => y.resize(64), holds),
+                            BitVec::resize_zero_extend(32, 32, x.rotr(amount)));
+                    let counted: (g(x.zero_extend(32)) = x.rotr(amount).zero_extend(32)) =
+                        trans(cong_fn(λ (c: Nat) => ror32_value(x.zero_extend(32), c), ror32_count_of(amount, fits)),
+                            ror_narrow(x, amount));
+                    trans(rotated, trans(sym(counted),
+                        cong_fn(g, trans(sym(BitVec::resize_zero_extend(32, 32, x)), rep))))
+                },
+                file.reshaped_keeps<M>(values, code, g, Narrow(32), Narrow(32), destination, output, value,
+                    in_place_ror32<M>(destination, BitVec::ofNat(amount))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 // What only the word has yet (a signed comparison, an arithmetic right
@@ -2758,6 +2849,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         WideStore(_, _, _, _, _) => None,
         // A swap of 32 bits held narrow; the 64-bit swap is not lowered yet.
         ByteSwap(width, output, source) => at_width(32, width, width.eq_dec(32), file.byte_swap(destination, output, source), None),
+        RotateRight(width, output, value, amount) => at_width(32, width, width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None),
     }
 }
 
@@ -2860,6 +2953,10 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(width, output, source) => at_width_keeps<M>(values, file, 32, width, λ w => NodeHolds(values, ByteSwap(w, output, source)),
             width.eq_dec(32), file.byte_swap(destination, output, source), None, file.byte_swap_keeps<M>(values, destination, output, source), trivial),
+        RotateRight(width, output, value, amount) => at_width_keeps<M>(values, file, 32, width,
+            λ w => NodeHolds(values, RotateRight(w, output, value, amount)), width.eq_dec(32),
+            file.rotate_right(destination, output, value, amount), None,
+            file.rotate_right_keeps<M>(values, destination, output, value, amount), trivial),
     }
 }
 
@@ -2959,6 +3056,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         WideLoad(_, _, _, _) => trivial,
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(_, _, _) => trivial,
+        RotateRight(_, _, _, _) => trivial,
     }
 }
 
@@ -3378,6 +3476,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         WideLoad(_, _, _, index) => [index],
         WideStore(_, _, _, index, value) => [index, value],
         ByteSwap(_, _, source) => [source],
+        RotateRight(_, _, value, _) => [value],
     }
 }
 
@@ -3487,7 +3586,7 @@ fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
         BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
-        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, _ => False,
+        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, RotateRight(_, _, _, _) => True, _ => False,
     }
 }
 
@@ -3576,13 +3675,23 @@ fn Node::crowded(self node: Node, file: File, live, later, crossed: Nat → Bool
 // what `crowded_in` finds; else the first free callee-saved register of
 // `pool`, which costs its function a save (`Saving`,
 // function_ir_lower_calls); else RAX.
-fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
-    match file.first_spare(live, pool_unsaved(pool), kept) {
+//
+// A value `keeps` names (read after a later call, on a path every run of
+// the function takes) tries the callee-saved ones first: in a caller-saved register it costs a store and a load at every
+// call it lives across, in a saved one a store and a load for the whole
+// function, which its frame already has room for
+// (issues/function-ir-values-in-kept-registers.md).
+fn Node::fresh(self node: Node, file: File, live, later, crossed, keeps: Nat → Bool, pool, kept: List<Gpr>) → Gpr {
+    let unsaved_first = match file.first_spare(live, pool_unsaved(pool), kept) {
         Some(register) => register,
         None => match node.crowded_in(file, live, later, crossed, pool) {
             Some(register) => register,
             None => match file.first_spare(live, pool_saved(pool), kept) { None => Rax, Some(register) => register },
         },
+    };
+    match keeps(node.output_id()) {
+        False => unsaved_first,
+        True => match file.first_spare(live, pool_saved(pool), kept) { None => unsaved_first, Some(register) => register },
     }
 }
 
@@ -3593,11 +3702,14 @@ fn Node::fresh(self node: Node, file: File, live, later, crossed: Nat → Bool, 
 //
 // `live` is what is read by the node or after it, `later` what is read
 // after it, and `crossed` what is read after a later call.
-fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+// The values that prefer a callee-saved register are `keeps` (`Node::fresh`).
+fn Node::choose_keeping(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed, keeps: Nat → Bool, kept: List<Gpr>) → Gpr
 {
-    let fresh = node.fresh(file, live, later, crossed, pool, kept);
-    let reuse = match prefers_operand(node) {
+    let fresh = node.fresh(file, live, later, crossed, keeps, pool, kept);
+    // A value that prefers a saved register keeps the one `fresh` found
+    // rather than its operand's, which a call would store round.
+    let reuse = match prefers_operand(node) && !(keeps(node.output_id()) && !fresh.save_rank().same(0)) {
         False => fresh,
         True => match node.in_place(file, later) {
             None => fresh,
@@ -3611,6 +3723,14 @@ fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entri
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
+}
+
+// `choose_keeping` where every value read after a later call prefers a
+// callee-saved register.
+fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed: Nat → Bool, kept: List<Gpr>) → Gpr
+{
+    node.choose_keeping(file, live, later, entries, registers, pool, crossed, crossed, kept)
 }
 
 // `choose_by` with what is read later, and after a later call, as lists.

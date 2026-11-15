@@ -28,6 +28,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("bitvec", include_str!("../../../../lib/std/bitvec/bitvec.hthr")),
     ("location", include_str!("../../../../lib/std/machine/location.hthr")),
     ("certified_lookup", include_str!("../../../../lib/std/data/certified_lookup.hthr")),
+    ("bitvec_rotate", include_str!("../../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("x86_64", include_str!("../../../../lib/std/arch/x86_64/x86_64.hthr")),
     ("x86_64_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_block.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),

@@ -139,6 +139,22 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
     }
 }
 
+// A register-direct ModRM under a REX without W: the 32-bit forms, MOV
+// r32, r32 onto itself (89 /r) and ROR r/m32, imm8 (C1 /1 ib). Neither reads
+// ModRM.reg; their completeness is all the decoder claims.
+fn decode_register_form32(opcode: BitVec(8), rm: Gpr, rest: List<BitVec(8)>) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0x89)) {
+        Inl(_) => emitted_form(MovSelf32(rm)),
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0xc1)) {
+            Inl(_) => match rest {
+                Nil => None,
+                Cons(b0, _) => emitted_form(RorRI32(rm, b0)),
+            },
+            Inr(_) => None,
+        },
+    }
+}
+
 // mod 01 with r/m 100: a SIB byte, then a byte displacement, which only the
 // stack forms use (the word load's displaced bases are r/m 101).
 fn stack_slot(modrm: BitVec(8)) → Bool {
@@ -247,7 +263,10 @@ fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<S
     match rest {
         Nil => None,
         Cons(modrm, tail) => match byte_bit7(modrm) {
-            True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
+            True => match byte_bit3(rex) {
+                True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
+                False => decode_register_form32(opcode, rm_of(rex, modrm), tail),
+            },
             False => match stack_slot(modrm) {
                 True => decode_slot_form(rex, opcode, modrm, tail),
                 False => match opcode.eq_dec(BitVec::ofNat(0x8d)) {
@@ -575,6 +594,14 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
             trans(cong_fn(λ (d: Gpr) => emitted_form(MovRI32(d, imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
                     imm32_byte2(immediate), imm32_byte3(immediate)))), gpr_fields_roundtrip(destination)),
                 cong_fn(λ (v: BitVec(32)) => emitted_form(MovRI32(destination, v)), imm32_bytes_roundtrip(immediate))),
+        MovSelf32(destination) => match destination {
+            Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+            R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+        },
+        RorRI32(destination, _) => match destination {
+            Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+            R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+        },
     }
 }
 
