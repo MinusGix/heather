@@ -107,3 +107,4 @@ Classes are memoized per step closure in the arena.
 
 - 2026-09-09: The `toInt` width-64 negative rail the acceptance list deferred now passes: [[int-arithmetic-over-nat-primitives]] redefined `int::add` over `nat::add` and a synchronous `subNatNat`, both classes this issue built, with no kernel change.
 - 2026-09-11: Triage 2026-09-11: landed on 2026-09-09 (eval/probe.rs, value/algebra.rs; DESIGN.md records the third acceleration kind retired; nat_step_successors/nat_step_synchronizes gone from the kernel). Closing; the remaining acceptance rows (2^64 refl timings, bench --check) are covered by the bench and the lib_std_bitvec tests.
+- 2026-11-15: The probe this issue added uses fixed reserved levels, which a nested probe reads as its own: [[fold-probe-nested-probe-variable-collision]] (proves False).
