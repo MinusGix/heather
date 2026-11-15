@@ -100,7 +100,7 @@ theorem Sha256::block_with_byte(s: Sha256, i: Nat, b: u8, below: i < 64):
 // A byte stored inside the block is that byte of the schedule's word replaced.
 theorem Sha256::put_inside(s: Sha256, at, byte: u64, below: at.toNat() < 64):
     Sha256::put(s, at, byte) = Mutated((s with { schedule = vector_with_byte_be(s.schedule, at.toNat(), byte.truncate(8, 56)) }), at) {
-    Sha256::put::True(s, at, byte, below)
+    simp_only(Sha256::put, discharge := bv_omega)
 }
 
 // The context after whole blocks `full` of a message and `T` more bytes,
@@ -148,7 +148,7 @@ theorem Sha256::push_full(s: Sha256, full: List<List<u8>>, T: List<u8>, fill, by
     let P = Sha256::put(s, fill, byte).after;
     let space: (T.len() = 63) = t.space;
     let inside: (fill.toNat() < 64) = omega;
-    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, 0)) = Sha256::push::True(s, fill, byte, bv_omega);
+    let pushed: (Sha256::push(s, fill, byte) = Mutated(Sha256::run(P).after, 0)) = simp_only(Sha256::push, discharge := bv_omega);
     let block: (Sha256::block(P) = last) =
         trans(sym(Sha256::block(P).take_len()), simp_only(Sha256::len_block, space, using := Sha256::block_put(s, T, fill, byte, t.held, at, omega)));
     let hashed: (Sha256::state(Sha256::run(P).after.hash) = Sha2::absorbed(Sha2::sha256().start(), full ++ [last])) =

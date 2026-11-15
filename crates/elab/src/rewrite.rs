@@ -460,7 +460,7 @@ impl Rewrites<'_> {
                 Some(arg) => arg,
                 None => {
                     let side = crate::strengthen_ty(&cx.gamma, &cod, 1).is_some();
-                    match premise.filter(|_| side).and_then(|p| p(cx, &dom, &dom_level)) {
+                    match premise.and_then(|p| p(cx, &dom, &dom_level, !side)) {
                         Some(found) => Rc::new(found),
                         None => {
                             return Err(Miss::Unbound { index: j + 1, premise: side.then(|| ((*dom).clone(), dom_level.clone())) });
@@ -866,7 +866,11 @@ struct Equation {
 
 /// A side condition's discharger: a proof of the type, scoped in the
 /// context given, or `None`.
-pub(crate) type Premise<'p> = &'p dyn Fn(&Cx, &Type, &Level) -> Option<Term>;
+/// A side condition's proof, asked of the caller: the context, the
+/// condition, its level, and whether a later binder of the law depends on
+/// it (its proof then appears in what the law concludes, as a generated
+/// branch equation's test hypothesis does in an arm that uses it).
+pub(crate) type Premise<'p> = &'p dyn Fn(&Cx, &Type, &Level, bool) -> Option<Term>;
 
 /// Why an unapplied law did not become an instance at a goal.
 pub(crate) enum Miss {

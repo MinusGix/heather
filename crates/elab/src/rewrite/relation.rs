@@ -260,7 +260,7 @@ impl Relations<'_> {
                     // A side condition is discharged in the goal's own
                     // context: below a binder the proof would have to be
                     // found there, which is not attempted.
-                    match premise.filter(|_| side && depth == 0).and_then(|p| p(&here, &dom, &dom_level)) {
+                    match premise.filter(|_| side && depth == 0).and_then(|p| p(&here, &dom, &dom_level, false)) {
                         Some(found) => Rc::new(found),
                         None => {
                             return Err(super::Miss::Unbound {
