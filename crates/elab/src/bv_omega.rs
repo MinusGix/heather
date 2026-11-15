@@ -1165,6 +1165,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     // left alone when one fails.
     let mut restated: Vec<(String, Type)> = Vec::new();
     let mut optimistic = false;
+    let fact_names: Vec<String> = facts_in_scope.iter().map(|(name, _)| name.clone()).collect();
     for (name, ty) in facts_in_scope {
         let compared = word_fact(elab, cx, &name, &ty);
         let is_comparison = compared.is_some();
@@ -1225,6 +1226,8 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     subjects.sort_unstable();
     subjects.dedup();
 
+    let hidden_roots = hidden_roots(&fact_names, &restated);
+
     let prelude = prelude(&walk);
     let mut e = Emitter::new(&walk, &stated);
     let mut seen = HashSet::new();
@@ -1260,11 +1263,18 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
             names.push(name.clone());
         }
         // Rebinding a fact under its own name hides the original from the
-        // `omega` inside.
-        for (name, ty) in &restated {
+        // `omega` inside. A conjunct's name is a projection path
+        // (`m.left`), which is no binder: it is bound fresh, and its root is
+        // hidden as `True` once every conjunct read from it is restated.
+        for (k, (name, ty)) in restated.iter().enumerate() {
             let spelled = elab.spell_type_source(cx, ty).ok_or("could not spell a fact in scope")?;
-            binders.push_str(&format!("({name}: {}) → ", generalise(spelled)));
-            names.push(name.clone());
+            let binder = restated_binder(k, name);
+            binders.push_str(&format!("({binder}: {}) → ", generalise(spelled)));
+            names.push(binder);
+        }
+        for root in &hidden_roots {
+            binders.push_str(&format!("({root}: True) → "));
+            names.push(root.clone());
         }
         source.push_str(&format!("have __bv_goal: ({binders}{goal}) = λ {} => omega;\n", names.join(" ")));
     }
@@ -1282,6 +1292,9 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     }
     for (name, _) in &restated {
         arguments.push(name.clone());
+    }
+    for _ in &hidden_roots {
+        arguments.push("trivial".into());
     }
     for line in &e.lines {
         source.push_str(line);
@@ -1498,4 +1511,32 @@ fn is_nat_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
         Type::Id { ty, .. } => elab.display_type(cx, ty) == "Nat",
         _ => false,
     }
+}
+
+/// The binder for the `k`th restated fact: its own name when that is an
+/// identifier, a fresh one for a conjunct's projection path (`m.left`).
+fn restated_binder(k: usize, name: &str) -> String {
+    if name.contains('.') { format!("__bv_fact{k}") } else { name.to_string() }
+}
+
+/// The roots of the restated conjuncts (`m` of `m.left`) every one of whose
+/// conjuncts is restated: hiding them keeps the original composite words
+/// from the `omega` inside, as rebinding does for a plain name.
+fn hidden_roots(fact_names: &[String], restated: &[(String, Type)]) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    for (name, _) in restated {
+        let Some((root, _)) = name.split_once('.') else { continue };
+        if roots.iter().any(|r| r == root) {
+            continue;
+        }
+        let prefix = format!("{root}.");
+        let all = fact_names
+            .iter()
+            .filter(|f| f.starts_with(&prefix))
+            .all(|f| restated.iter().any(|(r, _)| r == f));
+        if all {
+            roots.push(root.to_string());
+        }
+    }
+    roots
 }
