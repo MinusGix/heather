@@ -45,4 +45,4 @@ unneeded.
 
 ## Log
 
-- 2026-11-15: The sort example (`examples/sort`) works around it with a shift-insert that takes its key as a word parameter; a neighbouring refusal it hit is [[runtime-mut-self-let-read-walk]].
+- 2026-11-15: The sort example (`examples/sort`) works around it with a shift-insert that takes its key as a word parameter; a neighbouring refusal it hit is `runtime-mut-self-let-read-walk` (filed and fixed in its own PR).
