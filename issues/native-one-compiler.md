@@ -82,7 +82,7 @@ case and the same premise, and `Source` has one kind of call.
   - `Known` gained `file: Option<FileKnown>` so the pure reflector knows which term is the span now; a read of any other span term is refused as the span as it was.
   - `List::put_within` is the `mut self` store, in `rt_file.hthr`.
   - Probes (`lib/_tests/native/runtime/rt_file_reflect_tests.hthr`): `poke`, `poke_low`, `poke_pair` and `raise_from` reflect to the terms 4c-1 and 4c-2 wrote by hand and are pinned by `refl` (the loop to its recursor's step); four refusals with their reasons.
-  - Refused and filed: a byte read before a store and used after it ([[rt-file-read-before-store]]). Refused by design for now: a span that branches and joins, a store under a word that is not the length parameter, another computation called last directly.
+  - A byte read before a store and used after it was refused and is now reflected, bound before the store ([[rt-file-read-before-store]], 2026-11-15). Refused by design for now: a span that branches and joins, a store under a word that is not the length parameter, another computation called last directly.
 
   Next is 4c-3b, linking over the run, then 4c-3c (class, generator, `raise_span` as a `runtime fn`). Design note §2.6 and §3 are updated. `scripts/test --pr`: 3112 passed and one failure, `compiled_yes_takes_its_line_as_gnu_yes`, which is a race in the image store after the merge re-imaged the library ([[image-sweep-removes-planned-image]]) and passes when run again.
 - 2026-11-11: U4 step 4c-3b: linking over the run, and the class of a function that writes.
