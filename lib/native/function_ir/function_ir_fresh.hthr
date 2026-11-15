@@ -1,5 +1,5 @@
 // Ids below a bound, and valuations that agree below it
-// (docs/optimizer-design.md §3.1): what a pass that makes new ids owes.
+// (docs/native/optimizer-design.md §3.1): what a pass that makes new ids owes.
 //
 // A function's body is equations over one valuation, so a pass that adds a
 // value must name it with an id the body does not use, and then show the

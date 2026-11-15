@@ -9,7 +9,7 @@ created: 2026-11-10
 updated: 2026-11-14
 ---
 
-Stage L3 of `docs/native-lexer-crypto-roadmap.md` §3: Heather's scanner,
+Stage L3 of `docs/native/native-lexer-crypto-roadmap.md` §3: Heather's scanner,
 compiled natively, linked into the `heather` binary in place of the
 tokenizing loop of `crates/syntax/src/lexer.rs` (Minus, 2026-11-10: "lexer
 in Heather linked directly"). [[self-hosted-lexer]] is the other front end

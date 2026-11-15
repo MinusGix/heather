@@ -11,10 +11,10 @@ it was never the width of anything, it was 86 constructed temporaries in the
 recursion cycle. Three changes, in `crates/kernel/src/typing.rs` and
 `typing/ity.rs`; the bench gate is clean and the corpus is back inside its
 own spread. Filed by
-stage 1b of `docs/intro-by-type-design.md` as the residue of its own bench
+stage 1b of `docs/elaborator/intro-by-type-design.md` as the residue of its own bench
 gate, per `issues/README.md`'s rule that a regression worth keeping gets an
 issue. Originally filed as: measured, unattacked. Filed by stage 1b of
-`docs/intro-by-type-design.md` as the residue of its own bench gate, per
+`docs/elaborator/intro-by-type-design.md` as the residue of its own bench gate, per
 `issues/README.md`'s rule that a regression worth keeping gets an issue.
 
 ## The number
@@ -35,8 +35,8 @@ that measure the same checker over bigger objects: `wf/check-tree`,
 `code/check-identity-recursor`, and `check/generated-terms` — the broad
 checker-throughput row — all pass. So this is a **per-node constant on the
 narrowest possible workload**, not a slope and not a whole-workload cost. The
-routine corpus agrees: `lib/ir_v1`, `probes/t_cp9`, `probes/t_qt3`,
-`probes/str/p10` all landed inside their own before-against-before spread
+routine corpus agrees: `lib/ir_v1`, `perf/fixtures/matched_type_normal_form/t_cp9.hthr`, `perf/fixtures/matched_type_normal_form/t_qt3.hthr`,
+`probes/str/p10@ef3961a` all landed inside their own before-against-before spread
 (issue log, 2026-09-20).
 
 ## Where it comes from
@@ -92,9 +92,9 @@ time is made of**:
 | file | before CPU-s | after CPU-s | | what dominates it |
 |---|---:|---:|---|---|
 | `lib/certgen/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations — inference per node |
-| `probes/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | ditto, with a record tower |
-| `probes/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | ditto, deeper |
-| `probes/str/p10.hthr` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
+| `perf/fixtures/matched_type_normal_form/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | ditto, with a record tower |
+| `perf/fixtures/matched_type_normal_form/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | ditto, deeper |
+| `probes/str/p10.hthr@ef3961a` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
 | `complete_post` (`--only`) | 17.21 | 14.54 | **−16 %** | conversion, over a replayed prefix |
 
 Peak RSS across the same five: −0.1 % to +4.1 %, no direction.
@@ -106,7 +106,7 @@ faster. That is the shape a fix should preserve: whatever replaces the
 back the inference one.
 
 It is also the reason the number matters less than it looks: stage 2 of
-`docs/intro-by-type-design.md` exists to move the tower's cost *out* of the
+`docs/elaborator/intro-by-type-design.md` exists to move the tower's cost *out* of the
 per-query conversion work, and the files that pay this constant are the ones
 whose declarations are small enough that nothing else is happening.
 
@@ -265,9 +265,9 @@ file agree to within a per cent):
 | file | median wall | verdict | stage 1b had it at |
 |---|---:|---|---:|
 | `lib/certgen/ir_v1.hthr` | −0.9 % | **no change** | +33 % |
-| `probes/t_cp9.hthr` | +0.2 % | **no change** | +21 % |
-| `probes/t_qt3.hthr` | −0.7 % | **no change** | +26 % |
-| `probes/str/p10.hthr` | +0.3 % | **no change** | −4 % |
+| `perf/fixtures/matched_type_normal_form/t_cp9.hthr` | +0.2 % | **no change** | +21 % |
+| `perf/fixtures/matched_type_normal_form/t_qt3.hthr` | −0.7 % | **no change** | +26 % |
+| `probes/str/p10.hthr@ef3961a` | +0.3 % | **no change** | −4 % |
 
 `kernel_gate` agrees on all four (−0.9 %, +0.4 %, +0.3 %, −0.2 %), and peak
 RSS moves by −0.0 % to +0.0 %. On every file, every sample, both binaries:
@@ -283,7 +283,7 @@ checker's behaviour is unchanged to the unit, as it was at stage 1b.
 
 **Verdict: closed.** The design is untouched — `ITy` is still the checker's
 currency, `Sel` is still arena-free, and nothing moved in
-`docs/intro-by-type-design.md` §3.2–3.4. What changed is that the *checking*
+`docs/elaborator/intro-by-type-design.md` §3.2–3.4. What changed is that the *checking*
 direction borrows instead of owning, and the one arm with wide temporaries is
 no longer on the recursion cycle.
 

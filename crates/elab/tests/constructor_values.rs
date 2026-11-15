@@ -1,5 +1,5 @@
 //! Acceptance for constructors as function values, against the checklist of
-//! `docs/constructor-function-values.md` §4. Tracking issue:
+//! `docs/language/constructor-function-values.md` §4. Tracking issue:
 //! `issues/constructors-as-function-values.md`.
 //!
 //! Two independent halves: `Succ` becomes a name (§2.1), and a declared
@@ -165,7 +165,7 @@ fn a_constructor_partially_applies() {
 
 // §4.6 — a parameterized declaration. The type arguments come off the
 // expected type (they are monomorphized, never inferred:
-// `docs/inductive-tier0-lowering.md` §2), so the *same* constructor is a
+// `docs/inductives/inductive-tier0-lowering.md` §2), so the *same* constructor is a
 // function value at two instantiations in one file.
 #[test]
 fn a_parameterized_constructor_takes_its_arguments_from_the_expected_type() {
@@ -285,7 +285,7 @@ fn rejections() {
 // peeled domain that disagrees with the field it fills must be a *rejection*.
 // If the η arm read the field types off the peeled domains instead of off the
 // encoding, this would elaborate — a `Box` built from a `Bool`, i.e. the
-// hazard class `docs/inductive-tier0-lowering.md` opens by naming.
+// hazard class `docs/inductives/inductive-tier0-lowering.md` opens by naming.
 #[test]
 fn a_domain_that_disagrees_with_its_field_is_rejected() {
     let msg = elab_err(

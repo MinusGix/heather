@@ -1,5 +1,5 @@
 // exp at a nonzero rational is clear of every float grid
-// (issues/exp-log-grid-gap.md; docs/creal-transcendental-round.md, "The Padé
+// (issues/exp-log-grid-gap.md; docs/library/creal.md, "The Padé
 // gap").
 //
 // Ziv's search over `exp`'s enclosures ends as soon as the real sits a known

@@ -8,7 +8,7 @@ updated: 2026-09-13
 ---
 
 Measured while taking the before column for
-`docs/kernel-arena-terms-design.md` (2026-09-13, furnace-bb0218be4a, tree
+`docs/kernel/kernel-arena-terms-design.md` (2026-09-13, furnace-bb0218be4a, tree
 af00689, release `--features value-metrics`, W=1, warm `reused_callee`
 `build-x86`):
 
@@ -43,7 +43,7 @@ distinguish them:
 ## What would settle it
 
 Read `type_cache_lookups`/`type_cache_hits` on the three workloads that
-already have `value-metrics` probes (`docs/benchmarking.md`: `lib_std_bitvec`'s
+already have `value-metrics` probes (`docs/infrastructure/benchmarking.md`: `lib_std_bitvec`'s
 carry test, `x86_64`'s module check, `certgen`'s `add`) plus a cold Omega
 closure, and put the four rates beside each other. That is one furnace job and
 no code.
@@ -61,4 +61,4 @@ first of all.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/benchmarking.md`); [[env-lookup-depth]] (`crates/kernel/src/value.rs`); [[perf-tracking-consistent-environment]] (`docs/benchmarking.md`).
+- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/infrastructure/benchmarking.md`); [[env-lookup-depth]] (`crates/kernel/src/value.rs`); [[perf-tracking-consistent-environment]] (`docs/infrastructure/benchmarking.md`).

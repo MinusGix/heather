@@ -1,5 +1,5 @@
 //! Receiver dispatch through instances: `x.op(y)`
-//! (`docs/traits-receiver-dispatch-design.md`, `issues/traits.md`).
+//! (`docs/language/classes/traits-receiver-dispatch-design.md`, `issues/traits.md`).
 //!
 //! Everything dispatch emits is a *generated term*
 //! (`docs/testing-generated-terms.md`) — a projection of a term the writer

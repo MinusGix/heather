@@ -198,7 +198,7 @@ theorem Nat::mul_comm(self x, y: Nat): x * y = y * x {
 }
 
 // ---------------------------------------------------------------------------
-// The order, stated PROPOSITIONALLY (docs/nat-order-design.md §1). `<=` is
+// The order, stated PROPOSITIONALLY (docs/library/nat-order-design.md §1). `<=` is
 // surface notation for a call to `Le` and `<` for a call to `Lt`
 // (issues/comparison-operators.md).
 //
@@ -207,7 +207,7 @@ theorem Nat::mul_comm(self x, y: Nat): x * y = y * x {
 //
 // Uncurried since 2026-09-05: the recursion is on `n` and the inner `match`
 // varies `m`, which the elaborator now generalizes into the motive
-// (docs/ih-generalization-design.md). `leb` and `sub` were curried for the
+// (docs/tactics/ih-generalization-design.md). `leb` and `sub` were curried for the
 // same reason and are uncurried the same way. A partial application `Le(n)`
 // still writes where a relation value is wanted.
 //
@@ -576,7 +576,7 @@ theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue(
 theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
 
 // The order's `Decide` instance — generic in **both** of its values
-// (docs/value-generic-instances-design.md, 2026-08-17). Until value binders
+// (docs/language/classes/value-generic-instances-design.md, 2026-08-17). Until value binders
 // existed the only registrable spelling was `Decide<Le(2, 5)>` at fixed
 // numerals, which is precisely the case elaboration-time computation already
 // answered; the open one, which is the only one a caller with variables in hand
@@ -881,7 +881,7 @@ theorem Nat::zero_ne_succ(self n: Nat): 0 ≠ Succ(n) {
 //
 // Equality instances are keyed by the endpoints' inferred carrier, so this
 // registers independently of equality at Bool and every other nominal type
-// (docs/decidable-equation-carrier-design.md). The generated canonical value
+// (docs/language/classes/decidable-equation-carrier-design.md). The generated canonical value
 // is deliberately unwritable; ordinary uses reach it through `Decide<n = m>`.
 fn Nat::eq_dec(self n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
     λ m => (match n.same(m) as λ bit => n.same(m) = bit → n = m ∨ n ≠ m {
@@ -920,7 +920,7 @@ instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := n.same(m), 
 instance DecEq<Nat> { eq_dec := Nat::eq_dec }
 
 // ---------------------------------------------------------------------------
-// The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
+// The bridge to addition — route (c) of docs/library/nat-order-design.md §1, proved
 // rather than chosen. `le_add` is the forward half and was already here.
 
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized —
@@ -1111,7 +1111,7 @@ theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
 }
 
 // The lexicographic order on `(a, r)` flattened into `a * n + r` for `r < n`
-// (docs/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
+// (docs/language/recursion/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
 // and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
 // group closes every recursive call's scaled obligation with one of these.
 theorem Nat::scaled_lt(self a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
@@ -1832,7 +1832,7 @@ theorem Nat::choose_self(self n: Nat): n.choose(n) = 1 {
     }
 }
 
-// Evidence rules (docs/positivity-evidence-design.md §6 A). A `:= infer`
+// Evidence rules (docs/library/positivity-evidence-design.md §6 A). A `:= infer`
 // positivity premise with no proof in scope backchains through these, each
 // premise searched the same way, so `0 < x * (y + 1)` is found from `0 < x`.
 // A literal or `Succ` operand needs no rule: its goal computes to `True`.
@@ -2740,7 +2740,7 @@ theorem Nat::leb_trans(self a, b, c: Nat, p: a.leb(b) = True, q: b.leb(c) = True
     a.leb_true(c, a.le_trans(b, c, a.leb_sound(b, Bool::is_true_of_eq(p)), b.leb_sound(c, Bool::is_true_of_eq(q))))
 }
 
-// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// Closed facts by evaluation (`norm_num`, docs/tactics/numeral-normalisation-design.md):
 // a `Bool` computed to `True` or `False` proves the fact or refutes it, so
 // a comparison of large numerals costs the accelerated `leb` / `same` and
 // never a conversion over the numbers.

@@ -9,7 +9,7 @@ updated: 2026-11-02
 ---
 
 [[grind-lemma-premises]] proves a premise by the graph, a local or a hint that
-is no equation (`Defeq`), or `Synth` (docs/grind-design.md §11). Wanted: a
+is no equation (`Defeq`), or `Synth` (docs/tactics/grind-design.md §11). Wanted: a
 caller's tactic as the last resort, `grind_by(names, hints, t)`, run at the
 premise's statement with the goal's locals (`focus`), its result checked
 against the premise before it counts, so that a premise needing a derived

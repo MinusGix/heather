@@ -12,7 +12,7 @@ was stalled rather than worked around, and `lib/std/num/int.hthr` carries a comm
 where the instance would be.
 
 `std/nat` registers the order's decision generically in both values
-(`docs/value-generic-instances-design.md`):
+(`docs/language/classes/value-generic-instances-design.md`):
 
 ```heather
 instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
@@ -28,7 +28,7 @@ instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
 
 The two `Le`s are different declarations in different modules — `nat::Le` and
 `int::Le` — and nothing about them is ambiguous *to a reader* or to name
-resolution, which qualifies by module (`docs/modules-design.md` §4). The registry
+resolution, which qualifies by module (`docs/language/modules-design.md` §4). The registry
 key is the head's **surface name**, so it cannot tell them apart.
 
 ## Why the workarounds are worse than the stall
@@ -67,13 +67,13 @@ Both would be answered by a key that is a declaration reference.
 ## Log
 
 - 2026-08-17: Filed by the `Int` round as the round's only refused row. Ranked #3 of six, and it is the one that cost a *kit item* rather than proof lines.
-- 2026-08-17: CLOSED by `docs/instance-resolved-key-design.md` (2026-08-17). The full round in one entry.
+- 2026-08-17: CLOSED by `docs/elaborator/instance-resolved-key-design.md` (2026-08-17). The full round in one entry.
 
 **The decision.** Identity by resolution, never by spelling. The registry key is `(class key, carrier-head key, index spelling)` with every component a RESOLVED declaration reference: `("logic::Decide", "int::Le", "")` and `("logic::Decide", "nat::Le", "")` are two instances that coexist. Duplicate semantics are unchanged — same resolved carrier twice is refused, and the refusal now module-qualifies the carrier, the class and the occupant.
 
-The enabling step is worth recording because it is why this was cheap where `docs/traits-layer1-design.md` §7.1 thought it expensive: **a key never had to be spellable, only a name did.** §7.1 keyed on the head because a canonical name must be an identifier — true, and still true — but the key is a tuple in a HashMap no program writes down. Dropping spellability-as-a-key-constraint made the cheap form of §8's 'full canonical key' available with no layer-2 canonical-derivation table.
+The enabling step is worth recording because it is why this was cheap where `docs/language/classes/traits-layer1-design.md` §7.1 thought it expensive: **a key never had to be spellable, only a name did.** §7.1 keyed on the head because a canonical name must be an identifier — true, and still true — but the key is a tuple in a HashMap no program writes down. Dropping spellability-as-a-key-constraint made the cheap form of §8's 'full canonical key' available with no layer-2 canonical-derivation table.
 
-**Names did not move.** The canonical name is still `Le::Decide`, declared in the declaring module like any other declaration; the external face is `int::Le::Decide`. Nothing is minted, so `docs/repr-access-spellings-design.md`'s minted-name policy needed no extension — the round's brief expected to extend it, and there was nothing to extend (design §7.2). One thing did move: `InstanceInfo.global` is now module-qualified, because it is emitted as a `Var` at a use site that may see two `Le::Decide`s.
+**Names did not move.** The canonical name is still `Le::Decide`, declared in the declaring module like any other declaration; the external face is `int::Le::Decide`. Nothing is minted, so `docs/native/repr-access-spellings-design.md`'s minted-name policy needed no extension — the round's brief expected to extend it, and there was nothing to extend (design §7.2). One thing did move: `InstanceInfo.global` is now module-qualified, because it is emitted as a `Var` at a use site that may see two `Le::Decide`s.
 
 **The lexer joins a chain** (`if` → `while`), so `int::Le::Decide` is writable and 'printed paths are writable verbatim' is an invariant again rather than an invariant-with-a-carve-out. Boundaries checked and unmoved: `m::{a, b}` (a `::` before `{` never joined), `Impl(add, R)::member` (its `::` follows a `)` and never reaches the identifier scanner). Nothing relied on the one-join rule — `a::b::c` used to lex as `a::b` `::` `c` and the parser's postfix `::` arm needs an APPLIED owner, so it was a parse error everywhere.
 

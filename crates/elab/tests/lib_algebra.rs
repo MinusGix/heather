@@ -1,5 +1,5 @@
 //! `lib/std/algebra/algebra.hthr`'s derived-instance table, which Heather
-//! cannot state about itself (`docs/traits-layer2-design.md` §7.1, §8).
+//! cannot state about itself (`docs/language/classes/traits-layer2-design.md` §7.1, §8).
 //!
 //! The library's classes and instances are probed in Heather, in
 //! `lib/_tests/std/algebra/algebra_tests.hthr`: which instance is registered

@@ -1,7 +1,7 @@
 # A native program reads like a program
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 and S5 landed 2026-10-03.** Anchor issue:
@@ -71,7 +71,7 @@ fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False),
 
 ## 2. What the probes found (2026-10-02)
 
-Probe files are in `probes/ergo/`; byte-path costing is logged on
+Probe files are in `probes/ergo/@ef3961a`; byte-path costing is logged on
 `issues/byte-vocabulary-for-native-programs.md`.
 
 - **Per-byte facts are one line each.** Against wc's current step,
@@ -286,7 +286,7 @@ constructor over the old value's projections. The frontend already reads
 that term. Refuse a dependent record whose later field mentions a replaced
 one.
 
-**Built 2026-10-03** (`docs/surface-records.md` §6.2). `wc_step`'s arms name
+**Built 2026-10-03** (`docs/language/surface-records.md` §6.2). `wc_step`'s arms name
 only what they change (`s with { bytes = Succ(s.bytes), inside = False }`).
 One frontend change was needed: an arm that keeps a field now carries the
 input through, where every arm used to write a literal. In a decided
@@ -300,7 +300,7 @@ Issues: `split-all-reduce-defined-heads`, `split-all-closed-tonat-literals`,
 and `cons-nil-argument-inference`, which the S6 work ran into.
 
 **Built 2026-10-02.** Changes are in `crates/elab/src/goal_combinators.rs`
-and `constructor.rs`; the described behaviour is in `docs/goal-combinators.md`.
+and `constructor.rs`; the described behaviour is in `docs/tactics/goal-combinators.md`.
 
 - **Defined heads.** `simplify_goal` replaces a call by the arm its match
   selects (`matched_at_constructor`), but only when the match ι-reduces to a
@@ -344,7 +344,7 @@ those facts are real lemmas; the third, `words(Cons(Nil, ps)) = words(ps)`, is
 ### 4.1 Results (2026-10-02)
 
 None refutes the plan. Two amend it: V1 changes S3, and V1 and V2 add a
-`split_all` fix. Probe files are in `probes/ergo/` (`v1_wc_l`, `t_v2_runs`,
+`split_all` fix. Probe files are in `probes/ergo/@ef3961a` (`v1_wc_l`, `t_v2_runs`,
 `t_v3_zf`, `v4_tr`, `t_wc_a`).
 
 - **V1, amended. `&&` reaches the frontend but cannot be lowered.**

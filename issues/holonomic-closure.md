@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §3.5: holonomic (D-finite and
+`docs/library/analysis-foundations-design.md` §3.5: holonomic (D-finite and
 P-recursive) objects, meaning functions and sequences given by a linear
 ODE or recurrence with polynomial coefficients plus initial terms, closed
 under `+`, `·` and some compositions, with identities proved by comparing

@@ -31,5 +31,5 @@ rounding round) is to bind `.left`/`.right` as lets by hand.
 its conjuncts at every depth, each named by its projection path and typed by
 `project_field`; the certificate cites `h.right.left` only where it uses it.
 A disjunction under a conjunction is split like a top-level one. Design:
-`docs/omega-measure-reduction-design.md` §13. Probes and a control:
+`docs/tactics/omega-measure-reduction-design.md` §13. Probes and a control:
 `conj_*` in `lib/_tests/std/tactic/omega_tests.hthr`.

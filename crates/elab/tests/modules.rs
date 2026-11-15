@@ -1,5 +1,5 @@
 //! Modules: imports, per-file namespaces, and the §4 name regime
-//! (docs/modules-design.md, issues/modules.md).
+//! (docs/language/modules-design.md, issues/modules.md).
 //!
 //! The claim under test is not "a second file can be read" — it is that the
 //! name layer is **honest**: a name that resolves uniquely works unqualified,
@@ -271,7 +271,7 @@ fn flag_num(f: Flag) -> Nat { match f { Off => 0, On => 1 } }";
 
 // ---------------------------------------------------------------------------
 // Expected-type-directed constructor resolution
-// (issues/ctor-resolution-by-expected-type.md, docs/modules-design.md §4's
+// (issues/ctor-resolution-by-expected-type.md, docs/language/modules-design.md §4's
 // follow-up and §8's "one resolution judgment").
 //
 // The claim: in checking position the expected type names the declaration, so
@@ -306,7 +306,7 @@ fn a_bare_constructor_is_settled_by_the_expected_type() {
 
 #[test]
 fn an_unsaturated_bare_constructor_is_settled_through_the_expected_pi() {
-    // The η-expansion of docs/constructor-function-values.md §2: the expected
+    // The η-expansion of docs/language/constructor-function-values.md §2: the expected
     // type is a `Π`, so the declaration is in its *codomain* and a route that
     // read the head would find no declaration at all. `Some` is ambiguous
     // across the two modules, so the arrow is carrying a name the name layer
@@ -568,7 +568,7 @@ fn two_modules_cannot_claim_one_slot() {
 
 #[test]
 fn a_match_arm_resolves_its_constructors_through_the_scrutinee() {
-    // The free win of docs/modules-design.md §8: an arm never consults the
+    // The free win of docs/language/modules-design.md §8: an arm never consults the
     // global constructor table, so two visible `None`s do not make an arm
     // ambiguous — the scrutinee's type already said which constructors exist.
     // The qualified spelling is accepted too, and only for the right type.

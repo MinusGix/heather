@@ -18,7 +18,7 @@
 //
 // `converges` is now written as §6 states it — `record Converges(p, env, ir,
 // vs) { n: Nat, h: eval(n, p)(env, ir) = Out(vs) }`, a value-parameterized
-// record (docs/surface-value-parameters.md, issues/surface-existential.md
+// record (docs/language/surface-value-parameters.md, issues/surface-existential.md
 // route 1). The bound is genuinely hidden, so `refines_trans_conv` is
 // implication chaining with no fuel map. The computed-bound form stays
 // alongside it, additive: `refines_of_bounded` is the ∃-closure between them,
@@ -33,7 +33,7 @@
 // it just re-enters the loop protocol).
 
 // The Nat kit — `add`, `sub`, `leb`/`Le` and the order lemmas — is `lib/std/nat`
-// now (docs/modules-design.md §7). It was declared here, verbatim, until
+// now (docs/language/modules-design.md §7). It was declared here, verbatim, until
 // modules existed; `import nat;` puts all of it in scope unqualified.
 import nat;
 
@@ -160,7 +160,7 @@ fn append(a: Val, b: Val) → Val {
 
 // arm for `tag` out of an Arm-chain; NoArm when the chain is short
 // The seven non-`Arm` constructors all answer `NoArm`, and the `_` arm is
-// the sugar for exactly that (docs/nested-match-patterns-design.md §4). It is
+// the sugar for exactly that (docs/language/matching/nested-match-patterns-design.md §4). It is
 // available in the *decreasing* position — this `match` is what installs the
 // guard `pick_arm(next)` reads — because `_` binds nothing the guard looks at
 // (§6.2). The body is elaborated once and shared across the seven expanded
@@ -219,7 +219,7 @@ fn step_letcon(ev: Val → Ir → Res, env: Val, tag: Nat, args: Refs, rest: Ir)
 }
 
 // The two-level tower written as one decision tree
-// (docs/nested-match-patterns-design.md §3.2). The `_` row is the
+// (docs/language/matching/nested-match-patterns-design.md §3.2). The `_` row is the
 // fallthrough for `VNil`/`VCons` *and* for `NoneV`; the inner `match` on the
 // evaluation result stays written out, because its arms differ.
 fn step_letmatch(ev: Val → Ir → Res, env: Val, scrut: Nat, arms: Ir, rest: Ir) → Res {
@@ -249,7 +249,7 @@ fn step_letloop(ev: Val → Ir → Res, env: Val, init: Refs, body: Ir, rest: Ir
 // Three levels of tower as one decision tree, `ftag` included: the `Nat`
 // column is split by the same machinery as the `Val` ones, and the two rows
 // that reach it carry `carried` down past two splits
-// (docs/nested-match-patterns-design.md §3.2).
+// (docs/language/matching/nested-match-patterns-design.md §3.2).
 fn step_loopiter(ev: Val → Ir → Res, env: Val, body: Ir) → Res {
     match ev(env, body) {
         OutOfFuel => OutOfFuel,
@@ -433,7 +433,7 @@ fn k_iter(ev: Val → Ir → Res, body: Ir, r: Res) → Res {
 }
 
 // The order on Nat — `Bool`, `leb`, `Le`, `sub` — is `nat`'s
-// (docs/modules-design.md §7). `<=` is surface notation for a call to `Le`
+// (docs/language/modules-design.md §7). `<=` is surface notation for a call to `Le`
 // (issues/comparison-operators.md), so the spellings below are unchanged by
 // the move: `<=` where the order is being *stated*, and the explicit `Le`
 // inside explicit motives, where an infix operator would read as one more
@@ -635,7 +635,7 @@ theorem k_iter_is_step(ev: Val → Ir → Res, env: Val, body: Ir):
 
 // ---------------------------------------------------------------------------
 // INVERSION for `k_bind`, as a value-parameterized record — the surface's
-// value-indexed Σ (docs/surface-value-parameters.md; issues/surface-existential
+// value-indexed Σ (docs/language/surface-value-parameters.md; issues/surface-existential
 // route 1). The statement is the existential the issue could not write:
 //
 //     k_bind(ev, env, rest, r) = Out(vs) → ∃ ws. r = Out(ws) × ev(ws ++ env, rest) = Out(vs)
@@ -699,7 +699,7 @@ theorem k_bind_mono(ev1: Val → Ir → Res, ev2: Val → Ir → Res,
 // says so in one token: `match h : ev1(env, lbody)` binds
 // `h : ev1(env, lbody) = Out(ws)` in each arm and the elaborator writes the
 // convoy motive and the `refl` it is applied to
-// (docs/match-equation-split-design.md §3). Giving it its own inversion record
+// (docs/language/matching/match-equation-split-design.md §3). Giving it its own inversion record
 // as well is the same move as `k_bind_inv` and is left for a second consumer.
 
 theorem step_mono(prog: Prog, ev1: Val → Ir → Res, ev2: Val → Ir → Res,
@@ -827,7 +827,7 @@ theorem eval_mono_plus(prog: Prog, n: Nat, env: Val, ir: Ir, vs: Val,
 }
 // The arithmetic and order kit `le_add`, `le_refl`, `le_succ_r`, `le_add_l`
 // and `le_add_r` — with `cong_nat`, `add_left_zero`, `add_succ_left` and
-// `sub_zero` under them — is `nat`'s (docs/modules-design.md §7).
+// `sub_zero` under them — is `nat`'s (docs/language/modules-design.md §7).
 
 // doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) → n <= m →
 // simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed
@@ -845,7 +845,7 @@ theorem fuel_monotone(prog: Prog, env: Val, ir: Ir, vs: Val, n: Nat, m: Nat,
 // `converges` (doc §6), AS STATED — the ∃-closure, not the bounded image of
 // it. This is the surface's value-indexed Σ: a record whose value parameters
 // are the four things the predicate is *about*, and whose two fields are the
-// witness and the equation over it (docs/surface-value-parameters.md;
+// witness and the equation over it (docs/language/surface-value-parameters.md;
 // issues/surface-existential.md route 1).
 //
 //     converges(p, env, ir, vs)  :=  ∃ n. eval(n, p)(env, ir) = Out(vs)
@@ -984,7 +984,7 @@ theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
 // and the bound arithmetic that `refines_trans` had to thread disappears.
 //
 // The relation now HAS A NAME. A type is an ordinary expression
-// (docs/types-as-expressions.md), so `Refines` is an ordinary `fn` whose
+// (docs/language/types-as-expressions.md), so `Refines` is an ordinary `fn` whose
 // result type is `Type` and whose body is a function type; `Refines(…)` in
 // type position is `El` of the call, and conversion sees through it by δ.
 // This closes doc §13 note 7's "refines cannot be given a name"
@@ -1418,7 +1418,7 @@ theorem add_rec_converges(a: Nat, b: Nat, tail: Val)
 // then a record — `NatEnv(e)`, which packs the two embedded arguments, the
 // tail, and the proof that `e` has that shape — and a record type applied to
 // its value parameters IS a `Val → Type` value
-// (docs/record-type-values.md, [[record-types-as-type-valued-functions]]).
+// (docs/language/record-type-values.md, [[record-types-as-type-valued-functions]]).
 record NatEnv(e: Val) {
     a: Nat,
     b: Nat,

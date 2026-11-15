@@ -148,7 +148,7 @@ impl Shape {
     /// A `runtime fn`'s program, as its generator published it
     /// (`{source}::program`, its last function `source`, the others the
     /// runtime fns it reaches) with its agreement (`{source}::agrees`, from
-    /// the functions' `Compile` instances, docs/runtime-fn-setups-design.md
+    /// the functions' `Compile` instances, docs/native/runtime-fn-setups-design.md
     /// §16.9): nothing about the program is proved here.
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize) -> Shape {
         let parameters = arguments(arity);
@@ -532,7 +532,7 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 }
 
 /// The optimizer over a program that is lent spans
-/// (`function_ir_optimize`, docs/optimizer-design.md §9): a function at a
+/// (`function_ir_optimize`, docs/native/optimizer-design.md §9): a function at a
 /// time, callees first, each over its callees as the stages left them, and
 /// a search at a time, each over the function the searches before it
 /// made. A search is an evaluation and proves nothing: it answers a
@@ -986,7 +986,7 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
                 let read = read_items(&numbers[3..])?;
                 // The contract's ground for needing no stack alignment and
                 // touching no state the model lacks: a function's code
-                // calls only compiled code (docs/native-library-exports-design.md
+                // calls only compiled code (docs/native/native-library-exports-design.md
                 // §6, clauses 7 and 9). The function compiler emits no
                 // system call; one would be refused here, not exported.
                 if read.iter().any(|(_, item)| item == "Syscall") {

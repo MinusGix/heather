@@ -1,5 +1,5 @@
 // SHA-256's word functions as compiled code (issues/sha2-compress-native.md,
-// stage C1 of docs/native-lexer-crypto-roadmap.md), at 32 bits in the
+// stage C1 of docs/native/native-lexer-crypto-roadmap.md), at 32 bits in the
 // machine's 64-bit registers.
 //
 // The same three functions as `sha512_round`: `T1` and `T2` of a round

@@ -17,7 +17,7 @@ inclusions between them (`machine_runs_of_fetched`, `linux_steps_of_fetched`,
 `linux_steps_of_machine`, `LinuxIo::steps_of_stack`) are separate inductions
 where a generic closure gives one monotonicity lemma. About 100 citations.
 `SimPaid` is a star/plus simulation diagram spelled for one tree type.
-`docs/native-mathematics-survey.md` §3; survey rank 3.
+`docs/surveys/native-mathematics-survey.md` §3; survey rank 3.
 
 ## Scope
 

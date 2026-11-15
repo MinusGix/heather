@@ -18,11 +18,11 @@ parameter as inferred at use?
 ## Where things stand
 
 - Value parameters are kernel abstractions. A probe on `3099a7d`
-  (`docs/sequencing-surface-design.md` appendix P1) passes
+  (`docs/language/sequencing-surface-design.md` appendix P1) passes
   `inductive Box(A: Type)` as `M: Type → Type`, and generic code over it
   computes by `refl`.
 - `<A>` parameters are substituted at each use, so `Option<Nat>` and
-  `Option<Bool>` are unrelated kernel types (`docs/inductive-tier0-lowering.md` §2).
+  `Option<Bool>` are unrelated kernel types (`docs/inductives/inductive-tier0-lowering.md` §2).
   That doc says the choice was forced because the surface had no first-class
   types then, and that a `ΠΠ ℓ⃗`-abstracted encoding becomes possible with
   universe polymorphism.
@@ -35,7 +35,7 @@ parameter as inferred at use?
 2. **What it would retire**:
    - pieces 1–2 of [[higher-kinded-classes]] (a bare `Option` as a value; the
      unifier's `?M(A) =?= Option<A>` becomes first-order);
-   - trial-by-kernel-check resolution's reason (`docs/traits-layer2-design.md`
+   - trial-by-kernel-check resolution's reason (`docs/language/classes/traits-layer2-design.md`
      §3.1: a monomorphized carrier cannot be read back);
    - one kernel object per generic theorem or instance.
 3. **What it costs**:
@@ -55,5 +55,5 @@ patches or this round's first step).
 
 ## Log
 
-- 2026-10-31: [[higher-kinded-classes]] landed without this round: pieces 1–2 did not need <A> as kernel families, because tier-0/1 generic declarations already register D#tycode_fn : Π(A : Ty 0). Ty l, which is the constructor value, and the unifier's ?M(A) ≟ Option<A> is first-order against its respelling. This round no longer gates it; what remains of the case is the cost side (per-use substitution, trial-by-kernel-check resolution, level profiles other than all-Ty 0). docs/higher-kinded-classes-design.md §6.
-- 2026-11-05: gardener: cites a file it shares with [[dependent-field-injectivity]] (`docs/inductive-tier0-lowering.md`); [[inductive-compiler]] (`docs/inductive-tier0-lowering.md`); [[tier2-type-code-functions]] (`docs/higher-kinded-classes-design.md`).
+- 2026-10-31: [[higher-kinded-classes]] landed without this round: pieces 1–2 did not need <A> as kernel families, because tier-0/1 generic declarations already register D#tycode_fn : Π(A : Ty 0). Ty l, which is the constructor value, and the unifier's ?M(A) ≟ Option<A> is first-order against its respelling. This round no longer gates it; what remains of the case is the cost side (per-use substitution, trial-by-kernel-check resolution, level profiles other than all-Ty 0). docs/language/classes/higher-kinded-classes-design.md §6.
+- 2026-11-05: gardener: cites a file it shares with [[dependent-field-injectivity]] (`docs/inductives/inductive-tier0-lowering.md`); [[inductive-compiler]] (`docs/inductives/inductive-tier0-lowering.md`); [[tier2-type-code-functions]] (`docs/language/classes/higher-kinded-classes-design.md`).

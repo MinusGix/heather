@@ -1,5 +1,5 @@
 //! `rewrite(h₁, …, hₙ, e)`: rewrite the goal along equations, without
-//! writing `j`'s motive (`docs/equation-rewrite-design.md`,
+//! writing `j`'s motive (`docs/tactics/equation-rewrite-design.md`,
 //! `issues/equation-rewrite-in-goal.md`).
 //!
 //! At a checking position with goal `G`, each `hᵢ : aᵢ = bᵢ` in turn
@@ -186,7 +186,7 @@ impl Rewrites<'_> {
     /// `hᵢ : aᵢ = bᵢ` in turn, every occurrence of `aᵢ` in its type turned
     /// into `bᵢ` — the goal form's direction, applied to a type that is
     /// proved rather than wanted, so the step is `J(hᵢ; y q. M; hyp) : M[b/y]`
-    /// with no `sym` (docs/equation-rewrite-design.md §7). An inference form:
+    /// with no `sym` (docs/tactics/equation-rewrite-design.md §7). An inference form:
     /// the result's type is what the rewrite leaves.
     pub(crate) fn elab_rewrite_in(&self, cx: &Cx, args: &[Expr], named: &[NamedArg], span: Span) -> R<(Term, Type, Level)> {
         if args.is_empty() {
@@ -368,7 +368,7 @@ impl Rewrites<'_> {
     /// [`Self::rewrite_instance`], with the ways an unapplied equation fails
     /// to become an instance told apart ([`Miss`]), and `premise` asked for
     /// an argument matching left open that nothing after it depends on: a
-    /// conditional law's side condition (`docs/simp-design.md` §6).
+    /// conditional law's side condition (`docs/tactics/simp-design.md` §6).
     fn rewrite_instance_or(
         &self,
         cx: &Cx,
@@ -589,7 +589,7 @@ impl Rewrites<'_> {
         }
         // A codata constructor is a `corec` whose signature holds the type's
         // parameters and whose step holds the fields: matched structurally,
-        // binders and all (docs/equation-rewrite-design.md §11.2).
+        // binders and all (docs/tactics/equation-rewrite-design.md §11.2).
         if let Term::Corec { .. } = pat {
             return matches!(**t, Term::Corec { .. }) && self.match_deep(cx, pat, t, k, 0, binds);
         }
@@ -600,7 +600,7 @@ impl Rewrites<'_> {
             return self.match_spine(cx, &g, &t, k, binds, deferred);
         }
         // A class carrier's parent dictionary, minted over the law's own
-        // parameters (docs/traits-layer2-design.md §8.1), is what a written
+        // parameters (docs/language/classes/traits-layer2-design.md §8.1), is what a written
         // record was before: compared by conversion once the dictionaries
         // are bound, not spine by spine against the goal's instance.
         if Resolution(self).is_open_app(pat) {
@@ -987,7 +987,7 @@ fn eta(t: &Term) -> Option<Term> {
 }
 
 /// A left side whose occurrences are found by conversion, not `==` alone
-/// (docs/equation-rewrite-design.md §6.2): one headed by a global, or by a
+/// (docs/tactics/equation-rewrite-design.md §6.2): one headed by a global, or by a
 /// local variable. A variable converts to nothing but itself, but the
 /// arguments it is applied to may be spelled differently in the goal: a
 /// class law's operation is the caller's operator variable, and the

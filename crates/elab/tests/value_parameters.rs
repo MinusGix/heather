@@ -1,7 +1,7 @@
 //! Value parameters on `record` — the surface's value-indexed Σ
-//! (`docs/surface-value-parameters.md`). Tracking issue:
+//! (`docs/language/surface-value-parameters.md`). Tracking issue:
 //! `issues/surface-existential.md`; the feasibility report this implements is
-//! `docs/surface-existential-investigation.md`, whose §B.1 hand-built kernel
+//! `docs/language/surface-existential-investigation.md`, whose §B.1 hand-built kernel
 //! terms (`crates/elab/tests/surface_existential_probe.rs`) are the shapes the
 //! generator's output has to match.
 //!
@@ -15,7 +15,7 @@
 //! binders the field spine pushes. Get that shift wrong and the record still
 //! declares, still checks, and still inhabits — it is just a *different*
 //! proposition, usually a trivially inhabited one (`Σ n. dbl n = n` instead of
-//! `Σ n. dbl n = m`). That is `docs/surface-existential-investigation.md` §H
+//! `Σ n. dbl n = m`). That is `docs/language/surface-existential-investigation.md` §H
 //! risk 3, and the only observer for it is a proposition that must **not** be
 //! provable: §7 and §8 below. A suite that checked only the encoding would pass
 //! against the captured spelling.
@@ -43,7 +43,7 @@ fn bad(src: &str) -> String {
     }
 }
 
-/// The miniature of `docs/surface-existential-investigation.md` §B.1, now
+/// The miniature of `docs/language/surface-existential-investigation.md` §B.1, now
 /// written at the surface: a real recursive function, and a record that is a
 /// **predicate** over the free value `m`. `dbl` is deliberately a recursive
 /// `fn` rather than a constructor, so `dbl(n)` at a neutral `n` is a stuck
@@ -133,8 +133,8 @@ fn elimination_uses_the_witness_and_the_equation() {
 
 // -- 5: construction is checking-position only -----------------------------
 
-/// The design decision of `docs/surface-existential-investigation.md` §C.5,
-/// closed the recommended way (docs/surface-value-parameters.md §4): a value
+/// The design decision of `docs/language/surface-existential-investigation.md` §C.5,
+/// closed the recommended way (docs/language/surface-value-parameters.md §4): a value
 /// parameter appears only inside a *field's* type, so nothing in the argument
 /// list determines it. Every checking position supplies it — a declared result
 /// type, an argument position — and both the call spelling and the
@@ -144,7 +144,7 @@ fn elimination_uses_the_witness_and_the_equation() {
 /// `let x: T = e;`. It did not parse for *any* type when this test was
 /// written, and the reason recorded here was wrong — not "the type grammar has
 /// `a = b`" but `expr()`'s comparison rung, reached through `ty_atom`'s
-/// fall-through (`docs/let-and-blocks-design.md` §1.1(1)). The annotation now
+/// fall-through (`docs/language/let-and-blocks-design.md` §1.1(1)). The annotation now
 /// suppresses that rung, so the position works and is exercised below.
 #[test]
 fn checking_position_supplies_the_parameters() {
@@ -162,7 +162,7 @@ fn checking_position_supplies_the_parameters() {
 
 /// …and where nothing fixes the parameter, a named diagnostic, not a wrong
 /// guess: `h`'s argument is `refl`, which only checks, so the field that would
-/// fix `m` cannot (docs/surface-value-parameters.md §4.1). Written type
+/// fix `m` cannot (docs/language/surface-value-parameters.md §4.1). Written type
 /// arguments do not change that — `<…>` supplies types, and the value
 /// arguments are read off the fields either way.
 #[test]
@@ -286,7 +286,7 @@ fn a_witness_for_one_parameter_does_not_inhabit_another() {
 // -- 9-10: composition and levels ------------------------------------------
 
 /// `record R<A>(k: T)` — type parameters and value parameters compose, in that
-/// order (docs/surface-value-parameters.md §1). The **open** element type is
+/// order (docs/language/surface-value-parameters.md §1). The **open** element type is
 /// the axis `docs/testing-generated-terms.md` says hides three defects on its
 /// own: `A` is a type parameter here and the field `v: A` is open, while `k` is
 /// a value parameter reaching the third field's type.

@@ -1,5 +1,5 @@
 // Where the environment's words are between statements, once each word has
-// a home (native_alloc; docs/native-register-allocation-design.md).
+// a home (native_alloc; docs/native/native-register-allocation-design.md).
 //
 // The region still holds a file of words (`Target::Placed`), but only the
 // words in their slots are read from it; a word homed in a register is read
@@ -10,7 +10,7 @@
 // home (`Homes::Agrees`). A dead word is anywhere. And RSP is the running
 // activation's frame (`Target::Agreeing`): no statement moves it, so a
 // CALL pushes below the frame and a callee finds its own frame in RSP
-// (docs/native-procedures-are-functions-design.md §3, step 5a).
+// (docs/native/native-procedures-are-functions-design.md §3, step 5a).
 //
 // The registers enter only through `home_values`, the home pool's six read
 // in order and RSP after them. A write to a register outside the pool
@@ -350,7 +350,7 @@ theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) 
 
 // What code between two statements keeps: the pool's registers, and after
 // them the stack pointer, which is the running frame
-// (docs/native-procedures-are-functions-design.md §3, step 5a).
+// (docs/native/native-procedures-are-functions-design.md §3, step 5a).
 fn home_values(g: Gprs) → List<BitVec(64)> { home_pool().map(λ (register: Gpr) => read_gpr(register, g)) ++ [read_gpr(Rsp, g)] }
 
 theorem home_value(g: Gprs): (k: Nat) → k < 6 → home_values(g).get_or(k, BitVec::zero()) = read_gpr(home_register(k), g) {

@@ -1,6 +1,6 @@
 // Probes for a function of a laid record that reads a second span
 // (`lib/native/runtime/runtime.hthr`, "A function of a laid record";
-// docs/layout-design.md §9.5): after its record it takes each span it
+// docs/native/layout-design.md §9.5): after its record it takes each span it
 // only reads, the span's bytes and then its 64-bit length word, and then
 // its words. Its code over the bytes takes the record's span first, and
 // what it is proved to be, where that span holds a record, is the

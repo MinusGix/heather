@@ -17,7 +17,7 @@ every declaration that is:
 
 - refused by the exporter (the cause is the `Refusal` text);
 - rejected by Lean or Rocq (the cause is the first failing conversion,
-  classified against `docs/export-fragment-design.md` §6's list);
+  classified against `docs/library/export-fragment-design.md` §6's list);
 - too slow in the target (§5.4).
 
 The table of causes is the deliverable, more than the pass count. It is the

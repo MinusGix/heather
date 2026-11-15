@@ -1,5 +1,5 @@
 // What is stored in bytes: a value of `A` as bytes of a `Layout`, read and
-// written through a window of a list (docs/layout-design.md §5.2). The
+// written through a window of a list (docs/native/layout-design.md §5.2). The
 // third layer over `lib/std/machine/layout.hthr`: a `Stored<A>` says how
 // an `A` is bytes, `get` and `put` read and store one at an offset, and
 // the laws are proved once for every codec: what is put is read back

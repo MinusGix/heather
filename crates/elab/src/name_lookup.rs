@@ -62,7 +62,7 @@ impl NameLookup<'_> {
             return NameRes::Found(module.to_string());
         }
         // A registered value is cited by its key on the caller's behalf by
-        // `registered(T)` (docs/registered-values-design.md), as an evidence
+        // `registered(T)` (docs/metaprogramming/registered-values-design.md), as an evidence
         // rule is above: its module need only be in the import closure.
         if let Some((module, base)) = split_qual(name)
             && self.traits.is_registered(name)
@@ -140,7 +140,7 @@ impl NameLookup<'_> {
         }
         // A registered instance's global, by its key: generated, unwritable
         // (`#`), and reachable wherever its instance is, which is the whole
-        // run's closure (docs/module-dag-design.md §2) and not only the
+        // run's closure (docs/infrastructure/module-dag-design.md §2) and not only the
         // modules this one names. A child instance fills an inherited field
         // from a parent registered in a module it never imported
         // (`algebra`'s `CommMonoidRel<Nat>(RelId, add)` under `semiring`'s
@@ -158,7 +158,7 @@ impl NameLookup<'_> {
             return self.key_of_declared_kinds(target, kinds);
         }
         // `f::unfold`, the unfolding equation's designed spelling, is the
-        // declared `f_unfold` (docs/decreases-unfolding-design.md §2), which
+        // declared `f_unfold` (docs/language/recursion/decreases-unfolding-design.md §2), which
         // stays a deprecated spelling of it.
         if let Some(base) = name.strip_suffix("::unfold")
             && let Some(k) = self.key_of_kinds(&format!("{base}_unfold"), kinds)
@@ -193,11 +193,11 @@ impl NameLookup<'_> {
 
     /// Inside a member of `T` (`fn T::f`), a bare name may name `T`'s other
     /// members: `cong_cons` for `List::cong_cons` inside `List::append_assoc`
-    /// (docs/sections-design.md §6). The member joins the candidate set with
+    /// (docs/language/sections-design.md §6). The member joins the candidate set with
     /// the same rank as every other reading, so when the bare name also
     /// resolves on its own the two are ambiguous (`Err`, the message): a
     /// precedence either way would let a library's growth reinterpret checked
-    /// text (docs/modules-design.md §8). Only a declared member counts, never
+    /// text (docs/language/modules-design.md §8). Only a declared member counts, never
     /// the constructor reading of `T::C`. It is consulted only where a written
     /// expression enters elaboration ([`Self::owner_rewrite`]), so the
     /// elaborator's own lookups of library names, and receiver dispatch's
@@ -218,12 +218,12 @@ impl NameLookup<'_> {
                 "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
                  `{owner}::{name}` (`{m}`) or `{name}` (`{other}`). Write `{owner}::{name}` \
                  for the member, or qualify the other (`{other}::{name}`) \
-                 (docs/sections-design.md §6)"
+                 (docs/language/sections-design.md §6)"
             )),
             NameRes::Ambiguous(origins) => Err(format!(
                 "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
                  `{owner}::{name}` (`{m}`), and it is also declared in {}. Qualify it \
-                 (docs/sections-design.md §6)",
+                 (docs/language/sections-design.md §6)",
                 origins.iter().map(|o| format!("`{o}`")).collect::<Vec<_>>().join(" and ")
             )),
         }
@@ -269,7 +269,7 @@ impl NameLookup<'_> {
 
     /// Inside an `instance` block, an unqualified name that is an *earlier*
     /// member of this block names that member's global
-    /// (docs/traits-layer1-design.md §4.2). A name rewrite and nothing more:
+    /// (docs/language/classes/traits-layer1-design.md §4.2). A name rewrite and nothing more:
     /// the members' own parameters are unaffected, so in a *generic* instance
     /// a cross-member call still passes the `requires` binders — layer 1 has
     /// no resolution to fill them with.
@@ -429,14 +429,14 @@ impl NameLookup<'_> {
 
     /// The **pull reflection API**, first cut
     /// (issues/fn-reflection-for-analyzers.md,
-    /// docs/fn-signature-reflection-design.md §1): a declared fn's *type as
+    /// docs/metaprogramming/fn-signature-reflection-design.md §1): a declared fn's *type as
     /// code* — a `Term::BoxTy` of type `CodeTy(·, 0)`, ready for the
     /// type-code recursor. Nothing is stored per declaration; the type is
     /// read out of Ψ on request, which is what makes this pull and not push.
     ///
     /// THIS IMPLEMENTATION IS FINAL, and that is a correction to what the
     /// signature-reflection round expected here
-    /// (docs/opaque-globals-analysis-design.md §2): the opaque-globals round
+    /// (docs/metaprogramming/opaque-globals-analysis-design.md §2): the opaque-globals round
     /// settled unfolding-for-analysis *at the reflection boundary*, so the
     /// Ψ-read below (a committed statement is read as stored, as
     /// `Defs::body` reads a constant's body) already *is* `u^δ`
@@ -457,7 +457,7 @@ impl NameLookup<'_> {
         let GlobalBinding::Tm { ctx, ty, level, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
-        // A box payload holds no checked spelling (`docs/intro-by-type-design.md`
+        // A box payload holds no checked spelling (`docs/elaborator/intro-by-type-design.md`
         // §2.3), and a statement elaborated outside a quote may: translate it
         // in the binding's own world before rescoping.
         let ty = self.code_form_ty(abs, ctx, Rc::clone(ty), level)?;
@@ -466,7 +466,7 @@ impl NameLookup<'_> {
         let ty = (*ty).clone();
         // Unfolding-for-analysis, per the doctrine above, now with a second
         // case: a statement spells registered lowerings as `El (D#tycode^δ)`
-        // (`docs/annotation-component-respell-design.md` §2.1), and at layer
+        // (`docs/elaborator/annotation-component-respell-design.md` §2.1), and at layer
         // m a boxed global reference is *syntax* — the analyzer cannot δ
         // through it, so the signature checker would decline every fn whose
         // result is a coded declaration. The reflection boundary is where

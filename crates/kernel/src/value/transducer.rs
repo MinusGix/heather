@@ -1,5 +1,5 @@
 //! Bit transducers: Mealy machines over a word, iterated natively
-//! (`docs/native-bitvector-values-design.md` §§4, 5).
+//! (`docs/kernel/native-bitvector-values-design.md` §§4, 5).
 //!
 //! A fold over a `Vec`'s *length* whose step reads one bit from each of `a`
 //! vector arguments and a state from a finitely enumerable type, and whose

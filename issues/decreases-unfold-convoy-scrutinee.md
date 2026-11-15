@@ -10,7 +10,7 @@ updated: 2026-11-01
 ---
 
 Found by the `rt` pins (`lib/_tests/native/runtime/rt_tests.hthr`, V3 of
-`docs/runtime-fn-setups-design.md` §12). The native examples' measured loop
+`docs/native/runtime-fn-setups-design.md` §12). The native examples' measured loop
 
 ```heather
 fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {

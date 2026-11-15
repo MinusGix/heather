@@ -21,7 +21,7 @@ over checked witnesses" after constant folding.
   immediate ([[x86-narrow-and-rotate-forms]]).
 - The rewrite `(x >> a) | (x << b) → rotr(x, a)` when `a + b = w`, as a
   local law of the certified pass algebra
-  (`docs/certified-pass-algebra-probe.md`), composed as one more diagram
+  (`docs/metaprogramming/certified-pass-algebra-probe.md`), composed as one more diagram
   (`function_ir_pass_diagrams.hthr`).
 - Worth weighing: the e-graph library (`lib/std/data/egraph.hthr`) as the
   search, so later peepholes are rules and not passes.

@@ -1,5 +1,5 @@
 // Hurwitz series: calculus in coinductive form
-// (issues/formal-power-series.md; docs/analysis-foundations-design.md §3.4, §5).
+// (issues/formal-power-series.md; docs/library/analysis-foundations-design.md §3.4, §5).
 //
 // A series over a commutative ring is its coefficient function in the
 // Hurwitz convention: `coeff(n)` stands for the `n`-th derivative at the
@@ -539,7 +539,7 @@ theorem Hurwitz::mul_first(f, g: Hurwitz<A>): Hurwitz::mul(f, g).coeff(1) ≈ f.
 
 // Series over a commutative ring are a commutative ring at their `≈`, so
 // they nest: `Hurwitz<Hurwitz<A>>` is series in two variables
-// (docs/analysis-foundations-design.md §5, "several variables are iterated
+// (docs/library/analysis-foundations-design.md §5, "several variables are iterated
 // series").
 instance<A: CommRing(≈, +, *)> CommRing<Hurwitz<A>>(Hurwitz::Same<A>, Hurwitz::add<A>, Hurwitz::mul<A>) {
     rel_refl := λ f => Hurwitz::same_refl(f),
@@ -689,7 +689,7 @@ fn Hurwitz::newton_inv_iter(k: Nat, f, g: Hurwitz<A>) → Hurwitz<A> {
 
 // Newton lifting for the inverse: from an inverse `u` of the head, `k` steps
 // invert `f` to order `2^k`. Precision doubles per step, the shape Newton has
-// at the reals (`docs/analysis-foundations-design.md` §5).
+// at the reals (`docs/library/analysis-foundations-design.md` §5).
 theorem Hurwitz::newton_inv_lifts(k: Nat, f: Hurwitz<A>, u: A, hu: u * f.coeff(0) ≈ A.multiplicative.unit):
     Hurwitz::Vanishes(Nat::pow(2, k), Hurwitz::inv_error(f, Hurwitz::newton_inv_iter(k, f, Hurwitz::constant(u))))
 {

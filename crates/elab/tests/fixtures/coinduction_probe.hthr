@@ -1,5 +1,5 @@
 // Coinductive trees without a kernel change: two encodings, probed
-// (docs/kernel-coinduction-design.md §3; issues/kernel-coinductive-types.md).
+// (docs/kernel/kernel-coinduction-design.md §3; issues/kernel-coinductive-types.md).
 //
 // What a kernel `M` would give, measured against what Heather can already
 // write. Each encoding is built far enough to see which laws are `refl`,

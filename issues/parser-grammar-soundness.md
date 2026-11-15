@@ -67,6 +67,6 @@ choice explores every derivation. Decide its scoped theorem after soundness.
   completeness claim in this round. [[parser-canonical-printers]] must establish
   executable acceptance of its generated subset; grammar soundness alone is
   insufficient for that reverse direction. Design and proof notes are in
-  `docs/calculator-grammar-soundness.md`.
+  `docs/showcase/calculator-grammar-soundness.md`.
 
 - 2026-09-15: Final full `scripts/test`: **2672 passed, 0 failed, 5 ignored**. Tracker and whitespace checks pass. The one-test count reduction is the retained depth sweep sharing the calculator fixture. All acceptance items are complete; remaining ergonomics/checking cost and canonical-printer recognition laws have separate owners.

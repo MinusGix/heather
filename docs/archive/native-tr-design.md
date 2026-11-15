@@ -1,13 +1,13 @@
 # `tr`: output inside the read loop — design
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **decisions taken 2026-09-30 (§6); probe V2 §4.1; slices N, A, B, C, D landed 2026-09-30 (§4.2, §3.1).** Owner: `issues/native-tr.md`.
 Builds on `docs/archive/native-wc-design.md` (the state process, §4.8; the write loop
 at an offset, §5.2), `docs/archive/native-syscall-failures-design.md` (failure paths
-and histories) and `docs/fetched-step-determinism-design.md` (claims universal
+and histories) and `docs/native/fetched-step-determinism-design.md` (claims universal
 over runs).
 
 ## 1. Why this program

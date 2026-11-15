@@ -239,7 +239,7 @@ fn a_type_that_only_converts_is_still_accepted() {
 /// inline width and at a real pool: under the parallel gate the join reports
 /// no note at all, the pass is discarded and replayed serially, and it is the
 /// replay's `kernel_error` that must produce the same message at the same
-/// span (`docs/parallel-kernel-gate-design.md` §5.1).
+/// span (`docs/kernel/parallel-kernel-gate-design.md` §5.1).
 #[test]
 fn a_deferred_note_survives_every_gate_width() {
     let mismatch = format!("{LIST}fn d_w<A>(xs: List<A>, n: Nat) -> List<A> {{ n }}\n");

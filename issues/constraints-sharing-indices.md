@@ -9,7 +9,7 @@ updated: 2026-10-31
 
 A declaration cannot say `A: OrderedField(≈, <, <=, +, *)` and
 `A: CommRingOfInt(≈, +, *)` together: each constraint installs `≈`, `+` and
-`*` again, and the second is refused (docs/linarith-design.md). The library
+`*` again, and the second is refused (docs/tactics/linarith-design.md). The library
 has answered with combined classes that add nothing but the pairing:
 `OrderedFieldOfInt` (`linarith`'s certificates), and the
 `OrderedFieldOfRat` that the [[interval-containment-once-over-ordered-field]]
@@ -75,7 +75,7 @@ first.
   the first parent that has it; at `Rat` and `CReal` that checks because
   their instances share the ancestor by reference. `linarith`'s section
   writes the two constraints; `OrderedFieldOfInt` and its instances are
-  gone. Design: docs/operators-onto-classes-design.md §17. Probes:
+  gone. Design: docs/language/classes/operators-onto-classes-design.md §17. Probes:
   lib/_tests/std/algebra/ordered_field_tests.hthr (laws from both
   classes combined, either written order, one parent's lemma through it,
   `Rat`/`CReal`/explicit `<Rat>`, a section, two carriers still refused).

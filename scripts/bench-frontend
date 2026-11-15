@@ -19,7 +19,7 @@
 #                              [--filter substr] [--list]
 #        scripts/bench-frontend --help
 #
-# See docs/frontend-benchmarking.md for what the numbers mean and when to
+# See docs/infrastructure/frontend-benchmarking.md for what the numbers mean and when to
 # re-record.
 set -euo pipefail
 cd "$(dirname "$0")/.."

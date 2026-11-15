@@ -13,7 +13,7 @@ Give `Level` a compact representation, canonical if possible. Today it is 24 byt
 
 `enum Level { Var, Zero, Succ(Rc<Level>), Max(Rc<Level>, Rc<Level>), Omega }` (`crates/kernel/src/level.rs` ~23) is 24 bytes. `App` holds two, `Pi` two, `Case` three, and the largest variants (`Case`, `ElimCodeTm`) fix `size_of::<Term>()` at 128 and `Type` at 72 (`term.rs`'s `syntax_nodes_stay_their_size`). An `Arc<Term>` allocation is therefore 144 bytes even for a `Var` leaf.
 
-`Level::succ` allocates per `1+` and `Level::constant(n)` allocates n nodes. `shift`, `subst_at` and `inst_at` rebuild the whole tree even when nothing moves. Every rebuilt annotated node does one or two atomic refcount pairs per non-trivial level. [[level-normalization-allocation]] closed by naming this residue: "drop glue on Level clones inside term construction, which is a term-representation question." Survey: `docs/data-oriented-survey.md` §3. In cold samples, `Level` frames alone are 3–5%; the larger effect is on node size.
+`Level::succ` allocates per `1+` and `Level::constant(n)` allocates n nodes. `shift`, `subst_at` and `inst_at` rebuild the whole tree even when nothing moves. Every rebuilt annotated node does one or two atomic refcount pairs per non-trivial level. [[level-normalization-allocation]] closed by naming this residue: "drop glue on Level clones inside term construction, which is a term-representation question." Survey: `docs/surveys/data-oriented-survey.md` §3. In cold samples, `Level` frames alone are 3–5%; the larger effect is on node size.
 
 ## Proposal
 

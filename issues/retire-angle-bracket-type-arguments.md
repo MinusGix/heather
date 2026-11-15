@@ -20,7 +20,7 @@ language, genuinely just another kind of argument. Both spellings this issue
 offered as replacements were considered and rejected on those grounds.
 
 The ambiguity argument below is answered instead by
-`docs/type-argument-disambiguation.md` (the one-directional whitespace rule),
+`docs/language/type-argument-disambiguation.md` (the one-directional whitespace rule),
 which closed [[comparison-inside-type-arguments]] without touching the
 notation. Declaration sites — where most of the readability lives — were never
 ambiguous at all.
@@ -66,7 +66,7 @@ kernel does not have.
 
 **Overtaken by events**, and this is the bullet the decision turns on: the
 first of those two was fixed the same day without touching the notation
-(`docs/type-argument-disambiguation.md`), by supplying the one bit
+(`docs/language/type-argument-disambiguation.md`), by supplying the one bit
 backtracking cannot recover — which `<`s are eligible to be brackets — from
 whitespace. The list above is therefore the history of the problem, not its
 current state.
@@ -74,7 +74,7 @@ current state.
 ## What the kernel actually has
 
 A type parameter is **a leading implicit value parameter at `Ty 0`**
-(`docs/surface-polymorphism.md` §2): `fn f<A, B>(x: P)` lowers to
+(`docs/language/surface-polymorphism.md` §2): `fn f<A, B>(x: P)` lowers to
 `Π(A : Ty 0). Π(B : Ty 0). Π(x : ⟦P⟧). …`. There is no second binder form, no
 kind, and nothing in `Term` that distinguishes a type argument from any other.
 `<…>` is sugar over `Π`, exactly as `(…)` is.
@@ -85,7 +85,7 @@ This is the finding that makes the issue worth filing rather than musing, and
 both halves were run (2026-08-16):
 
 1. **Implicit binders at `Type` work today.** `fn f({A: Type}, x: A) -> A { x }`
-   **checks**. `docs/surface-polymorphism.md` §3.3's "there is still no way to
+   **checks**. `docs/language/surface-polymorphism.md` §3.3's "there is still no way to
    say `Type` in a function type" is stale. So `fn map<A, B>(…)` has a spelling
    that needs no new mechanism: `fn map({A, B: Type}, …)`.
 2. **Positional explicit instantiation is `@`.** `@sym(b, a, p)` suppresses
@@ -141,4 +141,4 @@ should write the same file both ways and read them**, per
   the standing next thing. Filed now because the two grammar gaps the same
   round produced are both *instances* of it, and they should not be fixed
   separately if this is the answer.
-- 2026-08-16: 2026-08-16: DECLINED as filed, same day, and rescoped to the Or(Nat, Nat) half — see the decision header. The proposal's mechanical case was sound and its two probes stand (implicit binders at Type check today; @f gives implicits positionally), but it weighed only the grammar and not the reading, and the reading is why <> exists: it demotes type arguments out of the value-argument stream. The ambiguity that motivated the proposal was fixed without touching the notation (docs/type-argument-disambiguation.md), which removes the argument's urgency as well as its premise — [[comparison-inside-type-arguments]] is closed and declaration sites were never ambiguous. What survives is that <...> and (...) elaborate to the same application, so admitting the call spelling is a restriction to remove.
+- 2026-08-16: 2026-08-16: DECLINED as filed, same day, and rescoped to the Or(Nat, Nat) half — see the decision header. The proposal's mechanical case was sound and its two probes stand (implicit binders at Type check today; @f gives implicits positionally), but it weighed only the grammar and not the reading, and the reading is why <> exists: it demotes type arguments out of the value-argument stream. The ambiguity that motivated the proposal was fixed without touching the notation (docs/language/type-argument-disambiguation.md), which removes the argument's urgency as well as its premise — [[comparison-inside-type-arguments]] is closed and declaration sites were never ambiguous. What survives is that <...> and (...) elaborate to the same application, so admitting the call spelling is a restriction to remove.

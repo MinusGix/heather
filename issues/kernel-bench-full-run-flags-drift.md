@@ -6,7 +6,7 @@ created: 2026-08-17
 updated: 2026-09-11
 ---
 
-Observed 2026-08-17 as the end-of-round gate of the motive-synthesis round (docs/goal-motive-synthesis-design.md), and recorded because the round could not tell "my change regressed something" from "this harness's time half does not repeat" without four runs.
+Observed 2026-08-17 as the end-of-round gate of the motive-synthesis round (docs/elaborator/goal-motive-synthesis-design.md), and recorded because the round could not tell "my change regressed something" from "this harness's time half does not repeat" without four runs.
 
 Four consecutive full `scripts/bench --check` runs on the same binary and the same baseline, minutes apart, on an otherwise idle desktop:
 
@@ -15,7 +15,7 @@ Four consecutive full `scripts/bench --check` runs on the same binary and the sa
 - run 3: 6 flags — level/equiv-shared:4/8/16, code/check-identity-recursor:33, code/whnf-identity-recursor:3, check/generated-terms:200
 - run 4: 1 flag — conv/perturbed-pairs:100
 
-Nine distinct fixtures across four runs, no fixture flagged in all four, every magnitude in the 1.25-1.5x band, i.e. just over the 1.25x gate. Meanwhile **every filtered re-run of a flagged family is green**: `--check --filter subst` ok (12 comparisons), `--check --filter check` ok twice (21 comparisons), with check/generated-terms:200 at 4.13-4.15 ms filtered against 4.72-4.81 ms in a full run and a 3.77 ms baseline. And in all four runs **every scaling exponent was inside its expected band** — the headline number docs/benchmarking.md says to read.
+Nine distinct fixtures across four runs, no fixture flagged in all four, every magnitude in the 1.25-1.5x band, i.e. just over the 1.25x gate. Meanwhile **every filtered re-run of a flagged family is green**: `--check --filter subst` ok (12 comparisons), `--check --filter check` ok twice (21 comparisons), with check/generated-terms:200 at 4.13-4.15 ms filtered against 4.72-4.81 ms in a full run and a 3.77 ms baseline. And in all four runs **every scaling exponent was inside its expected band** — the headline number docs/infrastructure/benchmarking.md says to read.
 
 This is the same *signature* as [[frontend-bench-heavy-contaminates-cheap-cases]] on the other harness: a family reads 1.3x slower when something big has run before it in the same process, the gate sits below the contamination, and the flags are therefore unactionable. Whether the mechanism is the same (allocator/reclaim state after a large workload) is not established here; what is established is that the kernel suite's time half does not repeat within its own threshold on a full run, and that the four candidate fixes that issue lists apply to this harness too — the harness is a sibling, not a shared crate, so a fix has to be made twice or the two have to be unified.
 

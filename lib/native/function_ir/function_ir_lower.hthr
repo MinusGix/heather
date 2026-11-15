@@ -2977,7 +2977,7 @@ inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), Spilling(mask
 
 // A bit that is a constant is known true or false, which is what an arm
 // taken on it knows: a decided comparison's bit written after it
-// (docs/optimizer-design.md §5.1) is read here.
+// (docs/native/optimizer-design.md §5.1) is read here.
 fn File::know_bit(self file: File, output, value: Nat) → Option<Lowered> {
     match value {
         Zero => Some(Lowered([], file.know(Falsity(output)))),

@@ -1,4 +1,4 @@
-// Probes of `runtime fn` over signed words (docs/runtime-fn-setups-design.md
+// Probes of `runtime fn` over signed words (docs/native/runtime-fn-setups-design.md
 // §16.13, issues/sint-native-lowering.md): an `i64` is `SInt(64)`, a record
 // over `BitVec(64)` that `sint.hthr` gives a `datarepr` (`I64`). The
 // generator finds the repr through the registry, holds the type at

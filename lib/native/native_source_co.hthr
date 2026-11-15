@@ -1,6 +1,6 @@
 // A `Source` with no fuel: its statements as a coinductive tree over
 // Linux's calls (issues/effectful-loops-without-passes.md;
-// docs/effects-capabilities-design.md §4).
+// docs/language/effects-capabilities-design.md §4).
 //
 // `Stmt::denote` reads a `Repeat` as `ITree::iter` at a fuel, cut past it,
 // and the fuel is shared by every loop and every call. Here a `Repeat` is

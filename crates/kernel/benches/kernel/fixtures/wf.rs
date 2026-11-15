@@ -1,5 +1,5 @@
 //! `Wf` elimination at depth — the branching-inductive substrate
-//! (`docs/wf-former-design.md`, [[branching-inductives-decision]]). Every
+//! (`docs/kernel/wf-former-design.md`, [[branching-inductives-decision]]). Every
 //! user-declared branching datatype compiles through this former, so its
 //! elimination cost is the cost of running generated recursors.
 //!

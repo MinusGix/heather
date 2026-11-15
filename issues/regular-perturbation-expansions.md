@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-28
 ---
 
-Layer F of `docs/analysis-foundations-design.md` (§10): every perturbation
+Layer F of `docs/library/analysis-foundations-design.md` (§10): every perturbation
 theory here is Newton's lemma in a dominance relation.
 
 Scope:

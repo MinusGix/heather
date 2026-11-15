@@ -10,11 +10,11 @@ updated: 2026-09-18
 The calculator showcase parses a `List<PTok>` that someone else produced.
 Nothing in the pipeline starts from text, so `String` — which landed as a
 specification type in [[string-char-spec-types]] — has no consumer, and the
-parser library's deliberate "no string lexer" non-goal (`docs/parser-library.md`)
+parser library's deliberate "no string lexer" non-goal (`docs/library/parser-library.md`)
 has never been tested against an actual character grammar.
 
 Two decisions, taken in discussion 2026-09-18, recorded in
-`docs/sequence-parser-source-design.md`:
+`docs/library/sequence-parser-source-design.md`:
 
 1. **The calculator becomes scannerless**: a `Char` grammar, not a lexer
    feeding the token grammar. A `Number` derivation carries its *digits*, so
@@ -30,7 +30,7 @@ Two decisions, taken in discussion 2026-09-18, recorded in
    its token type in the constraint and stays polymorphic in the source, so
    one calculator runs on a `String` and on a `List<Char>`.
 
-## What the probes settled (2026-09-18, `probes/str`)
+## What the probes settled (2026-09-18, `probes/str@ef3961a`)
 
 Measured against the tree at 3d10b94 with a freshly built release binary
 (the one on disk predated the literal support and rejected `"…"`):
@@ -83,7 +83,7 @@ scannerless calculator demonstrates.
 
 ## Log
 
-- 2026-09-18: Rounds 1–3 landed; the design record is `docs/sequence-parser-source-design.md`.
+- 2026-09-18: Rounds 1–3 landed; the design record is `docs/library/sequence-parser-source-design.md`.
 
   - `lib/std/text/char.hthr`: `is_digit`, `is_space`, `code_is`, `digit_val`,
     `digit_of`, and the facts around them — `selected_of_match` (the inversion at
@@ -110,7 +110,7 @@ scannerless calculator demonstrates.
   — so it is not in `crates/elab/tests/showcase_calculator.rs` beside
   `calc_parser` yet. The cause is measured and is not the grammar: a record token
   type costs 27× an inductive one's conversion misses in a controlled pair
-  (`probes/str/p10.hthr`), logged on
+  (`probes/str/p10.hthr@ef3961a`), logged on
   [[elaborator-canonical-type-spelling]] with the numbers. Wiring it in waits on
   that defect; two spellings were tried against it and neither is the lever.
 
@@ -146,7 +146,7 @@ scannerless calculator demonstrates.
     varies a non-decreasing parameter has **no spelling that checks** (a qualified
     self-call is refused too). `spell` is therefore the one declaration in the
     file that stays freestanding, and it is the difference-list idiom that removed
-    every `append_assoc` from the showcase. 12-line repro, `probes/str/p13.hthr`.
+    every `append_assoc` from the showcase. 12-line repro, `probes/str/p13.hthr@ef3961a`.
   - [[type-declaration-form]] — nine declarations in the file are `fn … → Type`
     and read like programs that happen to return types.
   - [[type-owned-namespaces]] gets the datum that a type-owned member is reachable
@@ -156,7 +156,7 @@ scannerless calculator demonstrates.
   And one tooling finding that bears on iterating here at all:
   [[check-only-no-stored-image]] — `check --cache --only <item>` refuses on every
   module tried, immediately after the `--cache` run its own message asks for,
-  against a feature `docs/check-only-design.md` records working on these exact
+  against a feature `docs/infrastructure/check-only-design.md` records working on these exact
   targets. Measured consequence: a **theorem-only** edit to this showcase costs
   95 s to recheck unloaded, and a grammar-level edit costs 96 s — the edit's size
   does not matter because the floor is re-elaborating the module. Restoring
@@ -172,4 +172,4 @@ scannerless calculator demonstrates.
   or the CLI first, beyond the misleading message. The record axis of
   [[elaborator-canonical-type-spelling]] is the single root cause of all four
   symptoms and is the next round.
-- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`lib/std/text/char.hthr`); [[elab-emits-normal-form-of-matched-type-argument]] (`probes/str/p10.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`lib/std/text/char.hthr`); [[elab-emits-normal-form-of-matched-type-argument]] (`probes/str/p10.hthr@ef3961a`).

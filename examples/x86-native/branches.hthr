@@ -14,7 +14,7 @@ import runtime;
 // `Compile` instance, except the three whose tests call the `Bool` helper
 // `unequal`: the default setup compiles functions of words to a word, so
 // those stay on the Rust reflector until it does
-// (docs/runtime-fn-setups-design.md §16.9).
+// (docs/native/runtime-fn-setups-design.md §16.9).
 runtime fn nested_true(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(b) {
         False => a.sub(b),

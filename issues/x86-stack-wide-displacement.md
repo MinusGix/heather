@@ -13,7 +13,7 @@ The stack model's word forms take a byte displacement
 `mov [rsp + disp8]`), which reaches sixteen slots. That is enough for the
 function compiler's frame and too short for a frame that holds a
 statement's file of words
-(`docs/native-procedures-are-functions-design.md` §2.2), so U5 reaches a
+(`docs/native/native-procedures-are-functions-design.md` §2.2), so U5 reaches a
 slot through RBX: `MovRI(Rbx, 8 * id)`, `AddRR(Rbx, Rsp)`, then the word
 `Load` or `Store` (`Prog::word_to`, `Prog::word_store`, step 5b). One
 instruction would do.

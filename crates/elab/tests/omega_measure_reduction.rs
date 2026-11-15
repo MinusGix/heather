@@ -1,5 +1,5 @@
 //! Acceptance for issues/omega-measure-at-constructor-pattern.md
-//! (docs/omega-measure-reduction-design.md): at `omega`'s atom fallback a
+//! (docs/tactics/omega-measure-reduction-design.md): at `omega`'s atom fallback a
 //! measure applied to a constructor value is reduced, kept only when its head
 //! became arithmetic, and its leaves named by conversion against candidates
 //! built from the original's own spelling. The obligation this closes is

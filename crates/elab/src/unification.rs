@@ -10,7 +10,7 @@ use heather_syntax::Expr;
 
 use crate::{code, inductive, spelling};
 
-/// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
+/// A deferred explicit argument (docs/elaborator/unifier-completeness-design.md §3.1):
 /// **not** a first-class constraint in a queue on the [`crate::Elaborator`],
 /// but a record local to one [`crate::application::apply_implicit`] activation.
 /// The scratch world is the constraint store — the domain's meta occurrences
@@ -23,7 +23,7 @@ pub(crate) struct ResolveOb {
     /// The scratch slot standing for the argument.
     pub(crate) slot: usize,
     /// The parameter's declared domain, scratch world — the goal, once every
-    /// meta it mentions is solved (docs/traits-layer2-design.md §4).
+    /// meta it mentions is solved (docs/language/classes/traits-layer2-design.md §4).
     pub(crate) dom: Type,
     pub(crate) dom_level: Level,
     /// Parameter index, for the hint and the message.
@@ -67,7 +67,7 @@ pub(crate) struct DeferredArg<'a> {
 }
 
 /// One argument a call gave before a defaulted parameter, for a default that
-/// mentions its parameter (`k: Nat := n`; docs/named-arguments-design.md
+/// mentions its parameter (`k: Nat := n`; docs/language/named-arguments-design.md
 /// §9.6): the parameter's index in the callee's table, the argument, and its
 /// type, which is the parameter's domain as this call instantiated it.
 #[derive(Clone)]
@@ -79,7 +79,7 @@ pub(crate) struct EarlierArg {
 }
 
 /// Per-slot state of one [`crate::application::apply_implicit`] scratch world
-/// (docs/unifier-completeness-design.md §3). Three states, because two
+/// (docs/elaborator/unifier-completeness-design.md §3). Three states, because two
 /// different "unsolved" populations exist and must not be conflated:
 ///
 /// - `Unsolved` — nothing known yet; `unify_ty`/`unify_tm` may record a
@@ -122,7 +122,7 @@ impl Sol {
 /// Congruence through every type former the lowerings build, plus the one
 /// rule that makes polymorphism inferable:
 ///
-/// > `El ?A ≟ T` solves `?A := ⌜T⌝` (docs/surface-polymorphism.md §4).
+/// > `El ?A ≟ T` solves `?A := ⌜T⌝` (docs/language/surface-polymorphism.md §4).
 ///
 /// `d` counts the binders crossed since `gamma` — a `Σ`'s second component, a
 /// `Π`'s codomain, a `Wf`'s arity. A meta's solution is scoped in `gamma`, so
@@ -137,7 +137,7 @@ impl Sol {
 /// `type_args` answers, for a rigid application spine in the subject under
 /// `d` binders, which of its arguments sit at a `Ty` domain — the spine's
 /// parameter telescope read off its **head's** type. An `app(…)` node
-/// states its domain, but `app@(f; a)` (`docs/app-by-head-type-design.md`
+/// states its domain, but `app@(f; a)` (`docs/elaborator/app-by-head-type-design.md`
 /// §6.2) does not, so [`matching_value_spine`] asks here for those. `None`
 /// is "cannot read it", and the spine is then not a matching value spine,
 /// which is the refusal the rule already gave a head it could not read.
@@ -176,7 +176,7 @@ pub(super) struct U<'a> {
     /// A re-spelled subject `El(app(D#tycode_fn^δ; ā))` read as the type
     /// constructor at `D`'s declared slot and the argument there
     /// ([`GeneratedDefs::slot_view`](crate::gendefs::GeneratedDefs::slot_view),
-    /// docs/lambda-carrier-instances-design.md §7.3 reader 2), asked only by
+    /// docs/language/classes/lambda-carrier-instances-design.md §7.3 reader 2), asked only by
     /// an applied meta of one argument. `None` declines, and the aligned
     /// spine's head-plus-leading-arguments rule applies.
     pub(super) slot_view: &'a dyn Fn(&Term) -> Option<(Term, Term)>,
@@ -186,7 +186,7 @@ pub(super) struct U<'a> {
     /// mentions an open slot, or the caller has no declared types.
     pub(super) slot_type: &'a dyn Fn(usize, &[Sol]) -> Option<Type>,
     /// Every write goes through [`assign`], and this is its one check
-    /// (docs/elaborator-principles-survey.md P1,
+    /// (docs/elaborator/elaborator-principles-survey.md P1,
     /// issues/unifier-checked-assignment.md): may `slot` take the solution,
     /// given what the others hold now? The elaborator's answer holds it to
     /// the slot's declared type ([`crate::Elaborator::solution_fits`]);
@@ -202,7 +202,7 @@ pub(super) struct U<'a> {
     /// A rigid subject term in `gamma` unfolded to its **next head**: the
     /// first transparent reduct whose spine is headed by another global or
     /// local, or is no application at all. What the δ-lazy order compares
-    /// next at a rigid head mismatch (docs/elaborator-principles-survey.md
+    /// next at a rigid head mismatch (docs/elaborator/elaborator-principles-survey.md
     /// P3, issues/unifier-lazy-delta.md). `None` when the subject does not
     /// unfold, or not within the walk's budget.
     pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
@@ -328,7 +328,7 @@ fn canonical_kind(t: &Term) -> Option<u8> {
 
 /// What the unifier does at one of its **guesses**: a rule that picks one
 /// solution among several the equation allows, rather than the one it
-/// forces (docs/elaborator-principles-survey.md P2,
+/// forces (docs/elaborator/elaborator-principles-survey.md P2,
 /// issues/unifier-guesses-postponed.md). There are two, both at an unsolved
 /// applied meta whose rigid subject spine is **longer** than the pattern's:
 /// `?M(Nat) ≟ Pair2<Nat, Bool>` learns `?M := Pair2<Nat>` (the head with its
@@ -493,7 +493,7 @@ impl<'a> U<'a> {
 
 /// [`unify_ty`] as the elaborator enters it: one bracket per *root* attempt,
 /// so the timer measures unification and the recursive congruence below it
-/// carries no clock at all (`docs/instrumentation-design.md` §5).
+/// carries no clock at all (`docs/infrastructure/instrumentation-design.md` §5).
 pub(super) fn unify_ty_root(
     u: &U<'_>,
     pat: &Type,
@@ -560,7 +560,7 @@ pub(super) fn unify_ty(
             LEVEL_DECLINED.with(|c| c.borrow_mut().push((slot, level.clone(), l)));
             return;
         }
-        // The Miller-pattern guard (docs/unifier-completeness-design.md §6):
+        // The Miller-pattern guard (docs/elaborator/unifier-completeness-design.md §6):
         // the delayed substitution must be exactly the weakened identity
         // `embed(Γ, d)` — the one condition under which taking the
         // strengthened subject verbatim *is* the pattern inversion. Every
@@ -595,7 +595,7 @@ pub(super) fn unify_ty(
     };
     // The subject may be `El` of a canonical code rather than the former
     // itself — a record field read off a type that arrived through a
-    // `Val -> Type` *value* is exactly that (docs/record-type-values.md §4).
+    // `Val -> Type` *value* is exactly that (docs/language/record-type-values.md §4).
     // `decoded` is the same context-free strip the structural readers of
     // `inductive.rs` use: canonical codes only, never a neutral, so this walk
     // still does no δ. Below the pattern's own `El` rule, which must keep
@@ -692,7 +692,7 @@ pub(super) fn unify_ty(
         }
         // A codata instance `M(I; S; P; next)(j)`: the shape binds the index,
         // the positions index and shape, `next` all three
-        // (docs/codata-elaborator-design.md §2) — so a type argument read off
+        // (docs/inductives/codata-elaborator-design.md §2) — so a type argument read off
         // a constructor's field is learned under those binders.
         (Type::M { sig: g1, index: j1 }, Type::M { sig: g2, index: j2 }) => {
             if !Rc::ptr_eq(g1, g2) {
@@ -703,7 +703,7 @@ pub(super) fn unify_ty(
             }
             unify_tm(u, j1, j2, n, d, sols);
         }
-        // An `IWf`-route family instance (docs/iwf-former-design.md §8): the
+        // An `IWf`-route family instance (docs/kernel/iwf-former-design.md §8): the
         // arity and output index are scoped under the shape binder, the child
         // index under it and the position. A type argument is learned from
         // the shape, where its stored fields mention it.
@@ -960,7 +960,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, &heather_kernel::term::nat_lit_pred(k), b, n, d, sols)
         }
         // Either spelling on either side: `app` and `app@` are one former
-        // (`docs/app-by-head-type-design.md` §6.2), and this congruence
+        // (`docs/elaborator/app-by-head-type-design.md` §6.2), and this congruence
         // never read the annotations.
         (p, s) if spelling::is_app(p) && spelling::is_app(s) => {
             let (f1, a1) = spelling::app_of(p).expect("an application");
@@ -984,7 +984,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // declared slot, `λ A. Result<A, E>` — is substituted and the
             // redex contracted first: paired positionally, `?M(?B) ≟
             // Result<Nat, Bool>` would teach `?B := Bool`, the argument the
-            // λ fixes (docs/lambda-carrier-instances-design.md §7.3).
+            // λ fixes (docs/language/classes/lambda-carrier-instances-design.md §7.3).
             if let Term::GlobalTm { var, .. } = head
                 && let Some(slot) = var.innermost(n)
                 && sols[slot as usize].solved().is_some_and(|t| matches!(&**t, Term::Lam { .. }))
@@ -997,7 +997,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // `?M(p)` against a declaration's code spine with a declared
             // slot: the constructor at that slot, not the aligned spine's
             // head plus leading arguments
-            // (docs/lambda-carrier-instances-design.md §7.3 reader 2).
+            // (docs/language/classes/lambda-carrier-instances-design.md §7.3 reader 2).
             if let Term::GlobalTm { var, .. } = head
                 && let Some(slot) = var.innermost(n)
                 && sols[slot as usize].solved().is_none()
@@ -1076,7 +1076,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         // implicits sit inside those — `Cons(?l, ?lt)` — so without these
         // cases the goal that states them teaches nothing. Pairs and
         // injections come in two spellings (`pair` and the checked `pair@`,
-        // docs/intro-by-type-design.md), either on either side, and like
+        // docs/elaborator/intro-by-type-design.md), either on either side, and like
         // `app`/`app@` above the congruence never reads their annotations.
         (
             Term::Supf { label: l1, children: c1, .. },
@@ -1157,7 +1157,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         // A declared-index family's type is `El` of an **index recursion
         // choosing among quoted codes** — `elimN(M; z «Σ…+…»; s «…»; i)`
         // with the payload type a variable *inside* the code literals
-        // (docs/inductive-indexed-lowering.md), so learning `A` from
+        // (docs/inductives/inductive-indexed-lowering.md), so learning `A` from
         // `t: W3<A>(n)` means walking the eliminator and the code
         // constructors (issues/type-arg-inference-through-index.md). Same
         // license as every case here: learn-only, kernel judges. Depths are

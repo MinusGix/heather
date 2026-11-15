@@ -1,6 +1,6 @@
 //! Acceptance for tier-2 inductives — a recursive **function** field, lowered
 //! on `W` (`issues/recursive-function-fields.md`), against the checklist of
-//! `docs/inductive-tier2-w-lowering.md` §10 and the four axes of
+//! `docs/inductives/inductive-tier2-w-lowering.md` §10 and the four axes of
 //! `docs/testing-generated-terms.md`.
 //!
 //! Every declaration below is lowered onto `W`/`sup`/`elim_W` plus the leaf
@@ -276,7 +276,7 @@ fn the_restrictions_are_diagnosed() {
         ("inductive T { L, C(n: Nat, xs: [T; n]), F(k: Nat -> T) }", "container"),
         // §1.1's "no indexed family" is lifted: an indexed family with a
         // function field lowers on the IWf-on-W route
-        // (docs/iwf-infinitary-design.md, crates/elab/tests/iwf_infinitary.rs).
+        // (docs/kernel/iwf-infinitary-design.md, crates/elab/tests/iwf_infinitary.rs).
     ];
     for (src, needle) in cases {
         let msg = elab_err(src);
@@ -344,7 +344,7 @@ fn a_function_binder_shows_its_written_domain() {
 }
 
 // The leaf predicate is a generated definition, `D#canon`, registered at the
-// all-`Ty 0` profile (docs/inductive-tier2-w-lowering.md §13). Every test
+// all-`Ty 0` profile (docs/inductives/inductive-tier2-w-lowering.md §13). Every test
 // above runs through the named spelling; an instance at another profile —
 // a tree of types — keeps the inline one, and must build, match, compute and
 // refuse exactly as the named one does, beside it in one module.

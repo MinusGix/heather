@@ -1,4 +1,4 @@
-//! The emission walker (`docs/annotation-component-respell-design.md` §2.5,
+//! The emission walker (`docs/elaborator/annotation-component-respell-design.md` §2.5,
 //! `issues/emission-spelling-chokepoint.md`).
 //!
 //! One pass over a checked declaration's statement and term that asks, at
@@ -160,7 +160,7 @@ impl Walk<'_> {
         // The question a slot asks is the *component* respell
         // (`Elaborator::emit_wf_slots`), not `emit_ty` of the former the two
         // reconstitute: since
-        // `docs/per-instantiation-type-codes-design.md` a monomorphized `Wf`
+        // `docs/inductives/per-instantiation-type-codes-design.md` a monomorphized `Wf`
         // has a name for the whole, and that name may not stand in a slot
         // that holds the component (§8).
         let _ = level;
@@ -339,7 +339,7 @@ impl Walk<'_> {
                 self.term(pair, d);
             }
 
-            // The checked spellings (docs/intro-by-type-design.md): at most
+            // The checked spellings (docs/elaborator/intro-by-type-design.md): at most
             // one slot each and **no binder under it** — the component forms'
             // `snd_ty` is walked at `d + 1`, `T` at `d`. An unannotated intro
             // and the projections have no slot at all.
@@ -374,7 +374,7 @@ impl Walk<'_> {
                 self.term(val, d);
             }
             Term::FstAt { pair } | Term::SndAt { pair } => self.term(pair, d),
-            // No annotation, so no slot (docs/app-by-head-type-design.md §6.2).
+            // No annotation, so no slot (docs/elaborator/app-by-head-type-design.md §6.2).
             Term::AppAt { fun, arg } => {
                 self.term(fun, d);
                 self.term(arg, d);
@@ -467,7 +467,7 @@ impl Walk<'_> {
             }
 
             // Nothing emits these until the generator round
-            // (docs/iwf-former-design.md §13 step 6); walked so the answer
+            // (docs/kernel/iwf-former-design.md §13 step 6); walked so the answer
             // exists when something does. The signature's two types are
             // slots, its three terms are walked under their binders.
             Term::Supi { sig, label, children } => {
@@ -491,7 +491,7 @@ impl Walk<'_> {
                 self.term(scrut, d);
             }
             // Nothing emits these until the elaborator round
-            // (docs/kernel-coinduction-design.md §10 step 4); walked as
+            // (docs/kernel/kernel-coinduction-design.md §10 step 4); walked as
             // IWf's are.
             Term::Corec { sig, carrier, step, index, seed, .. } => {
                 self.slot("Corec.idx", &sig.idx, d);

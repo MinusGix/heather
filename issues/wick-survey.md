@@ -30,7 +30,7 @@ the `machine-learning` area.
 
 ## Log
 
-- 2026-10-21: Surveyed at Wick `b1b88a2`: `docs/wick-survey.md`. Follow-ups:
+- 2026-10-21: Surveyed at Wick `b1b88a2`: `docs/surveys/wick-survey.md`. Follow-ups:
   [[ml-tensor-shapes]], [[ml-layers-reverse-mode]], [[ml-scalar-refinement]],
   [[ml-gaussian-states]], [[ml-deterministic-descent]] (machine-learning);
   [[finite-linear-algebra]], [[real-functions-and-derivatives]],

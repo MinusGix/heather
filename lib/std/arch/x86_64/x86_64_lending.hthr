@@ -1,5 +1,5 @@
 // What a call is lent of memory, and what it may store there
-// (docs/native-one-compiler-design.md §2.6).
+// (docs/native/native-one-compiler-design.md §2.6).
 //
 // A call is lent spans of bytes, by number, and may be allowed to write
 // some of them. `Stack::Lends` (x86_64_stack) says a span reads its bytes

@@ -1,5 +1,5 @@
 //! The canaries under the Merkle substitution and the walker's framing
-//! (`docs/cache-v1-design.md` §12, `crates/cache/src/merkle.rs` module docs).
+//! (`docs/infrastructure/cache-v1-design.md` §12, `crates/cache/src/merkle.rs` module docs).
 //!
 //! v1's canaries pinned a *scanner*: they asserted that the printed spellings
 //! `u<d>`/`U<d>`/`g<d>` were rewritten and that ordinary text was not. There

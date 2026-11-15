@@ -1,5 +1,0 @@
-import nat;
-record W { after: Nat, pres: after = 0 }
-theorem mk_w(): W { W(after := 0, pres := refl) }
-// Direct: needs mk_w() to unfold. Must be refused.
-theorem direct(): mk_w().after = 0 { refl }

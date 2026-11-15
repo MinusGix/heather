@@ -50,7 +50,7 @@ the user-facing contract. Retain existing numbered discharges compatibly.
   recovery strips it before inference. Duplicate, unknown and nonrecursive
   labels receive source diagnostics. The ordinary obligation lifter and
   kernel check each proof against its own call. Design:
-  `docs/stable-termination-labels-design.md`. Focused elaborator acceptance:
+  `docs/language/recursion/stable-termination-labels-design.md`. Focused elaborator acceptance:
   **39 passed, 0 failed**; editor grammar corpus: **9 passed**.
 - 2026-09-14: Full `scripts/test`: **2666 passed, 0 failed, 5 ignored**.
   Tracker and whitespace checks pass. Scoped acceptance complete.

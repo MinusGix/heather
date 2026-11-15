@@ -1,5 +1,5 @@
 //! Named arguments at call sites — `f(x := e)`
-//! (`docs/named-arguments-design.md`, `issues/named-arguments.md`).
+//! (`docs/language/named-arguments-design.md`, `issues/named-arguments.md`).
 //!
 //! What is varied, per `docs/testing-generated-terms.md`: an **open** element
 //! type as well as a closed one; a *checking* position as well as a computing
@@ -138,7 +138,7 @@ theorem t(x: Nat, y: Nat, p: x = y): y = x { sym(p := ?q, a := x) }
 }
 
 /// §6 — constructors, including a record's. This is the payoff
-/// `docs/surface-records.md` §6 asked for: a braced literal and a named call
+/// `docs/language/surface-records.md` §6 asked for: a braced literal and a named call
 /// say the same thing, and here they are proved to.
 #[test]
 fn constructors_and_records_are_nameable_by_field() {
@@ -149,7 +149,7 @@ record Two { fst: Nat, snd: Bool }
 theorem call_equals_positional(): Two(fst := 1, snd := True) = Two(1, True) { refl }
 theorem order_free(): Two(snd := True, fst := 1) = Two(1, True) { refl }
 // The braced literal is parenthesised because a `theorem` statement is one of
-// the three block-preceding positions (docs/surface-records.md §6.1) — which
+// the three block-preceding positions (docs/language/surface-records.md §6.1) — which
 // is one of the costs the named-call spelling on the left does not have.
 theorem call_equals_literal():
     Two(fst := 1, snd := True) = (Two { fst: 1, snd: True }) { refl }

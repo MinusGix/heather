@@ -8,7 +8,7 @@ updated: 2026-10-31
 ---
 
 A `ring` certificate's kernel cost is the in-language normalizer's evaluation
-(docs/ring-normalization-design.md §5). Monomials are dense exponent vectors
+(docs/tactics/ring-normalization-design.md §5). Monomials are dense exponent vectors
 over the whole atom list, so every comparison and every monomial product walks
 a vector as long as the highest atom index it mentions, and `sound_with`
 normalizes both `lhs − rhs` and the multiplied hypotheses `D`. On the

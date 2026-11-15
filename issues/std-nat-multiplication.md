@@ -23,7 +23,7 @@ one way or the other.
 - **[[certifying-generator]]** owns the generator and its byte pins. Assumed
   here: only that the `IR_*` literals are a pin on the *generator's* layout and
   must not become a pin on library text.
-- **[[surface-operators]]** / `docs/operators-onto-classes-design.md` own the
+- **[[surface-operators]]** / `docs/language/classes/operators-onto-classes-design.md` own the
   symbol ladder. Assumed here: only that a `designation` outranks a file's own
   same-named global, which is what makes the `*` row a real decision.
 
@@ -144,10 +144,10 @@ whole-closure acceptance `crates/elab/tests/lib_algebra.rs::the_library_checks`
 plus every certgen binary's `nat` prelude). `scripts/bench --check`: 18
 comparisons within thresholds. Both showcase files re-checked by hand.
 
-Design docs that predate today (`docs/opaque-globals-analysis-design.md`,
+Design docs that predate today (`docs/metaprogramming/opaque-globals-analysis-design.md`,
 `docs/certgen-cert-expression-design.md@4acf2fe`, `docs/archive/certgen-transcriber-in-language-design.md`,
 `docs/certgen-non-nat-embeddings-design.md@4acf2fe`, `docs/certgen-ctor-fields-design.md@4acf2fe`,
-`docs/fn-signature-reflection-design.md`, `docs/analyzer-evaluation-design.md`)
+`docs/metaprogramming/fn-signature-reflection-design.md`, `docs/metaprogramming/analyzer-evaluation-design.md`)
 call the fixture `mul` and are left alone: they are round records, and
 rewriting them would falsify what those rounds saw. The forwarding note lives
 where a reader arrives — `certgen.rs`'s `VIAADD` doc comment and

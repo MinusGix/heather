@@ -8,7 +8,7 @@ updated: 2026-11-03
 ---
 
 The rest of [[instance-conclusion-matched-first]]'s proposal
-(docs/elaborator-principles-survey.md §4). Instance search now matches a
+(docs/elaborator/elaborator-principles-survey.md §4). Instance search now matches a
 candidate's conclusion with the elaborator's unifier, and the tactic host's
 `match_at` already did (`host.rs`, `unify_root` then a conversion check).
 Rewrite's occurrence matcher is the one left: `rewrite.rs` `match_spine`

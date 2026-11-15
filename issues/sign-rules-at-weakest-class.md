@@ -15,7 +15,7 @@ carrier (lib/std/algebra/field_division.hthr: `positive_add`, `nonneg_mul`,
 need a field. `positive_add` is a fact about an ordered additive monoid,
 `positive_mul` about an ordered semiring, `positive_neg` about an ordered ring.
 Each rule should sit at the weakest class whose laws prove it
-(docs/division-design.md §6; the ordered layers already name theorems by
+(docs/library/division-design.md §6; the ordered layers already name theorems by
 their weakest class), so a client uses only what it needs.
 
 ## Why they were not

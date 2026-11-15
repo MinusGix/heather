@@ -1,5 +1,5 @@
 // Probes of the reflector for functions that write a span
-// (lib/native/runtime/rt_file_reflect.hthr; docs/native-one-compiler-design.md
+// (lib/native/runtime/rt_file_reflect.hthr; docs/native/native-one-compiler-design.md
 // §2.6, U4 step 4c-3): ordinary Heather over a span's bytes, as a `mut
 // self` method or returning `Mutated` itself, read from its elaborated
 // body as the `FFun` the lowering takes (`reflects_file_as`), and the pin

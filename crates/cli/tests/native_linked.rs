@@ -1,7 +1,7 @@
 //! The assembly `crates/linked` links is what the compiler emits today.
 //!
 //! `crates/linked/generated/*.s` is checked in, so that building the
-//! workspace needs no Heather compiler (docs/native-lexer-crypto-roadmap.md
+//! workspace needs no Heather compiler (docs/native/native-lexer-crypto-roadmap.md
 //! §2, piece 7). A checked-in copy can go stale without anyone noticing: the
 //! source module changes, or the lowering does, and the linked bytes are
 //! then certified by nothing. This is the gate on that: every export in
@@ -77,7 +77,7 @@ fn linked_exports_are_what_the_compiler_emits() {
 }
 
 // What the contract does not take is refused by name, and nothing is
-// written (docs/native-library-exports-design.md §6, clauses 1 and 4): a
+// written (docs/native/native-library-exports-design.md §6, clauses 1 and 4): a
 // ninth word (issues/function-call-past-six-words.md), whether the words
 // are the function's own or a span's address and length among them, for a function that reads its span and for
 // one that stores into it, and an entry of a program that is not one

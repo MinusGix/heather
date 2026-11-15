@@ -24,7 +24,7 @@ success values explicitly wrapped in Ok. No implicit error conversion.
 
 ## Implementation
 
-`docs/result-propagation-design.md` records the semantics and lowering.
+`docs/language/result-propagation-design.md` records the semantics and lowering.
 `crates/syntax/src/try_lower.rs` lowers to the library's ordinary map/and_then.
 Nested scopes package a local success value before passing it to an outer
 continuation; continuation code is never moved under a written inner binder.

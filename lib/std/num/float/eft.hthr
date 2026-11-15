@@ -1,4 +1,4 @@
-// Error-free transformations (docs/floating-point-design.md §19).
+// Error-free transformations (docs/library/floating-point-design.md §19).
 //
 // A floating-point operation is error-free when its exact result is itself
 // a float: then every mode rounds it to itself (`Format::exact_of_rounds`).

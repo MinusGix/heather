@@ -9,7 +9,7 @@ updated: 2026-11-11
 ---
 
 `simp_only` takes laws that conclude an equation `a = b` or a designated
-relation `R(a, b)` between terms (`docs/simp-design.md` §5). A law `P ↔ Q`
+relation `R(a, b)` between terms (`docs/tactics/simp-design.md` §5). A law `P ↔ Q`
 relates two *statements*, and the relation walk
 (`crates/elab/src/rewrite/relation.rs`) rewrites terms inside a goal, with
 contexts that are term operations carrying `PreservesRelation`/`Respects2`
@@ -38,4 +38,4 @@ Done when `iff_law` and a membership probe
 
 ## Log
 
-- 2026-11-11: Built (docs/simp-design.md §12, `crates/elab/src/rewrite/statement.rs`): a statement walk beside the term walk. Positions are the goal, the operands of `∧`, `∨`, `↔`, `¬`, a non-dependent `→`, and a `∀`'s body; each matched on its own; the proof is `goal ↔ next` from `logic`'s new `iff_*_congr` lemmas. Equations and relation steps are carried to the same positions (they did not fire inside a connective before: the lowering puts an operand under a binder). `List::mem_append_iff` joined `List::shape`. Both done-when probes close (`iff_law`, `mem_three` in `lib/_tests/std/tactic/simp_tests.hthr`). Left: `∃` bodies, on simp-under-binders.
+- 2026-11-11: Built (docs/tactics/simp-design.md §12, `crates/elab/src/rewrite/statement.rs`): a statement walk beside the term walk. Positions are the goal, the operands of `∧`, `∨`, `↔`, `¬`, a non-dependent `→`, and a `∀`'s body; each matched on its own; the proof is `goal ↔ next` from `logic`'s new `iff_*_congr` lemmas. Equations and relation steps are carried to the same positions (they did not fire inside a connective before: the lowering puts an operand under a binder). `List::mem_append_iff` joined `List::shape`. Both done-when probes close (`iff_law`, `mem_three` in `lib/_tests/std/tactic/simp_tests.hthr`). Left: `∃` bodies, on simp-under-binders.

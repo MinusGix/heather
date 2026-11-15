@@ -8,7 +8,7 @@ created: 2026-10-24
 updated: 2026-10-24
 ---
 
-Heather can declare an indexed family (`IWf`, `docs/iwf-former-design.md`),
+Heather can declare an indexed family (`IWf`, `docs/kernel/iwf-former-design.md`),
 but not a group of mutually defined ones. The kernel route is known: one
 `IWf` indexed by `Σ(tag). I_tag`. It is checked in heather-coq's rules,
 including the case where the index types depend on the tag
@@ -30,7 +30,7 @@ apply, and one test should use a tag-dependent index type.
 ## Log
 
 - 2026-10-24: Filed from the heather-coq port assessment.
-- 2026-10-24: Done, design in `docs/mutual-inductive-design.md`. A run of
+- 2026-10-24: Done, design in `docs/inductives/mutual-inductive-design.md`. A run of
   `inductive`s that mention one another is a group, lowered to one `IWf`
   indexed by a generated sum of the members' indices (`D#members`), not
   `Σ(tag). I_tag`: the sum says the tag dependence by construction, so the

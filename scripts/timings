@@ -59,7 +59,7 @@ COLUMNS = {
     # rather than nodes is two equal DAGs compared as trees.
     "eq":        (["syntax_eq_nodes"], 1),
     "eq memo":   (["syntax_eq_memo_hits"], 1),
-    # The checked spellings (docs/intro-by-type-design.md): `@` forms the
+    # The checked spellings (docs/elaborator/intro-by-type-design.md): `@` forms the
     # checker judged, `ITy::Sel` descriptions the value machine evaluated, and
     # descriptions the rewriter had to *spell*. All three are zero until the
     # elaborator emits the forms, which is what makes `at` the round's marker
@@ -68,7 +68,7 @@ COLUMNS = {
     "sels":      (["sel_evals"], 1),
     "spelled":   (["ity_materialized"], 1),
     # Copy-on-write writes that copied, and what they cost
-    # (docs/instrumentation-design.md, "Elaborator state"): the column that
+    # (docs/infrastructure/instrumentation-design.md, "Elaborator state"): the column that
     # moves when a clone or checkpoint makes every declaration copy a
     # module-sized layer. `*.cow-sites.txt` beside the TSV names the sites.
     "cow ms":    (["cow_ns"], 1e6),
@@ -80,7 +80,7 @@ COLUMNS = {
     "structural projections": (["projection_structural"], 1),
     "instance matches": (["instance_match_calls"], 1),
     # How far the process's peak memory rose while the row was open
-    # (docs/instrumentation-design.md §4): a rise, not a use, and exact only
+    # (docs/infrastructure/instrumentation-design.md §4): a rise, not a use, and exact only
     # at one kernel worker. The row with the largest raised the peak.
     "peak MB":   (["peak_growth_kb"], 1e3),
 }
@@ -138,7 +138,7 @@ class Table:
         return [r for r in self.rows if r[i] == kind]
 
     def only(self) -> str:
-        """The `--only` item set a run was restricted to (`docs/check-only-design.md`
+        """The `--only` item set a run was restricted to (`docs/infrastructure/check-only-design.md`
         §3), or "" for a whole run. Lives in the run row's `item` column."""
         for r in self.scoped("run"):
             item = r[self.index("item")]
@@ -150,7 +150,7 @@ class Table:
         if self.only():
             print(f"NOTE: {self.path} is a `--only {self.only()}` run: the named items were "
                   f"elaborated over a replayed prefix. Their counts reproduce a whole run's; "
-                  f"their times need not (docs/check-only-design.md §4). Every other item row "
+                  f"their times need not (docs/infrastructure/check-only-design.md §4). Every other item row "
                   f"is a replay, and the run row is not a whole run's.")
             print()
 
@@ -219,11 +219,11 @@ def cmd_diff(args, cols):
     a, b = Table(Path(args.diff[0])), Table(Path(args.diff[1]))
     # A `--only` table diffs against a `--only` table of the same items and
     # nothing else: the other rows are replays, and the run rows are not
-    # comparable to anything (docs/check-only-design.md §3).
+    # comparable to anything (docs/infrastructure/check-only-design.md §3).
     if a.only() != b.only():
         sys.exit(f"error: {a.path} is {'a `--only ' + a.only() + '`' if a.only() else 'a whole'} run and "
                  f"{b.path} is {'a `--only ' + b.only() + '`' if b.only() else 'a whole'} run; "
-                 f"only two `--only` runs of the same items diff (docs/check-only-design.md §3)")
+                 f"only two `--only` runs of the same items diff (docs/infrastructure/check-only-design.md §3)")
     a.banner()
     left = {a.name(r): r for r in a.items(args.item)}
     right = {b.name(r): r for r in b.items(args.item)}

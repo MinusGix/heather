@@ -1,4 +1,4 @@
-// The optimizer's rules over facts (docs/optimizer-design.md §4): each a
+// The optimizer's rules over facts (docs/native/optimizer-design.md §4): each a
 // clause made from an instance's numbers, with the theorem that a valuation
 // and buffers satisfying its premises satisfy its conclusion. A fact is a
 // node's equation, a word's range, an order between two words
@@ -67,7 +67,7 @@ theorem move_move_sound(w, o, s, t: Nat): move_move(w, o, s, t).Sound() {
 }
 
 // ---------------------------------------------------------------------------
-// Ranges (docs/optimizer-design.md §5.1): what a word's value lies between,
+// Ranges (docs/native/optimizer-design.md §5.1): what a word's value lies between,
 // from the node that makes it and the ranges of what it reads, and what a
 // comparison's bit says of its operands. A rule is made where its literals
 // allow it (a sum that cannot wrap), so none has a condition left to prove.

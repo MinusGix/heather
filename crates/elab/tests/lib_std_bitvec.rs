@@ -253,7 +253,7 @@ fn bit_vector_literal_at(width: u32, value: u128) -> String {
 /// open operands the difference is found in a few columns and reported as
 /// `NotConvertible`, while at width 64 the budget runs out first. That is why
 /// the stale-source control in `function_ir_x86.rs` accepts either refusal.
-/// Before docs/bitvec-width-bounded-defaults-design.md the two had different
+/// Before docs/library/bitvec-width-bounded-defaults-design.md the two had different
 /// heads (`iterate_increment` against `iterate_decrement`) and both widths
 /// were immediate.
 #[test]
@@ -365,7 +365,7 @@ fn ripple_add_and_sub_cost_the_width_not_the_magnitude() {
         assert!(msg.contains("NotConvertible"), "{name}: {msg}");
     }
 
-    // Working-set evidence (docs/benchmarking.md): the counters separate width
+    // Working-set evidence (docs/infrastructure/benchmarking.md): the counters separate width
     // from magnitude — the same width-64 ripple at a small and at a huge
     // operand, the width-32 ripple, and the old `add` at a count of eight.
     if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
@@ -452,7 +452,7 @@ fn consumers_over_computed_machine_width_producers_cost_the_width() {
 
 /// Closed order facts stated as the *specification* and discharged by
 /// `decide` (issues/reflection-through-decide-instances.md,
-/// docs/reflection-through-decide-instances-design.md): the `Decide`
+/// docs/tactics/reflection-through-decide-instances-design.md): the `Decide`
 /// instances keyed at `unsigned_lt`/`unsigned_le`/`signed_lt`/`signed_le` run
 /// the ripple borrow or `int::Int::le_dec` over `toInt`, and resolution builds
 /// them before the derived `Le` instances that fit the same goals by
@@ -503,10 +503,10 @@ fn closed_order_specifications_are_discharged_by_decide() {
 /// head bit re-enters the evaluator natively once per unit of the count — a
 /// depth the syntax does not show and the fuel does not bound. A depth budget
 /// beside the fuel makes that an ordinary refusal
-/// (docs/native-depth-budget-design.md, issues/kernel-native-depth-budget.md).
+/// (docs/kernel/native-depth-budget-design.md, issues/kernel-native-depth-budget.md).
 ///
 /// The same computation through `add` succeeds, because `add` is the ripple
-/// (docs/bitvec-width-bounded-defaults-design.md). The refusal is a property
+/// (docs/library/bitvec-width-bounded-defaults-design.md). The refusal is a property
 /// of the definition, not of the arguments.
 #[test]
 fn nested_scrutinee_values_are_refused_rather_than_aborting() {

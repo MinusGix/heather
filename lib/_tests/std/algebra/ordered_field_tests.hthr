@@ -1,5 +1,5 @@
 // Probes of `lib/std/algebra/ordered_field.hthr` at `Rat` and `CReal`
-// (`docs/constructive-ordered-field-design.md`): every layer resolves at
+// (`docs/library/constructive-ordered-field-design.md`): every layer resolves at
 // both carriers with the carrier's own operations as its fields, and each
 // layer's theorems apply where its structure is. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
@@ -97,7 +97,7 @@ theorem creal_interchange(a, b, c, d: CReal): (a * b) * (c * d) ≈ (a * c) * (b
 
 // ---------------------------------------------------------------------------
 // Two constraints sharing `≈`, `+` and `*` at one carrier are one dictionary
-// (issues/constraints-sharing-indices.md, docs/operators-onto-classes-design.md
+// (issues/constraints-sharing-indices.md, docs/language/classes/operators-onto-classes-design.md
 // §17). `zero_lt_one` is `OrderedField`'s, over its `unit`; `of_int_one` is
 // `CommRingOfInt`'s, over its `multiplicative.unit`: they combine only if
 // both classes' `CommRing` is one.
@@ -141,7 +141,7 @@ theorem two_carriers<A: OrderedField(≈, <, <=, +, *), B: CommRingOfInt(≈, +,
 
 // ---------------------------------------------------------------------------
 // The layers below the field (issues/ordered-algebra-api.md,
-// docs/ordered-algebra-design.md). `Nat` is an ordered semiring and `Int` and
+// docs/library/ordered-algebra-design.md). `Nat` is an ordered semiring and `Int` and
 // `Dyadic` ordered rings; the fields are ordered rings too. A theorem stated
 // once at its weakest layer reads at each of them.
 
@@ -215,7 +215,7 @@ theorem range_needs_located<A: OrderedAddMonoid(≈, <, <=, +)>(n: Nat, f, g: Na
 fn ring_has_no_recip<A: OrderedRing(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.unit)) → A { A.recip(x, h) }
 
 // A generic `calc` steps through `<`, `≈` and `≤` from the class alone
-// (docs/strict-order-presentation-design.md): a strict order's tagged views
+// (docs/library/strict-order-presentation-design.md): a strict order's tagged views
 // give `<` transitivity and `≈` on either side of either order, and a
 // located one adds `≤` transitivity and the mixed `<`/`≤` pairs.
 section<A: StrictOrder(≈, <, <=)> {

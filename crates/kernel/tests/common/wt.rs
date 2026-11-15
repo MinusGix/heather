@@ -102,7 +102,7 @@ pub struct WtEnv {
     pub layer: Layer,
     pub gamma: LocalCtx,
     /// Generate the five **checked spellings** (`pair@`/`inl@`/`inr@`/
-    /// `fst@`/`snd@`, `docs/intro-by-type-design.md` §2)? **Off by default**,
+    /// `fst@`/`snd@`, `docs/elaborator/intro-by-type-design.md` §2)? **Off by default**,
     /// and off is byte-identical to the pre-`@` generator: the arm dispatch
     /// picks its modulus from this flag (`r.below(27)` vs `r.below(32)`) and
     /// `Rng::below` draws exactly one word whatever the bound, so a stream
@@ -271,7 +271,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     for _ in 0..8 {
         match r.below(21) {
             // Unit^l / Empty^l — level-indexed, so a generated level rather
-            // than 0 (docs/unit-empty-level-indexing.md). Without these the
+            // than 0 (docs/kernel/unit-empty-level-indexing.md). Without these the
             // property suite never sees the round at all.
             16 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -401,7 +401,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                     Level::max(dl, cl),
                 );
             }
-            // Vec/Fin/Wf (extension; docs/wf-former-design.md §1). Lengths
+            // Vec/Fin/Wf (extension; docs/kernel/wf-former-design.md §1). Lengths
             // and arities are Nat *terms*: often neutral, in which case the
             // type is stuck and inhabiting it fails — the callers all treat
             // that as a miss, and a literal length gives the Σ/Unit form.
@@ -420,7 +420,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let arity = gen_wt_nat(&e, r, b / 2);
                 return (rty(Type::Wf { level: l.clone(), shape, arity }), l);
             }
-            // DVec (extension; docs/iwf-former-design.md §1.1): the family
+            // DVec (extension; docs/kernel/iwf-former-design.md §1.1): the family
             // in (Γ, i : Fin len). Computing layers only — it has no code
             // yet, and a code context is generated at layer c.
             18 if b > 0 && env.layer.computes() => {
@@ -429,7 +429,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let (fam, l) = gen_wt_type(&e, r, b / 2);
                 return (rty(Type::DVec { level: l.clone(), len, fam }), l);
             }
-            // IWf (extension; docs/iwf-former-design.md §1.2): the arity and
+            // IWf (extension; docs/kernel/iwf-former-design.md §1.2): the arity and
             // output index under `x : S`, the child index under `x, i : Fin
             // n`, the index in Γ — each component a checked term of its type,
             // or the arm is a miss. Computing layers only, as DVec.
@@ -450,7 +450,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let ty = Type::IWf { sig: Rc::new(sig), index };
                 return (rty(ty), Level::max(l, li));
             }
-            // M (extension; docs/kernel-coinduction-design.md §1.1): shapes
+            // M (extension; docs/kernel/kernel-coinduction-design.md §1.1): shapes
             // under `i : I`, positions under `i, s`, the child index a
             // checked term of `I` under `i, s, p`, the index in Γ.
             // Computing layers only, as IWf.
@@ -605,7 +605,7 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
             (rt(Term::TmWf { level: l.clone(), shape, arity }), l)
         }
         14 if b > 0 => {
-            // M encoding (docs/kernel-m-codes-design.md §1): each piece an
+            // M encoding (docs/kernel/kernel-m-codes-design.md §1): each piece an
             // encoding under `El` of the earlier ones; `next` is the bound
             // index `i` itself, which always fits.
             let (idx, li) = gen_encoding(env, r, b / 4);
@@ -804,7 +804,7 @@ pub fn gen_wt_term_at(
         // what makes the checked spellings **nest**: the field of a `pair@`
         // is itself checked at a `Sel { T, Fst }`, and if it is another
         // `pair@` the checker meets a description against an annotation.
-        // That chain is where `docs/intro-by-type-design.md` §3's mechanism
+        // That chain is where `docs/elaborator/intro-by-type-design.md` §3's mechanism
         // lives, and nothing in the synthesis arms produces it — they build
         // one `@` form over component-form fields.
         //
@@ -988,7 +988,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 );
                 let lvl = cod_level.clone();
                 // Half the time the checked spelling, whose Π is the one the
-                // head infers (docs/app-by-head-type-design.md). The head
+                // head infers (docs/elaborator/app-by-head-type-design.md). The head
                 // here infers a syntactic Π or is a λ, so this is the
                 // rule's fast path; arm 32 below is the reducing head.
                 let app = if env.at_forms && env.layer.computes() && r.below(2) == 0 {
@@ -1376,7 +1376,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                     bl,
                 );
             }
-            // -- the checked spellings (docs/intro-by-type-design.md) -----
+            // -- the checked spellings (docs/elaborator/intro-by-type-design.md) -----
             //
             // Generated so the premise `T ⇝* former` is exercised in its
             // *non*-reflexive case: the annotation is `El ⌜Σ⌝` / `El ⌜+⌝`,
@@ -1461,7 +1461,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
             }
             32 | 33 if b > 0 && env.at_forms && env.layer.computes() => {
                 // app@ over a head whose type needs *reduction* to show its
-                // Π (docs/app-by-head-type-design.md §3.1's second line): a
+                // Π (docs/elaborator/app-by-head-type-design.md §3.1's second line): a
                 // function stored as a record field, `fst@(pair@^{T}(f; c))`
                 // with T = El ⌜Σ(g: El ⌜Π(x: El A). El B⌝). El C⌝. The head
                 // infers `Sel{T, Fst}`, whose Π is behind two decodes and a
@@ -2322,7 +2322,7 @@ pub fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
-        // Each binds ℓ now (docs/unit-empty-level-indexing.md §3), so the
+        // Each binds ℓ now (docs/kernel/unit-empty-level-indexing.md §3), so the
         // identity arm reconstructs at `ℓ` rather than at 0.
         ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: lv(0) }))),
         ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: lv(0) }))),
@@ -2469,7 +2469,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g5)),
             })))
         },
-        // -- finitary branching branches (docs/wf-former-design.md §6) --
+        // -- finitary branching branches (docs/kernel/wf-former-design.md §6) --
         // box Vec^ℓ(U_T^id; u_k^id) — telescope g = 2, U_T = 1, u_k = 0.
         ty_vec: rt(Term::BoxTy(rty(Type::Vec {
             level: lv(0),
@@ -2687,7 +2687,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g)),
             })))
         },
-        // -- indexed well-founded trees (docs/iwf-former-design.md §13) --
+        // -- indexed well-founded trees (docs/kernel/iwf-former-design.md §13) --
         // box DVec^ℓ(u_n; i. U_F) — g = 2, u_n = 1, U_F = 0.
         ty_dvec: {
             let len = rt(gtm(1, &g2));

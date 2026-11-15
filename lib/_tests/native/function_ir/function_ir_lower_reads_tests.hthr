@@ -1,5 +1,5 @@
 // Probes of the function compiler reading and writing a lent buffer
-// (function_ir_lower_reads; docs/native-one-compiler-design.md §2.3, U3,
+// (function_ir_lower_reads; docs/native/native-one-compiler-design.md §2.3, U3,
 // and §2.6, U4): a byte read under the comparison that bounds it, a loop
 // over a buffer, a call that hands its buffer on, a byte stored under its
 // bound, a loop that rewrites a buffer, and what is refused. Each
@@ -7,7 +7,7 @@
 // theorem (`lower_program_lent_correct`) instantiated, whatever the
 // buffers hold and wherever the lending laws let them lie (`Loan`,
 // x86_64_lending): the file is threaded, so a function is called over the
-// file as it is then (docs/native-one-compiler-design.md §2.6).
+// file as it is then (docs/native/native-one-compiler-design.md §2.6).
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -549,7 +549,7 @@ theorem drifting_carries_nothing(): loop_carried(drifting().homes(), [0, 1], [10
 theorem drifting_refused(): lower_program_lent([drifting()], plan_program([drifting()]), [1]) = None { refl }
 
 // ---------------------------------------------------------------------------
-// What a false arm knows (docs/native-library-exports-design.md §3.1, V3)
+// What a false arm knows (docs/native/native-library-exports-design.md §3.1, V3)
 
 // The file of an arm taken where the bit 2, `1 below 0`, is clear: value 0
 // is at most value 1. Whatever else the file holds.
@@ -595,7 +595,7 @@ theorem load_in_false_arm_refused(): lower_program_lent([load_in_false_arm()], p
 // function stores into. A function at a time (`ProgramNeeds`, as rows by
 // `program_marked`), a function that only reads is called under a lending
 // to read, whatever the functions beside it store
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 
 // `byte_at` beside `put_at`: function 1 reads its buffer, function 0
 // stores into its own.

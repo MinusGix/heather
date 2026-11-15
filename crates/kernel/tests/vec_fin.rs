@@ -1,5 +1,5 @@
 //! `Vec` and `Fin`: phase 1 of the `Wf` landing
-//! (`docs/wf-former-design.md` §1, `issues/wf-former.md`).
+//! (`docs/kernel/wf-former-design.md` §1, `issues/wf-former.md`).
 //!
 //! These two formers carry no introduction or elimination forms of their
 //! own — their whole content is the length-driven reduction into existing
@@ -7,7 +7,7 @@
 //! proof irrelevance at arity 0) is supposed to arrive *through* those
 //! reductions rather than from new conversion rules. That claim is what
 //! this file pins, because it is the reason route C was chosen over route
-//! A (`docs/branching-inductives-choice.md` §15): children stored in
+//! A (`docs/inductives/branching-inductives-choice.md` §15): children stored in
 //! `Σ`/`Unit` reach the η the kernel already has, children stored in `Π`
 //! do not.
 //!
@@ -242,7 +242,7 @@ fn formation_and_levels() {
 ///
 /// This was `vec_at_zero_drops_its_level_known_gap`, which pinned the defect
 /// so it could not close silently. Route (a) closed it
-/// (`docs/unit-empty-level-indexing.md`), so the pin becomes its positive.
+/// (`docs/kernel/unit-empty-level-indexing.md`), so the pin becomes its positive.
 #[test]
 fn vec_at_zero_keeps_its_level() {
     let g = nil_ctx();
@@ -322,7 +322,7 @@ fn every_type_has_exactly_one_level() {
 fn layer_c_accepts_vec_and_fin() {
     // Phase 1 gated both out of layer c until they had code formers and
     // recursor branches; phase 3 gave them both, so boxed code may now
-    // mention them (docs/wf-former-design.md §6). The codes themselves and
+    // mention them (docs/kernel/wf-former-design.md §6). The codes themselves and
     // the round-trip through the recursor live in `tests/wf_codes.rs`.
     let g = nil_ctx();
     for t in [vec(Type::Nat, nat(2)), fin(nat(2))] {
@@ -373,7 +373,7 @@ fn sigma_eta_reaches_through_vec() {
     // tuple `cs : Vec(Nat; 2)`, `cs` is convertible with its own
     // projections repackaged. Route A's analogue needs funext; here it is
     // Σ-η plus Unit-irrelevance, both already in conv.rs, reached through
-    // the `Vec` reduction (docs/branching-inductives-choice.md §15).
+    // the `Vec` reduction (docs/inductives/branching-inductives-choice.md §15).
     let ty = vec(Type::Nat, nat(2));
     let g = ext(&nil_ctx(), ty.clone(), c(0));
     let tail_ty = vec(Type::Nat, nat(1));
@@ -518,7 +518,7 @@ fn the_generators_reach_vec_and_fin() {
 
 /// The **witness has to be generated**, not merely generatable — the lesson
 /// of `issues/metatheory-lemma-sweep.md`. Level-indexing `Unit`/`Empty`
-/// (`docs/unit-empty-level-indexing.md`) is only covered by the property
+/// (`docs/kernel/unit-empty-level-indexing.md`) is only covered by the property
 /// suite if `gen_wt_type` actually reaches `Unit^l` with `l ≠ 0`; before this
 /// round the well-typed generator produced no `Unit`/`Empty` at all, so the
 /// whole route would have been untested by everything in `conv_properties`
@@ -565,7 +565,7 @@ fn the_well_typed_generator_reaches_unit_at_a_nonzero_level() {
 
 // -------------------------------------------------------------------------
 // Two sides both spelled `Vec` (`Conv::vec_ty`, 2026-09-11;
-// docs/wf-former-design.md §5). The verdicts here are the encoding's — every
+// docs/kernel/wf-former-design.md §5). The verdicts here are the encoding's — every
 // case below held before the rule and is pinned so that the rule stays a
 // shortcut and never becomes a stricter or looser judgment than the
 // reductions give.

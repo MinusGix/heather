@@ -1,5 +1,5 @@
 //! Acceptance for surface function types and lambdas, against the checklist
-//! of `docs/surface-function-types.md` §9. Tracking issue:
+//! of `docs/language/surface-function-types.md` §9. Tracking issue:
 //! `issues/surface-function-types.md`.
 //!
 //! Nothing here touches the kernel: `Type::Pi`, `Term::Lam` and `Term::App`
@@ -453,7 +453,7 @@ mod rejections {
 
     // Successor of `implicit_binders_are_diagnosed_not_parsed` (retired
     // 2026-08-06): both spellings are parses now
-    // (docs/implicit-binders-design.md §8) — a `{n: Nat}` parameter type
+    // (docs/language/implicit-binders-design.md §8) — a `{n: Nat}` parameter type
     // elaborates, and an implicit lambda binder is accepted where the
     // expected skeleton says implicit. What stays refused is the mark in a
     // *result* position, whose skeleton has no consumer (§3.4), and an
@@ -477,11 +477,11 @@ mod rejections {
     }
 
     // What makes a function field infinitary is a *self-occurrence* inside
-    // it, not the arrow (corrected 2026-07-27, docs/surface-records.md §11 —
+    // it, not the arrow (corrected 2026-07-27, docs/language/surface-records.md §11 —
     // the original check keyed on the shape of the field type and so rejected
     // `Nat -> Nat` too, which is an ordinary payload). Since 2026-10-20 the
     // strictly positive shape is the infinitary tier, lowered on `W`
-    // (docs/inductive-tier2-w-lowering.md; its own acceptance is
+    // (docs/inductives/inductive-tier2-w-lowering.md; its own acceptance is
     // inductive_tier2.rs), so `Acc`-style `Intro(h: Nat -> Acc)` declares.
     #[test]
     fn a_recursive_function_field_is_the_infinitary_tier() {

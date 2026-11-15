@@ -9,7 +9,7 @@ updated: 2026-10-22
 ---
 
 Design Heather's tensor representation for the ML area
-(`docs/wick-survey.md` §3.2, §3.6). A shape is a value of an inductive
+(`docs/surveys/wick-survey.md` §3.2, §3.6). A shape is a value of an inductive
 (named dimensions with sizes); the index type of a tensor is computed from
 the shape; a tensor is a function on that index type, with a curried view
 (`Fin seqLen → R[keyDim]`) as the default and a flat view beside it.

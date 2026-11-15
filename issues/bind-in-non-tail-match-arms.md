@@ -9,11 +9,11 @@ updated: 2026-11-01
 ---
 
 `let r = match c { True => (<- x) + 1, False => 0 }; rest` is refused with
-"`match` in inference position needs a motive" (docs/sequencing-surface-design.md
+"`match` in inference position needs a motive" (docs/language/sequencing-surface-design.md
 §13 item 4). The lowering, shared with `?` (`crates/syntax/src/try_lower.rs`),
 packages each arm with `Pointed::ret` and binds the match once, which makes the
 match `Bind::seq`'s first argument, where nothing gives it a motive. `?` has
-the same gap at a non-tail match (docs/result-propagation-design.md).
+the same gap at a non-tail match (docs/language/result-propagation-design.md).
 
 ## Fix
 

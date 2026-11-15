@@ -19,7 +19,7 @@
 //! only where the connective needs it.
 //!
 //! A loop, a recursion on a fuel or a `decreases` recursion on a word's
-//! `toNat`, is a `runtime fn`'s (docs/runtime-fn-setups-design.md §16.11):
+//! `toNat`, is a `runtime fn`'s (docs/native/runtime-fn-setups-design.md §16.11):
 //! this reflector refuses one, naming the marker. It stays for tests through
 //! `Bool` helpers, which the default setup does not compile yet, and for
 //! `heather reflect`.
@@ -62,7 +62,7 @@ pub struct ProgramFunction {
     pub decided: bool,
     /// A test calls a `Bool` helper, whose body is inlined: the default
     /// `runtime fn` setup does not compile that yet (`compile-x86` keeps
-    /// such a program on this reflector, docs/runtime-fn-setups-design.md
+    /// such a program on this reflector, docs/native/runtime-fn-setups-design.md
     /// §16.9).
     pub helped: bool,
 }
@@ -254,7 +254,7 @@ impl Program<'_> {
             .ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not a function of at most six BitVec(64) parameters returning BitVec(64)")))?;
         let (_, term) = self.body_of(at, arity)?;
         if self.measured(at, &name, &term) {
-            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
+            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/native/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
         }
         self.stack.push(at);
         let parameters: Vec<Port> = (0..arity as u64).map(|id| Port { id, width: 64 }).collect();
@@ -409,7 +409,7 @@ impl Body {
         }
         if program.loop_signature(at).is_some() {
             let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
-            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
+            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/native/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
         }
         let Some(arity) = program.word_signature(at) else {
             let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());

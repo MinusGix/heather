@@ -1,4 +1,4 @@
-// Probes of views (x86_64_views; docs/native-library-exports-design.md
+// Probes of views (x86_64_views; docs/native/native-library-exports-design.md
 // §3.1): the two halves of a span of sixteen bytes lent apart, the first
 // to write and the second to read, under any lending of the span, and what
 // the lender has after. Then the controls: views that share a byte, a view

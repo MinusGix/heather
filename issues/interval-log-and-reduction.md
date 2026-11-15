@@ -8,7 +8,7 @@ updated: 2026-11-01
 ---
 
 `CReal::exp_rat`, `sin_rat` and `cos_rat` (`lib/std/num/float/elementary.hthr`,
-`docs/floating-point-design.md` §16, "Series and elementary functions") sum
+`docs/library/floating-point-design.md` §16, "Series and elementary functions") sum
 their series from `start`, the point past which each ratio is at most 1/2:
 twice `⌊|a|⌋ + 1` for exp and once for sin and cos. The enclosure therefore
 costs a step per unit of the argument before it starts to converge, and the

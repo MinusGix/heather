@@ -1,5 +1,5 @@
 //! Acceptance for `codata` declarations, lowered onto the kernel's `M` /
-//! `corec` / `out` (`docs/codata-elaborator-design.md`,
+//! `corec` / `out` (`docs/inductives/codata-elaborator-design.md`,
 //! `issues/codata-elaborator.md`), against the four axes of
 //! `docs/testing-generated-terms.md`: literal *and* neutral seeds and
 //! scrutinees, an open element type, checking positions, and a negative
@@ -275,7 +275,7 @@ fn value_parameters_and_approximation() {
 
 // §6 — every declaration is bound at layer c, codata or not: `M`, `corec`
 // and `out` are admitted there, with `TmM` their code
-// (docs/kernel-m-codes-design.md).
+// (docs/kernel/kernel-m-codes-design.md).
 #[test]
 fn codata_declarations_are_code() {
     let e = elab(&format!(
@@ -346,7 +346,7 @@ fn wrong_observation_is_refused() {
 }
 
 // No η for M: a corecursive tree is not definitionally its one-step
-// unfolding written with the constructor (docs/kernel-coinduction-design.md
+// unfolding written with the constructor (docs/kernel/kernel-coinduction-design.md
 // §2.1; bisimilarity is the equation, not conversion).
 #[test]
 fn no_eta_for_codata() {
@@ -527,7 +527,7 @@ fn corecursion_up_to_controls() {
 
 // Constructors nested above a call beside a friend, and a constructor with a
 // call inside a friend's argument: pending nodes of the free carrier
-// (docs/codata-elaborator-design.md §5.6), observed by `refl` at a neutral
+// (docs/inductives/codata-elaborator-design.md §5.6), observed by `refl` at a neutral
 // and a literal seed.
 #[test]
 fn nested_constructors_beside_a_friend() {
@@ -547,7 +547,7 @@ fn nested_constructors_beside_a_friend() {
 // type, and it reads one layer of that function's answer (`match h(n)`),
 // as `bind` on interaction trees does. A definition corecurses under it with
 // a λ whose body holds the corecursive call, at a function position of the
-// free carrier (docs/codata-elaborator-design.md §5.6).
+// free carrier (docs/inductives/codata-elaborator-design.md §5.6).
 const DBIND: &str = r#"
 codata Dl { Now(n: Nat), Later(t: Dl) }
 fn dbind(t: Dl, h: Nat -> Dl) -> Dl {
@@ -625,10 +625,10 @@ fn recursion_out_of_codata_is_refused() {
 }
 
 // Indexed codata reads its index by observation: a result annotation is
-// refused (docs/codata-indexed-design.md §1; the acceptance is
+// refused (docs/inductives/codata-indexed-design.md §1; the acceptance is
 // `codata_indexed.rs`).
 #[test]
 fn indexed_codata_refuses_result_annotations() {
     let msg = elab_err("codata Tg : (n: Nat) -> Type { TZ : Tg(0) }");
-    assert!(msg.contains("docs/codata-indexed-design.md §1"), "{msg}");
+    assert!(msg.contains("docs/inductives/codata-indexed-design.md §1"), "{msg}");
 }

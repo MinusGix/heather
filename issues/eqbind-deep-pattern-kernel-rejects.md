@@ -7,7 +7,7 @@ created: 2026-10-31
 updated: 2026-11-01
 ---
 
-Found by [[dependent-match-compiler]]'s survey (2026-10-31, docs/dependent-match-compiler-design.md §2.1 P4), master `35b223d`:
+Found by [[dependent-match-compiler]]'s survey (2026-10-31, docs/language/matching/dependent-match-compiler-design.md §2.1 P4), master `35b223d`:
 
 ```heather
 fn mk(n: Nat) → List<Nat> { [n, n] }

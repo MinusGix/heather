@@ -1,4 +1,4 @@
-// Summation error (docs/floating-point-design.md §19): the recursive sum's
+// Summation error (docs/library/floating-point-design.md §19): the recursive sum's
 // bound and Kahan's compensated step.
 //
 // Addition obeys the standard model with no underflow term: below the

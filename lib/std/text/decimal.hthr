@@ -1,7 +1,7 @@
 // A count's decimal digits, as bytes: the spec `%d` and `%7d` print
 // (`decimal`, `decimal_line`, `pad_left`). Salvaged from the native
 // formatter's library (decimal_line, burned with the hand-proved process
-// stack; docs/native-program-logic-design.md §3.1), keeping only what the
+// stack; docs/native/native-program-logic-design.md §3.1), keeping only what the
 // output means, not how a word held it.
 import bitvec;
 import bool;

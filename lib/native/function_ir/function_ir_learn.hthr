@@ -1,5 +1,5 @@
 // The search for what a function's own tests already say
-// (docs/optimizer-design.md §5.1), and for the test worth making at its
+// (docs/native/optimizer-design.md §5.1), and for the test worth making at its
 // entry. Nothing here is trusted or proved: what it finds is a plan the
 // replayer checks (`function_ir_replay.hthr`) by the rules of
 // `function_ir_rules.hthr`, and a guard `function_ir_guard.hthr` checks.
@@ -50,7 +50,7 @@
 // (`Step::Again`), so what the test says of its sum is said of the body's.
 //
 // Bytes loaded from a span and joined by shifts and ors are a word, and
-// one load reads a word (docs/optimizer-design.md §4.1). The walk keeps,
+// one load reads a word (docs/native/optimizer-design.md §4.1). The walk keeps,
 // for a word, that it is so many bytes of a buffer from an index, shifted
 // (`Join`): a byte load starts one, a shift moves it, and an or of two
 // that are side by side in the buffer and in the word is the longer one,
@@ -575,7 +575,7 @@ fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
 
 // A comparison: decided where its operands' ranges lie apart. Where a load
 // or a store indexes by its left, the bit is written after it, which is
-// what the lowering reads (docs/optimizer-design.md §5.1).
+// what the lowering reads (docs/native/optimizer-design.md §5.1).
 fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
     shared(Seen(nat_map_set(seen.made, c, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins), λ noted =>
         shared(seen.of(l), λ a => shared(seen.of(r), λ b => match Succ(a.high).leb(b.low) {
@@ -716,7 +716,7 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
 }
 
 // ---------------------------------------------------------------------------
-// Bytes joined into words (docs/optimizer-design.md §4.1)
+// Bytes joined into words (docs/native/optimizer-design.md §4.1)
 
 fn Seen::joins_as(self seen: Seen, joins: Joins) → Seen {
     Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, joins)

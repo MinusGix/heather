@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-31
 ---
 
-The last operation of `float-arith` (`docs/floating-point-design.md` §7.1,
+The last operation of `float-arith` (`docs/library/floating-point-design.md` §7.1,
 §14). Round 4 landed add, sub, mul, fma, div and conversion; square root was
 left out because its correctness theorem has nothing to state yet, not
 because it is hard to compute.

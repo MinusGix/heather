@@ -1,5 +1,5 @@
 // Probes of tidying (lib/native/function_ir/function_ir_tidy.hthr,
-// docs/optimizer-design.md §3.1): what inlining leaves read through its
+// docs/native/optimizer-design.md §3.1): what inlining leaves read through its
 // copies and the copies dropped; a buffer read brought back to the shape
 // the lowering accepts; a call and a loop fed the ids their arguments
 // copied; the plans the searchers find; and the stage's theorem. Tests,

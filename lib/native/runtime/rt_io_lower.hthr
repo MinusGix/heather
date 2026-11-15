@@ -1,5 +1,5 @@
 // Effectful `rt` lowered to a `Source`'s statements, and its soundness
-// proved once (docs/effects-capabilities-design.md §8.5;
+// proved once (docs/language/effects-capabilities-design.md §8.5;
 // issues/effects-uniqueness-surface.md, slice 4; R6 item 2).
 //
 // A computation (`ETm`, `rt_io`) is a chain of pure bindings and calls to
@@ -19,7 +19,7 @@
 // the buffer before the read no longer has its value there: every variable
 // at that buffer is `Gone` after the call, and the lowering refuses any use
 // of a gone variable. That is the `Unique` fact for the call's buffer
-// (docs/facts-on-demand-design.md §7) decided by the lowering, not assumed.
+// (docs/native/facts-on-demand-design.md §7) decided by the lowering, not assumed.
 //
 // `ETm::lower_sound` is the theorem every case is a case of, by induction
 // over `ETm`: from any environment holding the variables (`LocsHold`) and
@@ -42,7 +42,7 @@
 // What the theorem asks of the program's functions is asked of the ones a
 // pure term can call (`Writers::Still` among `functions_below`): the
 // program may have functions that write, numbered after them
-// (docs/native-one-compiler-design.md §2.6, U4 step 4c-4).
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4c-4).
 import logic;
 import bool;
 import nat;
@@ -1229,7 +1229,7 @@ theorem ETm::call_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, n
 }
 
 // ---------------------------------------------------------------------------
-// A function lent the first buffer (docs/native-one-compiler-design.md §2.6)
+// A function lent the first buffer (docs/native/native-one-compiler-design.md §2.6)
 //
 // `Lend` is a `Compute` of a region `Call` of the program's function
 // `base + f`, where `base` counts the program's pure functions (the world's
@@ -1573,7 +1573,7 @@ theorem Flow::read_back_keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: 
 // The lowered statements' tree, read against any world, with the value read
 // back from its word, agrees with the computation's meaning up to silent
 // steps: `Io::Reads`, the agreement the default setup's `sound` states for
-// an effectful function (docs/runtime-fn-setups-design.md §6.1), from an
+// an effectful function (docs/native/runtime-fn-setups-design.md §6.1), from an
 // environment that holds the variables.
 fn ETm::lower_reads(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: t.lower(w, ls, g, locs, next) = Some(l),
     call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),

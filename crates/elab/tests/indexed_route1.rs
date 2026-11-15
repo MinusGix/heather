@@ -1,5 +1,5 @@
 //! Indexed-families route 1 hand prototype: the family by large elimination
-//! on the index (`docs/inductive-indexed-lowering.md`; section numbers below
+//! on the index (`docs/inductives/inductive-indexed-lowering.md`; section numbers below
 //! are that document's).
 //!
 //! The forcing function for the route-1 round of `issues/indexed-families.md`:

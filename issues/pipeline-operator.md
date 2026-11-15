@@ -43,4 +43,4 @@ is separately owned by [[function-composition-operator]].
 
 - 2026-08-22: Filed separately from `apply`: equal unary normal forms do not
   make value-first dataflow and goal-first construction the same source model.
-- 2026-10-31: 2026-10-31: docs/sequencing-surface-design.md §11 item 7: binding statements remove carrier towers, not pure dataflow chains, so this issue stays open and independent of lang-sequencing. Method calls already give value-first chaining for a type's own operations.
+- 2026-10-31: 2026-10-31: docs/language/sequencing-surface-design.md §11 item 7: binding statements remove carrier towers, not pure dataflow chains, so this issue stays open and independent of lang-sequencing. Method calls already give value-first chaining for a type's own operations.

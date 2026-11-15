@@ -1,5 +1,5 @@
 // Probes of Linux as a capability (`linux_world`;
-// docs/effects-capabilities-design.md): `mut self` calls on a `let mut io`,
+// docs/language/effects-capabilities-design.md): `mut self` calls on a `let mut io`,
 // a program written over them, and its agreement with the hand-built
 // `Source` cat (`native_cat`) when both are read against the same world.
 // Literal and neutral worlds, a checking position, and the negative
@@ -86,7 +86,7 @@ theorem write_checks(io: Io): Io::write(io, Io::stdout(), []).value = io.world(i
 // read or write (status 1). The loop holds what is left to write of the
 // last read: with nothing left it reads, and otherwise it writes what is
 // left. It goes round until the input ends, so it has no bound, and means
-// a computation in `Partial` (docs/effects-capabilities-design.md §4).
+// a computation in `Partial` (docs/language/effects-capabilities-design.md §4).
 fn Io::cat(io: Io, capacity: Nat) → Partial(Mutated<Io, BitVec(64)>) {
     let mut io = io;
     let mut status: BitVec(64) = BitVec::ofNat(0);

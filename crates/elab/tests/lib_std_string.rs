@@ -1,6 +1,6 @@
 //! `lib/std/text/char.hthr` and `lib/std/text/string.hthr` — Unicode scalar
 //! values and sequences of them as *specification* types
-//! (docs/string-char-design.md): the refusals that need the checker. Every
+//! (docs/library/string-char-design.md): the refusals that need the checker. Every
 //! law at a literal and at a neutral string, and the `¬` theorems for the
 //! wrong values (a wrong character, split or length, a false equation, a code
 //! outside `scalar`), are `lib/_tests/std/text/string_tests.hthr`, which the

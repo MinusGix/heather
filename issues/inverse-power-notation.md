@@ -9,7 +9,7 @@ updated: 2026-11-06
 
 Write `x⁻¹` and `x ^ n` the way Lean does, with `x ^ (-1)` agreeing with
 `x⁻¹`, but keep the hypothesis instead of a junk `0⁻¹ = 0`. Design:
-docs/inverse-power-notation-design.md.
+docs/library/inverse-power-notation-design.md.
 
 ## Done in this round
 
@@ -31,4 +31,4 @@ docs/inverse-power-notation-design.md.
 ## Log
 
 - 2026-10-19: `inv` is now stated once ([[constructive-ordered-field-interface]]: `OrderedField.inv` at apartness, `inv_unique`/`inv_respects` generic). A generic `pow` is not; it stays here.
-- 2026-11-06: The division round (docs/division-design.md) closed two of the leftovers: `apart_of_nonzero` is a rule over a one-place `x.Nonzero()`, so a local `¬(x ≈ 0)` gives `x⁻¹` at `Rat`, and `CReal` has `apart_mul`, `apart_inv`, `apart_div`. Integer-exponent laws remain.
+- 2026-11-06: The division round (docs/library/division-design.md) closed two of the leftovers: `apart_of_nonzero` is a rule over a one-place `x.Nonzero()`, so a local `¬(x ≈ 0)` gives `x⁻¹` at `Rat`, and `CReal` has `apart_mul`, `apart_inv`, `apart_div`. Integer-exponent laws remain.

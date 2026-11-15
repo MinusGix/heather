@@ -9,7 +9,7 @@
 //! section numbers here are that document's.
 //!
 //! Nothing here uses the elaborator; the terms are what the generator will
-//! emit. The tier-0 nominal tag (`docs/inductive-tier0-lowering.md` §3.3) is
+//! emit. The tier-0 nominal tag (`docs/inductives/inductive-tier0-lowering.md` §3.3) is
 //! elided — the prototype is about the height recursion, and the tag rides
 //! along unchanged as field 0 of each constructor.
 

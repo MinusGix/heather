@@ -274,7 +274,7 @@ fn read_baseline(path: &Path) -> Option<Baseline> {
 fn save(path: &Path, m: &Measures, env: &[(&str, String)]) {
     let mut out = String::from(
         "# scripts/bench-native --save: the linked code's speed and the Rust references'.\n\
-         # docs/native-benchmarking.md says how to read it and when to re-record.\n",
+         # docs/native/native-benchmarking.md says how to read it and when to re-record.\n",
     );
     for (key, value) in env {
         out.push_str(&format!("env\t{key}\t{value}\n"));

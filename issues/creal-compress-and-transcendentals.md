@@ -24,7 +24,7 @@ submilestones that were waiting on it:
   finite floats, with `CReal::log_rat` (atanh after scaling into one binade)
   new beside `exp_rat`.
 
-Design and results: docs/creal-transcendental-round.md.
+Design and results: docs/library/creal.md.
 
 ## Log
 

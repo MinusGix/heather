@@ -1,5 +1,5 @@
 //! The `ring` tactic (`lib/std/tactic/ring.hthr`,
-//! `docs/ring-normalization-design.md`): its refusals. What it proves is
+//! `docs/tactics/ring-normalization-design.md`): its refusals. What it proves is
 //! `lib/_tests/std/tactic/ring_tests.hthr`, which the whole-library gate
 //! checks (`crates/cli/tests/library.rs`; docs/test-value-audit.md §5): the
 //! identities at `Int` and `Nat`, the checking positions, `ring(h, …)` with

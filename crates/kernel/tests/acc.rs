@@ -1,5 +1,5 @@
 //! `Acc` via `W`: the indexed-container reduction, hand-built and
-//! kernel-checked. Scheme: `docs/acc-via-w.md`;
+//! kernel-checked. Scheme: `docs/inductives/acc-via-w.md`;
 //! [[stress-proof-suite]] item 3 / [[inductive-compiler]] tier 2.
 //!
 //! `elim_W`'s β synthesizes the induction hypothesis **under a λ** —
@@ -9,7 +9,7 @@
 //! the construction that genuinely needs it. Nothing in the frontend reaches
 //! `W`, so this file is insurance on trusted code, not frontend progress.
 //!
-//! The encoding (`docs/acc-via-w.md` §1):
+//! The encoding (`docs/inductives/acc-via-w.md` §1):
 //!
 //! ```text
 //! Below(a) := Σ(b : A). R(b, a)
@@ -833,7 +833,7 @@ fn st_nat() -> Term {
 }
 
 // ---------------------------------------------------------------------------
-// Checking helpers — Ψ is empty everywhere (docs/acc-via-w.md §4).
+// Checking helpers — Ψ is empty everywhere (docs/inductives/acc-via-w.md §4).
 // ---------------------------------------------------------------------------
 
 fn ck(gamma: &LocalCtx, t: &Term, ty: &Type, level: Level) {
@@ -977,7 +977,7 @@ fn wfrec_checks_at_an_open_motive_and_step() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. The β equation — the headline (docs/acc-via-w.md §2.3)
+// 5. The β equation — the headline (docs/inductives/acc-via-w.md §2.3)
 // ---------------------------------------------------------------------------
 
 #[test]

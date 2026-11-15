@@ -61,7 +61,7 @@
 //! reach their inputs through the [`dom::Dom`] accessor boundary. The public
 //! entry points below instantiate it at [`dom::values::Values`], an
 //! environment machine over the value domain of
-//! `docs/nbe-conversion-design.md`; [`oracle`] instantiates the same arms at
+//! `docs/kernel/nbe-conversion-design.md`; [`oracle`] instantiates the same arms at
 //! [`dom::Syn`], the `reduce.rs` term rewriter, and exists only so the two
 //! can be held against each other. Nothing above depends on the choice — the
 //! rules, the fuel accounting, the left-biased inference and the layer
@@ -531,7 +531,7 @@ pub fn conv_local_ctx(
 // query to the next instead of being rebuilt per query. The cache belongs to
 // one Ψ (see [`GlobalCache`]), and the caller is the one that knows its Ψ is the
 // same — `typing::Env` rebuilds it exactly where conversion's own `push_tele`
-// does. `docs/conversion-query-arena-pooling-design.md` §3.
+// does. `docs/kernel/conversion-query-arena-pooling-design.md` §3.
 
 #[cfg(not(feature = "value-metrics"))]
 #[allow(clippy::too_many_arguments)]
@@ -603,7 +603,7 @@ pub(crate) fn conv_local_ctx_cached_with_metrics(
 
 // -- entry points that take the checker's *descriptions* ---------------------
 //
-// `docs/intro-by-type-design.md` §3.3: an [`ITy`] is consumed by exactly two
+// `docs/elaborator/intro-by-type-design.md` §3.3: an [`ITy`] is consumed by exactly two
 // operations, and both of them are a per-query arena's worth of value-domain
 // work. The arena's lifetime is unchanged — it is built here and dropped
 // when the query returns, exactly as `conv_type_cached`'s is — which is the
@@ -775,7 +775,7 @@ pub(crate) fn injection_heads_cached(
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should: the entry points above are conversion.
 /// This module exists because the trusted-base story changed when the round
-/// of `docs/nbe-conversion-design.md` landed — "ch. 06 verbatim" moved from
+/// of `docs/kernel/nbe-conversion-design.md` landed — "ch. 06 verbatim" moved from
 /// the algorithm to the *specification*, and `reduce.rs` is now the
 /// specification. These functions are the same comparison arms instantiated
 /// at [`dom::Syn`], so a test can run the two engines over one corpus and
@@ -1147,7 +1147,7 @@ struct Conv<'v, D: Dom<'v>> {
     /// Live native frames of [`Conv::tm`]/[`Conv::ty`], bounded by
     /// [`NATIVE_DEPTH_LIMIT`] and handed on to every evaluator run from
     /// inside them, so that one budget bounds the whole stack
-    /// (docs/native-depth-budget-design.md).
+    /// (docs/kernel/native-depth-budget-design.md).
     depth: u32,
     /// Comparisons met [`crate::term::SPINE_ITERATE_AT`] frames deep,
     /// queued instead of descended into ([`crate::premises`]): a rule's
@@ -1492,7 +1492,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// `Γ ⊢ Vec^l(T; k) ≈ Vec^l'(T'; k')` decided on the spelling, before
-    /// either side reduces (extension; docs/wf-former-design.md §5).
+    /// either side reduces (extension; docs/kernel/wf-former-design.md §5).
     ///
     /// The verdict is the one the reductions give, reached without them.
     /// A vector at a canonical length *is* its right-nested `Σ` encoding,
@@ -1684,7 +1684,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm(env, t1, t2, s1, l1)?;
                 self.tm(env, u1, u2, s1, l1)
             }
-            // sEq congruence (extension; docs/sprop-design.md §2.1) — Id's
+            // sEq congruence (extension; docs/kernel/sprop-design.md §2.1) — Id's
             // arm verbatim. The *endpoints* are compared as ordinary terms;
             // only proofs (terms *at* sEq type) are irrelevant.
             (
@@ -1735,7 +1735,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // Vec/Fin congruence (extension): reached only at a *neutral*
             // length — a canonical one reduces away before `ty_nf` — so this
             // is the neutral-type comparison, structural in element and
-            // length (docs/wf-former-design.md §5). Two sides both *spelled*
+            // length (docs/kernel/wf-former-design.md §5). Two sides both *spelled*
             // `Vec` are decided before reduction by [`Conv::vec_ty`]; this
             // arm is what remains when one side reached `Vec` by unfolding.
             (
@@ -1749,7 +1749,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             (TyView::Fin { len: k1 }, TyView::Fin { len: k2 }) => {
                 self.tm_at_nat(env, k1, k2)
             }
-            // DVec congruence (extension; docs/iwf-former-design.md §5): as
+            // DVec congruence (extension; docs/kernel/iwf-former-design.md §5): as
             // `Vec`'s, reached only at a neutral length, with the family
             // compared under one binder, `i : Fin k` at the left length.
             (
@@ -1773,7 +1773,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_x = D::push_entry(env, s1, l1);
                 self.tm_at_nat(&e_x, n1, n2)
             }
-            // IWf congruence (extension; docs/iwf-former-design.md §5):
+            // IWf congruence (extension; docs/kernel/iwf-former-design.md §5):
             // structural, every component, index included, with levels equal.
             // The components under the shape's binder are compared in
             // (Γ, x : S), the child index in (Γ, x : S, i : Fin n).
@@ -1811,7 +1811,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm(&e_xi, c1, c2, &D::weaken_ty(env, x1, 2), li1)?;
                 self.tm(env, m1, m2, x1, li1)
             }
-            // M congruence (extension; docs/kernel-coinduction-design.md
+            // M congruence (extension; docs/kernel/kernel-coinduction-design.md
             // §2.1): structural, as IWf's, every component and the index,
             // with levels equal. Shapes in (Γ, i : I), positions in
             // (Γ, i, s : S), the child index in (Γ, i, s, p : P) at `I`.
@@ -2422,7 +2422,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
             // either side.
             TyView::Unit { .. } => Ok(()),
-            // sEq irrelevance (extension; docs/sprop-design.md §5.2): the
+            // sEq irrelevance (extension; docs/kernel/sprop-design.md §5.2): the
             // Unit pattern generalized — any two proofs of a strict equality
             // are definitionally equal, which makes UIP at sEq definitional
             // (`p ≡ srefl`) rather than a theorem.
@@ -2430,14 +2430,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // presupposition holds by assumption on the caller, and the arm
             // must sit here in `tm_nf`, ahead of any structural fallback.
             TyView::SEq { .. } => Ok(()),
-            // sEmpty irrelevance (extension; docs/sprop-design.md §2.2):
+            // sEmpty irrelevance (extension; docs/kernel/sprop-design.md §2.2):
             // any two absurdity proofs are convertible — vacuously sound,
             // the type is uninhabited in consistent contexts.
             TyView::SEmpty { .. } => Ok(()),
             // Propositional truncation is definitionally proof-irrelevant,
             // while evaluation above still forces both sides to WHNF.
             TyView::Squash { .. } => Ok(()),
-            // Empty η (extension; docs/metatheory-ch07-extensions.md §28):
+            // Empty η (extension; docs/kernel/metatheory-ch07-extensions.md §28):
             // proof irrelevance, as at sEmpty — any two terms of an Empty type
             // are convertible. Only neutrals can appear (no canonical
             // inhabitants), and they exist only under a false hypothesis.
@@ -2463,10 +2463,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // Wf (extension): positive, like W — but the children compare at
             // a `Vec`, so the comparison descends through `Σ`-η and bottoms
             // out in `Unit`'s proof irrelevance. That is the whole reason
-            // this former exists (docs/wf-former-design.md §5): no funext is
+            // this former exists (docs/kernel/wf-former-design.md §5): no funext is
             // reachable from here, because there is no function to compare.
             TyView::Wf { .. } => self.tm_nf_wf(env, a, b, w, &vw),
-            // IWf (extension; docs/iwf-former-design.md §5): positive, like
+            // IWf (extension; docs/kernel/iwf-former-design.md §5): positive, like
             // Wf, and `sup_i` stores nothing but its shape and its children —
             // the constructor is at its output index — so two of them are
             // equal exactly when their visible data is: the shapes, then the
@@ -2474,7 +2474,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // takes their η. No irrelevance arm is involved. The annotations
             // are forced by the type, as `sup_f`'s (heather-coq `actmnf_supi`).
             TyView::IWf { .. } => self.tm_nf_i_wf(env, a, b, w, &vw),
-            // M (extension; docs/kernel-coinduction-design.md §2.1): no η.
+            // M (extension; docs/kernel/kernel-coinduction-design.md §2.1): no η.
             // Two `corec`s compare by their coalgebras: the carrier's level,
             // the carrier in (Γ, i : I), the step in (Γ, i, x : X) at the
             // left one's step type, and the seed at `X[j]` — in that order,
@@ -2499,7 +2499,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Pi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Pi { dom_level, cod_level, dom, cod } = vw else {
@@ -2512,7 +2512,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `UPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_u_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::UPi { num_vars, level, body } = vw else {
@@ -2528,7 +2528,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `CtxPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_ctx_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CtxPi { level, body } = vw else {
@@ -2544,7 +2544,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `TyPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_ty_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::TyPi { ctx, arg_level, body_level, body } = vw else {
@@ -2564,7 +2564,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `CodeTy`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_code_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CodeTy { .. } = vw else {
@@ -2580,7 +2580,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `CodeTm`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_code_tm(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CodeTm { .. } = vw else {
@@ -2596,7 +2596,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Nat`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_nat(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
         let TyView::Nat = vw else {
@@ -2619,7 +2619,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Ty`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Ty(_) = vw else {
@@ -2732,7 +2732,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e = self.push_el(env, l1, s1)?;
                 self.tm_at_nat(&e, n1, n2)
             }
-            // TmM congruence (docs/kernel-m-codes-design.md §1): the
+            // TmM congruence (docs/kernel/kernel-m-codes-design.md §1): the
             // type former's comparison read through `El` — the shape
             // under the index, the positions under both, the child index
             // under all three at the index type, and the index there.
@@ -2753,7 +2753,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm(&e_isp, o1, o2, &D::weaken_ty(env, &el_i, 3), i1)?;
                 self.tm(env, j1, j2, &el_i, i1)
             }
-            // TmDVec congruence (docs/iwf-former-design.md §6): the type
+            // TmDVec congruence (docs/kernel/iwf-former-design.md §6): the type
             // former's comparison read through `El`, the family under
             // `i : Fin k` at the left length.
             (
@@ -2793,7 +2793,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Id`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_id(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Id { level, ty, .. } = vw else {
@@ -2810,7 +2810,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Sigma`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_sigma(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
         let TyView::Sigma { fst_level, snd_level, fst, snd } = vw else {
@@ -2818,7 +2818,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         };
         let result: R = {
             // Native bitvector words (extension;
-            // `docs/native-bitvector-values-design.md` §7), ahead of the
+            // `docs/kernel/native-bitvector-values-design.md` §7), ahead of the
             // guard below and for the same observation carried one step
             // further: a `Vec` is a right-nested Σ, and when its element
             // type has exactly two canonical inhabitants the whole chain
@@ -2860,7 +2860,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Sum`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_sum(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Sum { lhs_level, rhs_level, lhs, rhs } = vw else {
@@ -2880,7 +2880,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `W`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_w(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::W { shape_level, pos_level, shape, pos } = vw else {
@@ -2906,7 +2906,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `Wf`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Wf { level, shape, arity } = vw else {
@@ -2930,7 +2930,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `IWf`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_i_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::IWf { level, idx_level, shape, .. } = vw else {
@@ -2952,7 +2952,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_nf`] at `M`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_nf_m(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::M { sig, index } = vw else {
@@ -3025,7 +3025,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // elim_sEmpty neutral congruence (extension) — ElimEmpty's arm
             // with the scrutinees *skipped*: they sit at sEmpty, whose
             // irrelevance arm accepts any two terms, so comparing them
-            // would be that arm anyway (docs/sprop-design.md §5.3). The
+            // would be that arm anyway (docs/kernel/sprop-design.md §5.3). The
             // motive instances agree for the same reason.
             (TmView::ElimSEmpty { .. }, TmView::ElimSEmpty { .. },) => self.tm_ne_elim_s_empty(env, &va, &vb),
             (TmView::ElimSquash { .. }, TmView::ElimSquash { .. },) => self.tm_ne_elim_squash(env, &va, &vb),
@@ -3112,7 +3112,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `GlobalTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_global_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3146,7 +3146,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimNat` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_nat(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3171,7 +3171,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimEmpty` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3189,7 +3189,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimSEmpty` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_s_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3207,7 +3207,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimSquash` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_squash(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3239,7 +3239,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `Case` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_case(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3292,7 +3292,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimW` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_w(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3363,7 +3363,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimWf` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3395,7 +3395,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimIWf` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_i_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3443,7 +3443,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `Out` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_out(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3458,7 +3458,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `J` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_j(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3497,7 +3497,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `App` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3508,7 +3508,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         };
         // Levels as the `Fst` arm below: compared when both sides
         // store them, and otherwise the inferred Π's are the answer
-        // (`app@`, docs/app-by-head-type-design.md §4).
+        // (`app@`, docs/elaborator/app-by-head-type-design.md §4).
         if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
             self.lev_eq(dl1, dl2)?;
             self.lev_eq(cl1, cl2)?;
@@ -3555,7 +3555,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `Fst` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_fst(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3588,7 +3588,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `Snd` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_snd(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3614,7 +3614,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `UApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_u_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3643,7 +3643,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `CtxApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_ctx_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3663,7 +3663,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `TyApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_ty_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3687,7 +3687,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `LetBoxTy` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_let_box_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3735,7 +3735,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `LetBoxTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_let_box_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3790,7 +3790,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimCodeTy` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_code_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3857,7 +3857,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     }
 
     /// [`Conv::tm_ne`] at two `ElimCodeTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn tm_ne_elim_code_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3990,7 +3990,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 /// in `rec_ca`'s own frame they made it the fattest frame in conversion,
 /// standing under every branch comparison's recursion; built here, the
 /// frame that holds them returns before the first comparison
-/// (docs/native-depth-budget-design.md §8).
+/// (docs/kernel/native-depth-budget-design.md §8).
 #[inline(never)]
 fn branch_table<'v, D: Dom<'v>>(
     a: &RecSide<'_, 'v, D>,
@@ -4005,7 +4005,7 @@ fn branch_table<'v, D: Dom<'v>>(
 
 impl<'v> Conv<'v, Values> {
     /// [`Conv::ty_root`] over two *descriptions*
-    /// (`docs/intro-by-type-design.md` §3.3). The reflexivity shortcut and
+    /// (`docs/elaborator/intro-by-type-design.md` §3.3). The reflexivity shortcut and
     /// the cross-head memo are the checker's, on the descriptions
     /// themselves; what reaches here is a miss, and it evaluates both sides
     /// in this query's arena and then runs the ordinary comparison. δ is as

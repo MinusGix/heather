@@ -1,4 +1,4 @@
-//! Corecursion up to friends (docs/codata-elaborator-design.md §5.5, §5.6).
+//! Corecursion up to friends (docs/inductives/codata-elaborator-design.md §5.5, §5.6).
 //!
 //! A corecursive call may sit under a **friend**, a function of the
 //! definition's own codata family that reads each codata argument at most
@@ -847,7 +847,7 @@ impl FriendMode {
     fn refuse<T>(&self, what: &str, span: Span) -> R<T> {
         err(
             format!(
-                "`{}` is not a friend of the corecursive `{}` (docs/codata-elaborator-design.md §5.5): {what}",
+                "`{}` is not a friend of the corecursive `{}` (docs/inductives/codata-elaborator-design.md §5.5): {what}",
                 self.friend, self.user
             ),
             span,
@@ -990,7 +990,7 @@ impl UpTo<'_> {
         let scope = self.names.module_scope(module).cloned().map(Rc::new);
         let _scope = scope.as_ref().map(|s| self.use_scope(s));
         let refuse = |what: String| -> R<Option<Friend>> {
-            err(format!("`{name}` cannot be a friend of this corecursion (docs/codata-elaborator-design.md §5.6): {what}"), span)
+            err(format!("`{name}` cannot be a friend of this corecursion (docs/inductives/codata-elaborator-design.md §5.6): {what}"), span)
         };
         let hcx = cx.hygienic();
         let site_len = hcx.names.len();
@@ -1423,7 +1423,7 @@ impl UpTo<'_> {
                         msg
                     } else {
                         format!(
-                            "`{}` is not a friend of the corecursive `{user}` (docs/codata-elaborator-design.md §5.5): its body does not elaborate over the free carrier: {msg}",
+                            "`{}` is not a friend of the corecursive `{user}` (docs/inductives/codata-elaborator-design.md §5.5): its body does not elaborate over the free carrier: {msg}",
                             friend.written
                         )
                     };
@@ -1480,7 +1480,7 @@ impl UpTo<'_> {
         }
         err(
             format!(
-                "this call to `{who}` is at `{}`, but the place it stands in is at `{}`: a friend's result index must be the one its position wrote (docs/codata-elaborator-design.md §5.6)",
+                "this call to `{who}` is at `{}`, but the place it stands in is at `{}`: a friend's result index must be the one its position wrote (docs/inductives/codata-elaborator-design.md §5.6)",
                 self.display_type(cx, &a),
                 self.display_type(cx, &b)
             ),
@@ -1524,7 +1524,7 @@ impl UpTo<'_> {
                     } else {
                         return err(
                             format!(
-                                "write `{}`'s type arguments at this call (`{}<…>(…)`): its type parameter `{}` is not read off the definition's type, so the friend's node stores it (docs/codata-elaborator-design.md §5.6)",
+                                "write `{}`'s type arguments at this call (`{}<…>(…)`): its type parameter `{}` is not read off the definition's type, so the friend's node stores it (docs/inductives/codata-elaborator-design.md §5.6)",
                                 friend.written,
                                 friend.written,
                                 friend.decl.tyvars[i].name
@@ -1699,7 +1699,7 @@ impl UpTo<'_> {
                     match nested_self_call(&selfref, a) {
                         Some(at) => err(
                             format!(
-                                "this call to `{}` sits in a data argument of the friend `{}`, where no corecursive call is guarded (docs/codata-elaborator-design.md §5.5)",
+                                "this call to `{}` sits in a data argument of the friend `{}`, where no corecursive call is guarded (docs/inductives/codata-elaborator-design.md §5.5)",
                                 selfref.written_name, friend.written
                             ),
                             at,

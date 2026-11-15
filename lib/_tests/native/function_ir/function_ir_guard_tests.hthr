@@ -1,5 +1,5 @@
 // Probes of the test at a function's entry
-// (lib/native/function_ir/function_ir_guard.hthr, docs/optimizer-design.md
+// (lib/native/function_ir/function_ir_guard.hthr, docs/native/optimizer-design.md
 // §5.1): the function made, the stage's statement about a program, and
 // what is refused. Tests, not library: nothing imports this module.
 import function_ir;

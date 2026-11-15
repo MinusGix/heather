@@ -1,5 +1,5 @@
 // Effectful `rt`: computations over the one world capability
-// (docs/effects-capabilities-design.md §8; docs/runtime-fn-setups-design.md
+// (docs/language/effects-capabilities-design.md §8; docs/native/runtime-fn-setups-design.md
 // §8, N3; issues/effects-uniqueness-surface.md).
 //
 // A `runtime fn` that talks to Linux is a `mut self` method over `Io`
@@ -20,10 +20,10 @@
 // The capability is **not a value of `rt`**. It is the world the
 // computation threads, so no term can name it, copy it, store it in a record
 // or drop it halfway: capability linearity, the default setup's N3 clause
-// (docs/runtime-fn-setups-design.md §5.1), holds by construction, and the
+// (docs/native/runtime-fn-setups-design.md §5.1), holds by construction, and the
 // reflector's job is to read a body that threads `io` straight through, and
 // refuse one that does not. This is the source's own split
-// (docs/native-effect-source-design.md §11): values are total and pure
+// (docs/native/native-effect-source-design.md §11): values are total and pure
 // (`Tm`, lowered to FunctionIR), computations are the layer over them
 // (`ETm`, lowered to `Source` statements), Levy's call-by-push-value.
 //
@@ -165,7 +165,7 @@ fn Effect::push(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::En
 // Functions a computation lends a buffer to
 
 // A compiled function of the program that a computation hands a buffer and
-// words (docs/native-one-compiler-design.md §2.6): how many words it takes
+// words (docs/native/native-one-compiler-design.md §2.6): how many words it takes
 // after the buffer, and what it does with them, the bytes it leaves and the
 // word it answers. A function that only reads leaves the bytes as they
 // were. The buffer's length is the function's to read off the bytes, as its

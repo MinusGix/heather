@@ -54,7 +54,7 @@ theorem nat_min_idem(a: Nat): a.min(a) = a { nat_min_mergeable().idem(a) }
 // The setoid, the congruence, associativity and commutativity are `algebra`'s
 // `CommMonoid<Bool>(and)`'s, registered at `RelId` (its relational parents),
 // so the instance writes only the law they lack; the canonical evidence is
-// reused exactly, not restated (docs/relation-indexed-algebra-design.md).
+// reused exactly, not restated (docs/library/relation-indexed-algebra-design.md).
 instance Mergeable<Bool>(RelId<Bool>, Bool::and) {
     idem := λ x => match x as λ x => Bool::and(x, x) = x { True => refl, False => refl },
 }

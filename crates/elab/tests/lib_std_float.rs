@@ -1,4 +1,4 @@
-//! The float modules (`lib/std/num/float/`, `docs/floating-point-design.md`):
+//! The float modules (`lib/std/num/float/`, `docs/library/floating-point-design.md`):
 //! the refusals that need the checker. Everything the language can state
 //! about them is a theorem: the probes at specific values and the contract
 //! restated at open ones are `lib/_tests/std/num/float/*_tests.hthr`, which

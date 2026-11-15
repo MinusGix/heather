@@ -33,7 +33,7 @@ impl Operators<'_> {
 
     /// The fixed name an operator symbol falls back to — the third rung of
     /// [`Self::resolve_op_name`] and the whole of what `+` meant before this
-    /// round (docs/operators-onto-classes-design.md §4).
+    /// round (docs/language/classes/operators-onto-classes-design.md §4).
     ///
     /// This table *is* the parser desugaring it replaced, moved from
     /// `Parser::infix_op`'s first column to the resolver's last stop. That is
@@ -57,7 +57,7 @@ impl Operators<'_> {
     }
 
     /// §5.2's uniqueness rule, over the **symbol** namespace
-    /// (docs/operators-onto-classes-design.md §5.1–§5.2, as
+    /// (docs/language/classes/operators-onto-classes-design.md §5.1–§5.2, as
     /// issues/binder-symbol-as-notation.md amends them): a declaration installs
     /// each spelling once, by any mix of constraint symbol slots and `as`.
     ///
@@ -84,7 +84,7 @@ impl Operators<'_> {
                 "`{sym}` is already this declaration's body spelling, installed by {by}: \
                  each spelling binds exactly one referent, so one declaration installs a \
                  symbol once — by a constraint's symbol slot or by `as`, not both \
-                 (docs/operators-onto-classes-design.md §5.1). Pick a second symbol, or \
+                 (docs/language/classes/operators-onto-classes-design.md §5.1). Pick a second symbol, or \
                  drop one of the two spellings"
             ),
             span,
@@ -94,15 +94,15 @@ impl Operators<'_> {
 
 impl Elaborator {
     // The clause a diagnostic uses to say which of rung 2's two sources the
-    // carrier came from (docs/bare-symbol-checking-carrier-design.md §6).
+    // carrier came from (docs/language/classes/bare-symbol-checking-carrier-design.md §6).
     const FROM_OPERAND: &'static str = "the carrier of its left operand";
     const FROM_EXPECTED: &'static str = "the carrier this position expects";
 }
 
 impl Operators<'_> {
     /// The name an operator symbol means here — the three-rung ladder of
-    /// docs/operators-onto-classes-design.md §4, as
-    /// docs/bare-symbol-checking-carrier-design.md widens rung 2.
+    /// docs/language/classes/operators-onto-classes-design.md §4, as
+    /// docs/language/classes/bare-symbol-checking-carrier-design.md widens rung 2.
     ///
     /// `args` is the symbol's operand list, empty for a bare symbol between
     /// delimiters (`Monoid(+)`, `mconcat(++, xss)`). Rung 2 takes its carrier
@@ -219,7 +219,7 @@ impl Operators<'_> {
                 //     OrderedField := OrderedField::inv`). The operation is
                 //     emitted bare like any designated one, so its own
                 //     dictionary is resolved at the operand's carrier
-                //     (docs/division-design.md §6).
+                //     (docs/library/division-design.md §6).
                 return Ok(op);
             }
         }
@@ -275,7 +275,7 @@ impl Operators<'_> {
         // The carrier rung 2 tried, where it got one from either source. Naming
         // it is the difference between "covers this carrier" — which names no
         // carrier at all — and a sentence the reader can check against the
-        // table (docs/bare-symbol-checking-carrier-design.md §6).
+        // table (docs/language/classes/bare-symbol-checking-carrier-design.md §6).
         let designation_form = match fixity {
             OpFixity::Prefix => format!("designation prefix {sym} at …"),
             OpFixity::Postfix => format!("designation postfix {sym} at …"),
@@ -319,7 +319,7 @@ impl Operators<'_> {
     /// The binder's carrier is the first domain of its type (`K` for
     /// `#op+@0_3 : K -> K -> K`); the operands' is the first
     /// inference-capable non-numeral leaf of their operator trees, probed as
-    /// rung 2 probes (docs/operators-onto-classes-design.md §4.1). The binder
+    /// rung 2 probes (docs/language/classes/operators-onto-classes-design.md §4.1). The binder
     /// keeps the symbol whenever either is unknown: an operand that does not
     /// infer, or a numeral-only one (`0 + 1` inside the section is `K`'s, as
     /// before), or an operand at a type with no nominal head, which is the
@@ -423,7 +423,7 @@ impl Operators<'_> {
     }
 
     /// The head of the carrier an operator application is at — rung 2's probe
-    /// (docs/operators-onto-classes-design.md §4.1).
+    /// (docs/language/classes/operators-onto-classes-design.md §4.1).
     ///
     /// Two rules, both load-bearing. It searches the operand's operator tree
     /// for one inference-capable non-numeral leaf (skipping checking-only
@@ -491,7 +491,7 @@ impl Operators<'_> {
     }
 
     /// The head of the carrier a **checking position** is asking for — rung
-    /// 2's second source (docs/bare-symbol-checking-carrier-design.md §3, §4).
+    /// 2's second source (docs/language/classes/bare-symbol-checking-carrier-design.md §3, §4).
     ///
     /// The expected type's **first domain**, which is where the left operand
     /// would have sat: at `A -> A -> A` with `A := List<B>` it is `List`. That
@@ -522,7 +522,7 @@ impl Operators<'_> {
     /// checking-position source free of a second lesson: the name it produces
     /// is *checked* against `expected`, so a generic `append` gets its element
     /// type from the same domain the carrier came from
-    /// (docs/operators-onto-classes-design.md §12.2).
+    /// (docs/language/classes/operators-onto-classes-design.md §12.2).
     ///
     /// `expected` is the checking position's type where there is one, and
     /// `None` at the two inference sites.
@@ -582,7 +582,7 @@ impl Operators<'_> {
 
     /// A **bare** operator symbol whose meaning only a carrier can settle —
     /// the gate on [`AppUnify::is_checking_only`]'s new arm
-    /// (docs/bare-symbol-checking-carrier-design.md §4.3).
+    /// (docs/language/classes/bare-symbol-checking-carrier-design.md §4.3).
     ///
     /// Two conjuncts, both load-bearing.
     ///

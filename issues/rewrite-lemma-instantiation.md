@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-21
 ---
 
-`rewrite(h, e)` (`docs/equation-rewrite-design.md`) needs `h` fully applied:
+`rewrite(h, e)` (`docs/tactics/equation-rewrite-design.md`) needs `h` fully applied:
 `rewrite(k.add_comm(n), …)`. Lean's `rw [Nat.add_comm]` leaves the lemma's
 arguments open and finds them by matching its left side, with those arguments
 as pattern variables, against the goal's subterms — the first match in
@@ -36,7 +36,7 @@ asks for it explicitly.
 ## Log
 
 - 2026-10-21: done with [[rewrite-keyed-conversion-matching]]
-  (`docs/equation-rewrite-design.md` §6.1). The proof's type is opened as a
+  (`docs/tactics/equation-rewrite-design.md` §6.1). The proof's type is opened as a
   telescope (≤ 32 binders); the first same-keyed goal subterm under no binder
   that matches fixes the arguments; spine matching is first-order, non-spine
   parts that mention variables are compared once those are bound. Refused: a

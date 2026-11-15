@@ -1,6 +1,6 @@
 // FunctionIR evaluated: a total function computing a region's values, and
 // the theorem that what it computes satisfies the region's equations
-// (issues/function-ir-total-evaluator.md; docs/native-effect-source-design.md
+// (issues/function-ir-total-evaluator.md; docs/native/native-effect-source-design.md
 // §2.1, round S3.0).
 //
 // FunctionIR's meaning is relational: a valuation satisfies a region's
@@ -1164,7 +1164,7 @@ fn program_evaluable(functions: List<Function>) → Bool {
 // Linking: a function written against a numbering of its own callees, put
 // into a program that numbers them differently, has its calls renamed. It
 // evaluates as before, each call answered at its new name
-// (docs/runtime-fn-setups-design.md §16.9).
+// (docs/native/runtime-fn-setups-design.md §16.9).
 
 fn StructuredRegion::relabel(self region: StructuredRegion, links: Nat → Nat) → StructuredRegion {
     match region {
@@ -1417,7 +1417,7 @@ theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) 
 // The same over a file, at every file at once: the functions' sources are
 // what they compute at each file (a function lent spans reads the file's),
 // and the program, evaluated over a file, is its sources there
-// (docs/native-one-compiler-design.md §2.3). That a function's calls fit is
+// (docs/native/native-one-compiler-design.md §2.3). That a function's calls fit is
 // no file's matter and is stated once.
 fn program_linked_files(functions: List<Function>, arities: List<Nat>, sources: Buffers() → Answers()) → Type {
     match functions {

@@ -1,6 +1,6 @@
 // Probes of ranges as facts and of the search that learns them
 // (lib/native/function_ir/function_ir_replay.hthr, function_ir_rules.hthr,
-// function_ir_learn.hthr, docs/optimizer-design.md §5.1): a conditional
+// function_ir_learn.hthr, docs/native/optimizer-design.md §5.1): a conditional
 // replaced by the arm its test is proved to take, what the replayer
 // refuses, the test the search puts at a function's entry and the plan it
 // finds past it, a loop whose passes keep a range, a narrowing that a

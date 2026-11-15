@@ -51,4 +51,4 @@ A probe ruled out the other explanation (that the build and the replay hash the 
 
 ## Not done here
 
-The first replay still hashes every binding's interface to ask its questions, where the steady state is vouched for whole by one replay verdict per module (`REPLAY_ENTRY`). The build could record that verdict itself, after decoding the image it wrote and comparing it with what it checked. That moves trust from "the kernel or a verdict saw each binding" to "the encoder round-trips", so it is a decision about the trust argument (`docs/cache-v1-design.md` §6) and not a constant to shave.
+The first replay still hashes every binding's interface to ask its questions, where the steady state is vouched for whole by one replay verdict per module (`REPLAY_ENTRY`). The build could record that verdict itself, after decoding the image it wrote and comparing it with what it checked. That moves trust from "the kernel or a verdict saw each binding" to "the encoder round-trips", so it is a decision about the trust argument (`docs/infrastructure/cache-v1-design.md` §6) and not a constant to shave.

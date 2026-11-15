@@ -6,7 +6,7 @@
 //! The oracle here is not `crates/elab/src/vec.rs` but the **kernel**'s `nth`
 //! schema (`heather_kernel::term::nth`), which is what `elab_vec_nth` emits
 //! when no template claims `vec.nth`
-//! (docs/surface-fin-indexing-design.md §5.2). That schema is pinned verbatim
+//! (docs/language/surface-fin-indexing-design.md §5.2). That schema is pinned verbatim
 //! by `surface_fin.rs::indexing_emits_exactly_the_kernel_nth_schema`, so the
 //! left-hand side of every conversion below is nailed down independently and a
 //! drift in either direction becomes visible in one suite or the other.
@@ -171,7 +171,7 @@ fn hook_output_is_convertible_with_the_kernel_oracle() {
 
 /// The rigidity control, and the round's finding.
 ///
-/// docs/surface-fin-indexing-design.md §9 predicted that `nth_code` would have
+/// docs/language/surface-fin-indexing-design.md §9 predicted that `nth_code` would have
 /// **no writable mutant**: not rigid in `map`'s sense (the result is the bare
 /// `A`, which no index pins), but with a step arm forced anyway because the
 /// index and the recursion leave nothing else to pick. That is wrong, and the
@@ -179,7 +179,7 @@ fn hook_output_is_convertible_with_the_kernel_oracle() {
 /// is in scope at type `A` right beside `ih(tail(v), j)`. Answering `head(v)`
 /// in *both* arms is the constant-first-element projection — well typed at the
 /// declared signature, and (registration checking the type and never the body,
-/// docs/meta-def-registration-design.md §2.2) registered for `vec.nth` exactly
+/// docs/metaprogramming/meta-def-registration-design.md §2.2) registered for `vec.nth` exactly
 /// as the real template is.
 ///
 /// So adequacy is not carried by the type here, and this test is the proof
@@ -240,7 +240,7 @@ meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
 
 /// `nth_code` coexists with the templates that were already there: a file that
 /// indexes into the result of a `.map` routes each construct to its own slot
-/// (docs/meta-def-registration-design.md §8 item 5's positive half). This is
+/// (docs/metaprogramming/meta-def-registration-design.md §8 item 5's positive half). This is
 /// the fixture that would notice a hook dispatching on the wrong slot — and it
 /// nests them, so a payload applied in the wrong argument order shows up as a
 /// type error rather than as a silent wrong answer.

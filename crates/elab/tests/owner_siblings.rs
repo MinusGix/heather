@@ -1,5 +1,5 @@
 //! Inside a member of `T`, a bare name may name `T`'s other members
-//! (docs/sections-design.md §6). The member joins the candidate set with the
+//! (docs/language/sections-design.md §6). The member joins the candidate set with the
 //! same rank as every other reading, so what is pinned beside each positive is
 //! the negative a precedence would pass: a bare name that also resolves on its
 //! own is ambiguous, whichever module either reading comes from.

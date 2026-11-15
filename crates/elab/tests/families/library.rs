@@ -1,7 +1,7 @@
 //! The `lib_*` family: the standard library's modules, each checked by the
 //! member file that names it. One binary instead of one per file, so a Rust
 //! edit relinks the compiler once for all of them
-//! (docs/elab-test-families-design.md). The runner still runs each member in
+//! (docs/infrastructure/elab-test-families-design.md). The runner still runs each member in
 //! a process of its own (`scripts/run-test-targets.mjs`, family sharding), so
 //! members keep their own rails, fixtures and timing rows.
 

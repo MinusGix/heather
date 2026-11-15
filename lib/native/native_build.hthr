@@ -1,5 +1,5 @@
 // Native programs written over named words and buffers, lowered to the
-// effectful source (docs/native-real-programs-plan.md §3.3, round 5;
+// effectful source (docs/native/native-real-programs-plan.md §3.3, round 5;
 // issues/native-source-builder.md).
 //
 // A `Source` is a tree over numbered words whose leaves the compiler takes
@@ -103,7 +103,7 @@ inductive Calc {
 // A statement. `When` and the loops test their value's being nonzero. A
 // statement with two parts holds them as a function of a `Bool`, `True` the
 // first: `Act` has a function field (`Let`'s body), so no constructor may
-// have two recursive fields (docs/inductive-tier2-w-lowering.md §2.2).
+// have two recursive fields (docs/inductives/inductive-tier2-w-lowering.md §2.2).
 inductive Act {
     Skip,
     Seq(parts: Bool → Act),
@@ -136,7 +136,7 @@ inductive Act {
     Calculate(calc: Calc),
     // A call of the tool's procedure `procedure` (`proc`): each argument
     // placed, then the call, its results into `results`
-    // (docs/native-procedures-design.md).
+    // (docs/native/native-procedures-design.md).
     CallProc(procedure: Nat, args: List<Val>, results: List<Var>),
 }
 

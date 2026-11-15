@@ -34,7 +34,7 @@ impl std::ops::Deref for Projections<'_> {
 impl Projections<'_> {
     /// The classes that **declare** `name` — not the ones that merely inherit
     /// it — and are visible here, in sorted canonical-name order
-    /// (docs/traits-owner-dispatch-design.md §2). Never `HashMap` order and
+    /// (docs/language/classes/traits-owner-dispatch-design.md §2). Never `HashMap` order and
     /// never declaration order.
     ///
     /// "Visible here" is `key_of(C.name) == the key C is stored under`: the
@@ -67,7 +67,7 @@ impl Projections<'_> {
     }
 
     /// The receiver read **as a type**, when it is one
-    /// (docs/traits-type-projection-design.md §3.1). Two shapes, and they are
+    /// (docs/language/classes/traits-type-projection-design.md §3.1). Two shapes, and they are
     /// exclusive by construction:
     ///
     /// - the receiver elaborates as a value whose type is a universe — a type
@@ -99,7 +99,7 @@ impl Projections<'_> {
     }
 
     /// `T.f` / `T.f(…)` where the subject is a **type**
-    /// (docs/traits-type-projection-design.md): `A.unit`, `G.plus(x, G.zero)`,
+    /// (docs/language/classes/traits-type-projection-design.md): `A.unit`, `G.plus(x, G.zero)`,
     /// `Nat.zero`.
     ///
     /// The rule is receiver dispatch's with one word changed: the goal is
@@ -306,7 +306,7 @@ impl Projections<'_> {
             );
         }
         // As in receiver dispatch: an upcast answer is read through
-        // (docs/traits-named-upcast-design.md §2).
+        // (docs/language/classes/traits-named-upcast-design.md §2).
         let (ind, goal, dict) = Receivers(self).through_upcast(ind, goal, dict, up, name);
         let Some(idx) = ind.field_index(name) else {
             return err(
@@ -321,7 +321,7 @@ impl Projections<'_> {
 
     /// What a `T.f(…)` would have meant if `T` were a value — the reading a
     /// successful type projection has to be named beside, and a failed one
-    /// falls back to (docs/traits-type-projection-design.md §4).
+    /// falls back to (docs/language/classes/traits-type-projection-design.md §4).
     ///
     /// Two things make this narrower than receiver dispatch's `other`, and
     /// both are consequences of the subject being a **type**:
@@ -421,7 +421,7 @@ impl Projections<'_> {
 
     /// `G::AddCommMonoid` — the escape spelling: *the* `AddCommMonoid`
     /// dictionary at the type `G`, resolved rather than looked up
-    /// (docs/traits-type-projection-design.md §5).
+    /// (docs/language/classes/traits-type-projection-design.md §5).
     ///
     /// Reached only from [`Elaborator::resolve`]'s last stop, so it fires exactly
     /// where the answer would otherwise have been "unbound name". At a
@@ -430,7 +430,7 @@ impl Projections<'_> {
     /// library already had — is untouched: this generalizes it to the carriers
     /// that have no global to name.
     /// `Nat::Monoid(add)` — the same spelling with the class's **index**
-    /// (docs/operation-indexed-classes-design.md §5.1). An indexed class
+    /// (docs/language/classes/operation-indexed-classes-design.md §5.1). An indexed class
     /// otherwise has no short dictionary spelling at a carrier with two
     /// structures, which is what discharges the projection round's
     /// "`T::C` takes no arguments" residue on `issues/traits.md`.
@@ -459,8 +459,8 @@ impl Projections<'_> {
         let (carrier, clvl) = self.elab_ty(cx, &Ty { kind, span }).ok()?;
         let targs = [(carrier, clvl)];
         // `Bool::Mon(+)` — the designation reference as a dictionary spelling
-        // (docs/operation-indexed-classes-design.md §5.1, built in
-        // docs/operators-onto-classes-design.md §4). This is the one argument
+        // (docs/language/classes/operation-indexed-classes-design.md §5.1, built in
+        // docs/language/classes/operators-onto-classes-design.md §4). This is the one argument
         // position where a bare symbol *does* have a carrier: the qualified
         // name wrote it. A symbol the table does not cover falls through to
         // the ordinary ladder, which reports it as written.
@@ -484,7 +484,7 @@ impl Projections<'_> {
             }
         }
         // A carrier declared at a universe is the record's leading value
-        // argument (`docs/frame-locale-design.md` §3).
+        // argument (`docs/library/frame-locale-design.md` §3).
         let lead = Dictionaries(self).universe_carrier(cx, &info, &targs).ok()?;
         let gargs: Vec<(Type, Level)> = if lead.is_some() { Vec::new() } else { targs.to_vec() };
         let vargs = match Inductives(self).valparam_args_after(cx, &ind, &gargs, lead.into_iter().collect(), &written, span) {

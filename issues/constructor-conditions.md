@@ -8,7 +8,7 @@ updated: 2026-10-23
 ---
 
 Research record, waiting for a client. From the Arend survey
-(`docs/arend-survey.md` §3).
+(`docs/surveys/arend-survey.md` §3).
 
 **The idea.** Arend lets a constructor carry *conditions*: equations saying
 what it computes to at some arguments, such as `Int` with `pos(n)`,
@@ -37,7 +37,7 @@ reduced fractions if `Rat` ever wants `=` rather than `Rat::Same`.
 **What it would take.** A former with per-constructor condition clauses;
 conversion that fires a condition on canonical arguments; an eliminator
 whose branches are checked against each condition; a soundness argument
-(the groupoid model of `docs/no-uip-model.md` should interpret the type as
+(the groupoid model of `docs/kernel/no-uip-model.md` should interpret the type as
 its normal forms, given termination and confluence); code-recursor
 branches; and an export story (Lean has no such conversion, so exported
 terms would see the normal-form carrier and explicit normalisation).
@@ -50,4 +50,4 @@ terms would see the normal-form carrier and explicit normalisation).
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[interval-paths-for-funext]] (`docs/no-uip-model.md`).
+- 2026-11-05: gardener: cites a file it shares with [[interval-paths-for-funext]] (`docs/kernel/no-uip-model.md`).

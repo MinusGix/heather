@@ -1,4 +1,4 @@
-// The optimizer as the compiler runs it (docs/optimizer-design.md §3, §5.1,
+// The optimizer as the compiler runs it (docs/native/optimizer-design.md §3, §5.1,
 // §9): the stages a function goes through in turn, each with a plan or
 // none; the searches that find a function's plans; and what the compiler
 // reads of them.

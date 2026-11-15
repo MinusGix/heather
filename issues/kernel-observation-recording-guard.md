@@ -15,7 +15,7 @@ Give `withheld::record` the drop guard `unseal::Recording` has, ideally as one r
 
 There is no defect today because `withheld::record` has no caller. Its first reader is [[interface-body-early-cutoff]]. After that, a lost frame means a client replayed over a withheld body it did observe.
 
-Review: `docs/kernel-implicit-state-review.md` §6.
+Review: `docs/kernel/kernel-implicit-state-review.md` §6.
 
 ## Proposal
 

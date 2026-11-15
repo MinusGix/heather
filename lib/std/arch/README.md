@@ -15,7 +15,7 @@ arch/
     x86_64_*.hthr    blocks, fetch, calls, stores, … over that model
 ```
 
-Module names are flat file stems (docs/modules-design.md §3.2), so each
+Module names are flat file stems (docs/language/modules-design.md §3.2), so each
 module carries its architecture in its name: `x86_64_fetch.hthr` is the
 module `x86_64_fetch` for the CLI, the editor and the native builder alike.
 The loader finds it below `lib/std` without a `-L` of its own.

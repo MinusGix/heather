@@ -16,7 +16,7 @@ needs that this blocks. The milestone `nh-procedures` asks that "a
 non-tail recursive function compiles"; that holds from the builder
 (`Perform`) and not from a `runtime fn`.
 
-`docs/native-procedures-are-functions-design.md` §2.8 gives the shape:
+`docs/native/native-procedures-are-functions-design.md` §2.8 gives the shape:
 the function reflects to a procedure whose body `Perform`s itself, each
 call a statement, and it publishes its tree at a depth: the Heather
 function's value where the depth covers the recursion at that argument,

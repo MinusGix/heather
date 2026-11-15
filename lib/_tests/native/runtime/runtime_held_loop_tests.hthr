@@ -1,6 +1,6 @@
 // Probes for a loop in a function of a laid record
 // (`lib/native/runtime/rt_held_loop.hthr`; `lib/native/runtime/runtime.hthr`,
-// "A function of a laid record"; docs/layout-design.md §9.5): a `mut self`
+// "A function of a laid record"; docs/native/layout-design.md §9.5): a `mut self`
 // method that `decreases` and ends in its own call. Its code counts its
 // passes, so its function over the bytes is its body iterated as often
 // as the code goes round (`FFun::rounds`), at every span; where the span

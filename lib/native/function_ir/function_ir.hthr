@@ -58,7 +58,7 @@ inductive Node {
     SignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
     Equal(width: Nat, output: Nat, left: Nat, right: Nat),
     // A buffer's byte, on the region's state edge
-    // (docs/native-effect-source-design.md §6; issues/native-source-bytes.md):
+    // (docs/native/native-effect-source-design.md §6; issues/native-source-bytes.md):
     // the byte at the 64-bit word `index` of buffer `buffer`, zero-extended
     // to a word, or zero past the buffer's end.
     BufferLoad(output: Nat, buffer: Nat, index: Nat),
@@ -90,7 +90,7 @@ inductive Node {
     // the buffer's end reads zero, as `BufferLoad`'s does (`buffer_word`).
     // Total and defined by bytes, so a rewrite between byte loads and one
     // wide load needs no premise: whether the bytes are inside is the
-    // lowering's to know (docs/optimizer-design.md, step 5).
+    // lowering's to know (docs/native/optimizer-design.md, step 5).
     WideLoad(bytes: Nat, output: Nat, buffer: Nat, index: Nat),
     // The `8 * bytes`-bit word `value` stored from `index`, least significant
     // byte first, each byte where the buffer has one and nothing past its
@@ -660,7 +660,7 @@ fn Valuation() → Type { (width: Nat) → Nat → BitVec(width) }
 
 // The buffers a region reads: lists of bytes, named by number. A meaning
 // reads a buffer as a value and never as an address
-// (docs/native-library-exports-design.md §3); where its bytes are is the
+// (docs/native/native-library-exports-design.md §3); where its bytes are is the
 // lowering's to say.
 fn Buffers() → Type { List<List<BitVec(8)>> }
 
@@ -952,7 +952,7 @@ fn BlockArgumentsHold(values: Valuation(), arguments: BlockArguments()) → Type
 }
 
 // A view of a buffer of the scope, lent to a callee as a buffer of its own
-// (docs/native-library-exports-design.md §3.1): bytes `start` up to `end`
+// (docs/native/native-library-exports-design.md §3.1): bytes `start` up to `end`
 // of buffer `buffer`, which the callee may store into when `written`.
 // `home` is the value that is the buffer's address in the scope. `base` and
 // `length` are the two values the lend binds, the view's own home, which
@@ -1033,7 +1033,7 @@ inductive StructuredRegion {
     Loop(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
         next: List<Nat>, outputs: List<Nat>, exhausted: Nat),
     // A call of function `callee` over views of the scope's buffers
-    // (docs/native-library-exports-design.md §3.1): the callee's buffer `k`
+    // (docs/native/native-library-exports-design.md §3.1): the callee's buffer `k`
     // is view `k`, a window of a buffer of the scope, and what it stores
     // into a written view is put back into that buffer. The lend binds
     // each view's home (`views_nodes`) and passes the homes before the
@@ -1202,7 +1202,7 @@ fn LoopHolds(pass: Valuation() → Type, values: Valuation(), inputs: List<Nat>,
 // A loop whose state keeps `invariant` and whose passes that go round
 // decrease `measure` never runs out of passes while the measure is below
 // the passes left: the bound a function defined by well-founded recursion
-// compiles with (docs/native-effect-source-design.md §5.4). Its last pass,
+// compiles with (docs/native/native-effect-source-design.md §5.4). Its last pass,
 // the one that leaves, is a pass too, so the bound is the measure at entry
 // plus one, or the measure itself where it is positive at every pass.
 theorem loop_runs_unexhausted(pass: Valuation() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
@@ -1357,7 +1357,7 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
 // 64-bit word it returns. Its first `lent` buffers are lent to it by its
 // caller, each as two parameters, the base address and then the length,
 // before every other: buffer `k` is parameters `2k` and `2k + 1`
-// (docs/native-one-compiler-design.md §2.3). The meaning reads neither
+// (docs/native/native-one-compiler-design.md §2.3). The meaning reads neither
 // word as an address: a buffer is the list of bytes it is called over.
 record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0 }
 

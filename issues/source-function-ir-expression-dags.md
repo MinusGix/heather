@@ -51,7 +51,7 @@ The parameterized rail now passes at both requested scales. The source-only
 frontend checks in 20.9s at 20 nodes and 199.3s at 100 nodes. The complete x86
 artifacts check in 105.6s and 677.7s respectively. At 100 nodes reflection and
 generation remain below 150ms each; proof elaboration and checking dominate.
-The detailed breakdown is recorded in `docs/function-ir-design.md`.
+The detailed breakdown is recorded in `docs/native/function-ir-design.md`.
 
 The expanded endpoint syntax is still 7.46MB at 100 nodes; follow-up is tracked
 in [[generated-source-semantic-term-sharing]]. Remaining acceptance work here

@@ -1,6 +1,6 @@
 // Probes of the lowering of a call over views (`File::emit_lend`,
 // function_ir_lower_calls; function_ir_lower_views;
-// docs/native-library-exports-design.md §3.1): a function that lends its
+// docs/native/native-library-exports-design.md §3.1): a function that lends its
 // callee a window of its buffer to write, one that lends two windows of
 // one buffer, one to read and one to write, the code each lowers to, the
 // contract each meets at every lending of its counts, and what is

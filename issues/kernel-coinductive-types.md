@@ -15,8 +15,8 @@ words: "might as well get full proper power sooner".
 
 ## Why
 
-The interaction-tree library (`docs/itree-core-round.md`,
-`docs/itree-refinement-round.md`) is finite. Trees are cut at fuel, and a
+The interaction-tree library (`docs/itrees/itree-core-round.md`,
+`docs/itrees/itree-refinement-round.md`) is finite. Trees are cut at fuel, and a
 program is a growing family. That states safety, refinement and
 termination of deterministic programs well. It cannot state liveness over
 unbounded interaction ("every request is eventually answered"), fairness,
@@ -70,7 +70,7 @@ since July.
 
 ## Constraints from elsewhere
 
-- **Export** (`docs/export-fragment-design.md`). Lean 4's kernel has no
+- **Export** (`docs/library/export-fragment-design.md`). Lean 4's kernel has no
   coinductive types, and mathlib builds M types as limits, so an exported
   M term would arrive as option 2's construction on the Lean side, possibly
   without option 1's β rule holding definitionally. Minus (2026-10-21):
@@ -83,7 +83,7 @@ since July.
 
 ## Scope of the first round
 
-A design document (`docs/kernel-coinduction-design.md`) choosing between
+A design document (`docs/kernel/kernel-coinduction-design.md`) choosing between
 the options, with heather-coq probes for the questions above. Then a
 kernel round that adds the former, its typing and conversion rules,
 `Debug` gated by `node()` (`crates/kernel/src/fmt.rs`), and the
@@ -100,7 +100,7 @@ copatterns).
 
 ## Log
 
-- 2026-10-21: Design written, for review: `docs/kernel-coinduction-design.md`.
+- 2026-10-21: Design written, for review: `docs/kernel/kernel-coinduction-design.md`.
   Recommends option 1 in its **indexed** form (shapes depend on the index,
   children's indices computed, nothing stored), introduced by a
   **primitive corecursor** (each child a new seed or an existing tree, so
@@ -130,6 +130,6 @@ copatterns).
   random and well-typed generators and the evaluator differential. Still
   open: heather-coq's §9 Q1–Q3 (the relation, decidability, the bridge),
   the elaborator round (§10 step 4) and the library (§10 step 5).
-- 2026-10-22: Elaborator round (design §10 step 4) implemented: [[codata-elaborator]], `docs/codata-elaborator-design.md`. It needed one more kernel change: bodied term definitions at layer p in Ψ, since `M` has no codes and every declaration was bound at c. Follow-ups are [[codata-indexed]] (`Bisim`/eutt need it), [[codata-nested-guards]] and [[codata-codes]]. Next is the library (§10 step 5), milestone `it-coinductive`.
-- 2026-10-22: Codes round (design §10 step 6, brought forward): `TmM`, the four `ty_m`/`tm_m`/`tm_corec`/`tm_out` branches, and `M`/`corec`/`out` at layer c, so codata declarations are bound at c and the round-1 p-layer extension is gone (`docs/kernel-m-codes-design.md`, [[codata-codes]]).
-- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/codata-elaborator-design.md`); [[export-codata-m]] (`crates/kernel/tests/m.rs`); [[formal-power-series]] (`docs/codata-elaborator-design.md`); [[kernel-refusal-without-a-checking-site]] (`crates/kernel/src/fmt.rs`); [[tier2-fragment-extensions]] (`docs/itree-core-round.md`).
+- 2026-10-22: Elaborator round (design §10 step 4) implemented: [[codata-elaborator]], `docs/inductives/codata-elaborator-design.md`. It needed one more kernel change: bodied term definitions at layer p in Ψ, since `M` has no codes and every declaration was bound at c. Follow-ups are [[codata-indexed]] (`Bisim`/eutt need it), [[codata-nested-guards]] and [[codata-codes]]. Next is the library (§10 step 5), milestone `it-coinductive`.
+- 2026-10-22: Codes round (design §10 step 6, brought forward): `TmM`, the four `ty_m`/`tm_m`/`tm_corec`/`tm_out` branches, and `M`/`corec`/`out` at layer c, so codata declarations are bound at c and the round-1 p-layer extension is gone (`docs/kernel/kernel-m-codes-design.md`, [[codata-codes]]).
+- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/inductives/codata-elaborator-design.md`); [[export-codata-m]] (`crates/kernel/tests/m.rs`); [[formal-power-series]] (`docs/inductives/codata-elaborator-design.md`); [[kernel-refusal-without-a-checking-site]] (`crates/kernel/src/fmt.rs`); [[tier2-fragment-extensions]] (`docs/itrees/itree-core-round.md`).

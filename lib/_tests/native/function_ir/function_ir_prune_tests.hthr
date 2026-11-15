@@ -1,5 +1,5 @@
 // Probes of the pass that empties functions nothing calls
-// (lib/native/function_ir/function_ir_prune.hthr, docs/optimizer-design.md
+// (lib/native/function_ir/function_ir_prune.hthr, docs/native/optimizer-design.md
 // §3.1): a program whose calls were inlined keeps its entry and empties
 // the rest; what the pass's theorem says of the entry; and a program that
 // still calls a function the pass was told to empty, which is not closed.

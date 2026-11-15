@@ -12,7 +12,7 @@ A `runtime fn` over a span must end in `Mutated(span, value)`, in a
 `match` on a `Bool` whose arms do, or in its own call
 (`lib/native/runtime/rt_file_reflect.hthr`, the refusal "a function over a
 span ends in …"). Ending in a call of *another* computation, `g(span, …)`,
-is refused, and `docs/native-one-compiler-design.md` gave the reason as "the
+is refused, and `docs/native/native-one-compiler-design.md` gave the reason as "the
 kernel has no η for records, so the pin could not be a conversion".
 
 That reason is false. A record lowers to the Σ spine of its tag, its fields

@@ -1,4 +1,4 @@
-// Probes of `lib/std/itree/coitree.hthr` (`docs/coitree-design.md`):
+// Probes of `lib/std/itree/coitree.hthr` (`docs/itrees/coitree-design.md`):
 // observations at a literal and an open depth, generic results and events,
 // and a client's own corecursive bisimilarity with its observation equations
 // in checking position. Tests, not library: nothing outside lib/_tests

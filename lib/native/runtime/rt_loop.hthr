@@ -1,6 +1,6 @@
 // Loops in the default setup's lowering: a function that calls itself only
 // in tail position is one FunctionIR `Loop`, and its soundness is proved
-// once (docs/runtime-fn-setups-design.md §7.4, §16.10;
+// once (docs/native/runtime-fn-setups-design.md §7.4, §16.10;
 // issues/runtime-fn-default-setup.md).
 //
 // Two recursions are loops:
@@ -1119,7 +1119,7 @@ theorem Fun::fuel_sound(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: Wor
 // on in place, the rest it moves. The kept words are the homes of the spans
 // the function is lent, which the function compiler carries through a loop
 // only as the pass's own parameters (`carried_sound`,
-// docs/native-one-compiler-design.md §2.3); a function lent nothing keeps
+// docs/native/native-one-compiler-design.md §2.3); a function lent nothing keeps
 // none, and its loop is the one it was.
 //
 // Ids `0…` are the words; then the bound, the pass's state `ps` (the kept
@@ -1454,7 +1454,7 @@ theorem Fun::measured_sound(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: Tm, res
 }
 
 // ---------------------------------------------------------------------------
-// `Guarded` at every world of a family at once (docs/native-one-compiler-design.md
+// `Guarded` at every world of a family at once (docs/native/native-one-compiler-design.md
 // §2.3). A function over a lent span is one function at each file, and its
 // own `f::ext` asks its two recursions to agree at every span, because
 // `decreases` takes every parameter into the recursor, the span among them

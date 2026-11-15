@@ -40,7 +40,7 @@ files make them matter; the design doc should leave them reachable.
 ## Log
 
 - 2026-08-05: Filed; design round opens (coordinator-run, not managed).
-- 2026-08-05: Design doc landed (docs/modules-design.md). Verdict: kernel
+- 2026-08-05: Design doc landed (docs/language/modules-design.md). Verdict: kernel
   untouched (Ψ is nameless), modules are files, imports elaborate the DAG
   once into one Ψ; the name regime is unambiguous-or-qualified with
   ambiguity-at-use, no silent shadowing between modules (doc §4 has the

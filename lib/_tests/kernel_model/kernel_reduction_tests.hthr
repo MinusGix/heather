@@ -1,6 +1,6 @@
 // Probes of `lib/kernel_model/kernel_reduction.hthr`, the reference model of
 // the kernel's weak-head reduction and the substitution property the fold
-// classifier relies on (`docs/kernel-model-design.md`): the model run at
+// classifier relies on (`docs/kernel/kernel-model-design.md`): the model run at
 // literal terms by `refl`, the probe lemma applied at open values in checking
 // position, out of fuel exactly where the probe was, and the `¬` theorems
 // that each hypothesis is needed. Tests, not library: nothing outside

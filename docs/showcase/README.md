@@ -34,7 +34,7 @@ It imports the existing `Expr`, evaluator, RPN compiler, and compiler proof
 from `calc.hthr`. The grammar imports `parser`, the facade over
 `lib/std/parser/`, for source-indexed cursors, consuming composition,
 commitment and complete-input checking.
-See [the parser library](../parser-library.md) for its contracts.
+See [the parser library](../library/parser-library.md) for its contracts.
 
 ```text
 expr   := factor [ '+' expr ]
@@ -68,7 +68,7 @@ well-formed grammar derivation whose spelling is exactly the input and whose
 meaning is the returned AST. Source-indexed cursors and checked consumption
 provide recursive-call evidence. The proof-carrying recursive implementation
 projects ordinary replies for public callers. See
-[calculator grammar soundness](../calculator-grammar-soundness.md).
+[calculator grammar soundness](calculator-grammar-soundness.md).
 AST equations also check precedence, association, and nesting, including an
 open numeric payload. Characters are no longer future work — `calc_text.hthr`
 below is the same grammar over text, scannerless. General recognition
@@ -113,7 +113,7 @@ It checks in 16 s at 0.3 GiB at width one (2026-09-22), its semantic image
 publishes, so a warm recheck replays it in about a second and `--only` works,
 and it is an ordinary row of the CLI showcase test. It was 343 s and 9.8 GiB
 with an image refused as over budget until application annotations stopped
-being written (`docs/app-by-head-type-design.md`); the history is in
+being written (`docs/elaborator/app-by-head-type-design.md`); the history is in
 `issues/showcase-harness.md` and `issues/check-only-no-stored-image.md`.
 
 The entry points take a `String`: `parse`, `calculate`, `execute`.
@@ -134,7 +134,7 @@ The cap above is deliberate and the reason this file is **not yet** in
 `crates/elab/tests/showcase_calculator.rs`: it needs more than 8 GiB cold,
 which the suite's 6 GiB per-process rail refuses. The cost is not the grammar's
 shape — a record token type costs 27× the conversion misses of an inductive one
-in a controlled pair (`probes/str/p10.hthr`), which is
+in a controlled pair (`probes/str/p10.hthr@ef3961a`), which is
 `issues/elaborator-canonical-type-spelling.md` reached from the type-argument
 end, since `Cursor<Char>` and `List<Char>` instantiate the library at a record.
 `issues/sequence-parser-source.md` owns the file and
@@ -155,7 +155,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 
 | Idealized construct | What's missing | Owner |
 | --- | --- | --- |
-| `theorem compile_pushes_eval(e, rest, s)` with plain parameters | **landed 2026-09-05**: a varying parameter is generalized into the motive by the elaborator (`docs/ih-generalization-design.md`); the realized file still writes the old shape until `issues/uncurried-recursions-library-sweep.md` | closed |
+| `theorem compile_pushes_eval(e, rest, s)` with plain parameters | **landed 2026-09-05**: a varying parameter is generalized into the motive by the elaborator (`docs/tactics/ih-generalization-design.md`); the realized file still writes the old shape until `issues/uncurried-recursions-library-sweep.md` | closed |
 | `fn run(toks, s)` uncurried | **landed 2026-09-05**, same mechanism at `fn` level | closed |
 | calc steps that reassociate `++` silently | monoid laws as an ambient simp set the chain applies where they obviously fire | `issues/grind-port.md`, `issues/lemma-selection-and-search.md` |
 | `:= compile_pushes_eval(l)` (endpoints fill the arguments) | unification-driven instantiation of a calc-step justification | `issues/elab-unifier-completeness.md` (nearest) |
@@ -228,11 +228,11 @@ renamed `viaadd` for exactly that reason; the pins moved by name only.
 [`finite-sets-idealized.hthr`](finite-sets-idealized.hthr) is a separate
 client-first design sketch for relational abstraction, ahead of an implementation.
 It deliberately does not check and has no realized counterpart yet.
-[Its design analysis](../finite-set-client-design.md) works backward from the
+[Its design analysis](finite-set-client-design.md) works backward from the
 client to certificates, dependent membership transport, and proof opportunities.
 
 For a smaller introduction and syntax critique, see
-[three small transfer experiences](../three-small-transfer-experiences.md):
+[three small transfer experiences](three-small-transfer-experiences.md):
 one set function, one positive-natural function, and one rejected/repaired
 cardinality implementation. These are proposed examples, not checked programs.
 
@@ -254,7 +254,7 @@ closure and every showcase declaration run in `lib_setoid_mergeable`:
 furnace run -- scripts/test -p heather-elab --test lib_setoid_mergeable
 ```
 
-[The implementation record](../manual-mergeable-round.md) contains the gap table,
+[The implementation record](manual-mergeable-round.md) contains the gap table,
 explicit compatibility proof, and acceptance boundaries. The broader idealized
 finite-set and subtype examples are still design sketches.
 
@@ -263,7 +263,7 @@ finite-set and subtype examples are still design sketches.
 [`relational_contexts.hthr`](relational_contexts.hthr) constructs a certificate
 for `known ++ (incoming ++ incoming)`, applies a local law beneath that whole
 context, and states the extra evidence required by a surrounding observer.
-It runs in `lib_setoid_mergeable`; [the round notes](../relational-context-round.md)
+It runs in `lib_setoid_mergeable`; [the round notes](relational-context-round.md)
 explain the proof rules and remaining automation work.
 
 ```sh
@@ -275,7 +275,7 @@ scripts/showcase check relational_contexts
 [`relational_generator_input.hthr`](relational_generator_input.hthr) is ordinary
 client source for `scripts/relational-context-demo`. The driver can emit a checked
 preservation definition, expose a missing observer contract, resume with supplied
-evidence, or leave raw length unproved. [The generator round](../relational-generator-round.md)
+evidence, or leave raw length unproved. [The generator round](relational-generator-round.md)
 documents the explicit request API and its source-level prototype boundary.
 
 [`relational_generator_generated.hthr`](relational_generator_generated.hthr)
@@ -288,7 +288,7 @@ certificate. It can be checked directly as an ordinary Heather module.
 with a single goal hole. The source driver selects its proof parameter, recovers
 the shared context, and fills the hole with a checked certificate application.
 It is input to `scripts/relational-context-demo rewrite`, not a completed module
-until the driver fills that hole. [The round notes](../contextual-rewrite-round.md)
+until the driver fills that hole. [The round notes](contextual-rewrite-round.md)
 cover partial occurrences, missing observer evidence, and the bounded fragment.
 
 The [saved generated theorem](contextual_rewrite_generated.hthr) contains the
@@ -298,4 +298,4 @@ ordinary proof emitted by the driver and is independently checked.
 
 [relational_proof.hthr](relational_proof.hthr) uses a supplied idempotence proof
 inside `merge_twice` and discharges a missing observer certificate with an
-ordinary `on` clause. See [the round notes](../proof-position-relational-congruence.md).
+ordinary `on` clause. See [the round notes](proof-position-relational-congruence.md).

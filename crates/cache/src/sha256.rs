@@ -1,6 +1,6 @@
 //! SHA-256 (FIPS 180-4), first-party.
 //!
-//! `docs/cache-v1-design.md` §2 argues the choice: a cache entry is believed
+//! `docs/infrastructure/cache-v1-design.md` §2 argues the choice: a cache entry is believed
 //! at rung 1, so a collision here is a wrongly accepted proof, which puts this
 //! module in the same category as the kernel — the one place above the kernel
 //! with a trust story to protect. FNV-1a (the determinism test's hash) is 64

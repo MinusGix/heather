@@ -1,6 +1,6 @@
 // Transition systems over any step relation: runs, invariants, determinism
 // and simulation diagrams, stated once (issues/transition-systems-and-
-// simulations.md; docs/native-mathematics-survey.md §3).
+// simulations.md; docs/surveys/native-mathematics-survey.md §3).
 //
 // A transition system here is only its step relation `R: A → A → Type`;
 // what a machine, a fetched-code profile or Linux adds is which relation.

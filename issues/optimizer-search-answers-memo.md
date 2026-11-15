@@ -9,7 +9,7 @@ updated: 2026-11-14
 ---
 
 `compile-x86`'s optimizer (`crates/cli/src/native/verified.rs`, `optimize`;
-`docs/optimizer-design.md` §9.1) asks the library what to do a function and
+`docs/native/optimizer-design.md` §9.1) asks the library what to do a function and
 a stage at a time: each question is an evaluation of a search
 (`Function::find_inlined`, `find_guarded`, `find_learned_past`, …,
 `Function::fits`, `Function::lowers`), read back as text. The store

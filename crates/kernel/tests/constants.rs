@@ -292,7 +292,7 @@ fn the_global_operations_skip_what_they_would_not_change() {
 }
 
 /// A numeral as deep as the stack is not: the bound of a long data spine is
-/// computed from the bottom up (`docs/deep-term-walks-design.md`).
+/// computed from the bottom up (`docs/kernel/deep-term-walks-design.md`).
 #[test]
 fn the_global_bound_of_a_deep_spine_does_not_recurse_its_length() {
     let head = Rc::new(Term::GlobalTm {

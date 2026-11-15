@@ -40,7 +40,7 @@ fn Odd(n: Nat) -> Type {
 ```
 
 `Even`/`Odd` are **propositional and reducing**, like `Le`
-(`docs/nat-order-design.md` §1): `Even(4)` unfolds to `True` so the proof is
+(`docs/library/nat-order-design.md` §1): `Even(4)` unfolds to `True` so the proof is
 `trivial`, and `¬ Even(7)` is the hypothesis itself. No `Bool` appears in the
 statement of anything — the parity *decision* can come later as an `even_dec`
 returning `Or<Even(n), ¬ Even(n)>`, mirroring `le_dec`, with a value-generic

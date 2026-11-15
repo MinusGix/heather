@@ -1,6 +1,6 @@
 // exp, sin and cos at rational arguments, as the limits of their Taylor
 // series (issues/interval-elementary-functions.md;
-// docs/floating-point-design.md §16, "Series").
+// docs/library/floating-point-design.md §16, "Series").
 //
 // Each is a `Series` by the ratio of consecutive terms:
 //

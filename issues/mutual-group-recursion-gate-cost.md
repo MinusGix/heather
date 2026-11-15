@@ -107,7 +107,7 @@ next, so the issue stays open.
 functions are generated definitions (`D#iarity`, `D#iout`, `D#ichild`), and
 the step's ih type is spelled with a fourth (`D#idnth`), so a member wrapper
 or a convoy motive carries a handful of references where it carried the
-Θ(m²) trees (`docs/iwf-named-signature-design.md`). `heather check
+Θ(m²) trees (`docs/inductives/iwf-named-signature-design.md`). `heather check
 --timings`, release, width one, cloud box, `size0` total / gate, and the
 whole file:
 

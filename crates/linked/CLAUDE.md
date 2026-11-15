@@ -12,7 +12,7 @@ repository root.
   the Rust declarations with them (`generated/exports.rs`, never edited:
   `crates/cli/tests/linked_exports.rs`).
 - **`compile-x86` runs the optimizer** over a program that is lent spans
-  (inline, then tidy: `docs/optimizer-design.md` §9.1), so the assembly here
+  (inline, then tidy: `docs/native/optimizer-design.md` §9.1), so the assembly here
   is the optimised program's. `HEATHER_OPTIMIZE=off` compiles without it, to
   measure a pass or to tell a refusal of the passes from the lowering's;
   never check in what it writes.

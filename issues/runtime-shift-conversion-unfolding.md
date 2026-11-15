@@ -21,7 +21,7 @@ argument by argument.
 Shifts by realistic counts compile, rotations among them
 (`examples/x86-native/shifts.hthr`), and a lone large count does too
 (`shifts_past.hthr`). Found in the i64 round 3
-(docs/runtime-fn-setups-design.md §16.13).
+(docs/native/runtime-fn-setups-design.md §16.13).
 
 ## Directions
 

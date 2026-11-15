@@ -6,7 +6,7 @@ created: 2026-09-26
 updated: 2026-09-28
 ---
 
-`bv_omega`'s first slice (docs/bv-omega-design.md §4) takes words apart through
+`bv_omega`'s first slice (docs/tactics/bv-omega-design.md §4) takes words apart through
 `add`, `sub`, `ofNat`, `word_of_nat` and the definitions that step to them.
 `lib/decimal_line.hthr` still does three kinds of word step by hand:
 

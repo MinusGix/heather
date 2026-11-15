@@ -1,5 +1,5 @@
 // SHA-512's word functions as compiled code (issues/sha2-compress-native.md,
-// stage C1 of docs/native-lexer-crypto-roadmap.md, at the machine's own
+// stage C1 of docs/native/native-lexer-crypto-roadmap.md, at the machine's own
 // width first).
 //
 // Three functions hold all of the compression function's arithmetic: `T1`

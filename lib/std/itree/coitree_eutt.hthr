@@ -1,5 +1,5 @@
 // Equivalence up to silent steps on coinductive trees
-// (docs/coitree-design.md §7; issues/coitree-eutt.md, milestone
+// (docs/itrees/coitree-design.md §7; issues/coitree-eutt.md, milestone
 // `it-coinductive`).
 //
 // Strong bisimilarity (`Bisim`, `coitree`) matches the two trees step for
@@ -653,7 +653,7 @@ fn Eutt::iter_unfold<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) �
 
 // `Eutt` is an equivalence, so a relation `rewrite(h, e)` with `h : Eutt(t, u)`
 // rewrites inside an `Eutt` goal and chains each side's step into it
-// (docs/equation-rewrite-design.md §9, §11).
+// (docs/tactics/equation-rewrite-design.md §9, §11).
 //
 // `Eutt<R>(E)` is a codata family, which an expression cannot apply to fewer
 // than its indices; `Eutt::Rel` names it as a relation, and converts with
@@ -721,7 +721,7 @@ evidence theorem Eutt::iter_respects<A, B>({E: Events}, {a: A}):
 //
 // Each lemma below reads one constructor of its relation arguments and calls
 // itself on their children, so it is a *friend* of `Eutt`
-// (docs/codata-elaborator-design.md §5.6): a corecursive proof may call
+// (docs/inductives/codata-elaborator-design.md §5.6): a corecursive proof may call
 // itself under it, which is coinduction up to that lemma. `Eutt::trans`
 // itself is no friend and must not be one (`spin ≈ CTau(CRet(0))` would
 // close as `ETau(0, 0, spin, CRet(0), refl, refl, trans(self, tau_l))`,

@@ -1,5 +1,5 @@
 // What a caller that places its own buffers hands a function it calls
-// (docs/native-one-compiler-design.md §2.3): the homes of the buffers the
+// (docs/native/native-one-compiler-design.md §2.3): the homes of the buffers the
 // function is lent, each an address then a length, before its words.
 //
 // A program states its call with no address (`program_writers`,

@@ -1,4 +1,4 @@
-// A record under a prefix generator (docs/value-definitions-design.md §3.5).
+// A record under a prefix generator (docs/metaprogramming/value-definitions-design.md §3.5).
 laid record Meters { value: u32 }
 
 laid(endian := BigEndian, order := AsWritten) record Header { tag: u8, length: u64, flags: [u16; 3] }

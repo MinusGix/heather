@@ -48,7 +48,7 @@ lowering documents describe:
   types;
 - recursive fields, so tier 1's path is covered too (a `Wf`'s shape, arity
   and children tuple all have their own shift arithmetic —
-  `docs/inductive-tier1-wf-lowering.md` §5, §6.2).
+  `docs/inductives/inductive-tier1-wf-lowering.md` §5, §6.2).
 
 ## The oracle, and why it is not just "it elaborates"
 
@@ -84,4 +84,4 @@ guessing which malformed encodings the kernel would happen to reject.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[guard-matches-self-calls-by-term]] (`docs/inductive-tier1-wf-lowering.md`); [[nested-inductives-container-fields]] (`docs/inductive-tier1-wf-lowering.md`).
+- 2026-11-05: gardener: cites a file it shares with [[guard-matches-self-calls-by-term]] (`docs/inductives/inductive-tier1-wf-lowering.md`); [[nested-inductives-container-fields]] (`docs/inductives/inductive-tier1-wf-lowering.md`).

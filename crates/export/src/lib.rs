@@ -1,5 +1,5 @@
 //! Export of checked kernel declarations to Lean 4 and Rocq (Coq), through
-//! one target-neutral intermediate language (`docs/export-fragment-design.md`).
+//! one target-neutral intermediate language (`docs/library/export-fragment-design.md`).
 //!
 //! Prototype scope, stated by what it refuses: the translation is
 //! syntax-directed over kernel terms, total on the *layer-free* fragment

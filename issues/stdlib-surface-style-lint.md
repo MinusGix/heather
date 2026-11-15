@@ -117,7 +117,7 @@ rewrite that would change which later argument participates in inference.
   notation in signatures, motives, and proofs. Structural relation instance
   keys remain named where designation-headed keys are unsupported. The
   connective control succeeded: `Decide<¬P>` registers and resolves, so parser
-  connectives do not share that boundary. `docs/stdlib-style.md` records the
+  connectives do not share that boundary. `docs/library/stdlib-style.md` records the
   rules and semantic exemptions. Full suite: 1,980 passed, 0 failed. The issue
   stays open for the provenance-aware lint and generated-fixture policy.
 - 2026-08-20: Follow-up review tightened `¬(...)`, adopted argument slots for
@@ -144,4 +144,4 @@ rewrite that would change which later argument participates in inference.
   remaining executable chains in Nat/Int; all three now use one argument list.
   This issue remains open for provenance-aware designated-operator spelling.
 - 2026-09-16: [[heather-formatter]] takes the whitespace half (the tight-comma spelling in lib/std/parser, 1,741 of the library's 1,790 occurrences). It decides nothing about which spelling is idiomatic, which stays here.
-- 2026-11-05: gardener: cites a file it shares with [[stdlib-doc-comment-audit]] (`docs/stdlib-style.md`).
+- 2026-11-05: gardener: cites a file it shares with [[stdlib-doc-comment-audit]] (`docs/library/stdlib-style.md`).

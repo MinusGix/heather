@@ -1,4 +1,4 @@
-//! `bv_omega`: word arithmetic lifted to Nat (docs/bv-omega-design.md).
+//! `bv_omega`: word arithmetic lifted to Nat (docs/tactics/bv-omega-design.md).
 //!
 //! A generator, not a solver. It finds every `toNat` of a word in the goal
 //! and in the facts in scope, takes each word apart through `add`, `sub`,

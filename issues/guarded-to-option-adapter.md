@@ -8,7 +8,7 @@ updated: 2026-08-17
 ---
 
 Filed from the datarepr design review (2026-08-14, user note on
-docs/datarepr-design.md sec. 2.2): a guarded total function
+docs/native/datarepr-design.md sec. 2.2): a guarded total function
 `nth_g(l, i, h: i < len(l)) -> A` should not need a hand-written twin
 `nth -> Option<A>` — the Option/Result face is derivable by an ADAPTER
 (helper fn or syntax): decide the precondition; None on failure, otherwise

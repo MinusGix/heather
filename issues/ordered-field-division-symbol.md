@@ -9,7 +9,7 @@ updated: 2026-11-06
 ---
 
 `/` and `⁻¹` are designated at `Rat` and `CReal` with a searched
-apartness (docs/division-design.md), each carrier restating the same
+apartness (docs/library/division-design.md), each carrier restating the same
 definitions, laws and sign rules. The generic classes have
 `OrderedField::recip(x, h)` but no symbol, so a section over
 `A: OrderedField(…)` writes `x * A.recip(x, h)` and passes `h` by hand.
@@ -19,7 +19,7 @@ Wanted, in order:
 1. `⁻¹` and `/` inside a section over an ordered field, at the
    dictionary's `recip` with `h: ApartBy(<, x, A.unit) := infer` (needs a
    designation, or a binder symbol, for a postfix operator and a defaulted
-   proof at a class carrier; docs/operators-onto-classes-design.md).
+   proof at a class carrier; docs/language/classes/operators-onto-classes-design.md).
 2. The division laws (`div_mul_cancel`, `div_respects`, `add_div`, …)
    and the sign rules stated once there, with `Rat`/`CReal` reading them
    through the instance; the carrier copies then go.

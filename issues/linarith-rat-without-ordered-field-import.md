@@ -30,7 +30,7 @@ numerator-denominator reading, which is nonlinear.
 - Or have `rat` re-export what `linarith` needs at `Rat`, so importing the
   carrier and the tactic is enough.
 
-Found writing lib/std/locale/real_locale.hthr (docs/localic-reals-design.md §8).
+Found writing lib/std/locale/real_locale.hthr (docs/library/localic-reals-design.md §8).
 
 ## Log
 

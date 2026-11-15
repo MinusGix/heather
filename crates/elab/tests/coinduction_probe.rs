@@ -1,5 +1,5 @@
 //! Coinductive trees without a kernel change: the library probe of
-//! `docs/kernel-coinduction-design.md` §3 (`issues/kernel-coinductive-types.md`).
+//! `docs/kernel/kernel-coinduction-design.md` §3 (`issues/kernel-coinductive-types.md`).
 //! The source is `tests/fixtures/coinduction_probe.hthr`; it is a probe, not a
 //! library module, so nothing imports it outside this file.
 //!

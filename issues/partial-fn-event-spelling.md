@@ -9,7 +9,7 @@ updated: 2026-11-06
 ---
 
 Since [[partial-fn-tail-iter]], a `partial(E) fn` has two shapes
-(docs/partial-functions-design.md §10 item 4):
+(docs/language/partial-functions-design.md §10 item 4):
 
 - **tail-only** (no self-call under `<-`): `f#body` is a pass over `E`
   itself, so a command is `CoTree::trigger(E, c)`;

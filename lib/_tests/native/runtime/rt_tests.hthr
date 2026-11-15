@@ -1,6 +1,6 @@
 // Probes of the reflected language `rt` (`lib/native/runtime/rt.hthr`) and
 // its reflector (`rt_reflect.hthr`): the verification items V1–V5 of
-// docs/runtime-fn-setups-design.md §12. Each example states its reflection
+// docs/native/runtime-fn-setups-design.md §12. Each example states its reflection
 // twice, once checked against the reflector's output from the real
 // elaborated body (`reflects_as`) and once pinned to the function by `refl`
 // (`<f>_reflects`), the pin a `runtime fn` publishes. Tests, not library:

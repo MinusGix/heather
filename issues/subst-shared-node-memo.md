@@ -17,7 +17,7 @@ a shared value comes back from the shift as a tree. This is cause 2 of
 [[kernel-typing-memo-on-node-identity]]'s reach section asks for it to be
 named or filed: the typing memo cannot share what the shift has already
 copied apart. mengine, a λ-DAG proof engine, keeps the same memo on by
-default for this reason (`docs/mengine-survey.md` §3.2). It has no shift at
+default for this reason (`docs/surveys/mengine-survey.md` §3.2). It has no shift at
 all; the memo is how an indexed kernel gets the same property.
 
 ## The proposal
@@ -76,4 +76,4 @@ would show.
     - **End to end** (release, width one, `--timings`, whole `chain` item including the gate): the interleaved probe at k = 8/12 went 5,058 → 1,242 and 81,834 → 16,854 local visits. What is left is the gate's own walk, one per path: `queries` are unchanged (1,032 / 16,396), as they must be until [[kernel-typing-memo-on-node-identity]] lands. That issue's Reach now holds: aliases used under binders reach the gate as shared nodes.
     - **On a real workload**: `heather check lib/native/native_cat_executable.hthr --cache`, master's binary against this one (release, width one, cold verdicts): `queries` identical on every item, and no item's count goes up. `shift_global_nodes` fell 1.12G → 274M summed over items (the global rescoping's own share of shared nodes), and 428 items trade a few `conv_misses` and eval steps for `conv_memo_hits`, since more of what reaches the gate is shared. Seconds are not measured here (one cold sample each on the cloud box).
   - **Acceptance 2/3**: `scripts/bench --check --filter subst` and `--filter nat` pass shape-only on the cloud box (the baseline is another CPU and toolchain, so no time verdict); the 300-seed substitution laws pass in the suite unchanged.
-  - Not done, with owners: `rewrite`'s abstraction walk (`AbstractLocal`) is still a tree walk; a memo for it must number occurrences of a shared subterm, which is the bottom-up design of `docs/mengine-survey.md` §4.3. Module images (`put_term`) still write trees; nothing has measured one as tree-blown (this issue's Reach).
+  - Not done, with owners: `rewrite`'s abstraction walk (`AbstractLocal`) is still a tree walk; a memo for it must number occurrences of a shared subterm, which is the bottom-up design of `docs/surveys/mengine-survey.md` §4.3. Module images (`put_term`) still write trees; nothing has measured one as tree-blown (this issue's Reach).

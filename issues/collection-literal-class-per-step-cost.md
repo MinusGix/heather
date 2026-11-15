@@ -20,7 +20,7 @@ the same one in every corpus file:
 each step is 60–100× the file's median, so the time is in what a step
 *touches*, not in how many there are. The class is telescoped and its spine
 is dependent (`fromLiteral` mentions `element`;
-`docs/telescoped-record-projections-design.md`), so a large type rebuilt or
+`docs/elaborator/telescoped-record-projections-design.md`), so a large type rebuilt or
 compared per step is the first suspect, not a proven one.
 
 It is small in absolute terms, but it is in the **prelude**, so every check

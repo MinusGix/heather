@@ -1,7 +1,7 @@
 # First real program: `wc -l` as a certified static executable — design
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **slices A–C landed 2026-09-24 (§8): `wc -l` builds as a certified
@@ -249,7 +249,7 @@ application template.
 
 ## 7. Verification items — results (2026-09-24)
 
-Probed on `probes/fp/*.hthr` with the release CLI (≈8 s load baseline).
+Probed on `probes/fp/*.hthr@ef3961a` with the release CLI (≈8 s load baseline).
 
 - **V1: holds.** `count_native<M>` is generic in `M` and returns an
   `AccessArtifact` plus `LoopObserved` against `count_occurrences`, so it
@@ -392,7 +392,7 @@ missing, and both are general:
   composed results, leaving `SETcc` its byte registers.
 - **Certificates that cost what their links cost.** A 16-link chain's
   certificate ran out of kernel fuel at every level from about the sixth.
-  Attributed item by item (probes under `probes/dec`), there were four
+  Attributed item by item (probes under `probes/dec@ef3961a`), there were four
   mechanisms, each fixed at the generator:
   1. A comparison's one-bit value was spelled `cons_bit(k, lt(…), zero(k))`
      where `NodeHolds` says `ofBool(lt(…))`; reconciling the two evaluated the

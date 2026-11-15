@@ -59,7 +59,7 @@ only when the new shared interface needs them.
 ## Integration boundary
 
 The source/IR contract is now concrete in `function_ir_loop.hthr` (see
-`docs/function-ir-readonly-loops.md`). It supplies a typed `ReadonlyLoop<C>`
+`docs/native/function-ir-readonly-loops.md`). It supplies a typed `ReadonlyLoop<C>`
 body reference and one `loop_run` evaluator. This issue must lower that checked
 body through shared regions before physical selection; a resolved source name
 is not a selected body or a physical certificate. The first source clients

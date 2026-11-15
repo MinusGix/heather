@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §3.5: prove hypergeometric finite-sum
+`docs/library/analysis-foundations-design.md` §3.5: prove hypergeometric finite-sum
 identities by checked certificates (Gosper, Zeilberger, Wilf–Zeilberger
 pairs; *A = B*), the analysis counterpart of `omega` and `ring`.
 

@@ -1,5 +1,5 @@
 // `rt`'s computations over a written span, lowered to FunctionIR
-// (docs/native-one-compiler-design.md §2.6, U4 step 4c): `FTm::lower`, and
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4c): `FTm::lower`, and
 // the theorem that the code it builds **runs** to the computation's
 // meaning, the file threaded (`StructuredRegion::run`): the value at the
 // result port, and the file the meaning's span over the rest.

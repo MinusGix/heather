@@ -25,4 +25,4 @@ A `mut self` method is a row of `EXPORTS.tsv` under a symbol, linked and called 
 
 ## Log
 
-- 2026-11-12: Built on PR #551's branch: a row names the function by its path and is exported under a symbol (derived, `Type::method` as `type_method` in snake case, or written `sym = Type::method`); compile-x86 --symbol; heather linked-exports --rows; two rows with one symbol refused by name. First row: List::raise_letters (native_tool_spans) as list_raise_letters, held to raise_span's reference in crates/linked/tests/spans.rs. docs/native-library-exports-design.md §6.4.
+- 2026-11-12: Built on PR #551's branch: a row names the function by its path and is exported under a symbol (derived, `Type::method` as `type_method` in snake case, or written `sym = Type::method`); compile-x86 --symbol; heather linked-exports --rows; two rows with one symbol refused by name. First row: List::raise_letters (native_tool_spans) as list_raise_letters, held to raise_span's reference in crates/linked/tests/spans.rs. docs/native/native-library-exports-design.md §6.4.

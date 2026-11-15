@@ -24,7 +24,7 @@ The goal as written does not, and its exposed form (`matching::expose`, one
 neither spelling has a subterm with the left side's head. The note on the
 error, "as written or one unfolding of it", promises more than the search
 does. Found while testing mutual recursion over a mutual family
-(`docs/mutual-inductive-design.md` §7), where the same happens one δ-step
+(`docs/inductives/mutual-inductive-design.md` §7), where the same happens one δ-step
 further away; the tests there use a congruence lemma checked by conversion
 instead.
 

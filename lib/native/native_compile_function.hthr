@@ -1,4 +1,4 @@
-// A function called from a program (docs/native-one-compiler-design.md
+// A function called from a program (docs/native/native-one-compiler-design.md
 // §2.2): the code `Prog::function_call` emits runs as the `Call` region's
 // meaning, given the functions' contracts.
 //
@@ -32,7 +32,7 @@
 // (`Target::in_memory`): the region's claim places them in the data
 // region, which lies below the stack and is the program's to write,
 // so the lending laws hold of them under it (`Target::loan`,
-// docs/native-one-compiler-design.md §2.6).
+// docs/native/native-one-compiler-design.md §2.6).
 import native_source;
 import native_structured;
 import native_structured_meaning;

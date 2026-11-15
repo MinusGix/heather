@@ -2,7 +2,7 @@
 // function, the constructors' injectivity and apartness, and the list of all
 // its elements. `Fin(n)` reduces to `Empty` or `Unit + Fin(k)`, so a `match`
 // on an index is written under a `match` on the length
-// (docs/surface-fin-indexing-design.md §1.2); every recursion here is on `n`.
+// (docs/language/surface-fin-indexing-design.md §1.2); every recursion here is on `n`.
 
 import logic;
 import nat;

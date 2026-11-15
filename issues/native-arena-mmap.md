@@ -9,7 +9,7 @@ updated: 2026-11-02
 ---
 
 A native arena today is a `Source` buffer in the data segment, sized when the
-program is written (docs/native-heap-arena-design.md §1, §5). Growing one at
+program is written (docs/native/native-heap-arena-design.md §1, §5). Growing one at
 run time is `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS,
 -1, 0)`.
 
@@ -22,7 +22,7 @@ run time is `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS,
   is new to the compiler: every buffer's address is fixed by the layout today.
 - What the compiler's theorem then needs about two regions of machine memory
   at once: [[wp-view-separating-product]]'s footprints, and the permission
-  change `docs/byte-memory-design.md` §7 describes.
+  change `docs/native/byte-memory-design.md` §7 describes.
 
 `native_arena`'s laws are about the arena's bytes wherever they live, so
 nothing there changes.

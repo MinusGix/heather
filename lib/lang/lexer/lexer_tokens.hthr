@@ -1,7 +1,7 @@
 // Heather's scanner over a whole source: the loop around the automaton of
 // `lexer_scan.hthr`, as a function the kernel evaluates
 // (issues/heather-lexer-evaluated.md, stage L0 of
-// docs/native-lexer-crypto-roadmap.md §3, the scanner's half of it).
+// docs/native/native-lexer-crypto-roadmap.md §3, the scanner's half of it).
 //
 // `Scanned::of(source)` is the tokens of a source: for each, its kind and
 // the bytes it spans, whitespace and comments dropped, and an end-of-file

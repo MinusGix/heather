@@ -1,4 +1,4 @@
-// Probes of `lib/std/itree/itree_sim.hthr` (`docs/itree-simulation-design.md`):
+// Probes of `lib/std/itree/itree_sim.hthr` (`docs/itrees/itree-simulation-design.md`):
 // loops at a literal and an open state, generic events throughout, each pass's
 // simulation in checking position. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5). Moved from

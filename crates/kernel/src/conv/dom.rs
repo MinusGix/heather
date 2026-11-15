@@ -1,5 +1,5 @@
 //! The **comparison domain**: the boundary through which [`super::Conv`]'s
-//! arms reach their inputs (docs/nbe-conversion-design.md §13, stage 2a).
+//! arms reach their inputs (docs/kernel/nbe-conversion-design.md §13, stage 2a).
 //!
 //! Conversion is a structural comparison of two weak head normal forms. *What
 //! a weak head normal form is* is the only thing that changes when the checker
@@ -261,11 +261,11 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     // The stored Π / Σ annotations are not part of these views: the typed
     // application and projection rules read the head's inferred type
     // instead, so the view never builds closures for them. `levels` is `None`
-    // for the checked spelling `app@` (docs/app-by-head-type-design.md §4),
+    // for the checked spelling `app@` (docs/elaborator/app-by-head-type-design.md §4),
     // for the reason given at `Fst` below.
     App { levels: Option<(&'a Level, &'a Level)>, fun: D::TmC, arg: D::TmC },
     // `levels` is `None` for the checked spellings `fst@` / `snd@`
-    // (docs/intro-by-type-design.md), which store no levels at all — their
+    // (docs/elaborator/intro-by-type-design.md), which store no levels at all — their
     // annotation is one whole type and finding the levels inside it would
     // mean reducing, which a view may not do. The arms read them as a
     // redundant cross-check on the *component* spelling and take the real
@@ -521,7 +521,7 @@ pub(super) trait Dom<'v>: Sized {
     /// this so that two vectors at a canonical length are compared by length
     /// and element once, instead of through the `Σ` encoding both reduce
     /// to, which repeats the element comparison per level
-    /// (docs/wf-former-design.md §5).
+    /// (docs/kernel/wf-former-design.md §5).
     fn vec_former(cv: &Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> Option<(Level, Self::TyC, Self::TmC)>;
     fn view_tm<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Tm) -> TmView<'a, 'v, Self>;
     /// The weak head form of a sub-structure that is **already** in weak head
@@ -795,7 +795,7 @@ pub(super) trait Dom<'v>: Sized {
     /// Decide two values at a Σ the `Vec` type rule produced by comparing a
     /// common prefix of their **bits** as a machine word, instead of taking
     /// the chain one η-projection at a time
-    /// (`docs/native-bitvector-values-design.md` §7).
+    /// (`docs/kernel/native-bitvector-values-design.md` §7).
     ///
     /// `Ok(None)` means only that this domain — or this Σ, or these values —
     /// has no word to compare; the ordinary η arm follows and decides exactly
@@ -1522,7 +1522,7 @@ impl<'v> Dom<'v> for Syn {
             },
 
             // The checked spellings view exactly as the forms they spell
-            // (docs/intro-by-type-design.md §9.0 item 3): the annotation is
+            // (docs/elaborator/intro-by-type-design.md §9.0 item 3): the annotation is
             // not part of any of these views, so there is nothing to see
             // through and nothing to reduce. This is also what makes
             // `inl@(T;a)` and `inl(A;B;a)` convertible without a new arm.

@@ -10,7 +10,7 @@ updated: 2026-11-09
 
 A reordering pass that consumes `Writes` facts (`docs/compilation-vision.md`
 §3.2) needs to know that operations with disjoint footprints commute and
-that a reordered sequence means the same. `docs/native-mathematics-survey.md`
+that a reordered sequence means the same. `docs/surveys/native-mathematics-survey.md`
 §8; survey rank 10.
 
 ## Scope

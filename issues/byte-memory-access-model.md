@@ -58,7 +58,7 @@ normal-access theorems.
   loads/stores by accident.
 - 2026-10-21: Landed as `lib/std/machine/memory.hthr`, with `lib/std/data/vector.hthr` (`snoc`,
   `reverse`) and `lib/std/bitvec/bitvec_bytes.hthr` (packing). The design is in
-  `docs/byte-memory-design.md`, which says where the model sits in the
+  `docs/native/byte-memory-design.md`, which says where the model sits in the
   program-logic redesign. The showcase is `docs/showcase/memory_client.hthr`
   and the controls are `crates/elab/tests/lib_std_memory.rs`. Against the
   acceptance:

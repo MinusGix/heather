@@ -1,7 +1,7 @@
 // Division over the ordered-field classes: `x⁻¹` and `a / b` inside a
 // section over `OrderedField(≈, <, <=, +, *)`, at a searched apartness from
 // zero, with the laws and the sign rules stated once
-// (docs/division-design.md §6, issues/ordered-field-division-symbol.md).
+// (docs/library/division-design.md §6, issues/ordered-field-division-symbol.md).
 //
 // The decision is `Rat`'s and `CReal`'s: no junk value. `x⁻¹` is
 // `OrderedField::inv(x, h)`, the dictionary's `recip` at `h:
@@ -191,7 +191,7 @@ evidence theorem OrderedField::invertible_div({a, b: A}, {h: b.Invertible()}, ha
 }
 
 // ---------------------------------------------------------------------------
-// Arithmetic, last (docs/division-design.md §2 step 4): search rules, tried
+// Arithmetic, last (docs/library/division-design.md §2 step 4): search rules, tried
 // after every plain rule failed and never inside an arithmetic tactic's own
 // run. `nlinarith` reads the caller's hypotheses. At the sign rules' leaves a
 // sum (subtraction is a sum with a negation here) is `nlinarith`'s, and a

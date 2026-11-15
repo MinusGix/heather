@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-27
 ---
 
-Round 2 of `docs/native-real-programs-plan.md` (§3.2, §6). Measured on
+Round 2 of `docs/native/native-real-programs-plan.md` (§3.2, §6). Measured on
 master `aee4a09`: `write-elf` of cat with its pass inlined twice (about 1.7×
 cat's code) peaks at about a third of the suite's 6 GiB rail. Inlined four
 times (about 3×), it aborts under the 8 GiB direct-run rail

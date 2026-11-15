@@ -22,7 +22,7 @@ allows.
 - Points are streams. A continuous function on streams given on generators is
   then uniformly continuous as a program: a modulus read off the cover. This
   bears on `CoTree`, interaction trees and anything that consumes input
-  lazily (docs/localic-reals-design.md §7).
+  lazily (docs/library/localic-reals-design.md §7).
 - Binary expansions map Cantor space onto `[0, 1]`: a second proof of the
   interval's compactness and a test of maps between presented locales.
 

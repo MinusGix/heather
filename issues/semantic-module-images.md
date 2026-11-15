@@ -15,7 +15,7 @@ warm (573 cache hits). Splitting its acceptance matrix restores the process
 rail but pays that prefix in five binaries and does not scale to a compiler,
 larger architecture models, or proof-heavy downstream projects.
 
-Implement `docs/semantic-module-images-design.md`: first make the complete
+Implement `docs/infrastructure/semantic-module-images-design.md`: first make the complete
 committed-state boundary an explicit in-memory image with isolated suffix
 forks, then freeze per-module deltas, persist them under source/dependency and
 semantic fingerprints, and load them without parsing or elaborating unchanged

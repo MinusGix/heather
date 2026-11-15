@@ -1,5 +1,5 @@
 // Probes for an array field in a function of a laid record
-// (`lib/native/runtime/rt_held_reflect.hthr`, docs/layout-design.md §9.5):
+// (`lib/native/runtime/rt_held_reflect.hthr`, docs/native/layout-design.md §9.5):
 // an array whose elements' codec has an accessor is read and stored an
 // element at a time, at a literal index, each element where its part of
 // the record lies. Nothing here is proved by hand: each theorem reads

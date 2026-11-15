@@ -15,7 +15,7 @@ whether it is of the goal type (`checks_at`). That is how #387 surfaced
 `mono` search costs gigabytes ([[mono-failure-under-upcast-cost]]).
 Meanwhile rewrite (`rewrite.rs` `match_spine`, repeated binders by
 conversion) and the host's `match_at` are further matchers with their own
-policies (docs/elaborator-principles-survey.md §4).
+policies (docs/elaborator/elaborator-principles-survey.md §4).
 
 ## Proposal
 

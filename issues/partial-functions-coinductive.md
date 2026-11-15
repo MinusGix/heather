@@ -15,7 +15,7 @@ statements (the itree rounds).
 ## Scope
 
 - `partial fn` lowers into the coinductive tree library: a `Delay`, or an
-  `ITree` with no events (`docs/coitree-design.md`). Its theorems are about
+  `ITree` with no events (`docs/itrees/coitree-design.md`). Its theorems are about
   convergence, through the coinductive↔fuelled bridge (`coitree_bridge.hthr`).
 - `runtime fn` programs that loop until EOF or forever use it
   ([[runtime-fn-default-setup]]).
@@ -35,7 +35,7 @@ formatter is not a customer: its fuel is a termination witness, which
 
 ## Log
 
-- 2026-10-31: Assessed in `docs/partial-functions-design.md`. The
+- 2026-10-31: Assessed in `docs/language/partial-functions-design.md`. The
   coinductive library already has everything except `CoTree::rec`. A probe
   builds it as a loop over the pending tree (`iter`, Coq's `interp_mrec`):
   its unfolding laws hold by `refl` at open arguments, runs at literals check
@@ -62,8 +62,8 @@ formatter is not a customer: its fuel is a termination witness, which
   `Ω` never returns, which needs a lemma saying a λ's only reduct is itself.
 - 2026-11-03: Round 2 is now [[partial-fn-surface]], and round 3 (runtime loops) is
   [[effectful-loops-without-passes]], after Minus decided that loops over a
-  world mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md` §4).
-- 2026-11-03: Round 2 built ([[partial-fn-surface]], closed): `partial fn` and `while` with no measure; docs/partial-functions-design.md §9. The tail case to `CoTree::iter` is [[partial-fn-tail-iter]], which round 3 (partial `runtime fn` loops) wants.
+  world mean `Io → Partial<Mutated<Io, R>>` (`docs/language/effects-capabilities-design.md` §4).
+- 2026-11-03: Round 2 built ([[partial-fn-surface]], closed): `partial fn` and `while` with no measure; docs/language/partial-functions-design.md §9. The tail case to `CoTree::iter` is [[partial-fn-tail-iter]], which round 3 (partial `runtime fn` loops) wants.
 - 2026-11-04: Round 3's customer half done ([[effectful-loops-without-passes]], closed): `Io::tac`, `Io::sort`, `Io::cat` and `Io::write_all` are `while` loops with no measure, meaning `Io → Partial(Mutated<Io, R>)`, and a `Source`'s `Repeat` has a fuel-free denotation (`native_source_co`). Still left for partial `runtime fn` loops: the setup lowering them (R6) and [[partial-fn-tail-iter]].
-- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/coitree-design.md`).
-- 2026-11-06: [[partial-fn-tail-iter]] done: a tail-only `partial fn` is `CoTree::iter` of a pass, proved with `CoTree::iter_sound` (docs/partial-functions-design.md §10). Left for partial `runtime fn` loops: the setup lowering them (R6).
+- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/itrees/coitree-design.md`).
+- 2026-11-06: [[partial-fn-tail-iter]] done: a tail-only `partial fn` is `CoTree::iter` of a pass, proved with `CoTree::iter_sound` (docs/language/partial-functions-design.md §10). Left for partial `runtime fn` loops: the setup lowering them (R6).

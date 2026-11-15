@@ -6,13 +6,13 @@ created: 2026-08-18
 updated: 2026-08-20
 ---
 
-Found by the [[named-arguments]] round (docs/named-arguments-design.md §7 and
+Found by the [[named-arguments]] round (docs/language/named-arguments-design.md §7 and
 §12.1), which needed parameter *names* off a value head and discovered the
 boundary is not where it looks.
 
 `skel_of_ty` (`crates/elab/src/lib.rs`) returns `Some(Skel)` only when the
 written type carries an **implicit mark** somewhere — that is
-`docs/implicit-binders-design.md` §3.1's deliberate sparseness rule, "existing
+`docs/language/implicit-binders-design.md` §3.1's deliberate sparseness rule, "existing
 declarations store nothing new". A `SkelBinder` carries `name: Option<String>`,
 so the names are *available* in the syntax; they are simply not stored when
 nothing else about the type needed storing.

@@ -1,4 +1,4 @@
-//! Probe for `docs/host-elaboration-interface-design.md` §9: the tactic
+//! Probe for `docs/metaprogramming/host-elaboration-interface-design.md` §9: the tactic
 //! protocol — a request container (`Req`, `Resp`), the generic request tree
 //! `Tac<A>` with its `bind`, and a tactic written against it — is writable
 //! and computes in today's surface, with no host at all. The handler here is

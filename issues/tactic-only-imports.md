@@ -23,7 +23,7 @@ This has decided where grind may be used:
   `Memory::set_set_comm` by hand even though grind closes them. The reason
   given: importing grind into `int`/`memory` "would put the tactic library
   in every client's closure".
-- `docs/grind-design.md` §14.5–§14.6: the x86 conversions were taken back
+- `docs/tactics/grind-design.md` §14.5–§14.6: the x86 conversions were taken back
   because of the closure's cost on the bundled native path. Importing
   `tactic` into `x86_64_asm_table` also shadowed that module's own `At`
   with `Note`'s. That is a scope leak into the client's names, not only a
@@ -48,7 +48,7 @@ Design questions:
 - **Images and caches.** The module image records tactic-only imports
   apart from ordinary ones. Clients load only the ordinary ones. The cache
   key still covers the tactic modules, because a different tactic may
-  produce a different term (`docs/module-interface-cutoff-design.md` decides
+  produce a different term (`docs/infrastructure/module-interface-cutoff-design.md` decides
   whether that is an interface change).
 - **Cycles.** A tactic-only import of a module above the importer (`nat`
   using grind, which imports `nat`) stays refused. This issue does not open
@@ -70,5 +70,5 @@ module, and a negative control shows that a tactic-only name used outside a
   `lib/std/core/common.hthr` exports `Char` and `String`), so every module
   after the facade has them and grind's closure adds `tactic`, `derive`,
   `nat_map`, `egraph` and `grind`. grind's certificate also cites
-  `grind::congr_dep` now (docs/grind-design.md §15.1), a seventh lemma to
+  `grind::congr_dep` now (docs/tactics/grind-design.md §15.1), a seventh lemma to
   move.

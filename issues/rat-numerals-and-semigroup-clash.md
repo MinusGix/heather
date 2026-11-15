@@ -21,7 +21,7 @@ Two pieces:
   relation. They should not share a name. Renaming the relational one (for
   example `SemigroupRel`) unblocks numerals in every setoid client, not only
   `Rat`. Today the workaround is a list import, `import algebra_rel::{Semigroup}`
-  (docs/modules-design.md §3).
+  (docs/language/modules-design.md §3).
 
 ## Acceptance
 

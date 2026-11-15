@@ -7,7 +7,7 @@ created: 2026-11-07
 updated: 2026-11-07
 ---
 
-Since docs/deep-term-walks-design.md §3.4 conversion
+Since docs/kernel/deep-term-walks-design.md §3.4 conversion
 compares two long vectors component by component at constant native depth,
 so two separately built `Term::VecItems` nodes of any length compare. The
 time is quadratic: each step unfolds the node one element

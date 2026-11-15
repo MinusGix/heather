@@ -29,7 +29,7 @@ name* stays `op` — so the empty constraint slot still binds `op`, linked
 slots still refer by the caller's own name, diagnostics and the registry
 never see a symbol — and inside the class body the index is spelled `∙`,
 exactly the installation the constraint symbol slot already performs
-(docs/operators-onto-classes-design.md §5(b)).
+(docs/language/classes/operators-onto-classes-design.md §5(b)).
 
 A symbol-*only* head (`class Semigroup<A>(∙: …)`) was considered and leans
 rejected: the empty slot would have no identifier to bind, and generic code
@@ -103,7 +103,7 @@ no designation and no fallback exist); a duplicate-spelling negative control
   the spelling (`crates/syntax/src/ast.rs`); the parser reads `as` between a
   binder's name and its `:` in both declaring positions; the elaborator pushes
   onto `Cx::op_locals` — the same table the constraint symbol slot pushes onto
-  (docs/operators-onto-classes-design.md §5(b)), so there is one installation
+  (docs/language/classes/operators-onto-classes-design.md §5(b)), so there is one installation
   path and no fourth resolution rung. Value parameters install in
   `elab_decl_inner`'s telescope loop (scope: rest of the telescope, result
   type, body); a class head's spellings ride on `Inductive::op_symbols` and are

@@ -19,7 +19,7 @@ goes from 186 to 1,741, `div_product` from 104 to 967.
 
 The likely shape: a rule's premise and conclusion speak of `A.unit`, `+`
 and `*` through the upcast dictionary (`#open:…OrderedAddMonoid` applied to
-the section's prefix, docs/traits-layer2-design.md §8.1), and every
+the section's prefix, docs/language/classes/traits-layer2-design.md §8.1), and every
 comparison with the section's own `K.unit` or a local `K.unit < b` is a
 conversion that unfolds the open derivation and walks the projection path.
 Confirm with `HEATHER_CONV_MISS_TRACE` or the per-item counters before

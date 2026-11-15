@@ -8,7 +8,7 @@ created: 2026-11-12
 updated: 2026-11-12
 ---
 
-Exports that share callees are one program with several labels since 2026-11-12 (`docs/native-library-exports-design.md` §6.3, `compile-x86 --entry`, the fourth column of `crates/linked/generated/EXPORTS.tsv`). What that round left, each refused by name where it applies:
+Exports that share callees are one program with several labels since 2026-11-12 (`docs/native/native-library-exports-design.md` §6.3, `compile-x86 --entry`, the fourth column of `crates/linked/generated/EXPORTS.tsv`). What that round left, each refused by name where it applies:
 
 ## Two roots that do not reach each other
 

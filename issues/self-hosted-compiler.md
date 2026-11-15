@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-Round R11 of `docs/compiler-milestones-proposal.md` (§5, §7), milestone `self-compiler`: the native compiler,
+Round R11 of `docs/native/compiler-milestones-proposal.md` (§5, §7), milestone `self-compiler`: the native compiler,
 compiled natively. This is the second half of what
 [[self-hosting-first-component]] filed.
 

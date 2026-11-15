@@ -1,5 +1,5 @@
 //! Indexed families on the `IWf` route: the declaration lowered onto the
-//! kernel's finitary indexed fixed point (`docs/iwf-former-design.md` §8).
+//! kernel's finitary indexed fixed point (`docs/kernel/iwf-former-design.md` §8).
 //!
 //! This replaced route 2b's fording (`docs/archive/inductive-fording-lowering.md`,
 //! superseded): a child's index is **stored** in the label rather than
@@ -53,7 +53,7 @@ use crate::codata::CodataMut;
 
 /// The two spellings of an `IWf`-route family: the kernel's finitary
 /// `IWf(sig)(m)`, or, for a family with a recursive function field, the
-/// `W`-encoded `Σ(t : W₀). El(ok t m)` (docs/iwf-infinitary-design.md §5).
+/// `W`-encoded `Σ(t : W₀). El(ok t m)` (docs/kernel/iwf-infinitary-design.md §5).
 pub(crate) enum FamForm {
     IWf(Rc<IWfSig>),
     W(Rc<crate::iwf_w::IwSig>),
@@ -167,7 +167,7 @@ impl IwfFamily<'_> {
         let d = crate::inductive::decoded(ty);
         let Type::IWf { sig, index } = &*d else {
             // The `W` encoding of a family with a function field
-            // (docs/iwf-infinitary-design.md §5), found by the same shape.
+            // (docs/kernel/iwf-infinitary-design.md §5), found by the same shape.
             let (sig, idx) = crate::iwf_w::IwSig::read(&d)?;
             let shape = self.tag_of(&sig.shape)?;
             let ind = Rc::clone(self.types.iwf_by_shape(shape.tag)?);
@@ -388,7 +388,7 @@ impl std::ops::DerefMut for IwfFamilyMut<'_> {
 }
 
 impl IwfFamilyMut<'_> {
-    // -- the named signature (docs/iwf-named-signature-design.md) -----------
+    // -- the named signature (docs/inductives/iwf-named-signature-design.md) -----------
 
     /// `D#iarity`, `D#iout` and `D#ichild` at declaration time: the inline
     /// signature [`IwfFamily::iwf_sig`] builds over [`GeneratedDefs::tycode_fn_telescope`]'s
@@ -779,7 +779,7 @@ impl IwfFamily<'_> {
             return err(
                 format!(
                     "`{}` constructs the indexed family `{}(i)`, but the expected type \
-                     here is not in that family form (docs/iwf-former-design.md §8)",
+                     here is not in that family form (docs/kernel/iwf-former-design.md §8)",
                     ctor.name, ind.name
                 ),
                 span,
@@ -858,7 +858,7 @@ impl IwfFamily<'_> {
             .is_err()
         {
             // A mutual group's constructor at another member is a different
-            // type, not a different index (docs/mutual-inductive-design.md §3).
+            // type, not a different index (docs/inductives/mutual-inductive-design.md §3).
             if !ind.members.is_empty()
                 && let Some(want) = self.iwf_member_at(cx, ind, &fam.idx, span)
                 && ind.member_of_ctor(i) != Some(want)
@@ -937,7 +937,7 @@ impl IwfFamily<'_> {
         let tail = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value)));
         let tail_tm = self.build_fields_collect(cx, &tail, rest, false, out, span)?;
         // The tuple's checked spelling, exactly as `build_fields_skel`'s
-        // (`docs/intro-by-type-design.md` §4.1): no annotation, since every
+        // (`docs/elaborator/intro-by-type-design.md` §4.1): no annotation, since every
         // layer is in checking position.
         if self.emits_at_forms() {
             return Ok(Term::PairAt {
@@ -959,7 +959,7 @@ impl IwfFamily<'_> {
     // -- the eliminator -------------------------------------------------------
 
     /// The `match` motive over `(Γ, j, z)` from the expected one over
-    /// `(Γ, z)`, for a scrutinee at `fam.idx` (`docs/iwf-former-design.md`
+    /// `(Γ, z)`, for a scrutinee at `fam.idx` (`docs/kernel/iwf-former-design.md`
     /// §8.3). A variable index is generalized as route 1's is. Otherwise,
     /// in order:
     ///
@@ -1025,7 +1025,7 @@ impl IwfFamily<'_> {
     /// or some constructor's output index is not constructor-headed, or `M`
     /// has no code to case into.
     ///
-    /// Inversion is **per level** (docs/mutual-inductive-design.md §4): in
+    /// Inversion is **per level** (docs/inductives/mutual-inductive-design.md §4): in
     /// the branch at the scrutinee's index constructor, each argument of it
     /// is, in turn, abstracted (a variable), inverted again by its own type's
     /// eliminator (constructor-headed, and so is the argument at that
@@ -1252,7 +1252,7 @@ impl IwfFamily<'_> {
     }
 
     /// Which member of a mutual group's family an index selects
-    /// (docs/mutual-inductive-design.md §2), if its weak head says.
+    /// (docs/inductives/mutual-inductive-design.md §2), if its weak head says.
     pub(crate) fn iwf_member_at(
         &self,
         cx: &Cx,
@@ -1316,7 +1316,7 @@ impl IwfFamily<'_> {
         let inverted = how != IndexMotive::Plain;
         let n = ind.ctors.len();
         // A mutual group's `match` is on one member, and only that member's
-        // constructors have arms (docs/mutual-inductive-design.md §4).
+        // constructors have arms (docs/inductives/mutual-inductive-design.md §4).
         let member = if ind.members.is_empty() {
             None
         } else {
@@ -1375,7 +1375,7 @@ impl IwfFamily<'_> {
                 format!(
                     "this `{}` on a `{shown}` cannot set the rest of its mutual group \
                      aside: that takes its result type as a code, and this one has none \
-                     (docs/mutual-inductive-design.md §4)",
+                     (docs/inductives/mutual-inductive-design.md §4)",
                     form.keyword()
                 ),
                 span,
@@ -1397,7 +1397,7 @@ impl IwfFamily<'_> {
         let dec = crate::recursion::guard_param(cx, &scrut, arms);
         // The index a recursion may vary: the family's own when it is a
         // parameter, or a member's, under its member constructor
-        // (docs/mutual-inductive-design.md §5).
+        // (docs/inductives/mutual-inductive-design.md §5).
         let param_at = |t: &Term| match t {
             Term::Var(LocalVar(i)) => {
                 let pos = cx.names.len() - 1 - *i as usize;
@@ -1440,7 +1440,7 @@ impl IwfFamily<'_> {
         let sig = match &fam.form {
             FamForm::IWf(sig) => sig,
             // A family with a function field eliminates by `elim_W` and
-            // carries its equations by `J` (docs/iwf-infinitary-design.md §7).
+            // carries its equations by `J` (docs/kernel/iwf-infinitary-design.md §7).
             FamForm::W(sig) => return IwfW(self).iw_match(cx, &env, sig, scrut),
         };
         let fl = sig.family_level();
@@ -1733,7 +1733,7 @@ pub(crate) struct ArmEnv<'a> {
     pub(crate) dec: Option<usize>,
     pub(crate) idx_param: Option<usize>,
     /// The varying index is the member constructor's argument, not the
-    /// family's index itself (docs/mutual-inductive-design.md §5).
+    /// family's index itself (docs/inductives/mutual-inductive-design.md §5).
     pub(crate) rebind_inner: bool,
     pub(crate) outer_guard: Option<Rc<Guard>>,
     pub(crate) keyword: &'static str,
@@ -1746,7 +1746,7 @@ pub(crate) struct ArmEnv<'a> {
 }
 
 /// How a `match`'s motive treats the scrutinee's index
-/// (`docs/iwf-former-design.md` §8.3).
+/// (`docs/kernel/iwf-former-design.md` §8.3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum IndexMotive {
     /// Generalized: the index abstracted (tier 2), or the motive as given.
@@ -1887,7 +1887,7 @@ fn literal_closed(t: &Term) -> bool {
 
 #[cfg(test)]
 mod named_signature {
-    //! `docs/iwf-named-signature-design.md`: an `IWf`-route family at the
+    //! `docs/inductives/iwf-named-signature-design.md`: an `IWf`-route family at the
     //! registered profile is spelled over `D#iarity`/`D#iout`/`D#ichild`, its
     //! `match` over `D#idnth`, and an instance off the profile stays inline.
     //! Each source also runs a `match` and a `refl` unfolding through the

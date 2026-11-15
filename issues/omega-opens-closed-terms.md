@@ -31,7 +31,7 @@ bounded and named in the failure report when the bound stops it:
 
 **Done when** the bindings that exist only to open a term are gone from the
 SHA-256 agreement modules and `docs/proof-patterns.md` §3 says what `omega`
-opens. Design: `docs/omega-measure-reduction-design.md` §22.
+opens. Design: `docs/tactics/omega-measure-reduction-design.md` §22.
 
 ## Log
 

@@ -26,7 +26,7 @@ Candidate fixes, in the order this round would rank them, none implemented (out 
 3. Normalize each run by a per-run machine factor (median ratio across comparable cases) and gate on the normalized ratio. Cheap and it would have made all four of the above runs agree -- but it makes a GLOBAL regression invisible by construction, which is a real loss and wants a deliberate decision.
 4. Raise time_regress above the measured contamination. Masks the signal; recorded only so the list is honest.
 
-Interim protocol, written into docs/frontend-benchmarking.md: for the time half, believe --no-heavy; run the full suite for the slope bands, the latency budgets and the guards, which are unaffected (all three were green in every run above).
+Interim protocol, written into docs/infrastructure/frontend-benchmarking.md: for the time half, believe --no-heavy; run the full suite for the slope bands, the latency budgets and the guards, which are unaffected (all three were green in every run above).
 
 ## What it assumes from elsewhere
 

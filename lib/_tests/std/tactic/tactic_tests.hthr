@@ -1,5 +1,5 @@
 // Probes of the tactic host (`lib/std/tactic/tactic.hthr`,
-// `crates/elab/src/host.rs`, `docs/host-elaboration-interface-design.md`):
+// `crates/elab/src/host.rs`, `docs/metaprogramming/host-elaboration-interface-design.md`):
 // the `Goal` view, and at a class carrier how `View` presents a dictionary's
 // field reads and a dictionary's own type, and `apply` with a class's lemma,
 // whose dictionary `Match` finds in scope. Tests, not library: nothing

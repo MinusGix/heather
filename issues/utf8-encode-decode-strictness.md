@@ -17,7 +17,7 @@ theorem encode_decode(bytes: List<BitVec(8)>, s: String, p: decode(bytes) = Some
 
 which is what makes `Utf8 ≅ String` (with it, `ofString(u.toString()) = u`
 through a `bytes_injective` for `Utf8`). The decoder was not weakened to
-get it; the stop rule in `docs/string-char-design.md` §5.4 was taken.
+get it; the stop rule in `docs/library/string-char-design.md` §5.4 was taken.
 
 Where it stalls (design §5.5): the hypothesis is at an abstract byte list,
 so the proof must case on `class_of(b)`, but `decode` computes the class
@@ -64,5 +64,5 @@ unchanged: `class_of(b)` is still computed inside the body.
   bound rather than the list: [[cov-window-in-theorem-arms]] (the window refuses
   theorem-shaped goals) and [[wf-nested-match-motive-synthesis-kernel-refusal]]
   (nested motive-less matches accepted by the elaborator, refused by the kernel;
-  the motives are written) were filed on the way. `docs/string-char-design.md`
+  the motives are written) were filed on the way. `docs/library/string-char-design.md`
   §5.6 is the record.

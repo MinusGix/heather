@@ -101,7 +101,7 @@ theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apa
 // same start, and it evaluates.
 theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_lt_one()).witness = 7 { refl }
 
-// `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the apartness
+// `x⁻¹` and `x ^ n` (docs/library/inverse-power-notation-design.md): the apartness
 // is searched from a local apartness or sign, or from an embedded
 // rational's sign; a negative power needs it and a natural one does not.
 theorem from_apart(x: CReal, h: x.Apart(0)): x * x⁻¹ ≈ 1 { x.mul_inv() }
@@ -109,7 +109,7 @@ theorem from_negative(x: CReal, h: x < 0): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one()
 theorem square(x: CReal): x ^ 2 ≈ x * x { x.pow_two() }
 theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) { CReal::ofRat_inv(Rat(OfNat(2), 1)) }
 
-// `a / b` (docs/division-design.md): the same searched apartness.
+// `a / b` (docs/library/division-design.md): the same searched apartness.
 theorem div_is_mul_inv(a, b: CReal, h: 0 < b): a / b = a * b⁻¹ { refl }
 theorem div_cancels(a, b: CReal, h: b.Apart(0)): (a / b) * b ≈ a { a.div_mul_cancel(b) }
 theorem div_self_negative(b: CReal, h: b < 0): b / b ≈ 1 { b.div_self() }

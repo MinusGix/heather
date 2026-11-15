@@ -10,7 +10,7 @@ A numeral was a `u64` from the lexer to the kernel, so `18446744073709551616`
 (2^64, the first number a 64-bit word cannot hold) did not lex. Mathematics
 needs such numbers constantly — a word's bound is one — and the workarounds
 were `Nat::pow(2, 64)` or `omega`'s byte chain `add(mul(x, 256), b)`.
-Numerals are now arbitrary-precision everywhere: `docs/wide-numerals-design.md`.
+Numerals are now arbitrary-precision everywhere: `docs/language/wide-numerals-design.md`.
 
 Raised by [[bv-omega-check-cost]]'s attempt to present a word's bound as the
 number it is.

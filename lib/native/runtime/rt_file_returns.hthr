@@ -1,5 +1,5 @@
 // An export's return theorem at a span function's ending
-// (docs/native-library-exports-design.md §7): what `compile-x86` states a
+// (docs/native/native-library-exports-design.md §7): what `compile-x86` states a
 // certificate's `…_returns` with.
 import function_ir;
 import function_ir_eval;

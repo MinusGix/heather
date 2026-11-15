@@ -15,7 +15,7 @@ resolve.rs (`UNFOLD_STEPS`), ring.rs (`WRAPPER_STEPS`), host.rs
 `INDEX_UNFOLD_STEPS` from #387), bv_omega.rs, relational_context/proof.rs
 (×2), literals.rs, iwf_family.rs, indexed.rs. Each budget was tuned to its
 first customer, and a step count mixes a δ step on a large definition with a
-β step (docs/elaborator-principles-survey.md §5).
+β step (docs/elaborator/elaborator-principles-survey.md §5).
 
 ## Proposal
 

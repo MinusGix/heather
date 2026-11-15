@@ -203,7 +203,7 @@ fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
     }
 }
 
-// One step of a loop that may exit early (docs/sequencing-surface-design.md
+// One step of a loop that may exit early (docs/language/sequencing-surface-design.md
 // §5.2): go on with the state, stop the loop with it, or leave the function
 // with its value. A `for` whose body has `break`, `continue` or `return`
 // lowers to `List::for_in` over a step returning this.
@@ -229,7 +229,7 @@ fn List::for_in<A, S, R>(self xs: List<A>, step: S → A → ForStep<S, R>, s: S
 
 // A left fold whose step is a computation in a carrier `M`: the binding
 // counterpart of `foldl`, and what a `for` loop in a carrier block lowers to
-// (docs/sequencing-surface-design.md §6.1). Each step runs after the
+// (docs/language/sequencing-surface-design.md §6.1). Each step runs after the
 // previous one, in list order.
 fn List::for_m<A, S>(self xs: List<A>, {M: Type → Type}, s: S, step: S → A → M(S),
     b: Bind<M> := infer, p: Pointed<M> := infer) → M(S) {
@@ -636,7 +636,7 @@ theorem List::len_range(n: Nat): List::range(n).len() = n {
 
 // `[a, a + 1, …, a + n - 1]`, built at the end as `range` is: `a..b` in a
 // `for` header is `List::range_from(a, b - a)`
-// (docs/sequencing-surface-design.md §5.2).
+// (docs/language/sequencing-surface-design.md §5.2).
 fn List::range_from(a, n: Nat) → List<Nat> {
     match n {
         Zero => Nil,
@@ -904,7 +904,7 @@ fn List::last<A>(self xs: List<A>) → Option<A> {
 }
 
 // The index varies with the recursion on the list and is generalized into
-// the motive (docs/ih-generalization-design.md). Call sites write
+// the motive (docs/tactics/ih-generalization-design.md). Call sites write
 // `xs.nth(i)`: the receiver reaches the member through the type
 // (issues/type-owned-members-receiver-slice.md).
 fn List::nth<A>(self xs: List<A>, i: Nat) → Option<A> {

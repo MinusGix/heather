@@ -10,7 +10,7 @@ updated: 2026-10-31
 `Ctors(ty)` answers a parameterless, non-indexed inductive only, and a
 constructor with a field whose type mentions an earlier field comes back
 with that field untyped and no constructor function
-(docs/host-elaboration-interface-design.md §19). Quoting likewise turns only
+(docs/metaprogramming/host-elaboration-interface-design.md §19). Quoting likewise turns only
 a parameterless inductive's name into a type. So `generate congruences(T)`
 cannot run at `List<A>`, `Option<A>`, a record with a dependent field, or an
 indexed family, and issues/heather-checked-construction-api.md's "open types"

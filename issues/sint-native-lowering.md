@@ -8,7 +8,7 @@ updated: 2026-11-08
 ---
 
 `i8`/`i64` are `SInt(n)`, a record over `BitVec(n)`
-(docs/fixed-width-integers-design.md §3), so their operations are the word's
+(docs/library/fixed-width-integers-design.md §3), so their operations are the word's
 behind a field: `SInt::add(a, b) = SInt(a.bits.add(b.bits))`. The native
 frontend and `rt` read `BitVec` words; a `runtime fn` over `i64` would meet
 the record constructor and projection first.
@@ -33,7 +33,7 @@ request `Unfold`): `a + b` becomes the word's `Add(64)` between the field
 and the constructor. The boundary (`Ty::OneWord`, proved in
 `Fun::lower_sound`) passes the record in the 64-bit word a `u64` takes, so
 `i64_add::agrees` says the program returns `x.add(y)` on words.
-docs/runtime-fn-setups-design.md §16.13 has the design;
+docs/native/runtime-fn-setups-design.md §16.13 has the design;
 `lib/_tests/native/runtime/runtime_sint_tests.hthr` the probes.
 
 Of the four signed ops, `lt_bit` → `Slt` (`JL`) and `shift_right` → `Ashr`

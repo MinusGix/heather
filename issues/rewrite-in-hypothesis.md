@@ -22,4 +22,4 @@ heavy proofs in `int.hthr`'s division section are candidates.
 
 ## Log
 
-- 2026-10-21: Done: spelling `rewrite(h, …, in := hyp)`, an inference form (Rocq's `rewrite h in H`), chosen against the library's `let x = j(p, λ y _ => M, hyp);` customers (float/round.hthr, function_ir_loop_trace.hthr, x86_64_asm.hthr, …): one form and one rule set with the goal form, no new grammar, `at :=` kept for occurrences. Step is J(h; y q. M; hyp) with no sym. Design: docs/equation-rewrite-design.md §7.
+- 2026-10-21: Done: spelling `rewrite(h, …, in := hyp)`, an inference form (Rocq's `rewrite h in H`), chosen against the library's `let x = j(p, λ y _ => M, hyp);` customers (float/round.hthr, function_ir_loop_trace.hthr, x86_64_asm.hthr, …): one form and one rule set with the goal form, no new grammar, `at :=` kept for occurrences. Step is J(h; y q. M; hyp) with no sym. Design: docs/tactics/equation-rewrite-design.md §7.

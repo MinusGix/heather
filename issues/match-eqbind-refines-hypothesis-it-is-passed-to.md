@@ -20,7 +20,7 @@ here". The split on the local `b` refined the hypotheses the arms name
 (`select_refined`, issues/elab-match-refines-hypothesis-kernel-rejects.md),
 so `g` became `(False = False) → A` in the `False` arm, while the convoy's
 `h` is stated about `b` as written. A computed scrutinee never had this:
-design §5.1 of `docs/dependent-match-compiler-design.md` already refines
+design §5.1 of `docs/language/matching/dependent-match-compiler-design.md` already refines
 nothing by occurrence under `match h:`, for exactly this reason.
 
 ## Fix

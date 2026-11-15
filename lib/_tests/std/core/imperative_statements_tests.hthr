@@ -1,4 +1,4 @@
-// Probes of local state in pure code (docs/sequencing-surface-design.md §4,
+// Probes of local state in pure code (docs/language/sequencing-surface-design.md §4,
 // §5.1; issues/pure-imperative-statements.md): `let mut`, `x := e` and a
 // statement `if`/`match` that joins per variable, all lowered by the parser
 // to ordinary `let`s. Each form at literal and neutral inputs, at an open

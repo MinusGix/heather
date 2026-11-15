@@ -1,5 +1,5 @@
 // Probes of `function_ir_run`, FunctionIR evaluated with the file threaded
-// (docs/native-one-compiler-design.md §2.6, U4 step 4a-5): a store runs to
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4a-5): a store runs to
 // the file with its byte set, a load after it reads that byte, a caller
 // reads what its callee stored (which evaluation over a fixed file does
 // not), a program with no store leaves the file and answers as it

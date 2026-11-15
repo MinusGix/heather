@@ -39,7 +39,7 @@ type with `spelling::beta_head` before reading it. The contractum is what
 omega, `linarith` and `bv_omega` then see, so a `.proof` whose predicate is
 a conjunction is also split into its conjuncts. The certificate cites the
 fact by name at its original type; the two are β-convertible. Design:
-`docs/omega-measure-reduction-design.md` §15. Probes `ex_proof`,
+`docs/tactics/omega-measure-reduction-design.md` §15. Probes `ex_proof`,
 `ex_proof_let`, `ex_proof_conj`, `ex_proof_int` and the control
 `ex_proof_false` are in `lib/_tests/std/tactic/omega_tests.hthr`; the four
 positive probes are refused on master.

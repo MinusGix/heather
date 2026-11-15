@@ -1,4 +1,4 @@
-//! `'x'` and `"…"` (docs/string-char-design.md §3), on the numeral's ladder:
+//! `'x'` and `"…"` (docs/library/string-char-design.md §3), on the numeral's ladder:
 //! the spec type's introduction form at `Char`/`String`, and the
 //! `CharLiteral`/`StringLiteral` classes at any other carrier.
 //!

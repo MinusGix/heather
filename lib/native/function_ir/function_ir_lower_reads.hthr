@@ -1,6 +1,6 @@
 // A function reads and writes a buffer it is lent
-// (docs/native-one-compiler-design.md §2.3, §2.6;
-// docs/native-library-exports-design.md §3 to §5): what the lowering of a
+// (docs/native/native-one-compiler-design.md §2.3, §2.6;
+// docs/native/native-library-exports-design.md §3 to §5): what the lowering of a
 // `BufferLoad` and of a `BufferStore` needs that is not a machine run.
 //
 // A buffer has a home in the scope that reads it: two of the scope's
@@ -873,7 +873,7 @@ fn File::emit_load(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, l
 }
 
 // ---------------------------------------------------------------------------
-// A leaf that is one store (docs/native-one-compiler-design.md §2.6)
+// A leaf that is one store (docs/native/native-one-compiler-design.md §2.6)
 
 record Store { output: Nat, buffer: Nat, index: Nat, value: Nat }
 

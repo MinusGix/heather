@@ -1,4 +1,0 @@
-import logic;
-import nat;
-import omega;
-theorem combo(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < nat::Nat::pow(2, 64), r1: t < nat::Nat::pow(2, 64)): 2 * (t) + (0) < nat::Nat::pow(2, 64) + (0) { omega }

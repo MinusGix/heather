@@ -18,7 +18,7 @@ zip(xs, ys)               // neither
 ```
 
 Raised by the [[named-arguments]] round, which considered and **declined**
-fixing it with names (docs/named-arguments-design.md §5.3, §10.1). The reason
+fixing it with names (docs/language/named-arguments-design.md §5.3, §10.1). The reason
 is worth keeping: a type argument is a *type*, parsed by `ty()` and lowered by
 `elab_ty`, while a named argument's payload is an expression parsed by
 `expr()`. The overlap is large but proper — `Nat`, `List<Nat>`, `Type<0>` and

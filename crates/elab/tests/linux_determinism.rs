@@ -1,6 +1,6 @@
 use crate::read_loop_fixture::{checker, checker_with};
 
-// The run is the run (docs/fetched-step-determinism-design.md): every step
+// The run is the run (docs/native/fetched-step-determinism-design.md): every step
 // form reads back from the front of its bytes, so a step is a function of
 // the defined state and none runs at a SYSCALL; a claimed run is then every
 // run that got the same answers from Linux.

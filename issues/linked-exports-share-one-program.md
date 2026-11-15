@@ -26,7 +26,7 @@ The generator already links by name (`f::program`, `lib/native/runtime/runtime.h
 
 ## Log
 
-- 2026-11-12: Built (2026-11-12, PR #551). `docs/native-library-exports-design.md` §6.3 is the record.
+- 2026-11-12: Built (2026-11-12, PR #551). `docs/native/native-library-exports-design.md` §6.3 is the record.
 
   - `compile-x86 <module> <function> --entry <module>::<function>…` compiles the function's program once and exports each entry at its own label, with its own `_returns` in the one certificate. With no `--entry` the output is byte for byte what it was (the eight other exports' files did not change).
   - The generator publishes `f::sources`, `f::sourced` and `f::names` beside `f::program`: every function of the program against its source, and which function is where. The certificate reads `f::sourced` at the entry's index.

@@ -1,6 +1,0 @@
-import logic;
-import nat;
-import list;
-import int;
-import omega;
-theorem int_side(g: List<Nat> → int::Int, h: g(list::List::append(Nil, Nil)) = g(Nil) + int::OfNat(1)): False { omega }

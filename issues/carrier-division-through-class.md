@@ -9,7 +9,7 @@ updated: 2026-11-06
 ---
 
 `/` and `⁻¹` are stated once over `OrderedField` (lib/std/algebra/field_division.hthr,
-docs/division-design.md §6), and a carrier reads the generic laws through its
+docs/library/division-design.md §6), and a carrier reads the generic laws through its
 instance by unfolding: `OrderedField::div_mul_cancel(a, b, h := Inr(hb))` proves
 `a / b * b ≈ a` at `Rat` (lib/_tests/std/algebra/field_division_tests.hthr).
 But `Rat` and `CReal` still keep their own `div`, `inv`, laws and sign rules

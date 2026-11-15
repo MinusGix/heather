@@ -4,7 +4,7 @@
 //!
 //! This is the kernel harness (`crates/kernel/benches/kernel/harness.rs`)
 //! with four things added and one removed, and the differences are exactly
-//! the differences between the two questions (docs/frontend-benchmarking.md):
+//! the differences between the two questions (docs/infrastructure/frontend-benchmarking.md):
 //!
 //! - **Labels.** A kernel case is identified by a number (16, 64, 256). A
 //!   corpus case is identified by a file name, so `Case` carries a label and
@@ -513,7 +513,7 @@ impl Baseline {
     pub fn render(env: &[(String, String)], reports: &[Report]) -> String {
         let mut out = String::new();
         out.push_str(
-            "# Heather frontend benchmark baseline — see docs/frontend-benchmarking.md\n\
+            "# Heather frontend benchmark baseline — see docs/infrastructure/frontend-benchmarking.md\n\
              # Regenerate with: scripts/bench-frontend --save\n",
         );
         for (k, v) in env {
@@ -626,7 +626,7 @@ pub fn compare(reports: &[Report], base: &Baseline, th: &Thresholds) -> Vec<Diff
             // A declared latency budget is a standing claim about user
             // latency, so it is checked on every machine, baseline or not —
             // the same status an exponent band has. It is deliberately loose
-            // (docs/frontend-benchmarking.md): the point is to notice a file
+            // (docs/infrastructure/frontend-benchmarking.md): the point is to notice a file
             // that became unusable, not to police 20%.
             if let Some(b) = p.budget_ns {
                 if p.min_ns > b as f64 {
@@ -671,7 +671,7 @@ pub fn compare(reports: &[Report], base: &Baseline, th: &Thresholds) -> Vec<Diff
             // regression flag on a case whose own median is far above its
             // own min is a claim about the machine as much as the code.
             // Printing the ratio beside the verdict is what lets a reader
-            // apply docs/benchmarking.md's "re-run before believing it"
+            // apply docs/infrastructure/benchmarking.md's "re-run before believing it"
             // without a second run first.
             let noise = p.median_ns / p.min_ns;
             let noise = if noise > 1.15 { format!("  [med/min {noise:.2}×]") } else { String::new() };

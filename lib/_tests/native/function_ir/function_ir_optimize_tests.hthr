@@ -1,5 +1,5 @@
 // Probes of the optimizer as the compiler runs it
-// (lib/native/function_ir/function_ir_optimize.hthr, docs/optimizer-design.md
+// (lib/native/function_ir/function_ir_optimize.hthr, docs/native/optimizer-design.md
 // §3, §9): what each search finds for a program, callees first; the
 // stages making the functions found from the plans found, a plan a
 // statement; a function left as it is; a function whose bounds tests a

@@ -1,5 +1,5 @@
 // Where a compiled program keeps the environment (issues/native-effect-source-compiler.md,
-// round S3.2; docs/native-procedures-are-functions-design.md, step 5b): the
+// round S3.2; docs/native/native-procedures-are-functions-design.md, step 5b): the
 // buffers in one data region of the byte model, each at its capacity, then
 // the scratch range a read lands in, then the slot RSP is saved to; and the
 // words in the running activation's frame on the stack, slot `i` the word
@@ -76,9 +76,9 @@ record Target {
     laid: program.laid_out().IsTrue(),
     // The command line the process was started with.
     args: List<List<BitVec(8)>>,
-    // The procedures a call may name (docs/native-procedures-design.md).
+    // The procedures a call may name (docs/native/native-procedures-design.md).
     procedures: List<Procedure>,
-    // The functions a region may call (docs/native-one-compiler-design.md
+    // The functions a region may call (docs/native/native-one-compiler-design.md
     // §2.2), compiled after the program's own code.
     functions: List<Function>,
     // The process's stack (§5): above the region and below the canonical

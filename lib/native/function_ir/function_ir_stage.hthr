@@ -1,4 +1,4 @@
-// A stage of the optimizer (docs/optimizer-design.md §3.1): a program
+// A stage of the optimizer (docs/native/optimizer-design.md §3.1): a program
 // rewritten a function at a time, and the one theorem every stage shares.
 //
 // A program lists its functions last first, and a function calls only the

@@ -1,5 +1,5 @@
 // Probes of the wide accesses and the byte swap (`WideLoad`, `WideStore`,
-// `ByteSwap`; docs/optimizer-design.md, step 5): a word of a buffer's bytes
+// `ByteSwap`; docs/native/optimizer-design.md, step 5): a word of a buffer's bytes
 // read low byte first and zero past the end, a word stored as that many
 // byte stores, and the big-endian read compiled code makes a byte at a
 // time is the swap of the little-endian word. At literal files and words,

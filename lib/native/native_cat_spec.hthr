@@ -1,5 +1,5 @@
 // `cat` implements `tr_spec(λ b => b)` at every capacity below 2^63
-// (issues/native-source-cat-implements.md; docs/itree-simulation-design.md §7).
+// (issues/native-source-cat-implements.md; docs/itrees/itree-simulation-design.md §7).
 //
 // cat (`native_cat`) reads into its buffer and writes what it read in as
 // many writes as Linux takes; the spec reads and then writes its pending

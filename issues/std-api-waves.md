@@ -115,7 +115,7 @@ datum.
   wave 1's whole kit is stated against a curried relation). Wave 1 is next and
   its dependency is met.
 - 2026-08-16: Wave 1 landed except its arithmetic tail ([[nat-order-kit]],
-  `docs/nat-order-design.md`). The sequencing datum it produced: the *migration*
+  `docs/library/nat-order-design.md`). The sequencing datum it produced: the *migration*
   this push was braced for cost **nothing** — `ir_v1` and `list_algos` check
   unmodified — while the unbudgeted cost was two grammar gaps
   ([[comparison-inside-type-arguments]],
@@ -131,8 +131,8 @@ datum.
   (type arguments recovered from the value arguments' own types, first-order
   and domain-only). [[ih-generalization]] stands as the one gap wave 1 has to
   live with, and it shapes the spelling rather than blocking the work.
-- 2026-08-17: Wave 2 landed ([[decide-class]], docs/decide-class-design.md). The sequencing datum it produced: Decide splits along a line the wave list did not anticipate — complete over the connectives, absent at the relations, because an instance cannot bind a value parameter ([[value-generic-instances]]). L3 is therefore UNBLOCKED rather than waiting: state the relation by recursion and call the decider by name, which is what lib/lang/list_algos.hthr now does. The ranking this round produced, in order: value-generic instances (blocks the class from ever reaching a relation), the equation carrier key, and resolution's candidate fan-out. None was on the list before wave 2 started.
-- 2026-08-17: The ranking wave 2 produced has its top item done: [[value-generic-instances]] landed 2026-08-17 (docs/value-generic-instances-design.md), the same day it was ranked. So the algorithmic-wave choice §L3 described as two routes is now one: state the relation by recursion AND reach its decider by resolution, which is what lib/lang/list_algos.hthr does. The two remaining ranked items are unmoved — the equation carrier key, and resolution's candidate fan-out (now seven Decide instances).
+- 2026-08-17: Wave 2 landed ([[decide-class]], docs/language/classes/decide-class-design.md). The sequencing datum it produced: Decide splits along a line the wave list did not anticipate — complete over the connectives, absent at the relations, because an instance cannot bind a value parameter ([[value-generic-instances]]). L3 is therefore UNBLOCKED rather than waiting: state the relation by recursion and call the decider by name, which is what lib/lang/list_algos.hthr now does. The ranking this round produced, in order: value-generic instances (blocks the class from ever reaching a relation), the equation carrier key, and resolution's candidate fan-out. None was on the list before wave 2 started.
+- 2026-08-17: The ranking wave 2 produced has its top item done: [[value-generic-instances]] landed 2026-08-17 (docs/language/classes/value-generic-instances-design.md), the same day it was ranked. So the algorithmic-wave choice §L3 described as two routes is now one: state the relation by recursion AND reach its decider by resolution, which is what lib/lang/list_algos.hthr does. The two remaining ranked items are unmoved — the equation carrier key, and resolution's candidate fan-out (now seven Decide instances).
 - 2026-08-17: Wave 3 closed out except parity: min/max + sub kit + monotonicity ([[nat-arithmetic-kit]]), pow + fact ([[nat-pow-and-fact]]). half/even/odd stalled on [[recursion-at-deeper-subterms]] rather than encoded around — the decision and its reasoning are recorded there and in §Ranking the language above.
 - 2026-08-17: Wave 3 is closed in full. [[recursion-at-deeper-subterms]] landed 2026-08-17 and [[nat-parity-and-half]] went in behind it the same day, in the spellings that issue had written down as its acceptance test — so the stall cost the wave nothing and bought a language feature.
 
@@ -153,5 +153,5 @@ The datum for the ranking function: the feature the library ranked was not the f
   [[decidable-equation-carrier]] supplied carrier-keyed equality instances.
   The historical sequencing entries above remain the record of why L3 did
   not wait for either.
-- 2026-11-05: gardener: cites a file it shares with [[decidable-relations-and-comparison]] (`docs/decide-class-design.md`); [[prelude-clone-cost-grew]] (`lib/std/core/logic.hthr`); [[traits]] (`lib/lang/list_algos.hthr`).
-- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §9): symmetric case splits want `Nat::wlog_le`/`Int::wlog_le` in the API; filed as [[wlog-symmetric-cases]].
+- 2026-11-05: gardener: cites a file it shares with [[decidable-relations-and-comparison]] (`docs/language/classes/decide-class-design.md`); [[prelude-clone-cost-grew]] (`lib/std/core/logic.hthr`); [[traits]] (`lib/lang/list_algos.hthr`).
+- 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §9): symmetric case splits want `Nat::wlog_le`/`Int::wlog_le` in the API; filed as [[wlog-symmetric-cases]].

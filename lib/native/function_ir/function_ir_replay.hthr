@@ -1,4 +1,4 @@
-// The replayer over a list of nodes (docs/optimizer-design.md §3.1, §3.2):
+// The replayer over a list of nodes (docs/native/optimizer-design.md §3.1, §3.2):
 // the one function of the optimizer at this level that is proved, and what
 // it takes from an untrusted searcher.
 //
@@ -45,7 +45,7 @@
 // A node among the facts may be emitted beside the node that already
 // writes its id: a function's meaning is the valuations that satisfy its
 // equations, and one the others imply changes none of them. That is how a
-// fact a plan proved reaches the lowering (docs/optimizer-design.md §5.1).
+// fact a plan proved reaches the lowering (docs/native/optimizer-design.md §5.1).
 import function_ir;
 import function_ir_eval;
 import function_ir_state;

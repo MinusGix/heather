@@ -1,6 +1,6 @@
 // Probes of the default setup's lowering of `rt` into FunctionIR and its
 // soundness proved once (`lib/native/runtime/rt_lower.hthr`): V6 of
-// docs/runtime-fn-setups-design.md §12, and round 2's primitives, literals,
+// docs/native/runtime-fn-setups-design.md §12, and round 2's primitives, literals,
 // convoys, calls and the function wrapper. Per program nothing is proved: the
 // lowering is evaluated, the theorem `Tm::lower_sound` is instantiated, and
 // the pin (`rt` meaning to function, by conversion) closes the gap. Tests,

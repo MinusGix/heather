@@ -1,4 +1,4 @@
-// Functions nothing calls any more, emptied (docs/optimizer-design.md
+// Functions nothing calls any more, emptied (docs/native/optimizer-design.md
 // §3.1): after inlining, a function whose every call was replaced is code
 // the program never reaches, and the lowering would still compile it.
 //

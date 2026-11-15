@@ -7,7 +7,7 @@
 import bool; import logic; import nat; import int; import algebra; import semiring; import ring;
 import bitvec; import bitvec_nat; import bitvec_ring;
 
-// P1 of docs/native-mathematics-survey.md.
+// P1 of docs/surveys/native-mathematics-survey.md.
 theorem ring_words(a, b, c: BitVec(64)): a.add(b.add(c)) ≈ c.add(b.add(a)) { ring }
 theorem ring_square(n: Nat, a, b: BitVec(n)): (a + b) * (a + b) ≈ a * a + 2 * (a * b) + b * b { ring }
 theorem ring_numerals(a: BitVec(64)): a + a + 3 * a ≈ 5 * a { ring }

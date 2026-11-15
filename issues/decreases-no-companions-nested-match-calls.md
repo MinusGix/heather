@@ -35,7 +35,7 @@ The function checks. `two_var::ext` is
 and `two_var_unfold` is
 
 > no unfolding equation for `two_var`: a `match` holding a recursive call
-> inside an argument, see docs/decreases-unfolding-design.md §3
+> inside an argument, see docs/language/recursion/decreases-unfolding-design.md §3
 
 The same with the inner branch a `match g:` on a computed scrutinee, or an
 `if`. Nothing here is inside an argument as written: the inner `match` is

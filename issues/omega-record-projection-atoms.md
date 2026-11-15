@@ -35,7 +35,7 @@ spell. Then drop wc's helper theorems for inline `omega`s.
 
 ## Log
 
-- 2026-09-29: Done (docs/omega-measure-reduction-design.md §10). The term omega met was not a
+- 2026-09-29: Done (docs/tactics/omega-measure-reduction-design.md §10). The term omega met was not a
   reduct: `WcState` is closed and not dependent, so it registers no projection
   definitions and `s.words` *is* the inline walk `fst(snd(snd(s)))`, which the
   speller had no case for. Fixed in the speller: a field read spells as `r.name`

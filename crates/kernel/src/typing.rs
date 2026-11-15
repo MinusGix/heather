@@ -54,7 +54,7 @@
 //! **What a rule passes to the next.** Not a [`Type`] but an
 //! [`ity::ITy`]: syntax, or an un-spelled *description* of a component of
 //! something that reduces to a former
-//! (`docs/intro-by-type-design.md` §3.2). Every rule but the five checked
+//! (`docs/elaborator/intro-by-type-design.md` §3.2). Every rule but the five checked
 //! spellings produces `Syn` and behaves exactly as it did before
 //! descriptions existed; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
 //! consume `Sel`, whose point is that the component is never spelled — the
@@ -252,7 +252,7 @@ impl From<ConvError> for TypeError {
 }
 
 /// Record how a conversion **miss** ended
-/// (`docs/instrumentation-design.md` §2). Exhausted fuel and a genuine
+/// (`docs/infrastructure/instrumentation-design.md` §2). Exhausted fuel and a genuine
 /// mismatch call for opposite responses — more budget against a better
 /// spelling — so they never share a column
 /// (`issues/generated-proof-cost-diagnostics.md`). Observational: nothing in
@@ -625,7 +625,7 @@ pub fn locate_type_refusal(
 }
 
 /// A checked spelling's former, as the eager checker viewed it: what the
-/// translation `⌊·⌋` (`docs/intro-by-type-design.md` §2.4) writes into the
+/// translation `⌊·⌋` (`docs/elaborator/intro-by-type-design.md` §2.4) writes into the
 /// component form in its place.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Spelled {
@@ -676,7 +676,7 @@ fn keep_spelled(rec: &RefCell<HashMap<(usize, u32), Option<Spelled>>>, key: (usi
     }
 }
 
-/// **The quote boundary** (`docs/intro-by-type-design.md` §2.3, amended
+/// **The quote boundary** (`docs/elaborator/intro-by-type-design.md` §2.3, amended
 /// 2026-09-22): `t : ty @ level` in `gamma` with every checked spelling
 /// translated to its component form, so it can be the payload of a `box`.
 ///
@@ -713,7 +713,7 @@ pub fn spell_checked_in_code(
 /// `fst@`/`snd@` as its own projections, which take the pair's type from the
 /// pair, so none of the three has annotations to write. Spelling them is
 /// what makes the passes cascade on a library proof
-/// (`docs/export-fragment-design.md` §5.6): an `app@`'s components are the
+/// (`docs/library/export-fragment-design.md` §5.6): an `app@`'s components are the
 /// callee's statement instantiated at the arguments, and a projection's are
 /// the rest of a class record, whose later field statements mention the
 /// earlier fields as `fst@`s of the record. Each instantiation carries
@@ -851,7 +851,7 @@ fn spell_checked_ty(
 }
 
 /// The **differential oracle**: the checker with its deferred types spelled
-/// the moment they are formed (`docs/intro-by-type-design.md` §3.6).
+/// the moment they are formed (`docs/elaborator/intro-by-type-design.md` §3.6).
 ///
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should — [`check_term`] and its siblings are the
@@ -868,7 +868,7 @@ fn spell_checked_ty(
 /// input. `tests/typing_differential.rs` runs the pair over `wt.rs`'s
 /// well-typed streams with the checked spellings on and requires
 /// verdict-for-verdict agreement, which is machine adequacy
-/// (`docs/nbe-conversion-design.md` §11.2) applied at the typing seam.
+/// (`docs/kernel/nbe-conversion-design.md` §11.2) applied at the typing seam.
 pub mod oracle {
     use super::*;
 
@@ -1004,7 +1004,7 @@ struct Env {
     /// Rescoped definition bodies and binding signatures for **this** Ψ
     /// (`reduce::GlobalCache`), shared by every conversion and whnf query of
     /// one gate rather than rebuilt per query
-    /// (`docs/conversion-query-arena-pooling-design.md` §3). Inherited by
+    /// (`docs/kernel/conversion-query-arena-pooling-design.md` §3). Inherited by
     /// every scope that keeps Ψ and rebuilt by the one that does not,
     /// `push_tele`.
     cache: Rc<GlobalCache>,
@@ -1013,7 +1013,7 @@ struct Env {
     univs: u32,
     /// Inside the payload of a `box`: the side condition on the two `box`
     /// rules that keeps the checked spellings out of code
-    /// (`docs/intro-by-type-design.md` §2.3), read by
+    /// (`docs/elaborator/intro-by-type-design.md` §2.3), read by
     /// [`Tc::checked_spelling_admitted`].
     ///
     /// **Not a layer predicate**, and that is the whole of stage 2's first
@@ -1349,7 +1349,7 @@ struct ClosedConvBucket {
 /// Everything a typing rule reads from its scope besides Γ's entries: the
 /// part of [`Env`] every typing memo key ([`Scope`], [`TyScope`],
 /// [`SigScope`]) holds, so a component added here is in all three by
-/// construction ([`Env::ambient`], docs/kernel-implicit-state-review.md §3).
+/// construction ([`Env::ambient`], docs/kernel/kernel-implicit-state-review.md §3).
 ///
 /// Ψ is held by its bindings' identity, which also stands for the parts of
 /// Ψ that are not bindings. Changing the interface boundary
@@ -1582,7 +1582,7 @@ enum TcMode {
 
 impl TcMode {
     /// Whether descriptions are materialized at once rather than kept
-    /// lazy (**the oracle mode**, `docs/intro-by-type-design.md` §3.6).
+    /// lazy (**the oracle mode**, `docs/elaborator/intro-by-type-design.md` §3.6).
     ///
     /// Under it an [`ITy::Sel`] is spelled the moment it would be formed,
     /// and the five `@` rules view their annotation through the rewriter,
@@ -1827,7 +1827,7 @@ impl Tc {
     }
 
     /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`, over the checker's
-    /// **descriptions** (`docs/intro-by-type-design.md` §3.3).
+    /// **descriptions** (`docs/elaborator/intro-by-type-design.md` §3.3).
     ///
     /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
     /// it is the α-test it has always been (in the shared size of the two
@@ -2020,7 +2020,7 @@ impl Tc {
 
     /// The miss of a query with a selection on either side: both
     /// descriptions evaluated in **one per-query arena** and compared by the
-    /// ordinary conversion arms (`docs/intro-by-type-design.md` §3.3).
+    /// ordinary conversion arms (`docs/elaborator/intro-by-type-design.md` §3.3).
     fn conv_ity(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
         // Reached only when at least one side is a selection, so this is the
         // `@`-form path and nothing here is on the per-node constant. A side
@@ -2083,7 +2083,7 @@ impl Tc {
         }
     }
 
-    /// **Spell a description** (`docs/intro-by-type-design.md` §3.5): whnf
+    /// **Spell a description** (`docs/elaborator/intro-by-type-design.md` §3.5): whnf
     /// the `of` through the rewriter and take the component's syntax.
     ///
     /// This is the current checker's answer — which is why it is complete
@@ -2178,7 +2178,7 @@ impl Tc {
         })
     }
 
-    /// **The view** (`docs/intro-by-type-design.md` §3.3): the head former of
+    /// **The view** (`docs/elaborator/intro-by-type-design.md` §3.3): the head former of
     /// a description, with its components as descriptions.
     ///
     /// `value_domain` decides which machine answers, and the rule it
@@ -2328,7 +2328,7 @@ impl Tc {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
 
-    /// The checked spellings' guard (`docs/intro-by-type-design.md` §2.3):
+    /// The checked spellings' guard (`docs/elaborator/intro-by-type-design.md` §2.3):
     /// they may appear anywhere **but** inside the payload of a `box`.
     ///
     /// A δ-unfolding cannot smuggle one in either: δ inside a box is opaque
@@ -2387,7 +2387,7 @@ impl Tc {
     }
 
     /// An `M` signature's premises, shared by its formation rule and its two
-    /// term formers (docs/kernel-coinduction-design.md §1.1): `I @ li`,
+    /// term formers (docs/kernel/kernel-coinduction-design.md §1.1): `I @ li`,
     /// `(Γ, i : I) ⊢ S @ l`, `(Γ, i, s : S) ⊢ P @ l'`,
     /// `(Γ, i, s, p : P) ⊢ o : I`.
     fn m_sig_wf(&self, env: &Env, sig: &MSig) -> R {
@@ -2590,7 +2590,7 @@ impl Tc {
                 self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
-            // sEq-formation (extension; docs/sprop-design.md §2.1) — Id's
+            // sEq-formation (extension; docs/kernel/sprop-design.md §2.1) — Id's
             // rule verbatim:
             // ⊢_i sEq^l(I; a; b) @ l ⟸ ⊢_i I @ l, ⊢_i a : I @ l, ⊢_i b : I @ l
             Type::SEq { level, ty, lhs, rhs } => {
@@ -2600,7 +2600,7 @@ impl Tc {
                 self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
-            // sEmpty-formation (extension; docs/sprop-design.md §2.2):
+            // sEmpty-formation (extension; docs/kernel/sprop-design.md §2.2):
             // ⊢_i sEmpty^l @ l — premise-free like Unit/Empty.
             Type::SEmpty { level } => {
                 self.level_wf(env, level)?;
@@ -2627,7 +2627,7 @@ impl Tc {
             // **Level-indexed, not level-polymorphic.** `Unit^l` and
             // `Unit^{l'}` are distinct types, so a type still determines its
             // level and `ty_check` needs no special case — see its doc
-            // comment and `docs/unit-empty-level-indexing.md`.
+            // comment and `docs/kernel/unit-empty-level-indexing.md`.
             Type::Unit { level } | Type::Empty { level } => {
                 self.level_wf(env, level)?;
                 Ok(level.clone())
@@ -2652,7 +2652,7 @@ impl Tc {
                 self.ty_check(&e, pos, pos_level)?;
                 Ok(Level::join(shape_level.clone(), pos_level.clone()))
             }
-            // Vec-formation (extension; docs/wf-former-design.md §1.1):
+            // Vec-formation (extension; docs/kernel/wf-former-design.md §1.1):
             // ⊢_i Vec^l(T; k) @ l ⟸ ⊢_i T @ l, ⊢_i k : Nat @ 0. The length
             // is a term in Γ (no binder), which is what lets the tuple's
             // arity be *computed* from a shape.
@@ -2677,7 +2677,7 @@ impl Tc {
                 self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
                 Ok(level.clone())
             }
-            // DVec-formation (extension; docs/iwf-former-design.md §1.1):
+            // DVec-formation (extension; docs/kernel/iwf-former-design.md §1.1):
             // ⊢_i DVec^l(k; i. F) @ l ⟸ ⊢_i k : Nat @ 0,
             // (Γ, i : Fin k @ 0) ⊢_i F @ l. At every layer: `TmDVec` is its
             // code (design §6, §13 step 4).
@@ -2688,7 +2688,7 @@ impl Tc {
                 self.ty_check(&e_i, fam, level)?;
                 Ok(level.clone())
             }
-            // IWf-formation (extension; docs/iwf-former-design.md §1.2):
+            // IWf-formation (extension; docs/kernel/iwf-former-design.md §1.2):
             // ⊢_i IWf^{l,li}(I; x:S. n; x. o; x i. c)(m) @ l ⊔ li ⟸ the
             // signature (`iwf_sig_wf`), ⊢_i m : I @ li. At every layer:
             // `TmIWf` is its code (design §6, §13 step 4).
@@ -2697,11 +2697,11 @@ impl Tc {
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
             }
-            // M-formation (extension; docs/kernel-coinduction-design.md
+            // M-formation (extension; docs/kernel/kernel-coinduction-design.md
             // §1.1): ⊢_i M^{l,l',li}(I; i. S; i s. P; i s p. o)(j) @ l ⊔ l' ⊔
             // li ⟸ the signature (`m_sig_wf`), ⊢_i j : I @ li. Admitted at
             // every layer, as `Wf` is: `TmM` is its code
-            // (docs/kernel-m-codes-design.md §0).
+            // (docs/kernel/kernel-m-codes-design.md §0).
             Type::M { sig, index } => {
                 self.m_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
@@ -2970,7 +2970,7 @@ impl Tc {
     }
 
     /// The checking λ — the one *checking* descent whose expected type may
-    /// be a selection (`docs/intro-by-type-design.md` §3.3): a λ checked at
+    /// be a selection (`docs/elaborator/intro-by-type-design.md` §3.3): a λ checked at
     /// `Sel { T, Fst }` because it is the first field of a `pair@`. Hence
     /// the view, and hence `Sel::Dom` / `Sel::Cod` existing at all.
     ///
@@ -3196,7 +3196,7 @@ impl Tc {
     #[inline(always)]
     fn tm_infer_fresh(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         // The checked spellings are the only rules whose inferred type may
-        // be a *description* (`docs/intro-by-type-design.md` §3.2), so they
+        // be a *description* (`docs/elaborator/intro-by-type-design.md` §3.2), so they
         // have their own dispatch and every other rule keeps returning
         // syntax — which is the sentence "no existing rule constructs a
         // `Sel`" made true by construction rather than by review.
@@ -3241,7 +3241,7 @@ impl Tc {
         Ok((self.materialize(env, &ty)?, l))
     }
 
-    /// The five **checked spellings** (`docs/intro-by-type-design.md` §3.4)
+    /// The five **checked spellings** (`docs/elaborator/intro-by-type-design.md` §3.4)
     /// — the only inference rules whose result may be an un-spelled
     /// selection, and therefore the only ones that live outside
     /// [`Tc::tm_infer_inner`]. Keeping them here is what makes §3.2's
@@ -3250,7 +3250,7 @@ impl Tc {
     /// [`Tc::tm_infer`] wraps it.
     fn tm_infer_at(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         match &**t {
-            // -- checked spellings (extension; docs/intro-by-type-design.md)
+            // -- checked spellings (extension; docs/elaborator/intro-by-type-design.md)
             //
             // `pair@`, `inl@`, `inr@` with an annotation: one whole-type
             // annotation instead of the former's components. Each rule is
@@ -3347,7 +3347,7 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
             }
-            // `app@(f; a) : T[a/x]` (`docs/app-by-head-type-design.md` §3.1)
+            // `app@(f; a) : T[a/x]` (`docs/elaborator/app-by-head-type-design.md` §3.1)
             // — no annotation: the Π is the one `f` infers. Relative to
             // `app`'s rule this drops the two `ty_check`s of the annotation
             // and the conversion of `f`'s type against it; the head's
@@ -3726,7 +3726,7 @@ impl Tc {
                 self.tm_check_ty(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
-            // Encoding of sEq (extension; docs/sprop-design.md §6): mirrors
+            // Encoding of sEq (extension; docs/kernel/sprop-design.md §6): mirrors
             // TmId — sEq^l(s; t; u) : Ty l.
             Term::TmSEq { level, ty, lhs, rhs } => {
                 self.not_var_layer(env)?;
@@ -3779,7 +3779,7 @@ impl Tc {
                 let lmax = Level::join(shape_level.clone(), pos_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
-            // Encoding of Vec (extension; docs/wf-former-design.md §6):
+            // Encoding of Vec (extension; docs/kernel/wf-former-design.md §6):
             // Vec^l(s; k) : Ty l ⟸ s : Ty l, k : Nat. The length is a term
             // of the ambient scope, so it binds nothing.
             Term::TmVec { level, elem, len } => {
@@ -3812,11 +3812,11 @@ impl Tc {
                 self.tm_check_ty(&e, arity, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
-            // M-code (docs/kernel-m-codes-design.md §1): well-formed exactly
+            // M-code (docs/kernel/kernel-m-codes-design.md §1): well-formed exactly
             // when its decoding is a well-formed `M` signature, since `El u`
             // at `l` checks `u : Ty l`; the index is a term of the decoded
             // index type. A code at every layer but v, like every code.
-            // DVec-code (docs/iwf-former-design.md §6): DVec^l(k; i. f) : Ty l
+            // DVec-code (docs/kernel/iwf-former-design.md §6): DVec^l(k; i. f) : Ty l
             // ⟸ k : Nat, (Γ, i : Fin k) ⊢ f : Ty l. The length is a term of
             // the ambient scope, the family binds the position.
             Term::TmDVec { level, len, fam } => {
@@ -3944,7 +3944,7 @@ impl Tc {
                 ))
             }
 
-            // -- strict equality (extension; docs/sprop-design.md §3–4) -----
+            // -- strict equality (extension; docs/kernel/sprop-design.md §3–4) -----
             // srefl^l(I; a) : sEq^l(I; a; a) @ l.
             Term::SRefl { level, ty, tm } => {
                 self.not_var_layer(env)?;
@@ -4106,7 +4106,7 @@ impl Tc {
 
             // -- unit and empty (extension beyond ch. 04) -------------------
             // [b₀, …, b_{w-1}]^l(T; z, o) : Vec^l(T; w) @ l
-            // (docs/bitvector-literal-entry-design.md §3.1). Two elements are
+            // (docs/kernel/bitvector-literal-entry-design.md §3.1). Two elements are
             // checked, not `w`: every element *is* `zero` or `one`, which is
             // what makes the literal the pair chain `vec_lit_unfold` spells
             // and lets that chain's typing be read off these premises. The
@@ -4163,7 +4163,7 @@ impl Tc {
             // The level annotation is load-bearing, not decoration: without
             // it `⟨⟩` inhabits `Unit^l` for every `l`, i.e. a *term* with many
             // types, which ch. 04 §Non-cumulativity says the code eliminator
-            // cannot survive (`docs/unit-empty-level-indexing.md` §2.2).
+            // cannot survive (`docs/kernel/unit-empty-level-indexing.md` §2.2).
             Term::Triv { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
@@ -4463,7 +4463,7 @@ impl Tc {
 
             // sup_i^{l,li}(sig; a; cs) : IWf(sig)(o[a/x]) @ l ⊔ li, with
             // cs : DVec^{l⊔li}(n[a/x]; k. IWf(sig)(c[a/x, k/i])) — the
-            // constructor is at its output index (docs/iwf-former-design.md
+            // constructor is at its output index (docs/kernel/iwf-former-design.md
             // §2). A value at a convertible index checks by conversion. A code
             // at every layer but v, as `sup_f` is (design §13 step 4).
             Term::Supi { sig, label, children } => {
@@ -4501,9 +4501,9 @@ impl Tc {
 
             // corec^{k}(sig; i. X; i x. c; j; x) : M(sig)(j) @ f, with
             // (Γ, i) ⊢ X @ k, (Γ, i, x : X) ⊢ c : m_step_ty(…)↑ and
-            // x : X[j/i] (docs/kernel-coinduction-design.md §1.3). The
+            // x : X[j/i] (docs/kernel/kernel-coinduction-design.md §1.3). The
             // carrier's level is free: one rule per k, quantifying over
-            // nothing. Admitted at c (docs/kernel-m-codes-design.md §0): a
+            // nothing. Admitted at c (docs/kernel/kernel-m-codes-design.md §0): a
             // boxed corec is inert syntax, as a boxed `supf` is.
             Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
                 self.not_var_layer(env)?;
@@ -4915,7 +4915,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::BoxTm(..) => "BoxTm",
         Term::LetBoxTy { .. } => "LetBoxTy",
         Term::LetBoxTm { .. } => "LetBoxTm",
-        // The checked spellings (docs/intro-by-type-design.md). Stage 1a
+        // The checked spellings (docs/elaborator/intro-by-type-design.md). Stage 1a
         // added the `Term` variants and missed this match; the sampler is
         // behind `value-metrics`, which nothing in `scripts/test` builds, so
         // nothing said so.

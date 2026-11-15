@@ -24,7 +24,7 @@ On the showcase: 540 M of 40,434 M (1.3%).
 
 The walk is a function of the module scopes, and `Names::enter_scope` is their one writer. So the registry keeps the walk (`CommonClosure`, in `Names::common`): the modules it pops, in order, and for each module some popped module imports, how many had been popped when it was first met. An asking reads the table. `enter_scope` drops the walk when it writes a scope; a snapshot carries the walk of the tables it carries.
 
-**The record of name lookups is unchanged.** The per-asking walk noted every module it popped (`note`, the early cutoff's account of what an elaboration could have observed, `docs/module-interface-cutoff-design.md` §2): the whole closure for a no, and the modules popped up to the import that named `q` for a yes. The kept walk has that count per module, and notes the same prefix. A noted name stays noted, so it does it once per record (`RECORD` steps when a record starts or is taken, and `WALK_NOTED` holds how much of which walk this record already has).
+**The record of name lookups is unchanged.** The per-asking walk noted every module it popped (`note`, the early cutoff's account of what an elaboration could have observed, `docs/infrastructure/module-interface-cutoff-design.md` §2): the whole closure for a no, and the modules popped up to the import that named `q` for a yes. The kept walk has that count per module, and notes the same prefix. A noted name stays noted, so it does it once per record (`RECORD` steps when a record starts or is taken, and `WALK_NOTED` holds how much of which walk this record already has).
 
 ## What holds it
 

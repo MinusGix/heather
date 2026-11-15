@@ -1,5 +1,5 @@
 // Probes of the `ring` tactic (`lib/std/tactic/ring.hthr`,
-// `docs/ring-normalization-design.md`): identities it proves, at `Int` and
+// `docs/tactics/ring-normalization-design.md`): identities it proves, at `Int` and
 // `Nat`, in checking positions, and from hypotheses combined with
 // multipliers it finds, and modulo `≈` at `Rat` and `CReal`. Tests, not
 // library: nothing outside lib/_tests imports this module
@@ -129,7 +129,7 @@ theorem let_ring_unannotated(a: Int): a + a = a * 2 { let k = ring; k }
 // At a class carrier (issue cast-reading-at-class-carrier): the ring is the
 // section's own operations, its zero and one are `K.unit` and
 // `K.multiplicative.unit`, and its integers read through the derived map
-// out of `Int` (`semiring::Ring::int_cast`, docs/casting-design.md §16).
+// out of `Int` (`semiring::Ring::int_cast`, docs/language/casting-design.md §16).
 section<K: OrderedField(≈, <, <=, +, *)> {
 theorem class_distrib(x, y: K): x * (y + K.multiplicative.unit) ≈ x * y + x { ring }
 theorem class_square(x, y: K): (x + y) * (x + y) ≈ x * x + (x * y + x * y) + y * y { ring }

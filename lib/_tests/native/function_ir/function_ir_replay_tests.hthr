@@ -1,5 +1,5 @@
 // Probes of the replayer (lib/native/function_ir/function_ir_replay.hthr,
-// docs/optimizer-design.md §3.2): a plan followed over a list of nodes, a
+// docs/native/optimizer-design.md §3.2): a plan followed over a list of nodes, a
 // plan refused, a program of two functions rewritten as a stage, with
 // what its theorem says of the rewritten program, loads remembered, orders
 // between words, bytes joined into a word, and what a range says of a sum,

@@ -1,6 +1,6 @@
 // SHA-256 over a message that arrives in parts, as compiled code
 // (issues/sha2-compress-native.md, stage C2 of
-// docs/native-lexer-crypto-roadmap.md): `Sha256::init`, `Sha256::update`
+// docs/native/native-lexer-crypto-roadmap.md): `Sha256::init`, `Sha256::update`
 // and `Sha256::finish`, with the padding of FIPS 180-4 §5.1.1 done here
 // and not by the caller. §6.2.2 on one block a caller hands whole is
 // `Sha256::compress` (`sha256_one_block.hthr`, a module of its own so that

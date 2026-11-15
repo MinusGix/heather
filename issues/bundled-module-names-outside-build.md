@@ -29,7 +29,7 @@ directories is the workaround in use.
   other file there took the `x86_64_` prefix it already had as a module name
   (the `lib/std/parser/parser_*.hthr` convention). The loader now looks below
   each search directory after a miss in the directories themselves
-  (docs/modules-design.md §3.2; before, only a directory *target* got that
+  (docs/language/modules-design.md §3.2; before, only a directory *target* got that
   tier), so no client names `lib/std/arch/x86_64` or `lib/std/bitvec`.
   `heather check -L lib/std -L lib examples/x86-native/wc.hthr` checks, as do
   `lib/std/parser/parser.hthr`, the x86 modules in place and the whole native library

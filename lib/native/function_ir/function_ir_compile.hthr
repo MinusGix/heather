@@ -62,7 +62,7 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 }
 
 // The same of a program whose functions take buffers
-// (docs/native-one-compiler-design.md §2.3, §2.6): called over a file
+// (docs/native/native-one-compiler-design.md §2.3, §2.6): called over a file
 // `before` of the lending's lengths (`Stack::LentOver`: the homes of the
 // buffers `f` takes are its first arguments, and the file is in memory,
 // each buffer at its address), under the lending laws (`loan`) with every
@@ -144,7 +144,7 @@ theorem compiled_returns_written_through<M>(source, functions: List<Function>, p
 // write, the code returns the word its run over the file ends in and
 // leaves the file the run leaves. This is what an export that writes into
 // a span its caller lends is stated with
-// (docs/native-library-exports-design.md §7).
+// (docs/native/native-library-exports-design.md §7).
 theorem compiled_returns_written<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
     marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
@@ -162,7 +162,7 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
 }
 
 // A program some of whose calls are over views
-// (docs/native-library-exports-design.md §3.1): what each function needs
+// (docs/native/native-library-exports-design.md §3.1): what each function needs
 // to write is said a function at a time (`needs`, right for the program
 // by `ProgramNeeds`), since a callee over views writes the views and not
 // its caller's buffers. Function `f`, lent its buffers with the ones it
@@ -306,7 +306,7 @@ theorem compiled_returns_unlent_through<M>(source, functions: List<Function>, pl
 // contract is the one a program without buffers has (`compiled_returns`):
 // its arguments, its room, and stores of its own only. An export that is
 // one function of a larger program, beside functions over spans, is stated
-// with this (docs/native-library-exports-design.md §8.1).
+// with this (docs/native/native-library-exports-design.md §8.1).
 theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, program: Prog,
     lowered: lower_program_lent(functions, placement, counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     quiet: program_quiet(functions).IsTrue(),
@@ -552,7 +552,7 @@ theorem Emitted::emits_as(self e: Emitted, prog: Prog, rest: List<Place>, names:
 }
 
 // A program that lends buffers is emitted under the count each function
-// takes (`counts`, docs/native-one-compiler-design.md §2.3); one that lends
+// takes (`counts`, docs/native/native-one-compiler-design.md §2.3); one that lends
 // none is the same statements at no counts.
 theorem emit_functions_lent_start(placement: List<Place>, names: Nat, counts: List<Nat>):
     EmitsAs(emit_functions_after_lent(Start, [], placement, names, counts), Start, placement, names) {

@@ -8,7 +8,7 @@ updated: 2026-09-27
 ---
 
 `bv_omega` steps through a definition (`double`, `times256`) by unfolding it
-at each use (docs/bv-omega-design.md §2, "a definition"). So its cost grows
+at each use (docs/tactics/bv-omega-design.md §2, "a definition"). So its cost grows
 with the *unfolded* size of a word, not the number of definitions in it.
 `raise(n)` is five `times256`, each eight `double`s: `raise_value` takes 40
 `add`s apart and is the heaviest row left in `lib/decimal_line.hthr` (see
@@ -62,4 +62,4 @@ Questions to settle first:
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[certifying-arithmetic-proof-automation]] (`docs/bv-omega-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[certifying-arithmetic-proof-automation]] (`docs/tactics/bv-omega-design.md`).

@@ -53,5 +53,5 @@ constructor-headed arguments).
   distinct variables. Both one-liners check; `f(Cons(0, Nil))` against
   `f(Nil)` stays two atoms (`crates/elab/tests/omega_atoms_computation.rs`).
   `lib/elf64_read_loop.hthr` drops both restatements. Design note:
-  docs/omega-measure-reduction-design.md §5. Int-valued atoms are residue:
+  docs/tactics/omega-measure-reduction-design.md §5. Int-valued atoms are residue:
   [[omega-int-atoms-up-to-computation]].

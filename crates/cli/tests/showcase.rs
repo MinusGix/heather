@@ -41,7 +41,7 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // crates/elab/tests/support does.
     cmd.arg("--cache").arg("--cache-dir").arg(showcase::cli_check_images());
     // Every library module is keyed by its own closure
-    // (`docs/module-dag-design.md`), so the row's closure replays the gate's
+    // (`docs/infrastructure/module-dag-design.md`), so the row's closure replays the gate's
     // images and only the row's own module is elaborated.
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
@@ -141,7 +141,7 @@ fn every_search_directory_exists_and_is_not_the_showcase_directory() {
 /// The CLI tier: the checked-in generator outputs, which nothing regenerates,
 /// so the gate is that they still check — and `calc_text`, which was a
 /// separate serial gate in `scripts/test` while it cost 334 CPU-s and 9.8 GiB
-/// and is an ordinary row since `docs/app-by-head-type-design.md` (16 s,
+/// and is an ordinary row since `docs/elaborator/app-by-head-type-design.md` (16 s,
 /// 0.3 GiB at width one, 2026-09-22).
 /// The result parser and relational contexts also run here so their standalone
 /// module paths stay covered alongside their in-process tests. The library

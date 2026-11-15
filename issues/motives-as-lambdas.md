@@ -71,6 +71,6 @@ say what it rejects.
   ordinary `ExprKind::Lam`. What moved is what the body may *be*: a function
   type, which no expression is, and which an IH-generalizing motive needs
   (`λ z => (env: Val) -> … -> P(z)`, [[ih-generalization]]). Recorded as an
-  amendment in `docs/surface-universe.md` §13; tests in
+  amendment in `docs/language/surface-universe.md` §13; tests in
   `crates/elab/tests/motives.rs` §6b, with the three pre-existing body shapes
   kept as the regression. Stays closed.

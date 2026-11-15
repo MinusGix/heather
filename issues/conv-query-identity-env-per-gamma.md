@@ -33,7 +33,7 @@ The identity spine is the same for every query over the same Γ (it is
 `Env::identity`'s doc: every identity environment is a prefix of every longer
 one), so it does not need to be rebuilt per query; but it lives in the
 query's arena, and an arena that outlives a query is the thing
-`docs/intro-by-type-design.md` §3.7 prices separately. Two directions:
+`docs/elaborator/intro-by-type-design.md` §3.7 prices separately. Two directions:
 
 - An environment whose tail *is* the identity without being materialized:
   a length `base` below which `lookup(i)` answers `Val::var(level)` directly

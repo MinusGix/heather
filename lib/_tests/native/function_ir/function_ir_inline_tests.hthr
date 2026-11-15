@@ -1,5 +1,5 @@
 // Probes of the inline stage (lib/native/function_ir/function_ir_inline.hthr,
-// docs/optimizer-design.md §3.1): a call replaced by its callee's body in
+// docs/native/optimizer-design.md §3.1): a call replaced by its callee's body in
 // a composition, an arm and a loop's body; a program inlined callees first;
 // what the stage's theorem says of the inlined program; the searcher's
 // plans; the plans refused; and nodes at new ids written after a leaf.

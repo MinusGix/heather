@@ -1,6 +1,6 @@
 //! Tier-0 inductive declarations: the lowering to sums-of-Σs.
 //!
-//! This module is the mechanization of `docs/inductive-tier0-lowering.md`, and
+//! This module is the mechanization of `docs/inductives/inductive-tier0-lowering.md`, and
 //! is meant to be read against it — the section numbers in the comments are
 //! that document's. The doctrine (issues/inductive-compiler.md): the lowering
 //! is *untrusted* like the rest of the elaborator (the kernel re-checks every
@@ -11,7 +11,7 @@
 //!
 //! Tier 1 (recursive, branching) shares this module: its shape is *this*
 //! lowering with the recursive fields deleted, and the `Wf` former wraps it
-//! (`docs/inductive-tier1-wf-lowering.md`, mechanized in `wf.rs`). Sharing
+//! (`docs/inductives/inductive-tier1-wf-lowering.md`, mechanized in `wf.rs`). Sharing
 //! `lower_ctor`/`spine`/`const_case_tree` between the tiers is deliberate —
 //! it is what makes a divergence in payload handling impossible rather than
 //! merely unlikely.
@@ -19,7 +19,7 @@
 //! Tier 2 (a recursive *function* field, `k: A -> D`) shares it the same way:
 //! the shape is again this lowering with the recursive fields deleted, and the
 //! `W` former plus a leaf predicate wraps it
-//! (`docs/inductive-tier2-w-lowering.md`, mechanized in `infinitary.rs`).
+//! (`docs/inductives/inductive-tier2-w-lowering.md`, mechanized in `infinitary.rs`).
 //!
 //! Not here yet: nested recursion (`Rose`). It is classified and rejected,
 //! not mis-lowered.
@@ -96,13 +96,13 @@ pub(crate) struct Inductive {
     pub params: Vec<String>,
     /// The type parameter a type constructor over this declaration abstracts
     /// when the unifier learns one from `?M(a) ≟ D<…>`: `varies A` as written
-    /// (docs/lambda-carrier-instances-design.md §7.1), an index into
+    /// (docs/language/classes/lambda-carrier-instances-design.md §7.1), an index into
     /// [`Self::params`]. `None` is the default slot, the last parameter.
     pub varies: Option<usize>,
     /// `record R(p: Prog, env: Val)` — value parameters, kept in surface form
     /// for the same reason the field types are: they are elaborated afresh in
     /// the *ambient* context at every use site
-    /// (docs/surface-value-parameters.md §2). Each one's type may mention the
+    /// (docs/language/surface-value-parameters.md §2). Each one's type may mention the
     /// value parameters before it, so the list is a telescope.
     ///
     /// Empty for every declaration without the `(…)` list, which is the state
@@ -131,28 +131,28 @@ pub(crate) struct Inductive {
     pub ctors: Vec<Ctor>,
     /// Tier 1: some constructor has a recursive field, so the lowering is
     /// `Wf^l(x : S). n` rather than the bare sum-of-Σs `S`
-    /// (`docs/inductive-tier1-wf-lowering.md` §1). Computed once, at
+    /// (`docs/inductives/inductive-tier1-wf-lowering.md` §1). Computed once, at
     /// declaration time; every tier-1 branch below is guarded by it.
     pub recursive: bool,
-    /// Declared with `record` (docs/surface-records.md §2): exactly one
+    /// Declared with `record` (docs/language/surface-records.md §2): exactly one
     /// constructor, every field named. The lowering is unchanged — this is
     /// what makes `m.f` a projection and `D { … }` a literal.
     pub is_record: bool,
-    /// Declared with `codata` (docs/codata-elaborator-design.md): lowered onto
+    /// Declared with `codata` (docs/inductives/codata-elaborator-design.md): lowered onto
     /// the kernel's negative `M` former (`codata.rs`), never onto a sum, `Wf`
     /// or `W`. [`Self::recursive`] and [`Self::infinitary`] are both false for
     /// one, so every test that means "tier 0" must check this as well
     /// ([`Self::flat`]).
     pub codata: bool,
     /// An indexed family's index binder name (`inductive Vec<A> : (n: Nat) ->
-    /// Type`) (docs/inductive-indexed-lowering.md §2). When set, the
+    /// Type`) (docs/inductives/inductive-indexed-lowering.md §2). When set, the
     /// declaration lowers by recursion on the index (`indexed.rs`), **never**
     /// onto `Wf` — every `recursive`-guarded branch must check this first.
     pub index: Option<String>,
     /// What the index is a value of: `Nat`, or a previously declared
     /// inductive (§8.2). `Some` exactly when [`Self::index`] is.
     pub index_ty: Option<IdxTy>,
-    /// The `IWf` route (`docs/iwf-former-design.md` §8.1): the **shape
+    /// The `IWf` route (`docs/kernel/iwf-former-design.md` §8.1): the **shape
     /// declaration** — this declaration with its children deleted, lowered by
     /// tier 0 verbatim to the family's `IWf` shape. `Some` exactly for an
     /// `IWf`-route family, and it is what makes "route 1 or the `IWf` route"
@@ -162,19 +162,19 @@ pub(crate) struct Inductive {
     /// afterwards.
     pub skel: Option<Rc<Inductive>>,
     /// An indexed `codata` declaration's index telescope, in written order
-    /// (docs/codata-indexed-design.md §2): each binder's name and surface
+    /// (docs/inductives/codata-indexed-design.md §2): each binder's name and surface
     /// type, re-lowered per instance like [`Self::valparams`]. Empty for every
     /// other declaration. Kept apart from [`Self::index`], which routes an
     /// *inductive* family onto route 1 or 2b and which codata never takes.
     pub co_index: Vec<(String, Ty)>,
-    /// A **mutual group**'s family (docs/mutual-inductive-design.md §2): the
+    /// A **mutual group**'s family (docs/inductives/mutual-inductive-design.md §2): the
     /// members it is the union of, in declaration order. Member `k` is the
     /// view at index constructor `k` of the family's index type, the group's
     /// generated `D#member`. Empty for every other declaration.
     pub members: Vec<Member>,
 }
 
-/// One member of a mutual group (docs/mutual-inductive-design.md §2): a
+/// One member of a mutual group (docs/inductives/mutual-inductive-design.md §2): a
 /// surface type that is a view of the group's family at the member's index
 /// constructor. It has no lowering of its own and no nominal tag; the index
 /// constructor, which belongs to the group's index type alone, is what
@@ -197,7 +197,7 @@ impl Inductive {
 }
 
 /// The type an indexed declaration is indexed **by**
-/// (docs/inductive-indexed-lowering.md §2, §8.2). The scheme is not
+/// (docs/inductives/inductive-indexed-lowering.md §2, §8.2). The scheme is not
 /// `Nat`-specific — "one family branch per index constructor, `rec` at each
 /// recursive argument of the index constructor" — so what varies between the
 /// two is only which eliminator carries the family: `elim_Nat`, a `Case` tree
@@ -208,7 +208,7 @@ pub(crate) enum IdxTy {
     Decl(Rc<Inductive>),
     /// Any other type, written over the declaration's type and value
     /// parameters (`inductive Cover<P>(…) : (a: P) -> Type`). The `IWf` route
-    /// needs nothing of an index type (docs/iwf-former-design.md §8.2); route
+    /// needs nothing of an index type (docs/kernel/iwf-former-design.md §8.2); route
     /// 1 and inversion at a constructor-headed index do, so an open index is
     /// `IWf`-only and never inverted. `name` is its spelling, for messages.
     Open { ty: Ty, name: String },
@@ -262,7 +262,7 @@ impl IdxTy {
 
 impl Inductive {
     /// Tier 2: an unindexed declaration where some constructor has a recursive function field, so the
-    /// lowering is `Σ(t : W₀). El(canon t)` (docs/inductive-tier2-w-lowering.md
+    /// lowering is `Σ(t : W₀). El(canon t)` (docs/inductives/inductive-tier2-w-lowering.md
     /// §5) and [`Self::recursive`] — which means "lowered onto `Wf`" — is false.
     /// Derived from the field kinds, so it needs no storage of its own.
     pub fn infinitary(&self) -> bool {
@@ -276,7 +276,7 @@ impl Inductive {
 
     /// An indexed family on the `IWf` route with a recursive function field:
     /// lowered on `W` with its index and children equations
-    /// (docs/iwf-infinitary-design.md), not on the kernel's `IWf`.
+    /// (docs/kernel/iwf-infinitary-design.md), not on the kernel's `IWf`.
     pub fn iwf_infinitary(&self) -> bool {
         self.index.is_some()
             && self.skel.is_some()
@@ -307,7 +307,7 @@ impl Inductive {
 }
 
 /// The per-field implicitness skeletons an arm's binder aliases carry
-/// (docs/implicit-binders-design.md §3.1), aligned with the Σ walk — which
+/// (docs/language/implicit-binders-design.md §3.1), aligned with the Σ walk — which
 /// is only the declaration order when the constructor has no children, so a
 /// ctor with any recursive field gets none rather than a misaligned table.
 fn arm_field_skels(ind: &Inductive, j: usize) -> Vec<Option<Rc<crate::Skel>>> {
@@ -327,12 +327,12 @@ pub(crate) struct Ctor {
     /// types of the fields after it, which is why the spine is a Σ.
     pub fields: Vec<(Option<String>, Ty)>,
     /// Parallel to [`Self::fields`]: what each one contributes
-    /// (`docs/container-fields.md` §3.1). Neither recursive kind is part of
+    /// (`docs/language/container-fields.md` §3.1). Neither recursive kind is part of
     /// the shape — both are children in the `Vec` — so both are skipped by
     /// every payload walk here and reappear only in `wf.rs`.
     pub kind: Vec<FieldKind>,
     /// An indexed declaration's result index pattern
-    /// (docs/inductive-indexed-lowering.md §2): `Some` exactly when the
+    /// (docs/inductives/inductive-indexed-lowering.md §2): `Some` exactly when the
     /// declaration has an index telescope. `None` everywhere else.
     pub res: Option<IdxPat>,
     /// Parallel to [`Self::fields`]: at a recursive field of an indexed
@@ -344,21 +344,21 @@ pub(crate) struct Ctor {
     /// `None` everywhere on the `IWf` route, whose children carry their index
     /// in [`Self::child_index`] instead.
     pub rec_at: Vec<Option<usize>>,
-    /// The `IWf` route (`docs/iwf-former-design.md` §8.1): the constructor's
+    /// The `IWf` route (`docs/kernel/iwf-former-design.md` §8.1): the constructor's
     /// **written result index**, any expression at the index type over this
     /// constructor's stored fields. `None` on route 1 (where [`Self::res`]
     /// carries the pattern instead) and on every unindexed declaration.
     pub res_expr: Option<Expr>,
     /// Parallel to [`Self::fields`]: a record field's default
     /// (`name: T := e`), what fills it when a construction leaves it out.
-    /// It has no positional slot (docs/named-arguments-design.md §9.2).
+    /// It has no positional slot (docs/language/named-arguments-design.md §9.2).
     pub defaults: Vec<Option<Expr>>,
     /// Parallel to [`Self::fields`] wherever a child is written at an index
     /// of its own: at a child, the index it is written at, one expression
     /// per index binder, any expression over the stored fields. Two
     /// declarations fill it: an indexed `codata` one
-    /// (docs/codata-indexed-design.md §2), and an inductive on the `IWf`
-    /// route (`docs/iwf-former-design.md` §8.2: F1–F3 do not apply), whose
+    /// (docs/inductives/codata-indexed-design.md §2), and an inductive on the `IWf`
+    /// route (`docs/kernel/iwf-former-design.md` §8.2: F1–F3 do not apply), whose
     /// one index binder makes each entry a singleton. `None` at every other
     /// field; empty on every other declaration, route 1's included (its
     /// children's indices are read off [`Self::res`] by [`Self::rec_at`]).
@@ -366,7 +366,7 @@ pub(crate) struct Ctor {
 }
 
 /// A constructor's result index, decomposed: depth-one, constructor-headed,
-/// linear (docs/inductive-indexed-lowering.md §3). Everything else was
+/// linear (docs/inductives/inductive-indexed-lowering.md §3). Everything else was
 /// rejected at declaration time.
 ///
 /// `Nat`'s constructors are numbered as [`IdxTy::ctors`] lists them —
@@ -389,18 +389,18 @@ pub(crate) enum FieldKind {
     Payload,
     /// `D` itself, uniform and direct (tier 1 §1): exactly one child.
     Plain,
-    /// `[D; len]` (`docs/container-fields.md` §3.1): `len` children, where
+    /// `[D; len]` (`docs/language/container-fields.md` §3.1): `len` children, where
     /// `len_payload` is the *payload* index of the `Nat` field naming the
     /// length. At most one per constructor, last among the child-contributing
     /// fields.
     Container { len_payload: usize },
     /// An indexed constructor's pattern variable
-    /// (docs/inductive-indexed-lowering.md §4.1): the field named by the
+    /// (docs/inductives/inductive-indexed-lowering.md §4.1): the field named by the
     /// result index. It is **not stored** — the branch's `elim_Nat` binder is
     /// what it denotes — so it is neither payload nor child.
     IndexVar,
     /// `(y: A) -> D` — a recursive **function** field
-    /// (docs/inductive-tier2-w-lowering.md §1): one child per inhabitant of
+    /// (docs/inductives/inductive-tier2-w-lowering.md §1): one child per inhabitant of
     /// `A`. Its presence puts the whole declaration on tier 2, the `W`
     /// lowering (`infinitary.rs`), where a [`FieldKind::Plain`] child is the
     /// `Unit`-positioned case of the same thing.
@@ -415,7 +415,7 @@ impl FieldKind {
 
 impl Ctor {
     /// How many **plain** children this constructor carries: the `kᵢ` of
-    /// `docs/container-fields.md` §3.3. Without a container field this is the
+    /// `docs/language/container-fields.md` §3.3. Without a container field this is the
     /// whole arity (tier 1's `mᵢ`); with one, the arity is
     /// `Succ^{kᵢ}(len)` and only these `kᵢ` are reachable by a literal index.
     pub fn arity(&self) -> usize {
@@ -435,7 +435,7 @@ impl Ctor {
     /// order, paired with their index among the surface fields. An
     /// [`FieldKind::IndexVar`] is not payload either: it is the index, and
     /// storing it is exactly what the indexed scheme exists to avoid
-    /// (docs/inductive-indexed-lowering.md §4.1).
+    /// (docs/inductives/inductive-indexed-lowering.md §4.1).
     pub fn payload(&self) -> impl Iterator<Item = (usize, &(Option<String>, Ty))> {
         self.fields
             .iter()
@@ -547,7 +547,7 @@ impl Spine {
 ///
 /// - **Distinct per declaration.** Type conversion compares an `sEq`'s
 ///   endpoints, and irrelevance collapses proofs, never endpoints
-///   (docs/sprop-design.md §7), so different `k` are different types.
+///   (docs/kernel/sprop-design.md §7), so different `k` are different types.
 /// - **Proof-irrelevant.** Any two terms at an `sEq` type are convertible
 ///   (the `conv.rs` irrelevance arm). This is what a dependent motive needs:
 ///   an arm's binder `x : ⟦c_i⟧` is neutral, and the motive puts it back
@@ -599,7 +599,7 @@ fn read_tag(t: &Type) -> Option<u32> {
 /// leaves each child still `El`-wrapped (`reduce.rs`'s `step_type`). A type
 /// that reached the elaborator through a δ-transparent type abbreviation —
 /// `Refines(p, i, q, j)` elaborated as `El` of a `fn` call
-/// (`docs/types-as-expressions.md`) — is therefore `El`-headed at *every*
+/// (`docs/language/types-as-expressions.md`) — is therefore `El`-headed at *every*
 /// level below the first, and the readers above (`spine`, `tag_of`,
 /// `read_tag`) would otherwise see a code where they expect a `Σ`. So every
 /// structural step goes through this.
@@ -611,7 +611,7 @@ fn read_tag(t: &Type) -> Option<u32> {
 /// variable at `Type<n>`) is left exactly as it is — unfolding that is
 /// conversion's job, lazily, not this walk's.
 /// `u27` as `("u", 27)`: a name ending in a decimal width, read as a width
-/// family applied to it (docs/fixed-width-integers-design.md §2.2). The
+/// family applied to it (docs/library/fixed-width-integers-design.md §2.2). The
 /// family part ends in a letter and the width has no leading zero, so `x_1`
 /// and `u08` are never read this way.
 pub(crate) fn split_width(name: &str) -> Option<(&str, heather_numeral::Numeral)> {
@@ -876,7 +876,7 @@ pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Te
 }
 
 /// [`inject`] with the **checked spelling** at its outermost layer
-/// (`docs/intro-by-type-design.md` §4.1): `at` is the un-reduced type the
+/// (`docs/elaborator/intro-by-type-design.md` §4.1): `at` is the un-reduced type the
 /// whole injection was checked at — `build_ctor`'s `pre_whnf` — and replaces
 /// that layer's `lhs`/`rhs`, which are the two summands of its whnf.
 ///
@@ -963,7 +963,7 @@ pub(crate) enum NatHead {
 }
 
 /// A closed numeral's value at any size: `Zero`, a literal, or successors of
-/// one (docs/wide-numerals-design.md). [`nat_value`] is this capped at a
+/// one (docs/language/wide-numerals-design.md). [`nat_value`] is this capped at a
 /// `usize`, for the readers that index with it.
 pub(crate) fn nat_numeral(t: &Term) -> Option<heather_kernel::term::Numeral> {
     match t {
@@ -998,7 +998,7 @@ pub(crate) fn nat_lit(k: usize) -> Term {
 /// kernel to accept the constructor.
 ///
 /// Rebuilt from the index rather than copied off `t`: a tag type that arrived
-/// as *code* decodes (through [`decoded`], docs/types-as-expressions.md) to an
+/// as *code* decodes (through [`decoded`], docs/language/types-as-expressions.md) to an
 /// `sEq` whose element type is still `El ⌜Nat⌝`, and copying that would put a
 /// quote in every constructor value's annotation slot.
 pub(crate) fn tag_value(t: &Type) -> Term {
@@ -1051,7 +1051,7 @@ impl Elaborator {
 
 impl InductivesMut<'_> {
     /// [`Elaborator::elab_inductive`] for a mutual group's family, which carries
-    /// its members (docs/mutual-inductive-design.md §2). Empty `members` is
+    /// its members (docs/inductives/mutual-inductive-design.md §2). Empty `members` is
     /// an ordinary declaration.
     pub(crate) fn elab_inductive_members(
         &mut self,
@@ -1067,7 +1067,7 @@ impl InductivesMut<'_> {
         }
         reject_function_fields(d)?;
         // An indexed coinductive declaration reads its index by observation
-        // (docs/codata-indexed-design.md §1–§2): the index binders are in
+        // (docs/inductives/codata-indexed-design.md §1–§2): the index binders are in
         // scope in the field types, a child writes its own index, and none of
         // the inductive index routes below applies.
         let co_index = match (&d.index, d.is_codata) {
@@ -1080,7 +1080,7 @@ impl InductivesMut<'_> {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
-        // Value parameters (docs/surface-value-parameters.md §1, §6). On a
+        // Value parameters (docs/language/surface-value-parameters.md §1, §6). On a
         // `record` uniformity across constructors is free; on an `inductive`
         // it is what `classify_fields` checks at every recursive occurrence
         // (`D<p̄>(v̄)` with the declaration's own parameters, in order), so a
@@ -1097,7 +1097,7 @@ impl InductivesMut<'_> {
             }
             // A value parameter's type is re-lowered per instantiation with
             // no skeleton slot, so an implicit mark in it has no consumer
-            // (docs/implicit-binders-design.md §3.4).
+            // (docs/language/implicit-binders-design.md §3.4).
             if crate::has_implicit_mark(&p.ty) {
                 return err(crate::IMPLICIT_MARK_REFUSED, p.ty.span);
             }
@@ -1123,7 +1123,7 @@ impl InductivesMut<'_> {
             {
                 return err(
                     format!(
-                        "`{sym}` is already a body spelling in this head: each spelling                          binds one referent, so `{}` installs a symbol at most once                          (docs/operators-onto-classes-design.md §5.2)",
+                        "`{sym}` is already a body spelling in this head: each spelling                          binds one referent, so `{}` installs a symbol at most once                          (docs/language/classes/operators-onto-classes-design.md §5.2)",
                         d.name
                     ),
                     p.span,
@@ -1157,7 +1157,7 @@ impl InductivesMut<'_> {
                 );
             }
         }
-        // The index telescope (docs/inductive-indexed-lowering.md §2): one
+        // The index telescope (docs/inductives/inductive-indexed-lowering.md §2): one
         // `Nat` binder into bare `Type`, this round. The grammar parses any
         // type; the shape is validated here so the message can say what the
         // round supports rather than "parse error".
@@ -1173,7 +1173,7 @@ impl InductivesMut<'_> {
                 else {
                     return err(
                         "an indexed declaration's head is `: (n: I) -> Type` \
-                         (docs/inductive-indexed-lowering.md §2)",
+                         (docs/inductives/inductive-indexed-lowering.md §2)",
                         ty.span,
                     );
                 };
@@ -1184,7 +1184,7 @@ impl InductivesMut<'_> {
                 if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
                     return err(
                         "an index telescope ends in bare `Type`; the family's level is \
-                         computed from the fields (docs/inductive-indexed-lowering.md §2)",
+                         computed from the fields (docs/inductives/inductive-indexed-lowering.md §2)",
                         cod.span,
                     );
                 }
@@ -1228,7 +1228,7 @@ impl InductivesMut<'_> {
                     c.span,
                 );
             }
-            // Per *module* now (docs/modules-design.md §4): two modules may
+            // Per *module* now (docs/language/modules-design.md §4): two modules may
             // each declare a `Cons`, and a use picks by uniqueness, by
             // `List::Cons`, or errors. Within one module a constructor name
             // still belongs to one type.
@@ -1244,7 +1244,7 @@ impl InductivesMut<'_> {
             NameLookup(self).check_declarable(&c.name, c.span)?;
             // The result annotation: mandatory on an indexed declaration's
             // constructors, an error elsewhere
-            // (docs/inductive-indexed-lowering.md §2).
+            // (docs/inductives/inductive-indexed-lowering.md §2).
             if !co_index.is_empty()
                 && let Some(r) = &c.result
             {
@@ -1255,7 +1255,7 @@ impl InductivesMut<'_> {
                          has no η, so an equation `t = {}(…)` at a corecursively defined `t` \
                          is uninhabited; write what the constructor knows about the index \
                          as a field over the index binders instead, and each child's index \
-                         in its type (docs/codata-indexed-design.md §1)",
+                         in its type (docs/inductives/codata-indexed-design.md §1)",
                         c.name, d.name, c.name
                     ),
                     r.span,
@@ -1278,7 +1278,7 @@ impl InductivesMut<'_> {
             // find yet, so an occurrence is either the uniform recursive one
             // — tier 1, lowered onto `Wf` — or a rejection, never a silent
             // lowering. An indexed declaration classifies by its own rules —
-            // route 1's (docs/inductive-indexed-lowering.md §3) or route 2b's
+            // route 1's (docs/inductives/inductive-indexed-lowering.md §3) or route 2b's
             // (docs/archive/inductive-fording-lowering.md §3.2) — and `route` already
             // decided which, for the declaration as a whole.
             let (res, res_expr, kind, rec_at, child_index) = match &route {
@@ -1312,7 +1312,7 @@ impl InductivesMut<'_> {
             // has no construction site that could leave one out by name. An
             // unindexed constructor's `Pos<A>` field is the one default
             // elsewhere: its fact is searched as a record field's is
-            // (docs/positivity-evidence-design.md §13).
+            // (docs/library/positivity-evidence-design.md §13).
             if let Some(field) = c.fields.iter().find(|f| f.default.is_some())
                 && (index.is_some() || !(d.is_record || is_pos_search(field)))
             {
@@ -1346,20 +1346,20 @@ impl InductivesMut<'_> {
         }
         // *Any* child-contributing field, not just a plain one: a constructor
         // whose only recursive field is a container has `arity() == 0` and is
-        // still tier 1 (docs/container-fields.md §3.1). Getting this wrong
+        // still tier 1 (docs/language/container-fields.md §3.1). Getting this wrong
         // classifies `Rose` as non-recursive and silently drops its children —
         // which is the hazard class, not a rejection, so
         // `container_fields::a_container_is_not_dropped` is the observer.
         let any_child = ctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
-        // Tier 2 (docs/inductive-tier2-w-lowering.md §1): a recursive function
+        // Tier 2 (docs/inductives/inductive-tier2-w-lowering.md §1): a recursive function
         // field anywhere puts the whole declaration on `W`, and `recursive`
         // keeps meaning "lowered onto `Wf`".
         //
         // An indexed family's function fields stay on the `IWf` route, which
-        // lowers them on `W` itself (docs/iwf-infinitary-design.md): tier 2's
+        // lowers them on `W` itself (docs/kernel/iwf-infinitary-design.md): tier 2's
         // restrictions below are about one children function with no index.
         let infinitary = index.is_none() && ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
-        // Codata (docs/codata-elaborator-design.md §2): any number of plain
+        // Codata (docs/inductives/codata-elaborator-design.md §2): any number of plain
         // and function children per constructor, since a `match` on a value of
         // `M` never has to rebuild the children function — its motive does
         // not depend on the scrutinee. A container field is not lowered yet.
@@ -1370,7 +1370,7 @@ impl InductivesMut<'_> {
                         format!(
                             "`{}` has a container field, which a `codata` constructor does not \
                              take this round: write the children as a function from `Fin(n)` \
-                             (docs/codata-elaborator-design.md §2)",
+                             (docs/inductives/codata-elaborator-design.md §2)",
                             c.name
                         ),
                         cd.span,
@@ -1386,7 +1386,7 @@ impl InductivesMut<'_> {
                         format!(
                             "`{}` has a container field, and `{}` is infinitary (it has a \
                              recursive function field): the two child kinds do not mix this \
-                             round (docs/inductive-tier2-w-lowering.md §1)",
+                             round (docs/inductives/inductive-tier2-w-lowering.md §1)",
                             c.name, d.name
                         ),
                         cd.span,
@@ -1399,7 +1399,7 @@ impl InductivesMut<'_> {
                              (it has a recursive function field): its children would be one \
                              function out of a sum, which a `match` cannot rebuild without \
                              funext. Split the constructor, or keep `{}` finitary \
-                             (docs/inductive-tier2-w-lowering.md §2.2)",
+                             (docs/inductives/inductive-tier2-w-lowering.md §2.2)",
                             c.name, d.name, d.name
                         ),
                         cd.span,
@@ -1407,7 +1407,7 @@ impl InductivesMut<'_> {
                 }
             }
         }
-        // A `record` is tier 0 by construction (docs/surface-records.md §2):
+        // A `record` is tier 0 by construction (docs/language/surface-records.md §2):
         // a recursive one is an `inductive`, and saying so is more useful than
         // silently lowering it onto `Wf` where the field names would still
         // project but the declaration would no longer be a record.
@@ -1415,7 +1415,7 @@ impl InductivesMut<'_> {
             return err(
                 format!(
                     "`{}` is a `record` but mentions itself: a recursive declaration is \
-                     an `inductive` (docs/surface-records.md §2)",
+                     an `inductive` (docs/language/surface-records.md §2)",
                     d.name
                 ),
                 d.span,
@@ -1426,7 +1426,7 @@ impl InductivesMut<'_> {
             for (i, (n, _)) in fields.iter().enumerate() {
                 // Field names are *accessors* on a record, so a duplicate is
                 // ambiguous rather than merely positional as it is on an
-                // `inductive` (docs/surface-records.md §2.2).
+                // `inductive` (docs/language/surface-records.md §2.2).
                 if fields[..i].iter().any(|(m, _)| m == n) {
                     return err(
                         format!(
@@ -1439,7 +1439,7 @@ impl InductivesMut<'_> {
                 }
             }
         }
-        // The `IWf` route's shape (`docs/iwf-former-design.md` §8.1): the
+        // The `IWf` route's shape (`docs/kernel/iwf-former-design.md` §8.1): the
         // declaration with its children deleted, registered as an ordinary
         // tier-0 declaration so that the unindexed tiers lower it verbatim.
         // Tags come from the qualified names (`types::declaration_tag`); a
@@ -1458,7 +1458,7 @@ impl InductivesMut<'_> {
                 return err(
                     format!(
                         "the nominal tag of `{}::{}` collides with `{}::{}`'s: tags are derived \
-                         from qualified names (docs/module-dag-design.md §3), and these two hash \
+                         from qualified names (docs/infrastructure/module-dag-design.md §3), and these two hash \
                          alike; rename one of them",
                         module, d.name, holder.scope.module, holder.name
                     ),
@@ -1473,7 +1473,7 @@ impl InductivesMut<'_> {
             );
         }
         // `varies A` names the type parameter a type constructor over this
-        // declaration abstracts (docs/lambda-carrier-instances-design.md §7.1).
+        // declaration abstracts (docs/language/classes/lambda-carrier-instances-design.md §7.1).
         // Only a type parameter: the unifier's constructor rule abstracts a
         // type argument. Naming the last one, the default, is accepted.
         let varies = match &d.varies {
@@ -1545,7 +1545,7 @@ impl InductivesMut<'_> {
         });
         // A tier-2 declaration's lowering can fail on what the declaration
         // *says* — a function domain with no code, domains at two levels
-        // (docs/inductive-tier2-w-lowering.md §1.5) — so an unparameterized
+        // (docs/inductives/inductive-tier2-w-lowering.md §1.5) — so an unparameterized
         // one is lowered once here, where that is a declaration error rather
         // than a surprise at its first use.
         if (ind.infinitary() || ind.codata) && ind.params.is_empty() && ind.valparams.is_empty() {
@@ -1578,7 +1578,7 @@ impl InductivesMut<'_> {
             }
         }
         // A field's default is checked here, used or not (§9.7 of
-        // docs/named-arguments-design.md), as a parameter's is at its
+        // docs/language/named-arguments-design.md), as a parameter's is at its
         // declaration.
         Inductives(self).check_field_defaults_at_declaration(&ind)?;
         // From here on registration is infallible. The type registry installs
@@ -1599,13 +1599,13 @@ impl InductivesMut<'_> {
         // emits later references them; see `gendefs.rs`.
         //
         // Tier 2 names its leaf predicate and nothing else
-        // (docs/inductive-tier2-w-lowering.md §13): its lowering is spelled
+        // (docs/inductives/inductive-tier2-w-lowering.md §13): its lowering is spelled
         // with that definition, and the rest stays inline.
         if ind.infinitary() {
             self.register_w_canon(&ind, d.span);
         } else if ind.codata {
             // The signature's shape, positions and child index
-            // (docs/codata-named-signature-design.md): `⟦D⟧` is an `M` over
+            // (docs/inductives/codata-named-signature-design.md): `⟦D⟧` is an `M` over
             // references to them, and nothing else is named.
             CodataMut(self).register_m_sig(&ind, d.span);
         } else {
@@ -1616,7 +1616,7 @@ impl InductivesMut<'_> {
 }
 
 impl Inductives<'_> {
-    /// The index telescope's domain (docs/inductive-indexed-lowering.md §2,
+    /// The index telescope's domain (docs/inductives/inductive-indexed-lowering.md §2,
     /// §8.2): `Nat`, or a previously declared inductive that can carry a
     /// family. Each rejection below is a *shape* the scheme has no branch for,
     /// not a policy — a parameterized index would need its arguments at every
@@ -1627,7 +1627,7 @@ impl Inductives<'_> {
             return Ok(IdxTy::Nat);
         }
         // One of the declaration's own type parameters: an open index, which
-        // only the `IWf` route lowers (docs/iwf-former-design.md §8.2).
+        // only the `IWf` route lowers (docs/kernel/iwf-former-design.md §8.2).
         if let TyKind::Named { name: iname, args } = &dom.kind
             && args.is_empty()
             && params.iter().any(|p| p == iname)
@@ -1637,7 +1637,7 @@ impl Inductives<'_> {
         let TyKind::Named { name: iname, args } = &dom.kind else {
             return err(
                 "an index is a `Nat` or a previously declared inductive \
-                 (docs/inductive-indexed-lowering.md §8.2)",
+                 (docs/inductives/inductive-indexed-lowering.md §8.2)",
                 dom.span,
             );
         };
@@ -1658,7 +1658,7 @@ impl Inductives<'_> {
             return err(
                 format!(
                     "`{iname}` takes parameters and cannot be an index type this round \
-                     (docs/inductive-indexed-lowering.md §8.3)"
+                     (docs/inductives/inductive-indexed-lowering.md §8.3)"
                 ),
                 dom.span,
             );
@@ -1668,7 +1668,7 @@ impl Inductives<'_> {
                 format!(
                     "`{iname}` is itself an indexed family; indexing `{name}` by it would \
                      need a family over a family, which is not this scheme \
-                     (docs/inductive-indexed-lowering.md §8.3)"
+                     (docs/inductives/inductive-indexed-lowering.md §8.3)"
                 ),
                 dom.span,
             );
@@ -1687,7 +1687,7 @@ impl Inductives<'_> {
                 format!(
                     "`{iname}` has a container field (`[{iname}; n]`), so its recursive \
                      arguments are not a fixed list; an index type's constructors must \
-                     have a literal arity (docs/container-fields.md §3.1)"
+                     have a literal arity (docs/language/container-fields.md §3.1)"
                 ),
                 dom.span,
             );
@@ -1697,7 +1697,7 @@ impl Inductives<'_> {
                 format!(
                     "`{iname}` has a recursive function field, so its recursive \
                      arguments are not a fixed list; an index type's constructors must \
-                     have a literal arity (docs/inductive-tier2-w-lowering.md §1)"
+                     have a literal arity (docs/inductives/inductive-tier2-w-lowering.md §1)"
                 ),
                 dom.span,
             );
@@ -1746,7 +1746,7 @@ impl Inductives<'_> {
         // Level 0 **unconditionally**, like `Fin`: the surface has one `True`,
         // and the positions that want it — a `datarepr`'s `inv`, which is
         // `(r: R) -> Type` — are level-0 positions
-        // (`docs/datarepr-design.md` §1.4 note 6). `Unit^l` at other levels is
+        // (`docs/native/datarepr-design.md` §1.4 note 6). `Unit^l` at other levels is
         // a kernel former with no surface spelling, exactly as before.
         //
         // Claimed only when no declaration answers, so a file that declares
@@ -1764,7 +1764,7 @@ impl Inductives<'_> {
                  (`x: Pos<Nat>`), a function's result (`fn f(…) → Pos<Nat>`) or a named \
                  record or constructor field (`den: Pos<Nat>`), and stands for the carrier \
                  beside a searched `0 < x` \
-                 (docs/positivity-evidence-design.md §6 B). Here, write the carrier and the \
+                 (docs/library/positivity-evidence-design.md §6 B). Here, write the carrier and the \
                  hypothesis; a positive type for function domains and containers is \
                  issues/positive-refinement-type.md"
                     .to_string(),
@@ -1772,7 +1772,7 @@ impl Inductives<'_> {
             );
         }
         // A mutual group's member is a view of its family
-        // (docs/mutual-inductive-design.md §2); an indexed one is written
+        // (docs/inductives/mutual-inductive-design.md §2); an indexed one is written
         // applied, and reaches `try_indexed_ty` instead.
         if self.lookup_inductive(name).is_none()
             && let Some((fam, k)) = self.lookup_member(name)
@@ -1918,13 +1918,13 @@ impl Inductives<'_> {
         Ok(out)
     }
 
-    /// A type named by a **value definition** (docs/fixed-width-integers-design.md
+    /// A type named by a **value definition** (docs/library/fixed-width-integers-design.md
     /// §2): `u8` where `def u8: Type = BitVec(8);`, and `u27` where `def u:
     /// Nat → Type = …;` is a **width family** and `u27` itself names
     /// nothing, read as `u(27)`. `None` when the name is neither, so the
     /// caller's "unknown type" stands.
     ///
-    /// Unlike a type-valued `fn` call (`docs/types-as-expressions.md` §4,
+    /// Unlike a type-valued `fn` call (`docs/language/types-as-expressions.md` §4,
     /// lazily `El` of the call), the name is expanded **on the spot**: δ
     /// through the definition and decoded to the type it names, so `u8` *is*
     /// `BitVec(8)` to every reader after this one — numerals, instance
@@ -2018,7 +2018,7 @@ impl Inductives<'_> {
     }
 
     /// `D<ā>(v̄)` written in **type position**: a record applied to its value
-    /// parameters (docs/surface-value-parameters.md §3), which is what makes it
+    /// parameters (docs/language/surface-value-parameters.md §3), which is what makes it
     /// a predicate. The parser's applied-type-is-never-called backtracking
     /// delivers it as a [`TyKind::OfExpr`], the same road
     /// [`IndexedFamilies::try_indexed_ty`] travels; this recognizes the record case before
@@ -2120,7 +2120,7 @@ impl Inductives<'_> {
 
     /// A declared type former **partially applied**, checked against an
     /// expected function type whose ultimate codomain is a universe
-    /// (`docs/record-type-partial-application.md` §2). This is
+    /// (`docs/language/record-type-partial-application.md` §2). This is
     /// [`Self::build_ctor_value`]'s η-expansion pointed at the *type* reading:
     ///
     /// ```text
@@ -2130,7 +2130,7 @@ impl Inductives<'_> {
     ///
     /// `None` — not an error — for every shape that is not this one, so every
     /// reading the constructor arms have today is untouched. The disambiguator
-    /// is `docs/record-type-values.md` §2.1's, one arrow further in: no
+    /// is `docs/language/record-type-values.md` §2.1's, one arrow further in: no
     /// constructor inhabits a universe, and no record type is a `Π`, so an
     /// expected Π-spine that ends in `Ty l` can only want the type former.
     /// Committing on exactly that shape is what lets an arity mismatch be
@@ -2219,7 +2219,7 @@ impl Inductives<'_> {
         // The extra arguments are *surface* variables, so the saturated
         // spelling is lowered by `try_valparam_ty` exactly as a written
         // `D(v̄, x̄)` in type position is — no second copy of the instance
-        // lowering (`docs/record-type-values.md` §2).
+        // lowering (`docs/language/record-type-values.md` §2).
         let mut vargs = args.to_vec();
         vargs.extend(peeled.iter().map(|(binder, ..)| Expr {
             kind: ExprKind::Var(binder.clone()),
@@ -2263,7 +2263,7 @@ impl Inductives<'_> {
     ///
     /// [`Self::check_type_former_value`]'s value-parameter η-expansion with
     /// the binders filling the **type** parameters instead: `<A>` parameters
-    /// are substituted at each use (`docs/inductive-tier0-lowering.md` §2),
+    /// are substituted at each use (`docs/inductives/inductive-tier0-lowering.md` §2),
     /// so the abstraction is the elaborator's and the body is the ordinary
     /// lowering of `D<x̄>` at local type variables — which the emission
     /// respelling quotes as `app(D#tycode_fn^δ; x̄)` where the declaration
@@ -2272,7 +2272,7 @@ impl Inductives<'_> {
     ///
     /// A **partial** type-argument list fills the leading parameters and
     /// abstracts the rest (`Parser<T>` at `Type → Type`,
-    /// docs/lambda-carrier-instances-design.md §7.3 reader 1): the written
+    /// docs/language/classes/lambda-carrier-instances-design.md §7.3 reader 1): the written
     /// arguments are applied to the code function, η-short, so
     /// `Parser<T>(A)` is the reference spelling of `Parser<T, A>`. An
     /// argument list is a constructor's. Every domain must be a universe — a
@@ -2575,7 +2575,7 @@ impl Inductives<'_> {
 
 impl Elaborator {
     /// Check a use site's value arguments against the declared telescope
-    /// (docs/surface-value-parameters.md §2). Parameter `j`'s declared type may
+    /// (docs/language/surface-value-parameters.md §2). Parameter `j`'s declared type may
     /// mention parameters `0..j`, so it is elaborated in a context carrying the
     /// earlier arguments as aliases — all bound at the *ambient* depth, so no
     /// shifting happens here. The shifting that matters happens later, in
@@ -2583,7 +2583,7 @@ impl Elaborator {
     ///
     /// The declared type may also mention the declaration's **type**
     /// parameters — `class Monoid<A>(op: A -> A -> A)` is the case that made
-    /// this true (docs/operation-indexed-classes-design.md §3) — so they are
+    /// this true (docs/language/classes/operation-indexed-classes-design.md §3) — so they are
     /// bound here at the instantiation, exactly as [`Inductives::lower_ctor`] binds
     /// them for the field types. `record R(p: Prog, env: Val)`, whose value
     /// parameters' types are closed, is unaffected.
@@ -2759,7 +2759,7 @@ impl Inductives<'_> {
 
 impl Elaborator {
     /// `⟦D<ā>⟧`: the tag spine at tier 0, and the `Wf` over it at tier 1
-    /// (`docs/inductive-tier1-wf-lowering.md` §4). Every other lowering in
+    /// (`docs/inductives/inductive-tier1-wf-lowering.md` §4). Every other lowering in
     /// this crate goes through here, so the two tiers cannot disagree about
     /// what a declaration's kernel type is.
     pub(crate) fn lower_instance(
@@ -2781,12 +2781,12 @@ impl Elaborator {
                 span,
             );
         }
-        // Tier 2 (docs/inductive-tier2-w-lowering.md §5): the shape is this
+        // Tier 2 (docs/inductives/inductive-tier2-w-lowering.md §5): the shape is this
         // same sum-of-Σs, wrapped in `W` and the leaf predicate.
         if ind.infinitary() {
             return Infinitary(self).lower_instance_w(cx, ind, args, vargs, span);
         }
-        // Codata (docs/codata-elaborator-design.md §2): the same shape under
+        // Codata (docs/inductives/codata-elaborator-design.md §2): the same shape under
         // the negative `M`.
         if ind.codata {
             return Codata(self).lower_instance_m(cx, ind, args, vargs, None, span);
@@ -2832,7 +2832,7 @@ impl Inductives<'_> {
             // A declaration with no constructors lowers to `Empty` (§3.3).
             //
             // **This is where the level-0 assumption enters.** `Unit`/`Empty`
-            // are level-indexed (docs/unit-empty-level-indexing.md), but tier
+            // are level-indexed (docs/kernel/unit-empty-level-indexing.md), but tier
             // 0 monomorphises type parameters, so every encoding this module
             // builds lives at level 0 and there is no `l` here to derive one
             // from — `parts` is empty. A polymorphic declaration would take
@@ -2900,7 +2900,7 @@ impl Inductives<'_> {
 
     /// [`Self::lower_ctor`], also returning the **domain** of the
     /// constructor's recursive function field, if it has one
-    /// (docs/inductive-tier2-w-lowering.md §4): `(A, its level, j)` with `A`
+    /// (docs/inductives/inductive-tier2-w-lowering.md §4): `(A, its level, j)` with `A`
     /// lowered by this same walk at the point the field sits, so scoped over
     /// `(Γ, #tag, p₀, …, p_{j-1})` — the tag and the `j` payload fields
     /// declared before it. One walk for both, so the domain sees exactly the
@@ -2963,7 +2963,7 @@ impl Elaborator {
             })
             .collect();
         // Value parameters, bound to the terms the use site supplied
-        // (docs/surface-value-parameters.md §2). An `Alias` is exactly the
+        // (docs/language/surface-value-parameters.md §2). An `Alias` is exactly the
         // right carrier: it is not a kernel binder, it is inlined at each use,
         // and its `depth` is what a use gets weakened by — which is the whole
         // correctness obligation here. The field spine pushes the tag and then
@@ -2973,7 +2973,7 @@ impl Elaborator {
         // Getting this shift wrong does **not** produce a kernel rejection: an
         // un-shifted parameter under the Σ binder captures the field above it
         // and writes a well-formed but *different* — typically trivially
-        // inhabited — type (`docs/surface-existential-investigation.md` §B.1
+        // inhabited — type (`docs/language/surface-existential-investigation.md` §B.1
         // test 9, §H risk 3). The observers are therefore propositional, in
         // `crates/elab/tests/value_parameters.rs`, not merely structural.
         for ((name, _), (tm, ty, level)) in ind.valparams.iter().zip(vargs) {
@@ -2994,7 +2994,7 @@ impl Elaborator {
 
 impl Inductives<'_> {
     /// A record's field defaults, checked where they are written
-    /// (docs/named-arguments-design.md §9.7), by the rule a parameter's
+    /// (docs/language/named-arguments-design.md §9.7), by the rule a parameter's
     /// default is: a discharge is left to each construction, a value is
     /// elaborated and kernel-checked in the field telescope
     /// ([`Defaults::check_default_at_declaration`]).
@@ -3077,7 +3077,7 @@ impl Inductives<'_> {
 
     /// [`Self::lower_ctor_with_domain`] for every recursive function field of
     /// the constructor, in field order: a `codata` constructor may have
-    /// several (docs/codata-elaborator-design.md §2), a tier-2 one at most
+    /// several (docs/inductives/codata-elaborator-design.md §2), a tier-2 one at most
     /// one.
     pub(crate) fn lower_ctor_with_domains(
         &self,
@@ -3093,7 +3093,7 @@ impl Inductives<'_> {
 
     /// [`Self::lower_ctor_with_domains`] with `extra` aliases in scope in the
     /// field types, scoped at `cx`'s depth: an indexed `codata`
-    /// declaration's index binders (docs/codata-indexed-design.md §3).
+    /// declaration's index binders (docs/inductives/codata-indexed-design.md §3).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn lower_ctor_with_domains_at(
         &self,
@@ -3135,9 +3135,9 @@ impl Inductives<'_> {
             // A field *at a universe* — `record Mon { carrier: Type, unit:
             // carrier, … }` — is a type name for the fields after it, by the
             // same rule as a `Type`-valued parameter: a type name is any
-            // binder whose type is `Type<n>` (docs/surface-universe.md §2).
+            // binder whose type is `Type<n>` (docs/language/surface-universe.md §2).
             // This is what makes the **bundled** record writable, the case
-            // docs/surface-records.md §3 named as waiting on this round.
+            // docs/language/surface-records.md §3 named as waiting on this round.
             if let Type::Ty(level) = t {
                 fcx.tyvars.push(TyVar {
                     name: fname,
@@ -3186,9 +3186,9 @@ impl Elaborator {
             Type::Wf { shape, level, .. } => (Rc::clone(shape), level.clone()),
             // Tier 2: `Σ(t : W(x : S). P). El(canon t)`, and the summands are
             // `S`'s at the `W`'s shape level
-            // (docs/inductive-tier2-w-lowering.md §5).
+            // (docs/inductives/inductive-tier2-w-lowering.md §5).
             // Codata: `M(Unit; _. S; …)`, the summands `S`'s at the shape
-            // level (docs/codata-elaborator-design.md §2).
+            // level (docs/inductives/codata-elaborator-design.md §2).
             Type::M { sig, index } => (Rc::new(sig.shape_at(index)), sig.level.clone()),
             other => match crate::infinitary::w_of(other) {
                 Some((shape, shape_level)) => (shape, shape_level),
@@ -3241,7 +3241,7 @@ impl Elaborator {
 
 impl Inductives<'_> {
     /// [`Elaborator::spine`] of a type scoped in `cx`, a named codata signature
-    /// unfolded first (docs/codata-named-signature-design.md §3): the readers
+    /// unfolded first (docs/inductives/codata-named-signature-design.md §3): the readers
     /// that take a codata equation apart (`inj`, `absurd`) arrive with one.
     pub(crate) fn spine_in(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
         if let Type::M { sig, index } = &*decoded(ty)
@@ -3307,16 +3307,16 @@ impl Elaborator {
             Type::Wf { shape, .. } => self.tag_of(shape),
             Type::Sum { lhs, .. } => self.tag_of(lhs),
             // Codata: the tag is in the `M`'s shape, under its index binder,
-            // which the shape never mentions (docs/codata-elaborator-design.md
+            // which the shape never mentions (docs/inductives/codata-elaborator-design.md
             // §2).
             Type::M { sig, index } => match Codata(self).m_sig_tag(sig) {
-                // A named signature (docs/codata-named-signature-design.md):
+                // A named signature (docs/inductives/codata-named-signature-design.md):
                 // the tag is its shape definition's key.
                 Some(tag) => self.types.by_tag(tag).cloned(),
                 None => self.tag_of(&sig.shape_at(index)),
             },
             // Tier 2: through the `Σ` and the `W` to the shape
-            // (docs/inductive-tier2-w-lowering.md §5).
+            // (docs/inductives/inductive-tier2-w-lowering.md §5).
             Type::Sigma { .. } if crate::infinitary::w_of(ty).is_some() => {
                 self.tag_of(&crate::infinitary::w_of(ty)?.0)
             }
@@ -3339,14 +3339,14 @@ impl Inductives<'_> {
     /// (`issues/inductive-spelling-codes-nonrecursive.md`).
     fn display_shape(&self, ty: &Type) -> Type {
         // A whole-type reference first — since
-        // `docs/per-instantiation-type-codes-design.md` a *parameterized*
+        // `docs/inductives/per-instantiation-type-codes-design.md` a *parameterized*
         // instantiation has one too, and the constructor spine display reads
         // lives behind it (`List<A>` rather than `List<…>`).
         let inline = self.unspell_here(ty);
         let ty = inline.as_ref().unwrap_or(ty);
         // …and the kernel's lazy *decode* of one, which is what a type
         // reduced outside `Elaborator::whnf` arrives as: `Wf(El ⌜S⌝). n`,
-        // `docs/wf-shape-code-design.md` §1.4's look-alike.
+        // `docs/inductives/wf-shape-code-design.md` §1.4's look-alike.
         let decoded = decode_deep(ty);
         let ty = decoded.as_ref().unwrap_or(ty);
         let shape = match ty {
@@ -3503,7 +3503,7 @@ impl Inductives<'_> {
     // -- constructors (§4) --------------------------------------------------
 
     /// A constructor in checking position, saturated **or not**
-    /// (`docs/constructor-function-values.md` §2). With every field supplied
+    /// (`docs/language/constructor-function-values.md` §2). With every field supplied
     /// this is [`Elaborator::build_ctor`]; with fields missing and a `Π` expected it
     /// is the η-expansion
     ///
@@ -3621,7 +3621,7 @@ impl Elaborator {
         }
         if ind.index.is_some() {
             // An indexed constructor reads the *family form* of the expected
-            // type, not its whnf (docs/inductive-indexed-lowering.md §5;
+            // type, not its whnf (docs/inductives/inductive-indexed-lowering.md §5;
             // docs/archive/inductive-fording-lowering.md §6.3 for route 2b's).
             if ind.skel.is_some() {
                 return IwfFamily(self).build_iwf_ctor(cx, ind, i, args, expected, expected_lvl, span);
@@ -3630,11 +3630,11 @@ impl Elaborator {
         }
         let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
         if ind.infinitary() {
-            // Tier 2 (docs/inductive-tier2-w-lowering.md §6).
+            // Tier 2 (docs/inductives/inductive-tier2-w-lowering.md §6).
             return Infinitary(self).build_ctor_w(cx, ind, i, &args, expected, span);
         }
         if ind.codata {
-            // Codata (docs/codata-elaborator-design.md §3).
+            // Codata (docs/inductives/codata-elaborator-design.md §3).
             return Codata(self).build_ctor_m(cx, ind, i, &args, expected, span);
         }
         let prepared = Inductives(self).prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
@@ -3753,7 +3753,7 @@ impl Inductives<'_> {
         // re-elaborated from the argument: the arity term projects the same
         // field with the same function (`ConstBody::Arity`), so the two agree
         // by construction instead of by two elaborations happening to match
-        // (docs/container-fields.md §3.4).
+        // (docs/language/container-fields.md §3.4).
         let container = match (ctor.container(), &container) {
             (Some((_, p)), Some(arg)) => {
                 // The projection's receiver must infer, and the tuple was
@@ -3819,7 +3819,7 @@ impl Inductives<'_> {
         // a spine; the component form (under a quotation, or a recursive
         // declaration whose expected type is not a `Wf`) reads one at every
         // layer, and only then is the spine respelled, over an **emission** copy
-        // (`docs/annotation-component-respell-design.md` §2.3): the `Inl`/
+        // (`docs/elaborator/annotation-component-respell-design.md` §2.3): the `Inl`/
         // `Inr` annotations of a constructor value carry `⟦c_j⟧` and the sum
         // tails verbatim, and their mass is the embedded field types — a
         // value of an `⟦Ir⟧`-field declaration writes `⟦Ir⟧` once per payload
@@ -3855,7 +3855,7 @@ impl Inductives<'_> {
             );
         };
         // …and the `sup_f`'s own two slots take their **references**
-        // (`docs/wf-shape-code-design.md` §3.1). This is the value site the
+        // (`docs/inductives/wf-shape-code-design.md` §3.1). This is the value site the
         // measurement put first: a constructor value carries one whole shape
         // and one whole arity term, which for a large declaration is most of
         // what the value costs. The slots are the former's components rather
@@ -3925,7 +3925,7 @@ impl Elaborator {
 impl Inductives<'_> {
     /// [`Elaborator::build_fields`] plus, aligned positionally with `args`, each
     /// field's implicitness skeleton derived from its *stored surface* type
-    /// (docs/implicit-binders-design.md §6.1's third site) — what lets a
+    /// (docs/language/implicit-binders-design.md §6.1's third site) — what lets a
     /// record literal's field be an implicit lambda. Empty for every caller
     /// that has no surface fields at hand.
     pub(crate) fn build_fields_skel<A: Borrow<Expr>>(
@@ -3946,7 +3946,7 @@ impl Inductives<'_> {
         } = head
         else {
             // The Unit terminator (§3.1): every field consumed. `Unit` is
-            // level-indexed (docs/unit-empty-level-indexing.md), so match at
+            // level-indexed (docs/kernel/unit-empty-level-indexing.md), so match at
             // *any* level and take the inhabitant's level from the type —
             // matching on `Unit^0` would silently stop terminating records
             // once a declaration lives above level 0.
@@ -3980,7 +3980,7 @@ impl Inductives<'_> {
         let tail_tm = self.build_fields_skel(cx, &tail, rest, false, skels_rest, span)?;
         // The emitted `Pair`'s annotations are the elimination-side projection
         // chain's dual and take the same reference spelling
-        // (`docs/annotation-component-respell-design.md` §2.3): a constructor
+        // (`docs/elaborator/annotation-component-respell-design.md` §2.3): a constructor
         // *value* of an `⟦Ir⟧`-field declaration otherwise carries the field
         // type verbatim in its label tuple. The field arguments themselves
         // were checked against the inline components above, per the line.
@@ -3988,7 +3988,7 @@ impl Inductives<'_> {
         // a code literal (`decode_deep`), so a tuple built at an `El ⌜Σ…⌝`
         // record type spells each link as the next link's own type does.
         // …unless the checked spellings are emitted, where the tuple carries
-        // **no** type (`docs/intro-by-type-design.md` §2.1, §4.1): every layer
+        // **no** type (`docs/elaborator/intro-by-type-design.md` §2.1, §4.1): every layer
         // is a field of the injection or of the layer above it, a checking
         // position, and the kernel checks it against a description of the
         // component. `fst`/`snd` are the components of `ctor_ty`'s whnf —
@@ -4041,7 +4041,7 @@ impl Inductives<'_> {
         if ind.index.is_some() {
             // Reachable only when a scrutinee's type arrived pre-reduced (the
             // family form is gone, and with it the index). Diagnosed rather
-            // than mis-matched (docs/inductive-indexed-lowering.md §6).
+            // than mis-matched (docs/inductives/inductive-indexed-lowering.md §6).
             return err(
                 format!(
                     "cannot `match` here: `{}` is an indexed family, but the \
@@ -4115,23 +4115,23 @@ impl Inductives<'_> {
             .collect();
         if ind.codata {
             // Codata: a case tree on the label of `out(s)`, at the motive's
-            // instance at `s` itself (docs/codata-elaborator-design.md §4).
+            // instance at `s` itself (docs/inductives/codata-elaborator-design.md §4).
             return Codata(self).elab_match_m(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         if ind.recursive {
             // Tier 1: one `elim_Wf`, not a case tree over the scrutinee
-            // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
+            // (docs/inductives/inductive-tier1-wf-lowering.md §6). Everything above is
             // surface bookkeeping and is shared.
             return Wf(self).elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         if ind.infinitary() {
             // Tier 2: one `elim_W` over the tree, applied to its leaf proof
-            // (docs/inductive-tier2-w-lowering.md §7).
+            // (docs/inductives/inductive-tier2-w-lowering.md §7).
             return Infinitary(self).elab_match_w(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
         // The tier-0 twin of `wf.rs`'s motive respell
-        // (`docs/family-type-code-defs-design.md`, 2026-08-12 extension). The
+        // (`docs/inductives/family-type-code-defs-design.md`, 2026-08-12 extension). The
         // motive is written into every `Case` node of the tag tree and
         // substituted into every arm's obligation, so it is this lowering's
         // one Θ(arms)-copied whole type; the scrutinee's own `⟦D⟧` never
@@ -4141,10 +4141,10 @@ impl Inductives<'_> {
         // minted for it is stamped one past `Γ`'s length. Passed as a depth
         // rather than shifted afterwards, because the instance route mints an
         // *open* reference whose arguments are already scoped there
-        // (`docs/per-instantiation-type-codes-design.md` §4.1).
+        // (`docs/inductives/per-instantiation-type-codes-design.md` §4.1).
         let motive = GeneratedDefs(self).respell_ty_at(cx, &motive, 1, 0).unwrap_or(motive);
         // The emission copy of the spine, beside the structural one — the same
-        // split the tier-1 lowering takes (`docs/wf-shape-code-design.md`
+        // split the tier-1 lowering takes (`docs/inductives/wf-shape-code-design.md`
         // §3.4). A tier-0 `match` writes the constructor payload types into
         // every `Case` and every injection, and a payload type embeds its
         // fields' lowerings verbatim.
@@ -4339,7 +4339,7 @@ impl Inductives<'_> {
         expected: &Type,
         mlvl: &Level,
         // Aligned with the binders: each field's implicitness skeleton from
-        // its stored surface type (docs/implicit-binders-design.md §3.1), so
+        // its stored surface type (docs/language/implicit-binders-design.md §3.1), so
         // a matched-out function field inserts at its uses in the arm body.
         // Empty when the caller cannot align them (a ctor with children —
         // the Σ order is payload-then-children, not declaration order).
@@ -4418,7 +4418,7 @@ impl Inductives<'_> {
 }
 
 impl Elaborator {
-    /// Project field `idx` out of a record value (docs/surface-records.md
+    /// Project field `idx` out of a record value (docs/language/surface-records.md
     /// §4.3). This is [`Inductives::elab_arm`]'s walk with the aliasing removed:
     /// step down the Σ spine, skipping the nominal tag, and stop at the
     /// wanted field. `π_j = fst(snd^j(value))`, with the *j*-th `snd` carrying
@@ -4439,7 +4439,7 @@ impl Elaborator {
     ) -> R<(Term, Type, Level)> {
         // The named projection, where the declaration registered one
         // (`gendefs.rs`, `issues/theorem-field-projection-oom.md`, and
-        // `docs/per-instantiation-type-codes-design.md` §13 for the
+        // `docs/inductives/per-instantiation-type-codes-design.md` §13 for the
         // telescoped case). It is the walk below with its exponent removed
         // *and* with no `Σ` ever reconstituted against the receiver's own
         // reference, so it comes first; the walk stays as the fallback for
@@ -4563,7 +4563,7 @@ impl Elaborator {
         let mut cur_emit = crate::stats::timed(crate::stats::Timer::ProjectionEmit, || match self.emit_ty(cx, record_ty, 0) {
             Some(emitted) => Some(emitted),
             // The type may **already** be the emission spelling: since
-            // `docs/per-instantiation-type-codes-design.md` a parameterized
+            // `docs/inductives/per-instantiation-type-codes-design.md` a parameterized
             // record's instantiation has a name, so a receiver's inferred
             // type arrives as `El (app(D#tycode_fn^δ; ā))` — and `emit_ty` is
             // idempotent, so "nothing left to change" and "nothing to name"
@@ -4611,7 +4611,7 @@ impl Elaborator {
                     // an exponentially large type once per field. That is a
                     // 4 GiB abort on the eleven-field cross-referencing record
                     // of `crates/elab/tests/record_projection_size.rs`
-                    // (§13.10 of `docs/per-instantiation-type-codes-design.md`,
+                    // (§13.10 of `docs/inductives/per-instantiation-type-codes-design.md`,
                     // and §13.8 is the same sentence at the registration side:
                     // the field type is respelled, the tail never).
                     let behind_a_name = !matches!(emitted, Type::Sigma { .. });
@@ -4684,7 +4684,7 @@ impl Elaborator {
 impl Inductives<'_> {
     /// The record declaration a lowered type belongs to, if it is one. A
     /// non-record inductive gives `None`: its field names are positional, not
-    /// accessors (docs/surface-records.md §2).
+    /// accessors (docs/language/surface-records.md §2).
     pub(crate) fn record_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
         self.tag_of(ty).filter(|i| i.is_record)
     }
@@ -4696,7 +4696,7 @@ impl Elaborator {
     /// a type annotation: `dom(env)` with `dom := λ e => NatEnv(e)` is `El` of
     /// a β-redex, and [`decoded`] is deliberately context-free — it strips `El`
     /// off *canonical* codes only, because unfolding anything else is
-    /// conversion's job (docs/types-as-expressions.md §4). So the structural
+    /// conversion's job (docs/language/types-as-expressions.md §4). So the structural
     /// read is tried first and unchanged, and `whnf` is paid only when it
     /// fails, which is exactly the new shape.
     pub(crate) fn record_of_at(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Rc<Inductive>> {
@@ -4705,7 +4705,7 @@ impl Elaborator {
         }
         let head = self.whnf(cx, ty, span).ok()?;
         // …and through a **name**, which is the one new shape this round adds
-        // at this reader (`docs/name-per-value-design.md` §4's audit). The
+        // at this reader (`docs/elaborator/name-per-value-design.md` §4's audit). The
         // readback keeps a glued encoding folded on purpose — that is what
         // every structural reader anchors on — so a receiver whose type came
         // out of a named `build_ctor` reduct arrives as `El (D#tycode_fn^δ ā)`
@@ -4718,7 +4718,7 @@ impl Elaborator {
 }
 
 /// Is this field a recursive occurrence of the declaration being read
-/// (`docs/inductive-tier1-wf-lowering.md` §1)? Three outcomes, and the third
+/// (`docs/inductives/inductive-tier1-wf-lowering.md` §1)? Three outcomes, and the third
 /// is why this returns a `Result` rather than a `bool`:
 ///
 /// - `false` — the field does not mention `name` at all.
@@ -4729,7 +4729,7 @@ impl Elaborator {
 ///   at different arguments. Both are lowerable in principle and neither is
 ///   lowered here; a rejection with its own message is the whole point of
 ///   classifying rather than scanning.
-/// Classify every field of one constructor (`docs/container-fields.md` §3.1),
+/// Classify every field of one constructor (`docs/language/container-fields.md` §3.1),
 /// which has to be one pass rather than one call per field: a container
 /// field's length names an *earlier* field, and the position restrictions
 /// ("at most one container, last among the children") are properties of the
@@ -4760,7 +4760,7 @@ fn classify_fields(
                     format!(
                         "`{}` has more than one container field: the children are one \
                          tuple, and splitting it at a computed length is not an operation \
-                         it has (docs/container-fields.md §3.1)",
+                         it has (docs/language/container-fields.md §3.1)",
                         c.name
                     ),
                     f.ty.span,
@@ -4771,7 +4771,7 @@ fn classify_fields(
                 return err(
                     format!(
                         "a container field's length must be the name of a `Nat` field \
-                         declared before it (docs/container-fields.md §3.1)"
+                         declared before it (docs/language/container-fields.md §3.1)"
                     ),
                     len.span,
                 );
@@ -4782,7 +4782,7 @@ fn classify_fields(
                         "`{lname}` is not a `Nat` field of `{}` declared before this one; \
                          a container field's length is evaluated inside the shape, so it \
                          can only name an earlier payload field \
-                         (docs/container-fields.md §3.1)",
+                         (docs/language/container-fields.md §3.1)",
                         c.name
                     ),
                     len.span,
@@ -4810,7 +4810,7 @@ fn classify_fields(
                     format!(
                         "a recursive field of `{}` may not follow a container field: \
                          reaching it would mean skipping the container's children \
-                         (docs/container-fields.md §3.1)",
+                         (docs/language/container-fields.md §3.1)",
                         c.name
                     ),
                     f.ty.span,
@@ -4832,7 +4832,7 @@ fn classify_fields(
 
 /// An indexed `codata` head's telescope, `(i₁: I₁) -> … -> (iₙ: Iₙ) ->
 /// Type`, as (name, surface type) in written order
-/// (docs/codata-indexed-design.md §2). The types are lowered per instance.
+/// (docs/inductives/codata-indexed-design.md §2). The types are lowered per instance.
 fn codata_index_telescope(ix: &Ty, d: &InductiveDecl) -> R<Vec<(String, Ty)>> {
     let mut out: Vec<(String, Ty)> = Vec::new();
     let mut cur = ix;
@@ -4869,7 +4869,7 @@ fn codata_index_telescope(ix: &Ty, d: &InductiveDecl) -> R<Vec<(String, Ty)>> {
                 return err(
                     "an indexed `codata` head is `: (i: I) -> … -> Type`, every index \
                      binder named and the telescope ending in bare `Type` \
-                     (docs/codata-indexed-design.md §2)",
+                     (docs/inductives/codata-indexed-design.md §2)",
                     cur.span,
                 );
             }
@@ -4878,7 +4878,7 @@ fn codata_index_telescope(ix: &Ty, d: &InductiveDecl) -> R<Vec<(String, Ty)>> {
 }
 
 /// [`classify_fields`] for an indexed `codata` declaration
-/// (docs/codata-indexed-design.md §2): a child is `D<ā>(v̄, ē)` — the
+/// (docs/inductives/codata-indexed-design.md §2): a child is `D<ā>(v̄, ē)` — the
 /// parameters bare and in order, then one index expression per binder — or
 /// `(y: A) -> D<ā>(v̄, ē)`. Returns the kinds and, at each child, its `ē`.
 fn classify_codata_indexed(
@@ -4902,7 +4902,7 @@ fn classify_codata_indexed(
                     format!(
                         "field of `{}` mentions `{name}` nested inside another type: a child \
                          of indexed `codata` is `{own}` or a function into it \
-                         (docs/codata-indexed-design.md §2)",
+                         (docs/inductives/codata-indexed-design.md §2)",
                         c.name
                     ),
                     sp,
@@ -4927,7 +4927,7 @@ fn classify_codata_indexed(
                     "field of `{}` uses `{name}` at other arguments than a child takes: a child \
                      of indexed `codata` is `{own}` — the type parameters and value parameters \
                      bare and in order, then one index per binder ({n_idx}) \
-                     (docs/codata-indexed-design.md §2)",
+                     (docs/inductives/codata-indexed-design.md §2)",
                     c.name
                 ),
                 t.span,
@@ -4945,7 +4945,7 @@ fn classify_codata_indexed(
                 format!(
                     "`{}` has a container field, which a `codata` constructor does not take \
                      this round: write the children as a function from `Fin(n)` \
-                     (docs/codata-elaborator-design.md §2)",
+                     (docs/inductives/codata-elaborator-design.md §2)",
                     c.name
                 ),
                 f.ty.span,
@@ -4971,7 +4971,7 @@ fn classify_codata_indexed(
 }
 
 /// Decompose a constructor's result annotation `D<params>(pattern)` into an
-/// [`IdxPat`] (docs/inductive-indexed-lowering.md §2–§3): the type must be
+/// [`IdxPat`] (docs/inductives/inductive-indexed-lowering.md §2–§3): the type must be
 /// the declaration at its own parameters, and the index a depth-one, linear,
 /// constructor-headed pattern over the constructor's own fields. Everything
 /// else is a rejection with the route that *does* cover it named (§8.1).
@@ -5063,14 +5063,14 @@ fn parse_result_index<'a>(
             format!(
                 "`{}`'s result index is a numeral above `0`, which is a pattern deeper \
                  than one constructor — not index-recursive \
-                 (docs/inductive-indexed-lowering.md §8.1)",
+                 (docs/inductives/inductive-indexed-lowering.md §8.1)",
                 c.name
             ),
             idx.span,
         ),
         // A bare-variable result index. Two very different situations wear this
         // spelling, and sending both toward fording is what
-        // `docs/surface-existential-investigation.md` §C.7 asked this round to
+        // `docs/language/surface-existential-investigation.md` §C.7 asked this round to
         // correct:
         //
         // - *uniform* — every constructor's index is a bare variable. Then it
@@ -5089,7 +5089,7 @@ fn parse_result_index<'a>(
                  vary per constructor result. Write it as one: \
                  `inductive {name}({v}: Nat) {{ … }}`, or `record {name}({v}: Nat) {{ … }}` \
                  if `{name}` has a single constructor \
-                 (docs/surface-value-parameters.md §1, §6). A genuinely varying index is the \
+                 (docs/language/surface-value-parameters.md §1, §6). A genuinely varying index is the \
                  fording case (issues/indexed-families.md route 2b), and this is not it.",
                 c.name
             ),
@@ -5273,7 +5273,7 @@ fn decl_index_pattern(
                 format!(
                     "`{}`'s result index is deeper than one constructor: `{}`'s argument \
                      is itself constructor-headed, which needs simultaneous recursion — \
-                     a real extension, deferred (docs/inductive-indexed-lowering.md §8.1)",
+                     a real extension, deferred (docs/inductives/inductive-indexed-lowering.md §8.1)",
                     c.name, ict.name
                 ),
                 arg.span,
@@ -5338,7 +5338,7 @@ fn decl_index_pattern(
 }
 
 /// Classify an indexed constructor's fields
-/// (docs/inductive-indexed-lowering.md §3, generalized by §8.2): a pattern
+/// (docs/inductives/inductive-indexed-lowering.md §3, generalized by §8.2): a pattern
 /// variable is [`FieldKind::IndexVar`], a recursive occurrence `D<params>(x)`
 /// at a pattern variable that is a **recursive argument of the index
 /// constructor** is a [`FieldKind::Plain`] child-in-the-spine, and any other
@@ -5410,7 +5410,7 @@ fn classify_fields_indexed(
                         "a recursive field of `{}` must sit at the result index's \
                          pattern variable — `rec` is the immediate subindex and nothing \
                          else exists during the recursion \
-                         (docs/inductive-indexed-lowering.md §8.1; the general case is \
+                         (docs/inductives/inductive-indexed-lowering.md §8.1; the general case is \
                          issues/indexed-families.md route 2b)",
                         c.name
                     ),
@@ -5437,7 +5437,7 @@ fn classify_fields_indexed(
                     format!(
                         "a recursive field of `{}` sits at a pattern variable that is \
                          not a recursive argument of its result index's constructor: \
-                         {what} (docs/inductive-indexed-lowering.md §8.2)",
+                         {what} (docs/inductives/inductive-indexed-lowering.md §8.2)",
                         c.name
                     ),
                     f.ty.span,
@@ -5454,7 +5454,7 @@ fn classify_fields_indexed(
                     "field of `{}` mentions `{name}` without supplying its index (or \
                      nested inside another type): an indexed occurrence is \
                      `{name}<…>(x)` at the pattern variable \
-                     (docs/inductive-indexed-lowering.md §3)",
+                     (docs/inductives/inductive-indexed-lowering.md §3)",
                     c.name
                 ),
                 f.ty.span,
@@ -5472,18 +5472,18 @@ fn classify_fields_indexed(
 /// measured to fail on 2026-07-28, so a declaration with one non-route-1
 /// constructor fords **whole**.
 pub(crate) enum IdxRoute {
-    /// Route 1 (`docs/inductive-indexed-lowering.md`): per constructor, the
+    /// Route 1 (`docs/inductives/inductive-indexed-lowering.md`): per constructor, the
     /// result-index pattern, the field kinds, and each child's index-constructor
     /// argument.
     One(Vec<(IdxPat, Vec<FieldKind>, Vec<Option<usize>>)>),
-    /// The `IWf` route (`docs/iwf-former-design.md` §8): per constructor, the
+    /// The `IWf` route (`docs/kernel/iwf-former-design.md` §8): per constructor, the
     /// written result index, the field kinds, and each child's written index.
     Iwf(Vec<(Expr, Vec<FieldKind>, Vec<Option<Expr>>)>),
 }
 
 /// The classifier, read in order: route 1 if every constructor is
-/// route-1-eligible (`docs/inductive-indexed-lowering.md` §3), the `IWf`
-/// route if every constructor is `IWf`-eligible (`docs/iwf-former-design.md`
+/// route-1-eligible (`docs/inductives/inductive-indexed-lowering.md` §3), the `IWf`
+/// route if every constructor is `IWf`-eligible (`docs/kernel/iwf-former-design.md`
 /// §8), otherwise a rejection naming what failed where.
 fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     for c in &d.ctors {
@@ -5559,14 +5559,14 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
                     format!(
                         "`{}` is in neither indexed fragment: `{c1}` is not \
                          route-1-eligible ({m1}), and it is not `IWf`-eligible \
-                         either ({m2}) (docs/iwf-former-design.md §8)",
+                         either ({m2}) (docs/kernel/iwf-former-design.md §8)",
                         d.name
                     )
                 } else {
                     format!(
                         "`{}` is in neither indexed fragment: `{c1}` is not \
                          route-1-eligible ({m1}), and `{}` is not `IWf`-eligible \
-                         ({m2}) (docs/iwf-former-design.md §8)",
+                         ({m2}) (docs/kernel/iwf-former-design.md §8)",
                         d.name, c.name
                     )
                 };
@@ -5577,7 +5577,7 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     Ok(IdxRoute::Iwf(frows))
 }
 
-/// `IWf`-route eligibility for one constructor (`docs/iwf-former-design.md`
+/// `IWf`-route eligibility for one constructor (`docs/kernel/iwf-former-design.md`
 /// §8.1–§8.2). A child is `D<params>(e)` at **any** index expression `e` over
 /// the constructor's stored fields — the child index is stored in the label,
 /// not recomputed, so fording's F1–F3 are gone. What is left is what an `IWf`
@@ -5597,7 +5597,7 @@ fn classify_iwf(
     let mut child_idx: Vec<Option<Expr>> = vec![None; c.fields.len()];
     for (k, f) in c.fields.iter().enumerate() {
         // A recursive function field, `(y: A) -> D<params>(e)`
-        // (docs/iwf-infinitary-design.md §1): a child per inhabitant of `A`,
+        // (docs/kernel/iwf-infinitary-design.md §1): a child per inhabitant of `A`,
         // its index `e` over the stored fields and `y`. The declaration then
         // lowers on `W` rather than the kernel's `IWf`.
         let (child_ty, fn_child) = match &f.ty.kind {
@@ -5643,14 +5643,14 @@ fn classify_iwf(
                 format!(
                     "field of `{}` mentions `{name}` without supplying its index (or \
                      nested inside another type): an indexed occurrence is \
-                     `{name}<…>(e)` (docs/iwf-former-design.md §8.1)",
+                     `{name}<…>(e)` (docs/kernel/iwf-former-design.md §8.1)",
                     c.name
                 ),
                 f.ty.span,
             );
         }
     }
-    // A label cannot mention its children (`docs/inductive-tier1-wf-lowering.md`
+    // A label cannot mention its children (`docs/inductives/inductive-tier1-wf-lowering.md`
     // §2): the shape, the output index and the child indices are all read off
     // the label.
     let children: Vec<&str> = c
@@ -5784,7 +5784,7 @@ pub(crate) fn ty_mentions(t: &Ty, v: &str) -> bool {
 }
 
 /// The **shape declaration** of an `IWf`-route family
-/// (`docs/iwf-former-design.md` §8.1): the declaration with its children
+/// (`docs/kernel/iwf-former-design.md` §8.1): the declaration with its children
 /// deleted and its result annotations dropped. Every other field is stored,
 /// child-index fields included — they are ordinary payload now, which is what
 /// lifts F3. What remains is an ordinary tier-0 declaration, lowered verbatim
@@ -5839,7 +5839,7 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
 }
 
 /// The constructor an arm names, **through the scrutinee's type**
-/// (docs/modules-design.md §8, the free win): a `match` arm never consults the
+/// (docs/language/modules-design.md §8, the free win): a `match` arm never consults the
 /// global constructor table, because the scrutinee's declaration already says
 /// which constructors exist. An arm name is therefore unambiguous by
 /// construction even when two visible modules declare a `Cons`, and all
@@ -5916,7 +5916,7 @@ pub(crate) fn named_head(e: &Expr) -> Option<(&str, &[Ty])> {
 
 /// `t` *is* the declaration applied to something — `D<ā>` (a
 /// [`TyKind::Named`]) or `D<ā>(ē)`, which reaches a field type as a
-/// [`TyKind::OfExpr`] application (docs/surface-value-parameters.md §3) —
+/// [`TyKind::OfExpr`] application (docs/language/surface-value-parameters.md §3) —
 /// read as its type arguments and, for the applied spelling, its value
 /// arguments. `None` for every other type, including one that mentions `D`
 /// only further in.
@@ -5944,7 +5944,7 @@ fn self_head<'a>(t: &'a Ty, name: &str) -> Option<(&'a [Ty], Option<&'a [Expr]>)
 
 /// Is `t` the **uniform** recursive occurrence — the declaration at its own
 /// type parameters and its own value parameters, each bare and in order
-/// (tier 1 §1's rule, extended by docs/surface-value-parameters.md §6)? Only
+/// (tier 1 §1's rule, extended by docs/language/surface-value-parameters.md §6)? Only
 /// that occurrence is a child: it is the one whose type is the instance being
 /// declared, so lowering it as the `Wf`/`W` itself substitutes nothing. A
 /// value argument that differs (`ITree<R>(F)`, `D(Succ(n))`) would be an
@@ -6003,7 +6003,7 @@ fn classify_field(
                      declares no value parameters: the recursive occurrence is `{own}`. An \
                      argument that is the same in every occurrence is a value parameter \
                      (`inductive {name}(m: Nat) {{ … }}`); one that varies is an index \
-                     (docs/surface-value-parameters.md §6)"
+                     (docs/language/surface-value-parameters.md §6)"
                 ),
                 t.span,
             );
@@ -6015,7 +6015,7 @@ fn classify_field(
                      parameters: a recursive occurrence must be `{own}` exactly — its type \
                      parameters and then its value parameters, each bare and in order. A \
                      value argument that varies is an index, not a parameter \
-                     (docs/surface-value-parameters.md §6)"
+                     (docs/language/surface-value-parameters.md §6)"
                 ),
                 t.span,
             );
@@ -6024,7 +6024,7 @@ fn classify_field(
             format!(
                 "field of `{ctor}` uses `{name}` at arguments other than its own parameters \
                  (`{}`); parameters are monomorphized, so a recursive occurrence must be \
-                 uniform (docs/inductive-tier1-wf-lowering.md §1)",
+                 uniform (docs/inductives/inductive-tier1-wf-lowering.md §1)",
                 params.join(", ")
             ),
             t.span,
@@ -6035,7 +6035,7 @@ fn classify_field(
             format!(
                 "field of `{ctor}` mentions `{name}` nested inside another type: nested \
                  recursion (`Rose {{ Node(A, List Rose) }}`) is not lowered yet \
-                 (docs/inductive-tier1-wf-lowering.md §8)"
+                 (docs/inductives/inductive-tier1-wf-lowering.md §8)"
             ),
             sp,
         );
@@ -6048,7 +6048,7 @@ fn classify_field(
 ///
 /// It used to be that no field could have a function type at all, so a
 /// negative occurrence could not be written. Now one can
-/// (docs/surface-records.md §11.1), and what keeps polarity out of reach here
+/// (docs/language/surface-records.md §11.1), and what keeps polarity out of reach here
 /// is that [`reject_function_fields`] runs **first** and rejects a `Π` field
 /// mentioning the declaration in *either* position. So every occurrence that
 /// reaches this function is still under type constructors only, where it is
@@ -6062,7 +6062,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
         // An operator symbol is a name in its own namespace, never a
-        // declaration's (docs/operators-onto-classes-design.md §4).
+        // declaration's (docs/language/classes/operators-onto-classes-design.md §4).
         ExprKind::OpSymbol { .. }
         | ExprKind::Num(_)
         | ExprKind::SuffixedNum { .. }
@@ -6118,7 +6118,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         // are where a self-reference would hide.
         ExprKind::Match { .. } | ExprKind::MatchCode { .. } | ExprKind::J { .. } => true,
         // A block: conservative for the same reason, since its statements are
-        // where a self-reference would hide (docs/let-and-blocks-design.md
+        // where a self-reference would hide (docs/language/let-and-blocks-design.md
         // §4.4). A false positive costs a rejection; a false negative would
         // cost positivity.
         ExprKind::Block(_) => true,
@@ -6139,7 +6139,7 @@ pub(crate) fn occurs(t: &Ty, name: &str) -> Option<Span> {
         TyKind::Nat | TyKind::Univ { .. } => None,
         // A decoded expression (`m.carrier`). Scanned by *name*, conservatively:
         // a mention anywhere counts as an occurrence, since there is no type
-        // structure here to read polarity off (docs/surface-universe.md §4).
+        // structure here to read polarity off (docs/language/surface-universe.md §4).
         TyKind::OfExpr(e) | TyKind::TypeOf(e) => expr_mentions(e, name).then_some(t.span),
         TyKind::Eq(..) => None,
         TyKind::Named { name: n, args } => {
@@ -6172,20 +6172,20 @@ pub(crate) fn occurs(t: &Ty, name: &str) -> Option<Span> {
 
 /// A `Π` field whose domain or codomain mentions the declaration puts it in
 /// the **infinitary** tier. Exactly one shape of it is lowered
-/// (docs/inductive-tier2-w-lowering.md §1): a *top-level* field
+/// (docs/inductives/inductive-tier2-w-lowering.md §1): a *top-level* field
 /// `(y: A) -> D<p̄>` of an unindexed declaration, with `A` free of `D` — a
 /// strictly positive occurrence, `D` as the codomain and nowhere else. That
 /// field is classified [`FieldKind::FnChild`] by `classify_fields`, and the
 /// declaration lowers onto `W` (`infinitary.rs`).
 ///
 /// Every other `Π` that mentions the declaration is diagnosed rather than
-/// mis-lowered — the hazard class `docs/inductive-tier0-lowering.md` opens by
-/// naming (docs/surface-function-types.md §8): `D` in a domain (not strictly
+/// mis-lowered — the hazard class `docs/inductives/inductive-tier0-lowering.md` opens by
+/// naming (docs/language/surface-function-types.md §8): `D` in a domain (not strictly
 /// positive), a curried field (`A -> B -> D`, one arrow this round), a
 /// function field nested under another type, or one on an indexed family.
 ///
 /// A function field that does **not** mention the declaration is an ordinary
-/// **payload** and is accepted (corrected 2026-07-27, docs/surface-records.md
+/// **payload** and is accepted (corrected 2026-07-27, docs/language/surface-records.md
 /// §11). Nothing about it is infinitary: it is one `Type::Pi` component of the
 /// Σ spine, and every downstream scheme treats it like any other payload. The
 /// original check keyed on the *shape* of the field type rather than on a
@@ -6230,7 +6230,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                         format!(
                             "field of `{}` mentions `{}` in the domain of a function type: \
                              that occurrence is not strictly positive, and only `A -> {}` with \
-                             `A` free of `{}` is lowered (docs/inductive-tier2-w-lowering.md §1)",
+                             `A` free of `{}` is lowered (docs/inductives/inductive-tier2-w-lowering.md §1)",
                             c.name, d.name, d.name, d.name
                         ),
                         f.ty.span,
@@ -6241,7 +6241,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                         format!(
                             "field of `{}` is a curried function into `{}`: a recursive \
                              function field takes one argument this round — take a pair, or \
-                             a record of the arguments (docs/inductive-tier2-w-lowering.md §1)",
+                             a record of the arguments (docs/inductives/inductive-tier2-w-lowering.md §1)",
                             c.name, d.name
                         ),
                         f.ty.span,
@@ -6251,7 +6251,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                     return fail(crate::IMPLICIT_MARK_REFUSED.to_string(), f.ty.span);
                 }
                 // `A -> D<…>` itself: classified by `classify_fields` (or, in
-                // an indexed family, `classify_iwf`, docs/iwf-infinitary-design.md
+                // an indexed family, `classify_iwf`, docs/kernel/iwf-infinitary-design.md
                 // §1), which also checks that the occurrence is the uniform one.
                 if self_head(cod, &d.name).is_some() {
                     continue;
@@ -6260,7 +6260,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                     format!(
                         "field of `{}` is a function whose result mentions `{}` under \
                          another type: only `A -> {}` itself is lowered \
-                         (docs/inductive-tier2-w-lowering.md §1)",
+                         (docs/inductives/inductive-tier2-w-lowering.md §1)",
                         c.name, d.name, d.name
                     ),
                     f.ty.span,
@@ -6271,7 +6271,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                     format!(
                         "field of `{}` nests a function type mentioning `{}` inside another \
                          type: only a field that *is* `A -> {}` is lowered \
-                         (docs/inductive-tier2-w-lowering.md §1)",
+                         (docs/inductives/inductive-tier2-w-lowering.md §1)",
                         c.name, d.name, d.name
                     ),
                     sp,
@@ -6465,7 +6465,7 @@ impl Elaborator {
             };
             // The **emitted** `Fst`/`Snd` annotations take the reference
             // spelling where their components are registered lowerings
-            // (`docs/annotation-component-respell-design.md` §2.2): a field
+            // (`docs/elaborator/annotation-component-respell-design.md` §2.2): a field
             // of type `⟦Ir⟧` otherwise writes 1,712 nodes into `fst_ty` *and*
             // into every preceding step's `snd_ty`, per use of the binder the
             // chain aliases. The loop's own `cur` and the **returned** field
@@ -6562,7 +6562,7 @@ impl Inductives<'_> {
             _ => (t, None),
         };
         // Tier 2: `⟨sup(ℓ; f), q⟩`, and the label is inside the `sup`
-        // (docs/inductive-tier2-w-lowering.md §9). The children are a function,
+        // (docs/inductives/inductive-tier2-w-lowering.md §9). The children are a function,
         // not a tuple, and nothing reads them back: `inj` at a recursive field
         // of a tier-2 type is refused before it would look (§9), so each child
         // field gets the whole value as a stand-in, only to keep the field
@@ -6570,11 +6570,11 @@ impl Inductives<'_> {
         let tier2 = ind.infinitary();
         // Codata: `corec(…; _ _. ⟨ℓ, …⟩; …)`, and the label sits under the
         // step's two binders, which it never mentions
-        // (docs/codata-elaborator-design.md §4.2). The children are read back
+        // (docs/inductives/codata-elaborator-design.md §4.2). The children are read back
         // as stand-ins, like tier 2's.
         let codata_label = match (ind.codata, t) {
             // Indexed: the `in` with the out type as carrier, and the label
-            // is the seed's (docs/codata-indexed-design.md §4).
+            // is the seed's (docs/inductives/codata-indexed-design.md §4).
             (true, Term::Corec { seed, .. }) if !ind.co_index.is_empty() => {
                 match crate::spelling::pair_of(seed) {
                     Some((fst, _)) => Some((**fst).clone()),
@@ -6623,7 +6623,7 @@ impl Inductives<'_> {
             let mut p = snd;
             // Not `fields.len() - arity()`: a container field is neither
             // payload nor a *plain* child, so the two no longer partition the
-            // fields (docs/container-fields.md §3.1).
+            // fields (docs/language/container-fields.md §3.1).
             for _ in 0..ctor.payload().count() {
                 let Some((fst, snd)) = crate::spelling::pair_of(p) else {
                     return Ok(None);
@@ -6656,7 +6656,7 @@ impl Inductives<'_> {
             }
             // …and the container, if there is one, is what remains: the
             // tuple's tail *is* the children vector
-            // (docs/container-fields.md §3.4), so it reads back as one field
+            // (docs/language/container-fields.md §3.4), so it reads back as one field
             // value like any other.
             if ctor.container().is_some() {
                 kids.push(Rc::new(c.clone()));
@@ -6889,7 +6889,7 @@ impl Inductives<'_> {
     /// which is what both halves of no-confusion need, and the one place the
     /// two tiers differ in *how* they eliminate. Tier 0 cases on the
     /// scrutinee directly; tier 1 cases on the tag inside an `elim_Wf`
-    /// (docs/inductive-tier1-wf-lowering.md §7).
+    /// (docs/inductives/inductive-tier1-wf-lowering.md §7).
     ///
     /// `d_ty`, `spine` and `body`'s payloads are scoped in the caller's base
     /// context; `motive` and `scrut` in `mcx`, which is that context plus the
@@ -6998,7 +6998,7 @@ impl Inductives<'_> {
     }
 
     /// [`Self::build_absurd`] of an elaborated proof of type `proof_ty`: a
-    /// tactic's (`Absurd`, docs/host-elaboration-interface-design.md §25).
+    /// tactic's (`Absurd`, docs/metaprogramming/host-elaboration-interface-design.md §25).
     pub(crate) fn absurd_of_term(
         &self,
         cx: &Cx,
@@ -7022,7 +7022,7 @@ impl Inductives<'_> {
         span: Span,
     ) -> R<Term> {
         // An `IWf`-route family, either form: its tag is in the label, under
-        // the family's own eliminator (docs/iwf-infinitary-design.md §13).
+        // the family's own eliminator (docs/kernel/iwf-infinitary-design.md §13).
         if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, &written.1) {
             return IwfConfusion(self).fam_absurd(cx, &ind, &fam, written, expected, expected_lvl, span);
         }
@@ -7135,7 +7135,7 @@ impl Inductives<'_> {
     }
 
     /// [`Self::build_inj`] of an elaborated proof of type `proof_ty`: a
-    /// tactic's (`Inj`, docs/host-elaboration-interface-design.md §25).
+    /// tactic's (`Inj`, docs/metaprogramming/host-elaboration-interface-design.md §25).
     pub(crate) fn inj_of_term(
         &self,
         cx: &Cx,
@@ -7189,7 +7189,7 @@ impl Inductives<'_> {
         // (tier 1 §2/§7.2); a payload field is tier 0's projection, at its
         // index *among the payload*.
         // Injectivity at a *container* field is not phase 1
-        // (docs/container-fields.md §6). It is not a missing case so much as
+        // (docs/language/container-fields.md §6). It is not a missing case so much as
         // a dependent one: the field's type is `[D; len]`, which depends on
         // an earlier field, so a constant motive would need both sides'
         // lengths to be definitionally equal. That is tier 0's
@@ -7201,7 +7201,7 @@ impl Inductives<'_> {
                     "`inj` at the container field of `{}` is not supported yet: its type \
                      `[{}; …]` depends on the length field before it, so the two sides' \
                      lengths would have to be definitionally equal \
-                     (docs/container-fields.md §6)",
+                     (docs/language/container-fields.md §6)",
                     ind.ctors[i].name, ind.name
                 ),
                 span,
@@ -7213,7 +7213,7 @@ impl Inductives<'_> {
                     "`inj` at the recursive field of `{}` is not supported: `{}` is `codata`, \
                      and its children come back through `out` as a function of the \
                      positions, which an equation of two values does not take apart \
-                     (docs/codata-elaborator-design.md §4.2)",
+                     (docs/inductives/codata-elaborator-design.md §4.2)",
                     ind.ctors[i].name, ind.name
                 ),
                 span,
@@ -7224,7 +7224,7 @@ impl Inductives<'_> {
                 format!(
                     "`inj` at the recursive field of `{}` is not supported: `{}` has a \
                      recursive function field, and a child's injectivity there would need \
-                     funext (docs/inductive-tier2-w-lowering.md §9)",
+                     funext (docs/inductives/inductive-tier2-w-lowering.md §9)",
                     ind.ctors[i].name, ind.name
                 ),
                 span,
@@ -7256,7 +7256,7 @@ impl Inductives<'_> {
                     format!(
                         "field {k} of `{}` has a type that depends on an earlier field, so its \
                          injectivity is not derivable this way yet \
-                         (docs/inductive-tier0-lowering.md §6.2)",
+                         (docs/inductives/inductive-tier0-lowering.md §6.2)",
                         ind.ctors[i].name
                     ),
                     span,
@@ -7392,7 +7392,7 @@ fn match_targs(
 }
 
 /// May a field read off this receiver take the *reference*
-/// (`docs/per-instantiation-type-codes-design.md` §13.6, and
+/// (`docs/inductives/per-instantiation-type-codes-design.md` §13.6, and
 /// `docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5, which narrowed it)?
 ///
 /// Two conditions, and the second is the one the x86 scaling rail added.

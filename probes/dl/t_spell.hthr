@@ -1,4 +1,0 @@
-import bitvec;
-import nat;
-import omega;
-theorem respell(n: Nat, v: BitVec(64)->Nat, fact: BitVec::ofNat(5, n := 64).toNat() = 5, small: n < 10): n < 20 { omega }

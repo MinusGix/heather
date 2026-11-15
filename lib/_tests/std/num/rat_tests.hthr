@@ -25,7 +25,7 @@ theorem half_not_two_thirds(): ¬(Rat(OfNat(1), 2) ≈ Rat(OfNat(2), 3)) { λ h 
 // The raw reciprocal sends 0 to 0, so 0 · recip(0) is 0, not 1.
 theorem zero_recip_not_one(): ¬(0 * Rat::recip(0) ≈ 1) { λ h => omega(h) }
 
-// `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the hypothesis
+// `x⁻¹` and `x ^ n` (docs/library/inverse-power-notation-design.md): the hypothesis
 // is searched at the call, from a local apartness, a local sign, a product or
 // power of those, or a literal; the integer power's side condition computes
 // from the exponent's sign. A neutral and a literal base, a neutral and a
@@ -48,7 +48,7 @@ theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) { refl }
 theorem any_proof(x: Rat, h, h2: x.Apart(0)): x.inv(h := h) = x.inv(h := h2) { refl }
 theorem checked(x: Rat, h: 0 < x): 1 ≈ x * x⁻¹ { Rat::same_sym(x.mul_inv()) }
 
-// `a / b` (docs/division-design.md) asks for `b.Apart(0)` as `b⁻¹` does. The
+// `a / b` (docs/library/division-design.md) asks for `b.Apart(0)` as `b⁻¹` does. The
 // search reads a local apartness, sign or `¬(b ≈ 0)`; a closed divisor by
 // computation; the sign rules through sums, products, quotients, inverses,
 // powers, squares and absolute values; and last `nlinarith` over the
@@ -136,7 +136,7 @@ theorem abs_neg_half(): Rat(NegSucc(0), 2).abs() ≈ Rat(OfNat(1), 2) { refl }
 theorem abs_not_identity(): ¬((x: Rat) → x.abs() ≈ x) { λ h => omega(h(Rat(NegSucc(0), 2))) }
 
 // ---------------------------------------------------------------------------
-// `rewrite` along `≈` (docs/equation-rewrite-design.md §9): a proof of
+// `rewrite` along `≈` (docs/tactics/equation-rewrite-design.md §9): a proof of
 // `x ≈ y` turns `x` into `y` through `+` and `*` (their `Respects2`
 // instances), on either side of `≈` (the right side through `≈`'s
 // symmetry), and inside `<=` through the `Trans` pairs `calc` chains with.

@@ -22,7 +22,7 @@ that the arm is the `elim_Nat` step, and `n` inside it is still the outer
 top-level argument, not that level's `Succ(k)`. Nothing refines the
 scrutinee variable to the constructor inside its own arm for the *value*
 (only the motive is refined). Found 2026-09-25 while testing `have`
-([[proof-let-substitution-cost]]'s follow-up, docs/have-design.md); it is
+([[proof-let-substitution-cost]]'s follow-up, docs/language/have-design.md); it is
 independent of `let` and `have`.
 
 ## Acceptance
@@ -90,4 +90,4 @@ independent of `let` and `have`.
     Deferring the report is what the method-call case needs. The syntax cannot tell `contents.size()` on `List` from `Box::size`'s self-call; the first version refused `type_members`' `Box::size` for that reason. An arm's own pattern fields are aliases too, so a read only counts for aliases bound before the match (`aliases_before`). `Cx::prefix` drops the positional state.
   - **Library:** `parser_diagnostics::insert_expected` now returns `Cons(head, tail)`, pinned by `insert_expected_present_deeper` (`[1, 2, 3]` stays `[1, 2, 3]`). The full suite found no other library or test source the refusal rejects. My scanner's other two hits were a false positive and a theorem.
   - **Residue:** making the refused spellings legal (substitution for `Nat`, then the function-level lowering) and the type-valued `fn` gap go to [[fn-recursion-means-the-function]].
-- 2026-09-25: Superseded 2026-09-25: the threaded refusal described in the landing entry was replaced by a surface plan that compiles parameter reads by measure and refuses only off-result matches ([[fn-recursion-means-the-function]], docs/termination-measures-design.md §7).
+- 2026-09-25: Superseded 2026-09-25: the threaded refusal described in the landing entry was replaced by a surface plan that compiles parameter reads by measure and refuses only off-result matches ([[fn-recursion-means-the-function]], docs/language/recursion/termination-measures-design.md §7).

@@ -19,7 +19,7 @@ So a Heather tactic cannot look inside an existential. The cost seen so
 far: `by simp()` collects default sets from the types of the goal's
 subterms (`simp_types`, `lib/std/tactic/simp.hthr`), and a `List` that
 occurs only inside an `∃` brings no `List::shape`
-(`docs/simp-design.md` §13). `simp_only` reads the predicate off the
+(`docs/tactics/simp-design.md` §13). `simp_only` reads the predicate off the
 lowering directly (`Statements::existential`,
 `crates/elab/src/rewrite/statement.rs`), which is the read a view could
 share.

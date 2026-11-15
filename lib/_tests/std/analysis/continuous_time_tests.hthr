@@ -1,4 +1,4 @@
-// Probes for programming in continuous time (docs/continuous-time-survey.md):
+// Probes for programming in continuous time (docs/surveys/continuous-time-survey.md):
 // a program written against a time step `dt`, run exactly at the rationals,
 // its limit as `dt → 0` taken with a modulus, and a discrete answer improved
 // by what the limit says about the error. Tests, not library: nothing

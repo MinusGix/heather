@@ -1,5 +1,5 @@
 //! Types are expressions: a function type in expression position, and so a
-//! type-valued `fn` as an ordinary `fn` (`docs/types-as-expressions.md`).
+//! type-valued `fn` as an ordinary `fn` (`docs/language/types-as-expressions.md`).
 //! Tracking issue: `issues/type-definitions.md` (route 2).
 //!
 //! Nothing here touches the kernel. A named abbreviation elaborates to `El` of
@@ -41,7 +41,7 @@ fn bad(src: &str) -> String {
 
 // The one form the round adds: `->` after an expression. Before it, this was
 // `parse error: expected `}`, found Arrow`
-// (`docs/surface-existential-investigation.md`).
+// (`docs/language/surface-existential-investigation.md`).
 #[test]
 fn an_arrow_is_an_expression() {
     ok("fn Q() -> Type { Nat -> Nat }");
@@ -200,7 +200,7 @@ fn a_recursive_value_parameter_survives_the_abbreviation() {
 // an arity one. Pinned as it is, not as one might wish it: the message is
 // correct and unhelpful, and improving it is
 // `issues/cli-check-diagnostics.md`'s, not this round's
-// (`docs/types-as-expressions.md` §5).
+// (`docs/language/types-as-expressions.md` §5).
 #[test]
 fn a_wrong_arity_use_is_rejected() {
     let msg = bad("fn P(n: Nat, m: Nat) -> Type { n = m }
@@ -228,7 +228,7 @@ fn a_level_mismatch_in_an_abbreviation_is_rejected() {
 }
 
 // A `fn` whose result type is *not* a universe cannot have a type as its body:
-// the bridge is an opportunity, not a claim (`docs/surface-universe.md` §12.3).
+// the bridge is an opportunity, not a claim (`docs/language/surface-universe.md` §12.3).
 #[test]
 fn a_type_body_at_a_non_universe_result_is_rejected() {
     let msg = bad("fn Bad() -> Nat { Nat -> Nat }");

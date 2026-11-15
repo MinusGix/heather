@@ -1,4 +1,4 @@
-//! Deep right-nested terms (docs/deep-term-walks-design.md): every walk the
+//! Deep right-nested terms (docs/kernel/deep-term-walks-design.md): every walk the
 //! gate takes over a term must survive a chain far deeper than any native
 //! stack holds one frame per level of — or refuse it — on a thread with an
 //! ordinary stack.

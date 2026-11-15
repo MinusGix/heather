@@ -721,7 +721,7 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
 // comparison no register reads: one a single branch tests, where it is the
 // last of its block, and one no branch tests, which is there for what it
 // says (the bound of a load whose test was decided,
-// docs/optimizer-design.md §5.1). A bit's constant nothing reads, which
+// docs/native/optimizer-design.md §5.1). A bit's constant nothing reads, which
 // says that of a comparison before it.
 // Whether a comparison folds: no register reads it, and a single branch
 // tests it where it is the last of its block, or no branch does.

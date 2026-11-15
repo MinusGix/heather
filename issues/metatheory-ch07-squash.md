@@ -7,7 +7,7 @@ updated: 2026-10-16
 ---
 
 [[sprop-squash]] landed with the metatheory sketch in
-`docs/metatheory-ch07-extensions.md` §27: inhabitants are definitionally
+`docs/kernel/metatheory-ch07-extensions.md` §27: inhabitants are definitionally
 irrelevant only after both sides weak-head normalize, because the eliminator
 makes normalization operationally observable. This is a new
 **normalizing-total** relation, unlike the shape-free total relations for

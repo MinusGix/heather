@@ -1,4 +1,4 @@
-// Rounding error bounds (docs/floating-point-design.md §5.3, §13).
+// Rounding error bounds (docs/library/floating-point-design.md §5.3, §13).
 //
 // Every bound here comes from one picture. A nonnegative exact value `x`
 // sits in the cell of the greatest float at or below it, `d`; the cell is

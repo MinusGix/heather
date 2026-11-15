@@ -345,7 +345,7 @@ struct Reader<'a> {
     depth: u32,
     /// Added to every span read: a replayed declaration slice is decoded
     /// at the position its text now has in the edited source
-    /// (`docs/declaration-slice-replay-design.md` §4). Zero for an image.
+    /// (`docs/infrastructure/declaration-slice-replay-design.md` §4). Zero for an image.
     span_offset: i64,
     /// Every term and type decoded so far, in the order their nodes ended:
     /// what a [`tag::SHARED`] reference indexes ([`Share`]).
@@ -968,7 +968,7 @@ fn put_term_node(w: &mut Writer, term: &Term) {
         Term::Squash { level, ty, tm } => {
             w.byte(22); put_level(w, level); put_type(w, ty); put_term(w, tm);
         }
-        // 23 was `transp` (retired with it; docs/iwf-former-design.md §13).
+        // 23 was `transp` (retired with it; docs/kernel/iwf-former-design.md §13).
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
             w.byte(24); put_level(w, level); put_level(w, scrut_level); put_type(w, motive); put_term(w, scrut);
         }
@@ -1057,7 +1057,7 @@ fn put_term_node(w: &mut Writer, term: &Term) {
             w.byte(52); put_level(w, ty_motive_level); put_level(w, tm_motive_level); put_motives(w, motives); put_branches(w, branches); put_level(w, code_level); put_ctx(w, ctx); put_type(w, ty); put_term(w, scrut);
         }
         Term::NatLit(n) => { w.byte(53); w.numeral(n); }
-        // The checked spellings (docs/intro-by-type-design.md). New tags, so
+        // The checked spellings (docs/elaborator/intro-by-type-design.md). New tags, so
         // an older reader refuses the byte rather than mis-decoding it; the
         // image's `SemanticsIdentity` already changes with the kernel's
         // sources, so a stored image from before this change is a miss and
@@ -1075,7 +1075,7 @@ fn put_term_node(w: &mut Writer, term: &Term) {
         Term::InlAt { ty: None, val } => { w.byte(60); put_term(w, val); }
         Term::InrAt { ty: None, val } => { w.byte(61); put_term(w, val); }
         Term::AppAt { fun, arg } => { w.byte(62); put_term(w, fun); put_term(w, arg); }
-        // A packed vector literal (docs/bitvector-literal-entry-design.md
+        // A packed vector literal (docs/kernel/bitvector-literal-entry-design.md
         // §3): its two elements and its word, never the chain it spells.
         Term::VecLit { level, elem, zero, one, width, bits } => {
             w.byte(70); put_level(w, level); put_type(w, elem); put_term(w, zero); put_term(w, one); w.u32(*width); w.u64(*bits);
@@ -1580,7 +1580,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
 
 fn put_stmt(w: &mut Writer, stmt: &Stmt) {
     match stmt {
-        // A `have` is its own tag (docs/have-design.md §5) rather than a
+        // A `have` is its own tag (docs/language/have-design.md §5) rather than a
         // flag byte, so an image written before `have` existed still reads.
         Stmt::Let { name, ty, expr, span, opaque } => {
             w.byte(if *opaque { 3 } else { 0 }); w.string(name); w.option(ty.as_ref(), put_ty); put_expr(w, expr); put_span(w, *span);
@@ -2085,7 +2085,7 @@ fn get_meta(r: &mut Reader<'_>) -> Result<MetaDef, ModuleImageDecodeError> {
 }
 
 /// The deterministic encoding of a run of events, for comparing two runs
-/// structurally (`ModuleDelta` slices: `docs/declaration-slice-replay-design.md`
+/// structurally (`ModuleDelta` slices: `docs/infrastructure/declaration-slice-replay-design.md`
 /// §4). With `interface`, the projection a dependent observes — spans
 /// zeroed, theorem proofs and proof dependency edges dropped — which is what
 /// "the same contribution" means for the declarations after it.
@@ -2484,7 +2484,7 @@ fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
     for hash in delta.dependencies.ordered_interface_hashes() { w.bytes.extend_from_slice(hash); }
     w.len(delta.dependency_psi.bindings.len());
     w.vec(&delta.extension, put_binding); put_scope(w, &delta.scope); w.vec(&delta.events, put_event);
-    // The declaration slices (`docs/declaration-slice-replay-design.md` §3):
+    // The declaration slices (`docs/infrastructure/declaration-slice-replay-design.md` §3):
     // the semantic image only, never the interface projection, since a
     // slice's text is not something a dependent observes.
     if !w.interface {

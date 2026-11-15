@@ -15,10 +15,10 @@ by its file stem, which must be an identifier
 ```
 
 - `docs/showcase/result-parser.hthr` — the runnable `?`-propagation customer,
-  cited as such by `docs/result-propagation-design.md` and
+  cited as such by `docs/language/result-propagation-design.md` and
   [[result-propagation]].
 - `docs/showcase/relational-contexts.hthr` — the executable relational-context
-  showcase, cited by `docs/relational-context-round.md`.
+  showcase, cited by `docs/showcase/relational-context-round.md`.
 - `docs/showcase/finite-sets-idealized.hthr` has the same stem problem and does
   not check anyway, so it is only affected if it ever becomes checkable.
 

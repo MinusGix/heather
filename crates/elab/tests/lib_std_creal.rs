@@ -1,4 +1,4 @@
-//! `lib/std/num/creal.hthr` (`docs/regular-cauchy-reals-round.md`): the
+//! `lib/std/num/creal.hthr` (`docs/library/creal.md`): the
 //! refusals that need the checker. Everything the language can state about
 //! the reals is a theorem: the probes at specific values, the computed
 //! moduli and gaps, the instance checks, and the `¬` theorems for the false

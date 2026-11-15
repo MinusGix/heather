@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-The first part of `float-eft` (`docs/floating-point-design.md` §8 round 5,
+The first part of `float-eft` (`docs/library/floating-point-design.md` §8 round 5,
 §19): the error-free transformations that need nothing but the grid.
 
 Landed in `lib/std/num/float/eft.hthr`:

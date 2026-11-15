@@ -19,7 +19,7 @@ carrier-directed numerals, not introduce new numeric semantics.
 - Support separators consistently across decimal and radix forms, with clear
   errors for missing digits, invalid digits, and misplaced separators.
 - Feed the parsed value through the existing carrier-directed numeral route
-  described by `docs/carrier-directed-numerals-design.md`; `0x48` at `Nat` and
+  described by `docs/language/carrier-directed-numerals-design.md`; `0x48` at `Nat` and
   at `BitVec(8)` must differ only through the same existing carrier choice as
   decimal `72`.
 - Keep overflow/modular behavior owned by the selected carrier. The parser

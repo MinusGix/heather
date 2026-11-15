@@ -1,7 +1,7 @@
 // Controls of the contract a compiled function is exported under
 // (function_ir_compile's `compiled_returns`, `compiled_returns_lent`,
 // `compiled_returns_unlent` and `compiled_returns_written`;
-// docs/native-library-exports-design.md §6, the clauses by number). Each
+// docs/native/native-library-exports-design.md §6, the clauses by number). Each
 // clause of the contract is a part of those theorems' statements; a control
 // shows the clause has teeth, that something which would break it is
 // refused or is provably not what the statement allows. The controls that
@@ -90,7 +90,7 @@ theorem store_below_is_wrote<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, 
 //
 // A function that stores into a span is exported under a lending that
 // marks the span (`Lending::writing`, `compiled_returns_written`;
-// docs/native-library-exports-design.md §7): the post then allows stores
+// docs/native/native-library-exports-design.md §7): the post then allows stores
 // of bytes into the marked spans beside the callee's own room
 // (`Stack::WroteIn`). The marks are the whole of what that adds.
 
@@ -168,7 +168,7 @@ theorem first_byte_overlent_refused(): lower_program_lent([first_byte()], plan_p
 //
 // An export's program may hold functions lent nothing beside the one that
 // reads a span, and each can be exported at its own label
-// (docs/native-library-exports-design.md §6.3). Such a function's contract
+// (docs/native/native-library-exports-design.md §6.3). Such a function's contract
 // is the plain one, `Stack::CalleePost`, with no premise about a span:
 // `compiled_returns_unlent`. Here `sum` under `first_byte`, in a program
 // lent a span at its last function only.

@@ -6,7 +6,7 @@
 // The file imports `nat` and `bool` beside `int` on purpose: `int::Int::add`
 // and `nat::Nat::add` are then ambiguous by name, while `x + y` is not, since
 // the operand's carrier picks the designation
-// (`docs/operators-onto-classes-design.md`).
+// (`docs/language/classes/operators-onto-classes-design.md`).
 import int; import nat; import list; import logic; import bool; import algebra;
 
 // The API computes, in both signs on both sides of every operation (a
@@ -144,7 +144,7 @@ theorem remainder_at_zero(a: Int): int::Int::mod(a, OfNat(0)) = a {
 }
 
 // `Decide` at three orders that are all written `Le`
-// (`docs/instance-resolved-key-design.md`): `<=` reads its carrier off the
+// (`docs/elaborator/instance-resolved-key-design.md`): `<=` reads its carrier off the
 // operand, and the resolver hands each goal the instance at its own carrier.
 // Open operands answered by the registry, closed ones that must compute to
 // the right branch, and the canonical names written verbatim.

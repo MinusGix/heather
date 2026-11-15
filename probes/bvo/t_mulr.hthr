@@ -1,6 +1,0 @@
-import logic;
-import nat;
-import omega;
-theorem right(n, a: Nat, h: a = 1099511627776 * n): a = n * 1099511627776 { omega }
-theorem left(n, a: Nat, h: a = 1099511627776 * n): a = 1099511627776 * n { omega }
-theorem small_right(n, a: Nat, h: a = 256 * n): a = n * 256 { omega }

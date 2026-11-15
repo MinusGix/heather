@@ -435,7 +435,7 @@ pub fn branches_from(t: [Rc<Term>; 65]) -> Branches {
 
 /// One piece of an `M` signature as a branch telescope binds it: the type
 /// global `U^{id}` (`ty_m`, `tm_corec`, `tm_out`), or `El` of the code global
-/// `u^{id}` (`tm_m`) — docs/kernel-m-codes-design.md §2.
+/// `u^{id}` (`tm_m`) — docs/kernel/kernel-m-codes-design.md §2.
 fn m_piece(coded: bool, var: u32, ctx: &LocalCtx, level: &Level) -> Type {
     if coded {
         Type::El { level: level.clone(), tm: Rc::new(gtm(var, ctx)) }
@@ -530,7 +530,7 @@ fn m_sig_globals(coded: bool, l: &Level, lp: &Level, li: &Level) -> Vec<GlobalBi
 /// The `IWf` signature `(I; x:S. n; x. o; x i. c)` over globals
 /// `g, I, S, n, o, c` with `c` at index `k` (so `k` globals follow it), and
 /// the two contexts its binders open: `(g, x : S)` and `(g, x, i : Fin n)`
-/// (docs/iwf-former-design.md §6). `coded`, the index type and the shapes are
+/// (docs/kernel/iwf-former-design.md §6). `coded`, the index type and the shapes are
 /// `El` of code globals, as [`m_view`]'s pieces are.
 struct IWfView {
     sig: Rc<IWfSig>,
@@ -1194,7 +1194,7 @@ pub(crate) fn branch_specs(
         // *type* — `Nat @ 0` — not at the motive's ℓ. Ch. 04 writes `ℓ/ℓ`
         // here, which contradicts its own `t_ze`/`t_succ` (both `0/ℓ` for the
         // same `Nat/U_T` slot) and the β rule; see
-        // docs/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
+        // docs/kernel/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
         let x_t = inst_tm_motive(
             m_tm,
             (1, 5, 3),
@@ -2272,7 +2272,7 @@ pub(crate) fn branch_specs(
         let gt = gt(2, 3);
         // telescope view: ℓ = 1 (motive), ℓ' = 0 (scrutinee); g = 2, U_M = 1,
         // u_t = 0. `Empty` is level-indexed as of
-        // docs/unit-empty-level-indexing.md, so the scrutinee's level is its
+        // docs/kernel/unit-empty-level-indexing.md, so the scrutinee's level is its
         // own binder rather than a hardcoded 0 — this is the one branch that
         // gains a *second* universe rather than a first.
         let empty = Type::Empty { level: lvar(0) };
@@ -2288,7 +2288,7 @@ pub(crate) fn branch_specs(
         );
         // As in `tm_elim_nat`: the scrutinee's call is at the scrutinee's own
         // level ℓ' = lvar(0) (the level of `Empty^{ℓ'}`), not the motive's ℓ.
-        // See docs/delam-extensions.md §7.7/§16.1.
+        // See docs/kernel/delam-extensions.md §7.7/§16.1.
         let x_t = inst_tm_motive(
             m_tm,
             (2, 3, 1),
@@ -3346,7 +3346,7 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // -- finitary branching (docs/wf-former-design.md §6) --------------------
+    // -- finitary branching (docs/kernel/wf-former-design.md §6) --------------------
 
     // (ℓ, g, U_T : Typ_c(g, ℓ), u_k : Trm_c(g ⊢ Nat @ 0), x_T, x_k. t_Vec)
     //   : M_Typ[ℓ/ℓ, g/g, box Vec^ℓ(U_T^id; u_k^id)/x_T]
@@ -4006,7 +4006,7 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // -- strict equality (extension; docs/sprop-design.md §6) ---------------
+    // -- strict equality (extension; docs/kernel/sprop-design.md §6) ---------------
 
     // (ℓ, g, U_S : Typ_c(g, ℓ), u_t : Trm_c(g ⊢ U_S^id @ ℓ),
     //  u_u : Trm_c(g ⊢ U_S^id @ ℓ), x_S, x_t, x_u. t_sEq)
@@ -4614,7 +4614,7 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // -- M (docs/kernel-m-codes-design.md §2) -------------------------------
+    // -- M (docs/kernel/kernel-m-codes-design.md §2) -------------------------------
     //
     // Univs `l, l', li` (and `k` for corec) are pushed in that order, so the
     // innermost is `li` (or `k`). Every branch opens with the signature's
@@ -4914,7 +4914,7 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // -- dependent tuples and indexed trees (docs/iwf-former-design.md §6) --
+    // -- dependent tuples and indexed trees (docs/kernel/iwf-former-design.md §6) --
     //
     // heather-coq's M17c branches 55–60 (`RecSpec`: `brDecls`, `br_calls`,
     // `br_head`), checked binder for binder. Univs `ℓ`, `ℓi` (and `ℓ'` for
@@ -5486,7 +5486,7 @@ mod tests {
     /// a **bijection**: `n` layer-c `Ty` globals ⟺ `n` type-motive calls, in
     /// the same order. Layer-**p** `Ty` globals are the exception that
     /// explains the rule, and it is the paper's own
-    /// (`docs/delam-extensions.md` §16.5): a `Typ_c` binding is a sub-code
+    /// (`docs/kernel/delam-extensions.md` §16.5): a `Typ_c` binding is a sub-code
     /// and carries a recursive call, a `Typ_p` binding is an *external
     /// index* and carries none. `t_x`'s and `t_λ`'s `U_T` are the only two,
     /// because a `λ` does not store its codomain. The count assertion below
@@ -5558,7 +5558,7 @@ mod tests {
         // a type-motive recursive call, the enumeration in the issue and the
         // Coq `G_Typ` table both move with it.
         // 65 since `transp`'s two (its type and its motive) went with it
-        // (docs/iwf-former-design.md §13 step 6).
+        // (docs/kernel/iwf-former-design.md §13 step 6).
         assert_eq!(covered, 65, "the number of type-motive recursive calls moved");
     }
 }

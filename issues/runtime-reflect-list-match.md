@@ -15,7 +15,7 @@ elaborated `match xs { Nil => …, Cons(h, t) => … }` on a recursive type is
 not that term. The `View` of it falls through to the reflector's last arm, so
 the refusal is "a form the reflected fragment does not have"
 (`lib/native/runtime/rt_reflect.hthr`). Found writing `tac`'s and `sort`'s
-customers ([[runtime-fn-arena-lists]], docs/native-heap-arena-design.md §7.1).
+customers ([[runtime-fn-arena-lists]], docs/native/native-heap-arena-design.md §7.1).
 `List::bytes_before` in `lib/native/runtime/line_tools.hthr` matches on the
 rest of a line.
 

@@ -34,4 +34,4 @@ instead of through text.
 
 ## Log
 
-- 2026-10-27: Fixed by [[linarith-ordered-fields]]'s round (docs/linarith-design.md §4): an atom with no spelling is named in the atom list by an alias bound to the term (`__ring_a{i}`), so `x.seq(n) + 1 ≈ 1 + x.seq(n)` is `ring`'s (probe in lib/_tests/std/tactic/ring_field_tests.hthr). The `add_respects(x.seq(n).same_refl(), ring)` workarounds in creal.hthr still check and can be simplified when next touched.
+- 2026-10-27: Fixed by [[linarith-ordered-fields]]'s round (docs/tactics/linarith-design.md §4): an atom with no spelling is named in the atom list by an alias bound to the term (`__ring_a{i}`), so `x.seq(n) + 1 ≈ 1 + x.seq(n)` is `ring`'s (probe in lib/_tests/std/tactic/ring_field_tests.hthr). The `add_respects(x.seq(n).same_refl(), ring)` workarounds in creal.hthr still check and can be simplified when next touched.

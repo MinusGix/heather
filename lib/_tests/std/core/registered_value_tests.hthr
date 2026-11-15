@@ -1,5 +1,5 @@
 // Probes of checked names and registered values
-// (docs/registered-values-design.md): `name_of(p)` is the checked key a
+// (docs/metaprogramming/registered-values-design.md): `name_of(p)` is the checked key a
 // `by` looks up, `register def` enters a value under its type, and
 // `registered(T)` lists them where it is read. `mono`'s tables
 // (lib/std/tactic/mono_laws.hthr) are the library's client; mono_tests

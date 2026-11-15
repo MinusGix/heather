@@ -10,10 +10,10 @@ An instance is keyed on its carrier's head name (`{Head}::{Class}`), and an
 equation has none. `instance Decide<2 = 2>` reports
 
     the carrier `2 = 2` has no head type name, so this instance has no
-    canonical name (docs/traits-layer1-design.md §4.1)
+    canonical name (docs/language/classes/traits-layer1-design.md §4.1)
 
 and the 2026-08-17 carrier widening ([[decide-class]],
-`docs/decide-class-design.md` §2) deliberately did **not** answer for
+`docs/language/classes/decide-class-design.md` §2) deliberately did **not** answer for
 `TyKind::Eq` while it was widening `head_name` for everything else.
 
 ## Why it was left out rather than swept in
@@ -21,12 +21,12 @@ and the 2026-08-17 carrier widening ([[decide-class]],
 One reserved head — `Eq` — would be one key for equality at *every* type, so
 `Decide<n = m>` at `Nat` and `Decide<b = c>` at `Bool` would collide as
 duplicate declarations. Keying it correctly needs the **endpoints' type** in the
-key, and that is the (class, carrier-syntax) key `docs/traits-layer1-design.md`
+key, and that is the (class, carrier-syntax) key `docs/language/classes/traits-layer1-design.md`
 §7.1 defers to layer 2 and §8 lists as residue.
 
 > **Amended 2026-08-17** (see the log): that key landed, in a cheaper form than
 > this paragraph assumed — the registry key is a tuple of *resolved declaration
-> references* (`docs/instance-resolved-key-design.md`), with no layer-2 table
+> references* (`docs/elaborator/instance-resolved-key-design.md`), with no layer-2 table
 > involved. The endpoints' type in the key is now an ordinary carrier
 > component, so this half is paid. What is left is the canonical **name** for a
 > headless carrier, and the UX.
@@ -48,7 +48,7 @@ that lands.
 ## What it assumes from elsewhere
 
 - The key itself is layer 2's canonical-derivation table
-  (`docs/traits-design.md` §12's content-addressed minting, which is already
+  (`docs/language/classes/traits-design.md` §12's content-addressed minting, which is already
   keyed on (class, carrier-syntax) by design).
 - [[value-generic-instances]] is independent: that one is about *binders*, this
   one is about the *key*, and an equation carrier would want both — `n = m` at
@@ -76,7 +76,7 @@ proposition mentioning an equation resolves.
   Bool's new four-case decider are registered. Proposition-directed `if` and
   composed `Decide` resolution compute through both. Non-nominal endpoint
   types remain a targeted refusal. Design record:
-  `docs/decidable-equation-carrier-design.md`.
+  `docs/language/classes/decidable-equation-carrier-design.md`.
 
 - 2026-08-17: Second customer, and the sharpest so far (wave L3, [[std-list-mem-and-perm]], 2026-08-17): this key is what splits the two halves of one algorithm's specification. `Mem` needs only `=`, so it is polymorphic and lives in `std/list`; `count` must DECIDE `a = h`, so `decide<a = h>()` finds no instance, `nat::eq_dec` is called by name, and `count` is at `Nat` — a permanent monomorphic hole in an otherwise polymorphic list API. The dictionary-passing spelling (decider as a parameter, threaded through every call site) works and was deliberately NOT written, per the push's no-encoding-around doctrine. Ranked #2 of that round: fewest lines, largest design consequence.
-- 2026-08-17: The new-key half of this issue is PAID, and the cost estimate drops accordingly. `docs/instance-resolved-key-design.md` (2026-08-17) rebuilt the instance registry's key as a tuple of RESOLVED declaration references — (class key, carrier-head key, index spelling), no component a spelling — which is the cheap form of the (class, carrier-syntax) key `docs/traits-layer1-design.md` §7.1/§8 deferred to layer 2. It needed no canonical-derivation table: the enabling step was noticing that a *key* never had to be spellable, only a *name* did. So the sentence above — 'keying it correctly needs the endpoints' type in the key, and that is the (class, carrier-syntax) key deferred to layer 2' — no longer describes a blocker. There is no new notion of key to invent and no layer-2 table to wait for. What remains is: (1) a carrier component for `TyKind::Eq` — the endpoints' type as a resolved reference, which is what every other carrier component already is, so `Decide<n = m>` at Nat and at Bool land at different keys by construction; (2) the canonical NAME, which is the part that does still want a decision, since `Eq` is not a declared head and `{Head}::{Class}` has nothing to build from (identity and naming came apart in that round — §4 — so this is now a naming question in isolation, and a minted unwritable name is available where it was not before); (3) the UX — writing the instance, and the diagnostics. Estimate: from 'blocked on a layer-2 table nobody has designed' to a bounded slice, most of it (2) and (3). Still NOT implemented here, deliberately: that round's brief scoped it out and there is no evidence in it about the equation case.
+- 2026-08-17: The new-key half of this issue is PAID, and the cost estimate drops accordingly. `docs/elaborator/instance-resolved-key-design.md` (2026-08-17) rebuilt the instance registry's key as a tuple of RESOLVED declaration references — (class key, carrier-head key, index spelling), no component a spelling — which is the cheap form of the (class, carrier-syntax) key `docs/language/classes/traits-layer1-design.md` §7.1/§8 deferred to layer 2. It needed no canonical-derivation table: the enabling step was noticing that a *key* never had to be spellable, only a *name* did. So the sentence above — 'keying it correctly needs the endpoints' type in the key, and that is the (class, carrier-syntax) key deferred to layer 2' — no longer describes a blocker. There is no new notion of key to invent and no layer-2 table to wait for. What remains is: (1) a carrier component for `TyKind::Eq` — the endpoints' type as a resolved reference, which is what every other carrier component already is, so `Decide<n = m>` at Nat and at Bool land at different keys by construction; (2) the canonical NAME, which is the part that does still want a decision, since `Eq` is not a declared head and `{Head}::{Class}` has nothing to build from (identity and naming came apart in that round — §4 — so this is now a naming question in isolation, and a minted unwritable name is available where it was not before); (3) the UX — writing the instance, and the diagnostics. Estimate: from 'blocked on a layer-2 table nobody has designed' to a bounded slice, most of it (2) and (3). Still NOT implemented here, deliberately: that round's brief scoped it out and there is no evidence in it about the equation case.

@@ -26,7 +26,7 @@ theorem f(a: Nat, b: Nat, e: a = b): Le(a, b) {
 ```text
 error: recursive call to `f` must pass `b` unchanged: … only when the `match`
 is checked against a known result type and the varying call is visible in its
-arms (docs/ih-generalization-design.md); here it was not
+arms (docs/tactics/ih-generalization-design.md); here it was not
 ```
 
 Writing the arm as `{ let ih: Le(k, k) = f(k, k, refl); j(e, λ y q => Le(Succ(k), y), ih) }`

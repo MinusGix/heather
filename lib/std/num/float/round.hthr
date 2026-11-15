@@ -1,4 +1,4 @@
-// Rounding to a format (docs/floating-point-design.md §5).
+// Rounding to a format (docs/library/floating-point-design.md §5).
 //
 // The specification is a relation, `RoundsTo(F, mode, x, r)`: `r` is a
 // correct rounding of the exact rational `x` in format `F`. Its clauses are

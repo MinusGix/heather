@@ -1,5 +1,5 @@
 //! The **value instantiation** of [`Dom`]: conversion over the environment
-//! machine (docs/nbe-conversion-design.md §13, stage 2b).
+//! machine (docs/kernel/nbe-conversion-design.md §13, stage 2b).
 //!
 //! A weak head normal form is a [`Val`]/[`VTy`], and a sub-structure is a
 //! closure. Two numbers travel with every sub-structure, and they are what
@@ -519,7 +519,7 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
 /// The **depth** budget is shared the same way and for a more literal reason:
 /// this call stands on conversion's own native frames, so the machine is told
 /// how many there are and counts its re-entries on top of them
-/// (docs/native-depth-budget-design.md). It is not handed back — the frames
+/// (docs/kernel/native-depth-budget-design.md). It is not handed back — the frames
 /// are gone when the run returns.
 fn run<'v, T>(
     cv: &mut Conv<'v, Values>,
@@ -1045,7 +1045,7 @@ impl<'v> Dom<'v> for Values {
 
             // A run is a `Vec` value, and `Vec` values are Σ-pairs: opaque
             // exactly as `Val::Pair` is, with the Σ-η arm doing the work
-            // (`docs/native-bitvector-values-design.md` §3.3).
+            // (`docs/kernel/native-bitvector-values-design.md` §3.3).
             Val::Lam { .. }
             | Val::WfIh { .. }
             | Val::WIh { .. }
@@ -1872,7 +1872,7 @@ impl<'v> Dom<'v> for Values {
         };
         // The three bodies are mixed into one telescope, so they must be
         // read in one scope: each spends its closure's pending global offset
-        // here (`docs/lazy-global-offset-design.md` §5), and the telescope is
+        // here (`docs/kernel/lazy-global-offset-design.md` §5), and the telescope is
         // ambient.
         let (sbody, abody, mbody) =
             (amb_ty(senv, sbody), amb_tm(aenv, abody), amb_ty(menv, mbody));
@@ -2027,7 +2027,7 @@ impl<'v> Dom<'v> for Values {
 // ---------------------------------------------------------------------------
 
 /// Spend a closure's pending global offset on syntax read out of it
-/// (`docs/lazy-global-offset-design.md` §5).
+/// (`docs/kernel/lazy-global-offset-design.md` §5).
 /// An `IWf` signature's closures taken apart: their common environment and
 /// the syntax, each body with its closure's pending global offset spent (see
 /// [`Values::wf_step_telescope`]). `None` when a component is not syntactic
@@ -2106,7 +2106,7 @@ fn amb_tm<'v>(env: &value::Env<'v>, t: &Rc<Term>) -> Rc<Term> {
 
 /// The payload of `sigma` is ambient, and so is the body: a closure under a
 /// global binder — which is what every caller of this passes — is built with
-/// its offset already spent (`docs/lazy-global-offset-design.md` §4).
+/// its offset already spent (`docs/kernel/lazy-global-offset-design.md` §4).
 fn inst_global_ty<'v>(env: &Env<'v>, body: &TyC<'v>, sigma: GlobalSubst) -> R<TyC<'v>> {
     let Some((benv, bbody)) = body.clo.as_syn() else {
         return Err(NC);
@@ -2368,7 +2368,7 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Va
 }
 
 // ---------------------------------------------------------------------------
-// Deferred types (docs/intro-by-type-design.md §3.3)
+// Deferred types (docs/elaborator/intro-by-type-design.md §3.3)
 // ---------------------------------------------------------------------------
 
 /// Evaluate a checker description into this query's arena.

@@ -1,6 +1,6 @@
 //! `lib/std/text/utf8.hthr` — UTF-8 as the first *representation* of
 //! `String`, and the `Utf8` byte-level spec type beside it
-//! (docs/string-char-design.md §5): the refusals that need the checker. The
+//! (docs/library/string-char-design.md §5): the refusals that need the checker. The
 //! encoder at every byte width, the strict decoder at each rejection Rust's
 //! `from_utf8` makes, every law at a literal and at a neutral string, and the
 //! `¬` theorems for the wrong values are `lib/_tests/std/text/utf8_tests.hthr`,

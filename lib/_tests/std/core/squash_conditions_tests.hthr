@@ -1,4 +1,4 @@
-// Probes of conditions taken squashed (docs/strict-conditions-design.md):
+// Probes of conditions taken squashed (docs/language/strict-conditions-design.md):
 // two calls that differ only in a squashed proof are equal by `refl`, a
 // proof of `P` is accepted where `∥P∥` is expected, and a `decreases`
 // body whose found proofs are squashed keeps its unfolding equation whether

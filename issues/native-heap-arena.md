@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-11-03
 ---
 
-Round R9 of `docs/compiler-milestones-proposal.md` (§4.2 N4, §7), milestone `nh-heap`: recursive data at run
+Round R9 of `docs/native/compiler-milestones-proposal.md` (§4.2 N4, §7), milestone `nh-heap`: recursive data at run
 time. `hih-first-alloc` moved here.
 
 ## Scope
@@ -25,7 +25,7 @@ time. `hih-first-alloc` moved here.
 
 ## Log
 
-- 2026-11-02: Design and the back half landed (docs/native-heap-arena-design.md).
+- 2026-11-02: Design and the back half landed (docs/native/native-heap-arena-design.md).
   The arena is a `Source` buffer and a top word, so the compiler and
   `native_compile_correct` are unchanged, and running out branches to an exit
   the program gives (§1–§2). The stop condition did not fire: the arena needs

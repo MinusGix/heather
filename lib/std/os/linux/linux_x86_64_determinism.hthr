@@ -1,4 +1,4 @@
-// The run is the run (docs/fetched-step-determinism-design.md): a process
+// The run is the run (docs/native/fetched-step-determinism-design.md): a process
 // claim `LinuxRuns` states that a run with the claimed events exists, and
 // every run from the same state that got the same answers from Linux
 // produced those events. This module holds the facts about Linux that

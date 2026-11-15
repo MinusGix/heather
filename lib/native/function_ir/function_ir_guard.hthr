@@ -1,6 +1,6 @@
 // A function's body under a test of values it did not have: nodes of
 // fresh outputs, then a conditional on one of them whose arms are both the
-// body (docs/optimizer-design.md §5.1). The stage learns nothing: the arm
+// body (docs/native/optimizer-design.md §5.1). The stage learns nothing: the arm
 // the test's bit takes starts with that bit as a fact, which is where the
 // replayer has a rule derive what the body's own tests ask
 // (`function_ir_replay.hthr`), and the other arm is the function as it was.

@@ -34,7 +34,7 @@
 # grep.
 calc	lib/std	suite	The realized calculator: the same program as idealized.hthr, at the limit of what checks.
 calc_parser	lib/std,lib/std/parser	suite	Checked token parser over the calculator; the parser library's most complete client.
-calc_text	lib/std,lib/std/parser	cli	Scannerless character grammar. 16 s at 0.3 GiB at width one (2026-09-22, after docs/app-by-head-type-design.md; 343 s / 9.8 GiB on 2026-09-19); its image publishes, so it replays warm and takes --only.
+calc_text	lib/std,lib/std/parser	cli	Scannerless character grammar. 16 s at 0.3 GiB at width one (2026-09-22, after docs/elaborator/app-by-head-type-design.md; 343 s / 9.8 GiB on 2026-09-19); its image publishes, so it replays warm and takes --only.
 idealized	-	unchecked	The language we want; does not check, and its job is to be argued with. A snippet is quoted in crates/elab/tests/mutual_recursion.rs.
 finite-sets-idealized	-	unchecked	The finite-set half of the same argument; does not check.
 parser_core	lib/std	test	The pre-library parser prototype: crates/elab/tests/parser_core.rs. Name clashes with lib/std/parser/parser_core.hthr on purpose — see `search` above.

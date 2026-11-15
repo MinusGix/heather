@@ -76,7 +76,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // that read it. The library gate (crates/cli/tests/library.rs) builds the CLI
 // image store, and native_cat/native_tools's `write-elf` replays its closure
 // from it (every module is keyed by its own closure,
-// docs/module-dag-design.md); cold, one `write-elf` would build that closure
+// docs/infrastructure/module-dag-design.md); cold, one `write-elf` would build that closure
 // itself, past the CPU rail. So a prerequisite starts first and its readers
 // wait, while every other target fills the slots it leaves idle. A
 // prerequisite the run does not hold blocks nothing.
@@ -86,7 +86,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // targets hand to `write-elf` is in one, and `write-elf`'s fixed imports,
 // `WRITE_ELF_IMPORTS`, are in lib/native's closure), and `store` the image
 // store. While the prerequisite runs, the runner asks `heather check
-// --unbuilt` (BuildPlan, docs/module-dag-design.md §12: image headers only,
+// --unbuilt` (BuildPlan, docs/infrastructure/module-dag-design.md §12: image headers only,
 // nothing elaborated) every PROBE_SECONDS, and releases the readers as soon
 // as nothing there is unbuilt; if that never happens they start when the
 // prerequisite finishes, pass or fail, as before. Warm, the first probe
@@ -156,7 +156,7 @@ function probe(heather, prerequisite) {
 // files into one executable to save the links, not to share a process: it
 // runs as one shard per member file, and a shard is scheduled, railed,
 // timed and labelled exactly as that file's own binary was
-// (docs/elab-test-families-design.md §D3). The member is the test name's
+// (docs/infrastructure/elab-test-families-design.md §D3). The member is the test name's
 // first `::` segment, because the family mounts each file as a module named
 // after its stem, next to the family's own directory.
 //
@@ -568,7 +568,7 @@ export function collect(child) {
 }
 
 // The file is an append-only history: one row per (run, target), oldest run
-// first (`docs/instrumentation-design.md` §5). Scheduling wants the *latest*
+// first (`docs/infrastructure/instrumentation-design.md` §5). Scheduling wants the *latest*
 // row per target, which is what a forward pass leaves in the map. Rows written
 // before the `run` column existed have two fields and still read.
 function loadHistory(path) {

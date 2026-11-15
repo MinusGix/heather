@@ -8,7 +8,7 @@ created: 2026-11-10
 updated: 2026-11-10
 ---
 
-The second instruction group of `docs/native-lexer-crypto-roadmap.md` §2
+The second instruction group of `docs/native/native-lexer-crypto-roadmap.md` §2
 piece 6, needed from stage C4 (Poly1305, then field arithmetic for
 X25519): the machine model has no multiply and no carry chain.
 

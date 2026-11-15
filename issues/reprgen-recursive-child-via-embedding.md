@@ -11,11 +11,11 @@ updated: 2026-10-28
 except as a self-call's argument: `pred` (`Succ(k) => k`), `tail_of`
 (`Cons(h, t) => t`), `uses_child` (`Cons(h, t) => length(t)`). The reason,
 recorded at the decline in `crates/elab/src/reprgen.rs` and in
-`docs/datarepr-design.md` §3.3's as-landed notes, is that the arm's algebra
+`docs/native/datarepr-design.md` §3.3's as-landed notes, is that the arm's algebra
 is spelled once and typed twice. The child is at the carrier in the fold and
 at `S` in the anchor law, and no single spelling is well-typed under both.
 
-`docs/proof-repair-algebra-survey.md` §6 takes the way through from
+`docs/surveys/proof-repair-algebra-survey.md` §6 takes the way through from
 Plante et al.'s Proposition 3.15 remark: an occurrence of the source type in
 the defining data is a further use of the repair map. Here the repair map is
 the embedding `emb : S → R`, the spec recursor over the images.
@@ -132,4 +132,4 @@ theorem pred_raw_refines(r: Bin, h: bin_canon(r)): bin_abs(pred_raw(r)) = pred(b
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[datatype-container-algebras]] (`docs/proof-repair-algebra-survey.md`); [[parallel-checking-and-caching]] (`crates/elab/tests/support/mod.rs`); [[suite-tests-reelaborate-library-modules]] (`crates/elab/tests/support/mod.rs`).
+- 2026-11-05: gardener: cites a file it shares with [[datatype-container-algebras]] (`docs/surveys/proof-repair-algebra-survey.md`); [[parallel-checking-and-caching]] (`crates/elab/tests/support/mod.rs`); [[suite-tests-reelaborate-library-modules]] (`crates/elab/tests/support/mod.rs`).

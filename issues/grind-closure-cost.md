@@ -20,7 +20,7 @@ share of a test's CPU rail. The grind constructor-facts round converted
 `x86_64_fetch`/`_data_read`/`_stack` (on the bundled path) and
 `native::tests::the_bundled_library_checks` was killed at its CPU rail on
 the first run after a compiler change, so those conversions were taken
-back (docs/grind-design.md §14.5).
+back (docs/tactics/grind-design.md §14.5).
 
 Two directions, either of which would let Minus's 2026-11-05 decision
 (grind anywhere its imports allow) stand in practice:
@@ -44,7 +44,7 @@ grind_with([e])`.
 
 ## Log
 
-- 2026-11-06: Both directions (docs/grind-design.md §14.6). Measured with `--timings` at
+- 2026-11-06: Both directions (docs/tactics/grind-design.md §14.6). Measured with `--timings` at
   width one: the closure's cost was the kernel gate re-checking `Tac`
   constructor values, which spell `Tac`'s `W` encoding at every occurrence
   (about 20k kernel steps for a probe's `Pure(1)`, about 2.7k through a
@@ -63,15 +63,15 @@ grind_with([e])`.
   300 s rail against master's 36 s: grind's closure about 105 s, and about
   33 s of image recheck at each of `x86_64_fetch` and `x86_64_data_read`,
   where grind's chain meets the x86 chain. So they stay out
-  (docs/grind-design.md §14.6), and this stays open for what is left: the
+  (docs/tactics/grind-design.md §14.6), and this stays open for what is left: the
   recheck when two chains merge (the bundled session has no verdict store;
   find whether relocation must re-check at all,
-  docs/module-interface-cutoff-design.md), and the closure itself
+  docs/infrastructure/module-interface-cutoff-design.md), and the closure itself
   ([[tier2-constructor-value-cost]]). The lists past these four are
   [[lib-closure-markers]]. Not looked at: the second cost (itree in scope slowing every
   grind call), now [[grind-scope-size-cost]].
 - 2026-11-06: The merge recheck and most of the rest were overhead, not
-  grind (docs/grind-design.md §14.6, "Where the sixfold went"): no verdict
+  grind (docs/tactics/grind-design.md §14.6, "Where the sixfold went"): no verdict
   store in the bundled session (now an in-memory one), one Merkle prefix
   re-hashed at every world switch (now the last few are kept), and tree
   walks over shared terms in relocation and the Merkle walk (now memoized;

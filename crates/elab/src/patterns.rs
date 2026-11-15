@@ -1,5 +1,5 @@
 //! Deep patterns and the `_` arm — the pattern-matrix preprocessing
-//! (`docs/nested-match-patterns-design.md`).
+//! (`docs/language/matching/nested-match-patterns-design.md`).
 //!
 //! This module is the mechanization of that document and is meant to be read
 //! against it; the section numbers in the comments are its.
@@ -79,7 +79,7 @@ struct Compile {
     /// column — so the one it inherits is the only honest answer available.
     form: MatchForm,
     /// Whether the arms being compiled are a generated level's (§7.1 of
-    /// `docs/diagnostic-warnings-design.md`): ours, not the writer's, so an
+    /// `docs/elaborator/diagnostic-warnings-design.md`): ours, not the writer's, so an
     /// unreachable one is not their problem to hear about.
     generated: bool,
     /// How many leaves each arm's body reached.
@@ -118,7 +118,7 @@ fn unreachable_msg(a: &Arm, before: &[Arm], form: MatchForm) -> String {
     let shadowed_by_same = before.iter().any(|b| b.ctor == a.ctor);
     format!(
         "this `{}` arm can never be reached: {} already matches every value it does, and \
-         first match wins (docs/nested-match-patterns-design.md §3.3), so its body is \
+         first match wins (docs/language/matching/nested-match-patterns-design.md §3.3), so its body is \
          never run — and never checked",
         a.ctor,
         if shadowed_by_same {
@@ -161,7 +161,7 @@ impl Patterns<'_> {
         form: MatchForm,
         // Whether the pattern compiler built the node these arms came from.
         // Read only to decide whether an unreachable arm is worth reporting
-        // (`docs/diagnostic-warnings-design.md` §7.1).
+        // (`docs/elaborator/diagnostic-warnings-design.md` §7.1).
         generated: bool,
         arms: &[Arm],
         scrut_t: &Term,
@@ -323,7 +323,7 @@ impl Patterns<'_> {
                      `{}`, a parameter of `{}`, so its arm binders are what the \
                      termination guard matches a recursive call's argument against. \
                      Match the field in a nested `match` inside the arm instead \
-                     (docs/nested-match-patterns-design.md \u{a7}6)",
+                     (docs/language/matching/nested-match-patterns-design.md \u{a7}6)",
                     form.keyword(),
                     s.params[dec].0,
                     s.name
@@ -350,7 +350,7 @@ impl Patterns<'_> {
                              is an indexed family, and that binder is the arm's *index* \
                              pattern variable rather than a value — it is determined by \
                              the scrutinee's index, so there is nothing here to case on \
-                             (docs/nested-match-patterns-design.md \u{a7}7)",
+                             (docs/language/matching/nested-match-patterns-design.md \u{a7}7)",
                             a.ctor, ind.name
                         ),
                         p.span(),
@@ -434,7 +434,7 @@ impl Patterns<'_> {
         // one (an `if let`'s `else` on a two-constructor type): its fields
         // are bound, under names the source cannot spell, so a tactic or
         // `known` in the arm reads why the other arms did not match
-        // (docs/when-design.md §5, §10). Anywhere else `_` binds nothing.
+        // (docs/language/when-design.md §5, §10). Anywhere else `_` binds nothing.
         let sole = match (&ctors, dflt) {
             (Some(cs), Some(_)) => {
                 let mut uncovered = cs.iter().map(|(n, _)| n).filter(|n| !rows.iter().any(|(i, _)| arms[*i].ctor == **n));
@@ -726,7 +726,7 @@ impl Patterns<'_> {
                 // silence was deliberate and is the redundancy half of
                 // issues/match-arm-redundancy-warning.md; with a warning
                 // channel it can finally be *said*
-                // (docs/diagnostic-warnings-design.md §7). The census is the
+                // (docs/elaborator/diagnostic-warnings-design.md §7). The census is the
                 // one §5 already computes for sharing — reachability is not a
                 // new analysis, it is this number being zero.
                 0 => {
@@ -764,7 +764,7 @@ impl Patterns<'_> {
                                  it contains a `?goal`, which cannot be elaborated more \
                                  than once. {} Write the arms out, or move the goal \
                                  outside the `match` \
-                                 (docs/nested-match-patterns-design.md \u{a7}10.3)",
+                                 (docs/language/matching/nested-match-patterns-design.md \u{a7}10.3)",
                                 if independent {
                                     "It is copied because it binds pattern variables, \
                                      which mean different things in different arms."
@@ -1205,7 +1205,7 @@ impl Patterns<'_> {
         };
         if let Some((ind, fam)) = IwfFamily(self).iwf_of_at(cx, scrut_ty) {
             // A mutual group's member: its own constructors, the only ones a
-            // `match` on it has arms for (docs/mutual-inductive-design.md §4).
+            // `match` on it has arms for (docs/inductives/mutual-inductive-design.md §4).
             if let Some(m) = (!ind.members.is_empty())
                 .then(|| IwfFamily(self).iwf_member_at(cx, &ind, &fam.idx, span))
                 .flatten()

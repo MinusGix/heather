@@ -1,4 +1,4 @@
-//! `lib/std/itree/coitree.hthr` (`docs/coitree-design.md`): what needs the
+//! `lib/std/itree/coitree.hthr` (`docs/itrees/coitree-design.md`): what needs the
 //! checker. The observations and a client's own bisimilarities are
 //! `lib/_tests/std/itree/coitree_tests.hthr`, which the whole-library gate
 //! checks (`crates/cli/tests/library.rs`; docs/test-value-audit.md §3.4).
@@ -42,7 +42,7 @@ fn different_leaves_are_not_bisimilar() {
 }
 
 // A goal over `Bisim` names it with its trees, through the named signature
-// (`docs/codata-named-signature-design.md`).
+// (`docs/inductives/codata-named-signature-design.md`).
 #[test]
 fn goals_name_bisimilarity() {
     refused(

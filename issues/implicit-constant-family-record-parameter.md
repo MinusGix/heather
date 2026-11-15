@@ -52,7 +52,7 @@ of it.
   `unify_tm` now solves such patterns by abstraction (`?C := λ a. Bool`),
   binders annotated from the slot's declared type, wherever the first-order
   congruence would not align the spine
-  (docs/unifier-completeness-design.md §10.4). The library case needed a
+  (docs/elaborator/unifier-completeness-design.md §10.4). The library case needed a
   second rule: `ax` is read only through `(ax(a, k)).has(c)`, spelled as the
   accessor `Opens::has` in the pattern and as a projection in the subject,
   so a pattern call against a projection now unfolds the pattern's head

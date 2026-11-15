@@ -41,4 +41,4 @@ assume.
 
 ## Log
 
-- 2026-08-14: docs/datarepr-design.md (§5.2) places iterators as ordinary reprs: pipeline ops are registry Impls, and certified fusion is a via-derived certificate for the fused Impl against the composed stagewise derived Impls — no new mechanism. API naturality stays this issue's open half.
+- 2026-08-14: docs/native/datarepr-design.md (§5.2) places iterators as ordinary reprs: pipeline ops are registry Impls, and certified fusion is a via-derived certificate for the fused Impl against the composed stagewise derived Impls — no new mechanism. API naturality stays this issue's open half.

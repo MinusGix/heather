@@ -28,4 +28,4 @@ fi
 # Build outside any `ulimit -v` cap: mold reserves ~8 GiB of address space per
 # link and fails under one (see CLAUDE.md).
 cargo build --quiet --release -p heather-cli
-(ulimit -v 8388608 -t 300; exec target/release/heather fmt "${CHECK[@]}" "${PATHS[@]}")
+exec target/release/heather fmt --limits dev,cpu=300 "${CHECK[@]}" "${PATHS[@]}"

@@ -2,7 +2,7 @@
 //!
 //! An elaborator is a long-lived session, but its state does not all live as
 //! long as the session. Read by lifetime it falls into six classes
-//! (`docs/implicit-state-machines-survey.md` §1), and each class has exactly
+//! (`docs/elaborator/implicit-state-machines-survey.md` §1), and each class has exactly
 //! one rule for what a clone gets and one for what a rollback does:
 //!
 //! | Group | Clone | Rollback | Probe ([`Elaborator::probe`]) |
@@ -45,7 +45,7 @@ pub(crate) type PendingDerived = (Type, Level, Option<String>, Option<Term>);
 
 /// State one *module pass* owns: what the deferred kernel gate has in flight,
 /// the item loop's position, and the diagnostics and reports the pass has
-/// accumulated (`docs/parallel-kernel-gate-design.md` §5).
+/// accumulated (`docs/kernel/parallel-kernel-gate-design.md` §5).
 ///
 /// A declaration rollback ([`Elaborator::restore_from_clone`]) never takes
 /// the pool or the replay cursor back from its snapshot, and takes the
@@ -54,13 +54,13 @@ pub(crate) type PendingDerived = (Type, Level, Option<String>, Option<Term>);
 /// `restore_module_pass` (`session.rs`).
 pub(crate) struct ModulePass {
     /// The deferred kernel gate's worker pool
-    /// (`docs/parallel-kernel-gate-design.md`). One worker — the default — is
+    /// (`docs/kernel/parallel-kernel-gate-design.md`). One worker — the default — is
     /// exactly today's serial behaviour, spawns no thread, and queues nothing.
     /// Not shared by clones: a clone gets a fresh pool with the same worker
     /// count, like the rest of the transient scratch state.
     pub(crate) kernel_pool: pool::KernelPool,
     /// The verdicts a discarded parallel pass earned, held for the serial
-    /// replay that follows it (`docs/parallel-kernel-gate-design.md` §5.2).
+    /// replay that follows it (`docs/kernel/parallel-kernel-gate-design.md` §5.2).
     /// Empty everywhere else, and never inherited by a clone.
     pub(crate) kernel_replay: pool::ReplaySlot,
     /// Logical semantic additions made while one module delta is extracted.
@@ -70,17 +70,17 @@ pub(crate) struct ModulePass {
     /// (`check_module_delta_from`); `None` on every other pass.
     pub(crate) slice_plan: Option<module_delta::SlicePlan>,
     /// The names the container being elaborated declares, and whether each
-    /// carries `decreases` — what `docs/mutual-recursion-design.md` §8's
+    /// carries `decreases` — what `docs/language/recursion/mutual-recursion-design.md` §8's
     /// sentence on an unbound forward reference needs. Full declared names:
     /// a member `V::get` further down does not make a bare `get` "declared
     /// below", since a member's base name is never ambient
-    /// (docs/receiver-member-resolution-design.md §3).
+    /// (docs/language/classes/receiver-member-resolution-design.md §3).
     pub(crate) container_decls: RefCell<Vec<(String, bool, usize)>>,
     /// How far the container's item loop has got — only a declaration still
     /// *ahead* of it is the forward reference §8 explains.
     pub(crate) container_at: Cell<usize>,
     /// Non-fatal diagnostics raised so far, in the order they were raised
-    /// (`docs/diagnostic-warnings-design.md` §3). A `RefCell` because the
+    /// (`docs/elaborator/diagnostic-warnings-design.md` §3). A `RefCell` because the
     /// places that raise one hold `&self` — the pattern compiler is the first
     /// customer and takes `&self` throughout, exactly as `goals` and
     /// `pending_derived` do.
@@ -113,7 +113,7 @@ pub(crate) struct ModulePass {
     /// same binders instead of re-running the search.
     pub(crate) pending_derived: RefCell<Vec<PendingDerived>>,
     /// `f_unfold` names the `decreases` walk declined to generate, and why
-    /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
+    /// (`docs/language/recursion/decreases-unfolding-design.md` §3): a reference to one reports
     /// the body shape that stopped the walk rather than an unknown name.
     pub(crate) unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
     /// Every theorem's proof, by absolute Ψ index, when an exporter asked
@@ -298,7 +298,7 @@ impl Clone for ModulePass {
 /// budget). A site that enters an extent should do it through
 /// [`Elaborator::scoped`] or [`Elaborator::scoped_cell`], which restore the
 /// *outer* value rather than resetting to the inert one, so that an extent
-/// that nests is right by default (`docs/implicit-state-machines-survey.md`
+/// that nests is right by default (`docs/elaborator/implicit-state-machines-survey.md`
 /// §8). The depth counters keep their own guards (`ExprDepthGuard`,
 /// `omega_cert::CertificateScope`, `ring.rs`'s `Depth`, `ResolutionScope`).
 #[derive(Clone, Default)]
@@ -318,7 +318,7 @@ pub(crate) struct DynamicScope {
     /// (issues/fn-recursion-means-the-function.md). `None` everywhere else.
     pub(crate) misplaced_recursion: RefCell<Option<(String, usize, String)>>,
     /// While a declaration is lowered by recursion at the top
-    /// (docs/recursion-at-the-top-design.md §3, slice 1): the parameter it
+    /// (docs/language/recursion/recursion-at-the-top-design.md §3, slice 1): the parameter it
     /// recurses on and the span of the `match` on it that
     /// [`Declarations::recursion_at_top_body`](crate::declarations::Declarations::recursion_at_top_body) wrapped the body in. That
     /// `match` is the guard, and a `Nat` `match` on a constructor term
@@ -334,7 +334,7 @@ pub(crate) struct DynamicScope {
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
-    /// members use earlier members by name" (docs/traits-layer1-design.md
+    /// members use earlier members by name" (docs/language/classes/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     pub(crate) instance_scope: Vec<(String, String)>,
     /// The interface definitions (global keys) the declaration being
@@ -357,7 +357,7 @@ pub(crate) struct DynamicScope {
     pub(crate) generated_depth: Cell<usize>,
     /// Quotation payloads currently elaborating (`quote.rs`), read through
     /// [`Elaborator::under_quotation`]. The checked spellings of
-    /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
+    /// `docs/elaborator/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
     /// code grammar, `code_eq` and the 60 recursor branches range over that
     /// payload, and `tm_pair`'s branch telescope types its field
     /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
@@ -371,7 +371,7 @@ pub(crate) struct DynamicScope {
     /// `Cx::quoted` flag on the payload's context, because a helper inside a
     /// payload that starts from a fresh `Cx` lost the flag; a dynamic extent
     /// is exactly what this group is for, so the flag went
-    /// (`docs/implicit-state-machines-survey.md` §7).
+    /// (`docs/elaborator/implicit-state-machines-survey.md` §7).
     pub(crate) quote_depth: Cell<u32>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
@@ -422,7 +422,7 @@ pub(crate) struct DynamicScope {
     /// may resolve to a `mut self` method, since the statement threads its
     /// receiver. A dot call of one anywhere else is refused
     /// ([`Members::refuse_unthreaded_mut_call`](crate::dispatch::Members::refuse_unthreaded_mut_call),
-    /// docs/effects-capabilities-design.md §2.2). `None` everywhere else.
+    /// docs/language/effects-capabilities-design.md §2.2). `None` everywhere else.
     pub(crate) mut_call_site: Cell<Option<Span>>,
     /// The call whose condition a probe is capturing
     /// ([`Tested`](crate::tested::Tested)): its span, and where the capture
@@ -549,7 +549,7 @@ pub(crate) struct Policy {
     /// `heather check --meaning-check` sets it ([`Elaborator::set_meaning_check`]).
     pub(crate) meaning_check: bool,
     /// Tactics implemented in Rust, available as `by name`
-    /// ([`Elaborator::register_native_tactic`], docs/host-elaboration-interface-design.md §8a).
+    /// ([`Elaborator::register_native_tactic`], docs/metaprogramming/host-elaboration-interface-design.md §8a).
     pub(crate) native_tactics: RefCell<HashMap<String, fn() -> Box<dyn host::NativeTactic>>>,
     /// Optional explicit collector for evaluator-region activity. Clones
     /// share it so speculative and generated checking contribute to the same

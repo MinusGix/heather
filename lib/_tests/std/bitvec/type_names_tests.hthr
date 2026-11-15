@@ -1,5 +1,5 @@
 // A type name is expanded where it is read (`u8` is `BitVec(8)` to every
-// reader, docs/fixed-width-integers-design.md §2), and a diagnostic spells
+// reader, docs/library/fixed-width-integers-design.md §2), and a diagnostic spells
 // the expansion back by the name the program wrote
 // (issues/type-name-display-respelling.md): the most recently written name
 // that still means it here. Tests, not library: nothing outside lib/_tests

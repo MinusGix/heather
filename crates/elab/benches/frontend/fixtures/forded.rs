@@ -23,7 +23,7 @@
 //!
 //! **The bands record the exponents that exist, not the ones the design
 //! wants**, which is the kernel doc's rule for a band that records a defect
-//! (docs/benchmarking.md, "Adding a family").
+//! (docs/infrastructure/benchmarking.md, "Adding a family").
 //!
 //! Re-recorded 2026-08-04 by `issues/generated-term-defs.md`, and the result
 //! is not the one the phase-1 comment predicted. Routing `μ`, the index type's
@@ -163,7 +163,7 @@ fn occurrences() -> Family {
 /// (`Tw(SLeaf)`, `Tw(SBud(s))` with `s` a field), and the classifier tries
 /// route 1 **first** (`inductive.rs::classify_indexed_route`), so this
 /// declaration has never had a skeleton, a `μ`, or a form-A inversion. It is
-/// `docs/inductive-indexed-lowering.md` §8.2 — route 1 at a declared index —
+/// `docs/inductives/inductive-indexed-lowering.md` §8.2 — route 1 at a declared index —
 /// swept along the index type's constructor count, which is that scheme's own
 /// cost dimension: the family node carries one branch per index constructor
 /// and is re-emitted per occurrence.

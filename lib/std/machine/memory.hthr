@@ -1,6 +1,6 @@
 // Byte-addressed memory with explicit access outcomes
 // (issues/byte-memory-access-model.md; the design is
-// docs/byte-memory-design.md). Three layers, each usable without the next:
+// docs/native/byte-memory-design.md). Three layers, each usable without the next:
 //
 // - An address space `Space<A>`: a Boolean `same` and `offset(a, i)`, the
 //   address `i` cells past `a`. Finiteness and wraparound are the space's:
@@ -740,7 +740,7 @@ theorem Nat::space_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart
     Nat::space_apart_of(a, k, b, l, Span(a, k).disjoint_of_before(Span(b, l), below))
 }
 
-// Found, not cited (docs/facts-on-demand-design.md §3): in the two numbered
+// Found, not cited (docs/native/facts-on-demand-design.md §3): in the two numbered
 // spaces, a premise `space.Distinct(a, k) := infer` or `space.Apart(a, k,
 // b, l) := infer` is the numbers' endpoint verdict and the fits below the
 // top, by `omega` over the asker's hypotheses (`a.toNat()` an atom). A

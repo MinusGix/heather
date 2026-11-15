@@ -1,5 +1,5 @@
 // `Unique`, the fact an in-place byte write needs, over `rt` code
-// (docs/facts-on-demand-design.md §7; issues/unique-fact.md).
+// (docs/native/facts-on-demand-design.md §7; issues/unique-fact.md).
 //
 // `xs.with_byte(i, v)` (`rt`'s `Set`) means a new buffer. A lowering may
 // build it in the old one's storage when nothing reads the old one after

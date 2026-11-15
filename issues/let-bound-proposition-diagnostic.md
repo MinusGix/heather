@@ -47,4 +47,4 @@ diagnostic should say so rather than report an arity mismatch on `And`.
   declared type names and builtins retain their existing precedence in type
   position; the new alias fallback does not change a record's declared fields.
   Documented the type-value inference rule and nullary-constructor annotation
-  escape hatch in `docs/logic-connectives-design.md`.
+  escape hatch in `docs/library/logic-connectives-design.md`.

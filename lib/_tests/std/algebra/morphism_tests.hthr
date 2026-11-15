@@ -1,7 +1,7 @@
 // Probes of the cast surface: `↑e` at a checking position and
 // `cast<B>(e)`, both rewritten along the shortest path of `Cast` edges
 // (lib/std/algebra/morphism.hthr, the instances beside each target type;
-// docs/casting-design.md §14). Tests, not library: nothing outside
+// docs/language/casting-design.md §14). Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import int; import rat; import creal; import dyadic; import morphism;
 

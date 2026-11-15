@@ -45,7 +45,7 @@ Both asks done. `infer_ctor` hands value parameters to `infer_ctor_values`
 the parameters as scratch-world metas and each field type is unified with its
 argument's through the call path's `unify_arg_ty`, then the construction is
 built at the solution by the checking route
-(`docs/surface-value-parameters.md` §4.1). `Float::Fin(f)` and
+(`docs/language/surface-value-parameters.md` §4.1). `Float::Fin(f)` and
 `Float::Inf(b, h)` both infer, so the four `Float::Le(F := F, …)` spellings in
 `lib/std/num/float/round.hthr` and the one in `lib_std_float_round.rs` are plain
 now. The call note for an unpinned value implicit suggests `name(F := …, …)`

@@ -47,5 +47,5 @@ plain win.
   three siblings are its push lemmas, applied with the dictionary in scope.
   `by mono_with([hx, hy])` proves `map(Dyadic::add(a, c).rat()) <= x + y`
   in the section above (lib/_tests/std/tactic/cast_tests.hthr,
-  `local_hom_…`). Design: docs/casting-design.md §15. `ring`, `linarith` and
+  `local_hom_…`). Design: docs/language/casting-design.md §15. `ring`, `linarith` and
   `cast_from` at a class carrier are [[cast-reading-at-class-carrier]].

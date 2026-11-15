@@ -1,4 +1,4 @@
-// Probes of `linarith` (lib/std/tactic/linarith.hthr, docs/linarith-design.md):
+// Probes of `linarith` (lib/std/tactic/linarith.hthr, docs/tactics/linarith-design.md):
 // linear facts at an ordered field, read at its `≈`, the same certificate
 // checked at `Rat` and at `CReal` through the class laws. Tests, not
 // library: nothing outside lib/_tests imports this module
@@ -60,7 +60,7 @@ theorem rat_two_dens(a, b, d, e: Rat, hd: 0 < d, he: 0 < e, h: a * d⁻¹ <= b *
 theorem rat_den_sum(a, b, d: Rat, hd: 0 < d + 1, h: a * (d + 1)⁻¹ <= b): a <= b * d + b { linarith(hd, h) }
 // A quotient is a product with the divisor's reciprocal, and a numeral
 // divisor is positive by its sign rule, so `a / 2` is cleared with no fact
-// about it (docs/division-design.md).
+// about it (docs/library/division-design.md).
 theorem rat_half_below(a: Rat, h: 0 < a): a / 2 < a { linarith }
 theorem rat_midpoint(a, b: Rat, h: a < b): a < (a + b) / 2 ∧ (a + b) / 2 < b { And(linarith, linarith) }
 theorem rat_third(a: Rat, h: a <= 6): a / 3 < 3 { linarith }
@@ -95,7 +95,7 @@ theorem rat_den_negative(a, b, d: Rat, hd: d < 0, h: a <= b * d): a * d⁻¹ <= 
 theorem rat_wrong_fact(x: Rat, n: Nat, h: n < 3): x <= x { linarith(h) }
 
 // At `Int` and `Nat` `omega` decides, with `ring`'s monomials as its atoms
-// (docs/linarith-design.md §8): a side that multiplies is stated equal to
+// (docs/tactics/linarith-design.md §8): a side that multiplies is stated equal to
 // its normal form, so `b * a`, `a * b` and the `a * b` inside `(a + 1) * b`
 // are one atom, and the integers' rounding comes with `omega`.
 theorem int_commuted(a, b, c: Int, h: a * b <= c): b * a + b <= c + b { linarith(h) }
@@ -140,7 +140,7 @@ theorem int_wrong_fact(x: Int, h: True): x * x <= x * x { linarith(h) }
 theorem nat_not_entailed(a, b: Nat, h: a * b <= 3): b * a < 3 { linarith(h) }
 
 // ---------------------------------------------------------------------------
-// `nlinarith` (docs/nonlinear-arithmetic-design.md): the facts multiplied
+// `nlinarith` (docs/tactics/nonlinear-arithmetic-design.md): the facts multiplied
 // pairwise, the goal's negation among them where a refutation proves the
 // goal, and the squares the terms show.
 
@@ -210,7 +210,7 @@ theorem let_linarith_unannotated(x: Rat, h: x < 1): x < 2 { let k = linarith(h);
 
 // At a class carrier (issue cast-reading-at-class-carrier): the facts and
 // the goal are the section's own relations, and the certificate is spelled
-// in its operations (docs/casting-design.md §16).
+// in its operations (docs/language/casting-design.md §16).
 section<K: OrderedField(≈, <, <=, +, *)> {
 theorem class_trans(x, y, z: K, h: x <= y, k: y < z): x < z { linarith }
 theorem class_halve(x, y: K, h: x + x <= y + y): x <= y { linarith }
@@ -233,7 +233,7 @@ theorem class_parent_not_entailed(z, e: K, h: AbsLe(z, e)): K.unit < e { linarit
 theorem class_refusal_spelled(d: K): K.unit <= d * d + K.unit { linarith }
 }
 
-// Conjunctions (docs/linarith-design.md §9): a fact that is one, or a
+// Conjunctions (docs/tactics/linarith-design.md §9): a fact that is one, or a
 // definition that unfolds to one, gives each side as a row, written or in
 // context; a goal that is one is proved side by side.
 theorem conj_written(x, y: Rat, h: 0 <= x ∧ x <= y): 0 <= y { linarith(h) }

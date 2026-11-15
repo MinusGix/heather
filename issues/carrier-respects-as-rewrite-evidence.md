@@ -29,7 +29,7 @@ and the library writes the congruence by hand instead:
 `CReal::mul_respects(H.same_refl(), a)`, `Rat::abs_respects(Rat::sub_respects(
 (x.at(a) * y.at(a)).same_refl(), …))`. The `same_trans`/`same_sym`/`respects`
 family is about 3,100 occurrences across lib/std/algebra, analysis and num
-(docs/stdlib-math-awkwardness-survey.md §3); this is the cheapest part of it
+(docs/surveys/stdlib-math-awkwardness-survey.md §3); this is the cheapest part of it
 to remove.
 
 ## Direction

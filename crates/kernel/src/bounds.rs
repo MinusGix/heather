@@ -299,7 +299,7 @@ impl Walk {
 
     /// A deep node's spine answered from the bottom up, so the recursion
     /// that follows meets an answer one level down instead of walking the
-    /// chain one native frame per node (docs/deep-term-walks-design.md).
+    /// chain one native frame per node (docs/kernel/deep-term-walks-design.md).
     /// Each node below `t` is computed with the depth reset: its own spine
     /// child is already answered, so it recurses a level or two.
     fn warm_spine(&mut self, t: &Rc<Term>) {
@@ -922,7 +922,7 @@ pub(crate) fn global_bound_term(t: &Rc<Term>) -> u32 {
     let depth = GLOBAL_DEPTH.with(|d| d.get());
     if depth >= crate::term::SPINE_ITERATE_AT {
         // The spine below `t`, bottom up, so the walk of each node meets an
-        // answer one level down (docs/deep-term-walks-design.md).
+        // answer one level down (docs/kernel/deep-term-walks-design.md).
         let mut path = Vec::new();
         let mut cur = crate::term::spine_child(t);
         while let Some(c) = cur {

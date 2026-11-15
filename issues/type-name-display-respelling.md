@@ -8,7 +8,7 @@ updated: 2026-11-06
 ---
 
 A `def` at a universe and a width family are expanded where they are read
-(docs/fixed-width-integers-design.md §2): `u8` is `BitVec(8)` to every reader,
+(docs/library/fixed-width-integers-design.md §2): `u8` is `BitVec(8)` to every reader,
 so a diagnostic about a `u8` says `BitVec(8)`, and one about an `i64` says
 `SInt(64)`. Correct, and the honest spelling, but not the program's.
 
@@ -30,5 +30,5 @@ when two are in scope (`u8` and a program's own `Byte`).
   name wins: the most recently written that still resolves to the same `def`
   and is not hidden by a local, which inside a declaration is the one that
   declaration wrote. Reader flavours only. A computed width stays unreduced
-  (`u(add(8, 8))`). Design: docs/surface-type-display-design.md §5.1; probes
+  (`u(add(8, 8))`). Design: docs/elaborator/surface-type-display-design.md §5.1; probes
   lib/_tests/std/bitvec/type_names_tests.hthr.

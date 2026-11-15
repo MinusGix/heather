@@ -1,5 +1,5 @@
 //! The **evaluator**: (syntax, environment) → weak head normal value
-//! (docs/nbe-conversion-design.md §§3–6).
+//! (docs/kernel/nbe-conversion-design.md §§3–6).
 //!
 //! This is the environment machine that replaces the term rewriter's
 //! substitute-and-re-reduce loop on the conversion path. It decides the same
@@ -88,7 +88,7 @@ fn neutral<'v>(
 // -- materializing a closure's pending global offset -------------------------
 //
 // A syntactic closure evaluates an **unshifted** body under the global offset
-// its environment carries (`docs/lazy-global-offset-design.md`). The offset
+// its environment carries (`docs/kernel/lazy-global-offset-design.md`). The offset
 // stays pending on the value path; these four helpers spend it where syntax
 // *leaves* that path — into a box, a `ctx`, an annotation, a recursor table —
 // and where a closure body sits under a global binder, which is the one place
@@ -268,7 +268,7 @@ pub struct Eval<'a, 'v> {
     /// re-entry of [`Eval::drive`], plus whatever the caller reserved with
     /// [`Eval::reserve_depth`]. Bounded by
     /// [`crate::reduce::NATIVE_DEPTH_LIMIT`]
-    /// (docs/native-depth-budget-design.md).
+    /// (docs/kernel/native-depth-budget-design.md).
     depth: u32,
     /// Set while a caller has asked for the **δ-transparent** weak head
     /// value ([`Eval::delta_whnf`]). An eliminator stuck on a glued
@@ -282,7 +282,7 @@ pub struct Eval<'a, 'v> {
     /// the replays are gone. Off by default: opaque evaluation is what the
     /// δ-lazy rendezvous in conversion needs (see `step_elim`).
     transparent: bool,
-    /// Work done, for `crate::stats` (`docs/instrumentation-design.md` §2).
+    /// Work done, for `crate::stats` (`docs/infrastructure/instrumentation-design.md` §2).
     /// Plain fields rather than thread-locals: the fuel decrement is the
     /// kernel's hottest line and a counter beside `fuel` costs what `fuel -=
     /// 1` costs. Flushed to the thread-local totals when the run is dropped.
@@ -375,7 +375,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// [`Eval::spend`] in bulk: one unit per bit a native step consumed or
-    /// produced (`docs/native-bitvector-values-design.md` §8). Charging
+    /// produced (`docs/kernel/native-bitvector-values-design.md` §8). Charging
     /// *something* proportional to the data keeps `eval_steps` an
     /// interpretable measure and keeps a pathological width from being free;
     /// charging at most what the structural path charged is what keeps a
@@ -427,7 +427,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// application's function, a type annotation) stays on the native stack,
     /// where its depth is the syntax's and the rewriter's own — *except* when
     /// a value nests scrutinees, which is why each re-entry is counted
-    /// against [`NATIVE_DEPTH_LIMIT`] (docs/native-depth-budget-design.md).
+    /// against [`NATIVE_DEPTH_LIMIT`] (docs/kernel/native-depth-budget-design.md).
     /// A head that is a bound variable, the commonest way a value nests, is
     /// the exception's exception: it is forced on this loop with the
     /// elimination waiting on the heap ([`Eval::await_bound`], §9).
@@ -453,7 +453,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// The loop is the machine's whole native frame on a value-nested chain
-    /// (docs/native-depth-budget-design.md §8): every arm but the trivial
+    /// (docs/kernel/native-depth-budget-design.md §8): every arm but the trivial
     /// ones is a call to a function kept out of line, so this frame holds
     /// only `work` and what the next call needs, and a re-entry costs that
     /// rather than the union of every arm's locals.
@@ -658,7 +658,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// convertible pair instead: the cause was a withheld call judged open
     /// at a lazily forced argument and memoized unglued, fixed where the
     /// verdict is made ([`Eval::closed`],
-    /// `docs/kernel-implicit-state-review.md` §1).
+    /// `docs/kernel/kernel-implicit-state-review.md` §1).
     pub fn delta_step_transparent(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = self.delta_step(v);
@@ -702,7 +702,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     ///
     /// The evaluator-side spelling of `Conv::delta_to_head_ty`, and it exists
     /// for exactly one customer: the checked spellings
-    /// (`docs/intro-by-type-design.md`), whose single annotation is the
+    /// (`docs/elaborator/intro-by-type-design.md`), whose single annotation is the
     /// *un-reduced* type the elaborator had. Evaluating one means exposing
     /// that type's head former and reading the component closures off it —
     /// which is where the sharing this round is about comes from, because the
@@ -1015,7 +1015,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 VTy::Wf { level: l.clone(), shape: s, arity: *arity }
             }
             // `El(TmM …) ⇝ M(El idx; El shape; El pos; next)(index)`
-            // (docs/kernel-m-codes-design.md §1): `next` and the index are
+            // (docs/kernel/kernel-m-codes-design.md §1): `next` and the index are
             // terms of the decoded index type and ride across unchanged.
             Val::TmM(m) => {
                 let VTmM { level: l, pos_level, idx_level, idx, shape, pos, next, index } = &**m;
@@ -1036,7 +1036,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
             }
             // `El(TmIWf …) ⇝ IWf(El idx; El shape; arity; out; child)(index)`
-            // (docs/iwf-former-design.md §6): the arity, output and child
+            // (docs/kernel/iwf-former-design.md §6): the arity, output and child
             // index and the index are terms and ride across unchanged.
             Val::TmIWf(w) => {
                 let VTmIWf { level: l, idx_level, idx, shape, arity, out, child, index } = &**w;
@@ -1135,7 +1135,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `DVec^l(k; i. F)`: `0 ⇝ Unit^l`,
     /// `S k ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])`, stuck
-    /// otherwise (docs/iwf-former-design.md §1.1).
+    /// otherwise (docs/kernel/iwf-former-design.md §1.1).
     ///
     /// Both components are syntactic closures over the family's own
     /// environment, so nothing is forced: the head is the family with `i`
@@ -1279,7 +1279,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     ///
     /// This is the shape of a tier-2 function child, whose tree and proof
     /// are `λy. fst(k y)` and `λy. snd(k y)` over one `k`
-    /// (docs/inductive-tier2-w-lowering.md §6): without the sharing, every
+    /// (docs/inductives/inductive-tier2-w-lowering.md §6): without the sharing, every
     /// read of a child evaluated `k y` twice, and a `bind` nested `d` deep to
     /// the left evaluated its innermost tree `2^d` times
     /// (issues/tier2-left-nested-bind-cost.md). Sound because evaluation is
@@ -1314,7 +1314,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// head here and builds its eliminator in [`Eval::elim_of`]; every other former is
     /// [`Eval::step_intro`]'s. The split is for the native stack: the head's
     /// evaluation is the recursion, and only this small frame stands under
-    /// it (docs/native-depth-budget-design.md §8).
+    /// it (docs/kernel/native-depth-budget-design.md §8).
     fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
         let v = match t {
             Term::Var(x) => match env.lookup(self.arena, x.0) {
@@ -1389,9 +1389,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     ///
     /// A chain of such heads is a chain in the *value*, not the syntax: each
     /// variable stands for a thunk whose body eliminates the next one
-    /// (docs/native-depth-budget-design.md §1). The commonest is a tier-2
+    /// (docs/kernel/native-depth-budget-design.md §1). The commonest is a tier-2
     /// value's proof read through a run of `match` aliases, `c y` with `c`
-    /// the previous alias's `c y` (docs/inductive-tier2-w-lowering.md §7),
+    /// the previous alias's `c y` (docs/inductives/inductive-tier2-w-lowering.md §7),
     /// one link per request a tactic answers under a `bind`
     /// (issues/grind-unrelated-lemma-fuel.md). Forced natively, every link
     /// re-entered `drive` and the chain was capped at `NATIVE_DEPTH_LIMIT`
@@ -1568,7 +1568,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 val: tclo(env, val),
             },
 
-            // -- the checked spellings (docs/intro-by-type-design.md) -------
+            // -- the checked spellings (docs/elaborator/intro-by-type-design.md) -------
             //
             // These do not get value forms of their own. The evaluator
             // exposes the annotation's head former and builds the *existing*
@@ -1743,7 +1743,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 e
             }
             // app@ stores no Π, and the evaluator does not view the head's
-            // type to invent one (docs/app-by-head-type-design.md §5).
+            // type to invent one (docs/elaborator/app-by-head-type-design.md §5).
             Term::AppAt { arg, .. } => {
                 Elim::App { ann: None, arg: tclo(env, arg) }
             }
@@ -2103,7 +2103,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         match (&*head, &e) {
             (Val::Neutral(_), _) => self.step_neutral(head, e),
             // A width fold waiting for the arguments its class fires at
-            // (`docs/native-bitvector-values-design.md` §4).
+            // (`docs/kernel/native-bitvector-values-design.md` §4).
             (Val::BitFold { .. }, Elim::App { .. }) => self.bit_fold_app(&head, e),
             (Val::NatSync { .. }, Elim::App { .. }) => self.fire_nat_sync(head, e),
             (Val::NatRun { .. }, Elim::ElimNat { .. }) => self.fire_nat_run(head, e),
@@ -2248,7 +2248,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Ok(Work::Apply1(*case, *tm))
             }
             // A run's one-step view is the Σ-chain it stands for
-            // (`docs/native-bitvector-values-design.md` §3.3): unpack its
+            // (`docs/kernel/native-bitvector-values-design.md` §3.3): unpack its
             // first bit, with the annotations `Eval::vec_ty` gives that Σ,
             // and let the ordinary pair arms fire on it. Costing one step
             // per projection is what keeps `Fst`/`Snd` on a word O(1).
@@ -2306,7 +2306,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
-            // One step, only under `out` (docs/kernel-coinduction-design.md §1.4).
+            // One step, only under `out` (docs/kernel/kernel-coinduction-design.md §1.4).
             (Val::Corec { sig, coalg, index, seed }, Elim::Out { .. }) => {
                 self.spend()?;
                 match self.fire_out(sig, coalg, index, seed) {
@@ -2523,7 +2523,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// The β of a binder over a universe, a context, a type or a box: the
     /// body instantiated, then evaluated. Out of line because the
     /// substitution's temporaries are the largest locals of the β arms
-    /// (docs/native-depth-budget-design.md §8).
+    /// (docs/kernel/native-depth-budget-design.md §8).
     #[inline(never)]
     fn fire_instantiate(
         &mut self,
@@ -2828,7 +2828,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// `elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs]`, at any
-    /// index (docs/iwf-former-design.md §4), with the ih held as
+    /// index (docs/kernel/iwf-former-design.md §4), with the ih held as
     /// [`Val::IWfIh`] rather than built as that λ's syntax. The syntax
     /// guards are [`iwf_ih_lam`](Eval::iwf_ih_lam)'s, kept here so the β
     /// fires exactly when it did while the λ was eager.
@@ -2983,7 +2983,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// `out(corec^{k}(…; X; c; j; x)) ⇝ m_out_corec(…)`
-    /// (docs/kernel-coinduction-design.md §1.4). The reduct is `reduce.rs`'s,
+    /// (docs/kernel/kernel-coinduction-design.md §1.4). The reduct is `reduce.rs`'s,
     /// from the one schema [`m_out_corec`]: built as syntax in `(Γ, j, x)` —
     /// the signature and the coalgebra weakened past the two slots, `j` and
     /// `x` named by them — and evaluated in the coalgebra's environment
@@ -3251,7 +3251,7 @@ pub fn whnf_value_ty<'v>(
 }
 
 /// The run program a nonzero literal evaluates to
-/// (`docs/wide-numerals-design.md` §2): one saturated run up to `u64::MAX`;
+/// (`docs/language/wide-numerals-design.md` §2): one saturated run up to `u64::MAX`;
 /// above it, the value's bits from the top by doubling and incrementing
 /// ([`ContextProgram::of_count`]).
 fn nat_lit_program(n: &crate::term::Numeral) -> Rc<ContextProgram<()>> {
@@ -3398,7 +3398,7 @@ mod tests {
                 && matches!(tail, TmClo::Val(z) if matches!(&**z, Val::Zero))));
     }
 
-    /// A literal past a machine word (docs/wide-numerals-design.md) denotes
+    /// A literal past a machine word (docs/language/wide-numerals-design.md) denotes
     /// exactly its value, in a program of `O(bits)` shared nodes.
     #[test]
     fn a_wide_literal_enters_the_value_domain_as_its_exact_count() {

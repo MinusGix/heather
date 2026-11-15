@@ -1,5 +1,5 @@
 //! `subst(h, e)`: eliminate a local variable along an equation
-//! (`docs/equation-rewrite-design.md` §8, `issues/subst-local-equation.md`).
+//! (`docs/tactics/equation-rewrite-design.md` §8, `issues/subst-local-equation.md`).
 //!
 //! At a checking position with goal `G` in `Γ = Γ₀, x : A, Δ`, with
 //! `h : t = x` (or `x = t`) and `t` not mentioning `x`: every later local

@@ -14,7 +14,7 @@ proof-irrelevant side conditions (`Format::canonical`, the x86 asm tables,
 FunctionIR evaluation), so every client takes them apart by hand with
 `is_true_and` / `leb_sound` / `leb_complete` before omega can see them: 24
 library files do (x86_64_asm_table 40 uses, function_ir_eval 38,
-native_structured_meaning 26, …). `docs/bool-guard-reflection-design.md` §3.2
+native_structured_meaning 26, …). `docs/language/matching/bool-guard-reflection-design.md` §3.2
 has the before/after at `Format::canonical`.
 
 Wanted: before giving up on a `b.IsTrue()` fact, read `b` by structure:
@@ -24,7 +24,7 @@ Wanted: before giving up on a `b.IsTrue()` fact, read `b` by structure:
   (`Bool::is_true_or`, then the existing `Or` split), `!a` as `¬a.IsTrue()`
   (`Bool::is_true_not`);
 - a Bool definition by one δ step, as defined propositions already are
-  (design §11 of `docs/omega-measure-reduction-design.md`), so
+  (design §11 of `docs/tactics/omega-measure-reduction-design.md`), so
   `F.canonical(m, b).IsTrue()` reads through `canonical`'s `let`s;
 - a stuck `match n { Zero => x, Succ(_) => y }` by splitting `n = 0` /
   `0 < n`, the way §16 splits a truncated subtraction.
@@ -60,7 +60,7 @@ propositional kind). Guard goals are refuted from their negation. A stuck
 `match` inside a guard (the fourth bullet) is not read: the round binds the
 part and leaves it ([[omega-guard-reads-nat-match]]), so `canonical`'s
 least-exponent disjunction stays a `reflects_elim`. Design:
-`docs/omega-measure-reduction-design.md` §17. `Format::canonical_elim` is
+`docs/tactics/omega-measure-reduction-design.md` §17. `Format::canonical_elim` is
 `omega(ok)` per conjunct, `Finite::units_le_max` cites `g.ok` instead of
 the elim, and the probes and controls are in
 `lib/_tests/std/tactic/omega_tests.hthr`.

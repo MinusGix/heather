@@ -1,4 +1,4 @@
-// Inlining (docs/optimizer-design.md §3.1): a call replaced by its
+// Inlining (docs/native/optimizer-design.md §3.1): a call replaced by its
 // callee's body, as a stage of the optimizer (`function_ir_stage.hthr`).
 //
 // A call says the callee, run on the arguments' words over the file, may

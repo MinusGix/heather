@@ -1,6 +1,6 @@
 //! Acceptance for tier-1 branching inductives (issues/wf-former.md phase 5,
 //! `issues/tier1-branching-constructors.md`), against the checklist of
-//! `docs/inductive-tier1-wf-lowering.md` §10.
+//! `docs/inductives/inductive-tier1-wf-lowering.md` §10.
 //!
 //! The point of the tier, as at tier 0: every declaration below is lowered —
 //! here onto `Wf`/`sup_f`/`elim_Wf` — and then re-checked by the *real
@@ -392,7 +392,7 @@ fn the_lowering_shifts_are_exercised_by_a_dependent_parameter() {
 // it, measured by re-introducing the `d + 1`, was three tests in
 // `indexed_route_2b_gen.rs` — the *fording* file, four layers up, whose
 // `Tree<A>` happens to be three-constructor and polymorphic. That is
-// `docs/container-fields.md` §10.1's rule going unpaid: the emitter is here,
+// `docs/language/container-fields.md` §10.1's rule going unpaid: the emitter is here,
 // so its control belongs here, or the search for the next one starts from the
 // wrong end.
 //

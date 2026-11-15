@@ -1,7 +1,7 @@
 # One program shape: the stream filter
 
 > **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
-> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> hand-proved process stack (`docs/native/native-program-logic-design.md` §3.1); the document
 > stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
 
 Status: **landed 2026-10-01** (F0–F5 in one round; §10 lists how it was
@@ -107,7 +107,7 @@ record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C 
 Which bytes `tr -s`/`-d` act on is fixed in the source. There are no
 command-line arguments: there is no argv model yet.
 
-### 2.4 Probe findings (2026-10-01, `probes/filter/`)
+### 2.4 Probe findings (2026-10-01, `probes/filter/@ef3961a`)
 
 - `Filtered<C>`, `Stateless {}` and a `tr -d` spec proof over
   `filter_emitted` elaborate as written above.

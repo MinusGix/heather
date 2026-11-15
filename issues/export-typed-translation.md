@@ -15,14 +15,14 @@ appear only in proofs, but fragile: Lean's elaborator needed
 `with_unfolding_all` for a conversion its kernel accepts
 (`crates/export/probes/WfNative.lean`). It also cannot maintain the
 invariant both targets need for Heather's irrelevant types
-(`docs/export-fragment-design.md` §5.2): every term at a type whose whnf is
+(`docs/library/export-fragment-design.md` §5.2): every term at a type whose whnf is
 `sEq`, `sEmpty` or `Squash` must be written eta-long.
 
 The round:
 
 1. Walk each declaration with the kernel's inference (`heather_kernel::typing`),
    and erase each checked spelling to its component form at the whnf the
-   derivation contains (`docs/intro-by-type-design.md` §2.4's `⌊·⌋`).
+   derivation contains (`docs/elaborator/intro-by-type-design.md` §2.4's `⌊·⌋`).
 2. In the same pass, eta-expand neutrals at irrelevant types, and through
    `Σ`s whose components need it.
 3. Keep sharing. Heather terms are DAGs, and a tree printer is exponential in

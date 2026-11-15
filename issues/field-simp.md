@@ -36,7 +36,7 @@ Scope:
 
 ## Log
 
-- 2026-10-27: Done for equations (docs/ring-normalization-design.md §9). It is
+- 2026-10-27: Done for equations (docs/tactics/ring-normalization-design.md §9). It is
   not a separate step: at a `≈` carrier with `CommRingOfInt` (`Rat`, `CReal`)
   `ring` reads `x⁻¹` and `Rat::inv_succ(n)` as atoms with the facts that clear
   them (`<op>_mul`: `x⁻¹ * x ≈ 1`, `Rat::inv_succ_cancel`), and casts of `Nat`

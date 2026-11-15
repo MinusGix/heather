@@ -33,7 +33,7 @@ existing identity `cong` solver or claim a complete preservation procedure.
 ## Log
 
 - 2026-09-04: Began the authorized single-rewrite round. API, source driver,
-  proof-construction tests and `docs/contextual-rewrite-round.md` are in place;
+  proof-construction tests and `docs/showcase/contextual-rewrite-round.md` are in place;
   verification is in progress.
 - 2026-09-04: Initial 19 focused tests passed. An added identity control exposed reliance on an input import of relation_props; both generator entry points now add absent helper imports without duplicates. The parser requires imports before declarations; a negative regression preserves that restriction. Expanded checks are running.
 

@@ -1,4 +1,4 @@
-// Linux's calls and answers (docs/native-program-logic-design.md §4;
+// Linux's calls and answers (docs/native/native-program-logic-design.md §4;
 // issues/native-linux-spec.md): what a process asks of Linux, what Linux may
 // answer, and the events a run is a list of. Nothing here is about machines:
 // `linux_x86_64_io` says how a process makes these calls, `linux_trees` makes

@@ -23,10 +23,10 @@ any code:
    axiom, a universe shift, or refusal).
 2. Quotients, `Classical.choice` and the other axioms Lean's library uses,
    and how each would be marked through Heather's axiom provenance
-   (`docs/axiom-provenance-design.md`).
+   (`docs/kernel/axiom-provenance-design.md`).
 3. What formal model of Lean the translator is stated over, and what part
    of the translation is trusted.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/axiom-provenance-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/kernel/axiom-provenance-design.md`).

@@ -9,7 +9,7 @@ updated: 2026-10-24
 
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
 `Elaborator::emit_ty` and the walker (`crates/elab/src/emission_walk.rs`,
-docs/annotation-component-respell-design.md §2.5). The walker's first
+docs/elaborator/annotation-component-respell-design.md §2.5). The walker's first
 listing on `lib/certgen/ir_v1.hthr`'s closure, after the round's own routings
 (`Lam.dom` went from 49 to none), is 214 findings whose slots are recorded
 as `WALK_RESIDUE` in `crates/elab/tests/ir_v1.rs` — a regression guard that
@@ -79,9 +79,9 @@ rows 1–2.
 
 - 2026-09-10: Item 1 (`project_field`'s fallback walk) landed by [[unnameable-annotation-occurrences]]'s round (2026-09-10), in the fix shape written here: each link's `fst`/`snd` read off `whnf(cur_emit)` now goes through `emit_ty` (depth 0 and 1). Measured on the x86 fetch certificates rather than the library: the chain met the literal at every `FetchedFrom` instance (numbers on that issue). Item 2 (`elab_arm`'s alias projections) is untouched.
 - 2026-09-10: Five-node listing 578 → 260 after [[per-instantiation-type-codes]] (2026-09-10): the Supf shape/arity and the whole Fst/Snd chain are gone; Pair.fst_ty/snd_ty 236 → 120 each, App.cod/dom and ElimNat.motive 20 — all pre-existing slots, the closed boxed literal.
-- 2026-09-13: The quote layer's remaining literal had one more site than the walker lists, because it is a definition body and not a slot: `register_ty_code_fn`'s `code_of(template)`. Quoted respelled since 2026-09-13 (docs/record-projection-reference-design.md §9.8); the walker's own listing is unaffected, its slots were already routed.
-- 2026-09-16: The quote residue this table lists as not its own has been attributed to an item: `complete_post`'s 5.73 M conversion queries are the quote layer's inline component lowerings (docs/complete-post-attribution-design.md §4). Verification item for the slice: this walker's `WALK_RESIDUE` list may only shrink (design §8 item 4).
-- 2026-09-16: Re-list after the quote-layer slice (docs/complete-post-attribution-design.md §10.6): `App.dom`/`App.cod` and `Pair.fst_ty`/`snd_ty` were the slots the raw quote fed, so the five-node residue table above is stale until re-run.
+- 2026-09-13: The quote layer's remaining literal had one more site than the walker lists, because it is a definition body and not a slot: `register_ty_code_fn`'s `code_of(template)`. Quoted respelled since 2026-09-13 (docs/elaborator/record-projection-reference-design.md §9.8); the walker's own listing is unaffected, its slots were already routed.
+- 2026-09-16: The quote residue this table lists as not its own has been attributed to an item: `complete_post`'s 5.73 M conversion queries are the quote layer's inline component lowerings (docs/elaborator/complete-post-attribution-design.md §4). Verification item for the slice: this walker's `WALK_RESIDUE` list may only shrink (design §8 item 4).
+- 2026-09-16: Re-list after the quote-layer slice (docs/elaborator/complete-post-attribution-design.md §10.6): `App.dom`/`App.cod` and `Pair.fst_ty`/`snd_ty` were the slots the raw quote fed, so the five-node residue table above is stale until re-run.
 - 2026-09-23: Item 2 (`elab_arm`'s alias projections) landed 2026-09-23 in this issue's fix shape — each link's `fst`/`snd` through `emit_ty` at depth 0 / 1, `cur` kept structural — as part of [[elaborator-canonical-type-spelling]]'s constructor-value round (numbers there: a `match` on an `Instruction`-field declaration 13.5 K kernel steps → 21). The unannotated `FstAt`/`SndAt` `project_field` writes were tried first and refused: the elaborator's reducts substitute a constructor literal for the scrutinee, and the kernel cannot infer a projection of an unannotated tuple (`NotInferable` on two `x86_64` model declarations).
 - 2026-10-24: B2 (2026-10-24) deleted `lib/certgen/ir_v1.hthr`; the guard now runs over its frozen copy `crates/elab/tests/fixtures/ir_v1.hthr`, so `WALK_RESIDUE` still measures the same corpus. The five-node FunctionIR/x86 module and `mixed_binary_alu_raw` are deleted too.
-- 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`docs/record-projection-reference-design.md`); [[parser-certified-composition-cost]] (`docs/complete-post-attribution-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`docs/elaborator/record-projection-reference-design.md`); [[parser-certified-composition-cost]] (`docs/elaborator/complete-post-attribution-design.md`).
