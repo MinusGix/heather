@@ -51,8 +51,9 @@ import x86_64_asm;
 // was. Answers where `x` went.
 runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
     if h: 0 < j {
-        if larger: x < s.byte_within(n, j - 1).zero_extend(56) {
-            s.put_within(n, j, s.byte_within(n, j - 1));
+        let below = s.byte_within(n, j - 1);
+        if larger: x < below.zero_extend(56) {
+            s.put_within(n, j, below);
             s.insert_below(n, j - 1, x)
         } else {
             s.put_within(n, j, x.truncate(8, 56));

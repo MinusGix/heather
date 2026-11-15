@@ -32,8 +32,9 @@ uint64_t sort_in_place(uint8_t *bytes, uint64_t length);
 ```text
 runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
     if h: 0 < j {
-        if larger: x < s.byte_within(n, j - 1).zero_extend(56) {
-            s.put_within(n, j, s.byte_within(n, j - 1));
+        let below = s.byte_within(n, j - 1);
+        if larger: x < below.zero_extend(56) {
+            s.put_within(n, j, below);
             s.insert_below(n, j - 1, x)
         } else {
             s.put_within(n, j, x.truncate(8, 56));
@@ -155,6 +156,3 @@ The theorems are checked with the rest of the file:
   `n - i`, with the step as its own lemma. The direct `decreases` proof that
   `if h: i < n` would give is refused by the kernel today
   (`issues/theorem-branch-on-measured-fn-goal.md`).
-- `insert_below` spells the read below `j` twice rather than binding it with
-  `let`, which the companion generator does not yet read
-  (`issues/runtime-mut-self-let-read-walk.md`).

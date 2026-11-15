@@ -3261,7 +3261,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
 ///
 /// A claimed call whose receiver is no place is refused when `strict`, and
 /// left as written otherwise (the walk refuses it if it reaches it).
-fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<Vec<Stmt>, String> {
+pub(crate) fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<Vec<Stmt>, String> {
     let mut out = Vec::with_capacity(stmts.len());
     for st in stmts {
         let Stmt::Let { name, expr, span: at, .. } = st else {

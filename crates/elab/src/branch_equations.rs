@@ -303,7 +303,14 @@ impl Walk<'_> {
             if !b.ons.is_empty() {
                 break;
             }
-            lets.extend(b.stmts.iter().cloned());
+            // A claimed call (`let below = s.byte_within(…)` in a `mut
+            // self` body is `\0mutated(…)`) spelled as the two `let`s it
+            // binds, so a test that reads `below` states the value, which a
+            // hypothesis outside the block can elaborate.
+            match crate::measure::rebind_marked(&b.stmts, b.span, false) {
+                Ok(stmts) => lets.extend(stmts),
+                Err(_) => lets.extend(b.stmts.iter().cloned()),
+            }
             e = &b.result;
         }
         if self.too_many {
