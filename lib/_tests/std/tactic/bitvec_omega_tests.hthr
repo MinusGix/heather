@@ -39,6 +39,79 @@ theorem literal_in_fact(i: BitVec(8), h: i.toNat() < BitVec::ofNat(200, n := 8).
 theorem lt_bit_wrong_way(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = False):
     BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
 
+// ---- Word arithmetic in the facts, used by the side conditions ----
+
+// `1 < n - i` is a fact about `toNat(n - i)`, which the side condition
+// `i + 2 <= n` (that `n - (i + 2)` does not borrow) needs beside `n - i`'s
+// own fact: side conditions are proved in stages, a hypothesis word's fact
+// before the side conditions that read it (docs/tactics/bv-omega-design.md §2).
+theorem hyp_word_cmp(n, i: BitVec(64), a: i < n, b: 1 < n - i): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The same fact over Nat values.
+theorem hyp_word_nat(n, i: BitVec(64), a: i < n, b: 1 < (n - i).toNat()): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The facts the other way round: `n - i`'s no-borrow needs `a`, after `b`.
+theorem hyp_word_order(n, i: BitVec(64), b: 1 < n - i, a: i < n): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The Boolean tests nested guards put in scope.
+theorem hyp_word_bits(n, i: BitVec(64), a: i.unsigned_lt_bit(n) = True, b: BitVec::ofNat(1).unsigned_lt_bit(n - i) = True):
+    (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// A chain: the second word's no-borrow needs the first word's fact.
+theorem hyp_word_chain(n, i: BitVec(64), a: i < n, b: 2 < n - i, c: 0 < (n - i) - 2): (n - (i + 3)).toNat() < (n - i).toNat() { bv_omega }
+// In a checking position.
+theorem hyp_word_checking(n, i: BitVec(64), a: i < n, b: 1 < n - i): (n - i).toNat() - 2 = (n - (i + 2)).toNat() {
+    let step: ((n - (i + 2)).toNat() + 2 = (n - i).toNat()) = bv_omega;
+    omega
+}
+// At an open width, the step a word too (a literal step at an open width
+// may not fit it, which no fact here rules out).
+theorem hyp_word_open(w: Nat, n, i, k: BitVec(w), a: i < n, b: k < n - i): (n - (i + k)).toNat() <= (n - i).toNat() { bv_omega }
+
+// Negative control: `0 < n - i` leaves room for one step, not two.
+// expect-error: may borrow
+theorem hyp_word_one_short(n, i: BitVec(64), a: i < n, b: 0 < n - i): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+
+// A loop stepping by two under two nested guards: its decrease is found
+// from both tests.
+fn pairs_left(n, i: BitVec(64)) → Nat decreases (n - i).toNat() {
+    if h: i < n {
+        if g: 1 < n - i { 1 + pairs_left(n, i + 2) } else { 0 }
+    } else { 0 }
+}
+theorem pairs_left_lit(): pairs_left(10, 3) = 3 { refl }
+
+// Negative control: the inner guard does not leave room for two steps.
+// expect-error: must decrease the measure
+fn pairs_left_wrong(n, i: BitVec(64)) → Nat decreases (n - i).toNat() {
+    if h: i < n {
+        if g: 0 < n - i { 1 + pairs_left_wrong(n, i + 2) } else { 0 }
+    } else { 0 }
+}
+
+// ---- Word comparisons as goals ----
+
+// `<` and `<=` at a word, and the `<=` bit, as the Nat order over values.
+theorem goal_le_prop(i: BitVec(64), h: i < 8): i + 1 <= 8 { bv_omega }
+theorem goal_lt_prop(n, i: BitVec(64), a: i < n, b: 1 < n - i): i + 1 < n { bv_omega }
+theorem goal_le_bit_true(i: BitVec(64), h: i < 8): (i + 1).unsigned_le_bit(8) = True { bv_omega }
+theorem goal_le_bit_false(i: BitVec(64), h: 8 < i): i.unsigned_le_bit(8) = False { bv_omega }
+// At an open width, in a checking position.
+theorem goal_le_open(w: Nat, i, n: BitVec(w), h: i < n): i + 1 <= n {
+    let r: (i + 1 <= n) = bv_omega;
+    r
+}
+
+// Negative control: `i` may be eight.
+// expect-error: got stuck
+theorem goal_le_wrong(i: BitVec(64), h: i <= 8): i + 1 <= 8 { bv_omega }
+
+// ---- An `if h:` test named only by a discharge ----
+
+// The branches never mention `h`; the `on ?dec1` that proves the recursive
+// call's decrease does, so the branch binds it.
+fn count_down_on(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: n.eq_bit(BitVec::ofNat(0)) = False { count_down_on(n.sub(BitVec::ofNat(1)), acc.add(n)) } else { acc }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+theorem count_down_on_lit(): count_down_on(3, 0) = 6 { refl }
+
 // ---- A variable named `t` (issues/bv-omega-binder-captures-t.md) ----
 
 theorem named_t(t: BitVec(64), h: t.unsigned_lt_bit(64) = True): BitVec::sub(BitVec::ofNat(64), t + 1).toNat() < BitVec::sub(BitVec::ofNat(64), t).toNat() { bv_omega }
