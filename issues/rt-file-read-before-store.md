@@ -42,3 +42,7 @@ What a swap, a reverse in place and a shift all need. Two routes:
 
 Route 1 is the smaller change to the reflector and reads nothing
 unneeded.
+
+## Log
+
+- 2026-11-15: The sort example (`examples/sort`) works around it with a shift-insert that takes its key as a word parameter; a neighbouring refusal it hit is [[runtime-mut-self-let-read-walk]].

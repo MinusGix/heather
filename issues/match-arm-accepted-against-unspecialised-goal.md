@@ -37,3 +37,7 @@ The three shapes above, kept as probes with the old arms, are refused by
 the elaborator with the arm's expected type spelled, or the place the
 elaborator identifies scrutinee and pattern is found and the kernel's
 motive is built to agree with it.
+
+## Log
+
+- 2026-11-15: Likely a fourth shape in the sort example: an `if h: i < n` over a goal mentioning a measured `mut self` call's `.after`, worked around there; [[theorem-branch-on-measured-fn-goal]].

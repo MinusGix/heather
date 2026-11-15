@@ -127,7 +127,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_decimals_round_trip_the_widest_words
         --skip source_to_native_binary
         --skip utf8_validator_agrees_with_rust
-        --skip binary_search_agrees_with_partition_point
+        --skip binary_search_agrees_with_partition_point --skip sort_agrees_with_slice_sort
         --skip linked_exports_are_what_the_compiler_emits)
 elif [[ "${1:-}" == --pr ]]; then
   shift

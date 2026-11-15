@@ -2,7 +2,8 @@
 title: A `runtime fn` with an `on` block over a nested test, and a conjunction in `bv_omega`'s scope, were refused
 status: closed
 labels: [native,tactics]
-area: native
+area: heather-in-heather
+milestone: [nh-front]
 created: 2026-11-15
 updated: 2026-11-15
 ---
@@ -26,3 +27,7 @@ two refusals of correct programs and proofs:
 Probes: `count_down_odd` in `lib/_tests/native/runtime/runtime_loop_tests.hthr`
 and `conjunct_fact_restated` in `lib/_tests/std/tactic/bitvec_omega_tests.hthr`;
 both refused before.
+
+Left open from the same rounds: [[bv-omega-word-comparison-goal-composite]]
+(binary search), [[runtime-mut-self-let-read-walk]] and
+[[theorem-branch-on-measured-fn-goal]] (sort).

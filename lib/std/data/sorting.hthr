@@ -439,3 +439,56 @@ theorem List::sorted_nodup<A>(R: A → A → Type, irr: (a: A) → ¬R(a, a), tr
         Cons(h, t) => λ s => And(λ m => irr(h, t.sorted_below(R, tr, h, s, h, m)), t.sorted_nodup(R, irr, tr, s.right)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sorted lists grown at the end, and insertion there: what an in-place
+// insertion sort over a span reads (examples/sort).
+
+// A sorted list's prefix is sorted.
+theorem List::sorted_append_left<A>(R: A → A → Type, self ys, zs: List<A>, s: (ys ++ zs).Sorted(R)): ys.Sorted(R) {
+    match ys {
+        Nil => trivial,
+        Cons(h, t) => {
+            let head = (match t as λ u => (Cons(h, u) ++ zs).Sorted(R) → List::LeHead(R, h, u) {
+                Nil => λ _ => trivial,
+                Cons(_, _) => λ q => q.left,
+            })(s);
+            And(head, t.sorted_append_left(R, zs, s.right))
+        },
+    }
+}
+
+// A sorted list stays sorted with an element after its last that is above it.
+theorem List::sorted_snoc<A>(R: A → A → Type, self ys: List<A>, a, x: A, s: (ys ++ [a]).Sorted(R), ax: R(a, x)): (ys ++ [a, x]).Sorted(R) {
+    match ys {
+        Nil => And(ax, And(trivial, trivial)),
+        Cons(h, t) => {
+            let head = (match t as λ u => (Cons(h, u) ++ [a]).Sorted(R) → List::LeHead(R, h, u ++ [a, x]) {
+                Nil => λ q => q.left,
+                Cons(_, _) => λ q => q.left,
+            })(s);
+            And(head, t.sorted_snoc(R, a, x, s.right, ax))
+        },
+    }
+}
+
+// Inserting an element below the last one inserts it before the last.
+theorem List::insert_ordered_snoc<A: DecidableRel(R)>(R: A → A → Type, x, a: A, self ys: List<A>, xa: R(x, a)):
+    (ys ++ [a]).insert_ordered(R, x) = ys.insert_ordered(R, x) ++ [a]
+{
+    match ys {
+        Nil => match A.rel_dec(x, a) { Inl(_) => refl, Inr(no) => false_elim(no(xa)) },
+        Cons(h, t) => match A.rel_dec(x, h) {
+            Inl(_) => refl,
+            Inr(_) => List::cong_cons(h, t.insert_ordered_snoc(R, x, a, xa)),
+        },
+    }
+}
+
+// Under a linear order, a sorted list with `x` added is the insertion of `x`.
+theorem List::insert_ordered_unique<A: DecidableRel(R) + LinearOrder(R)>(R: A → A → Type, x: A, self ys, out: List<A>,
+    sorted: ys.Sorted(R), out_sorted: out.Sorted(R), p: Perm(Cons(x, ys), out)): out = ys.insert_ordered(R, x)
+{
+    Cons(x, ys).sorted_perm_unique(R, out, ys.insert_ordered(R, x), And(out_sorted, p),
+        And(ys.insert_ordered_sorted(R, x, sorted), List::perm_of_picks(x, ys.insert_ordered(R, x), ys, ys.insert_ordered_picks(R, x))))
+}
