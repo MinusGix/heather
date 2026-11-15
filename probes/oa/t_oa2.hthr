@@ -1,5 +1,0 @@
-import logic;
-import nat;
-import list;
-import omega;
-theorem closed_bit(x: Nat, h: Nat::of_bit(True) + x = 0): False { omega }

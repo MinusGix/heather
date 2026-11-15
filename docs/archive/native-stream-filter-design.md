@@ -107,7 +107,7 @@ record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C 
 Which bytes `tr -s`/`-d` act on is fixed in the source. There are no
 command-line arguments: there is no argv model yet.
 
-### 2.4 Probe findings (2026-10-01, `probes/filter/`)
+### 2.4 Probe findings (2026-10-01, `probes/filter/@ef3961a`)
 
 - `Filtered<C>`, `Stateless {}` and a `tr -d` spec proof over
   `filter_emitted` elaborate as written above.

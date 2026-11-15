@@ -36,7 +36,7 @@ combination, so every `op.end`, every `s.value`, every `c.evidence` is
 exponent `issues/theorem-field-projection-oom.md` diagnosed and named away for
 *closed* dependent records.
 
-The reproducer is seventeen lines (`probes/t_pc1.hthr` … `t_pc4.hthr`): a
+The reproducer is seventeen lines (`probes/t_pc1.hthr@ef3961a` … `t_pc4.hthr`): a
 `Cert<T>(source, begin)` record with `Certified`'s four fields, read through
 one, two, three and four **chained** receivers (`b: Cert(source, a.end)`, …).
 Its shape claim is the whole issue:
@@ -387,7 +387,7 @@ Verification items 3 and 4 of §9 are the ones that would refuse this.
 
 This section is the one below that was *not* probed on its own shape — the
 reproducer's record has no function-typed value parameter, so what follows is
-reasoning from the attribution plus a probe (`probes/t_pcr3.hthr`) written
+reasoning from the attribution plus a probe (`probes/t_pcr3.hthr@ef3961a`) written
 against the real `Certified` and left for the implementation round to run.
 
 `HEATHER_CONV_MISS_TRACE=close_body` puts all of that item's misses on one
@@ -567,12 +567,12 @@ Stop and report if any of these fires; each would refute part of the design.
    bar.
 2. **A decline listing, not an assertion.** Instrument `register_rec_projs`
    and `project_field` to print declaration, field and reason, and run it on
-   `probes/t_pc1.hthr` and on `docs/showcase/calc_parser.hthr`. The expected
+   `probes/t_pc1.hthr@ef3961a` and on `docs/showcase/calc_parser.hthr`. The expected
    listing is: no `#projdecline` at all, and no `#projwalk` for `Cursor`,
    `Success`, `Certified`, `CachedCursor`, `RecognizedHead`. A decline among
    those means one of §2's three layers is still missing — and a silent
    decline looks exactly like a device that fired and lost (§13.10).
-3. **The reproducer, before and after, on one box in one job.** `probes/t_pc1`
+3. **The reproducer, before and after, on one box in one job.** `probes/t_pc1@ef3961a`
    … `t_pc4` and `t_pcev3` at `--kernel-workers 1`, reporting per item
    `total_ns`, `kernel_gate_ns`, `decl_emit_ns`, `eval_steps`, `conv_misses`
    and `/usr/bin/time` maxrss. The expected **shape** is the point, not the
@@ -631,5 +631,5 @@ Stop and report if any of these fires; each would refute part of the design.
 ## 10. Status
 
 Design only. No source change lands in this pass; the spike that measured
-every claim above was reverted, and `probes/t_pc*.hthr` plus the decline
+every claim above was reverted, and `probes/t_pc*.hthr@ef3961a` plus the decline
 listing are what the implementation round starts from.

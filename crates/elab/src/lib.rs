@@ -235,7 +235,7 @@ mod quote;
 mod range_sum;
 mod sealing;
 // The projected-tuple-tower round's two instruments
-// (`docs/elaborator/projected-tuple-tower-design.md` §11, `probes/README.md`): the
+// (`docs/elaborator/projected-tuple-tower-design.md` §11, `probes/README.md@ef3961a`): the
 // value-graph counter that priced the naming, and the readback itself. Both
 // are inert unless `HEATHER_RB` is set.
 mod recursion;

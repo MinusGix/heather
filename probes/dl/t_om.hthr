@@ -1,4 +1,0 @@
-import nat;
-import omega;
-theorem dbl(v: Nat): v + v = 2 * v { omega }
-theorem ctx(v, w, x: Nat, a: w = v + v, b: x = w + 1): w = 2 * v { omega }

@@ -145,7 +145,7 @@ the prelude layer-2 round or the first file that wants two order kits.
   intended surface is `Derivation::tier`, `Derivation::meaning`,
   `Derivation::spell`, `Derivation::WellFormed`.
 
-  What the probe settled (`probes/str/p11.hthr`): the **receiver half of this
+  What the probe settled (`probes/str/p11.hthr@ef3961a`): the **receiver half of this
   issue already works** for a user-declared inductive. `fn Derivation::tier(self
   d: Derivation) → Nat` declares, and `Sum(…).tier() = 0` holds by `refl`. So the
   gap the showcase actually hit is not the mechanism but the habit — the standard
@@ -167,7 +167,7 @@ the prelude layer-2 round or the first file that wants two order kits.
   member cannot be named at all except through a receiver: inside
   `fn Tree::flat_d(self t: Tree, …)`, the qualified self-call `Tree::flat_d(l, …)`
   is refused with "`Tree::flat_d` is qualified by `Tree`, which is neither an
-  imported module nor a type in scope here" (`probes/str/p13.hthr`).
+  imported module nor a type in scope here" (`probes/str/p13.hthr@ef3961a`).
 
   So the two halves of this issue are not independent after all. Because there is
   no qualified spelling, every use of a member goes through the receiver path, and

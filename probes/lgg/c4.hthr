@@ -1,8 +1,0 @@
-inductive Col { Red, Green }
-fn wrap(d: Col) -> Col { d }
-fn pick(c: Col) -> Col { match c { Red => Green, Green => Red } }
-// The scrutinee is computed, so the match hands over `shape : pick(c) = Red`
-// with a `Red` built by the pattern, against a `Red` the goal wrote.
-theorem t(c: Col): wrap(pick(c)) = wrap(Red) {
-    match shape: pick(c) { Red => cong(shape), Green => cong(shape) }
-}

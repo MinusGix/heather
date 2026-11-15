@@ -30,7 +30,7 @@ Two decisions, taken in discussion 2026-09-18, recorded in
    its token type in the constraint and stays polymorphic in the source, so
    one calculator runs on a `String` and on a `List<Char>`.
 
-## What the probes settled (2026-09-18, `probes/str`)
+## What the probes settled (2026-09-18, `probes/str@ef3961a`)
 
 Measured against the tree at 3d10b94 with a freshly built release binary
 (the one on disk predated the literal support and rejected `"…"`):
@@ -110,7 +110,7 @@ scannerless calculator demonstrates.
   — so it is not in `crates/elab/tests/showcase_calculator.rs` beside
   `calc_parser` yet. The cause is measured and is not the grammar: a record token
   type costs 27× an inductive one's conversion misses in a controlled pair
-  (`probes/str/p10.hthr`), logged on
+  (`probes/str/p10.hthr@ef3961a`), logged on
   [[elaborator-canonical-type-spelling]] with the numbers. Wiring it in waits on
   that defect; two spellings were tried against it and neither is the lever.
 
@@ -146,7 +146,7 @@ scannerless calculator demonstrates.
     varies a non-decreasing parameter has **no spelling that checks** (a qualified
     self-call is refused too). `spell` is therefore the one declaration in the
     file that stays freestanding, and it is the difference-list idiom that removed
-    every `append_assoc` from the showcase. 12-line repro, `probes/str/p13.hthr`.
+    every `append_assoc` from the showcase. 12-line repro, `probes/str/p13.hthr@ef3961a`.
   - [[type-declaration-form]] — nine declarations in the file are `fn … → Type`
     and read like programs that happen to return types.
   - [[type-owned-namespaces]] gets the datum that a type-owned member is reachable
@@ -172,4 +172,4 @@ scannerless calculator demonstrates.
   or the CLI first, beyond the misleading message. The record axis of
   [[elaborator-canonical-type-spelling]] is the single root cause of all four
   symptoms and is the next round.
-- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`lib/std/text/char.hthr`); [[elab-emits-normal-form-of-matched-type-argument]] (`probes/str/p10.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`lib/std/text/char.hthr`); [[elab-emits-normal-form-of-matched-type-argument]] (`probes/str/p10.hthr@ef3961a`).

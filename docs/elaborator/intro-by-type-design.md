@@ -296,7 +296,7 @@ exponential object, built in the kernel this time
 correct). With the evaluator it is a closure, but a closure lives in an
 arena, and stage 1b measured what an arena that outlives a query costs:
 every binder push retained for the declaration is +9.3 GB on
-`probes/str/p10.hthr` before conversion's temporaries even join it. The
+`probes/str/p10.hthr@ef3961a` before conversion's temporaries even join it. The
 checker may therefore hold neither the syntax of a component nor a value
 of one. What it can hold is a **description**.
 
@@ -730,7 +730,7 @@ The corpus, in the main checkout's untracked `probes/` (not in the
 worktree; copy the files the round uses into its tree under `probes/` and
 list them in the log): the controlled curve `t_qt2`, `t_qt1`, `t_cp9`,
 `t_qt3`, `t_qt5` (component byte-identical, reply varied — the exponent's
-own instrument), `probes/str/p10.hthr` (the 27× record axis, 90 lines, both
+own instrument), `probes/str/p10.hthr@ef3961a` (the 27× record axis, 90 lines, both
 sides in one process), `docs/showcase/calc_parser.hthr` (`complete_post`,
 `close_body`, `expr_body`, `factor_body`) through
 `heather check --cache --only`, and `docs/showcase/calc_text.hthr` through

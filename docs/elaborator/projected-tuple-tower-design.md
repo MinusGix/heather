@@ -20,14 +20,14 @@ because it is a real constant and the numbers are the round's.
 
 Everything below is hand-run in this pass on one furnace E5 box, release with
 `--features value-metrics`, `--kernel-workers 1`, no `--cache`, one process
-per file. `probes/tt_count.sh`, `probes/tt_slice.sh`, `probes/tt_D.patch`, and
-`probes/README.md`'s round section say in what order.
+per file. `probes/tt_count.sh@ef3961a`, `probes/tt_slice.sh@ef3961a`, `probes/tt_D.patch@ef3961a`, and
+`probes/README.md@ef3961a`'s round section say in what order.
 
 ---
 
 ## 1. The instrument
 
-`probes/tt_D.patch` adds one elaborator-owned module, `crates/elab/src/ttsimp.rs`:
+`probes/tt_D.patch@ef3961a` adds one elaborator-owned module, `crates/elab/src/ttsimp.rs`:
 an exhaustive node counter over kernel `Term`/`Type`, and a **δ-free deep
 simplifier** with exactly three rules — `fst (pair a b) ⇝ a`, `snd … ⇝ b`,
 `app(λx. t; s) ⇝ t[s/x]`, `case(inl a; …) ⇝ c_l[a]` — applied bottom-up to a
@@ -58,7 +58,7 @@ rather than size.
 
 ## 2. The counts
 
-`probes/tt_count.sh` (four files) and `probes/tt_slice.sh`'s fifth point,
+`probes/tt_count.sh@ef3961a` (four files) and `probes/tt_slice.sh@ef3961a`'s fifth point,
 `HEATHER_TT=count`, the item's **own** `build_ctor` reduct — the largest
 record of the run that is not the library's:
 
@@ -147,7 +147,7 @@ must do and what no fix can do:
 
 ## 4. The spike: candidate D measured end to end
 
-`probes/tt_slice.sh`. One binary, two behaviours (`HEATHER_TT` unset = the
+`probes/tt_slice.sh@ef3961a`. One binary, two behaviours (`HEATHER_TT` unset = the
 parent's path, `fire` = D). Two controls say the unset path really is the
 parent's: `target/heather_parent` (HEAD, parked before the edit synced) on
 `t_cp9` reads 8 860 misses / 2 395 753 queries / 162 499 steps, the unset run
@@ -255,7 +255,7 @@ weight:
    largest item, still exponential, and the next combinator layer costs ×3.4
    on D's own curve.
 2. **It regresses ten items**, so it does not pass the gate the last two
-   rounds were held to (`probes/cp_gate.sh`'s reading: no item's misses,
+   rounds were held to (`probes/cp_gate.sh@ef3961a`'s reading: no item's misses,
    queries or steps may rise). The mechanism is understood — firing
    `case`-of-constructor in a `list::mem_*` reduct writes a different
    spelling, and the kernel misses where it hit — and it is fixable by firing
@@ -274,7 +274,7 @@ weight:
    sorts is a maintenance surface that every new kernel variant must answer
    to.
 
-It stays as `probes/tt_D.patch` with this table, and the coordinator may file
+It stays as `probes/tt_D.patch@ef3961a` with this table, and the coordinator may file
 it as a triggered accumulator issue (`perf-work-as-accumulator-issues`): if a
 customer needs `complete_post`'s 2.4 s before §6 lands, this is the lever, it
 is measured, and its first task would be the ten items.
@@ -452,13 +452,13 @@ join, run early and often.
 (`mod ttsimp;`, and the call in `build_ctor`), all of it inert with
 `HEATHER_TT` unset — the §4 control run is the check that "inert" is literal.
 The tree offered for review has it **reverted**; the patch is
-`probes/tt_D.patch` and the pristine originals are `probes/tt_base/`. Nothing
+`probes/tt_D.patch@ef3961a` and the pristine originals are `probes/tt_base/@ef3961a`. Nothing
 in `lib/`, the fixtures, the `WALK_RESIDUE` list or the x86 rails was touched,
 and no commit was made.
 
 For the record, since a declined patch may be picked up later:
 `scripts/test --fast -p heather-elab` **on the spike** is
-`== suite: 1961 passed, 0 failed, 5 ignored ==` (`probes/tt_fast.sh`). That is
+`== suite: 1961 passed, 0 failed, 5 ignored ==` (`probes/tt_fast.sh@ef3961a`). That is
 the fast lane, which replays module images an earlier build wrote, so it says
 the change breaks no elaborator test — not that it is landable. What would
 have to be run before it lands is the full `scripts/test`, and §4.2's ten
@@ -483,8 +483,8 @@ untouched rather than amended.
 
 Stop and report if any of these fires.
 
-1. **Re-confirm the counts before touching anything.** `probes/tt_count.sh`
-   and `probes/tt_slice.sh`'s fifth point, with `HEATHER_TT=count`: `qt_pure`
+1. **Re-confirm the counts before touching anything.** `probes/tt_count.sh@ef3961a`
+   and `probes/tt_slice.sh@ef3961a`'s fifth point, with `HEATHER_TT=count`: `qt_pure`
    390 717, `cp_andt` 1 756 377, `qt_deep` 7 219 017, `qt_deeper` 29 069 577
    nodes pre-firing, and the post-firing column within a point or two of
    0.75 / 0.60 / 0.56 / 0.55. The bar's bar is the **curve**: pre
@@ -506,7 +506,7 @@ Stop and report if any of these fires.
    3 681 039 queries and `close_body`'s 2 585 801 are the absolute sub-bars;
    the showcase is 16 762 944.
 5. **No item may regress** across the 944 joined showcase rows — misses,
-   queries, steps (`probes/tt_slice.sh`'s join is the shape).
+   queries, steps (`probes/tt_slice.sh@ef3961a`'s join is the shape).
 6. **`t_qt4` must stay within a percent of `t_qt3`.** If naming the reply in
    the library suddenly matters, the change is doing something other than §6.
 7. **The x86 rails at two sizes per item**, `WALK_RESIDUE` shrinking only, the
@@ -567,9 +567,9 @@ spelling (landed here, behind a flag, measured end to end) and the naming
 built). Everything below is measured on the same furnace E5 box as §4 unless
 a table says "local", release with `--features value-metrics`,
 `--kernel-workers 1`, no `--cache`, one process per file;
-`probes/rb_slice.sh` and `probes/README.md`'s round section say in what order.
+`probes/rb_slice.sh@ef3961a` and `probes/README.md@ef3961a`'s round section say in what order.
 The tree offered for review carries both instruments and is **inert** with
-`HEATHER_RB` unset; `probes/rb_base/` holds the pristine copies.
+`HEATHER_RB` unset; `probes/rb_base/@ef3961a` holds the pristine copies.
 
 ### 11.1 The spike: the naive count, the graph count, the curve (§9 items 1–3)
 
@@ -848,8 +848,8 @@ measurement that says what landing it would take.
 
 Everything below is measured on the same furnace E5 box as §4 and §11, release
 with `--features value-metrics`, `--kernel-workers 1`, `--timings`, no
-`--cache`, one process per file. `probes/rn_spike.sh`, `probes/rn_types.sh`,
-`probes/rn_merge.sh` and `probes/README.md`'s round section say in what order.
+`--cache`, one process per file. `probes/rn_spike.sh@ef3961a`, `probes/rn_types.sh@ef3961a`,
+`probes/rn_merge.sh@ef3961a` and `probes/README.md@ef3961a`'s round section say in what order.
 
 ### 12.1 What was built
 

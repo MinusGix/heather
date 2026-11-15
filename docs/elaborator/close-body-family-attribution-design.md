@@ -13,9 +13,9 @@ are instead.
 Everything below was hand-run in this pass on one furnace E5 box, HEAD
 `be365f3`, release with `--features value-metrics`, `--kernel-workers 1`, no
 `--cache` anywhere: three furnace jobs, one instrument, six new reproducers.
-`probes/cb_trace.sh`, `probes/cb_count.sh`, `probes/cb_decline.sh`,
-`probes/t_cb*.hthr`, `probes/cb_agg.py` are what a reader re-runs, and
-`probes/README.md`'s round section says in what order.
+`probes/cb_trace.sh@ef3961a`, `probes/cb_count.sh@ef3961a`, `probes/cb_decline.sh@ef3961a`,
+`probes/t_cb*.hthr@ef3961a`, `probes/cb_agg.py@ef3961a` are what a reader re-runs, and
+`probes/README.md@ef3961a`'s round section says in what order.
 
 **The headline is that four of the six rows are one mechanism, it is not
 `complete_post`'s, and it is a device that already exists and is declining.**
@@ -44,18 +44,18 @@ Two, both `value-metrics`-gated and both reverted before this doc was offered:
   own site stack. On a workload whose gate is a flat cost per query the
   queries are the datum and the misses are a remainder
   (`docs/kernel/conversion-query-traversal-design.md` §1).
-- **`HEATHER_CB=1`** (`probes/cb_count.patch`, this pass's one source change):
+- **`HEATHER_CB=1`** (`probes/cb_count.patch@ef3961a`, this pass's one source change):
   an exhaustive, unbudgeted **node counter**. One `cb decl` line per
   declaration — the tree size of exactly the `(statement, term)` pair the
   kernel is about to be handed, taken after the global substitution in
   `crates/elab/src/lib.rs` — and one `cb read` line per record **field read**
   (`Elaborator::project_field`), with the route it took (the named projection
   or the `Fst`/`Snd` fallback walk) and the tree size of the spine it built.
-  The reused walker is `probes/tt_count.patch`'s `ttsimp::count_ty`, with a
+  The reused walker is `probes/tt_count.patch@ef3961a`'s `ttsimp::count_ty`, with a
   `count_tm` beside it.
 
   **Its one limitation, stated because a row in §5.0 shows it:**
-  `probes/cb_agg.py` keys `cb decl` lines by the declaration's name and keeps
+  `probes/cb_agg.py@ef3961a` keys `cb decl` lines by the declaration's name and keeps
   the last, so an item that emits more than one pair is under-counted.
   Every row this doc argues from emits one; `checked_expr`, whose `decreases`
   lowering does not, is the visible exception and is not argued from.
@@ -65,7 +65,7 @@ in column 2 and the item in column 3, and both the query trace and the
 elaborator's scopes compare against column 3 — `close_body`, not
 `calc_parser::close_body`. A `module::item` spelling traces nothing and prints
 no error; that cost this pass a round trip and is worth the line in
-`probes/README.md`.
+`probes/README.md@ef3961a`.
 
 The sanity check every trace in this round passes — sampled lines × stride
 against the item's own `conv_shortcut_hits`:
@@ -82,7 +82,7 @@ against the item's own `conv_shortcut_hits`:
 
 ## 2. The premise, re-measured on this tree
 
-The showcase, serial, untraced, on HEAD (`probes/cb_trace.sh`, job 1):
+The showcase, serial, untraced, on HEAD (`probes/cb_trace.sh@ef3961a`, job 1):
 **959 items, 64.66 s of item totals, 50.01 s of kernel gate, 212 318 misses,
 16 762 944 queries, 4 697 239 evaluator steps.** The family, and its
 structural siblings for scale:
@@ -131,7 +131,7 @@ before §3:
 
 ## 3. The datum: the site histogram of queries
 
-`probes/cb_trace.sh`, one traced process per item, `qt_agg.py` at stride 128.
+`probes/cb_trace.sh@ef3961a`, one traced process per item, `qt_agg.py` at stride 128.
 
 ### 3.1 By rule frame and head pair — five items, one profile
 
@@ -211,8 +211,8 @@ Size distribution, `close_body`: p50 **4**, p90 79, mean 49.4, max 2 388;
 
 ## 4. The reproducers
 
-`probes/t_cb1`…`t_cb6`, `-L lib/std -L lib/std/parser`, no `--cache`, one
-process per file, untraced (`probes/cb_count.sh`, job 2). Every one of them is
+`probes/t_cb1@ef3961a`…`t_cb6`, `-L lib/std -L lib/std/parser`, no `--cache`, one
+process per file, untraced (`probes/cb_count.sh@ef3961a`, job 2). Every one of them is
 under thirty lines and uses the **library's own** records — `Certified`, whose
 third value parameter is function-typed, and `Success` for the control — so
 nothing about the shape is modelled away. `t_pc3` and `t_pcr3` are the previous round's files, the same
@@ -260,7 +260,7 @@ Three readings, and they are §5's mechanism:
 
 ### 5.0 The node counter: the item *is* its emitted term, and half of it is field reads
 
-`HEATHER_CB=1` on the showcase (`probes/cb_count.sh`, job 2). The `TOTAL
+`HEATHER_CB=1` on the showcase (`probes/cb_count.sh@ef3961a`, job 2). The `TOTAL
 nodes` column is the tree size of the `(statement, term)` pair the kernel is
 handed, counted exhaustively at the emission chokepoint's exit; `reads` is
 the number of record field reads `project_field` answered inside that item.
@@ -305,7 +305,7 @@ number_grammar  10 reads, 2 182 482 nodes in them (74 % of the item)
 complete_post    1 read, 1 187 nodes
 ```
 
-The probes carry it over unchanged (`probes/cb_decline.sh`'s last phase), and
+The probes carry it over unchanged (`probes/cb_decline.sh@ef3961a`'s last phase), and
 being controlled they also give the per-read curve:
 
 ```text
@@ -341,7 +341,7 @@ worth 4.4×". What the route is worth is a slice's measurement, and item 4 of
 
 Three points on `Certified`, everything else fixed (`t_cb3`/`t_cb2`/`t_cb1`):
 16 993 → 248 172 → 3 466 931, **×14.6 and ×14.0**. The previous round's
-`probes/t_pcr3.hthr` — the same record, the same chain, and *no* constructor
+`probes/t_pcr3.hthr@ef3961a` — the same record, the same chain, and *no* constructor
 and no `result::fold`, only `a.forward` / `le_trans(…)` — gives the same
 curve on its own three items: `qchain1` 4 464 → `qchain2` 105 437 → `qchain3`
 1 561 870, **×23.6 and ×14.8**, at **zero** conversion misses throughout.
@@ -514,9 +514,9 @@ making the device fire more often makes these two rows *bigger*.
 
 Every dear read in §5.0 is a read the **named-projection device declined**.
 The
-decline listing (`HEATHER_GENDEF_DECLINES=1`, `probes/cb_decline.sh`) says
+decline listing (`HEATHER_GENDEF_DECLINES=1`, `probes/cb_decline.sh@ef3961a`) says
 which decline it is per read, and that decides the owner. `project_field`'s rows for
-the family's items (`probes/cb_decline.sh`, job 3; the count is reads, the
+the family's items (`probes/cb_decline.sh@ef3961a`, job 3; the count is reads, the
 suffix on the reason is the field index):
 
 ```text
@@ -630,7 +630,7 @@ only once the two cheap slices have been measured.
 1. **Re-take §2's premise table** on the tree you start from. Item names are
    bare in column 3 of `--timings`; the family is `close_body`, `expr_body`,
    `factor_body`, `number_grammar`, `Grammar`, `Certified`.
-2. **`probes/cb_count.sh`'s probe table before anything else**: `t_cb3`,
+2. **`probes/cb_count.sh@ef3961a`'s probe table before anything else**: `t_cb3`,
    `t_cb2`, `t_cb1` must reproduce 16 993 / 248 172 / 3 466 931 queries at 22
    misses. If the miss counts have moved, the tree is not this one and the
    whole attribution has to be re-run.
@@ -638,7 +638,7 @@ only once the two cheap slices have been measured.
    `close_body` and leaves `t_cb1`/`t_cb2` at ×14 has bought a constant on an
    exponential; say so in its own §.
 4. **The route split is the cheap progress meter.** `HEATHER_CB=1` plus
-   `probes/cb_agg.py`: `Certified walk` reads must fall to zero for slice 1,
+   `probes/cb_agg.py@ef3961a`: `Certified walk` reads must fall to zero for slice 1,
    and the surviving `ref` reads' mean size is what slice 2 moves.
 5. **The per-item join over all 959 rows**, as the tower round's §4.2 did:
    a spelling change at `project_field` is met by every reader that
@@ -664,10 +664,10 @@ only once the two cheap slices have been measured.
 ## 9. Status
 
 **Design only.** No slice is implemented. The one source change is the node
-counter of §1, reverted before this doc was offered; `probes/cb_count.patch`
-is the patch and `probes/cb_base/` the pristine originals. `probes/cb_*.sh`,
-`probes/t_cb*.hthr`, `probes/cb_agg.py` and the round section of
-`probes/README.md` are what a reader re-runs. Nothing in `lib/`, the fixtures
+counter of §1, reverted before this doc was offered; `probes/cb_count.patch@ef3961a`
+is the patch and `probes/cb_base/@ef3961a` the pristine originals. `probes/cb_*.sh@ef3961a`,
+`probes/t_cb*.hthr@ef3961a`, `probes/cb_agg.py@ef3961a` and the round section of
+`probes/README.md@ef3961a` are what a reader re-runs. Nothing in `lib/`, the fixtures
 or the rails was touched, and no commit was made.
 
 What is now attributed, and what is not:

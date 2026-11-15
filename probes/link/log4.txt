@@ -1,4 +1,0 @@
-checking source refinement, exported bytes, and execution certificate
-timings: 2881 rows in probes/link/t4.tsv
-probes/link/chain4.s: 343 certified body bytes; SysV ret shim outside the proof
-certificate: probes/link/chain4.certificate.hthr

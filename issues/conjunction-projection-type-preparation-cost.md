@@ -12,7 +12,7 @@ superlinear: field preparation substitutes through the remaining structural
 tail and spells the selected field at every source dot. A selected `.right`
 field is itself the next large conjunction, so those traversals overlap.
 
-Reproduce with `probes/conjunction_projection_chain.py`; compare using
+Reproduce with `probes/conjunction_projection_chain.py@ef3961a`; compare using
 `scripts/perf ab --file target/conjunction-chain.hthr:lib/std` and inspect
 `decl_body_ns` separately from the kernel gate. Keep the bare-parameter and
 opaque-theorem-alias variants, open element types and dependent-field controls.

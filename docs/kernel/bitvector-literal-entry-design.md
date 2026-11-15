@@ -18,7 +18,7 @@ Every number below was measured on the current tree (`c62a3d3`, round 3
 landed) on one furnace instance, 2026-09-13, with a release binary built
 `--features value-metrics` and a **fresh `--cache-dir` per group**. The
 probe files are in `probes/`; the scripts that produced each table are
-`probes/r4p1.sh` … `probes/r4p6.sh`.
+`probes/r4p1.sh@ef3961a` … `probes/r4p6.sh@ef3961a`.
 
 ---
 
@@ -26,7 +26,7 @@ probe files are in `probes/`; the scripts that produced each table are
 
 ### 1.1 The whole workload
 
-Cold `--cache-dir`, `probes/r4p5.sh` (the `probes/README.md` recipe,
+Cold `--cache-dir`, `probes/r4p5.sh@ef3961a` (the `probes/README.md@ef3961a` recipe,
 `reused_callee` through `build-x86`, one kernel worker):
 
 | | items | item total s | `kernel_gate` s | steps | misses |
@@ -37,7 +37,7 @@ That is round 3's after column (48 797 992 steps, 361 706 misses,
 design §13) to within the instance's own spread, so the tree under every
 probe below is the one round 3 left.
 
-### 1.2 The probe table (`probes/r4p1.sh`, width 64 unless named)
+### 1.2 The probe table (`probes/r4p1.sh@ef3961a`, width 64 unless named)
 
 | row | what it is | `kernel_gate` ms | steps | misses |
 | --- | --- | --- | --- | --- |
@@ -51,7 +51,7 @@ probe below is the one round 3 left.
 `a3_bits_64` reproduces §13's 3 481 steps exactly. **The charter's premise
 holds**: the literal has not moved across the whole line.
 
-### 1.3 P2 — the literal separated from its packing (`probes/t_p2_lit_split.hthr`)
+### 1.3 P2 — the literal separated from its packing (`probes/t_p2_lit_split.hthr@ef3961a`)
 
 Three items per width over the same 64-element alternating literal `L`.
 `p2_def_n` is `fn p2_def_n() → [Bool; n] { L }`: the elaboration and the
@@ -83,7 +83,7 @@ The consequence for candidate 1 is sharp and favourable: the target is the
 kernel's `tm_check` of a chain of 64 `Term::Pair`s, not conversion, and a
 term whose typing rule is O(1) in the width removes the larger part.
 
-### 1.4 P3 — `ofNat` against the same value written out (`probes/t_p3_ofnat.hthr`)
+### 1.4 P3 — `ofNat` against the same value written out (`probes/t_p3_ofnat.hthr@ef3961a`)
 
 `p3_ofnat_*` is `bitvec::ofNat(n, k) = bitvec::from_bits(n, <bits of k>)` by
 `refl`; `p3_ctl_*` is that literal against **itself**, the control that
@@ -104,7 +104,7 @@ value written out as a literal, and the cost does not depend on the
 magnitude.** The width law the 2026-09-07 round bought is intact; the
 constant it bought it at is 0.30 ms per bit.
 
-### 1.5 P4 — the shape the x86 model actually pays (`probes/t_p4_mov_imm64.hthr`)
+### 1.5 P4 — the shape the x86 model actually pays (`probes/t_p4_mov_imm64.hthr@ef3961a`)
 
 `canonical_bytes(MovRI(R9, imm))` against its ten-byte list — the reproducer
 of `issues/bitvec-ofnat-large-literals.md`, at the immediate
@@ -152,7 +152,7 @@ the *packing*; what it did not say is that packing is the small half. Per bit
 at width 64: 44 steps to check the chain, ~10 more to pack it once, and a
 further 288 steps' worth of *seconds* if the value arrived through `ofNat`.
 
-### 2.1 Born packed, measured (`probes/t_p5_born.hthr`)
+### 2.1 Born packed, measured (`probes/t_p5_born.hthr@ef3961a`)
 
 `bitvec::all_ones` and `bitvec::zero` are `repeat_bit`, an `elim_Nat` on the
 width with no peeled argument and a `cons` output, which round 3's class
@@ -362,7 +362,7 @@ This is also why `bxor`/`band`/`add` classify and `ofNat`, `mul`, `div` do
 not (design §13's list): the first three peel vectors, the last three carry
 something the step splits on.
 
-### 4.2 Where `ofNat`'s 18 ms actually is (`probes/t_p3b_*.hthr`, `t_p3c_*.hthr`)
+### 4.2 Where `ofNat`'s 18 ms actually is (`probes/t_p3b_*.hthr@ef3961a`, `t_p3c_*.hthr`)
 
 Before proposing anything, the premise: the width sweep, and each suspect
 removed in turn.
@@ -414,7 +414,7 @@ spelling was rejected on 2026-09-07:
 **That note is stale.** It predates `nat-run-algebra-primitives` (2026-09-09),
 after which `half`'s course-of-values window is *classified* — "a permutation
 iterated by exponentiation", `crates/kernel/DESIGN.md:~305`. Hand-run
-(`probes/t_p3c_ofnat_halves.hthr`), with the whole respelling written as a
+(`probes/t_p3c_ofnat_halves.hthr@ef3961a`), with the whole respelling written as a
 probe-local definition:
 
 ```
@@ -462,7 +462,7 @@ Two further properties, both free:
   `lib/std/bitvec/bitvec.hthr` needs its proof re-run; that is the implementing
   pass's first job (§8.2).
 
-On the item the model actually pays (`probes/t_p4b_mov_half.hthr` — the P4
+On the item the model actually pays (`probes/t_p4b_mov_half.hthr@ef3961a` — the P4
 theorem with every `ofNat` replaced by `ofNatH`; `canonical_bytes` itself
 still uses the shipped `ofNat` for the REX and opcode bytes, so this
 **understates** the respelling by two sites):
@@ -680,7 +680,7 @@ boilerplate: rounds 2 and 3 both stopped at their bar, and §13 records that
 the two rounds that did *not* stop produced a misattribution and two fixes on
 a wrong diagnosis.
 
-1. **Re-run the fresh before table.** `probes/r4p1.sh` and the P2/P3/P4
+1. **Re-run the fresh before table.** `probes/r4p1.sh@ef3961a` and the P2/P3/P4
    scripts, cold `--cache-dir` each. `a3_bits_64` must be 3 481 steps and
    `p4_mov_ofnat` ~48 ms of gate. If they are not, this tree is not the one
    measured here and nothing below applies. (≈ 3 minutes.)
@@ -766,7 +766,7 @@ attempted and is filed deferred.
 ### 10.1 §8.3 — `odd_bit` is already classified; no new `FoldClass`
 
 The item that decides whether §4.4 is 200 lines or 500. The answer is 200.
-Probed end to end (`probes/t_v3_oddbit.hthr`, a `heather check` rather than a
+Probed end to end (`probes/t_v3_oddbit.hthr@ef3961a`, a `heather check` rather than a
 Rust unit test, which is the cheaper instrument for the question actually
 asked — *does the fold cost the magnitude?*):
 
@@ -810,7 +810,7 @@ exactly and every other probe row's steps to the digit, and `p4_mov_ofnat` at
 §1.5 records 1 780, and `p4_mov_lit` 13 251 against 6 186. The rows that
 differ are exactly the three that need `-L /tmp/archL`; the likeliest cause is
 that §1.5's P4 group was measured against a cache directory that was not
-fresh, which `probes/README.md` warns produces zeros and, partially warm,
+fresh, which `probes/README.md@ef3961a` warns produces zeros and, partially warm,
 produces undercounts. **The gate seconds — the column §8.8 sets the bar in —
 reproduce; the steps column for §1.5 alone should not be quoted again.** This
 does not change §1.5's conclusion, which was about seconds.
@@ -843,7 +843,7 @@ as written to step 2, whose two columns are the same library.
 ### 10.6 Step 1 landed and met the bar
 
 Cold, both columns in one furnace job on one instance, the recipe of
-`probes/README.md` (`probes/s1b.sh`; and see 10.8 for why a library column
+`probes/README.md@ef3961a` (`probes/s1b.sh@ef3961a`; and see 10.8 for why a library column
 needs its own *build*):
 
 | | items | item total s | `kernel_gate` s | steps | misses |
@@ -867,7 +867,7 @@ The chartered families, before → after (seconds of gate):
 The families that are byte-, address- and page-arithmetic over `ofNat`
 constants move by 3.8–4.5×, exactly as §5.1's shape claim said; the two
 families whose `ofNat` arguments are open or whose cost is elsewhere barely
-move, also as stated. The P4 item (`probes/t_p4_mov_imm64.hthr`) went
+move, also as stated. The P4 item (`probes/t_p4_mov_imm64.hthr@ef3961a`) went
 45.147 → **17.611** ms of gate, **2.56×** — below §4.3's hand-run 3.3×,
 because the shipped `canonical_bytes` respells its own two `ofNat` sites too
 and the remaining cost is the literals it compares against.
@@ -941,7 +941,7 @@ and `build-x86` refuses a source library that differs from the bundled one, so
 swapping `bitvec.hthr` between two runs of one binary produces
 `error: source module 'bitvec' differs from the compiler's bundled proof
 library` and no timings at all. Each column needs its own build. Recorded in
-`probes/README.md`.
+`probes/README.md@ef3961a`.
 
 ### 10.9 What is left
 

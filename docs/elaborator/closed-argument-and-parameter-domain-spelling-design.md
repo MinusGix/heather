@@ -294,7 +294,7 @@ The spike is the mechanism of §3 and nothing else.
 - **`complete_post` does not move.** Its misses are `El(?)`/`Wf`,
   `El⌜⌝`/`El(?)` and `Vec`/`Sigma`, which are other declarations' rows and the
   next round's.
-- **The reproducer improves without collapsing.** `probes/t_pcr3.hthr`'s
+- **The reproducer improves without collapsing.** `probes/t_pcr3.hthr@ef3961a`'s
   `qchain1..3` and `qev3` stay at **zero** misses and zero steps and get
   materially cheaper, but the per-receiver growth factor is still large: what
   the charter predicted (`t_pc1..4`'s collapse) does not arrive from the
@@ -519,5 +519,5 @@ Stop and report if any of these fires; each would refute part of the design.
 ## 8. Status
 
 Design only. No source change lands in this pass; the spike that measured
-every claim above was reverted, and `probes/s3_*.sh` plus the trace excerpts
+every claim above was reverted, and `probes/s3_*.sh@ef3961a` plus the trace excerpts
 are what a reader needs to reproduce it.

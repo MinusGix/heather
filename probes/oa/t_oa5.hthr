@@ -1,8 +1,0 @@
-import logic;
-import bool;
-import nat;
-import list;
-import int;
-import omega;
-fn sign(b: Bool) → int::Int { match b { False => int::NegSucc(0), True => int::OfNat(1) } }
-theorem closed_int(x: int::Int, h: sign(True) + x = int::OfNat(0)): x = sign(False) { omega }

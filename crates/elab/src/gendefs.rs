@@ -2033,7 +2033,7 @@ impl GeneratedDefsMut<'_> {
         // against the named tails at a telescope was made on non-dependent
         // spines, where nothing is substituted into a tail and the code costs
         // δ per entry per read for nothing. On a dependent spine that trade
-        // reverses: `probes/t_pc1..4` are zero misses and zero evaluator steps
+        // reverses: `probes/t_pc1..4@ef3961a` are zero misses and zero evaluator steps
         // at every depth and abort on emitted-term *size*.
         //
         // So the **dependency** test chooses the shape and the **telescope**

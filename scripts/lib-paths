@@ -13,7 +13,7 @@ rebasing.
     scripts/lib-paths            # list stale paths it can rewrite; exit 1 if any
     scripts/lib-paths --fix      # rewrite them in place
 
-Left alone: `probes/` and `perf/snapshots/` (frozen history of older trees)
+Left alone: `perf/snapshots/` (frozen history of older trees)
 and citations of modules that no longer exist anywhere (deleted modules
 stay cited as history). Stdlib only, like `scripts/issue`.
 """
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP = ("probes/", "perf/snapshots/")
+SKIP = ("perf/snapshots/",)
 SUFFIXES = (".rs", ".md", ".hthr", ".py", ".mjs", ".js", ".toml", ".sh", ".json", ".tsv")
 # An optional run of `../` (a relative include_str!), then a path below lib/.
 PATH = re.compile(r"((?:\.\./)*)lib/((?:[A-Za-z0-9_]+/)*)([A-Za-z0-9_]+)\.hthr")
