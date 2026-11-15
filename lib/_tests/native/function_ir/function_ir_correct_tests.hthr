@@ -1,0 +1,98 @@
+// Probes of the compiler's theorem as it is stated to be read
+// (function_ir_correct, docs/native/compiler-theorem.md): the names unfold
+// to what `compiled_returns` states, and the theorem composes with a
+// `runtime fn`'s own agreement the way a certificate composes them. The
+// controls that the contract's clauses have teeth are
+// function_ir_compile_tests.hthr.
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_correct;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bitvec_omega;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import rt;
+import rt_lower;
+import runtime;
+import tactic;
+
+// ---------------------------------------------------------------------------
+// The names are the statement `compile-x86` instantiates
+
+// `Prog::Returns` is `compiled_returns`' conclusion, word for word: a
+// certificate's `_returns` theorem is a `Prog::Returns` with no step.
+theorem returns_is_compiled_returns<M>(functions: List<Function>, placement: List<Place>, code: Prog,
+    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat, defined: Succ(f) <= functions.len(),
+    arguments: List<BitVec(64)>, arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    evaluates: program_eval(functions, f, arguments) = answer):
+    code.Returns(machine, origin, last, f, arguments, answer) {
+    compiled_returns<M>(functions, placement, code, lowered, evaluable, machine.fetch, machine.data, last, origin, machine.stack,
+        f, defined, arguments, arity, answer, evaluates)
+}
+
+// ---------------------------------------------------------------------------
+// A program of FunctionIR: sum(a, b) = a + b
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+fn sum() → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+            outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+// Whatever code the lowering makes of `sum`, it adds.
+theorem sum_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, [a, b], a + b) {
+    compiled_computes<M>([sum()], placement, code, lowered, trivial, machine, 0, trivial, [a, b], trivial, a + b, refl)
+}
+
+// ---------------------------------------------------------------------------
+// A `runtime fn`, as `compile-x86` takes one
+
+runtime fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, lo, hi) ∧ clamp(x, lo, hi) <= hi {
+    split_all; all_goals { bv_omega }
+}
+
+// The certificate's theorem, from the generator's agreement and the
+// compiler's: the code of `clamp`'s program computes `clamp`. A
+// certificate has the lowering as a literal checked by evaluation; here
+// it is any.
+theorem clamp_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
+    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, [x, lo, hi], clamp(x, lo, hi)) {
+    compiled_computes<M>(clamp::program, placement, code, lowered, trivial, machine, 0, trivial, [x, lo, hi], trivial,
+        clamp(x, lo, hi), clamp::agrees(x, lo, hi))
+}
+
+// So a fact about the source function is a fact about what the machine
+// returns: for ordered bounds, the code returns a word within them.
+theorem clamp_code_within<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
+    machine: Machine<M>, x: u64, {lo, hi: u64}, ordered: lo <= hi):
+    Exists<u64>(λ v => code.Computes(machine, 0, [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) {
+    Exists(clamp(x, lo, hi), ⟨clamp_computes<M>(placement, code, lowered, machine, x, lo, hi), clamp_within(x, ordered)⟩)
+}
