@@ -127,7 +127,6 @@ runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.
 // `n` exactly when all of them are.
 runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n, 0, n) }
 
-
 // ---------------------------------------------------------------------------
 // Why it is right
 
@@ -859,7 +858,6 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // What the program does

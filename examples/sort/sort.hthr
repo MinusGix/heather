@@ -46,7 +46,6 @@ import function_ir_lower;
 import function_ir_lower_calls;
 import x86_64_asm;
 
-
 // Inserts `x` into the sorted bytes before `j`, whose place `j` is free:
 // each larger byte moves up one, and `x` goes where the first one not larger
 // was. Answers where `x` went.

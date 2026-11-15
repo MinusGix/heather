@@ -30,4 +30,4 @@ both refused before.
 
 Left open from the same rounds: [[bv-omega-word-comparison-goal-composite]]
 (binary search), [[runtime-mut-self-let-read-walk]] and
-[[theorem-branch-on-measured-fn-goal]] (sort).
+`theorem-branch-on-measured-fn-goal` (sort; filed and fixed in its own PR).
