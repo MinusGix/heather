@@ -319,12 +319,14 @@ theorem each_runs_short(): program_run(each_program(), [five(), tens()], 1, [w(0
 // A pass holds twelve values at the call (the four kept words, the index
 // and the next, the loop's count, the argument and the four words the
 // views bind) and nine caller-saved registers hold a function's values.
-// The planner puts what fits nowhere else in callee-saved registers and
-// says how many the function saves, three here: the function stores them
-// above its spill slots at its entry and loads them back before its
-// return, so its caller finds them kept (`Saving`, `function_runs`). The
-// callee is crowded by nothing and saves none.
-theorem each_saves(): placement_saves(each_code().plan()) = 3 { refl }
+// The planner puts the loop's own registers in callee-saved ones, since
+// its body calls (they would otherwise be stored round the call every
+// pass), and what fits nowhere else after them, and says how many the
+// function saves, all six here: the function stores them above its spill
+// slots at its entry and loads them back before its return, so its caller
+// finds them kept (`Saving`, `function_runs`). The callee is crowded by
+// nothing and saves none.
+theorem each_saves(): placement_saves(each_code().plan()) = 6 { refl }
 theorem carry_saves(): placement_saves(carry_code().plan()) = 0 { refl }
 theorem each_present(): lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).is_some().IsTrue() { trivial }
 fn each_machine() → Prog { lower_program_lent(each_program(), plan_program(each_program()), [2, 2]).get(each_present()) }
@@ -354,7 +356,7 @@ theorem each_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
 // lose. So are they with one register fewer saved than they use.
 theorem each_unsaved_refused(): lower_program_lent(each_program(), carry_code().plan() ++ placement_body(each_code().plan()), [2, 2]) = None { refl }
 theorem each_undersaved_refused():
-    lower_program_lent(each_program(), carry_code().plan() ++ Cons(Saving(2), placement_body(each_code().plan())), [2, 2]) = None { refl }
+    lower_program_lent(each_program(), carry_code().plan() ++ Cons(Saving(5), placement_body(each_code().plan())), [2, 2]) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Read from source

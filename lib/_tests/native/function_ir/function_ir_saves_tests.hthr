@@ -215,3 +215,9 @@ theorem pair_unsaved_refused(): lower_program(pair(), [Into(Rax), Into(R12), Int
 theorem pair_unsaved_why(): add_double().refused(1, [Into(R12), Into(Rax)], 2, []) =
     "the node `2 = move64 1`, placed in r12 (callee-saved, and the function saves 0), where rsi holds 1; rdi holds 0; " { refl }
 theorem pair_callee_plain(): double().refused(0, [Into(Rax)], 2, []) = "nothing: the function has code after no other" { refl }
+
+// The planner puts a value read after a call in a callee-saved register
+// where one is free: R12, saved once, where a caller-saved register would
+// be stored and loaded round the call. The call then saves nothing.
+theorem planner_keeps_across_call(): add_double().plan() = [Saving(1), Into(R12), Spilling(0), Into(Rax)] { refl }
+theorem planner_keeps_lowers(): lower_program(pair(), plan_program(pair())).is_some() = True { refl }
