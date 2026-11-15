@@ -3523,9 +3523,25 @@ impl Respell<'_> {
     fn inline_lets(&self, stmts: &[Stmt], result: &Expr) -> Result<Expr, String> {
         let span = self.span;
         let mut env: Vec<(String, Expr)> = Vec::new();
+        // A `let` is substituted into the types the body spells too: an
+        // `if` on a test of a `let`'s variable is a `match` on
+        // `decide_bit<test>`, whose proposition is a type argument, which
+        // `subst` leaves alone. Left there, the variable would be free in
+        // the companions, where the `let` is gone.
         let apply = |env: &[(String, Expr)], e: &Expr| {
             let map: Vec<(&str, &Expr)> = env.iter().map(|(n, v)| (n.as_str(), v)).collect();
-            subst(e, &map, &mut Vec::new())
+            let mut out = subst(e, &map, &mut Vec::new());
+            crate::alpha::walk_expr_mut(&mut out, &mut |x| {
+                if let ExprKind::TyApp { args, .. } = &mut x.kind {
+                    for ty in args.iter_mut() {
+                        for (n, v) in &map {
+                            *ty = subst_surface_ty(ty, n, v);
+                        }
+                    }
+                }
+                false
+            });
+            out
         };
         let bind = |env: &mut Vec<(String, Expr)>, name: &str, value: Expr| match env.iter_mut().find(|(n, _)| n == name) {
             Some(slot) => slot.1 = value,
