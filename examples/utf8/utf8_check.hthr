@@ -22,6 +22,8 @@ import bitvec_concat;
 import bitvec_shift_nat;
 import ring;
 import list_window;
+import fintype;
+import bitvec_fintype;
 
 // Whether a lead byte and the continuation bytes after it are one UTF-8
 // sequence: 1 when they are, 0 when not. Each byte is a word, read from the
@@ -72,6 +74,19 @@ runtime fn utf8_four(b, c1, c2, c3: u64) → u64 {
     }
 }
 
+// The same tests on the bytes from offset `i` of the span. The loop calls
+// these rather than reading the bytes itself, which keeps it small enough
+// for the compiler's certificate to scan in one step.
+runtime fn utf8_two_at(s: List<u8>, n, i: u64) → u64 {
+    utf8_two(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56))
+}
+runtime fn utf8_three_at(s: List<u8>, n, i: u64) → u64 {
+    utf8_three(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56))
+}
+runtime fn utf8_four_at(s: List<u8>, n, i: u64) → u64 {
+    utf8_four(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56), s.byte_within(n, i + 3).zero_extend(56))
+}
+
 // The offset of the first byte from `i` where no sequence starts, or `n`
 // when the bytes from `i` are UTF-8 to the end; `left` is the number of
 // bytes from `i`, `n - i`.
@@ -84,19 +99,19 @@ runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.
             i
         } else if b < 0xE0 {
             if h2: 1 < left {
-                if utf8_two(b, s.byte_within(n, i + 1).zero_extend(56)) = 0 { i } else { utf8_valid_from(s, n, i + 2, left - 2) }
+                if utf8_two_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 2, left - 2) }
             } else {
                 i
             }
         } else if b < 0xF0 {
             if h3: 2 < left {
-                if utf8_three(b, s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56)) = 0 { i } else { utf8_valid_from(s, n, i + 3, left - 3) }
+                if utf8_three_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 3, left - 3) }
             } else {
                 i
             }
         } else if b < 0xF8 {
             if h4: 3 < left {
-                if utf8_four(b, s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56), s.byte_within(n, i + 3).zero_extend(56)) = 0 { i } else { utf8_valid_from(s, n, i + 4, left - 4) }
+                if utf8_four_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 4, left - 4) }
             } else {
                 i
             }
@@ -116,42 +131,15 @@ runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n,
 // ---------------------------------------------------------------------------
 // Why it is right
 
-// Every number from a below a + n is counted.
-theorem List::mem_count_from(a, n, k: Nat, low: a <= k, below: k < a + n): Mem(k, List::count_from(a, n)) {
-    match n {
-        Zero => false_elim(omega),
-        Succ(m) => match k.eq_dec(a) {
-            Inl(same) => Inl(same),
-            Inr(other) => Inr(List::mem_count_from(a + 1, m, k, omega, omega)),
-        },
-    }
-}
-
-// A claim about every byte, by evaluating it at each of the 256.
-fn BitVec::every_byte(p: u8 → Bool) → Bool { List::count_from(0, 256).all_bit(λ k => p(BitVec::ofNat(k))) }
-
-theorem BitVec::of_every_byte(p: u8 → Bool, all: BitVec::every_byte(p) = True, b: u8): p(b) = True {
-    let at = List::count_from(0, 256).all_bit_sound(λ k => p(BitVec::ofNat(k)), all, b.toNat(),
-        List::mem_count_from(0, 256, b.toNat(), omega, BitVec::toNat_lt_pow(8, b)));
-    rewrite(sym(BitVec::ofNat_toNat(8, b)), at)
-}
-
-// Two words computed from a byte that agree at each of the 256 agree.
-theorem BitVec::bytes_agree(m: Nat, f, g: u8 → BitVec(m), all: BitVec::every_byte(λ c => f(c).eq_bit(g(c))) = True, b: u8): f(b) = g(b) {
-    BitVec::eq_of_eq_bit(m, f(b), g(b), BitVec::of_every_byte(λ c => f(c).eq_bit(g(c)), all, b))
-}
-
-theorem Bool::of_not_xor(a, b: Bool, same: !(a.xor(b)) = True): a = b {
-    match a { False => match b { False => refl, True => absurd(same) }, True => match b { False => absurd(same), True => refl } }
+// Claims about every byte are checked by evaluating them at each of the 256
+// (`Fintype::all`). Two words computed from a byte that agree at each agree.
+theorem BitVec::bytes_agree(m: Nat, f, g: u8 → BitVec(m), all: Fintype::all<u8>(λ c => f(c).eq_bit(g(c))) = True, b: u8): f(b) = g(b) {
+    BitVec::eq_of_eq_bit(m, f(b), g(b), Fintype::all_sound<u8>(λ c => f(c).eq_bit(g(c)), all, b))
 }
 
 // Two tests of a byte that agree at each of the 256 agree.
-theorem BitVec::bytes_decide_alike(f, g: u8 → Bool, all: BitVec::every_byte(λ c => !(f(c).xor(g(c)))) = True, b: u8): f(b) = g(b) {
-    Bool::of_not_xor(f(b), g(b), BitVec::of_every_byte(λ c => !(f(c).xor(g(c))), all, b))
-}
-
-theorem BitVec::toNat_zero_extend(n, extra: Nat, x: BitVec(n)): x.zero_extend(extra).toNat() = x.toNat() {
-    BitVec::concat_zero_toNat(n, extra, x)
+theorem BitVec::bytes_decide_alike(f, g: u8 → Bool, all: Fintype::all<u8>(λ c => !(f(c).xor(g(c)))) = True, b: u8): f(b) = g(b) {
+    Bool::eq_of_not_xor(f(b), g(b), Fintype::all_sound<u8>(λ c => !(f(c).xor(g(c))), all, b))
 }
 
 // A byte as the program reads it: a word.
@@ -204,26 +192,25 @@ theorem code2_word(b, c1: u8):
     }
 }
 
-theorem Bool::false_of_not_true(b: Bool, no: ¬b.IsTrue()): b = False {
-    match b { False => refl, True => false_elim(no(trivial)) }
-}
-
-fn Option::is_some<A>(self o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
+// Whether an option holds a value (`function_ir_lower` has this as
+// `Option::is_some`; the name differs so that the two can meet in the
+// compiler's world).
+fn Option::holds<A>(self o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
 
 // The decoder emits a character exactly when the value is not overlong and
 // is a scalar value.
-theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).is_some() = (min.leb(code) && char::is_scalar(code)) {
+theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).holds() = (min.leb(code) && char::is_scalar(code)) {
     match low: min.leb(code) {
         False => calc {
-            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
+            utf8::emit(min, code, r).holds() = utf8::emit_min(min.leb(code), code, r).holds() := refl,
             = False && char::is_scalar(code) := rewrite(low, refl),
         },
         True => calc {
-            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
-            = utf8::emit_dec(code, char::is_scalar(code).is_true_dec(), r).is_some() := rewrite(low, refl),
+            utf8::emit(min, code, r).holds() = utf8::emit_min(min.leb(code), code, r).holds() := refl,
+            = utf8::emit_dec(code, char::is_scalar(code).is_true_dec(), r).holds() := rewrite(low, refl),
             = True && char::is_scalar(code) := match d: char::is_scalar(code).is_true_dec() {
                 Inl(p) => sym(cong_fn(λ (x: Bool) => True && x, eq_true_of_is_true(char::is_scalar(code), p))),
-                Inr(np) => sym(cong_fn(λ (x: Bool) => True && x, Bool::false_of_not_true(char::is_scalar(code), np))),
+                Inr(np) => sym(cong_fn(λ (x: Bool) => True && x, eq_false_of_not_is_true(char::is_scalar(code), np))),
             },
         },
     }
@@ -251,7 +238,7 @@ theorem cont_taken(c: u8, r: List<u8>, e7: utf8::bit7(c) = True, e6: utf8::bit6(
 }
 
 theorem seq2_is_some(b, c1: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C2, b, Cons(c1, r)).is_some() = ((utf8::bit7(c1) && !utf8::bit6(c1)) && Nat::leb(0x80, code2(b, c1))) {
+    utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() = ((utf8::bit7(c1) && !utf8::bit6(c1)) && Nat::leb(0x80, code2(b, c1))) {
     let is: (code2(b, c1) = utf8::cont_payload(c1).concat(utf8::lead2_payload(b)).toNat()) = refl;
     let small: (code2(b, c1) < 0xD800) = omega(BitVec::toNat_lt_pow(11, utf8::cont_payload(c1).concat(utf8::lead2_payload(b))));
     let opened: (utf8::decode_seq(utf8::C2, b, Cons(c1, r)) = utf8::seq2(b, utf8::cont_lead(c1, r))) = refl;
@@ -260,7 +247,7 @@ theorem seq2_is_some(b, c1: u8, r: List<u8>):
         True => match e6: utf8::bit6(c1) {
             True => rewrite(opened, cont_lead_byte(c1, r, e7, e6), refl),
             False => calc {
-                utf8::decode_seq(utf8::C2, b, Cons(c1, r)).is_some() = utf8::emit(0x80, code2(b, c1), r).is_some() := rewrite(opened, cont_taken(c1, r, e7, e6), refl),
+                utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() = utf8::emit(0x80, code2(b, c1), r).holds() := rewrite(opened, cont_taken(c1, r, e7, e6), refl),
                 = Nat::leb(0x80, code2(b, c1)) && char::is_scalar(code2(b, c1)) := emit_is_some(0x80, code2(b, c1), r),
                 = (True && !False) && Nat::leb(0x80, code2(b, c1)) := rewrite(scalar_below_surrogates(code2(b, c1), small), Bool::and_true_r(Nat::leb(0x80, code2(b, c1)))),
             },
@@ -280,7 +267,7 @@ theorem at_least_word(w, k: u64, v: Nat, value: w.toNat() = v): !w.unsigned_lt_b
     }
 }
 
-theorem two_decides(b, c1: u8, r: List<u8>): utf8_two(word(b), word(c1)).eq_bit(0) = !utf8::decode_seq(utf8::C2, b, Cons(c1, r)).is_some() {
+theorem two_decides(b, c1: u8, r: List<u8>): utf8_two(word(b), word(c1)).eq_bit(0) = !utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() {
     rewrite(two_bits(word(b), word(c1)), cont_word(c1), at_least_word(((word(b) & 0x1F) << 6) + (word(c1) & 0x3F), 0x80, code2(b, c1), code2_word(b, c1)), seq2_is_some(b, c1, r), refl)
 }
 
@@ -330,7 +317,7 @@ theorem scalar_unless_surrogate(code: Nat, below: code < 0x110000):
 }
 
 theorem seq3_is_some(b, c1, c2: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).is_some()
+    utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds()
         = ((((utf8::bit7(c1) && !utf8::bit6(c1)) && (utf8::bit7(c2) && !utf8::bit6(c2))) && Nat::leb(0x800, code3(b, c1, c2))) && !(Nat::leb(0xD800, code3(b, c1, c2)) && Succ(code3(b, c1, c2)).leb(0xE000))) {
     let v = code3(b, c1, c2);
     let is: (v = utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead3_payload(b))).toNat()) = refl;
@@ -348,7 +335,7 @@ theorem seq3_is_some(b, c1, c2: u8, r: List<u8>):
                     True => match f6: utf8::bit6(c2) {
                         True => rewrite(next, cont_lead_byte(c2, r, f7, f6), refl),
                         False => calc {
-                            utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).is_some() = utf8::emit(0x800, v, r).is_some() := rewrite(next, cont_taken(c2, r, f7, f6), refl),
+                            utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds() = utf8::emit(0x800, v, r).holds() := rewrite(next, cont_taken(c2, r, f7, f6), refl),
                             = Nat::leb(0x800, v) && char::is_scalar(v) := emit_is_some(0x800, v, r),
                             = (((True && !False) && (True && !False)) && Nat::leb(0x800, v)) && !(Nat::leb(0xD800, v) && Succ(v).leb(0xE000))
                                 := rewrite(scalar_unless_surrogate(v, small), refl),
@@ -367,7 +354,7 @@ theorem three_bits(b, c1, c2: u64): utf8_three(b, c1, c2).eq_bit(0)
 }
 
 theorem three_decides(b, c1, c2: u8, r: List<u8>):
-    utf8_three(word(b), word(c1), word(c2)).eq_bit(0) = !utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).is_some() {
+    utf8_three(word(b), word(c1), word(c2)).eq_bit(0) = !utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds() {
     let w = ((word(b) & 0x0F) << 12) + ((word(c1) & 0x3F) << 6) + (word(c2) & 0x3F);
     let value = code3_word(b, c1, c2);
     rewrite(three_bits(word(b), word(c1), word(c2)), cont_word(c1), cont_word(c2),
@@ -414,7 +401,7 @@ theorem code4_word(b, c1, c2, c3: u8):
 }
 
 theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).is_some()
+    utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).holds()
         = ((((utf8::bit7(c1) && !utf8::bit6(c1)) && (utf8::bit7(c2) && !utf8::bit6(c2))) && (utf8::bit7(c3) && !utf8::bit6(c3)))
             && Nat::leb(0x10000, code4(b, c1, c2, c3))) && Succ(code4(b, c1, c2, c3)).leb(0x110000) {
     let v = code4(b, c1, c2, c3);
@@ -448,7 +435,7 @@ theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):
                                 True => match g6: utf8::bit6(c3) {
                                     True => rewrite(third, cont_lead_byte(c3, r, g7, g6), refl),
                                     False => calc {
-                                        utf8::decode_seq(utf8::C4, b, Cons(c1, rest3)).is_some() = utf8::emit(0x10000, v, r).is_some() := rewrite(third, cont_taken(c3, r, g7, g6), refl),
+                                        utf8::decode_seq(utf8::C4, b, Cons(c1, rest3)).holds() = utf8::emit(0x10000, v, r).holds() := rewrite(third, cont_taken(c3, r, g7, g6), refl),
                                         = Nat::leb(0x10000, v) && char::is_scalar(v) := emit_is_some(0x10000, v, r),
                                         = ((((True && !False) && (True && !False)) && (True && !False)) && Nat::leb(0x10000, v)) && Succ(v).leb(0x110000) := tested,
                                     },
@@ -470,7 +457,7 @@ theorem four_bits(b, c1, c2, c3: u64): utf8_four(b, c1, c2, c3).eq_bit(0)
 }
 
 theorem four_decides(b, c1, c2, c3: u8, r: List<u8>):
-    utf8_four(word(b), word(c1), word(c2), word(c3)).eq_bit(0) = !utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).is_some() {
+    utf8_four(word(b), word(c1), word(c2), word(c3)).eq_bit(0) = !utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).holds() {
     let w = ((word(b) & 0x07) << 18) + ((word(c1) & 0x3F) << 12) + ((word(c2) & 0x3F) << 6) + (word(c3) & 0x3F);
     let value = code4_word(b, c1, c2, c3);
     rewrite(four_bits(word(b), word(c1), word(c2), word(c3)), cont_word(c1), cont_word(c2), cont_word(c3),
@@ -499,7 +486,7 @@ theorem decode_cons(b: u8, r: List<u8>): utf8::decode(Cons(b, r)) = utf8::decode
 theorem valid_is_decoded(bytes: List<u8>): utf8::is_utf8(bytes) = utf8::is_some_string(utf8::decode(bytes)) { refl }
 
 theorem push_is_some(step: Option<Pair<Char, List<u8>>>, tail: Option<String>):
-    utf8::is_some_string(utf8::push_char(step, tail)) = (step.is_some() && utf8::is_some_string(tail)) {
+    utf8::is_some_string(utf8::push_char(step, tail)) = (step.holds() && utf8::is_some_string(tail)) {
     match step {
         None => refl,
         Some(st) => match tail { None => refl, Some(t) => refl },
@@ -511,22 +498,22 @@ theorem valid_bad(b: u8, r: List<u8>, class: utf8::class_of(b) = utf8::CBad): ut
 }
 
 theorem valid_one(b: u8, r: List<u8>, class: utf8::class_of(b) = utf8::C1):
-    utf8::is_utf8(Cons(b, r)) = (utf8::decode_seq(utf8::C1, b, r).is_some() && utf8::is_utf8(r)) {
+    utf8::is_utf8(Cons(b, r)) = (utf8::decode_seq(utf8::C1, b, r).holds() && utf8::is_utf8(r)) {
     rewrite(valid_is_decoded(Cons(b, r)), decode_cons(b, r), class, push_is_some(utf8::decode_seq(utf8::C1, b, r), utf8::decode(r)), refl)
 }
 
 theorem valid_two(b, c1: u8, r: List<u8>, class: utf8::class_of(b) = utf8::C2):
-    utf8::is_utf8(Cons(b, Cons(c1, r))) = (utf8::decode_seq(utf8::C2, b, Cons(c1, r)).is_some() && utf8::is_utf8(r)) {
+    utf8::is_utf8(Cons(b, Cons(c1, r))) = (utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() && utf8::is_utf8(r)) {
     rewrite(valid_is_decoded(Cons(b, Cons(c1, r))), decode_cons(b, Cons(c1, r)), class, push_is_some(utf8::decode_seq(utf8::C2, b, Cons(c1, r)), utf8::decode(r)), refl)
 }
 
 theorem valid_three(b, c1, c2: u8, r: List<u8>, class: utf8::class_of(b) = utf8::C3):
-    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, r)))) = (utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).is_some() && utf8::is_utf8(r)) {
+    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, r)))) = (utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds() && utf8::is_utf8(r)) {
     rewrite(valid_is_decoded(Cons(b, Cons(c1, Cons(c2, r)))), decode_cons(b, Cons(c1, Cons(c2, r))), class, push_is_some(utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))), utf8::decode(r)), refl)
 }
 
 theorem valid_four(b, c1, c2, c3: u8, r: List<u8>, class: utf8::class_of(b) = utf8::C4):
-    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, Cons(c3, r))))) = (utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).is_some() && utf8::is_utf8(r)) {
+    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, Cons(c3, r))))) = (utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).holds() && utf8::is_utf8(r)) {
     rewrite(valid_is_decoded(Cons(b, Cons(c1, Cons(c2, Cons(c3, r))))), decode_cons(b, Cons(c1, Cons(c2, Cons(c3, r)))), class, push_is_some(utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))), utf8::decode(r)), refl)
 }
 
@@ -545,7 +532,7 @@ theorem valid_cut2(b, c1, c2: u8, class: utf8::class_of(b) = utf8::C4): utf8::is
 }
 
 // An ASCII byte is always a character.
-theorem seq1_is_some(b: u8, r: List<u8>): utf8::decode_seq(utf8::C1, b, r).is_some() = True {
+theorem seq1_is_some(b: u8, r: List<u8>): utf8::decode_seq(utf8::C1, b, r).holds() = True {
     let small = BitVec::toNat_lt_pow(7, utf8::ascii_payload(b));
     rewrite(emit_is_some(0, utf8::ascii_payload(b).toNat(), r), scalar_below_surrogates(utf8::ascii_payload(b).toNat(), omega), refl)
 }
@@ -578,9 +565,9 @@ theorem Bool::right_of_or_not(a, b: Bool, either: !a || b = True, yes: a = True)
 }
 
 // A test of a byte that every byte passing it has class `cl`.
-theorem class_from_test(test: u8 → Bool, cl: utf8::Class, all: BitVec::every_byte(λ c => !test(c) || same_class(utf8::class_of(c), cl)) = True,
+theorem class_from_test(test: u8 → Bool, cl: utf8::Class, all: Fintype::all<u8>(λ c => !test(c) || same_class(utf8::class_of(c), cl)) = True,
     b: u8, passed: test(b) = True): utf8::class_of(b) = cl {
-    let fact = BitVec::of_every_byte(λ c => !test(c) || same_class(utf8::class_of(c), cl), all, b);
+    let fact = Fintype::all_sound<u8>(λ c => !test(c) || same_class(utf8::class_of(c), cl), all, b);
     of_same_class(utf8::class_of(b), cl, Bool::right_of_or_not(test(b), same_class(utf8::class_of(b), cl), fact, passed))
 }
 
@@ -659,6 +646,30 @@ theorem drop_here(s: List<u8>, k: Nat, inside: k < s.len()): s.drop(k) = Cons(at
     s.drop_at(k, 0, inside)
 }
 
+// The sequence tests at an offset are the tests of the bytes read there.
+theorem two_at(s: List<u8>, n, i: u64, b, c1: u8, read0: s.byte_within(n, i) = b, read1: s.byte_within(n, i + 1) = c1):
+    utf8_two_at(s, n, i) = utf8_two(b.zero_extend(56), c1.zero_extend(56)) {
+    calc {
+        utf8_two_at(s, n, i) = utf8_two(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56)) := refl,
+        = utf8_two(b.zero_extend(56), c1.zero_extend(56)) := rewrite(read0, read1, refl),
+    }
+}
+theorem three_at(s: List<u8>, n, i: u64, b, c1, c2: u8, read0: s.byte_within(n, i) = b, read1: s.byte_within(n, i + 1) = c1, read2: s.byte_within(n, i + 2) = c2):
+    utf8_three_at(s, n, i) = utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) {
+    calc {
+        utf8_three_at(s, n, i) = utf8_three(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56)) := refl,
+        = utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) := rewrite(read0, read1, read2, refl),
+    }
+}
+theorem four_at(s: List<u8>, n, i: u64, b, c1, c2, c3: u8, read0: s.byte_within(n, i) = b, read1: s.byte_within(n, i + 1) = c1,
+    read2: s.byte_within(n, i + 2) = c2, read3: s.byte_within(n, i + 3) = c3):
+    utf8_four_at(s, n, i) = utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) {
+    calc {
+        utf8_four_at(s, n, i) = utf8_four(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56), s.byte_within(n, i + 3).zero_extend(56)) := refl,
+        = utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) := rewrite(read0, read1, read2, read3, refl),
+    }
+}
+
 // The lead byte's tests, as the loop's equations state them.
 theorem lead_below(s: List<u8>, n, i: u64, b: u8, read: s.byte_within(n, i) = b, k: u64, t: decide_bit<b.zero_extend(56) < k>() = True):
     s.byte_within(n, i).zero_extend(56) < k {
@@ -704,11 +715,11 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                 let read1: (s.byte_within(n, i + 1) = c1) = rewrite(sym(step1), read_at(s, n, i + 1, omega));
                                 let rest1: (s.drop(k + 1) = Cons(c1, s.drop(k + 2))) = drop_here(s, k + 1, omega);
                                 let tail = s.drop(k + 2);
-                                match ok: utf8::decode_seq(utf8::C2, b, Cons(c1, tail)).is_some() {
+                                match ok: utf8::decode_seq(utf8::C2, b, Cons(c1, tail)).holds() {
                                     False => {
                                         let z: (decide_bit<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>() = True) = trans(two_decides(b, c1, tail), cong_fn(λ (x: Bool) => !x, ok));
                                         calc {
-                                            utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_true<1 < left>(g), rewrite(read0, read1, decide_bit_true<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z))), stops),
+                                            utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_true<1 < left>(g), rewrite(two_at(s, n, i, b, c1, read0, read1), decide_bit_true<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z))), stops),
                                             = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, valid_two(b, c1, tail, class), ok, refl),
                                         }
                                     },
@@ -717,7 +728,7 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                         let skip: ((i + 2).toNat() = k + 2) = bv_omega;
                                         let ih = valid_from_decides(s, n, i + 2, left - 2, sized, bv_omega);
                                         calc {
-                                            utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 2, left - 2).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_true<1 < left>(g), rewrite(read0, read1, decide_bit_false<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z))), refl),
+                                            utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 2, left - 2).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_below(s, n, i, b, read0, 0xE0, t3), decide_bit_true<1 < left>(g), rewrite(two_at(s, n, i, b, c1, read0, read1), decide_bit_false<utf8_two(b.zero_extend(56), c1.zero_extend(56)) = 0>(z))), refl),
                                             = utf8::is_utf8(tail) := rewrite(sym(skip), ih),
                                             = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, valid_two(b, c1, tail, class), ok, refl),
                                         }
@@ -750,11 +761,11 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                     let rest1: (s.drop(k + 1) = Cons(c1, s.drop(k + 2))) = drop_here(s, k + 1, omega);
                                     let rest2: (s.drop(k + 2) = Cons(c2, s.drop(k + 3))) = drop_here(s, k + 2, omega);
                                     let tail = s.drop(k + 3);
-                                    match ok: utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, tail))).is_some() {
+                                    match ok: utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, tail))).holds() {
                                         False => {
                                             let z: (decide_bit<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>() = True) = trans(three_decides(b, c1, c2, tail), cong_fn(λ (x: Bool) => !x, ok));
                                             calc {
-                                                utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(read0, read1, read2, decide_bit_true<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), stops),
+                                                utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_true<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), stops),
                                                 = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, rest2, valid_three(b, c1, c2, tail, class), ok, refl),
                                             }
                                         },
@@ -763,7 +774,7 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                             let skip: ((i + 3).toNat() = k + 3) = bv_omega;
                                             let ih = valid_from_decides(s, n, i + 3, left - 3, sized, bv_omega);
                                             calc {
-                                                utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 3, left - 3).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(read0, read1, read2, decide_bit_false<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), refl),
+                                                utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 3, left - 3).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_false<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), refl),
                                                 = utf8::is_utf8(tail) := rewrite(sym(skip), ih),
                                                 = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, rest2, valid_three(b, c1, c2, tail, class), ok, refl),
                                             }
@@ -799,11 +810,11 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                         let rest2: (s.drop(k + 2) = Cons(c2, s.drop(k + 3))) = drop_here(s, k + 2, omega);
                                         let rest3: (s.drop(k + 3) = Cons(c3, s.drop(k + 4))) = drop_here(s, k + 3, omega);
                                         let tail = s.drop(k + 4);
-                                        match ok: utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, tail)))).is_some() {
+                                        match ok: utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, tail)))).holds() {
                                             False => {
                                                 let z: (decide_bit<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>() = True) = trans(four_decides(b, c1, c2, c3, tail), cong_fn(λ (x: Bool) => !x, ok));
                                                 calc {
-                                                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(read0, read1, read2, read3, decide_bit_true<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), stops),
+                                                    utf8_valid_from(s, n, i, left).eq_bit(n) = False := rewrite(utf8_valid_from::True::False::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_true<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), stops),
                                                     = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, rest2, rest3, valid_four(b, c1, c2, c3, tail, class), ok, refl),
                                                 }
                                             },
@@ -812,7 +823,7 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64, sized: s.len() = n.toNa
                                                 let skip: ((i + 4).toNat() = k + 4) = bv_omega;
                                                 let ih = valid_from_decides(s, n, i + 4, left - 4, sized, bv_omega);
                                                 calc {
-                                                    utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 4, left - 4).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(read0, read1, read2, read3, decide_bit_false<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), refl),
+                                                    utf8_valid_from(s, n, i, left).eq_bit(n) = utf8_valid_from(s, n, i + 4, left - 4).eq_bit(n) := rewrite(utf8_valid_from::True::False::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_false<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), refl),
                                                     = utf8::is_utf8(tail) := rewrite(sym(skip), ih),
                                                     = utf8::is_utf8(s.drop(k)) := rewrite(rest0, rest1, rest2, rest3, valid_four(b, c1, c2, c3, tail, class), ok, refl),
                                                 }
