@@ -145,10 +145,9 @@ theorem run_nodes_frame(nodes: List<Node>): (values: Valuation()) → (buffers: 
     match nodes {
         Nil => λ values buffers w id _ => refl,
         Cons(node, rest) => λ values buffers w id h => {
-            let parts = Bool::both(h);
             let s = node.run(values, buffers);
-            trans(run_nodes_frame(rest, s.values, s.buffers, w, id, parts.right),
-                node.run_other(values, buffers, w, id, id.differs_ne(node_output(node).id, parts.left)))
+            trans(run_nodes_frame(rest, s.values, s.buffers, w, id, known),
+                node.run_other(values, buffers, w, id, id.differs_ne(node_output(node).id, known)))
         },
     }
 }
@@ -283,17 +282,16 @@ theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (va
     match nodes {
         Nil => λ _ values env _ => refl,
         Cons(node, rest) => λ wide values env agree => {
-            let parts = Bool::both(wide);
             let out = node_output(node);
             let s = node.run(values, env.buffers);
             let after = run_nodes(rest, s.values, s.buffers);
-            let ran = node.run_wide(values, env.valuation(), agree, env.buffers, parts.left);
+            let ran = node.run_wide(values, env.valuation(), agree, env.buffers, known);
             let first = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers, env.args);
             let firsts: (first = env.computes([node])) = eq2(λ (k: Nat) (b: Buffers()) => Env(env.words.put(out.id, k, 0), b, env.args),
                 cong_fn(λ (x: BitVec(out.width)) => x.toNat(), ran.right), ran.left);
             let agree_first = λ (x: Nat) => (match x.eq_dec(out.id) as λ _ => s.values(64, x) = first.word(x) {
                 Inl(e) => j(sym(e), λ y _ => s.values(64, y) = first.word(y),
-                    trans(sym(node.run_word(values, env.buffers, parts.left)),
+                    trans(sym(node.run_word(values, env.buffers, known)),
                         cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(Env::number_put(env.words, s.buffers, env.args, out.id, s.values(out.width, out.id).toNat()))))),
                 Inr(ne) => trans(node.run_other(values, env.buffers, 64, x, ne), trans(agree(x),
                     cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(List::put_other(out.id, env.words, s.values(out.width, out.id).toNat(), 0, x, ne))))),
@@ -307,7 +305,7 @@ theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (va
                 False => λ written => settle_put_over(rest, out.id, absent_false_mem(out.id, nodes_writes(rest), written), env.words, after.buffers, env.args,
                     after.values(out.width, out.id).toNat(), s.values(out.width, out.id).toNat(), after.values),
             })(refl);
-            trans(over, trans(Env::steps_settle(rest, parts.right, s.values, first, agree_first), cong_fn<Env, Env>(λ e => e.steps(rest), firsts)))
+            trans(over, trans(Env::steps_settle(rest, known, s.values, first, agree_first), cong_fn<Env, Env>(λ e => e.steps(rest), firsts)))
         },
     }
 }
@@ -501,10 +499,9 @@ theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::l
             (match one: p.one_node(t.layout(), after, node, names) {
                 None => λ none => absurd(none),
                 Some(d) => λ more within apart next => {
-                    let parts = Bool::both(apart);
                     let w_d = Prog::within_trans(Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
-                    t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
-                        t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
+                    t.goes_one_node(after, env, p, names, d, tree, node, known, one, w_d,
+                        t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, known, next))
                 },
             })
         },
@@ -546,7 +543,6 @@ theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog,
     checked: (t.homes.nodes_apart(nodes, out) && t.homes.all_apart(nodes_writes(nodes), out)).IsTrue(),
     next: t.At(prog_len(c.prog), out, tree, env.computes(nodes))): t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
     let layout = t.layout();
-    let aparts = Bool::both(checked);
     (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
             Some(q) => Some(Compiled(q, names)),
             None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
@@ -557,11 +553,11 @@ theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog,
             let w_q: q.Within(t.program) = j(sym(c_is), λ x _ => x.prog.Within(t.program), within);
             let next_q: t.At(prog_len(q), out, tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(nodes)), next);
             let ran = run_nodes_pure(nodes, leafed.left, env.valuation(), env.buffers);
-            t.goes_leaf(out, env, p, q, nodes, leafed.right, w_q, tree, aparts.right,
+            t.goes_leaf(out, env, p, q, nodes, leafed.right, w_q, tree, known,
                 j(ran, λ s _ => t.At(prog_len(q), out, tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
         },
         None => λ _ => (match wide: nodes_wide(nodes) {
-            True => λ each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, aparts.left,
+            True => λ each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, known,
                 j(env.computes_steps(nodes, j(sym(wide), λ b _ => b.IsTrue(), trivial)), λ e _ => t.At(prog_len(c.prog), out, tree, e), next)),
             False => λ none => absurd(none),
         }),
