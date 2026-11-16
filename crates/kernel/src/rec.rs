@@ -1191,7 +1191,7 @@ pub(crate) fn branch_specs(
         // *type* — `Nat @ 0` — not at the motive's ℓ. Ch. 04 writes `ℓ/ℓ`
         // here, which contradicts its own `t_ze`/`t_succ` (both `0/ℓ` for the
         // same `Nat/U_T` slot) and the β rule; see
-        // docs/kernel/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
+        // docs/kernel/delam-extensions.md §16.1 (issues/recursor-elim-call-level-mismatch.md).
         let x_t = inst_tm_motive(
             m_tm,
             (1, 5, 3),
@@ -5410,7 +5410,7 @@ mod tests {
     /// on arrival: nothing well-formed can be checked against it, so no
     /// branch can use its own recursive call and nothing complains. That is
     /// exactly how a mis-levelled `□(g ⊢ Empty^{ℓ'} @ ℓ)` survived two
-    /// level-indexing rounds ([[recursor-elim-call-level-mismatch]]).
+    /// level-indexing rounds (issues/recursor-elim-call-level-mismatch.md).
     ///
     /// Under the **identity** motives the term-motive entries carry both
     /// slots that can disagree: `M_Trm[l/ℓ, …, U/U_T, …]` instantiates to
@@ -5464,7 +5464,7 @@ mod tests {
     /// for *any* in-scope `l` and any well-formed `Δ` — so
     /// [`every_branch_telescope_entry_is_a_well_formed_type`] checks the
     /// level's **scope** and never its **value**
-    /// ([[branch-telescope-type-motive-level-slots]]). The slots are pinned
+    /// (issues/branch-telescope-type-motive-level-slots.md). The slots are pinned
     /// here instead, by the one thing in the same table that already knows
     /// the answer.
     ///
