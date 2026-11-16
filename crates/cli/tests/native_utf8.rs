@@ -3,6 +3,10 @@
 //! what Rust's `std::str::from_utf8` answers: the length of the longest
 //! valid prefix (`valid_up_to`), or the whole input.
 //!
+//! The same validator as a whole program with no C (`utf8check.hthr`'s
+//! `main`, built by `write-elf`) exits 0 exactly when Rust takes its input
+//! as UTF-8, and 1 when not.
+//!
 //! The theorem says the compiled function is the strict decoder's verdict;
 //! this test is the outside check that "strict decoder" is the one the world
 //! uses, run against the binary the example's README tells a reader to build.
@@ -121,6 +125,36 @@ fn utf8_validator_agrees_with_rust() {
     cases.extend(random_cases(400));
     for bytes in &cases {
         assert_eq!(run(&binary, bytes), expected(bytes), "on {bytes:02x?}");
+    }
+    std::fs::remove_dir_all(output).unwrap();
+}
+
+/// `main` reads its whole input into its buffer, lends it to `utf8_status`
+/// and exits with the verdict (`utf8_status_answers`): 0 for UTF-8, 1 for
+/// not, 2 for an input that filled the buffer.
+#[test]
+fn utf8_program_exits_as_rust_decides() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let output = root.join(format!("target/native-utf8-program-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let binary = output.join("utf8check");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather"))
+        .current_dir(&root)
+        .args(["write-elf", "examples/utf8/utf8check.hthr", "-o"])
+        .arg(&binary).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let mut cases = boundary_cases();
+    cases.extend(random_cases(400));
+    cases.push("\u{20ac}".repeat(21845).into_bytes());
+    cases.push(vec![b'a'; 65536]);
+    for bytes in &cases {
+        let mut child = Command::new(&binary).stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let code = child.wait().unwrap().code();
+        let want = if bytes.len() >= 65536 { 2 } else if std::str::from_utf8(bytes).is_ok() { 0 } else { 1 };
+        assert_eq!(code, Some(want), "on {} bytes {:02x?}", bytes.len(), &bytes[..bytes.len().min(16)]);
     }
     std::fs::remove_dir_all(output).unwrap();
 }
