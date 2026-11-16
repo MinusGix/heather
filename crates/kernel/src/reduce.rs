@@ -21,13 +21,11 @@
 //!   does not carry it.
 //! - Recursors block (are neutral) on neutral scrutinees and on
 //!   `box (U^δ)` / `box (u^δ)`.
-//! - **Who calls this** (since 2026-07-31): `typing.rs`, whose whnf this
-//!   still is; the shared β helpers, which the value machine reuses rather
-//!   than transcribe; and `conv::oracle`, the differential oracle.
-//!   Conversion itself evaluates (`eval.rs`) — and so this file's standing
-//!   became *the specification*: it is ch. 06's relation transcribed rule
-//!   for rule, and the machine is measured against it, which is why it is
-//!   not going anywhere. See DESIGN.md, *Algorithms*.
+//! - **Who calls this**: `typing.rs`, whose whnf this is; the shared β
+//!   helpers, which the value machine reuses rather than transcribe; and
+//!   `conv::oracle`, the differential oracle. Conversion itself evaluates
+//!   (`eval.rs`), so this file is *the specification*: ch. 06's relation
+//!   transcribed rule for rule, which the machine is measured against. See DESIGN.md, *Algorithms*.
 //! - **δ (extension)**: the `_delta` entry points take a [`Defs`] and add
 //!   the one rule `u^δ ⇝ t[δ]` for a *defined* global. The Ψ-free names
 //!   ([`step_term`], [`whnf_term`], …) are ch. 06's relation exactly and
@@ -63,8 +61,7 @@ pub struct OutOfFuel;
 /// Like fuel, this is an invariant on *whether* the machine answers and never
 /// a cost model — an answer given under it agrees with the answer the deeper
 /// stack gives. The value sits between what the deepest known good workload
-/// needs and what the 8 MiB rail (`RUST_MIN_STACK` in `scripts/test`)
-/// measurably holds. What a counted level costs is a property of the frames
+/// needs and what [`NATIVE_STACK_BYTES`] measurably holds. What a counted level costs is a property of the frames
 /// the recursion passes through, which are kept small on purpose (design
 /// §8: a function a counted recursion passes through is a dispatcher), so
 /// moving this number needs both the design doc's ends re-read and the
@@ -618,10 +615,10 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // The tail is under the Σ's binder, so the length is shifted; `T`
         // and the tail's `T` likewise (docs/kernel/wf-former-design.md §1.1).
         //
-        // **The nullary reduct carries `l`.** It did not until 2026-07-25,
-        // which broke ch. 06's Preservation for every `l ≠ 0` and left the
-        // nullary constructor of a level-`l` `Wf` uninhabitable — the defect
-        // route (a) exists to close (docs/kernel/unit-empty-level-indexing.md §1).
+        // **The nullary reduct carries `l`**: at level 0 it would break
+        // ch. 06's Preservation for every `l ≠ 0` and leave the nullary
+        // constructor of a level-`l` `Wf` uninhabitable
+        // (docs/kernel/unit-empty-level-indexing.md §1).
         Type::Vec { level, elem, len } => match &**len {
             t if crate::term::is_nat_zero(t) => Some(Type::Unit { level: level.clone() }),
             Term::Succ(pred) => Some(Type::Sigma {
@@ -671,8 +668,7 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             }),
         },
         // Fin(0) ⇝ Empty^0, Fin(S k) ⇝ Unit^0 +^{0,0} Fin(k).   (§1.2)
-        // `Fin` is declared at level 0, so both reducts land there and it
-        // needs nothing from the level-indexing round.
+        // `Fin` is declared at level 0, so both reducts land there.
         Type::Fin { len } => match &**len {
             t if crate::term::is_nat_zero(t) => Some(Type::Empty { level: Level::Zero }),
             Term::Succ(pred) => Some(Type::Sum {
@@ -749,9 +745,11 @@ fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
 
 /// The withheld definition at the head of `t` when `t` is a call of it that
 /// may unfold: saturated (at least its arity of term arguments) and closed
-/// (those arguments read no free local variable). `docs/language/interface-definitions-design.md` §3; the value machine's
-/// rule is `Eval::glue_withheld`, and the two agree on every argument the
-/// value machine can classify.
+/// (those arguments read no free local variable).
+/// `docs/language/interface-definitions-design.md` §3. The value machine's
+/// rule is `Eval::glue_withheld`, which decides closedness by forcing, so the
+/// two can differ on an argument that names a variable it does not read
+/// (`eval/withheld.rs`); both only unfold what ordinary δ would.
 pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
     let mut args: Vec<&Rc<Term>> = Vec::new();
     let mut cur = t;
@@ -1354,7 +1352,7 @@ pub(crate) struct Rec<'a> {
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
     /// evaluator shares these functions rather than transcribing the 65
-    /// branch telescopes a sixth time (docs/kernel/nbe-conversion-design.md §2).
+    /// branch telescopes again (docs/kernel/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
         tm_motive_level: &'a Level,
@@ -1427,8 +1425,8 @@ fn fire(
 /// The signature pieces of an `M` branch, `U_I, U_S, U_P, u_o` as global
 /// payloads and `x_I, x_S, x_P, x_o` as recursive calls, each at the
 /// context its piece lives in (docs/kernel/kernel-m-codes-design.md §2). The
-/// pieces are the *types* of a boxed `M`/`corec`/`out`; [`tm_m_pieces`] is
-/// the code former's.
+/// pieces are those of the boxed `M` type and of a boxed `corec`/`out`,
+/// whose branches all start from them.
 fn m_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &MSig) -> (Vec<GlobalEntry>, Vec<Rc<Term>>) {
     let di = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
     let dis = extend(&di, Rc::clone(&sig.shape), sig.level.clone());
@@ -2222,11 +2220,9 @@ pub(crate) fn beta_elim_tm(
             vec![],
             gamma,
         )),
-        // (ℓ, g, U_M, u_t, x_M, x_t. t_elimE) — x_M recurses at the *type*
-        // motive; mirrors tm_elim_nat minus the base/step branches.   (extension)
         // (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elimE) — ℓ the motive's, ℓ' the
-        // scrutinee's `Empty` level. Two universes as of
-        // docs/kernel/unit-empty-level-indexing.md §3.
+        // scrutinee's `Empty` level (docs/kernel/unit-empty-level-indexing.md
+        // §3); x_M recurses at the *type* motive.   (extension)
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
             let empty = || Rc::new(Type::Empty { level: scrut_level.clone() });
             let dx_empty = extend(delta, empty(), scrut_level.clone());
