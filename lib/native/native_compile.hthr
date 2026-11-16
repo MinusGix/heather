@@ -1236,15 +1236,25 @@ fn program_linkable(functions: List<Function>) → Bool {
 }
 
 // The stack a program's calls of its functions ask below the caller: the
-// largest room of `program_room` and the CALL's return address. A program
-// lowered with any placement is checked against that table, which no
-// placement exceeds, so the bound needs nothing of the placement.
-fn program_calls_room(functions: List<Function>) → Nat { rooms_top(program_rooms(functions)) + 8 }
+// largest room of `program_room` and the CALL's return address; none
+// where there is no function. A program lowered with any placement is
+// checked against that table, which no placement exceeds, so the bound
+// needs nothing of the placement.
+fn program_calls_room(functions: List<Function>) → Nat {
+    match functions { Nil => 0, Cons(_, _) => rooms_top(program_rooms(functions)) + 8 }
+}
 
-theorem program_calls_room_above(functions: List<Function>, f: Nat): program_room(functions)(f) + 8 <= program_calls_room(functions) {
+theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ(f) <= functions.len()):
+    program_room(functions)(f) + 8 <= program_calls_room(functions) {
     let below: (program_room(functions)(f) <= rooms_top(program_rooms(functions))) = rooms_at_top(program_rooms(functions), f);
-    let unfold: (program_calls_room(functions) = rooms_top(program_rooms(functions)) + 8) = refl;
-    omega(below, unfold)
+    (match functions as λ fs => Succ(f) <= fs.len() → program_room(fs)(f) <= rooms_top(program_rooms(fs)) →
+        program_room(fs)(f) + 8 <= program_calls_room(fs) {
+        Nil => λ none _ => false_elim(nothing_below_zero(f, none)),
+        Cons(last, earlier) => λ _ under => {
+            let unfold: (program_calls_room(Cons(last, earlier)) = rooms_top(program_rooms(Cons(last, earlier))) + 8) = refl;
+            omega(under, unfold)
+        },
+    })(called, below)
 }
 
 // The functions the regions call, after the program's own code `p`, their

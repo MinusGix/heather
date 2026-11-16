@@ -999,7 +999,7 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let a = call(env.buffers, f, words);
         let i0 = t.index - 8;
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
-        let callee_room = program_calls_room_above(t.functions, f);
+        let callee_room = program_calls_room_above(t.functions, f, below);
         let room_f: (program_room(t.functions)(f) <= i0) = omega(t.roomy, callee_room);
         let bare = pre.left;
         let v = bare.left.witness;
