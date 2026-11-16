@@ -129,7 +129,8 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
                 bv_omega
             };
             let ih = lower_bound_in_splits(s, n, key, mid + 1, hi, asc, next_le(mid, hi, end), fits, below2, above);
-            rewrite(lower_bound_in::True::True(s, n, key, lo, hi, h, less), ih)
+            let step: (lower_bound_in(s, n, key, lo, hi) = lower_bound_in(s, n, key, mid + 1, hi)) = simp_only(lower_bound_in, discharge := bv_omega);
+            rewrite(step, ih)
         } else {
             let smaller = left_smaller(lo, hi, h);
             let above2: Above(s, n, key, mid) = λ j after within reached => {
@@ -139,11 +140,13 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
             let ih = lower_bound_in_splits(s, n, key, lo, mid, asc, start, omega, below, above2);
             let r = lower_bound_in(s, n, key, lo, mid);
             let within: (r <= hi) = r.toNat().le_trans(mid.toNat(), hi.toNat(), ih.left, mid.toNat().le_of_lt(hi.toNat(), end));
-            rewrite(lower_bound_in::True::False(s, n, key, lo, hi, h, less), ⟨within, ih.right⟩)
+            let step: (lower_bound_in(s, n, key, lo, hi) = r) = simp_only(lower_bound_in, discharge := bv_omega);
+            rewrite(step, ⟨within, ih.right⟩)
         }
     } else {
         let same: (lo = hi) = bv_omega;
-        rewrite(lower_bound_in::False(s, n, key, lo, hi, h), ⟨order, ⟨below, λ (j: u64) (after: lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩)
+        let step: (lower_bound_in(s, n, key, lo, hi) = lo) = simp_only(lower_bound_in, discharge := bv_omega);
+        rewrite(step, ⟨order, ⟨below, λ (j: u64) (after: lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩)
     }
 }
 
