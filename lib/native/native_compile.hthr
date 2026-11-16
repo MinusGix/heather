@@ -1246,7 +1246,7 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions)) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()) {
                 None => None,
                 Some(out) => Some(out.prog),
             },

@@ -659,6 +659,12 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
     }
 }
 
+// That table: what functions linked after a program of statements are
+// emitted under (`Prog::links`), the bound the statements' calls are
+// stated with. Every frame fits it, 112 bytes at the most and a call's 24
+// below, with each callee's room below that.
+fn index_rooms() → Nat → Nat { λ (g: Nat) => 136 * Succ(g) }
+
 // The room a region's calls ask below a frame: the largest of its
 // callees' rooms, each with the call's 24 bytes, and none without a call.
 fn StructuredRegion::callee_room(self region: StructuredRegion, rooms: Nat → Nat) → Nat {
@@ -6538,20 +6544,22 @@ fn lower_program_roomed(functions: List<Function>, placement: List<Place>, count
     }
 }
 
-// A room table for a program: each function's frame, saving `saves(f)`
-// registers, and below it the largest of its callees' rooms with a call's
-// 24 bytes, where it calls. Function `f` at entry `f`.
+// A room table for a program: each function's frame, function `f` saving
+// `saves(f)` registers, and below it the largest of its callees' rooms
+// with a call's 24 bytes, where it calls. Function `f`'s room at entry `f`.
+// A table is checked where it is used (`Function::roomy`), so this one is
+// a choice, not a premise.
 fn rooms_then(rooms: List<Nat>, last: Function, saves: Nat) → List<Nat> {
     rooms ++ [last.frame(saves) + last.body.callee_room(λ (g: Nat) => rooms_at(rooms, g))]
 }
 
-fn program_rooms_by(functions: List<Function>, saves: Function → Nat) → List<Nat> {
-    match functions { Nil => [], Cons(last, earlier) => rooms_then(program_rooms_by(earlier, saves), last, saves(last)) }
+fn program_rooms_by(functions: List<Function>, saves: Nat → Nat) → List<Nat> {
+    match functions { Nil => [], Cons(last, earlier) => rooms_then(program_rooms_by(earlier, saves), last, saves(earlier.len())) }
 }
 
 // The table a placement cannot exceed: every function saving all six
 // registers it may (`function_saves`).
-fn program_rooms(functions: List<Function>) → List<Nat> { program_rooms_by(functions, λ (_: Function) => 6) }
+fn program_rooms(functions: List<Function>) → List<Nat> { program_rooms_by(functions, λ (_: Nat) => 6) }
 
 fn program_room(functions: List<Function>) → Nat → Nat { λ (f: Nat) => rooms_at(program_rooms(functions), f) }
 
@@ -6694,8 +6702,12 @@ fn plan_program(functions: List<Function>) → List<Place> {
 // The table the planner's placement asks for: each function saving what
 // its plan says (`Function::plan`), so a leaf that saves nothing asks for
 // no stack below its return address. What an export is stated with.
+fn program_saves_planned(functions: List<Function>) → List<Nat> {
+    match functions { Nil => [], Cons(last, earlier) => program_saves_planned(earlier) ++ [placement_saves(last.plan())] }
+}
+
 fn program_rooms_planned(functions: List<Function>) → List<Nat> {
-    program_rooms_by(functions, λ (function: Function) => placement_saves(function.plan()))
+    program_rooms_by(functions, λ (f: Nat) => rooms_at(program_saves_planned(functions), f))
 }
 fn program_room_planned(functions: List<Function>) → Nat → Nat { λ (f: Nat) => rooms_at(program_rooms_planned(functions), f) }
 

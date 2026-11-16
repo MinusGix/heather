@@ -53,12 +53,14 @@ record Machine<M> {
 // ---------------------------------------------------------------------------
 // What a compiled function does
 
-// The stack room function `f` of a program asks for below its return
-// address is `stack_room(functions, f)` (function_ir_lower_calls): 136
-// bytes a level, for itself and each level of calls below it, by the depth
-// table the lowering computes from the program and checks
-// (`program_depth`, `program_shallow`). A function that calls nothing asks
-// for 136 bytes wherever it is in the program.
+// The stack function `f` of a program asks for below its return address
+// is its row of a room table (`rooms(f)`, function_ir_lower_calls): its
+// own frame, sized by what it saves and whether it calls, and below that
+// the deepest of its callees' rooms with a call's 24 bytes. The lowering
+// checks the table a function at a time (`Function::roomy`), so any table
+// it accepts is one the code keeps to; `program_room` is the table every
+// placement fits, and a certificate states the one its placement asks
+// for. A function that calls nothing and saves nothing asks for none.
 
 // Function `f` of `code`, loaded at `origin` with the bytes `last` after it,
 // returns `answer` when called with `arguments`. Entered at its label with
@@ -91,23 +93,23 @@ fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f, room: Nat, argumen
 // ---------------------------------------------------------------------------
 // The theorem
 
-// The compiler is correct. Whenever `lower_program` turns a program's
-// functions into machine code, and the functions are evaluable (every
-// node one the evaluator gives a meaning, every call to an earlier
-// function of the right arity), the code of each function computes what
+// The compiler is correct. Whenever `lower_program_roomed` turns a
+// program's functions into machine code under a room table `rooms`, and
+// the functions are evaluable (every node one the evaluator gives a
+// meaning, every call to an earlier function of the right arity), the code of each function computes what
 // the program's evaluator says that function returns, at every list of
 // arguments of its arity, on every machine, wherever the code is loaded,
-// given the stack its calls need (`stack_room`).
+// given the stack its row of the table says (`rooms(f)`).
 //
 // The placement (which register holds which value) is the planner's, and
 // the planner is not trusted: the theorem holds for any placement the
 // lowering accepts, and the lowering checks the code it writes.
-theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, code: Prog,
-    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
-    code.Computes(machine, f, stack_room(functions, f), arguments, program_eval(functions, f, arguments)) {
-    λ origin last => compiled_returns<M>(functions, placement, code, lowered, evaluable, machine.fetch, machine.data, last, origin,
+    code.Computes(machine, f, rooms(f), arguments, program_eval(functions, f, arguments)) {
+    λ origin last => compiled_returns<M>(functions, placement, rooms, code, lowered, evaluable, machine.fetch, machine.data, last, origin,
         machine.stack, f, defined, arguments, arity, program_eval(functions, f, arguments), refl)
 }
 
@@ -115,14 +117,14 @@ theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, c
 // with an equation from its generator (`f::agrees`): the program evaluates
 // function `f` to the source function's value. Composed with the compiler's
 // theorem, the machine code computes the source function.
-theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, code: Prog,
-    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
     agrees: program_eval(functions, f, arguments) = value):
-    code.Computes(machine, f, stack_room(functions, f), arguments, value) {
-    j(agrees, λ x _ => code.Computes(machine, f, stack_room(functions, f), arguments, x),
-        compiler_correct<M>(functions, placement, code, lowered, evaluable, machine, f, defined, arguments, arity))
+    code.Computes(machine, f, rooms(f), arguments, value) {
+    j(agrees, λ x _ => code.Computes(machine, f, rooms(f), arguments, x),
+        compiler_correct<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, arguments, arity))
 }
 
 // ---------------------------------------------------------------------------
@@ -181,13 +183,13 @@ theorem Prog::implements_of<M>(self code: Prog, machine: Machine<M>, f: Nat, roo
 // The compiler's theorem a function at a time: a program whose function
 // `f` of `n` words evaluates to `spec` (`agrees`, what a `runtime fn`'s
 // `f::agrees` gives) compiles to code that implements `spec`.
-theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>, code: Prog,
-    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), n: Nat, arity: arity_fits(program_arity(functions, f), n).IsTrue(),
     spec: Words(n), agrees: (words: List<BitVec(64)>) → words.len() = n → program_eval(functions, f, words) = apply_words(n, spec, words)):
-    code.Implements(machine, f, stack_room(functions, f), n, spec) {
-    code.implements_of(machine, f, stack_room(functions, f), n, spec, λ words length =>
-        compiled_computes<M>(functions, placement, code, lowered, evaluable, machine, f, defined, words,
+    code.Implements(machine, f, rooms(f), n, spec) {
+    code.implements_of(machine, f, rooms(f), n, spec, λ words length =>
+        compiled_computes<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, words,
             j(sym(length), λ k _ => arity_fits(program_arity(functions, f), k).IsTrue(), arity),
             apply_words(n, spec, words), agrees(words, length)))
 }
@@ -219,22 +221,22 @@ fn Prog::ComputesOver<M>(self code: Prog, machine: Machine<M>, top: Nat, lending
     (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.ReturnsOver(machine, origin, last, top, lending, f, room, arguments, before, answer)
 }
 
-// The compiler is correct over spans. Whenever `lower_program_lent` turns
-// a program's functions into code, the functions are evaluable, and every
+// The compiler is correct over spans. Whenever `lower_program_roomed`
+// turns a program's functions into code, the functions are evaluable, and every
 // store they make is into a buffer `marks` marks (checked by evaluation),
 // the code of each function, lent buffers lying anywhere the stack does
 // not reach, returns the word the program's run over those buffers ends in
 // and leaves the buffers as the run leaves them.
-theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, marks: List<Bool>, code: Prog,
-    lowered: lower_program_lent(functions, placement, counts) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, marks: List<Bool>, code: Prog,
+    lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     within: program_stores_within(functions, marks).IsTrue(),
     machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, before: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing(counts, addresses, before, marks).spans()),
     f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), origin: BitVec(64), last: List<BitVec(8)>):
-    code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, stack_room(functions, f), arguments, before,
+    code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, rooms(f), arguments, before,
         program_run(functions, before, f, arguments)) {
-    compiled_returns_written<M>(functions, placement, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
+    compiled_returns_written<M>(functions, placement, rooms, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
         machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
         program_run(functions, before, f, arguments), refl)
 }
