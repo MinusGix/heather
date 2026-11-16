@@ -1,6 +1,6 @@
 ---
 title: State a compiled function as implementing its source function, not one argument list at a time
-status: open
+status: closed
 labels: [native,theorems,readability]
 area: heather-in-heather
 milestone: [hih-program-logic]
@@ -16,3 +16,7 @@ Done when: the definition and both directions are in `function_ir_correct`, a pr
 
 ## Related
 The other readability rounds on the compiler's theorem, from the same review (2026-11-16): [[words-as-unlent-spans]], [[span-certificate-statements]], [[stack-room-by-call-depth]], [[compiled-call-frame-rule]], [[optimizer-as-refinement]].
+
+## Log
+
+- 2026-11-16: Done: Words(n), apply_words, Prog::Implements (Spread over Computes), implements_at, implements_of and compiled_implements in function_ir_correct.hthr; probes clamp_implements, sum_implements (function_ir_correct_tests); compile-x86 states {prefix}_implements and {symbol}_native_implements for functions of words (sha256_t2_native_code().Implements(machine, 0, 3, sha256_round::sha256_t2)). Spans are [[span-certificate-statements]].

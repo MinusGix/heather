@@ -96,3 +96,42 @@ theorem clamp_code_within<M>(placement: List<Place>, code: Prog, lowered: lower_
     Exists<u64>(λ v => code.Computes(machine, 0, [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) {
     Exists(clamp(x, lo, hi), ⟨clamp_computes<M>(placement, code, lowered, machine, x, lo, hi), clamp_within(x, ordered)⟩)
 }
+
+// One statement for every argument list: the code of `clamp`'s program
+// implements `clamp`. Unfolded, `Implements` is the binders the theorem
+// above takes, so its proof is `clamp_computes` under them.
+theorem clamp_implements<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
+    machine: Machine<M>): code.Implements(machine, 0, 3, clamp) {
+    λ x lo hi => clamp_computes<M>(placement, code, lowered, machine, x, lo, hi)
+}
+
+// And back at any three words.
+theorem clamp_implements_at<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
+    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, [x, lo, hi], clamp(x, lo, hi)) {
+    code.implements_at(machine, 0, 3, clamp, clamp_implements<M>(placement, code, lowered, machine), [x, lo, hi], refl)
+}
+
+// `compiled_implements` from an agreement at every list of two words.
+theorem sum_agrees(words: List<BitVec(64)>, length: words.len() = 2):
+    program_eval([sum()], 0, words) = apply_words(2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b, words) {
+    spread(2, λ (ws: List<BitVec(64)>) => program_eval([sum()], 0, ws) = apply_words(2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b, ws),
+        λ a b => refl, words, length)
+}
+
+theorem sum_implements<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code), machine: Machine<M>):
+    code.Implements(machine, 0, 2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b) {
+    compiled_implements<M>([sum()], placement, code, lowered, trivial, machine, 0, trivial, 2, trivial, λ (a: BitVec(64)) (b: BitVec(64)) => a + b,
+        sum_agrees)
+}
+
+// A function of words is a function of spans lent nothing, and back.
+theorem sum_over_none<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64), top: Nat):
+    code.ComputesOver(machine, top, Lending::none(), 0, [a, b], [], Ending(word := a + b, buffers := [])) {
+    code.computes_over_none(machine, 0, [a, b], a + b, sum_computes<M>(placement, code, lowered, machine, a, b), top)
+}
+
+theorem sum_back<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, [a, b], a + b) {
+    code.computes_of_over_none(machine, 0, [a, b], a + b, sum_over_none<M>(placement, code, lowered, machine, a, b, machine.stack.size))
+}
