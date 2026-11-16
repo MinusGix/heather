@@ -545,6 +545,65 @@ pub(crate) fn head_names(decl: &Decl) -> Vec<String> {
     }
 }
 
+/// Every path of arms through the tests at the head of a definition's
+/// `body`, as it spells them (`["False", "True"]`), at any depth: where an equation may
+/// be minted. A superset of the paths [`branch_equations`] names, which
+/// also stops at a test it cannot state or a `match` that is not on a
+/// parameter; never more than the body's own tests, so a reader looking
+/// equations up by name tries exactly these (`simp_only(f)`, which before
+/// tried every path six tests deep and so missed a seventh test). The
+/// paths come in the order a reader should try them: below.
+pub(crate) fn test_paths(body: &Expr) -> Vec<Vec<String>> {
+    fn head(e: &Expr) -> &Expr {
+        let mut e = e;
+        while let ExprKind::Block(b) = &e.kind {
+            e = &b.result;
+        }
+        e
+    }
+    fn arms(e: &Expr) -> Vec<(&str, &Expr)> {
+        match bool_test(e) {
+            Some(t) => vec![("True", t.yes), ("False", t.no)],
+            None => match &e.kind {
+                ExprKind::Match { motive: None, arms, .. } => arms
+                    .iter()
+                    .filter(|a| !a.default)
+                    .map(|a| (a.ctor.rsplit("::").next().unwrap_or(&a.ctor), &a.body))
+                    .collect(),
+                _ => Vec::new(),
+            },
+        }
+    }
+    fn leaves(e: &Expr) -> usize {
+        let arms = arms(head(e));
+        if arms.is_empty() { 1 } else { arms.iter().map(|(_, body)| leaves(body)).sum() }
+    }
+    fn walk(e: &Expr, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        let e = head(e);
+        if !path.is_empty() {
+            out.push(path.clone());
+        }
+        // The arm with the most leaves first, the last of equals first: a
+        // reader tries the equations in this order, so a test is asked
+        // first as the arm most of them take, and its other arm is then
+        // asked only where that failed. A body's main line (the recursion
+        // under `if 0 < n`, the long tail of an `else if` chain) is then
+        // asked first, and only a call that leaves it pays a failed side
+        // condition.
+        let mut arms: Vec<(usize, &str, &Expr)> = arms(e).into_iter().map(|(arm, body)| (leaves(body), arm, body)).collect();
+        arms.reverse();
+        arms.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, arm, body) in arms {
+            path.push(arm.to_string());
+            walk(body, path, out);
+            path.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, &mut Vec::new(), &mut out);
+    out
+}
+
 /// The equations of `decl`'s branches, at `reading`. `Err` says why there
 /// are none. `recursion` says how `f` reaches its body: a definition by
 /// unfolding, a `decreases` recursion through `f_unfold`, a structural one

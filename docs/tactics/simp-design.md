@@ -749,4 +749,19 @@ contradiction) would otherwise fail again at every law and every step.
 widened by zeros (`b.zero_extend(56) < 0x80`, a byte compared as a `u64`)
 as the narrower word's value (`BitVec::concat_zero_toNat`).
 
+The equations are looked up along the body's own tests
+(`branch_equations::test_paths`; a measured definition's body is the right
+side of its `f_unfold`), at any depth: a fixed search six tests deep once
+missed every equation of the UTF-8 loop's three- and four-byte branches
+(issues/simp-only-deep-branch-equations.md). The order they are tried in is
+the order their tests are asked: at each test the arm with more leaves
+first, so a body's main line (the recursion under `if 0 < n`, the tail of an
+`else if` chain) is asked as the condition that holds there, and a
+condition whose complement is already discharged, or whose negation's body
+is a hypothesis, is not given to the discharger, whose failures cost several
+times its successes. A failed discharge hands on the declaration's request
+for more goal slots (an `omega` atom list it could not name), so the
+declaration restarts instead of reporting a condition nothing discharged;
+and `discharge := e` reserves `e`'s slots for several runs.
+
 Probes: `lib/_tests/std/tactic/simp_branch_tests.hthr`.
