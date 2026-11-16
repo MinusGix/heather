@@ -408,3 +408,47 @@ fn Matchable::told_at(self m: Matchable, at: Node, had: Walked) → Option<Told>
         _ => None,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// A rule whose nodes fit and that is not applied
+
+// The premises that are nodes: a rule's shape.
+fn premises_nodes(premises: List<PatternFact>) → List<PatternFact> {
+    match premises {
+        Nil => [],
+        Cons(premise, rest) => match premise { Makes(_, _, _) => Cons(premise, premises_nodes(rest)), _ => premises_nodes(rest) },
+    }
+}
+
+// The rule's numbers its nodes give, read as many times as there are
+// nodes: none where a node is not the one the rule states.
+fn premises_shaped(rounds: List<PatternFact>, nodes: List<PatternFact>, at: Node, had: Walked, found: NatMap<Nat>) → Option<NatMap<Nat>> {
+    match rounds {
+        Nil => Some(found),
+        Cons(_, later) => premises_bind(nodes, at, had, found).and_then(λ more => premises_shaped(later, nodes, at, had, more)),
+    }
+}
+
+// The words the ranges a rule reads are of, where each is found.
+fn premises_ranged(premises: List<PatternFact>, found: NatMap<Nat>) → List<Nat> {
+    match premises {
+        Nil => [],
+        Cons(premise, rest) => match premise {
+            Ranges(x, _, _) => match x {
+                Numbered(k) => match nat_map_get(found, k) { None => premises_ranged(rest, found), Some(id) => Cons(id, premises_ranged(rest, found)) },
+                _ => premises_ranged(rest, found),
+            },
+            _ => premises_ranged(rest, found),
+        },
+    }
+}
+
+// Where the nodes a rule states are the ones at `at`: the words whose
+// ranges it reads. A rule so shaped that makes no instance there was kept
+// from it by a range or by its condition, which is what a report of the
+// rules not applied says (function_ir_explain).
+fn Matchable::shaped(self m: Matchable, at: Node, had: Walked) → Option<List<Nat>> {
+    m.fits(at).then(m.anchor).and_then(λ k => shared(premises_nodes(m.pattern.premises), λ nodes =>
+        premises_shaped(nodes, nodes, at, had, nat_map_set(NatMap::empty(), k, node_output(at).id)).and_then(λ found =>
+            Some(premises_ranged(m.pattern.premises, found)))))
+}
