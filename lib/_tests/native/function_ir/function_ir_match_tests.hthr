@@ -127,3 +127,32 @@ theorem below_yes_head(): below_yes_entry.at(7).head = Some(10) { refl }
 theorem within_add_head(): within_add_entry.at(4).head = Some(2) { refl }
 theorem add_zero_fits_add(): add_zero_entry.at(0).fits(Add(64, 7, 5, 6)) = True { refl }
 theorem add_zero_skips_sub(): add_zero_entry.at(0).fits(Sub(64, 7, 5, 6)) = False { refl }
+
+// ---------------------------------------------------------------------------
+// What a test says in the arm taken
+
+// `l < r` taken, with `r` at most 16: `l` is at most 15. The rule states
+// `r.within(0, Succ(b))`, and the range read gives `b`.
+fn taken() → Walked { Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 16)), nat_map_set(no_bits(), 4, True)) }
+
+theorem below_left_told(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2), taken()) =
+    Some(Told(9, [1, 2, 15, 4], 1, Range(0, 15), [2])) { refl }
+
+// The rule is read at the comparison, whose bit its premises test.
+theorem below_left_anchor(): below_left_entry.at_test(9).anchor = Some(3) { refl }
+theorem below_left_head(): below_left_entry.at_test(9).head = Some(10) { refl }
+
+// The other arm's rule says nothing here: the bit is one.
+theorem above_left_untold(): above_left_entry.at_test(11).told_at(UnsignedLessThan(64, 4, 1, 2), taken()) = None { refl }
+
+// Nor does the rule where the bit is not known.
+theorem unknown_bit_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2),
+    Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 16)), no_bits())) = None { refl }
+
+// A right operand that may only be zero has nothing before it.
+theorem below_zero_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2),
+    Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 0)), nat_map_set(no_bits(), 4, True))) = None { refl }
+
+// A literal in a node is read as itself: a rule about 64-bit words is not
+// tried further at a 32-bit node.
+theorem narrow_compare_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(32, 4, 1, 2), taken()) = None { refl }

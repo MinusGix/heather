@@ -825,36 +825,34 @@ fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
     }
 }
 
-// A range a rule's step derives.
-record Narrower { range: Range, step: Step }
+// The ranges and the steps as the rules a test gives narrow them.
+record Narrowed { range: NatMap<Range>, steps: List<Step> }
 
-// What a comparison's bit says of its operands in the arm taken where it
-// is `bit`: each one's range, where that is narrower than what is known.
-record Narrowed { left: Option<Narrower>, right: Option<Narrower> }
-
-fn narrowing(c, l, r: Nat, bit: Bool, a, b: Range) → Narrowed {
-    match bit {
-        True => Narrowed(
-            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [l, r, b.high - 1, c]))), False => None },
-            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [l, r, a.low, c]))), False => None }),
-        False => Narrowed(
-            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [l, r, b.low, c]))), False => None },
-            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [l, r, a.high, c]))), False => None }),
+// What the rules say of other words where the bit the node `at` writes
+// is known, each read against what the walk had on entering the arm: a
+// word's range is narrowed where a rule says more than is known, by the
+// rule's step.
+fn narrowed_among(table: List<Matchable>, at: Node, had: Walked, so: Narrowed) → Narrowed {
+    match table {
+        Nil => so,
+        Cons(m, rest) => match m.told_at(at, had) {
+            None => narrowed_among(rest, at, had, so),
+            Some(told) => shared(range_known(so.range, told.id), λ known => match known.inside(told.range) {
+                True => narrowed_among(rest, at, had, so),
+                False => narrowed_among(rest, at, had,
+                    Narrowed(nat_map_set(so.range, told.id, known.meet(told.range)), so.steps ++ [Derive(told.place, told.numbers)])),
+            }),
+        },
     }
 }
 
-fn narrower_set(ranges: NatMap<Range>, id: Nat, found: Option<Narrower>) → NatMap<Range> {
-    match found { None => ranges, Some(narrower) => nat_map_set(ranges, id, narrower.range) }
-}
-
-fn narrower_step(found: Option<Narrower>) → List<Step> { match found { None => [], Some(narrower) => [narrower.step] } }
-
-// The same, owed with the derivations the steps read.
-fn Seen::narrowed(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
-    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowing(c, l, r, bit, seen.of(l), seen.of(r)), λ found =>
-        Seen(seen.made, narrower_set(narrower_set(seen.range, l, found.left), r, found.right), seen.how,
-            nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
-            seen.pending ++ (why.steps ++ (narrower_step(found.left) ++ narrower_step(found.right))), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
+// In the arm taken where the bit the comparison `node` writes is known:
+// what the rules say of its operands (rules 9 to 12), owed with the
+// derivations the steps read.
+fn Seen::narrowed(self seen: Seen, node: Node, l, r: Nat) → Seen {
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing, node, seen.walked(), Narrowed(seen.range, [])), λ found =>
+        Seen(seen.made, found.range, seen.how, nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
+            seen.pending ++ (why.steps ++ found.steps), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
 }
 
 // Where the bit `c` is `bit`: what a comparison's bit says of its operands,
@@ -865,7 +863,7 @@ fn Seen::taking_in(self seen: Seen, depth, c: Nat, bit: Bool) → Seen {
         match nat_map_get(seen.made, c) {
             None => known,
             Some(node) => match node {
-                UnsignedLessThan(_, _, l, r) => known.narrowed(c, l, r, bit).ordered_by(c, l, r, bit),
+                UnsignedLessThan(_, _, l, r) => known.narrowed(node, l, r).ordered_by(c, l, r, bit),
                 BitOr(_, _, a, b) => match bit {
                     True => known,
                     False => match depth {
