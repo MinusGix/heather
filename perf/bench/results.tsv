@@ -1,14 +1,14 @@
 # Probe benchmark results — see docs/infrastructure/cloud-benchmarks.md
 # Regenerate with: scripts/bench-probes --save   (a filtered --save replaces only the cases it ran)
-# case	name	time_s	cpu_s	total_s	kernel_s	elab_s	merkle_s	image_s	spread	eval_steps	queries	conv_misses	local_subst_nodes	shift_global_nodes	check_terms
+# case	name	time_s	cpu_s	total_s	kernel_s	elab_s	merkle_s	image_s	spread	eval_steps	queries	conv_misses	local_subst_nodes	shift_global_nodes	check_terms	reduce_steps	reduce_frames
 env	source	cloud
 env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
 env	nproc	4
 env	mem	16 GiB
 env	profile	dev (hot crates opt-level 3), kernel width 1
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
-env	commit	d64c439
-env	date	2026-11-12
+env	commit	fdafd26
+env	date	2026-11-16
 case	analysis/below-located	7.930	8.511	7.930	2.805	5.113	0.012	0.000	1.026	340656	353384	39606	58723724	22980	1147
 case	cert/yes-labels	0.036	2.819	0.036	0.014	0.022	0.000	0.000	1.084	29242	4840	2155	5138	70	15
 case	cert/yes-pieces	0.072	2.859	0.072	0.066	0.007	0.000	0.000	1.082	205229	413	21	2882	28	7
@@ -24,4 +24,6 @@ case	native/elf-floor-yes	2.016	2.016	1.915	0.003	0.486	0.297	1.129	1.082	321649
 case	native/goes-arg-found	0.326	2.251	0.326	0.110	0.213	0.002	0.000	1.111	288455	21401	4037	791611	1521	14
 case	native/perform-call	25.975	28.349	25.975	7.225	18.492	0.146	0.000	1.015	7268042	3105479	182353	332243307	7320854	9
 case	native/world-replay	1.056	1.056	1.081	0.001	0.335	0.000	0.745	1.046	231	353	26	1619	6	21
+case	omega/block-spread	9.890	10.276	9.890	0.783	9.082	0.025	0.000	1.064	7412302	30150	3090	43627447	357509	1228	1056376	30331910
+case	reduce/clamp-literal	12.990	13.181	12.990	0.001	12.989	0.000	0.000	1.023	3924	102	7	16587159	16	5	3145939	177274112
 case	x86/moves-spills	0.314	0.822	0.314	0.015	0.296	0.003	0.000	1.071	18245	9179	1129	5250947	62486	0
