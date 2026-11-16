@@ -660,10 +660,11 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
     }
 }
 
-// That table: what functions linked after a program of statements are
-// emitted under (`Prog::links`), the bound the statements' calls are
-// stated with. Every frame fits it, 112 bytes at the most and a call's 24
-// below, with each callee's room below that.
+// That table: one every frame fits, 112 bytes at the most and a call's 24
+// below, with each callee's room below that. What a question about a
+// placement alone is asked under (`Function::lowers`, compile-x86's
+// probes), where the room is not what is asked; code is emitted under a
+// program's own table (`program_room`, `program_room_planned`).
 fn index_rooms() → Nat → Nat { λ (g: Nat) => 136 * Succ(g) }
 
 // The room a region's calls ask below a frame: the largest of its
