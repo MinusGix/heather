@@ -362,6 +362,9 @@ pub struct DeclView {
     /// `AsInstance(class, args, index)`: a `def` that is also registered as
     /// the instance `class<args…>(index…)`, the index arguments by name.
     pub instance: Option<(String, Vec<RExpr>, Vec<String>)>,
+    /// `AsRegistered(ty)`: a `def` that is also registered under the type
+    /// named `ty`, as `register def` does.
+    pub registered: Option<String>,
     pub name: String,
     pub params: Vec<(u64, bool)>,
     pub result: RExpr,
@@ -718,10 +721,12 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             } else {
                 None
             };
+            let registered = if form == 4 { Some(self.string(self.call("decl_registered_type", vec![d])?)?) } else { None };
             decls.push(DeclView {
                 theorem: form == 0,
-                value: form == 2 || form == 3,
+                value: form == 2 || form == 3 || form == 4,
                 instance,
+                registered,
                 name: self.string(self.call("decl_name", vec![d])?)?,
                 params,
                 result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
@@ -1230,7 +1235,9 @@ pub(crate) enum Leaves {
     /// ([`HostMut::elab_generate`]), in a context of the length given.
     /// They were built in a world of `psi` globals, and the declarations
     /// published since are shifted past.
-    Member { fills: Vec<(Held, usize)>, psi: usize },
+    /// `checked`: a body is compared with the type it is elaborated at
+    /// (a registered member's, which is written by name).
+    Member { fills: Vec<(Held, usize)>, psi: usize, checked: bool },
 }
 
 const LEAF: &str = "\0host-leaf-";
@@ -1618,6 +1625,8 @@ pub(crate) struct Member {
     /// The instance the value is registered as: the class, its type
     /// arguments (in the root scope) and its index arguments by name.
     instance: Option<(String, Vec<(Type, Level)>, Vec<String>)>,
+    /// The name of the type the value is registered under.
+    registered: Option<String>,
     name: String,
     params: Vec<(String, bool, Type, Level)>,
     result: (Type, Level),
@@ -4342,9 +4351,13 @@ impl Host<'_> {
                 Some((t, n)) if *n == cx.gamma.len() => Ok(t.clone()),
                 _ => err("a split's branch was elaborated in another context than it was proved in", span),
             },
-            Leaves::Member { fills, psi } => match fills.get(k) {
-                Some((Held::Term(t, ..), n)) if *n == cx.gamma.len() => {
-                    Ok(t.shift_global((self.goal_psi().bindings.len() - *psi) as u32))
+            Leaves::Member { fills, psi, checked } => match fills.get(k) {
+                Some((Held::Term(t, ty, _), n)) if *n == cx.gamma.len() => {
+                    let by = (self.goal_psi().bindings.len() - *psi) as u32;
+                    if *checked && !self.conv_types(cx, &ty.shift_global(by), expected, lvl) {
+                        return err("a generator registers a value under a type that is not the value's type", span);
+                    }
+                    Ok(t.shift_global(by))
                 }
                 _ => err("a generated declaration's body was elaborated in another context than it was built in", span),
             },
@@ -4358,7 +4371,7 @@ impl Host<'_> {
         };
         let leaves = state.borrow();
         match &*leaves {
-            Leaves::Member { fills, psi } => match fills.get(k) {
+            Leaves::Member { fills, psi, .. } => match fills.get(k) {
                 Some((Held::Type(t, l), n)) if *n == cx.gamma.len() => {
                     Ok((t.shift_global((self.goal_psi().bindings.len() - *psi) as u32), l.clone()))
                 }
@@ -4728,7 +4741,7 @@ impl Host<'_> {
         let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
         let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
-        Ok(Member { theorem: d.theorem, value: d.value, instance, name: name.clone(), params, result: (result, level), body })
+        Ok(Member { theorem: d.theorem, value: d.value, instance, registered: d.registered.clone(), name: name.clone(), params, result: (result, level), body })
     }
 }
 
@@ -4755,6 +4768,14 @@ impl HostMut<'_> {
                 span,
             })
             .collect();
+        // A registered member writes its type by name, as `register def`
+        // does: the registry is the type's, and the body the generator
+        // built is checked against it like any body against its statement.
+        let result = match &m.registered {
+            Some(written) if is_name(written) => Ty { kind: TyKind::Named { name: written.clone(), args: Vec::new() }, span },
+            Some(written) => return err(format!("`{}` is to be registered under `{written}`, which is not a type's name", m.name), span),
+            None => leaf_ty(n),
+        };
         let decl = Decl {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
@@ -4765,7 +4786,7 @@ impl HostMut<'_> {
             name: m.name.clone(),
             tyvars: Vec::new(),
             params,
-            result: leaf_ty(n),
+            result,
             decreases: None,
             unfolding: Vec::new(),
             body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
@@ -4776,8 +4797,9 @@ impl HostMut<'_> {
         let (result, level) = &m.result;
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
-        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))?;
+        let registered = m.registered.is_some();
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi, checked: registered }));
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| if registered { me.elab_registered_def(&decl) } else { me.elab_decl(&decl) })?;
         match &m.instance {
             None => Ok(()),
             Some(instance) => self.publish_instance_member(&m.name, instance, psi, span),
@@ -4850,7 +4872,7 @@ impl HostMut<'_> {
             body: InstanceBody::Literal(fields),
             span,
         };
-        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi, checked: false }));
         self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| ClassesMut(me).elab_instance(&decl))
     }
 }

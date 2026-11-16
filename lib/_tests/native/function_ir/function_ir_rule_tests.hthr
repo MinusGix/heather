@@ -1,7 +1,7 @@
 // The `rule` prefix generator (function_ir_rule): for each rule theorem,
 // the clause its statement stands for at chosen numbers, by evaluation, and
 // a guard that refuses. The rule's soundness is in the published value's
-// type, so each `_rule` below checking is the generator's proof checking.
+// type, so each `_entry` below checking is the generator's proof checking.
 // Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
@@ -15,7 +15,7 @@ import omega; import bitvec_shift_nat; import bool; import list; import logic; i
 
 rule theorem add_zero_r(w: Nat, x: BitVec(w)): x.add(BitVec::ofNat(0)) = x { BitVec::add_zero(w, x) }
 
-theorem add_zero_made(): add_zero_r_rule.make([64, 5, 7, 6]) = Some(Clause([Is(Const(64, 6, 0)), Is(Add(64, 7, 5, 6))], Is(Move(64, 7, 5)))) { refl }
+theorem add_zero_made(): add_zero_r_entry.rule.make([64, 5, 7, 6]) = Some(Clause([Is(Const(64, 6, 0)), Is(Add(64, 7, 5, 6))], Is(Move(64, 7, 5)))) { refl }
 
 rule theorem swap_twice_r(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes() = w {
     let back: (w.swap_bytes().resize(64).resize(32) = w.swap_bytes()) = BitVec::resize_round_trip(32, 64, Nat::leb_sound(32, 64, trivial), w.swap_bytes());
@@ -23,7 +23,7 @@ rule theorem swap_twice_r(w: u32): w.swap_bytes().resize(64).resize(32).swap_byt
         trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
 }
 
-theorem swap_twice_made(): swap_twice_r_rule.make([9, 1, 2, 3, 4]) =
+theorem swap_twice_made(): swap_twice_r_entry.rule.make([9, 1, 2, 3, 4]) =
     Some(Clause([Is(ByteSwap(32, 4, 9)), Is(Resize(32, 64, 3, 4)), Is(Resize(64, 32, 2, 3)), Is(ByteSwap(32, 1, 2))], Is(Move(32, 1, 9)))) { refl }
 
 rule theorem within_add_r(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), right: Range(c, d).Holds(r), fits: b + d <= word_top()):
@@ -34,10 +34,10 @@ rule theorem within_add_r(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l)
     j(sym(sum), λ n _ => (a + c <= n) ∧ (n <= b + d), ⟨Nat::add_le_mono(a, l.toNat(), c, r.toNat(), left.left, right.left), high⟩)
 }
 
-theorem within_add_made(): within_add_r_rule.make([1, 2, 0, 255, 0, 255, 3]) =
+theorem within_add_made(): within_add_r_entry.rule.make([1, 2, 0, 255, 0, 255, 3]) =
     Some(Clause([Within(1, 0, 255), Within(2, 0, 255), Is(Add(64, 3, 1, 2))], Within(3, 0, 510))) { refl }
 
-theorem within_add_guarded(): within_add_r_rule.make([1, 2, 0, 18446744073709551615, 0, 255, 3]) = None { refl }
+theorem within_add_guarded(): within_add_r_entry.rule.make([1, 2, 0, 18446744073709551615, 0, 255, 3]) = None { refl }
 
 rule theorem below_left_r(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, Succ(b)).Holds(r)):
     Range(0, b).Holds(l) {
@@ -47,7 +47,7 @@ rule theorem below_left_r(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt
     ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
 }
 
-theorem below_left_made(): below_left_r_rule.make([1, 2, 9, 3]) =
+theorem below_left_made(): below_left_r_entry.rule.make([1, 2, 9, 3]) =
     Some(Clause([Is(UnsignedLessThan(64, 3, 1, 2)), Is(Const(1, 3, 1)), Within(2, 0, 10)], Within(1, 0, 9))) { refl }
 
 rule theorem order_join_r(x, y, z: u64, m, n, p, q, u, v: Nat, first: x.toNat() + m <= y.toNat() + n, second: y.toNat() + p <= z.toNat() + q,
@@ -55,59 +55,59 @@ rule theorem order_join_r(x, y, z: u64, m, n, p, q, u, v: Nat, first: x.toNat() 
     omega(first, second, slack)
 }
 
-theorem order_join_made(): order_join_r_rule.make([1, 2, 3, 1, 0, 0, 0, 1, 0]) = Some(Clause([AtMost(1, 1, 2, 0), AtMost(2, 0, 3, 0)], AtMost(1, 1, 3, 0))) { refl }
+theorem order_join_made(): order_join_r_entry.rule.make([1, 2, 3, 1, 0, 0, 0, 1, 0]) = Some(Clause([AtMost(1, 1, 2, 0), AtMost(2, 0, 3, 0)], AtMost(1, 1, 3, 0))) { refl }
 
 // With the operators written as operators.
 rule theorem add_zero_op({w: Nat}, x: BitVec(w)): x + 0 = x { BitVec::add_zero(w, x) }
 
-theorem add_zero_op_made(): add_zero_op_rule.make([64, 5, 7, 6]) = Some(Clause([Is(Const(64, 6, 0)), Is(Add(64, 7, 5, 6))], Is(Move(64, 7, 5)))) { refl }
+theorem add_zero_op_made(): add_zero_op_entry.rule.make([64, 5, 7, 6]) = Some(Clause([Is(Const(64, 6, 0)), Is(Add(64, 7, 5, 6))], Is(Move(64, 7, 5)))) { refl }
 
 // The library's own two (function_ir_rules), at the numbers a plan gives.
-theorem library_add_zero(): add_zero_rule.make([64, 0, 2, 1]) = Some(Clause([Is(Const(64, 1, 0)), Is(Add(64, 2, 0, 1))], Is(Move(64, 2, 0)))) { refl }
+theorem library_add_zero(): add_zero_entry.rule.make([64, 0, 2, 1]) = Some(Clause([Is(Const(64, 1, 0)), Is(Add(64, 2, 0, 1))], Is(Move(64, 2, 0)))) { refl }
 
-theorem library_swap_twice(): swap_twice_rule.make([9, 1, 2, 3, 4]) =
+theorem library_swap_twice(): swap_twice_entry.rule.make([9, 1, 2, 3, 4]) =
     Some(Clause([Is(ByteSwap(32, 4, 9)), Is(Resize(32, 64, 3, 4)), Is(Resize(64, 32, 2, 3)), Is(ByteSwap(32, 1, 2))], Is(Move(32, 1, 9)))) { refl }
 
 // A hypothesis that says a fact of a word the theorem binds is a premise
 // kept, not a definition written out.
-theorem stated_word_kept(): or_of_clear_rule.make([1, 2, 3]) = Some(Clause([Is(Const(1, 1, 0)), Is(Const(1, 2, 0)), Is(BitOr(1, 3, 1, 2))], Is(Const(1, 3, 0)))) {
+theorem stated_word_kept(): or_of_clear_entry.rule.make([1, 2, 3]) = Some(Clause([Is(Const(1, 1, 0)), Is(Const(1, 2, 0)), Is(BitOr(1, 3, 1, 2))], Is(Const(1, 3, 0)))) {
     refl
 }
 
 // A term written twice is one node: the sum in the hypothesis and in the
 // conclusion.
-theorem term_shared(): sum_tested_low_rule.make([1, 7, 3, 2]) =
+theorem term_shared(): sum_tested_low_entry.rule.make([1, 7, 3, 2]) =
     Some(Clause([Is(Const(64, 2, 7)), Is(Add(64, 3, 1, 2)), AtMost(1, 0, 3, 0)], AtMost(1, 7, 3, 0))) { refl }
 
 // A guard over a closed bound and a range to the top of a word.
-theorem below_yes_made(): below_yes_rule.make([1, 2, 5, 9, 3]) =
+theorem below_yes_made(): below_yes_entry.rule.make([1, 2, 5, 9, 3]) =
     Some(Clause([Within(1, 0, 5), Within(2, 9, word_top()), Is(UnsignedLessThan(64, 3, 1, 2))], Is(Const(1, 3, 1)))) { refl }
 
-theorem below_yes_guarded(): below_yes_rule.make([1, 2, 9, 9, 3]) = None { refl }
+theorem below_yes_guarded(): below_yes_entry.rule.make([1, 2, 9, 9, 3]) = None { refl }
 
 // Memory: a buffer by its number, a byte load and bytes joined; a word's
 // low byte in another's; a word's four bytes.
-theorem buffer_read(): join_byte_rule.make([0, 1, 2]) = Some(Clause([Loaded(BufferLoad(2, 0, 1))], Joined(2, 0, 1, 1, 0))) { refl }
+theorem buffer_read(): join_byte_entry.rule.make([0, 1, 2]) = Some(Clause([Loaded(BufferLoad(2, 0, 1))], Joined(2, 0, 1, 1, 0))) { refl }
 
-theorem join_word_made(): join_word_rule.make([0, 1, 2, 3, 4, 5]) =
+theorem join_word_made(): join_word_entry.rule.make([0, 1, 2, 3, 4, 5]) =
     Some(Clause([Joined(2, 0, 1, 4, 0), Loaded(WideLoad(4, 3, 0, 1)), Is(ByteSwap(32, 5, 3)), Is(Resize(32, 64, 4, 5))], Is(Move(64, 2, 4)))) { refl }
 
-theorem low_shifted_made(): low_shifted_rule.make([1, 2, 8, 0, 3]) = Some(Clause([Is(LogicalShiftRight(64, 3, 2, 8)), Low(1, 3, 0)], Low(1, 2, 8))) { refl }
+theorem low_shifted_made(): low_shifted_entry.rule.make([1, 2, 8, 0, 3]) = Some(Clause([Is(LogicalShiftRight(64, 3, 2, 8)), Low(1, 3, 0)], Low(1, 2, 8))) { refl }
 
-theorem split_swapped_made(): split_swapped_rule.make([1, 2, 3, 4, 5, 6, 7]) =
+theorem split_swapped_made(): split_swapped_entry.rule.make([1, 2, 3, 4, 5, 6, 7]) =
     Some(Clause([Low(2, 1, 24), Low(3, 1, 16), Low(4, 1, 8), Low(5, 1, 0), Is(Resize(64, 32, 7, 1)), Is(ByteSwap(32, 6, 7))], Split(6, 2, 3, 4, 5))) { refl }
 
 // A move is an equation of two words the theorem binds.
-theorem moves(): move_move_rule.make([64, 1, 2, 3]) = Some(Clause([Is(Move(64, 2, 1)), Is(Move(64, 3, 2))], Is(Move(64, 3, 1)))) { refl }
+theorem moves(): move_move_entry.rule.make([64, 1, 2, 3]) = Some(Clause([Is(Move(64, 2, 1)), Is(Move(64, 3, 2))], Is(Move(64, 3, 1)))) { refl }
 
 // The clause's shape, published beside the rule: a number of the rule by
 // its place, a literal as computed.
-theorem add_zero_shape(): add_zero_r_pattern = RulePattern(4,
+theorem add_zero_shape(): add_zero_r_entry.pattern = RulePattern(4,
     [Makes(0, 1, [Numbered(0), Numbered(3), Computed]), Makes(2, 1, [Numbered(0), Numbered(2), Numbered(1), Numbered(3)])],
     Makes(1, 1, [Numbered(0), Numbered(2), Numbered(1)])) { refl }
 
-theorem within_add_shape(): within_add_r_pattern = RulePattern(7,
+theorem within_add_shape(): within_add_r_entry.pattern = RulePattern(7,
     [Ranges(Numbered(0), Numbered(2), Numbered(3)), Ranges(Numbered(1), Numbered(4), Numbered(5)), Makes(2, 1, [Computed, Numbered(6), Numbered(0), Numbered(1)])],
     Ranges(Numbered(6), Computed, Computed)) { refl }
 
-theorem order_join_shape(): order_join_r_pattern.premises = [Unread, Unread] { refl }
+theorem order_join_shape(): order_join_r_entry.pattern.premises = [Unread, Unread] { refl }
