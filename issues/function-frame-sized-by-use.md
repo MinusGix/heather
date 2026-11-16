@@ -32,5 +32,5 @@ Figures (`STACK:` in `crates/linked/generated/exports.rs`): every leaf that save
 
 Left, not this issue's:
 - An empty frame still opened and closed with `ADD RSP, 0`; closed by [[function-ir-verified-leaf-frame]].
-- The statement compiler's functions (`Prog::links`) are emitted under `index_rooms()` (`136 * Succ(g)`), the bound the statements' calls are stated with; following the planned table there is a change to `Target::roomy` and `native_compile_function.hthr`'s call steps.
+- The statement compiler's functions (`Prog::links`) were emitted under `index_rooms()` (`136 * Succ(g)`). 2026-11-16: they are emitted under `program_room` (every function saving the six registers it may, so no placement exceeds it and the bound needs nothing of `homes.places`), and a statement activation keeps `program_calls_room` below its frame (the table's largest room and the CALL's word) in place of `144 * functions.len()` (`Target::roomy`, the `deep` premise of `Source::elf_file_simulates` and the write-elf certificates).
 

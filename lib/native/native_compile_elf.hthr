@@ -69,7 +69,7 @@ theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= 
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= depth,
+    deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let x = X86Profile::process(size, top, depth);
@@ -102,7 +102,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= depth,
+    deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     Program::sim_of_paid(X86Profile::process(size, top, depth).linux(), src.denote(args), s, src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv))
@@ -119,7 +119,7 @@ theorem Source::elf_runs_exact(self src: Source, size: Nat, within: size <= io_d
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= depth,
+    deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
     run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(size, top, depth).linux(), run, s),
     valid: LinuxEventsValid(run)):
@@ -138,7 +138,7 @@ theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= 
     top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, io_elf_file(assemble(no_fills(), program, Nil), size)),
-    deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= depth,
+    deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let length = 232 + assemble(no_fills(), program, Nil).len();

@@ -6651,6 +6651,19 @@ fn program_rooms(functions: List<Function>) → List<Nat> { program_rooms_by(fun
 
 fn program_room(functions: List<Function>) → Nat → Nat { λ (f: Nat) => rooms_at(program_rooms(functions), f) }
 
+// The largest room of a table: every row is at most it.
+fn rooms_top(rooms: List<Nat>) → Nat { match rooms { Nil => 0, Cons(room, rest) => room.max(rooms_top(rest)) } }
+
+theorem rooms_at_top(rooms: List<Nat>): (f: Nat) → rooms_at(rooms, f) <= rooms_top(rooms) {
+    match rooms {
+        Nil => λ f => trivial,
+        Cons(room, rest) => λ f => match f {
+            Zero => room.le_max_l(rooms_top(rest)),
+            Succ(g) => Nat::le_trans(rooms_at(rest, g), rooms_top(rest), room.max(rooms_top(rest)), rooms_at_top(rest)(g), room.le_max_r(rooms_top(rest))),
+        },
+    }
+}
+
 // The stack function `f` of a program asks for below its return address,
 // under the table `lower_program_lent` is stated by.
 fn stack_room(functions: List<Function>, f: Nat) → Nat { program_room(functions)(f) }
