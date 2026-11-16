@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Write an LRAT refutation as a staged Heather proof, for probing
+`lib/std/tactic/lrat.hthr`.
+
+    scripts/lrat-probes addcomm|mulcomm <width> [--per N] [--every K]
+
+prints a module body: the Tseitin clauses of a miter saying `a + b ≠ b + a`
+(or `a * b ≠ b * a`) over `width`-bit words, a refutation from the small
+CDCL solver below, cut into stage theorems, and `<name>_refuted`, the
+theorem the stages prove. The solver is untrusted: the kernel replays its
+proof. `--per` bounds the hinted literals one stage reads (a stage's cost is
+mostly one variable lookup per hinted literal); `--every` makes every K-th
+stage's formula a literal, so later stages do not replay the insertions
+before it.
+
+This is a probe generator, not the decision procedure: a `bv_decide` tactic
+would bit-blast inside the elaborator and ask the host for the proof
+(issues/lrat-certified-bitvector-decision.md).
+"""
+import argparse
+
+# ---------------------------------------------------------------------------
+# A naive CDCL solver with first-UIP learning, writing LRAT. Literals are
+# DIMACS ints; clauses are numbered from 1 and learned clauses continue the
+# numbering. Its proof is a list of (id, clause, hints).
+def solve(nvars, clauses):
+    cls = {}  # id -> list of lits
+    for i, c in enumerate(clauses, 1):
+        cls[i] = list(dict.fromkeys(c))
+    next_id = len(clauses) + 1
+    watches = {}
+    assign = {}  # var -> (value, level, reason)
+    trail = []
+    proof = []
+
+    def val(l):
+        a = assign.get(abs(l))
+        if a is None: return None
+        return a[0] if l > 0 else not a[0]
+
+    def propagate(level):
+        # naive: loop over all clauses until fixpoint
+        changed = True
+        while changed:
+            changed = False
+            for cid, c in cls.items():
+                unassigned = None; nun = 0; sat = False
+                for l in c:
+                    v = val(l)
+                    if v is True: sat = True; break
+                    if v is None:
+                        nun += 1; unassigned = l
+                        if nun > 1: break
+                if sat or nun > 1: continue
+                if nun == 0: return cid
+                assign[abs(unassigned)] = (unassigned > 0, level, cid)
+                trail.append(unassigned)
+                changed = True
+        return None
+
+    level = 0
+    conflict = propagate(0)
+    while True:
+        if conflict is not None:
+            if level == 0:
+                # final empty clause: hints = reasons in trail order + conflict
+                used = set(); order = []
+                stack = list(cls[conflict])
+                need = set(abs(l) for l in cls[conflict])
+                # collect all reasons transitively
+                seen = set()
+                work = [abs(l) for l in cls[conflict]]
+                while work:
+                    v = work.pop()
+                    if v in seen: continue
+                    seen.add(v)
+                    r = assign[v][2]
+                    if r is not None:
+                        for l in cls[r]:
+                            if abs(l) != v: work.append(abs(l))
+                hints = [assign[abs(l)][2] for l in trail if abs(l) in seen and assign[abs(l)][2] is not None]
+                proof.append((next_id, [], hints + [conflict]))
+                return proof
+            # first-UIP learning
+            c = set(cls[conflict]); resolved = []
+            def count_cur(c):
+                return sum(1 for l in c if assign[abs(l)][1] == level)
+            idx = len(trail) - 1
+            while count_cur(c) > 1:
+                while abs(trail[idx]) not in set(abs(l) for l in c) or assign[abs(trail[idx])][1] != level:
+                    idx -= 1
+                lit = trail[idx]; v = abs(lit); r = assign[v][2]
+                resolved.append(v)
+                c = (c | set(cls[r])) - {lit, -lit}
+                idx -= 1
+            learned = sorted(c, key=lambda l: -assign[abs(l)][1])
+            # hints: reasons of every var whose falsification is needed, in trail order
+            seen = set(); work = [abs(l) for l in cls[conflict]]
+            learned_vars = set(abs(l) for l in learned)
+            while work:
+                v = work.pop()
+                if v in seen or v in learned_vars: continue
+                seen.add(v)
+                r = assign[v][2]
+                if r is not None:
+                    for l in cls[r]:
+                        if abs(l) != v: work.append(abs(l))
+            hints = [assign[abs(l)][2] for l in trail if abs(l) in seen and assign[abs(l)][2] is not None]
+            hints.append(conflict)
+            cid = next_id; next_id += 1
+            cls[cid] = learned
+            proof.append((cid, learned, hints))
+            back = max([assign[abs(l)][1] for l in learned[1:]], default=0)
+            while trail and assign[abs(trail[-1])][1] > back:
+                del assign[abs(trail.pop())]
+            level = back
+            conflict = propagate(level)
+            continue
+        # decide
+        free = [v for v in range(1, nvars + 1) if v not in assign]
+        if not free:
+            return None  # SAT
+        level += 1
+        v = free[0]
+        assign[v] = (False, level, None); trail.append(-v)
+        conflict = propagate(level)
+
+def check(clauses, proof):
+    cls = {i: c for i, c in enumerate(clauses, 1)}
+    for cid, c, hints in proof:
+        a = {}
+        for l in c: a[abs(l)] = l < 0  # falsify
+        ok = False
+        for h in hints:
+            d = cls[h]; un = [l for l in d if (a.get(abs(l)) is None)]
+            tr = [l for l in d if a.get(abs(l)) is not None and a[abs(l)] == (l > 0)]
+            if tr: return False
+            if not un: ok = True; break
+            if len(un) > 1: return False
+            a[abs(un[0])] = un[0] > 0
+        if not ok: return False
+        cls[cid] = c
+        if not c: return True
+    return False
+
+# ---------------------------------------------------------------------------
+# Tseitin circuits.
+
+class C:
+    def __init__(s): s.n = 0; s.cl = []
+    def var(s): s.n += 1; return s.n
+    def AND(s, a, b):
+        g = s.var(); s.cl += [[-g, a], [-g, b], [g, -a, -b]]; return g
+    def OR(s, a, b):
+        g = s.var(); s.cl += [[g, -a], [g, -b], [-g, a, b]]; return g
+    def XOR(s, a, b):
+        g = s.var(); s.cl += [[-g, a, b], [-g, -a, -b], [g, -a, b], [g, a, -b]]; return g
+    def add(s, xs, ys):
+        out = []; carry = None
+        for x, y in zip(xs, ys):
+            if carry is None:
+                out.append(s.XOR(x, y)); carry = s.AND(x, y)
+            else:
+                t = s.XOR(x, y); out.append(s.XOR(t, carry))
+                carry = s.OR(s.AND(x, y), s.AND(t, carry))
+        return out
+    def mul(s, xs, ys):
+        w = len(xs); acc = None
+        for i, y in enumerate(ys):
+            row = [None] * i + [s.AND(x, y) for x in xs][: w - i]
+            if acc is None:
+                acc = [r for r in row]
+                z = s.var(); s.cl.append([-z])
+                acc = [a if a is not None else z for a in acc]
+            else:
+                z = s.var(); s.cl.append([-z])
+                row = [r if r is not None else z for r in row]
+                acc = s.add(acc, row)
+        return acc
+    def neq(s, xs, ys):
+        ds = [s.XOR(x, y) for x, y in zip(xs, ys)]
+        s.cl.append(ds)
+
+def problem(kind, w):
+    c = C(); a = [c.var() for _ in range(w)]; b = [c.var() for _ in range(w)]
+    if kind == 'addcomm': c.neq(c.add(a, b), c.add(b, a))
+    if kind == 'mulcomm': c.neq(c.mul(a, b), c.mul(b, a))
+    return c.n, c.cl
+
+# DIMACS literal to the checker's: variable `v` is `2v`, its negation `2v + 1`.
+def lit(l):
+    return 2 * abs(l) + (1 if l < 0 else 0)
+
+def trie_literal(entries):
+    # entries: dict key(Nat) -> hthr value text; NatMap layout: 0 at root, Succ(k) -> child low_bit(k) at k//2
+    def build(d):
+        if not d: return "MEmpty"
+        here = d.get(0)
+        ev = {}; od = {}
+        for k, v in d.items():
+            if k == 0: continue
+            j = k - 1
+            (ev if j % 2 == 0 else od)[j // 2] = v
+        return "MNode(%s, %s, %s)" % ("Some(%s)" % here if here is not None else "None", build(ev), build(od))
+    return build(entries)
+
+# ---------------------------------------------------------------------------
+# Heather text.
+
+def lits(c): return "[" + ", ".join(str(lit(l)) for l in c) + "]"
+def step(s): cid, c, h = s; return "Add(%d, %s, [%s])" % (cid, lits(c), ", ".join(map(str, h)))
+
+# ---------------------------------------------------------------------------
+# Stages.
+
+CLS = {}
+EVERY = 8
+
+def chunks(proof, per):
+    # `per` bounds the hinted clauses' literals a chunk reads: each costs a
+    # lookup of its variable, which dominates a stage.
+    out, cur, n = [], [], 0
+    db = dict(CLS)
+    for s in proof:
+        cur.append(s); n += sum(len(db[h]) for h in s[2]) + len(s[1]); db[s[0]] = s[1]
+        if n >= per: out.append(cur); cur, n = [], 0
+    if cur: out.append(cur)
+    return out
+
+def emit_staged(name, cls, proof, per, literal):
+    o = []
+    CLS.clear(); CLS.update({i: c for i, c in enumerate(cls, 1)})
+    o.append(f"fn {name}_cnf() → List<List<Nat>> {{ [{', '.join(lits(c) for c in cls)}] }}")
+    if literal:
+        o.append(f"fn {name}_f0() → NatMap<List<Nat>> {{ {trie_literal({i: lits(c) for i, c in enumerate(cls, 1)})} }}")
+        o.append(f"theorem {name}_f0_is(): formula_of({name}_cnf()) = {name}_f0() {{ refl }}")
+    else:
+        o.append(f"fn {name}_f0() → NatMap<List<Nat>> {{ formula_of({name}_cnf()) }}")
+    ch = chunks(proof, per)
+    db = {i: c for i, c in enumerate(cls, 1)}
+    for k, c in enumerate(ch, 1):
+        o.append(f"fn {name}_c{k}() → List<Step> {{ [{', '.join(step(s) for s in c)}] }}")
+        for cid, cc, _ in c: db[cid] = cc
+        if k < len(ch):
+            o.append(f"theorem {name}_s{k}(): adds({name}_f{k-1}(), {name}_c{k}()) = True {{ refl }}")
+            if k % EVERY == 0:
+                # A checkpoint: the formula so far as a literal, so later
+                # stages do not replay every insertion before it.
+                o.append(f"fn {name}_f{k}() → NatMap<List<Nat>> {{ {trie_literal({i: lits(x) for i, x in db.items()})} }}")
+                o.append(f"theorem {name}_f{k}_is(): add_all({name}_f{k-1}(), {name}_c{k}()) = {name}_f{k}() {{ refl }}")
+            else:
+                o.append(f"fn {name}_f{k}() → NatMap<List<Nat>> {{ add_all({name}_f{k-1}(), {name}_c{k}()) }}")
+        else:
+            o.append(f"theorem {name}_s{k}(): check({name}_f{k-1}(), {name}_c{k}()) = True {{ refl }}")
+    n = len(ch)
+    body = []
+    h0 = f"holds_formula_from({name}_cnf(), v, 1, MEmpty, holds_empty(v), e)"
+    if literal: h0 = f"j({name}_f0_is(), λ g _ => Holds(g, v), {h0})"
+    body.append(f"            let h0: Holds({name}_f0(), v) = {h0};")
+    for k in range(1, n):
+        hk = f"adds_sound({name}_f{k-1}(), v, h{k-1}, {name}_c{k}(), {name}_s{k}())"
+        if k % EVERY == 0: hk = f"j({name}_f{k}_is(), λ g _ => Holds(g, v), {hk})"
+        body.append(f"            let h{k}: Holds({name}_f{k}(), v) = {hk};")
+    body.append(f"            false_elim(check_sound({name}_f{n-1}(), v, h{n-1}, {name}_c{n}(), {name}_s{n}()))")
+    o.append(f"theorem {name}_refuted(v: Nat → Bool): all_true({name}_cnf(), v) = False {{\n    match e: all_true({name}_cnf(), v) {{\n        False => refl,\n        True => {{\n" + "\n".join(body) + "\n        },\n    }\n}")
+    return "\n".join(o) + "\n"
+
+def main():
+    ap = argparse.ArgumentParser(description="Write an LRAT refutation as a staged Heather proof.")
+    ap.add_argument("kind", choices=["addcomm", "mulcomm"])
+    ap.add_argument("width", type=int)
+    ap.add_argument("--per", type=int, default=1100)
+    ap.add_argument("--every", type=int, default=8)
+    args = ap.parse_args()
+    global EVERY
+    EVERY = args.every
+    n, cls = problem(args.kind, args.width)
+    proof = solve(n, cls)
+    assert proof is not None and check(cls, proof)
+    hints = sum(len(h) for _, _, h in proof)
+    print(f"// {args.kind} w={args.width}: {n} variables, {len(cls)} clauses, {len(proof)} steps, {hints} hints")
+    print(emit_staged(f"{args.kind}{args.width}", cls, proof, args.per, True), end="")
+
+if __name__ == '__main__':
+    main()
