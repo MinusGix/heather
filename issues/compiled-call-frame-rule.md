@@ -16,8 +16,21 @@ Done when: the lemma is proved, with a probe that keeps a fact about a caller's 
 
 ## Built (2026-11-16)
 
-- `lib/std/arch/x86_64/x86_64_frame.hthr`: `Stack::Stable(i, P)` (a word stored below `i` keeps `P`) and `Stack::StableIn(i, spans, P)` (so do bytes stored into a span that may be written); the rule `Stack::wrote_frame`, `Stack::wrote_in_frame`, and on a contract `Site::returns_frame`. Stable predicates ready to cite: `Stack::stable_word`, `Stack::stable_resident`, `Loan::stable_word`, `Loan::stable_resident`, `Loan::stable_reads`; combined by `stable_and`, `stable_given` (a fact not about memory, so a frame can speak of the entry offset), `stable_deeper`, `stable_in_none`. The predicate is an implicit argument, read off the stability proof.
-- `lib/native/function_ir/function_ir_frame.hthr`: the rule over the compiler's postconditions, `Stack::callee_frame` and `Stack::answered_frame` (from the promise), `Site::callee_framed` and `Site::answered_framed` (on the contract a `Prog::Computes` or `Prog::ComputesOver` unfolds to), and `Loan::stable_buffer`. It is stated over `Stack::CalleePost` and `Stack::AnsweredOver`, not over `Prog::Computes`, so reshaping the readable statements does not move it.
-- Probes: `lib/_tests/std/arch/x86_64/x86_64_frame_tests.hthr` (a word, a word and the code, a word and an unwritten span, `Stack::Unchanged` recovered from the rule, and the control `own_word_not_stable`), `lib/_tests/native/function_ir/function_ir_frame_tests.hthr` (through `Prog::Computes` and `Prog::ComputesOver`).
+The rule lives beside what it speaks of:
 
-Not done: the older lemmas (`wrote_unchanged`, `wrote_resident`, `Loan::unchanged`, `Loan::resident`, `Loan::unwritten_reads`) keep their own proofs and their callers; they are instances of the rule and could be restated through it. A written span has no ready stable predicate, since what it reads after the call is the callee's answer (`Stack::InMemory`), not a frame fact.
+- `lib/std/arch/x86_64/x86_64_stack.hthr`: `Stack::Stable(i, P)` (a word stored below `i` keeps `P`), the rule `Stack::wrote_frame`, the stable predicates `stable_word` and `stable_resident`, the combinators `stable_and`, `stable_given` (a fact not about memory, so a frame can speak of the entry offset) and `stable_deeper`. `Stack::Through(i, P, memory)` is the rule's conclusion held for later, and `Stack::Lends` is now `Through` at "the span reads its bytes" (same unfolding, so no load proof moved).
+- `lib/std/arch/x86_64/x86_64_lending.hthr`: `Stack::StableIn(i, spans, P)` (and bytes stored into a span that may be written), the rule `Stack::wrote_in_frame`, `stable_in_and`, `stable_in_given`, `stable_in_none`, and under a `Loan` the stable predicates `Loan::stable_span`, `Loan::stable_word`, `Loan::stable_resident`, `Loan::stable_reads`.
+- `lib/std/arch/x86_64/x86_64_stack_runs.hthr`, `x86_64_frame.hthr`: a body's saved registers (`Stack::stable_saved`, `Loan::stable_saved`), and the rule on a contract, `Site::returns_frame`.
+- `lib/native/function_ir/function_ir_frame.hthr`: the rule over the compiler's postconditions, `Stack::callee_frame` and `Stack::answered_frame` (from the promise), `Site::callee_framed` and `Site::answered_framed` (on the contract a `Prog::Computes` or `Prog::ComputesOver` unfolds to), and `Loan::stable_buffer`. Stated over `Stack::CalleePost` and `Stack::AnsweredOver`, not over `Prog::Computes`, so reshaping the readable statements does not move it.
+
+The predicate is an implicit argument, read off the stability proof.
+
+Used:
+
+- `Stack::wrote_unchanged`, `Stack::wrote_resident`, `Loan::wrote_reads`, `Loan::lends`, `Loan::unwritten_reads`, `Loan::unchanged`, `Loan::resident` and `Stack::in_memory_wrote` are each the rule at one stable predicate; their own inductions over the stores are gone.
+- The call leaf (`function_ir_lower_calls.hthr`): the saved slots across a call, across a spill and across the body are the rule at `stable_saved`; `Stack::saved_unchanged` and `Stack::saved_above` are removed.
+- `Target::based_left` (`native_compile_function.hthr`): "the region holds some file, the buffers not lent as they were" is proved stable and carried by the rule, in place of an induction that took each step apart.
+
+Probes: `lib/_tests/std/arch/x86_64/x86_64_frame_tests.hthr` (a word, a word and the code, a word and an unwritten span, `Stack::Unchanged` recovered from the rule, `Lends` from a stable span, and the control `own_word_not_stable`), `lib/_tests/native/function_ir/function_ir_frame_tests.hthr` (through `Prog::Computes` and `Prog::ComputesOver`).
+
+Not done: a written span has no ready stable predicate, since what it reads after the call is the callee's answer (`Stack::InMemory`), not a frame fact.

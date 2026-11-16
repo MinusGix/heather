@@ -1,4 +1,5 @@
-// Probes of the frame rule (x86_64_frame; issues/compiled-call-frame-rule.md):
+// Probes of the frame rule (x86_64_stack, x86_64_lending, x86_64_frame;
+// issues/compiled-call-frame-rule.md):
 // what a caller keeps across a call's stores, each in one step from the
 // rule and a stable predicate, over any stack and any lending. Then the
 // control: a word of the call's own room is not stable, so the rule
@@ -45,6 +46,14 @@ theorem unchanged_by_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
     wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
     λ k above fits => stack.wrote_frame(i, stack.stable_word(i, k, above, fits, read_word(data, before, stack.at(k))),
         before, after, wrote, refl)
+}
+
+// A span whose bytes are stable is lent in the sense a load asks for
+// (`Stack::Lends`): it reads them through the call.
+theorem lent_by_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, stable: stack.Stable(i, λ (m: M) => Readable(data, m, a, xs)), memory: M, reads: Readable(data, memory, a, xs)):
+    stack.Lends(i, a, xs, memory) {
+    stack.stable_through(i, stable, memory, reads)
 }
 
 // ---------------------------------------------------------------------------

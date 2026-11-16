@@ -1,5 +1,6 @@
 // The frame rule for a compiled function's contract
-// (issues/compiled-call-frame-rule.md; x86_64_frame has the rule itself).
+// (issues/compiled-call-frame-rule.md; the rule itself is `Stack::wrote_frame`,
+// x86_64_stack, and `Stack::wrote_in_frame`, x86_64_lending).
 //
 // What a compiled function promises of memory is its stores: for a function
 // of words, words of its own room (`Stack::CalleePost`); for a function of
@@ -16,7 +17,7 @@
 //   promises. A `code.Computes(…)(origin, last)` is such a contract.
 // - `Loan::stable_buffer`: a buffer the lending does not let the call write
 //   reads its bytes, as a stable predicate. A caller's word and the code
-//   are `Loan::stable_word` and `Loan::stable_resident` (x86_64_frame).
+//   are `Loan::stable_word` and `Loan::stable_resident` (x86_64_lending).
 import function_ir;
 import function_ir_eval;
 import function_ir_writes;

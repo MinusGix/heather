@@ -610,9 +610,11 @@ theorem readable_same<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs, 
 // buffers may store keeps the region's claim, of the file with those
 // buffers as the function left them, and the stack's words from `i` up.
 // Along its stores the region holds some file with the caller's count of
-// buffers and the buffers not lent as they were: a word stored below `i`
-// leaves the file and the words from `i` up, and a byte put into a buffer
-// lent writes those bytes over it (`Target::based_span`). Where the stores end,
+// buffers and the buffers not lent as they were. That is stable
+// (`Stack::StableIn`): a word stored below `i` leaves the file and the
+// words from `i` up, and a byte put into a buffer lent writes those bytes
+// over it (`Target::based_span`). So it holds where the stores end
+// (`Stack::wrote_in_frame`). There,
 // the buffers lent read in memory both as that file has them and as the
 // function left them (`Stack::InMemory`), so the file is the one the call
 // answers (`relent_is`).
@@ -630,47 +632,41 @@ theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVe
     let along: X86Memory(t.r.profile) → Type = λ a => Exists<Buffers()>(λ file => holding(file, a) ∧
         ((file.len() = env.buffers.len()) ∧ ((b: Nat) → count <= b → buffer_bytes(file, b) = buffer_bytes(env.buffers, b))));
     let start: along(m) = Exists(env.buffers, ⟨⟨Exists(v, based), frames⟩, ⟨refl, λ b _ => refl⟩⟩);
-    let ended: along(m2) = Star::invariant(λ (a: X86Memory(t.r.profile)) (b: X86Memory(t.r.profile)) => t.stack.Stores(i, spans, a, b), along,
-        λ a b kept step => match step {
-            Inl(own) => {
-                let file = kept.witness;
-                let k = own.witness;
-                let word = own.proof.right.witness;
-                let fits: (k + 8 <= t.stack.size) = omega(own.proof.left, inside);
-                let stored: (b = t.r.profile.store(a, t.stack.at(k), word_bytes(word))) =
-                    trans(own.proof.right.proof, t.stack_stored(a, t.stack.at(k), word_bytes(word)));
-                let there: holding(file, t.r.profile.store(a, t.stack.at(k), word_bytes(word))) = ⟨Exists(kept.proof.left.left.witness,
-                        t.based_stack_store(Env(env.words, file, env.args), room, kept.proof.left.left.witness, a, kept.proof.left.left.proof, k, fits, word)),
-                    t.frames_stack_store(a, k, fits, word, words, i, own.proof.left, kept.proof.left.right)⟩;
-                Exists(file, ⟨j(sym(stored), λ x _ => holding(file, x), there), kept.proof.right⟩)
+    let stable: t.stack.StableIn(i, spans, along) =
+        ⟨λ a k below word kept => match kept {
+            ⟨file, ⟨⟨⟨w, held⟩, framed⟩, rest⟩⟩ => {
+                let fits: (k + 8 <= t.stack.size) = omega(below, inside);
+                let there: holding(file, t.r.profile.store(a, t.stack.at(k), word_bytes(word))) =
+                    ⟨Exists(w, t.based_stack_store(Env(env.words, file, env.args), room, w, a, held, k, fits, word)),
+                     t.frames_stack_store(a, k, fits, word, words, i, below, framed)⟩;
+                Exists(file, ⟨j(sym(t.stack_stored(a, t.stack.at(k), word_bytes(word))), λ x _ => holding(file, x), there), rest⟩)
             },
-            Inr(put) => {
-                let file = kept.witness;
-                let b0 = put.witness;
-                let k0 = put.proof.witness;
-                let within: (k0 < buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = put.proof.proof.left.right;
-                let bytes = put.proof.proof.right.witness;
-                let reach: (k0 + bytes.len() <= buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = put.proof.proof.right.proof.left;
+         },
+         λ a b0 k0 written inside bytes fits kept => match kept {
+            ⟨file, ⟨⟨⟨w, held⟩, framed⟩, ⟨count_same, others⟩⟩⟩ => {
+                let within: (k0 < buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = inside;
+                let reach: (k0 + bytes.len() <= buffer_bytes(lent_buffers(count, env.buffers), b0).len()) = fits;
                 let sp = t.lent_span(env.buffers, count, sized, b0, omega(within));
                 let after_file = store_span(file, b0, k0, bytes);
                 let q = layout.buffer_offset(b0) + k0;
                 let address: (spans.byte(b0, k0) = next_rip(t.r.low, q)) =
                     trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, k0), sp.right.right), rip_compose(t.r.low, layout.buffer_offset(b0), k0));
-                let stored: (b = t.r.profile.store(a, next_rip(t.r.low, q), bytes)) = trans(put.proof.proof.right.proof.right,
+                let stored: (t.stack.writes.store(a, spans.byte(b0, k0), bytes) = t.r.profile.store(a, next_rip(t.r.low, q), bytes)) =
                     trans(t.stack_stored(a, spans.byte(b0, k0), bytes),
-                        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ x => t.r.profile.store(a, x, bytes), address)));
+                        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ x => t.r.profile.store(a, x, bytes), address));
                 let span: (q + bytes.len() <= t.r.size) = omega(reach, sp.left.right);
                 let there: holding(after_file, t.r.profile.store(a, next_rip(t.r.low, q), bytes)) =
-                    ⟨Exists(t.r.stored_cells(kept.proof.left.left.witness, q, bytes),
-                        t.based_span(Env(env.words, file, env.args), room, kept.proof.left.left.witness, a, kept.proof.left.left.proof, b0,
+                    ⟨Exists(t.r.stored_cells(w, q, bytes),
+                        t.based_span(Env(env.words, file, env.args), room, w, a, held, b0,
                             buffer_bytes(lent_buffers(count, env.buffers), b0).len(), sp.right.left, k0, within, bytes, omega(reach))),
-                    t.frames_store(a, q, bytes, span, words, i, kept.proof.left.right)⟩;
+                     t.frames_store(a, q, bytes, span, words, i, framed)⟩;
                 Exists(after_file, ⟨j(sym(stored), λ x _ => holding(after_file, x), there),
-                    ⟨trans(file.len_update(b0, λ (xs: List<BitVec(8)>) => xs.put_window(k0, bytes)), kept.proof.right.left),
+                    ⟨trans(file.len_update(b0, λ (xs: List<BitVec(8)>) => xs.put_window(k0, bytes)), count_same),
                         λ c past => trans(buffer_bytes_span_other(file, b0, k0, bytes, c, λ same => false_elim(omega(same, past, sp.left.left))),
-                            kept.proof.right.right(c, past))⟩⟩)
+                            others(c, past))⟩⟩)
             },
-        }, m, m2, start, wrote);
+         }⟩;
+    let ended: along(m2) = t.stack.wrote_in_frame(i, spans, stable, m, m2, wrote, start);
     let file = ended.witness;
     let w2 = ended.proof.left.left.witness;
     let based2 = ended.proof.left.left.proof;
