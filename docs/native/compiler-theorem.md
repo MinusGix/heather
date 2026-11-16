@@ -11,15 +11,16 @@ statement `compile-x86`'s certificates instantiate.
 ## The compiler's theorem
 
 A program is a list of FunctionIR functions, each of which may call the
-functions before it. `lower_program` turns it into machine code (`Prog`) or
-refuses. The compiler's theorem is proved once, for every program:
+functions before it. `lower_program_roomed` turns it into machine code
+(`Prog`) under a room table, or refuses. The compiler's theorem is proved
+once, for every program and every table:
 
 ```heather
-theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, code: Prog,
-    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
-    code.Computes(machine, f, stack_room(functions, f), arguments, program_eval(functions, f, arguments))
+    code.Computes(machine, f, rooms(f), arguments, program_eval(functions, f, arguments))
 ```
 
 In words: **whenever the lowering accepts a program, the code of each of its
@@ -35,8 +36,7 @@ System V caller relies on. Entered at function `f`'s label with
 - the arguments in RDI, RSI, RDX, RCX, R8, R9, and past the sixth on the
   stack just above the return address (`Stack::Passed`), and
 - `room` bytes of stack below the return address; the theorem gives it as
-  `stack_room(functions, f)`, 136 bytes a level: one for the function's own
-  frame and one for each level of calls nested below it,
+  `rooms(f)`, function `f`'s row of the room table,
 
 the machine runs to the return address and arrives there with
 
@@ -53,11 +53,19 @@ return address, not only that it ends there if it ends.
 
 Two premises are about the program, and both are checked by evaluation.
 `lowered` is the lowering's own result, which includes the stack's
-accounting: the lowering computes from the program how deep each
-function's calls go (`program_depths`, a function's depth one more than its
-deepest callee's) and refuses a program whose calls do not respect that
-table (`program_shallow`), so a function that calls nothing asks for 136
-bytes wherever it sits in the program. `evaluable` says every node is one
+accounting. A function's frame is sized by what it uses: eight words of
+call slots if it calls and none if not, and a word for each callee-saved
+register its placement saves (`Function::frame`, at most 112 bytes). The
+lowering checks each function against its row of the table
+(`Function::roomy`): the frame fits the row, a call's 24 bytes fit below
+the frame, and what is left below holds each callee's row. A table that
+does not fit is refused, so any table the lowering accepts is one the code
+keeps to. `program_rooms_by` computes the least such table from what each
+function saves, its frame and the deepest callee's room with a call's 24
+bytes; `program_room` is that table with every function saving all six,
+which every placement fits, and `lower_program` is the lowering under it. A
+certificate states the table its placement asks for as a literal, so a
+leaf that saves nothing asks for no stack below its return address. `evaluable` says every node is one
 the evaluator gives a meaning to, and every call is to an earlier function
 with the right number of arguments. The `placement` (which register holds
 which value) comes from the planner, which is not trusted: the theorem holds
@@ -78,7 +86,8 @@ composed with one equation from the program's generator:
    computes the source function: `clamp::agrees(x, lo, hi): program_eval(clamp::program, 0, [x, lo, hi]) = clamp(x, lo, hi)`.
    It is checked by the kernel like any other theorem.
 2. **The lowering, as a literal.** The certificate states the code
-   (`clamp_code()`) and proves `lower_program(...) = Some(clamp_code())` by
+   (`clamp_code()`) and its room table (`clamp_rooms()`), and proves
+   `lower_program_roomed(...) = Some(clamp_code())` by
    evaluation, a function at a time. It proves the program evaluable the
    same way.
 3. **The bytes.** It proves that the code assembles to the bytes the `.s`
@@ -87,12 +96,12 @@ composed with one equation from the program's generator:
 `compiled_computes` is the composition:
 
 ```heather
-theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, code: Prog,
-    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
     agrees: program_eval(functions, f, arguments) = value):
-    code.Computes(machine, f, stack_room(functions, f), arguments, value)
+    code.Computes(machine, f, rooms(f), arguments, value)
 ```
 
 At `clamp` it reads: **the bytes `compile-x86` wrote, called as a C function
@@ -108,8 +117,8 @@ The certificate states its theorem through the same names. For
 
 ```heather
 theorem sha256_t2_native_returns<M>(machine: Machine<M>, a0, a1, a2: BitVec(64)):
-    sha256_t2_native_code().Computes(machine, 0, 136, [a0, a1, a2], sha256_round::sha256_t2(a0, a1, a2)) {
-    compiled_computes<M>(sha256_t2_native_program(), sha256_t2_native_placement(), sha256_t2_native_code(),
+    sha256_t2_native_code().Computes(machine, 0, 0, [a0, a1, a2], sha256_round::sha256_t2(a0, a1, a2)) {
+    compiled_computes<M>(sha256_t2_native_program(), sha256_t2_native_placement(), sha256_t2_native_rooms(), sha256_t2_native_code(),
         sha256_t2_native_lowers(), sha256_t2_native_evaluable(), machine, 0, trivial, [a0, a1, a2], trivial,
         sha256_round::sha256_t2(a0, a1, a2), sha256_t2_native_agrees(a0, a1, a2))
 }
@@ -123,7 +132,7 @@ line:
 
 ```heather
 theorem sha256_t2_native_implements<M>(machine: Machine<M>):
-    sha256_t2_native_code().Implements(machine, 0, 136, 3, sha256_round::sha256_t2) {
+    sha256_t2_native_code().Implements(machine, 0, 0, 3, sha256_round::sha256_t2) {
     λ a0 a1 a2 => sha256_t2_native_returns<M>(machine, a0, a1, a2)
 }
 ```

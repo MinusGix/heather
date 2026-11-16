@@ -600,7 +600,7 @@ fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imp
     let placed = format!("{probe}_opt_placed");
     fork.define(&placed, &format!("{imports}import {source};
 fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List<Nat> {{
-    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts()) {{
+    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts(), index_rooms()) {{
         None => [0],
         Some(_) => Cons(1, places.map(λ (place: Place) => place.number())),
     }}

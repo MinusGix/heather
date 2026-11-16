@@ -1052,8 +1052,9 @@ program.
 - (Done 2026-11-16, `issues/stack-room-by-call-depth.md`.) The stack an entry's
   theorem asks for was by its index in the program, so `scan_accept`, a
   few instructions, was stated with the room of every function before it.
-  It is now by the call depth below the function (`stack_room`,
-  `program_depths`), a table the lowering computes and checks.
+  It is now by the frames on the deepest path below the function
+  (`program_rooms_by`, issues/function-frame-sized-by-use.md), a table the
+  certificate states and the lowering checks.
 
 ### 6.4 A method as an export (2026-11-12)
 
