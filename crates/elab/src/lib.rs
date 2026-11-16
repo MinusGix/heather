@@ -2511,6 +2511,18 @@ impl Elaborator {
         if let Some(msg) = self.unknown_access_path(name) {
             return NameRes::Restricted(msg);
         }
+        // A designed path whose generated declaration more than one imported
+        // module made, for different declarations of one name: say so, since
+        // "neither imported nor in scope" is wrong about a name two modules
+        // declare (docs/tactics/functional-induction-design.md §6).
+        if let Some(target) = self.access_alias(name)
+            && let NameRes::Ambiguous(modules) = NameLookup(self).resolve_declared(target)
+        {
+            let list = modules.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(" and ");
+            return NameRes::Restricted(format!(
+                "`{name}` is ambiguous: {list} each generate it, for different declarations of the name"
+            ));
+        }
         declared
     }
 

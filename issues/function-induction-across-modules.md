@@ -1,6 +1,6 @@
 ---
 title: A structural function's induction principle, from a module that imports it
-status: open
+status: closed
 labels: [proofs,elaboration]
 area: language
 milestone: [lang-proof-modularity]
@@ -41,3 +41,7 @@ function". `induct List::foldl(…)` from outside `list` is the probe
 
 `induct List::foldl(xs, f, z); all_goals { … }` works from a module that
 imports `list`, and the probe moves from a refusal to a theorem.
+
+## Log
+
+- 2026-11-15: done without an image change. The issue's premise was wrong: a module image keeps every `fn`'s stored declaration with its body, and for a structural function that is the one written (only a `decreases` function's is its lowering, and those build their principle with themselves). An importer now builds the principle from it on demand, and resolution takes either of two modules' copies of a generated theorem when their interfaces are the same (`NameLookup::same_generated`); different functions of one name stay ambiguous, now said as such. Probes: `foldl_counts` in `induct_tests`, and `induct_import_tests` over `induct_left_tests`/`induct_right_tests`. Doc: `docs/tactics/functional-induction-design.md` §6.
