@@ -313,6 +313,7 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
+        | ExprKind::ByteStr(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
@@ -707,6 +708,7 @@ impl BinderUses {
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
+            | ExprKind::ByteStr(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl
