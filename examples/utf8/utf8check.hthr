@@ -59,8 +59,8 @@ theorem utf8_status_answers(span: List<u8>, length, filled: u64, sized: length.t
 // The program: read standard input into the buffer at a growing offset
 // until a read brings nothing (or fails, or the buffer is full), then exit
 // with the verdict on the bytes read.
-runtime fn main(mut io: Io, buf: ByteBuffer(65536)) → Partial(Mutated<Io, u64>) {
-    let mut buf = buf;
+runtime fn main(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut buf: List<u8> = List::replicate(0, 65536);
     let mut filled: u64 = 0;
     let mut going: u64 = 1;
     let mut failed: u64 = 0;

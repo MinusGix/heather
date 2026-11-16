@@ -155,3 +155,59 @@ fn ascii_say_whole() → Io::Reads<BitVec(64)>(ascii_say::source.tree_co([]), λ
 // starts empty, its capacity zeroed.
 theorem ascii_say_buffers(): ascii_say::source.buffers.map(λ b => b.capacity) = [4096, 10, 6] { refl }
 theorem ascii_say_said(): ascii_say::source.buffers.map(λ b => b.initial) = [[], b"not ascii\n", b"ascii\n"] { refl }
+
+// A buffer as a local (docs/native/io-programs-design.md §5 D2): `ascii_check`
+// with its buffer made in the body, `List::replicate(0, n)`, in place of a
+// parameter. The reading takes it as a parameter after the function's own,
+// as a byte string, and the `Source` starts it zeroed, so the program is
+// stated with no argument.
+runtime fn ascii_local(mut io: Io) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut buf: List<u8> = List::replicate(0, 4096);
+    let mut filled: BitVec(64) = BitVec::ofNat(0);
+    let mut going: BitVec(64) = BitVec::ofNat(1);
+    let mut failed: BitVec(64) = BitVec::ofNat(0);
+    while BitVec::ofNat(0).unsigned_lt_bit(going) {
+        let room = BitVec::ofNat(4096).sub(filled);
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room.unsigned_lt_bit(r.result);
+        buf := r.buf;
+        failed := if bad { BitVec::ofNat(1) } else { BitVec::ofNat(0) };
+        going := if bad { BitVec::ofNat(0) } else if r.result = BitVec::ofNat(0) { BitVec::ofNat(0) } else { BitVec::ofNat(1) };
+        filled := if bad { filled } else { filled.add(r.result) };
+    }
+    let m = ascii_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    Pointed::ret(Mutated(io, m.value))
+}
+
+fn ascii_local_whole() → Io::Reads<BitVec(64)>(ascii_local::source.tree_co([]), λ io => ascii_local(io)) { ascii_local::reads }
+
+// One buffer, the local's, zeroed at its capacity; the reading is
+// `ascii_check`'s (the parameter and the local read alike).
+theorem ascii_local_buffers(): ascii_local::source.buffers.map(λ b => b.capacity) = [4096] { refl }
+theorem ascii_local_zeroed(): ascii_local::source.buffers.map(λ b => b.initial) = [[]] { refl }
+theorem ascii_local_reads_as_check(): ascii_local::eloop = ascii_check::eloop { refl }
+
+// Two locals are two buffers, each zeroed at its own capacity, in the order
+// the body makes them, even where they start alike.
+runtime fn two_locals(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut a: List<u8> = List::replicate(0, 8);
+    let mut b: List<u8> = List::replicate(0, 16);
+    let r = io.read_into(Io::stdin(), a, 0, 8);
+    a := r.buf;
+    let s = io.read_into(Io::stdin(), b, 0, 16);
+    b := s.buf;
+    Pointed::ret(Mutated(io, r.result + s.result))
+}
+
+theorem two_locals_buffers(): two_locals::source.buffers.map(λ b => b.capacity) = [8, 16] { refl }
+fn two_locals_whole() → Io::Reads<u64>(two_locals::source.tree_co([]), λ io => two_locals(io)) { two_locals::reads }
+
+// A buffer that starts as other bytes than zeros is not a local's: the
+// data segment starts it zeroed, and given bytes are a byte string.
+// expect-error: a buffer a program makes for itself starts zeroed
+runtime fn ones_local(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut buf: List<u8> = List::replicate(1, 8);
+    let r = io.read_into(Io::stdin(), buf, 0, 8);
+    buf := r.buf;
+    Pointed::ret(Mutated(io, r.result))
+}

@@ -210,6 +210,44 @@ record Known {
     consts: List<Pair<List<Nat>, Nat>> := [],
 }
 
+// A buffer a program makes for itself, read as a parameter after the
+// function's own: a byte string it writes, by its bytes (`Written`, §5 D3), or a
+// local that starts as `n` zero bytes, `List::replicate(0, n)` (§5 D2).
+inductive ConstInit { Written(bs: List<Nat>), Zeros(count: Nat) }
+
+// The byte strings among the buffers found, each at the level `0`: what
+// `Known::const_level` looks a string up in while they are being found.
+fn ConstInit::strings(found: List<Pair<ConstInit, Handle>>) → List<Pair<List<Nat>, Nat>> {
+    match found {
+        Nil => [],
+        Cons(c, rest) => match c.fst { Written(bs) => Cons(Pair(bs, 0), ConstInit::strings(rest)), Zeros(_) => ConstInit::strings(rest) },
+    }
+}
+
+// The byte strings among the buffers placed, each at its level
+// (`Known::consts`).
+fn ConstInit::string_levels(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) → List<Pair<List<Nat>, Nat>> {
+    match placed {
+        Nil => [],
+        Cons(c, rest) => match c.fst.fst {
+            Written(bs) => Cons(Pair(bs, c.snd), ConstInit::string_levels(rest)),
+            Zeros(_) => ConstInit::string_levels(rest),
+        },
+    }
+}
+
+// The zeroed locals among the buffers placed, each its term's handle at
+// its level: the reading meets the term as that variable (`RSt::handles`).
+fn ConstInit::zeroed_handles(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) → List<Pair<Nat, Nat>> {
+    match placed {
+        Nil => [],
+        Cons(c, rest) => match c.fst.fst {
+            Written(_) => ConstInit::zeroed_handles(rest),
+            Zeros(_) => Cons(Pair(c.fst.snd.id, c.snd), ConstInit::zeroed_handles(rest)),
+        },
+    }
+}
+
 fn Known::within(self k: Known, sc: SelfCall) → Known {
     Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts)
 }
@@ -674,6 +712,24 @@ fn rt_const_bytes(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Option<List<N
             },
             _ => pure(None),
         }),
+    }
+}
+
+// `List::replicate`'s arguments when they make a zeroed buffer: its byte
+// the literal 0 and its count a numeral, the count. `None` otherwise.
+fn rt_const_zeros(k: Known, st: RSt, args: List<Handle>) → Tac<Option<Nat>> {
+    match args.rev() {
+        Cons(n, more) => match more {
+            Cons(b, _) => rt_const_byte(64, k, st, b).bind(λ byte => match byte {
+                Some(v) => match v.same(0) {
+                    True => numeral(Hd(n)).bind(λ c => match c { Accepted(count) => pure(Some(count)), Refused(_) => pure(None) }),
+                    False => pure(None),
+                },
+                None => pure(None),
+            }),
+            Nil => pure(None),
+        },
+        Nil => pure(None),
     }
 }
 

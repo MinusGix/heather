@@ -489,6 +489,23 @@ argument" in their own proofs; it is a lemma about the reflected
 `ELoop` (substituting a variable's initial value), proved once, not
 per program.
 
+**As built (2026-11-16): a zeroed local is read like a byte string.** A
+local `let mut buf: List<u8> = List::replicate(0, n);` at a numeral `n`
+is one more parameter of the reading after the function's own, as a byte
+string is (`rt_const_scan` records it as `ConstInit::Zeros(n)`, one buffer
+per local even where two start alike, in the order the body makes them).
+The `Source` holds it as `Program::zeroed(n)`, a zeroed buffer of that
+capacity, and `f::reads` is stated with no argument for it, its
+environment holding `List::replicate(zero_byte(), n)` by `refl` at
+`Source::start`. So the general abstraction lemma above was not needed:
+the reading never holds the local's value, only a variable for it, and
+the parameter form and the local form read alike
+(`ascii_local::eloop = ascii_check::eloop` by `refl`,
+`lib/_tests/native/runtime/runtime_program_tests.hthr`). A local that
+starts as other bytes is refused, naming a byte string as the spelling:
+the data segment starts a program's own buffer zeroed.
+`examples/utf8/utf8check.hthr`'s `main` makes its buffer this way.
+
 **D3. Constant bytes.** Agreed: byte-string literals `b"valid\n"` of
 type `[u8; 6]`; a literal reaching a write is a constant buffer of the
 `Source` (initial bytes in the data segment, never written). After the
@@ -525,7 +542,7 @@ it, so it can run in another thread at the same time.
    builder deleted).
 6. **After the UTF-8 program (2026-11-16, Minus's order).** Generated
    declarations resolve outside the program's own imports (§3, built);
-   then D2's local buffers. Filed for
+   then D2's local buffers (§5, built). Filed for
    later: printing (`issues/io-program-prints-output.md`), the sort and binary-search
    demos as programs (`issues/io-program-demo-mains.md`), and the
    whole-program theorem over the read loop and exit

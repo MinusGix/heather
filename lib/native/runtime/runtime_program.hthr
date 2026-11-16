@@ -86,10 +86,15 @@ fn Program::buffers(caps: List<Nat>) → List<Buffer> { caps.map(λ c => Buffer(
 // after theirs, and nothing but the bytes it starts with is new.
 fn Program::constant(bs: List<BitVec(8)>) → Buffer { Buffer(bs.len(), bs) }
 
-// The buffers of a program: a zeroed one per buffer parameter, then one
-// per byte string, holding it.
-fn Program::all_buffers(caps: List<Nat>, consts: List<List<BitVec(8)>>) → List<Buffer> {
-    Program::buffers(caps) ++ consts.map(λ bs => Program::constant(bs))
+// A local that starts as `n` zero bytes (`List::replicate(0, n)`, §5 D2):
+// a buffer of its own that starts zeroed, read as a parameter after the
+// function's own as a byte string is.
+fn Program::zeroed(n: Nat) → Buffer { Buffer(n) }
+
+// The buffers of a program: a zeroed one per buffer parameter, then the
+// ones it makes for itself (`Program::constant`, `Program::zeroed`).
+fn Program::all_buffers(caps: List<Nat>, consts: List<Buffer>) → List<Buffer> {
+    Program::buffers(caps) ++ consts
 }
 
 // The reading lowered at the plain world, its parameters where
@@ -104,7 +109,7 @@ fn Program::result(p: ELoop, ls: List<Lent>, g: List<Ty>) → Nat { Program::low
 // What `write-elf` compiles: the lent functions' program, a buffer per
 // parameter, the lowered statements, then an exit with the word the value
 // is in.
-fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<List<BitVec(8)>>) → Source {
+fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<Buffer>) → Source {
     Source(functions := functions, buffers := Program::all_buffers(caps, consts), words := Program::lowered(p, ls, g).stmt.word_bound(),
         main := Then(Program::lowered(p, ls, g).stmt, Exit(Program::lowered(p, ls, g).result)))
 }
@@ -122,11 +127,12 @@ fn Program::no_args() → List<List<BitVec(8)>> { [] }
 fn Program::no_functions() → List<Function> { [] }
 fn Program::no_lents() → List<Lent> { [] }
 fn Program::one_lent(l: Lent) → List<Lent> { [l] }
-fn Program::push(x: List<BitVec(8)>, xs: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { Cons(x, xs) }
+fn Program::no_buffers() → List<Buffer> { [] }
+fn Program::push(x: Buffer, xs: List<Buffer>) → List<Buffer> { Cons(x, xs) }
 
 // The lowering's theorem at the program's `Source`, joined to a bridge: the
 // statements' tree, the value read back from its word, reads as `f`.
-fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<List<BitVec(8)>>,
+fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<Buffer>,
     lowered: p.lower(ETm::plain_world(), ls, g, Program::locs(g.len()), 1) = Some(Program::lowered(p, ls, g)),
     lents: ETm::LentsAgree(ls, program_writers(functions)), vals: rt::Env(ETm::plain_world().tys, g),
     held: LocsHold(ETm::plain_world().tys, Program::source(p, ls, g, functions, caps, consts).start([]), g, Program::locs(g.len()), vals),
@@ -319,11 +325,15 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let buffer <- program_id("runtime_program", "ByteBuffer");
     let caps <- program_caps(name, buffer, 64, opened.body);
     let _ <- match (caps.len() + r.consts.len()).same(r.read.params.len()) { True => pure(0), False => program_refused(name, "a parameter after the world is a buffer") };
-    // The byte strings it writes, as written, the first found first.
+    // The buffers it makes for itself, as their first contents, the first
+    // found first, and as buffers of the Source.
     let consts <- bridge_consts(<- io_quoting(), r.consts);
     let push <- program_global("runtime_program", "Program::push");
-    let no_consts <- program_global("runtime_program", "Program::no_args");
-    let constsE = consts.rev().foldl(λ acc c => ap(push, [c, acc]), no_consts);
+    let no_consts <- program_global("runtime_program", "Program::no_buffers");
+    let constant <- program_global("runtime_program", "Program::constant");
+    let zeroed <- program_global("runtime_program", "Program::zeroed");
+    let buffersE = r.consts.zip(consts).map(λ c => match c.fst { Written(_) => ap(constant, [c.snd]), Zeros(n) => ap(zeroed, [NatLit(n)]) });
+    let constsE = buffersE.rev().foldl(λ acc c => ap(push, [c, acc]), no_consts);
     let q <- io_quoting();
     let nm <- bridge_names();
     let pl <- program_lent(name, lends);

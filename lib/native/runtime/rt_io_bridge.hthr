@@ -247,17 +247,20 @@ fn bridge_env(nm: BridgeNames, params: List<LocalRef>) → Expr { bridge_pairs(n
 
 fn bridge_lams(xs: List<LocalRef>, e: Expr) → Expr { match xs { Nil => e, Cons(x, rest) => Lam(x, bridge_lams(rest, e)) } }
 
-// The byte strings of a reading as terms, `rt_bytes([…])` each, in order.
-fn bridge_consts(q: IoQ, cs: List<List<Nat>>) → Tac<List<Expr>> {
+// The buffers a reading makes for itself as terms, in order: a byte
+// string `rt_bytes([…])`, a zeroed local `List::replicate(zero_byte(), n)`,
+// each as `Source::start` holds its buffer.
+fn bridge_consts(q: IoQ, cs: List<ConstInit>) → Tac<List<Expr>> {
     match cs {
         Nil => pure([]),
         Cons(_, _) => {
-            let found <- lookup(name_of(rt_bytes));
-            let f <- match found {
-                Accepted(g) => pure(Global(g)),
-                Refused(_) => lookup("rt_io::rt_bytes").or_fail("rt: `rt_bytes` (`rt_io`) is not in scope: ").bind(λ g => pure(Global(g))),
-            };
-            pure(cs.map(λ bs => ap(f, [q.rt.nat_list(bs)])))
+            let bytes <- lookup("rt_io::rt_bytes").or_fail("rt: `rt_bytes` (`rt_io`) is not reachable: ");
+            let replicate <- lookup(name_of(List::replicate)).or_fail("rt: `List::replicate`: ");
+            let zero <- lookup("native_source::zero_byte").or_fail("rt: `zero_byte` (`native_source`) is not reachable: ");
+            pure(cs.map(λ c => match c {
+                Written(bs) => App(Global(bytes), q.rt.nat_list(bs)),
+                Zeros(n) => App(App(App(Global(replicate), Blank), Global(zero)), NatLit(n)),
+            }))
         },
     }
 }
