@@ -486,7 +486,7 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
 
 /// What the optimizer needs besides: its stage, the plans' types, and the
 /// search.
-const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rules", "function_ir_tidy",
+const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
     "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
@@ -594,7 +594,7 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// each, a group a round.
 const STORES_MOST: usize = 8;
 
-fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize], explain: bool) -> Result<Optimized, String> {
     let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
     fork.define(&source, definitions);
@@ -782,6 +782,26 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             }
         }
         placements.push(placement);
+        // What the replays kept did, in the rules' words
+        // (`function_ir_explain`): a read of each plan, a line for each
+        // rule it used; a fact two replays derive is said once.
+        if explain {
+            let mut lines: Vec<String> = Vec::new();
+            for (at, staged) in made.iter().enumerate().filter(|(_, staged)| staged.stage == Stage::Replay) {
+                let item = format!("said_{k}_{at}");
+                let module = format!("{probe}_opt_{item}");
+                let text = format!("{imports}import function_ir_explain;\n{}
+fn {prefix}_opt_{item}() → List<Nat> {{ plan_explained({}) }}
+", uses(&modules), staged.plan);
+                fork.define(&module, &text);
+                let said = spelled_text(&read(&mut fork, &module, &item)?).ok_or_else(|| format!("function {k}'s explanation did not read back"))?;
+                for line in said.lines() {
+                    if !lines.iter().any(|known| known == line) { lines.push(line.to_string()); }
+                }
+            }
+            println!("function {k}: {}", match lines.len() { 0 => "no rule used".to_string(), 1 => "1 rule used".to_string(), n => format!("{n} rules used") });
+            for line in &lines { println!("{line}"); }
+        }
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
         let moves: Vec<&Staged> = made.iter().filter(|staged| staged.stage != Stage::Guard).collect();
@@ -852,7 +872,7 @@ fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
 ", rest(0)));
             statements.push_str(&format!("
 theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
-    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {},
+    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {}, registered(RuleEntry),
         {prefix}_opt_made_{k}_g(), {joined})
 }}
 ", rest(0)));
@@ -918,7 +938,7 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
     Ok(Optimized { definitions: stated, statements, placements })
 }
 
-pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: bool) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
@@ -932,7 +952,7 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let stem = lowered_stem(prefix, program.optimize);
     let (definitions, rewriting, placed) = if program.optimize {
         let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
-        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots)?;
+        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots, explain)?;
         (format!("{definitions}{}", made.definitions), made.statements, made.placements)
     } else { (definitions, String::new(), vec![None; m]) };
     // A function's emission after `prog`: under the program's counts of
@@ -965,19 +985,24 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
-    // What each function's placement asks it to save (`placement_saves`),
-    // which its frame is sized by.
-    let mut saves = Vec::new();
+    // What each function's placement asks it to save (`placement_saves`)
+    // and how many call slots it asks for (`placement_slots`, eight with no
+    // head), which its frame is sized by.
+    let (mut saves, mut slots) = (Vec::new(), Vec::new());
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
         let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
-        saves.push(match planned.first() { Some(&n) if (17..32).contains(&n) => n - 17, _ => 0 });
+        // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
+        let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
+        saves.push(saving.unwrap_or(0));
+        slots.push(planned.get(usize::from(saving.is_some())).filter(|&&n| (24..33).contains(&n)).map_or(8, |&n| n - 24));
         for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // What a call saves, a mask, and a function's count of
-                // saves (`Place::number`).
-                n if n >= 32 => format!("Spilling({})", n - 32),
+                // What a call saves, a mask, a function's count of call
+                // slots and its count of saves (`Place::number`).
+                n if n >= 33 => format!("Spilling({})", n - 33),
+                n if n >= 24 => format!("CallSlots({})", n - 24),
                 n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });
@@ -991,8 +1016,8 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let reading_rooms = format!("{probe}_rooms");
     let numbers = |values: &[u64]| values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
     fork.define(&reading_rooms, &format!("{imports}import {probe};
-fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f)) }}
-", numbers(&saves)));
+fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f), λ (f: Nat) => rooms_at([{}], f)) }}
+", numbers(&slots), numbers(&saves)));
     let table_rooms = read(&mut fork, &reading_rooms, "rooms_read")?;
     if table_rooms.len() != m { return Err("the program's room table did not read back".into()); }
     let room = |function: usize| table_rooms[function];

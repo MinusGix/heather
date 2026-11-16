@@ -36,6 +36,10 @@ use crate::mismatch_notes::MismatchNotes;
 const CHAR_TYPE: &str = "char::Char";
 const CHAR_INTRO: &str = "char::ofNat";
 const STRING_TYPE: &str = "string::String";
+// A byte string's element and its list form (`b"…"` at `List<u8>`).
+const BITVEC_TYPE: &str = "bitvec::BitVec";
+const BITVEC_MODULE: &str = "bitvec";
+const LIST_TYPE: &str = "list::List";
 const DECIDE_YES: &str = "bool::decide_yes";
 const DECIMAL_TYPE: &str = "rat::Decimal";
 const DECIMAL_INTRO: &str = "rat::Decimal::lit";
@@ -403,7 +407,7 @@ impl Literals<'_> {
                     CtxBase::Var(v) => Some(v.key()),
                 },
                 cx.gamma.entries.len(),
-                self.lowering_scope(),
+                self.psi.bindings.len() as u32,
             );
             if let Some((.., term)) = self.attempt.char_literals.borrow().iter().find(|(k, a, ty, _)| *k == c && *a == at && ty == expected) {
                 return Ok(term.clone());
@@ -470,6 +474,56 @@ impl Literals<'_> {
             .string_intro(text, e.span)
             .ok_or_else(|| self.literal_needs_module(STRING_TYPE, e.span))?;
         self.read_in_module(&module, |s| s.elab_infer(cx, &intro))
+    }
+
+    /// The type a byte string elaborates at: `[u8; n]`, or `List<u8>` when
+    /// `list` is asked for, each spelled by key (`bitvec::BitVec(8)`) so the
+    /// client needs `bitvec` (and `list`) only in its closure, as a string
+    /// literal needs `string`.
+    fn byte_string_type(&self, cx: &Cx, len: usize, list: bool, span: Span) -> R<(Type, Level)> {
+        let byte_key = self.closure_key(BITVEC_TYPE).ok_or_else(|| self.literal_needs_module(BITVEC_TYPE, span))?;
+        let width = Expr { kind: ExprKind::Num(8u64.into()), span };
+        let byte = Ty { kind: TyKind::OfExpr(Box::new(call(var(&byte_key, span), vec![width], span))), span };
+        let ty = if list {
+            let list_key = self.closure_key(LIST_TYPE).ok_or_else(|| self.literal_needs_module(LIST_TYPE, span))?;
+            Ty { kind: TyKind::Named { name: list_key, args: vec![byte] }, span }
+        } else {
+            let len = Expr { kind: ExprKind::Num((len as u64).into()), span };
+            Ty { kind: TyKind::Vec { elem: Box::new(byte), len: Box::new(len) }, span }
+        };
+        self.read_in_module(key_module(&byte_key), |s| s.elab_ty(cx, &ty))
+    }
+
+    /// The bytes as the collection literal of their numerals, checked at
+    /// `ty` (a [`Self::byte_string_type`]): the numeral at a byte is the
+    /// one `bitvec` registers, and the body is the collection-literal
+    /// lowering `[…]` already owns, so a byte string adds no route of its own.
+    fn byte_string_at(&self, cx: &Cx, bytes: &[u8], ty: &Type, level: &Level, span: Span) -> R<Term> {
+        let elems = bytes.iter().map(|b| Expr { kind: ExprKind::Num(u64::from(*b).into()), span }).collect();
+        let body = Expr { kind: ExprKind::CollectionLit(elems), span };
+        self.read_in_module(BITVEC_MODULE, |s| s.elab_check(cx, &body, ty, level))
+    }
+
+    /// A byte string `b"…"` in checking position (docs/native/io-programs-design.md
+    /// §5 D3): `[u8; n]`, or the list of the same bytes where a list is
+    /// expected (a `ByteBuffer(n)` is one), so a program can write a constant
+    /// into a buffer it hands to a call. Anything else is the vector, with
+    /// the disagreement noted for the gate as any inferred term's is.
+    pub(crate) fn elab_byte_string_check(&self, cx: &Cx, bytes: &[u8], e: &Expr, expected: &Type) -> R<Term> {
+        let list = self.closure_key(LIST_TYPE).is_some_and(|key| {
+            Carriers(self).carrier_of_ty(cx, expected, e.span).is_some_and(|carrier| carrier.key == key)
+        });
+        let (ty, level) = self.byte_string_type(cx, bytes.len(), list, e.span)?;
+        let term = self.byte_string_at(cx, bytes, &ty, &level, e.span)?;
+        MismatchNotes(self).note_check_mismatch(cx, &ty, expected, &level, e.span);
+        Ok(term)
+    }
+
+    /// A byte string in inference position: `[u8; n]`, `n` its length.
+    pub(crate) fn elab_byte_string_infer(&self, cx: &Cx, bytes: &[u8], e: &Expr) -> R<(Term, Type, Level)> {
+        let (ty, level) = self.byte_string_type(cx, bytes.len(), false, e.span)?;
+        let term = self.byte_string_at(cx, bytes, &ty, &level, e.span)?;
+        Ok((term, ty, level))
     }
 
     /// `rat::Decimal::lit(mant, up, down)` (or `HexFloat`'s), the exponent

@@ -28,3 +28,26 @@ theorem halves<A>(xs, ys: List<A>): Perm(xs ++ ys, ys ++ xs) { xs.perm_append_co
 theorem from_counts<A: DecEq>(xs, ys: List<A>, h: (a: A) → xs.occurrences(a) = ys.occurrences(a)): Perm(xs, ys) {
     xs.perm_iff_occurrences(ys).mpr(h)
 }
+
+// ---------------------------------------------------------------------------
+// Writes by index (`perm_update`, `perm_swap_at`, `occurrences_update`).
+
+// Two elements swapped, at a closed list: the statement computes to it.
+theorem swap_ends(): Perm<Nat>([1, 2, 3], [3, 2, 1]) { List::perm_swap_at<Nat>([1, 2, 3], 0, 2, 1, 3, refl, refl) }
+
+// At an open list and open indices, which may be one index: an element
+// swapped with itself is still a permutation.
+theorem swap_open<A>(xs: List<A>, i, k: Nat, x, y: A, at_i: xs.nth(i) = Some(x), at_k: xs.nth(k) = Some(y)):
+    Perm(xs, xs.update(i, λ _ => y).update(k, λ _ => x)) { xs.perm_swap_at(i, k, x, y, at_i, at_k) }
+
+theorem swap_self<A>(xs: List<A>, i: Nat, x: A, at: xs.nth(i) = Some(x)):
+    Perm(xs, xs.update(i, λ _ => x).update(i, λ _ => x)) { xs.perm_swap_at(i, i, x, x, at, at) }
+
+// A write moves one count: the old element's is given back in front.
+theorem write_counts<A: DecEq>(a: A, xs: List<A>, i: Nat, x, v: A, at: xs.nth(i) = Some(x)):
+    Cons(x, xs.update(i, λ _ => v)).occurrences(a) = Cons(v, xs).occurrences(a) { xs.occurrences_update(a, i, x, v, at) }
+
+// A write alone is no permutation: the old element's count drops.
+theorem write_not_perm(): ¬Perm<Nat>([1, 2], [1, 2].update(0, λ _ => 5)) {
+    λ p => Nat::succ_ne_zero(0, List::perm_occurrences(1, [1, 2], [1, 2].update(0, λ _ => 5), p))
+}

@@ -89,7 +89,8 @@ The gaps, each a section below:
 4. **A read lands at its buffer's start** (`CallShape::Reads`,
    `Effect::Reads`), so no program can read all of its input into one
    buffer (§4.1).
-5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2).
+5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2; built
+   since, as `ETm::If`).
 6. **No constant bytes** to write: a program cannot print `"valid\n"`
    except by storing it a byte at a time (§4.3).
 
@@ -296,8 +297,8 @@ clash). What differs from the table above:
   `f::source`'s tree.
 - `tr`: `runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256))` is the
   gate's tr. The hand `ELoop` in `rt_io_lend_tests` stays as the
-  reflector's pin and the lowering's probes; the builder tr stays until a
-  program can exit 1 on a failed write (issues/rt-io-exit-on-failed-write.md).
+  reflector's pin and the lowering's probes. The builder tr stayed until a
+  program could exit 1 on a failed write; round 5 (§4.2) removed it.
 
 **As built (round 4, 2026-11-16): a whole input, then a verdict.** The
 validator's shape is a loop that reads standard input into one buffer at a
@@ -348,24 +349,52 @@ This is a compiler change (in the native layer, not the kernel), every
 existing program passing `at = 0`, and its byte output for them is the
 same plus one `ADD` or none (an immediate 0 is folded).
 
-### 4.2 A branch whose arms call Linux: `EIf`
+### 4.2 A branch whose arms call Linux: `ETm::If` (built)
 
 A pass that writes only sometimes (`grep`, an error message on a failed
-read) needs `EIf(c, a, b)` over `ETm`. Design §8.4 names the obstacle: a
-statement `if` with calls in its arms joins per variable (`imperative.rs`),
-so the elaborated body projects `io` and each other local out of the
-branch's tuple, and an `EIf` meaning that branches over the whole
-`Mutated` needs a commuting conversion to agree by `refl`. Proposed: the
-reflector reads the per-variable join, and the pin goes through one
-equation proved once (`if c then (a.1, a.2) else (b.1, b.2)` is
-`(if c then a else b).1, …`, which is `refl` per projection on a neutral
-`c` only when the kernel has the commuting conversion; otherwise it is a
-`Bool` case split, one lemma). The lowering is a `Branch` on the flag,
-both arms ending with each variable at the same place, as a loop's pass
-does with its moves back.
+read), or a loop that stops on a failed write (`tr_upper`), needs a branch
+over `ETm`. A statement `if` elaborates (`imperative.rs`'s `join`) to one
+record of the locals its arms assign, the world among them, in the order
+they are first assigned: `#stage = match decide_bit(c) { True =>
+Mutated(io₁, Mutated(k₁, s₁)), False => … }`, every later read a field of
+it (`#stage.value.after`); one local alone is the local.
 
-None of the programs in §0 or the demo thread's three needs it (each
-computes its answer in pure code and writes once), so it comes after them.
+**The node** (`lib/native/runtime/rt_io.hthr`):
+`If(cond: Tm, yes: ETm, no: ETm, parts: List<Part>, body: ETm)`, a `Part`
+being `PWorld` or `PVar(t, y, n)`, a local of code `t` at index `y` at the
+end of the `yes` arm and `n` at the end of the `no` arm. Each arm runs to
+its end from the state before the `if`; its own result is not read. The
+meaning builds the same record, `Part::branch` (one `match` on the test's
+truth) of `Part::state` of each arm's end, and runs `body` with each
+`PVar` a new variable (`Part::push`, in the record's order) and the world
+`Part::world` of it. That is the surface's own shape, so the pin
+`meaning = f` is `refl` at a neutral test: no commuting conversion and no
+lemma was needed, against what this section first proposed. The
+variables before the `if` are untouched; the locals it assigns are new.
+
+**The lowering** (`rt_io_lower.hthr`, `ETm::lower_if`): the test into a
+flag; `Branch` on it, each arm its statements and then the moves
+(`Loc::moves`, the loop's) that bring each `PVar` word to one fresh word
+past both arms' (`ETm::join_lower`); a byte buffer stays where both arms
+leave it, else it is gone; a variable from before the `if` keeps its place
+where both arms leave it there (`Loc::meet`). It is proved in
+`ETm::lower_sound` (`ETm::lower_if_sound`): each arm by the induction
+hypothesis (`ETm::arm_sound`), the moves by `Loc::moves_sound`, and the
+join's places by `ETm::join_sound`. An `if` that does not assign the world
+lowers only when neither arm calls (`ETm::silent`).
+
+**The reflector** (`rt_io_reflect`, `rt_reflect`): the host's `Arms`
+answers a field read of a `match`'s record as that `match`, its arms
+whole, with the fields read (`MatchInfo::path`). A world that is such a
+read is on the world chain after the calls both arms' worlds start with
+(`rt_world_calls`), and the walk makes the `if` there (`rt_if_make`); a
+read of a local of an `if` that does not assign the world is made when a
+term first needs it, as a lent call is (`rt_lend_find`). The arms are read
+from the state before the `if`, under one local (`rt_bool_arms`), and each
+local after it is the variable `IfRes` names. The calls before an `if` are
+the run both arms start with, so an `if` whose two arms begin with the same
+call reads that call as before it, and the pin then refuses the program.
+`if h:` that assigns locals is refused for now.
 
 ### 4.3 Constant bytes
 
@@ -373,6 +402,39 @@ A `Source`'s buffer can start with bytes (`yes`'s line, `Buffer`'s
 initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
+
+**The surface (built, 2026-11-16).** `b"valid\n"` is the name `b` with a
+string literal right after it, no space between (`Parser::byte_string`; `b`
+alone or `b "x"` is what it was). Its bytes are the string's characters,
+each ASCII, since a non-ASCII character is refused rather than read as its
+UTF-8 encoding; the escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`,
+`\"`, `\0`, `\u{…}` up to `7F`), and a byte above `0x7F` has no spelling
+yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_string_*`)
+to the collection literal of its numerals at `[u8; n]`, or at
+`List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
+exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
+`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it.
+
+**The native half (built, 2026-11-16): a byte string is one more buffer
+parameter.** D2's move, applied by the reflector: before reading a program,
+`rt_const_scan` finds every closed list of byte literals in its body (each
+once, by its bytes, in the order the walk meets them), and the reading
+takes each as a parameter after the function's own (`Known::consts`, its
+level; `rt_const_bytes` reads a `Cons` spine at a byte buffer as that
+parameter, where it used to refuse it as a `Cons` onto a buffer). So
+nothing below the reflector is new: the lowering places the parameter in
+a buffer like any other (`Program::locs`), and its theorem is unchanged.
+The generator gives the `Source` one buffer per string after the
+parameters' (`Program::all_buffers`: `Program::constant(bs)`, of its own
+length, `initial := bs`), states `f::reads` at no argument for the strings,
+and proves the reading's environment holds each, `rt_bytes([…])` of its
+bytes, by `refl` at `Source::start` (`Program::held_cons`), as it does for
+the zeroed buffers; the bridge's environment holds the same terms
+(`bridge_consts`), which convert with the literal in the body. A string the
+program reads into is then a buffer the read overwrites, as a parameter
+is, and the lowering forgets it there, so "never written" needs no check
+of its own. `ascii_say` in `runtime_program_tests` says its verdict with
+two strings by an `if`, and `native_tools.rs` holds its output.
 
 ## 5. Decisions (Minus, 2026-11-15)
 
@@ -449,6 +511,8 @@ it, so it can run in another thread at the same time.
    unchanged.
 4. **The demos**: UTF-8 validator first (demo thread), each one program and
    one binary.
-5. (P) **`EIf`** (§4.2), then D3's literals (§4.3), then the rest of
+5. (P) **`EIf`** (§4.2, built: `tr_upper` exits 1 on a failed write, its
+   gate holds it to GNU tr on `/dev/full`, and the builder `tr`s are
+   gone), then D3's literals (§4.3), then the rest of
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).

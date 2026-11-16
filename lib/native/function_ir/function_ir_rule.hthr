@@ -38,6 +38,7 @@ import bitvec_bytes;
 import bitvec_resize;
 import bitvec_rotate;
 import bool;
+import char;
 import list;
 import logic;
 import nat;
@@ -123,6 +124,14 @@ inductive PatternFact {
 // How many numbers the rule takes, and its clause's shape.
 record RulePattern { arity: Nat, premises: List<PatternFact>, conclusion: PatternFact }
 
+// What a `rule theorem` publishes, registered: the rule, its clause's
+// shape, the theorem's name as its characters' codes (for the report of
+// what the optimizer did, function_ir_explain), and whether it is one of
+// the library's own (function_ir_rules), which have their places in
+// `rules()`; any other is added after them.
+record RuleEntry { library: Bool, name: List<Nat>, rule: Rule, pattern: RulePattern }
+
+fn rule_of_entry(x: RuleEntry) → RuleEntry { x }
 fn rule_of_slot(x: PatternSlot) → PatternSlot { x }
 fn rule_of_slots(x: List<PatternSlot>) → List<PatternSlot> { x }
 fn rule_of_shape(x: PatternFact) → PatternFact { x }
@@ -967,7 +976,10 @@ fn rule_shapes_of(cx: RuleCx, to: RuleShapes, facts: List<Expr>) → Tac<List<Ex
 // ---------------------------------------------------------------------------
 // The generator
 
-// `rule theorem name(…): statement { proof }` publishes `name_rule`.
+fn rule_codes(chars: List<Char>) → List<Expr> { match chars { Nil => [], Cons(c, rest) => Cons(NatLit(c.code), rule_codes(rest)) } }
+
+// `rule theorem name(…): statement { proof }` publishes `name_entry`, and
+// registers it.
 fn rule(name: String) → Tac<List<Decl>> {
     let theorem <- rule_ref(name);
     let ops <- rule_ops();
@@ -1006,11 +1018,19 @@ fn rule(name: String) → Tac<List<Decl>> {
         rule_closed(applied.hypotheses, rule_at(Global(theorem), values, λ id => rule_apps(Global(ops.buffer_at), [buffers, id]), applied.args),
             rule_assumed(kept ++ guarded, kept ++ guarded))));
     let made = rule_apps(Global(when), [Lam(numbers.ref, bits), Lam(numbers.ref, clause), Lam(numbers.ref, Lam(ok.ref, proof))]);
-    let ty <- infer(made).or_fail("rule: the rule made: ");
     let to <- rule_shapes();
     let premises <- rule_shapes_of(cx, to, concluded.read.premises);
     let conclusion <- rule_shape(cx, to, concluded.fact);
     let pattern = rule_apps(to.pattern, [NatLit(concluded.read.next), rule_list(to.no_shapes, to.shape_then, premises), conclusion]);
-    let shaped <- infer(pattern).or_fail("rule: the clause's shape: ");
-    pure([Decl(AsValue, name ++ "_rule", [], Hd(ty), made), Decl(AsValue, name ++ "_pattern", [], Hd(shaped), pattern)])
+    let entries <- rule_ctors(name_of(rule_of_entry));
+    let entry_of <- rule_ctor(entries, "RuleEntry");
+    let no <- rule_ctor(bools, "False");
+    let listed <- lookup("function_ir_rules::" ++ name);
+    let library = match listed { Accepted(g) => match rule_same(g, theorem) { True => yes, False => no }, Refused(_) => no };
+    let codes <- rule_ctors(name_of(rule_of_numbers));
+    let no_code <- rule_ctor(codes, "Nil");
+    let code_then <- rule_ctor(codes, "Cons");
+    let entry = rule_apps(entry_of, [library, rule_list(no_code, code_then, rule_codes(name.chars)), made, pattern]);
+    let entered <- infer(entry).or_fail("rule: the rule's entry: ");
+    pure([Decl(AsRegistered("RuleEntry"), name ++ "_entry", [], Hd(entered), entry)])
 }

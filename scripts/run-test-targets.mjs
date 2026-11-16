@@ -74,7 +74,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 
 // Targets whose run builds a store other targets read, each with the targets
 // that read it. The library gate (crates/cli/tests/library.rs) builds the CLI
-// image store, and native_cat/native_tools's `write-elf` replays its closure
+// image store, and native_cat/native_tools/native_utf8's `write-elf` replays its closure
 // from it (every module is keyed by its own closure,
 // docs/infrastructure/module-dag-design.md); cold, one `write-elf` would build that closure
 // itself, past the CPU rail. So a prerequisite starts first and its readers
@@ -95,7 +95,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // then again here as a test (issues/library-gate-warmup-runs-alone.md).
 // `built` is mirrored by the library gate's `--build-first` (crates/cli/tests/library.rs).
 export const PREREQUISITES = new Map([["library", {
-  readers: ["native_cat", "native_tools"],
+  readers: ["native_cat", "native_tools", "native_utf8"],
   built: ["lib/native", "lib/_tests/native"],
   store: "cli-check-images",
 }]]);

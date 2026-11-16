@@ -89,19 +89,14 @@ theorem read_split(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, sized: (ys ++
     (ys ++ Cons(z, rest)).byte_within(n, j) = z
 {
     let total = ys.len_append(Cons(z, rest));
-    let inside: (j.toNat() < n.toNat()) = omega;
-    let found: ((ys ++ Cons(z, rest)).nth(0 + ys.len()) = Some(z)) = ys.nth_append_r(Cons(z, rest), 0);
-    let index: (0 + ys.len() = j.toNat()) = omega;
-    trans((ys ++ Cons(z, rest)).byte_within_inside(n, j, inside), rewrite(sym(index), cong_fn(λ (o: Option<u8>) => o.unwrap_or(0), found)))
+    simp_only(List::byte_within_inside, List::byte_at, List::nth_append_at, discharge := omega)
 }
 
 theorem write_split(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, v: u8, sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat()):
     (ys ++ Cons(z, rest)).with_byte_within(n, j, v) = ys ++ Cons(v, rest)
 {
     let total = ys.len_append(Cons(z, rest));
-    let inside: (j.toNat() < n.toNat()) = omega;
-    let index: (0 + ys.len() = j.toNat()) = omega;
-    trans((ys ++ Cons(z, rest)).with_byte_within_inside(n, j, v, inside), rewrite(sym(index), ys.update_append_r(Cons(z, rest), 0, λ _ => v)))
+    simp_only(List::with_byte_within_inside, List::with_byte, List::update_append_at, discharge := omega)
 }
 
 // ---------------------------------------------------------------------------
@@ -182,74 +177,52 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
     }
 }
 
-// One pass of the outer loop: the byte at `i` goes into the sorted prefix,
-// and the loop goes on from `i + 1`, which `later` says sorts what it is given.
-theorem sort_from_step(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorted: s.take(i.toNat()).Sorted(BitVec::unsigned_le), h: i < n,
-    later: (t: List<u8>) → t.len() = n.toNat() → t.take((i + 1).toNat()).Sorted(BitVec::unsigned_le) →
-        t.SortedPerm(BitVec::unsigned_le, List::sort_from(t, n, i + 1).after)):
-    s.SortedPerm(BitVec::unsigned_le, List::sort_from(s, n, i).after)
-{
-    let k = i.toNat();
-    let below: (k < s.len()) = { let lt: (k < n.toNat()) = h; omega };
-    let ys = s.take(k);
-    let z = s.nth(k).unwrap_or(0);
-    let more = s.drop(Succ(k));
-    let cut: (s = ys ++ Cons(z, more)) = s.split_at(k, 0, below);
-    let taken: (ys.len() = k) = s.len_take(k, Nat::le_of_lt(k, s.len(), below));
-    let sized0: ((ys ++ Cons(z, more)).len() = n.toNat()) = trans(cong_fn(λ (l: List<u8>) => l.len(), sym(cut)), sized);
-    let read: (s.byte_within(n, i) = z) = j(sym(cut), λ l _ => l.byte_within(n, i) = z, read_split(ys, z, more, n, i, sized0, taken));
-    let inserted: (s.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more) =
-        j(sym(cut), λ l _ => l.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more,
-            insert_at_inserts(ys, z, more, n, i, z, sized0, taken, sorted));
-    let ys1 = ys.insert_ordered(BitVec::unsigned_le, z);
-    let s1 = ys1 ++ more;
-    let picks = ys.insert_ordered_picks(BitVec::unsigned_le, z);
-    let grew: (ys1.len() = Succ(ys.len())) = ys1.picks_len(z, ys, picks);
-    let l0 = ys.len_append(Cons(z, more));
-    let l1 = ys1.len_append(more);
-    let sized1: (s1.len() = n.toNat()) = omega;
-    let next: ((i + 1).toNat() = ys1.len()) = bv_omega;
-    let sorted1: s1.take((i + 1).toNat()).Sorted(BitVec::unsigned_le) =
-        rewrite(next, ys1.take_append_len(more), ys.insert_ordered_sorted(BitVec::unsigned_le, z, sorted));
-    let ih = later(s1, sized1, sorted1);
-    let taken_out: (s.insert_at(n, i, s.byte_within(n, i)) = s1) = rewrite(read, inserted);
-    let after: (List::sort_from(s, n, i).after = List::sort_from(s1, n, i + 1).after) =
-        calc {
-            List::sort_from(s, n, i).after = List::sort_from(s.insert_at(n, i, s.byte_within(n, i)), n, i + 1).after
-                := simp_only(List::sort_from, List::insert_at, fill, discharge := bv_omega),
-            = List::sort_from(s1, n, i + 1).after := cong_fn(λ (l: List<u8>) => List::sort_from(l, n, i + 1).after, taken_out),
-        };
-    let moved: Perm(s, s1) = j(sym(cut), λ l _ => Perm(l, s1), (ys ++ Cons(z, more)).perm_trans(Cons(z, ys ++ more), s1,
-        Cons(z, ys ++ more).perm_sym(ys ++ Cons(z, more), ys.perm_middle(z, more)),
-        Cons(z, ys).perm_append_l(ys1, more, List::perm_of_picks(z, ys1, ys, picks))));
-    let ordered: List::sort_from(s, n, i).after.Sorted(BitVec::unsigned_le) = rewrite(after, ih.left);
-    let same: Perm(s, List::sort_from(s, n, i).after) = rewrite(after, s.perm_trans(s1, List::sort_from(s1, n, i + 1).after, moved, ih.right));
-    And(ordered, same)
-}
-
-// Past the end there is nothing left to sort.
-theorem sort_from_done(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorted: s.take(i.toNat()).Sorted(BitVec::unsigned_le), h: ¬(i < n)):
-    s.SortedPerm(BitVec::unsigned_le, List::sort_from(s, n, i).after)
-{
-    let past: ¬(i.toNat() < n.toNat()) = h;
-    let all: (s.take(i.toNat()) = s) = s.take_all(i.toNat(), omega);
-    let stays: (List::sort_from(s, n, i).after = s) = simp_only(List::sort_from, discharge := bv_omega);
-    let ordered: List::sort_from(s, n, i).after.Sorted(BitVec::unsigned_le) = rewrite(stays, rewrite(sym(all), sorted));
-    let same: Perm(s, List::sort_from(s, n, i).after) = rewrite(stays, s.perm_refl());
-    And(ordered, same)
-}
-
 // The outer loop: with the bytes before `i` sorted, `sort_from` leaves the
-// span sorted, holding the bytes it held. By induction on what is left,
-// `n - i`, as the loop runs.
+// span sorted, holding the bytes it held. By induction along the loop's own
+// recursion: in a pass, the byte at `i` goes into the sorted prefix and the
+// loop goes on from `i + 1`; past the end there is nothing left to sort.
 theorem sort_from_sorts(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorted: s.take(i.toNat()).Sorted(BitVec::unsigned_le)):
     s.SortedPerm(BitVec::unsigned_le, List::sort_from(s, n, i).after)
-    decreases (n - i).toNat()
 {
-    if h: i < n {
-        sort_from_step(s, n, i, sized, sorted, h, λ t tl ts => sort_from_sorts(t, n, i + 1, tl, ts))
-    } else {
-        sort_from_done(s, n, i, sized, sorted, h)
+    induct List::sort_from(s, n, i) {
+        True => {
+            let k = i.toNat();
+            let below: (k < s.len()) = bv_omega;
+            let ys = s.take(k);
+            let z = s.nth(k).unwrap_or(0);
+            let more = s.drop(Succ(k));
+            let cut: (s = ys ++ Cons(z, more)) = s.split_at(k, 0, below);
+            let taken: (ys.len() = k) = s.len_take(k, Nat::le_of_lt(k, s.len(), below));
+            let sized0: ((ys ++ Cons(z, more)).len() = n.toNat()) = trans(cong_fn(λ (l: List<u8>) => l.len(), sym(cut)), sized);
+            let read: (s.byte_within(n, i) = z) = j(sym(cut), λ l _ => l.byte_within(n, i) = z, read_split(ys, z, more, n, i, sized0, taken));
+            let inserted: (s.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more) =
+                j(sym(cut), λ l _ => l.insert_at(n, i, z) = ys.insert_ordered(BitVec::unsigned_le, z) ++ more,
+                    insert_at_inserts(ys, z, more, n, i, z, sized0, taken, sorted));
+            let ys1 = ys.insert_ordered(BitVec::unsigned_le, z);
+            let s1 = ys1 ++ more;
+            let picks = ys.insert_ordered_picks(BitVec::unsigned_le, z);
+            let grew: (ys1.len() = Succ(ys.len())) = ys1.picks_len(z, ys, picks);
+            let l0 = ys.len_append(Cons(z, more));
+            let l1 = ys1.len_append(more);
+            let sized1: (s1.len() = n.toNat()) = omega;
+            let next: ((i + 1).toNat() = ys1.len()) = bv_omega;
+            let sorted1: s1.take((i + 1).toNat()).Sorted(BitVec::unsigned_le) =
+                rewrite(next, ys1.take_append_len(more), ys.insert_ordered_sorted(BitVec::unsigned_le, z, sorted));
+            let moved: Perm(s, s1) = j(sym(cut), λ l _ => Perm(l, s1), (ys ++ Cons(z, more)).perm_trans(Cons(z, ys ++ more), s1,
+                Cons(z, ys ++ more).perm_sym(ys ++ Cons(z, more), ys.perm_middle(z, more)),
+                Cons(z, ys).perm_append_l(ys1, more, List::perm_of_picks(z, ys1, ys, picks))));
+            // The loop goes on from the span with `z` in place, `s1`.
+            let taken_out: (s.insert_at(n, i, s.byte_within(n, i)) = s1) = rewrite(read, inserted);
+            let later = j(taken_out, λ l _ => l.len() = n.toNat() → l.take((i + 1).toNat()).Sorted(BitVec::unsigned_le) →
+                l.SortedPerm(BitVec::unsigned_le, List::sort_from(l, n, i + 1).after), ih);
+            let rest = later(sized1, sorted1);
+            j(sym(taken_out), λ l _ => s.SortedPerm(BitVec::unsigned_le, List::sort_from(l, n, i + 1).after),
+                ⟨rest.left, s.perm_trans(s1, List::sort_from(s1, n, i + 1).after, moved, rest.right)⟩)
+        },
+        False => {
+            let all: (s.take(i.toNat()) = s) = s.take_all(i.toNat(), bv_omega);
+            ⟨rewrite(sym(all), sorted), s.perm_refl()⟩
+        },
     }
 }
 

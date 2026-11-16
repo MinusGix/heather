@@ -124,12 +124,14 @@ the one the facts in scope decide.
 - When `j` is `0`, the prefix is empty.
 
 **The outer loop.** `sort_from_sorts` is the invariant: if the bytes before
-`i` are sorted, `sort_from` leaves a sorted permutation. Each pass
-(`sort_from_step`) splits the span at `i`, reads the byte there, uses
+`i` are sorted, `sort_from` leaves a sorted permutation. It is proved by
+`induct List::sort_from(s, n, i)`, with one arm per way the loop can go. In a
+pass, the arm splits the span at `i`, reads the byte there, uses
 `insert_at_inserts` to see the longer sorted prefix, and chains the
-permutations (`perm_middle`, `perm_of_picks`). The invariant is proved by
-`decreases (n - i).toNat()`, the measure of the loop it is about, with one
-`if h: i < n` that matches the program's.
+permutations (`perm_middle`, `perm_of_picks`). The induction hypothesis
+covers the rest of the loop. Past the end, there is nothing left to sort.
+The proof never states the loop's measure or takes a step of it: the
+induction principle reuses the function's own.
 
 The general facts the proof needed went into the library rather than staying
 here: list splits and updates in `lib/std/data/list_window.hthr`

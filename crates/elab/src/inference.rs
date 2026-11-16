@@ -561,6 +561,7 @@ impl Inference<'_> {
             ExprKind::Scaled(lit) => Literals(self).elab_scaled_infer(cx, lit, e),
             ExprKind::SuffixedNum { value, suffix } => Literals(self).elab_suffixed_infer(cx, value, suffix, e),
             ExprKind::Str(text) => Literals(self).elab_string_infer(cx, text, e),
+            ExprKind::ByteStr(bytes) => Literals(self).elab_byte_string_infer(cx, bytes, e),
             ExprKind::Block(block) => statements::infer_block(self.0, cx, block),
             // `(e: T)`: `e` checked at `T`, and the whole has type `T`. No
             // term of its own, as a typed `let` contributes none.

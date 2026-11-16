@@ -408,10 +408,10 @@ impl Checking<'_> {
                 self.elab_check_skel_slots(&inner, &built, expected, lvl, hint, skel, capture_slots)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
-                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF)
+                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF || name == crate::function_induction::INDUCT_LEAF_DEFAULT)
                     && named.is_empty() =>
             {
-                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL);
+                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF_DEFAULT);
                 crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
@@ -1155,6 +1155,7 @@ impl Checking<'_> {
             ExprKind::Char(c) => Literals(self).elab_char_check(cx, *c, e, expected, lvl),
             ExprKind::Scaled(lit) => Literals(self).elab_scaled_check(cx, lit, e, expected, lvl),
             ExprKind::Str(text) => Literals(self).elab_string_check(cx, text, e, expected, lvl),
+            ExprKind::ByteStr(bytes) => Literals(self).elab_byte_string_check(cx, bytes, e, expected),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is

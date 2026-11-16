@@ -257,6 +257,9 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // Other functions of the program to export beside the function: each a
     // module and a function in it.
     let mut entries: Vec<(String, String)> = Vec::new();
+    // Whether to print what the optimizer's replays did, in the rules'
+    // words (`--explain-optimizer`).
+    let mut explain = false;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -292,6 +295,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
                 }
                 kernel_workers = Some(n);
             }
+            "--explain-optimizer" => explain = true,
             _ if arg.starts_with('-') => return Err(format!("unknown option `{arg}`")),
             _ => positional.push(arg.as_str()),
         }
@@ -300,12 +304,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         return Err(if program_only {
             "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]"
         } else {
-            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
+            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--explain-optimizer] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
         }.into());
     }
     if program_only && (!entries.is_empty() || symbol.is_some()) {
         return Err("--entry and --symbol are compile-x86's: a reflected program is named whole".into());
     }
+    if program_only && explain { return Err("--explain-optimizer is compile-x86's: a reflected program is not optimized".into()); }
     let source = Path::new(positional[0]);
     // The function as its module names it: a name, or a method's path
     // (`List::raise_letters`). Its symbol is the label, and names the
@@ -527,7 +532,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
-    let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape)
+    let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape, explain)
         .map_err(|why| format!("verified lowering: {why}"))?;
     let signature = heather_cli::linked::Signature { kinds, stack: compiled.room };
     let proof = compiled.text;
@@ -574,6 +579,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
     }
     checked?;
+    refuse_assumptions(&elab, &certificate_module, &unchecked)?;
     // The answers the certificate stands on, now that it has checked: a
     // read that went into a refused one is never remembered.
     let (remembered, evaluated) = answers.counts();
@@ -594,6 +600,30 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     for (entry, _, at) in &exported[1..] { println!("  `{entry}`, a function of the same program, at offset {at}"); }
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+/// A certificate proves what it says only as far as the axioms it reaches
+/// hold: an index bound or a specification the source assumed is a premise
+/// of every theorem about the function, and the bytes carry no check for
+/// it. So a certificate that reaches one is refused, by name, before
+/// anything is published (issues/compile-x86-certifies-over-axioms.md).
+pub(crate) fn refuse_assumptions(elab: &Elaborator, certificate_module: &str, unchecked: &Path) -> Result<(), String> {
+    let own = format!("{certificate_module}::");
+    let assumed: std::collections::BTreeSet<String> = elab
+        .axiom_violations()
+        .into_iter()
+        .filter(|report| report.target.starts_with(&own))
+        .flat_map(|report| report.axioms.into_iter().map(|used| used.axiom))
+        .collect();
+    if assumed.is_empty() {
+        return Ok(());
+    }
+    let names = assumed.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+    Err(format!(
+        "the certificate rests on the axiom{} {names}: the compiled bytes are certified only for a program proved without assumptions (the unpublished certificate is {})",
+        if assumed.len() == 1 { "" } else { "s" },
+        unchecked.display(),
+    ))
 }
 
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {

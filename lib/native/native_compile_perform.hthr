@@ -74,7 +74,7 @@ import set_tactic;
 
 // The same target running another activation.
 fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.words + frames.len()) <= t.stack.size,
-    roomy: (room * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= index) → Target {
+    roomy: (room * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= index) → Target {
     Target(t.r, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
         t.stack_above, t.stack_canonical, index, frames, room, framed, roomy)
 }
@@ -92,7 +92,7 @@ theorem Target::held_slots(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
 
 // The claim reads no proof of the activation's.
 theorem Target::held_proofs(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: (t.room * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index):
+    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: (t.room * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index):
     t.activation(t.index, t.frames, t.room, framed, roomy).Held(live, env, g, m) {
     held
 }
@@ -512,8 +512,8 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
 
 // A room one past `d` still counts in a word.
 theorem Target::room_small(self t: Target, d: Nat, succ: t.room = Succ(d)): Succ(d) < Nat::pow(2, 64) {
-    let was: ((Succ(d) * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index) =
-        j(succ, λ r _ => (r * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index, t.roomy);
+    let was: ((Succ(d) * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index) =
+        j(succ, λ r _ => (r * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index, t.roomy);
     let one_le: (1 * Succ(d) <= (8 * (t.words + 7)) * Succ(d)) = Nat::mul_le_mono_r(Succ(d), 1, 8 * (t.words + 7), omega());
     let one: (Succ(d) <= Succ(d) * (8 * (t.words + 7))) = j(Nat::mul_comm(8 * (t.words + 7), Succ(d)), λ x _ => Succ(d) <= x,
         j(Nat::mul_left_one(Succ(d)), λ x _ => x <= (8 * (t.words + 7)) * Succ(d), one_le));

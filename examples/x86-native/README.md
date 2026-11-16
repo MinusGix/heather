@@ -192,6 +192,39 @@ proof never unfolds a callee; that is also what lets a caller call a
 function deciding through a connective (`calls_either` in
 `branches.hthr`).
 
+## A program's own optimizer rule
+
+`own_rule.hthr` declares a rule beside the function it compiles:
+
+```heather
+rule theorem or_zero({w: Nat}, x: BitVec(w)): x | 0 = x { … }
+```
+
+It is an ordinary theorem about words. The `rule` prefix reads the
+statement as what the optimizer may do (an `or` with a zero constant is a
+move of the other word), proves that sound from the theorem, and registers
+it. `compile-x86` then uses the rules registered in the program's modules
+beside the library's own, and the certificate's replay is over both, so
+nothing about the rule is trusted beyond the theorem the kernel checked.
+`first_or_zero` compiles to 46 bytes with the rule and 55 without: the
+`or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
+`docs/native/optimizer-rules-design.md`).
+
+`--explain-optimizer` prints what the optimizer did with the rules, a line
+for each one used, in the rule's own words and by its name:
+
+```console
+$ heather compile-x86 examples/x86-native/own_rule.hthr first_or_zero \
+    -o target/x86-native/first_or_zero.s --explain-optimizer
+function 0: 6 rules used
+  …
+  t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
+  t10 = t8 | 0 = t8   by or_zero
+```
+
+`t10` is the word the `or` computed; the line says what it was, what the
+rule makes it, and (in brackets) the facts the rule needed.
+
 ## Per-function certificates and `build-x86`: burned
 
 Before the verified lowering, each function got a certificate generated for

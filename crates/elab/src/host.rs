@@ -362,6 +362,9 @@ pub struct DeclView {
     /// `AsInstance(class, args, index)`: a `def` that is also registered as
     /// the instance `class<args…>(index…)`, the index arguments by name.
     pub instance: Option<(String, Vec<RExpr>, Vec<String>)>,
+    /// `AsRegistered(ty)`: a `def` that is also registered under the type
+    /// named `ty`, as `register def` does.
+    pub registered: Option<String>,
     pub name: String,
     pub params: Vec<(u64, bool)>,
     pub result: RExpr,
@@ -466,12 +469,14 @@ pub enum HeadView {
 
 /// A `match` with its arms, as `Arms` answers it (`tactic::MatchInfo`): the
 /// scrutinee, each constructor's name and a handle to its arm as a function
-/// of the payload, and the arguments the match is applied to.
+/// of the payload, the arguments the match is applied to, and the fields
+/// read off its record, by number, the first read first.
 #[derive(Clone, Debug)]
 pub struct ArmsView {
     pub scrut: u64,
     pub arms: Vec<(String, u64)>,
     pub args: Vec<u64>,
+    pub path: Vec<u64>,
 }
 
 /// A term's application spine, as `Spine` answers it (`tactic::SpineInfo`):
@@ -716,10 +721,12 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             } else {
                 None
             };
+            let registered = if form == 4 { Some(self.string(self.call("decl_registered_type", vec![d])?)?) } else { None };
             decls.push(DeclView {
                 theorem: form == 0,
-                value: form == 2 || form == 3,
+                value: form == 2 || form == 3 || form == 4,
                 instance,
+                registered,
                 name: self.string(self.call("decl_name", vec![d])?)?,
                 params,
                 result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
@@ -862,6 +869,9 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }
                 for h in &m.args {
                     out = self.call("host_arms_arg", vec![out, self.lit(*h)])?;
+                }
+                for i in &m.path {
+                    out = self.call("host_arms_field", vec![out, self.lit(*i)])?;
                 }
                 Ok(out)
             }
@@ -1225,7 +1235,9 @@ pub(crate) enum Leaves {
     /// ([`HostMut::elab_generate`]), in a context of the length given.
     /// They were built in a world of `psi` globals, and the declarations
     /// published since are shifted past.
-    Member { fills: Vec<(Held, usize)>, psi: usize },
+    /// `checked`: a body is compared with the type it is elaborated at
+    /// (a registered member's, which is written by name).
+    Member { fills: Vec<(Held, usize)>, psi: usize, checked: bool },
 }
 
 const LEAF: &str = "\0host-leaf-";
@@ -1613,6 +1625,8 @@ pub(crate) struct Member {
     /// The instance the value is registered as: the class, its type
     /// arguments (in the root scope) and its index arguments by name.
     instance: Option<(String, Vec<(Type, Level)>, Vec<String>)>,
+    /// The name of the type the value is registered under.
+    registered: Option<String>,
     name: String,
     params: Vec<(String, bool, Type, Level)>,
     result: (Type, Level),
@@ -2737,6 +2751,12 @@ impl Host<'_> {
     /// a λ over the payload. A `match h:` is that `Case` applied to `refl`,
     /// and the application's argument is listed. Wider matches nest `Case`s
     /// and are refused until a reader needs them.
+    ///
+    /// A field read of a `match`'s record (`(match c { … }).value.after`,
+    /// which `View` shows as the `match`, stuck on its scrutinee) is that
+    /// `match`, its arms whole, with the fields read listed by number, the
+    /// first read first (`path`): a statement `if`'s joined locals are read
+    /// so (docs/native/io-programs-design.md §4.2).
     fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
@@ -2747,8 +2767,39 @@ impl Host<'_> {
         while let Some(r) = crate::spelling::beta_head(&t) {
             t = r;
         }
-        let mut spine = Vec::new();
+        // The projections, the outermost first; a field `i` is `fst` after
+        // `i + 1` `snd`s (`DisplayCx::field_read_record`).
+        let mut projs = Vec::new();
         let mut head = &t;
+        while let Some((first, pair)) = crate::spelling::proj_of(head) {
+            projs.push(first);
+            head = pair;
+        }
+        let mut path = Vec::new();
+        let mut snds = 0u64;
+        for first in projs.iter().rev() {
+            if *first {
+                let Some(i) = snds.checked_sub(1) else { return Err(Fault::Ill("a projection of a `match` that is not a field read".into())) };
+                path.push(i);
+                snds = 0;
+            } else {
+                snds += 1;
+            }
+        }
+        if snds != 0 {
+            return Err(Fault::Ill("a projection of a `match` that is not a field read".into()));
+        }
+        // The record read may itself be a β-redex (a `match` under `on`
+        // clauses' `λ`s, its field read).
+        let reduced;
+        if let Some(mut r) = crate::spelling::beta_head(head) {
+            while let Some(r2) = crate::spelling::beta_head(&r) {
+                r = r2;
+            }
+            reduced = r;
+            head = &reduced;
+        }
+        let mut spine = Vec::new();
         while let Term::AppAt { fun, arg } = head {
             spine.push(arg);
             head = fun;
@@ -2775,7 +2826,7 @@ impl Host<'_> {
                 let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
                 args.push(run.issue_shared(at, a, aty, alevel));
             }
-            return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args });
+            return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args, path });
         }
         let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
             return Err(Fault::Ill("it is not a `match`".into()));
@@ -2796,7 +2847,7 @@ impl Host<'_> {
             let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
             args.push(run.issue_shared(at, a, aty, alevel));
         }
-        Ok(ArmsView { scrut: s, arms, args })
+        Ok(ArmsView { scrut: s, arms, args, path })
     }
 
     /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
@@ -4300,9 +4351,13 @@ impl Host<'_> {
                 Some((t, n)) if *n == cx.gamma.len() => Ok(t.clone()),
                 _ => err("a split's branch was elaborated in another context than it was proved in", span),
             },
-            Leaves::Member { fills, psi } => match fills.get(k) {
-                Some((Held::Term(t, ..), n)) if *n == cx.gamma.len() => {
-                    Ok(t.shift_global((self.goal_psi().bindings.len() - *psi) as u32))
+            Leaves::Member { fills, psi, checked } => match fills.get(k) {
+                Some((Held::Term(t, ty, _), n)) if *n == cx.gamma.len() => {
+                    let by = (self.goal_psi().bindings.len() - *psi) as u32;
+                    if *checked && !self.conv_types(cx, &ty.shift_global(by), expected, lvl) {
+                        return err("a generator registers a value under a type that is not the value's type", span);
+                    }
+                    Ok(t.shift_global(by))
                 }
                 _ => err("a generated declaration's body was elaborated in another context than it was built in", span),
             },
@@ -4316,7 +4371,7 @@ impl Host<'_> {
         };
         let leaves = state.borrow();
         match &*leaves {
-            Leaves::Member { fills, psi } => match fills.get(k) {
+            Leaves::Member { fills, psi, .. } => match fills.get(k) {
                 Some((Held::Type(t, l), n)) if *n == cx.gamma.len() => {
                     Ok((t.shift_global((self.goal_psi().bindings.len() - *psi) as u32), l.clone()))
                 }
@@ -4686,7 +4741,7 @@ impl Host<'_> {
         let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
         let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
-        Ok(Member { theorem: d.theorem, value: d.value, instance, name: name.clone(), params, result: (result, level), body })
+        Ok(Member { theorem: d.theorem, value: d.value, instance, registered: d.registered.clone(), name: name.clone(), params, result: (result, level), body })
     }
 }
 
@@ -4713,6 +4768,14 @@ impl HostMut<'_> {
                 span,
             })
             .collect();
+        // A registered member writes its type by name, as `register def`
+        // does: the registry is the type's, and the body the generator
+        // built is checked against it like any body against its statement.
+        let result = match &m.registered {
+            Some(written) if is_name(written) => Ty { kind: TyKind::Named { name: written.clone(), args: Vec::new() }, span },
+            Some(written) => return err(format!("`{}` is to be registered under `{written}`, which is not a type's name", m.name), span),
+            None => leaf_ty(n),
+        };
         let decl = Decl {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
@@ -4723,7 +4786,7 @@ impl HostMut<'_> {
             name: m.name.clone(),
             tyvars: Vec::new(),
             params,
-            result: leaf_ty(n),
+            result,
             decreases: None,
             unfolding: Vec::new(),
             body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
@@ -4734,8 +4797,9 @@ impl HostMut<'_> {
         let (result, level) = &m.result;
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
-        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))?;
+        let registered = m.registered.is_some();
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi, checked: registered }));
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| if registered { me.elab_registered_def(&decl) } else { me.elab_decl(&decl) })?;
         match &m.instance {
             None => Ok(()),
             Some(instance) => self.publish_instance_member(&m.name, instance, psi, span),
@@ -4808,7 +4872,7 @@ impl HostMut<'_> {
             body: InstanceBody::Literal(fields),
             span,
         };
-        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi, checked: false }));
         self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| ClassesMut(me).elab_instance(&decl))
     }
 }

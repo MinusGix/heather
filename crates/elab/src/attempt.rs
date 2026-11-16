@@ -79,25 +79,27 @@ pub(super) struct DeclAttempt {
     /// by every value of the same type, so repeated values carry the same
     /// allocations and the kernel's conversion memo and pointer-equality
     /// shortcuts answer their repeated queries. Keyed by the type (compared
-    /// structurally), the context length, the Ψ scope and whether code emits
-    /// `@`-forms. The scope is there because the annotations name generated
-    /// definitions, and a declaration registers its own mid-attempt
-    /// (`register_gen_defs`): an entry minted before a push names every
-    /// global one too close (`docs/inductives/iwf-named-signature-design.md` §2).
+    /// structurally), the context length, the signature's length and whether
+    /// code emits `@`-forms. The length is there because the annotations name
+    /// generated definitions, and a declaration registers its own mid-attempt
+    /// (`register_gen_defs`): an entry minted before a registration spells
+    /// inline what later ones name, and the kernel's shortcut wants one
+    /// spelling. Not the goal or `meta fn` padding: a generated definition is
+    /// a constant, read the same under any (`Elaborator::gen_def_of`).
     pub(super) children_annotations: RefCell<Vec<(Type, (usize, u32), bool, Rc<Type>, Rc<Type>)>>,
     /// The same for a `sup_f`'s shape and arity slots, keyed by the `Wf`.
     pub(super) wf_slot_annotations: RefCell<Vec<(Type, (usize, u32), (Rc<Type>, Rc<Term>))>>,
     /// `instance_match`'s answers (`gendefs.rs`): the subject type, compared
     /// structurally, under its declaration's tag, the context, the binders
-    /// past it, the scratch depth and the Ψ scope — everything the match
-    /// reads. A literal names the same instantiations at every constructor
+    /// past it, the scratch depth and the signature's length — everything the
+    /// match reads (the registry it consults grows only with the signature). A literal names the same instantiations at every constructor
     /// (`At(…, Block([…]))` matches `List<Instruction>` again and again;
     /// `issues/constructor-literal-respell-cost.md`), and each match is a hole
     /// walk, a template instantiated and walked again, and its arguments
     /// emitted.
     pub(super) instance_matches: RefCell<std::collections::HashMap<InstanceMatchKey, Vec<(Type, Option<(Level, Vec<Rc<Term>>)>)>>>,
     /// A character literal checked at `Char` itself, by the character, the
-    /// context's base and length, the Ψ scope and the expected type (compared
+    /// context's base and length, the signature's length and the expected type (compared
     /// structurally): `char::ofNat(code, decide_yes(refl))` read in `char`'s
     /// scope (`literals.rs`) names only globals, so a second `'a'` — every
     /// letter of every string literal — is the first one's term. Each is
@@ -149,7 +151,7 @@ pub(super) struct DeclAttempt {
 
 /// [`DeclAttempt::instance_matches`]' key past the subject type: the tag, the
 /// context's base and length, the binders past it, the scratch depth and the
-/// Ψ scope (`Elaborator::lowering_scope`).
+/// signature's length.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct InstanceMatchKey {
     pub(super) tag: u32,
