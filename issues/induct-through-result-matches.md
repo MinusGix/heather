@@ -38,6 +38,25 @@ So the `Seq`, `If` and `Loop` cases cannot be finished from the principle, and e
 
 With [[constructor-equations-in-context]] the `None` cases close themselves, and `Stmt::emits_extends` on the model is one `induct` with an arm per construct that has something to say.
 
+## Built (2026-11-16)
+
+Items 1 to 4 (`docs/tactics/functional-induction-design.md` §1.1): a
+`match` on any term of an inductive type that is not a parameter is a test,
+its type the elaborator's; the case binds the arm's fields and
+`h: g(ā) = C(ȳ)` (a `match h:`'s name where it gives one), with an IH at
+the matched call and at each recursive call under the arm; the equations
+come with it (`Stmt::emits::Then::Some` on `lib/native` states
+`Stmt::emits_then_of`); `and_then`/`map` on `Option` and `Result`, a postfix
+`?`, and `Bool::guard` read as the `match` they are. Probes in
+`lib/_tests/std/tactic/induct_tests.hthr` (`Prog::run`, a `match h:`, a
+nested one, a measured recursion) and
+`lib/_tests/std/core/branch_equations_tests.hthr`. On the mini-model,
+`St::emits_extends` is one `induct` whose `None` cases are `absurd(e)`.
+
+Left: the conversions below, which the proof-forms thread
+([[native-compile-correct-proof-forms]]) does with
+[[constructor-equations-in-context]].
+
 ## Done when
 
 `Stmt::emits_extends` and `Stmt::emits_runs` are `induct s.emits(p, layout, out, known, names)` with no hand inversion of a `None`/`Some` match, and `Stmt::emits_then_of`, `emits_repeat_of` and `emits_branch_of` are the generated equations (deleted from `native_compile_correct.hthr`). Probes in `lib/_tests/std/tactic/induct_tests.hthr` cover a result match with a recursive call under its arm, a `match h:` on a result, and a nested one.
