@@ -2973,7 +2973,7 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
 // `Spilling(mask)` is a call's: which of the eight registers a caller saves
 // the call saves round itself, bit `k` the `k`th (function_ir_lower_calls,
 // `call_saves`).
-inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), CallSlots(count: Nat), Spilling(mask: Nat) }
+inductive Place { Into(register: Gpr), Folded, Saving(count: Nat), CallSlots(count: Nat), Spilling(mask: Nat), Short(name: Nat) }
 
 // A bit that is a constant is known true or false, which is what an arm
 // taken on it knows: a decided comparison's bit written after it
@@ -3061,7 +3061,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
 }
 
 fn Node::lower_at(self node: Node, place: Place, file: File) → Option<Lowered> {
-    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None, CallSlots(_) => None, Spilling(_) => None }
+    match place { Into(destination) => node.lower(destination, file), Folded => node.fold(file), Saving(_) => None, CallSlots(_) => None, Short(_) => None, Spilling(_) => None }
 }
 
 theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
@@ -3071,7 +3071,7 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
         Into(destination) => node.lower_keeps<M>(values, destination, file),
         Folded => node.fold_keeps<M>(values, file),
         Saving(_) => trivial,
-        CallSlots(_) => trivial,
+        CallSlots(_) => trivial, Short(_) => trivial,
         Spilling(_) => trivial,
     }
 }
