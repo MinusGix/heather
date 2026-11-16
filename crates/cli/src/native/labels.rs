@@ -41,11 +41,50 @@ pub(super) fn offsets(lens: &[u64]) -> Vec<u64> {
 pub(super) fn jump(item: &str) -> Option<(u64, bool)> {
     let target = |prefix: &str| item.strip_prefix(prefix)
         .and_then(|rest| rest.trim_end_matches(')').rsplit(", ").next()?.parse::<u64>().ok());
-    match (target("Jcc("), target("Jmp(").or_else(|| target("CallTo("))) {
+    match (target("Jcc(").or_else(|| target("JccShort(")), target("Jmp(").or_else(|| target("JmpShort(")).or_else(|| target("CallTo("))) {
         (Some(to), _) => Some((to, true)),
         (_, Some(to)) => Some((to, false)),
         _ => None,
     }
+}
+
+/// Which labels' jumps can take the two-byte form, over one function's
+/// items as emitted near (`JccShort`, `JmpShort`; issues/function-ir-verified-short-jumps.md):
+/// every JCC and JMP to a label of these items starts short, and a label
+/// any of whose jumps does not reach it within a signed byte goes back to
+/// near, until nothing changes. Lengthening a jump only moves labels
+/// further apart, so the set only shrinks and the loop ends. Untrusted: the
+/// placement's `Short` heads say it, and the lowering's landing check is
+/// what holds a short jump to its target.
+pub(super) fn relax(items: &[(u64, String)], lens: &[u64]) -> BTreeSet<u64> {
+    let named: BTreeSet<u64> = items.iter().filter(|(name, _)| *name != 0).map(|(name, _)| *name).collect();
+    let jumps: Vec<(usize, u64, bool)> = items.iter().enumerate()
+        .filter(|(_, (_, item))| item.starts_with("Jcc(") || item.starts_with("Jmp("))
+        .filter_map(|(i, (_, item))| jump(item).map(|(to, conditional)| (i, to, conditional)))
+        .filter(|(_, to, _)| named.contains(to)).collect();
+    let mut short: BTreeSet<u64> = jumps.iter().map(|&(_, to, _)| to).collect();
+    loop {
+        let sized: Vec<u64> = items.iter().zip(lens).enumerate().map(|(i, (_, &len))| match jumps.iter().find(|&&(j, _, _)| j == i) {
+            Some(&(_, to, _)) if short.contains(&to) => 2,
+            _ => len,
+        }).collect();
+        let at = offsets(&sized);
+        let offset: std::collections::BTreeMap<u64, u64> = items.iter().enumerate().filter(|(_, (name, _))| *name != 0).map(|(i, (name, _))| (*name, at[i])).collect();
+        let far: Vec<u64> = jumps.iter().filter(|&&(_, to, _)| short.contains(&to)).filter(|&&(i, to, conditional)| {
+            let distance = offset[&to] as i64 - at[i + 1] as i64;
+            // A JCC lands ahead only (`ShortForward`), a JMP either way.
+            !(if conditional { (0..=127).contains(&distance) } else { (-128..=127).contains(&distance) })
+        }).map(|&(_, to, _)| to).collect();
+        if far.is_empty() { return short; }
+        for to in far { short.remove(&to); }
+    }
+}
+
+/// An item with its jump in the two-byte form.
+pub(super) fn shortened(item: &str) -> String {
+    if let Some(rest) = item.strip_prefix("Jcc(") { format!("JccShort({rest}") }
+    else if let Some(rest) = item.strip_prefix("Jmp(") { format!("JmpShort({rest}") }
+    else { item.to_string() }
 }
 
 /// The bytes linked: each jump's displacement, its item's last four bytes,
@@ -59,10 +98,14 @@ pub(super) fn link(items: &[(u64, String)], offsets: &[u64], bytes: &mut [u8]) -
     for (i, (_, item)) in items.iter().enumerate() {
         let Some((to, _)) = jump(item) else { continue };
         let (end, to) = (offsets[i + 1], *named.get(&to).ok_or_else(|| format!("a jump to label {to}, which no item names"))?);
+        // A short jump's displacement is its last byte (`short_rel`), a
+        // near one's its last four (`near_rel`).
+        let short = item.starts_with("JccShort(") || item.starts_with("JmpShort(");
         let displacement = (to.wrapping_sub(end) as u32).to_le_bytes();
+        let width = if short { 1 } else { 4 };
         let end = end as usize;
-        if end < 4 || end > bytes.len() || offsets[i + 1] - offsets[i] < 5 { return Err("a jump's bytes did not read back".into()); }
-        bytes[end - 4..end].copy_from_slice(&displacement);
+        if end < width || end > bytes.len() || offsets[i + 1] - offsets[i] < width as u64 + 1 { return Err("a jump's bytes did not read back".into()); }
+        bytes[end - width..end].copy_from_slice(&displacement[..width]);
     }
     Ok(())
 }
