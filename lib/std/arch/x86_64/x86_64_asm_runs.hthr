@@ -741,6 +741,7 @@ fn Gpr::tests_zero(self register: Gpr, gprs: Gprs) → Bool {
 // arm's label, and (after the second arm) the join.
 fn Prog::test_label(self start: Prog, register: Gpr) → Prog { At(start, 0, Block([TestRR(register, register)])) }
 fn Prog::branch_label(self start: Prog, register: Gpr, else_name: Nat) → Prog { At(start.test_label(register), 0, Jcc(E, else_name)) }
+fn Prog::branch_label_by(self start: Prog, register: Gpr, else_name: Nat, short: Bool) → Prog { At(start.test_label(register), 0, jcc_item(short, E, else_name)) }
 fn Prog::else_label(self yes_end: Prog, else_name, join_name: Nat) → Prog { At(At(yes_end, 0, Jmp(join_name)), else_name, Block([])) }
 fn Prog::join_label(self no_end: Prog, join_name: Nat) → Prog { At(no_end, join_name, Block([])) }
 
