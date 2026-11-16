@@ -5,7 +5,7 @@ labels: [native,effects,runtime]
 area: heather-in-heather
 milestone: [nh-effects]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-16
 ---
 
 `ETm::placed` (`lib/native/runtime/rt_io_lower.hthr`) leaves a bit in the
@@ -30,3 +30,7 @@ variable's port, so it is moved at one bit. A `Lit` bit is a one-bit
 ## Done when
 
 A loop whose condition is a bit variable compiles through `write-elf`.
+
+## Log
+
+- 2026-11-16: 2026-11-16: `ETm::If`'s test met it too: a test bound by an `ETm::Let` and read as `Var` made write-elf refuse tr_upper's pass. The reflector now writes an `if`'s test as one `Tm` with its lets inside, as a loop's is; a written `If(Var(b), …)` over a `Bool` variable still hits this.

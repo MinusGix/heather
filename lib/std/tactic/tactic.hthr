@@ -151,7 +151,10 @@ record CtorInfo { name: String, fields: List<FieldInfo>, ctor: Option<Handle> }
 // reaches; a constructor with no fields still takes one (it reads nothing).
 record ArmInfo { ctor: String, body: Handle }
 
-record MatchInfo { scrut: Handle, arms: List<ArmInfo>, args: List<Handle> }
+// `path` is the fields a read of the match's record reads off it, by
+// number, the first read first (`(match c { … }).value.after` is the match
+// and `[1, 0]`); `[]` for the match itself.
+record MatchInfo { scrut: Handle, arms: List<ArmInfo>, args: List<Handle>, path: List<Nat> }
 
 // A term as a head applied to arguments, as `Spine` answers it: every
 // argument in order, implicit ones included, each with whether the
@@ -1338,19 +1341,26 @@ fn host_head_lam(dom: Nat) → Answer { AHead(HLam(Handle(dom))) }
 fn host_head_ctor(ty: Nat, ctor: Nat, name: String) → Answer { AHead(HCtor(GlobalRef(ty), ctor, name, [])) }
 
 // `Arms`' answer: the scrutinee, then one arm at a time, then the
-// arguments.
-fn host_arms(scrut: Nat) → Answer { AArms(Accepted(MatchInfo(Handle(scrut), [], []))) }
+// arguments, then the fields read.
+fn host_arms(scrut: Nat) → Answer { AArms(Accepted(MatchInfo(Handle(scrut), [], [], []))) }
 
 fn host_arms_arm(a: Answer, ctor: String, body: Nat) → Answer {
     match a {
-        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms ++ [ArmInfo(ctor, Handle(body))], m.args))), Refused(_) => a },
+        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms ++ [ArmInfo(ctor, Handle(body))], m.args, m.path))), Refused(_) => a },
         _ => a,
     }
 }
 
 fn host_arms_arg(a: Answer, h: Nat) → Answer {
     match a {
-        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms, m.args ++ [Handle(h)]))), Refused(_) => a },
+        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms, m.args ++ [Handle(h)], m.path))), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_arms_field(a: Answer, i: Nat) → Answer {
+    match a {
+        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms, m.args, m.path ++ [i]))), Refused(_) => a },
         _ => a,
     }
 }

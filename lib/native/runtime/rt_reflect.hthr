@@ -74,13 +74,30 @@ record ReprEntry { repr: Nat, name: String, spec: String, abs: Nat, emb: Nat, ty
 // it is a record of them.
 record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields: List<Pair<String, Nat>> }
 
+// A statement `if` the walk has made (docs/native/io-programs-design.md
+// §4.2): the locals its arms assign, the world among them, are joined in
+// one record, `#stage`, a `match` on the test whose arms each end in the
+// locals written out (`Mutated(io, Mutated(k, s))`), and every later read of
+// a local is a field of it (`#stage.value.after`, which `Arms` answers as
+// the `match` and the fields' numbers). `stage` is that `match`, and
+// `parts` each local's variable after the `if`, in the record's order,
+// `None` for the world.
+record IfRes { stage: MatchInfo, parts: List<Option<Nat>> }
+
 // What an effectful body's reflection knows of its world: the capability's
 // local, the word-level methods that call Linux, and the calls made so far,
 // in order; the functions of the program a computation may lend a buffer
 // to (`ETm::Lend`), the table's order, and the calls of them made so far,
 // each with the variables its `Lend` bound the bytes it left (`after`) and
-// its word (`value`) to.
-record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes>, lends: List<Nat>, lent: List<CallRes> }
+// its word (`value`) to; the globals `Io` and `Mutated`, and the statement
+// `if`s made so far (`ETm::If`, `rt_if_make`).
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes>, lends: List<Nat>, lent: List<CallRes>, ty: Nat, mutated: Nat, ifs: List<IfRes> }
+
+fn IoKnown::with_calls(self io: IoKnown, calls: List<CallRes>) → IoKnown { IoKnown(io.world, io.methods, calls, io.lends, io.lent, io.ty, io.mutated, io.ifs) }
+fn IoKnown::with_lent(self io: IoKnown, lent: List<CallRes>) → IoKnown { IoKnown(io.world, io.methods, io.calls, io.lends, lent, io.ty, io.mutated, io.ifs) }
+fn IoKnown::with_ifs(self io: IoKnown, ifs: List<IfRes>) → IoKnown { IoKnown(io.world, io.methods, io.calls, io.lends, io.lent, io.ty, io.mutated, ifs) }
+// The same names, the world `world` with no call made yet.
+fn IoKnown::at(self io: IoKnown, world: Nat) → IoKnown { IoKnown(world, io.methods, [], io.lends, io.lent, io.ty, io.mutated, io.ifs) }
 
 // What the body of a function over a span it writes knows of that span
 // (`rt_file_reflect`, docs/native/native-one-compiler-design.md §2.6): the span
@@ -295,6 +312,16 @@ fn rt_refuse_at<A>(why: String, h: Handle) → Tac<A> {
 
 fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
     match c { Accepted(a) => pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
+}
+
+// The `match` `h` is, itself: a field read of its record (`Arms`' `path`)
+// is a statement `if`'s joined locals, which only an effectful walk reads
+// (`rt_if_make`).
+fn rt_match(what: String, h: Handle) → Tac<MatchInfo> {
+    arms(h).bind(λ c => rt_accepted(what, c)).bind(λ m => match m.path {
+        Nil => pure(m),
+        Cons(_, _) => rt_refuse(what ++ ": a field of a `match`'s record, which is read only as an `if`'s locals"),
+    })
 }
 
 // A generated global (`f#rec`, a `decreases` function's recursor): its name
@@ -869,20 +896,32 @@ fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
 
 // A record that is a field of a local whose fields name terms (a loop's
 // state, `z.value`, rt_io_reflect_loop): the term, which is the record
-// written out, so a read of its field is the field's term.
-fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> {
-    match k.named {
-        Nil => pure(r),
-        Cons(_, _) => rt_field_read(r).bind(λ read => match read {
+// written out, so a read of its field is the field's term. A record nested
+// in it (`z.value.value`, a state of three locals) is its field of that
+// term written out.
+fn rt_settle_named_in(fuel: Nat, k: Known, r: Handle) → Tac<Handle> {
+    match fuel {
+        Zero => pure(r),
+        Succ(f) => rt_field_read(r).bind(λ read => match read {
             None => pure(r),
             Some(p) => view(p.fst).bind(λ bv => match bv {
                 HLocal(x, xs) => match xs {
                     Nil => pure(Known::named_at(k.named, x.id, rt_base_name(p.snd)).unwrap_or(r)),
                     Cons(_, _) => pure(r),
                 },
-                _ => pure(r),
+                _ => rt_settle_named_in(f, k, p.fst).bind(λ inner => match inner.id.same(p.fst.id) {
+                    True => pure(r),
+                    False => rt_field_of_value(k, inner, p.snd).bind(λ v => pure(v.unwrap_or(r))),
+                }),
             }),
         }),
+    }
+}
+
+fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> {
+    match k.named {
+        Nil => pure(r),
+        Cons(_, _) => rt_settle_named_in(16, k, r),
     }
 }
 
@@ -920,6 +959,25 @@ fn rt_arm_body(m: MatchInfo, a: ArmInfo) → Tac<Handle> {
 
 fn rt_arm(m: MatchInfo, i: Nat) → Tac<Handle> {
     match m.arms.nth(i) { None => rt_refuse("a match without its arms"), Some(a) => rt_arm_body(m, a) }
+}
+
+// A `Bool` match's `True` and `False` arms, both under the one local the
+// `True` arm's payload is opened at, so that a term of one arm can be
+// compared with a term of the other (`Defeq` refuses locals of two
+// binders).
+fn rt_bool_arms(m: MatchInfo) → Tac<Pair<Handle, Handle>> {
+    match m.args {
+        Cons(_, _) => rt_refuse("an `if h:` over the world is not reflected yet"),
+        Nil => match m.arms.nth(1) {
+            None => rt_refuse("a match without its arms"),
+            Some(yes) => match m.arms.nth(0) {
+                None => rt_refuse("a match without its arms"),
+                Some(no) => open(yes.body, "payload").bind(λ c => rt_accepted("a match arm", c)).bind(λ o =>
+                    next_spelling(App(Hd(no.body), Local(o.local.ref))).bind(λ c2 => rt_accepted("a match arm", c2)).bind(λ n =>
+                    pure(Pair(o.body, n)))),
+            },
+        },
+    }
 }
 
 // A byte read or write: its operands as variables, its buffer's capacity
@@ -1019,12 +1077,131 @@ fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
     match Known::index(io.lends, g.id, 0) { Some(_) => True, None => False }
 }
 
+// Which of a joined record's `n` locals a read of it reads (`Arms`'
+// `path`): field 1 (`.value`) `i` times, then field 0 (`.after`) for the
+// `i`-th of all but the last, or nothing for the last; `None` for a read
+// that stops inside the record.
+fn rt_stage_part(n: Nat, i: Nat, path: List<Nat>) → Option<Nat> {
+    match path {
+        Nil => match Succ(i).same(n) { True => Some(i), False => None },
+        Cons(j, rest) => match j {
+            Zero => match rest { Nil => match Succ(Succ(i)).leb(n) { True => Some(i), False => None }, Cons(_, _) => None },
+            Succ(_) => rt_stage_part(n, Succ(i), rest),
+        },
+    }
+}
+
+// The term an arm of the `match` gives the local a read reads: the arm ends
+// in its locals written out, `Mutated(io, Mutated(k, s))`.
+fn rt_stage_follow(h: Handle, path: List<Nat>) → Tac<Handle> {
+    match path {
+        Nil => pure(h),
+        Cons(j, rest) => view(h).bind(λ v => match v {
+            HCtor(_, _, _, fields) => match fields.nth(j) {
+                Some(x) => rt_stage_follow(x, rest),
+                None => rt_refuse("an `if`'s arm whose locals are not all written out"),
+            },
+            _ => rt_refuse("an `if`'s arm that does not end in the locals it assigns written out"),
+        }),
+    }
+}
+
+// The longest run two worlds' calls start with: the calls before an `if`
+// whose arms are the two.
+fn rt_common(ys: List<Handle>, ns: List<Handle>) → Tac<List<Handle>> {
+    match ys {
+        Nil => pure([]),
+        Cons(y, yr) => match ns {
+            Nil => pure([]),
+            Cons(n, nr) => (match y.id.same(n.id) { True => pure(True), False => defeq(Hd(y), Hd(n)) }).bind(λ same => match same {
+                True => rt_common(yr, nr).bind(λ rest => pure(Cons(y, rest))),
+                False => pure([]),
+            }),
+        },
+    }
+}
+
+fn rt_same_handle(a: Handle, b: Handle) → Tac<Bool> {
+    match a.id.same(b.id) { True => pure(True), False => defeq(Hd(a), Hd(b)) }
+}
+
+// Whether two reads are of one `match`: one scrutinee, and the same arms.
+fn rt_same_match(m: MatchInfo, n: MatchInfo) → Tac<Bool> {
+    match m.arms {
+        Cons(m0, mr) => match mr {
+            Cons(m1, _) => match n.arms {
+                Cons(n0, nr) => match nr {
+                    Cons(n1, _) => rt_same_handle(m.scrut, n.scrut).bind(λ s => match s {
+                        False => pure(False),
+                        True => rt_same_handle(m0.body, n0.body).bind(λ s0 => match s0 {
+                            False => pure(False),
+                            True => rt_same_handle(m1.body, n1.body),
+                        }),
+                    }),
+                    Nil => pure(False),
+                },
+                Nil => pure(False),
+            },
+            Nil => pure(False),
+        },
+        Nil => pure(False),
+    }
+}
+
+// The `if` the walk has made that `m` reads (the elaborator repeats the
+// `match` wherever a local of it is read).
+fn rt_if_made(ifs: List<IfRes>, m: MatchInfo) → Tac<Option<IfRes>> {
+    match ifs {
+        Nil => pure(None),
+        Cons(r, rest) => rt_same_match(r.stage, m).bind(λ same => match same {
+            True => pure(Some(r)),
+            False => rt_if_made(rest, m),
+        }),
+    }
+}
+
+// A read of a local an `if` the walk has made assigned: its variable after
+// the `if` (`None` for the world), or `None` when `h` is no such read.
+fn rt_if_read(io: IoKnown, h: Handle) → Tac<Option<Option<Nat>>> {
+    match io.ifs {
+        Nil => pure(None),
+        Cons(_, _) => arms(h).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(m) => match m.path {
+                Nil => pure(None),
+                Cons(_, _) => rt_if_made(io.ifs, m).bind(λ made => match made {
+                    None => pure(None),
+                    Some(r) => pure(match rt_stage_part(r.parts.len(), 0, m.path) { Some(i) => r.parts.nth(i), None => None }),
+                }),
+            },
+        }),
+    }
+}
+
+// In effectful code, a read of a local an `if` the walk has made assigned.
+fn rt_if_local(k: Known, h: Handle) → Tac<Option<Option<Nat>>> {
+    match k.io { None => pure(None), Some(io) => rt_if_read(io, h) }
+}
+
 // The calls a world has been through, the first first: the parameter has
-// been through none, and `m(w, …).after` through `w`'s and then `m`.
+// been through none, and `m(w, …).after` through `w`'s and then `m`. A
+// world an `if` joined (`#stage.after`) has been through the calls before
+// the `if`, the run both arms' worlds start with, and then the `if`, whose
+// `match` stands in the list for it (`rt_if_make` reads its arms).
 fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
     match fuel {
         Zero => rt_refuse("the world's chain of calls is longer than the reflector's fuel"),
         Succ(f) => view(w).bind(λ v => match v {
+            HMatch(_) => {
+                let m <- arms(w).bind(λ c => rt_accepted("an `if` over the world", c));
+                let both <- rt_bool_arms(m);
+                let yw <- rt_stage_follow(both.fst, m.path);
+                let nw <- rt_stage_follow(both.snd, m.path);
+                let yc <- rt_world_calls(f, io, yw);
+                let nc <- rt_world_calls(f, io, nw);
+                let before <- rt_common(yc, nc);
+                pure(before ++ [w])
+            },
             HLocal(x, _) => match x.id.same(io.world) {
                 True => pure([]),
                 False => rt_refuse("a world that is not the capability `io`"),
@@ -1049,7 +1226,6 @@ fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
                 }),
                 False => rt_refuse("a world read out of a record (`." ++ name ++ "`)"),
             },
-            HMatch(_) => rt_refuse("the world through a branch: a call under `if` or `match` is not reflected yet"),
             _ => rt_refuse("a world that is not the capability threaded through calls"),
         }),
     }
@@ -1734,7 +1910,12 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         },
                     },
                 },
-                HMatch(_) => arms(h).bind(λ c => rt_accepted("a `match`", c)).bind(λ m =>
+                HMatch(_) => rt_if_local(k, h).bind(λ joined => match joined {
+                  Some(part) => match part {
+                    Some(l) => pure(st.finish(h, operand, Var(l))),
+                    None => rt_refuse("the world after an `if` used as a value: it is threaded on to the next call, never runtime data"),
+                  },
+                  None => rt_match("a `match`", h).bind(λ m =>
                     k.ty_of(m.scrut).bind(λ st_ty => match st_ty {
                         Bit => rt_go(f, k, st, m.scrut, True).bind(λ rc =>
                             rt_arm(m, 1).bind(λ yes_h => rt_arm(m, 0).bind(λ no_h =>
@@ -1747,6 +1928,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
                         _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
                     })),
+                }),
                 HLit(_) => rt_refuse("a `Nat` numeral is not runtime data under the reflected fragment"),
                 HLam(_) => rt_refuse("a function value is not runtime data under the reflected fragment"),
                 // A fuel recursion's `Nat` eliminator applied to the words it

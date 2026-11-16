@@ -57,17 +57,24 @@ fn echo_whole() → Io::Reads<BitVec(64)>(echo_all::source.tree_co([]), λ io =>
 
 // tr: read into the buffer, raise what came back in place (a `runtime fn`
 // over a span, lent the buffer), write it; while a read brings something.
+// A write that fails (stdout full) ends the loop, and the status is 1, as
+// GNU tr's is; the end of the input is status 0.
 runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256)) → Partial(Mutated<Io, BitVec(64)>) {
     let mut buf = buf;
     let mut n: BitVec(64) = BitVec::ofNat(1);
+    let mut status: BitVec(64) = BitVec::ofNat(0);
     while BitVec::ofNat(0).unsigned_lt_bit(n) {
         let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(256));
         let m = raise_span(r.buf, BitVec::ofNat(r.buf.len()), r.result, BitVec::ofNat(0));
         let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
         buf := m.after;
         n := r.result;
+        if w.signed_lt_bit(BitVec::ofNat(0)) {
+            n := BitVec::ofNat(0);
+            status := BitVec::ofNat(1);
+        }
     }
-    Pointed::ret(Mutated(io, n))
+    Pointed::ret(Mutated(io, status))
 }
 
 fn tr_whole() → Io::Reads<BitVec(64)>(tr_upper::source.tree_co([]), λ io => tr_upper(io, List::replicate(zero_byte(), 256))) { tr_upper::reads }

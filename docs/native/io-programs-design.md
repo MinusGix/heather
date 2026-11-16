@@ -89,7 +89,8 @@ The gaps, each a section below:
 4. **A read lands at its buffer's start** (`CallShape::Reads`,
    `Effect::Reads`), so no program can read all of its input into one
    buffer (§4.1).
-5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2).
+5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2; built
+   since, as `ETm::If`).
 6. **No constant bytes** to write: a program cannot print `"valid\n"`
    except by storing it a byte at a time (§4.3).
 
@@ -321,24 +322,52 @@ This is a compiler change (in the native layer, not the kernel), every
 existing program passing `at = 0`, and its byte output for them is the
 same plus one `ADD` or none (an immediate 0 is folded).
 
-### 4.2 A branch whose arms call Linux: `EIf`
+### 4.2 A branch whose arms call Linux: `ETm::If` (built)
 
 A pass that writes only sometimes (`grep`, an error message on a failed
-read) needs `EIf(c, a, b)` over `ETm`. Design §8.4 names the obstacle: a
-statement `if` with calls in its arms joins per variable (`imperative.rs`),
-so the elaborated body projects `io` and each other local out of the
-branch's tuple, and an `EIf` meaning that branches over the whole
-`Mutated` needs a commuting conversion to agree by `refl`. Proposed: the
-reflector reads the per-variable join, and the pin goes through one
-equation proved once (`if c then (a.1, a.2) else (b.1, b.2)` is
-`(if c then a else b).1, …`, which is `refl` per projection on a neutral
-`c` only when the kernel has the commuting conversion; otherwise it is a
-`Bool` case split, one lemma). The lowering is a `Branch` on the flag,
-both arms ending with each variable at the same place, as a loop's pass
-does with its moves back.
+read), or a loop that stops on a failed write (`tr_upper`), needs a branch
+over `ETm`. A statement `if` elaborates (`imperative.rs`'s `join`) to one
+record of the locals its arms assign, the world among them, in the order
+they are first assigned: `#stage = match decide_bit(c) { True =>
+Mutated(io₁, Mutated(k₁, s₁)), False => … }`, every later read a field of
+it (`#stage.value.after`); one local alone is the local.
 
-None of the programs in §0 or the demo thread's three needs it (each
-computes its answer in pure code and writes once), so it comes after them.
+**The node** (`lib/native/runtime/rt_io.hthr`):
+`If(cond: Tm, yes: ETm, no: ETm, parts: List<Part>, body: ETm)`, a `Part`
+being `PWorld` or `PVar(t, y, n)`, a local of code `t` at index `y` at the
+end of the `yes` arm and `n` at the end of the `no` arm. Each arm runs to
+its end from the state before the `if`; its own result is not read. The
+meaning builds the same record, `Part::branch` (one `match` on the test's
+truth) of `Part::state` of each arm's end, and runs `body` with each
+`PVar` a new variable (`Part::push`, in the record's order) and the world
+`Part::world` of it. That is the surface's own shape, so the pin
+`meaning = f` is `refl` at a neutral test: no commuting conversion and no
+lemma was needed, against what this section first proposed. The
+variables before the `if` are untouched; the locals it assigns are new.
+
+**The lowering** (`rt_io_lower.hthr`, `ETm::lower_if`): the test into a
+flag; `Branch` on it, each arm its statements and then the moves
+(`Loc::moves`, the loop's) that bring each `PVar` word to one fresh word
+past both arms' (`ETm::join_lower`); a byte buffer stays where both arms
+leave it, else it is gone; a variable from before the `if` keeps its place
+where both arms leave it there (`Loc::meet`). It is proved in
+`ETm::lower_sound` (`ETm::lower_if_sound`): each arm by the induction
+hypothesis (`ETm::arm_sound`), the moves by `Loc::moves_sound`, and the
+join's places by `ETm::join_sound`. An `if` that does not assign the world
+lowers only when neither arm calls (`ETm::silent`).
+
+**The reflector** (`rt_io_reflect`, `rt_reflect`): the host's `Arms`
+answers a field read of a `match`'s record as that `match`, its arms
+whole, with the fields read (`MatchInfo::path`). A world that is such a
+read is on the world chain after the calls both arms' worlds start with
+(`rt_world_calls`), and the walk makes the `if` there (`rt_if_make`); a
+read of a local of an `if` that does not assign the world is made when a
+term first needs it, as a lent call is (`rt_lend_find`). The arms are read
+from the state before the `if`, under one local (`rt_bool_arms`), and each
+local after it is the variable `IfRes` names. The calls before an `if` are
+the run both arms start with, so an `if` whose two arms begin with the same
+call reads that call as before it, and the pin then refuses the program.
+`if h:` that assigns locals is refused for now.
 
 ### 4.3 Constant bytes
 
@@ -422,6 +451,8 @@ it, so it can run in another thread at the same time.
    unchanged.
 4. **The demos**: UTF-8 validator first (demo thread), each one program and
    one binary.
-5. (P) **`EIf`** (§4.2), then D3's literals (§4.3), then the rest of
+5. (P) **`EIf`** (§4.2, built: `tr_upper` exits 1 on a failed write, its
+   gate holds it to GNU tr on `/dev/full`, and the builder `tr`s are
+   gone), then D3's literals (§4.3), then the rest of
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).
