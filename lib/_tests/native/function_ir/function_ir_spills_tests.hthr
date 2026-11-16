@@ -102,7 +102,7 @@ theorem one_saved_lowers(): lower_program(pair(), one_saved()) = Some(one_saved_
 
 theorem one_saved_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, one_saved_program(), last, origin).Calls(stack, program_callees(pair()), 2) {
+    Site<M>(fetch, data, one_saved_program(), last, origin).Calls(stack, program_callees(pair()), program_depth(pair()), 2) {
     lower_program_correct<M>(pair(), one_saved(), one_saved_program(), one_saved_lowers(), fetch, data, last, origin, stack)
 }
 

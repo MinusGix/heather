@@ -524,12 +524,12 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     let written = |span: usize| shape.marks.as_ref().is_some_and(|marks| marks.get(span) == Some(&true));
     let mut kinds: Vec<_> = (0..spans).map(|span| if written(span) { heather_cli::linked::Kind::SpanMut } else { heather_cli::linked::Kind::Span }).collect();
     kinds.resize(shape.arity - spans, heather_cli::linked::Kind::Word);
-    let signature = heather_cli::linked::Signature { kinds, stack: 136 * (shape.root as u64 + 1) };
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
     let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape)
         .map_err(|why| format!("verified lowering: {why}"))?;
+    let signature = heather_cli::linked::Signature { kinds, stack: compiled.room };
     let proof = compiled.text;
     eprintln!("checking the lowering, source agreement, bytes and return certificate in {}", unchecked.display());
     let certificate_module = format!("{prefix}_certificate");
@@ -585,8 +585,8 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     // The root, then the program's other entries: each a function of words.
     let mut exported = vec![(symbol.to_string(), signature, compiled.entry)];
-    for (entry, at) in shape.entries.iter().zip(&compiled.entries) {
-        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: 136 * (entry.index as u64 + 1) };
+    for ((entry, at), room) in shape.entries.iter().zip(&compiled.entries).zip(&compiled.rooms) {
+        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: *room };
         exported.push((entry.symbol.clone(), signature, *at));
     }
     write_new(&output, program_assembly(&exported, &compiled.bytes).as_bytes())?;

@@ -91,7 +91,7 @@ theorem byte_at_lowers(): lower_program_lent([byte_at()], plan_program([byte_at(
 theorem byte_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, byte_at_program(), last, origin).CallsOver(stack, program_effects([byte_at()]), 1,
+    Site<M>(fetch, data, byte_at_program(), last, origin).CallsOver(stack, program_effects([byte_at()]), program_depth([byte_at()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([byte_at()], plan_program([byte_at()]), Lending::reading([1], addresses, buffers), byte_at_program(),
         byte_at_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
@@ -146,7 +146,7 @@ theorem sum_lowers(): lower_program_lent([sum()], plan_program([sum()]), [1]) = 
 theorem sum_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, sum_program(), last, origin).CallsOver(stack, program_effects([sum()]), 1,
+    Site<M>(fetch, data, sum_program(), last, origin).CallsOver(stack, program_effects([sum()]), program_depth([sum()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([sum()], plan_program([sum()]), Lending::reading([1], addresses, buffers), sum_program(), sum_lowers(),
         fetch, data, last, origin, stack, top, loan, trivial, λ b stores => false_elim(program_quiet_stores([sum()], b, trivial, stores)))
@@ -210,7 +210,7 @@ theorem firsts_lowers(): lower_program_lent(firsts(), plan_program(firsts()), [1
 theorem firsts_call<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1, 1], addresses, buffers).spans())):
-    Site<M>(fetch, data, firsts_program(), last, origin).CallsOver(stack, program_effects(firsts()), 2,
+    Site<M>(fetch, data, firsts_program(), last, origin).CallsOver(stack, program_effects(firsts()), program_depth(firsts()), 2,
         Lending::reading([1, 1], addresses, buffers), top) {
     lower_program_lent_correct<M>(firsts(), plan_program(firsts()), Lending::reading([1, 1], addresses, buffers), firsts_program(),
         firsts_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
@@ -272,7 +272,7 @@ theorem put_at_allowed(lending: Lending, written: lending.written(0) = True):
 theorem put_at_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), 1,
+    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), program_depth([put_at()]), 1,
         writing([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([put_at()], plan_program([put_at()]), writing([1], addresses, buffers), put_at_program(),
         put_at_lowers(), fetch, data, last, origin, stack, top, loan, trivial, put_at_allowed(writing([1], addresses, buffers), refl))
@@ -306,7 +306,7 @@ theorem put_at_x<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<B
 theorem put_at_read_only<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), 1,
+    Site<M>(fetch, data, put_at_program(), last, origin).CallsOver(stack, program_effects([put_at()]), program_depth([put_at()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([put_at()], plan_program([put_at()]), Lending::reading([1], addresses, buffers), put_at_program(),
         put_at_lowers(), fetch, data, last, origin, stack, top, loan, trivial, put_at_allowed(Lending::reading([1], addresses, buffers), refl))
@@ -367,7 +367,7 @@ theorem bump_allowed(lending: Lending, written: lending.written(0) = True):
 theorem bump_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, bump_program(), last, origin).CallsOver(stack, program_effects([bump()]), 1,
+    Site<M>(fetch, data, bump_program(), last, origin).CallsOver(stack, program_effects([bump()]), program_depth([bump()]), 1,
         writing([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([bump()], plan_program([bump()]), writing([1], addresses, buffers), bump_program(),
         bump_lowers(), fetch, data, last, origin, stack, top, loan, trivial, bump_allowed(writing([1], addresses, buffers), refl))
@@ -618,7 +618,7 @@ theorem beside_reads<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1, 1], addresses, buffers).spans()),
     arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()):
     Site<M>(fetch, data, beside_program(), last, origin).Returns(stack, asm_labels(beside_program())(2),
-        stack.CalledOver(program_effects(beside()), Lending::reading([1, 1], addresses, buffers), top, 1, arguments, result, before, after),
+        stack.CalledOver(program_effects(beside()), program_depth(beside()), Lending::reading([1, 1], addresses, buffers), top, 1, arguments, result, before, after),
         stack.AnsweredOver(Lending::reading([1, 1], addresses, buffers), result, after)) {
     lower_program_lent_needs<M>(beside(), plan_program(beside()), [1, 1], beside_program(), beside_lowers(),
         λ (f: Nat) (b: Nat) => marked(marks_row(beside_rows(), f), b), program_marked_needs(beside(), beside_rows(), trivial),
@@ -632,7 +632,7 @@ theorem beside_stores<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: L
     loan: Loan<M>(fetch, data, stack, top, writing([1, 1], addresses, buffers).spans()),
     arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()):
     Site<M>(fetch, data, beside_program(), last, origin).Returns(stack, asm_labels(beside_program())(1),
-        stack.CalledOver(program_effects(beside()), writing([1, 1], addresses, buffers), top, 0, arguments, result, before, after),
+        stack.CalledOver(program_effects(beside()), program_depth(beside()), writing([1, 1], addresses, buffers), top, 0, arguments, result, before, after),
         stack.AnsweredOver(writing([1, 1], addresses, buffers), result, after)) {
     lower_program_lent_needs<M>(beside(), plan_program(beside()), [1, 1], beside_program(), beside_lowers(),
         λ (f: Nat) (b: Nat) => marked(marks_row(beside_rows(), f), b), program_marked_needs(beside(), beside_rows(), trivial),
@@ -648,7 +648,7 @@ theorem beside_stores_read_only<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1, 1], addresses, buffers).spans()),
     arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()):
     Site<M>(fetch, data, beside_program(), last, origin).Returns(stack, asm_labels(beside_program())(1),
-        stack.CalledOver(program_effects(beside()), Lending::reading([1, 1], addresses, buffers), top, 0, arguments, result, before, after),
+        stack.CalledOver(program_effects(beside()), program_depth(beside()), Lending::reading([1, 1], addresses, buffers), top, 0, arguments, result, before, after),
         stack.AnsweredOver(Lending::reading([1, 1], addresses, buffers), result, after)) {
     lower_program_lent_needs<M>(beside(), plan_program(beside()), [1, 1], beside_program(), beside_lowers(),
         λ (f: Nat) (b: Nat) => marked(marks_row(beside_rows(), f), b), program_marked_needs(beside(), beside_rows(), trivial),
@@ -692,7 +692,7 @@ theorem table_lowers(): lower_program_lent([table()], plan_program([table()]), [
 theorem table_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([0], addresses, buffers).spans())):
-    Site<M>(fetch, data, table_program(), last, origin).CallsOver(stack, program_effects([table()]), 1,
+    Site<M>(fetch, data, table_program(), last, origin).CallsOver(stack, program_effects([table()]), program_depth([table()]), 1,
         Lending::reading([0], addresses, buffers), top) {
     lower_program_lent_correct<M>([table()], plan_program([table()]), Lending::reading([0], addresses, buffers), table_program(),
         table_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
@@ -781,7 +781,7 @@ theorem be_word_lowers(): lower_program_lent([be_word()], plan_program([be_word(
 theorem be_word_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, be_word_program(), last, origin).CallsOver(stack, program_effects([be_word()]), 1,
+    Site<M>(fetch, data, be_word_program(), last, origin).CallsOver(stack, program_effects([be_word()]), program_depth([be_word()]), 1,
         Lending::reading([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([be_word()], plan_program([be_word()]), Lending::reading([1], addresses, buffers), be_word_program(),
         be_word_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
@@ -897,7 +897,7 @@ theorem be_put_allowed(lending: Lending, written: lending.written(0) = True):
 theorem be_put_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, writing([1], addresses, buffers).spans())):
-    Site<M>(fetch, data, be_put_program(), last, origin).CallsOver(stack, program_effects([be_put()]), 1,
+    Site<M>(fetch, data, be_put_program(), last, origin).CallsOver(stack, program_effects([be_put()]), program_depth([be_put()]), 1,
         writing([1], addresses, buffers), top) {
     lower_program_lent_correct<M>([be_put()], plan_program([be_put()]), writing([1], addresses, buffers), be_put_program(),
         be_put_lowers(), fetch, data, last, origin, stack, top, loan, trivial, be_put_allowed(writing([1], addresses, buffers), refl))

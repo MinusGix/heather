@@ -5,7 +5,7 @@ labels: [native,exports,linking]
 area: heather-in-heather
 milestone: [nh-library]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-16
 ---
 
 Exports that share callees are one program with several labels since 2026-11-12 (`docs/native/native-library-exports-design.md` §6.3, `compile-x86 --entry`, the fourth column of `crates/linked/generated/EXPORTS.tsv`). What that round left, each refused by name where it applies:
@@ -26,7 +26,9 @@ A writer's group publishes `f::runs_over` at its last function and no `sources`,
 
 ## The stack an entry is stated with
 
-`compiled_returns`'s premise is `120 * Succ(f) <= i` (72 before a function could save registers, [[function-frame-sized-by-use]]): room by the function's index in the program, since a function calls only functions before it. For a small function late in a large program that is far more than it uses: `scan_accept`, a few instructions, is stated with the room of every function of the automaton before it. The bound is sound, and Rust's stack makes it harmless in practice, but the `STACK:` figure in `generated/exports.rs` no longer reads as what the function needs. Tightening it is a change to the premise: room by the call depth below the function (a table computed from the program, checked by evaluation), not by its index.
+Built 2026-11-16 ([[stack-room-by-call-depth]]): the room is by the call depth below the function. What follows is the analysis as it stood.
+
+`compiled_returns`'s premise was `120 * Succ(f) <= i` (72 before a function could save registers, [[function-frame-sized-by-use]]): room by the function's index in the program, since a function calls only functions before it. For a small function late in a large program that is far more than it uses: `scan_accept`, a few instructions, is stated with the room of every function of the automaton before it. The bound is sound, and Rust's stack makes it harmless in practice, but the `STACK:` figure in `generated/exports.rs` no longer reads as what the function needs. Tightening it is a change to the premise: room by the call depth below the function (a table computed from the program, checked by evaluation), not by its index.
 
 ## Done when
 
