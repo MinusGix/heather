@@ -968,7 +968,7 @@ impl DeclarationsMut<'_> {
         if lifted && companions {
             match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
-                    self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
+                    self.pass.unfold_refusals.borrow_mut().insert(unfold.clone(), why);
                 }
                 Ok(parts) => {
                     let mut built = true;
@@ -976,7 +976,7 @@ impl DeclarationsMut<'_> {
                         if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
                             self.pass.unfold_refusals
                                 .borrow_mut()
-                                .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                                .insert(unfold.clone(), format!("the generated `{}` was refused ({e})", part.decl.name));
                             built = false;
                             break;
                         }
@@ -1005,6 +1005,20 @@ impl DeclarationsMut<'_> {
                             self.elab_recursion_equations(decl, branch_equations::Recursion::Measure);
                         }
                     }
+                }
+            }
+        }
+        // Without `f_unfold` there are no branch equations and no
+        // `f::induct` either, since both are proved from it: a reference to
+        // one reports why `f_unfold` was not built, not that `f` is not a
+        // recursion (issues/decreases-on-block-let-no-unfold.md).
+        if companions && decl.kind == DeclKind::Fn {
+            let refused = self.pass.unfold_refusals.borrow().get(&unfold).cloned();
+            if let Some(why) = refused {
+                let why = format!("its unfolding `{unfold}` was not built: {why}");
+                let mut refusals = self.pass.unfold_refusals.borrow_mut();
+                for name in branch_equations::head_names(decl).into_iter().chain([format!("{}::induct", decl.name)]) {
+                    refusals.entry(name).or_insert_with(|| why.clone());
                 }
             }
         }

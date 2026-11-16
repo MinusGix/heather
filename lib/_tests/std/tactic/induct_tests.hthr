@@ -134,6 +134,21 @@ theorem halves_grows(x, acc: Nat): acc <= halves(x, acc) {
     induct halves(x, acc); all_goals { omega }
 }
 
+// The same decrease proved in the `on` clause itself, by a search over a
+// `let`: the search names no binder, so the lifted obligation takes the
+// facts in scope about the goal (`h`) for it to read, and the function gets
+// its equations and principle (issues/decreases-on-block-let-no-unfold.md).
+fn halves_let(x, acc: Nat) → Nat decreases x {
+    if h: 0 < x { halves_let(x.half(), acc + 1) } else { acc }
+    on ?dec1 := { let d = x.half_add_le(); omega };
+}
+theorem halves_let_grows(x, acc: Nat): acc <= halves_let(x, acc) {
+    induct halves_let(x, acc); all_goals { omega }
+}
+theorem halves_let_zero(acc: Nat): halves_let(0, acc) = acc {
+    halves_let::False(0, acc, omega)
+}
+
 // An arm sees the test under the name the function gave it.
 theorem halves_named(x, acc: Nat): acc <= halves(x, acc) {
     induct halves(x, acc) {
