@@ -2721,7 +2721,7 @@ impl Host<'_> {
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
-        let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
+        let inline = self.unspell_here(&template)?;
         let mut sols = vec![Sol::Unsolved; m as usize];
         AppUnify(self).unify_root(cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
         let solved = crate::unification::zonked(&inline, m, &sols)?;
@@ -3366,7 +3366,7 @@ impl Host<'_> {
         let sols = match applied {
             Some(args) => args.into_iter().map(Sol::Solved).collect::<Vec<_>>(),
             None => {
-                let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
+                let inline = self.unspell_here(&template)?;
                 let mut sols = vec![Sol::Unsolved; m as usize];
                 AppUnify(self).unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
                 if sols.iter().any(|s| s.solved().is_none()) {
@@ -3659,7 +3659,7 @@ impl Host<'_> {
             // The candidates are lowered inline, and a lemma's parameter is
             // usually the reference `El (app(C#tycode_fn^δ; ā))`: read it
             // inline too, so the two unify field by field.
-            let inline = GeneratedDefs(self).unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
+            let inline = self.unspell_here(&pat).unwrap_or_else(|| pat.clone());
             let mut fitting = 0;
             let mut found = false;
             for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {

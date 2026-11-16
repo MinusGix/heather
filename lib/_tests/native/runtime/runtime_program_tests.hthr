@@ -74,3 +74,32 @@ fn tr_whole() → Io::Reads<BitVec(64)>(tr_upper::source.tree_co([]), λ io => t
 
 // Its Source calls `raise_span`'s program, lent the buffer.
 theorem tr_upper_functions(): tr_upper::source.functions = raise_span::program { refl }
+
+// ---------------------------------------------------------------------------
+// A whole input in one buffer, then a verdict on it: `ascii_check` reads
+// standard input into its buffer at a growing offset until a read brings
+// nothing, then lends the buffer to `ascii_status` (native_tool_spans) and exits with its
+// answer. The shape of a validator's `main` (examples/utf8): a loop that
+// threads three locals, then a lent call after the loop whose word is the
+// exit status. `crates/cli/tests/native_tools.rs` builds it and holds it to
+// a reference.
+
+runtime fn ascii_check(mut io: Io, buf: ByteBuffer(4096)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut buf = buf;
+    let mut filled: BitVec(64) = BitVec::ofNat(0);
+    let mut going: BitVec(64) = BitVec::ofNat(1);
+    let mut failed: BitVec(64) = BitVec::ofNat(0);
+    while BitVec::ofNat(0).unsigned_lt_bit(going) {
+        let room = BitVec::ofNat(4096).sub(filled);
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room.unsigned_lt_bit(r.result);
+        buf := r.buf;
+        failed := if bad { BitVec::ofNat(1) } else { BitVec::ofNat(0) };
+        going := if bad { BitVec::ofNat(0) } else if r.result = BitVec::ofNat(0) { BitVec::ofNat(0) } else { BitVec::ofNat(1) };
+        filled := if bad { filled } else { filled.add(r.result) };
+    }
+    let m = ascii_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    Pointed::ret(Mutated(io, m.value))
+}
+
+fn ascii_whole() → Io::Reads<BitVec(64)>(ascii_check::source.tree_co([]), λ io => ascii_check(io, List::replicate(zero_byte(), 4096))) { ascii_check::reads }

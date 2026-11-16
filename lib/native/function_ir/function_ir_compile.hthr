@@ -38,26 +38,26 @@ import option;
 // the callee-saved registers, and leaves memory as it was but for stores
 // into its own room below its return address (`Stack::Wrote`), whenever
 // the program evaluates `f` at those arguments to `answer`.
-theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, program: Prog,
-    lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, program: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(answer)) {
     let site = Site<M>(fetch, data, program, last, origin);
-    let calls = lower_program_correct<M>(functions, placement, program, lowered, fetch, data, last, origin, stack);
+    let calls = lower_program_roomed_quiet_correct<M>(functions, placement, rooms, program, lowered, fetch, data, last, origin, stack);
     let computed = program_eval_computes(functions, evaluable, f, arguments, fits);
     let returns = site.returns_weaken(stack, asm_labels(program, Succ(f)),
-        stack.CalleePre(program_callees(functions), program_depth(functions), f, arguments, program_eval(functions, f, arguments)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        stack.CalleePre(program_callees(functions), rooms, f, arguments, program_eval(functions, f, arguments)),
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(program_eval(functions, f, arguments)),
         calls(f, below, arguments, program_eval(functions, f, arguments)),
         λ i s held => ⟨held.left, ⟨computed, held.right⟩⟩);
     j(evaluates, λ x _ => site.Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(x)), returns)
 }
 
@@ -70,23 +70,23 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 // returns a result and leaves a file the program's meaning says it may
 // (`ran`). Whoever lends discharges the premises: a program from its data
 // region, Rust from a slice.
-theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), lendless: program_lendless(functions).IsTrue(),
+theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, lending: Lending, program: Prog,
+    lowered: lower_program_roomed(functions, placement, lending.counts, rooms) = Some(program), lendless: program_lendless(functions).IsTrue(),
     allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True,
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
     ran: program_effects(functions, before, f, arguments, result, after)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after)) {
     let site = Site<M>(fetch, data, program, last, origin);
-    let calls = lower_program_lent_correct<M>(functions, placement, lending, program, lowered, fetch, data, last, origin, stack, top, loan,
+    let calls = lower_program_roomed_correct<M>(functions, placement, rooms, lending, program, lowered, fetch, data, last, origin, stack, top, loan,
         lendless, allowed);
     site.returns_weaken(stack, asm_labels(program, Succ(f)),
-        stack.CalledOver(program_effects(functions), program_depth(functions), lending, top, f, arguments, result, before, after),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        stack.CalledOver(program_effects(functions), rooms, lending, top, f, arguments, result, before, after),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after), calls(f, below, arguments, result, before, after),
         λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
@@ -95,8 +95,8 @@ theorem compiled_returns_over<M>(functions: List<Function>, placement: List<Plac
 // What it returns and leaves, by evaluation: an evaluable program's run
 // over the file (`program_run`, function_ir_run) is a word and a file its
 // meaning allows, so the code returns the one and leaves the other.
-theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, lending: Lending, program: Prog,
+    lowered: lower_program_roomed(functions, placement, lending.counts, rooms) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     lendless: program_lendless(functions).IsTrue(),
     allowed: (b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True,
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
@@ -105,10 +105,10 @@ theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), before: Buffers(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, answer.word, answer.buffers)) {
-    compiled_returns_over<M>(functions, placement, lending, program, lowered, lendless, allowed, fetch, data, last, origin, stack, top, loan, f, below,
+    compiled_returns_over<M>(functions, placement, rooms, lending, program, lowered, lendless, allowed, fetch, data, last, origin, stack, top, loan, f, below,
         arguments, answer.word, before, answer.buffers,
         j(runs, λ x _ => program_effects(functions, before, f, arguments, x.word, x.buffers),
             program_run_effects(functions, evaluable, before, f, arguments, fits)))
@@ -119,8 +119,8 @@ theorem compiled_returns_run<M>(functions: List<Function>, placement: List<Place
 // (`keeps`, from `Stage::run_rewrites` and `prune_sound`). What the
 // lowering checks (`lowered`, `within`) is of the functions it lowers; what
 // says the run is a meaning (`evaluable`, `fits`) is of the source.
-theorem compiled_returns_written_through<M>(source, functions: List<Function>, placement: List<Place>, counts: List<Nat>,
-    addresses: List<BitVec(64)>, marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem compiled_returns_written_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(source).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
@@ -128,10 +128,10 @@ theorem compiled_returns_written_through<M>(source, functions: List<Function>, p
     fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(source, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), answer.word, answer.buffers)) {
-    compiled_returns_over<M>(functions, placement, Lending::writing(counts, addresses, before, marks), program, lowered,
+    compiled_returns_over<M>(functions, placement, rooms, Lending::writing(counts, addresses, before, marks), program, lowered,
         program_stores_within_lendless(functions, marks, within), λ b stores => program_stores_marked(functions, marks, b, within, stores),
         fetch, data, last, origin, stack, top, loan, f, below, arguments, answer.word, before, answer.buffers,
         keeps(before, arguments, answer.word, answer.buffers,
@@ -145,8 +145,8 @@ theorem compiled_returns_written_through<M>(source, functions: List<Function>, p
 // leaves the file the run leaves. This is what an export that writes into
 // a span its caller lends is stated with
 // (docs/native/native-library-exports-design.md §7).
-theorem compiled_returns_written<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
-    marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem compiled_returns_written<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
+    marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
@@ -154,10 +154,10 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), answer.word, answer.buffers)) {
-    compiled_returns_written_through<M>(functions, functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
+    compiled_returns_written_through<M>(functions, functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
         last, origin, stack, top, before, loan, f, below, λ _ _ _ _ ran => ran, arguments, fits, answer, runs)
 }
 
@@ -168,8 +168,8 @@ theorem compiled_returns_written<M>(functions: List<Function>, placement: List<P
 // its caller's buffers. Function `f`, lent its buffers with the ones it
 // needs to be written, returns a result and leaves a file the program's
 // meaning says it may.
-theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), needs: Nat → Nat → Bool,
+theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, lending: Lending, program: Prog,
+    lowered: lower_program_roomed(functions, placement, lending.counts, rooms) = Some(program), needs: Nat → Nat → Bool,
     needed: ProgramNeeds(functions, needs),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
@@ -177,23 +177,23 @@ theorem compiled_returns_needs<M>(functions: List<Function>, placement: List<Pla
     arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
     ran: program_effects(functions, before, f, arguments, result, after)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after)) {
     let site = Site<M>(fetch, data, program, last, origin);
-    let calls = lower_program_lent_needs<M>(functions, placement, lending.counts, program, lowered, needs, needed, fetch, data, last, origin,
+    let calls = lower_program_roomed_needs<M>(functions, placement, lending.counts, rooms, program, lowered, needs, needed, fetch, data, last, origin,
         stack, top);
     site.returns_weaken(stack, asm_labels(program, Succ(f)),
-        stack.CalledOver(program_effects(functions), program_depth(functions), lending, top, f, arguments, result, before, after),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        stack.CalledOver(program_effects(functions), rooms, lending, top, f, arguments, result, before, after),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, before)(i, s),
         stack.AnsweredOver(lending, result, after), calls(lending, refl, loan, f, below, allowed, arguments, result, before, after),
         λ i s held => ⟨⟨held.left.left, ⟨ran, held.left.right⟩⟩, held.right⟩)
 }
 
 // The same through an optimizer (`compiled_returns_written_through`).
-theorem compiled_returns_marked_through<M>(source, functions: List<Function>, placement: List<Place>, counts: List<Nat>,
-    addresses: List<BitVec(64)>, tables: List<List<Bool>>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem compiled_returns_marked_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, tables: List<List<Bool>>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(source).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), f: Nat, below: Succ(f) <= functions.len(), keeps: ProgramRewrites(source, functions, f),
@@ -201,10 +201,10 @@ theorem compiled_returns_marked_through<M>(source, functions: List<Function>, pl
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(source, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), answer.word, answer.buffers)) {
-    compiled_returns_needs<M>(functions, placement, Lending::writing(counts, addresses, before, marks_row(tables, f)), program, lowered,
+    compiled_returns_needs<M>(functions, placement, rooms, Lending::writing(counts, addresses, before, marks_row(tables, f)), program, lowered,
         λ (g: Nat) (b: Nat) => marked(marks_row(tables, g), b), program_marked_needs(functions, tables, marks), fetch, data, last, origin,
         stack, top, loan, f, below, λ b need => eq_true_of_is_true(marked(marks_row(tables, f), b), need), arguments, answer.word, before,
         answer.buffers,
@@ -218,8 +218,8 @@ theorem compiled_returns_marked_through<M>(source, functions: List<Function>, pl
 // returns the word its run over the file ends in and leaves the file the
 // run leaves. This is what an export that lends views of a span is stated
 // with.
-theorem compiled_returns_marked<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
-    tables: List<List<Bool>>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem compiled_returns_marked<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
+    tables: List<List<Bool>>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), f: Nat, below: Succ(f) <= functions.len(),
@@ -227,18 +227,18 @@ theorem compiled_returns_marked<M>(functions: List<Function>, placement: List<Pl
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: Ending,
     runs: program_run(functions, before, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), answer.word, answer.buffers)) {
-    compiled_returns_marked_through<M>(functions, functions, placement, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,
+    compiled_returns_marked_through<M>(functions, functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,
         last, origin, stack, top, before, f, below, λ _ _ _ _ ran => ran, loan, arguments, fits, answer, runs)
 }
 
 // The same through an optimizer: both programs store into no buffer, the
 // source's so that its evaluation is what it does over the file (`reads`),
 // the lowered one's so that nothing need be lent to write (`quiet`).
-theorem compiled_returns_lent_through<M>(source, functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(source).IsTrue(),
+theorem compiled_returns_lent_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, lending: Lending, program: Prog,
+    lowered: lower_program_roomed(functions, placement, lending.counts, rooms) = Some(program), evaluable: program_evaluable(source).IsTrue(),
     reads: program_quiet(source).IsTrue(), quiet: program_quiet(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
@@ -246,13 +246,13 @@ theorem compiled_returns_lent_through<M>(source, functions: List<Function>, plac
     fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), now: Buffers(), answer: BitVec(64),
     evaluates: program_eval_over(now, source, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, now)(i, s),
         stack.AnsweredOver(lending, answer, now)) {
     let value = program_eval_over(now, source, f, arguments);
     let computed = program_effects_quiet(source, reads, now, f, arguments, value,
         program_eval_reads(source, now, evaluable, f, arguments, fits));
-    compiled_returns_over<M>(functions, placement, lending, program, lowered, program_quiet_lendless(functions, quiet),
+    compiled_returns_over<M>(functions, placement, rooms, lending, program, lowered, program_quiet_lendless(functions, quiet),
         λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores)), fetch, data, last, origin, stack, top, loan, f, below,
         arguments, answer, now, now,
         keeps(now, arguments, answer, now, j(evaluates, λ x _ => program_effects(source, now, f, arguments, x, now), computed)))
@@ -261,8 +261,8 @@ theorem compiled_returns_lent_through<M>(source, functions: List<Function>, plac
 // A program that stores into no buffer (`quiet`) does what it evaluates to
 // over the file: the code returns what the program evaluates `f` to over
 // `now` and leaves `now` in memory, lent to read or to write.
-theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Place>, lending: Lending, program: Prog,
-    lowered: lower_program_lent(functions, placement, lending.counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, lending: Lending, program: Prog,
+    lowered: lower_program_roomed(functions, placement, lending.counts, rooms) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     quiet: program_quiet(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()),
@@ -270,26 +270,26 @@ theorem compiled_returns_lent<M>(functions: List<Function>, placement: List<Plac
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), now: Buffers(), answer: BitVec(64),
     evaluates: program_eval_over(now, functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(lending, top, f, arguments, now)(i, s),
         stack.AnsweredOver(lending, answer, now)) {
-    compiled_returns_lent_through<M>(functions, functions, placement, lending, program, lowered, evaluable, quiet, quiet, fetch, data, last, origin,
+    compiled_returns_lent_through<M>(functions, functions, placement, rooms, lending, program, lowered, evaluable, quiet, quiet, fetch, data, last, origin,
         stack, top, loan, f, below, λ _ _ _ _ ran => ran, arguments, fits, now, answer, evaluates)
 }
 
 // The same through an optimizer (`compiled_returns_lent_through`).
-theorem compiled_returns_unlent_through<M>(source, functions: List<Function>, placement: List<Place>, counts: List<Nat>, program: Prog,
-    lowered: lower_program_lent(functions, placement, counts) = Some(program), evaluable: program_evaluable(source).IsTrue(),
+theorem compiled_returns_unlent_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, program: Prog,
+    lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program), evaluable: program_evaluable(source).IsTrue(),
     reads: program_quiet(source).IsTrue(), quiet: program_quiet(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), keeps: ProgramRewrites(source, functions, f), unlent: lent_count(counts, f) = 0,
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval_over([], source, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(answer)) {
     let lending = Lending::reading(counts, [], []);
-    let returns = compiled_returns_lent_through<M>(source, functions, placement, lending, program, lowered, evaluable, reads, quiet, fetch, data,
+    let returns = compiled_returns_lent_through<M>(source, functions, placement, rooms, lending, program, lowered, evaluable, reads, quiet, fetch, data,
         last, origin, stack, stack.size, stack.loan_nothing(), f, below, keeps, arguments, fits, [], answer, evaluates);
     let lent: ArgsLent(lent_count(counts, f), 0, arguments, [], []) = j(sym(unlent), λ n _ => ArgsLent(n, 0, arguments, [], []), trivial);
     λ s at resident i rsp room held ret saved => {
@@ -307,17 +307,17 @@ theorem compiled_returns_unlent_through<M>(source, functions: List<Function>, pl
 // its arguments, its room, and stores of its own only. An export that is
 // one function of a larger program, beside functions over spans, is stated
 // with this (docs/native/native-library-exports-design.md §8.1).
-theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, program: Prog,
-    lowered: lower_program_lent(functions, placement, counts) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, program: Prog,
+    lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     quiet: program_quiet(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), unlent: lent_count(counts, f) = 0, arguments: List<BitVec(64)>,
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval_over([], functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(answer)) {
-    compiled_returns_unlent_through<M>(functions, functions, placement, counts, program, lowered, evaluable, quiet, quiet, fetch, data, last, origin,
+    compiled_returns_unlent_through<M>(functions, functions, placement, rooms, counts, program, lowered, evaluable, quiet, quiet, fetch, data, last, origin,
         stack, f, below, λ _ _ _ _ ran => ran, unlent, arguments, fits, answer, evaluates)
 }
 
@@ -325,19 +325,19 @@ theorem compiled_returns_unlent<M>(functions: List<Function>, placement: List<Pl
 // up are as they were. A caller with nothing but stack words to keep cites
 // this; one with data of its own cites `compiled_returns` and what its
 // data is under such stores.
-theorem compiled_returns_keeps<M>(functions: List<Function>, placement: List<Place>, program: Prog,
-    lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+theorem compiled_returns_keeps<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, program: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleeKeeps(answer)) {
     Site<M>(fetch, data, program, last, origin).returns_implies(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(f) <= i,
         stack.CalleePost(answer), stack.CalleeKeeps(answer),
-        compiled_returns<M>(functions, placement, program, lowered, evaluable, fetch, data, last, origin, stack, f, below, arguments, fits,
+        compiled_returns<M>(functions, placement, rooms, program, lowered, evaluable, fetch, data, last, origin, stack, f, below, arguments, fits,
             answer, evaluates),
         λ i s t room post => stack.callee_keeps(answer, i, s, t, room, post))
 }
@@ -554,67 +554,65 @@ theorem Emitted::emits_as(self e: Emitted, prog: Prog, rest: List<Place>, names:
 // A program that lends buffers is emitted under the count each function
 // takes (`counts`, docs/native/native-one-compiler-design.md §2.3); one that lends
 // none is the same statements at no counts.
-theorem emit_functions_lent_start(placement: List<Place>, names: Nat, counts: List<Nat>):
-    EmitsAs(emit_functions_after_lent(Start, [], placement, names, counts), Start, placement, names) {
+theorem emit_functions_lent_start(placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
+    EmitsAs(emit_functions_after_lent(Start, [], placement, names, counts, rooms), Start, placement, names) {
     refl
 }
 
-theorem emit_functions_lent_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, counts: List<Nat>, prog: Prog,
-    rest: List<Place>, labels: Nat, before: EmitsAs(emit_functions_after_lent(Start, earlier, placement, names, counts), prog, rest, labels),
+theorem emit_functions_lent_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, counts: List<Nat>,
+    rooms: Nat → Nat, prog: Prog, rest: List<Place>, labels: Nat,
+    before: EmitsAs(emit_functions_after_lent(Start, earlier, placement, names, counts, rooms), prog, rest, labels),
     next_prog: Prog, next_rest: List<Place>, next_labels: Nat,
-    emitted: EmitsAs(last.emit_lent(prog, earlier.len(), rest, labels, counts), next_prog, next_rest, next_labels)):
-    EmitsAs(emit_functions_after_lent(Start, Cons(last, earlier), placement, names, counts), next_prog, next_rest, next_labels) {
-    (match emit_functions_after_lent(Start, earlier, placement, names, counts) as λ out =>
+    emitted: EmitsAs(last.emit_lent(prog, earlier.len(), rest, labels, counts, rooms), next_prog, next_rest, next_labels)):
+    EmitsAs(emit_functions_after_lent(Start, Cons(last, earlier), placement, names, counts, rooms), next_prog, next_rest, next_labels) {
+    (match emit_functions_after_lent(Start, earlier, placement, names, counts, rooms) as λ out =>
         EmitsAs(out, prog, rest, labels) →
-        EmitsAs(match out { None => None, Some(b) => last.emit_lent(b.prog, earlier.len(), b.placement, b.names, counts) },
+        EmitsAs(match out { None => None, Some(b) => last.emit_lent(b.prog, earlier.len(), b.placement, b.names, counts, rooms) },
             next_prog, next_rest, next_labels) {
         None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held,
             EmitsAs(None, next_prog, next_rest, next_labels)),
         Some(b) => λ held => j(sym(b.emits_as(prog, rest, labels, held).left),
-            λ x _ => EmitsAs(last.emit_lent(x, earlier.len(), b.placement, b.names, counts), next_prog, next_rest, next_labels),
+            λ x _ => EmitsAs(last.emit_lent(x, earlier.len(), b.placement, b.names, counts, rooms), next_prog, next_rest, next_labels),
             j(sym(b.emits_as(prog, rest, labels, held).right.left),
-                λ y _ => EmitsAs(last.emit_lent(prog, earlier.len(), y, b.names, counts), next_prog, next_rest, next_labels),
+                λ y _ => EmitsAs(last.emit_lent(prog, earlier.len(), y, b.names, counts, rooms), next_prog, next_rest, next_labels),
                 j(sym(b.emits_as(prog, rest, labels, held).right.right),
-                    λ z _ => EmitsAs(last.emit_lent(prog, earlier.len(), rest, z, counts), next_prog, next_rest, next_labels), emitted))),
+                    λ z _ => EmitsAs(last.emit_lent(prog, earlier.len(), rest, z, counts, rooms), next_prog, next_rest, next_labels),
+                    emitted))),
     })(before)
 }
 
-theorem lower_program_lent_emitted(functions: List<Function>, placement: List<Place>, counts: List<Nat>, prog: Prog, rest: List<Place>,
-    labels: Nat, emitted: EmitsAs(emit_functions_after_lent(Start, functions, placement, functions.len(), counts), prog, rest, labels),
-    laid: prog.laid_out().IsTrue(), shallow: program_shallow(functions).IsTrue()): lower_program_lent(functions, placement, counts) = Some(prog) {
+// The program under the room table `rooms`: every function's frame and
+// calls fit their rows, which each emission checked
+// (`Function::roomy`), and the code is laid out.
+theorem lower_program_roomed_emitted(functions: List<Function>, placement: List<Place>, counts: List<Nat>, rooms: Nat → Nat, prog: Prog,
+    rest: List<Place>, labels: Nat,
+    emitted: EmitsAs(emit_functions_after_lent(Start, functions, placement, functions.len(), counts, rooms), prog, rest, labels),
+    laid: prog.laid_out().IsTrue()): lower_program_roomed(functions, placement, counts, rooms) = Some(prog) {
     let decided: ((match prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog)) =
         j(sym(eq_true_of_is_true(prog.laid_out(), laid)), λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog),
             refl);
-    let laid_some: (lower_program_laid(functions, placement, counts) = Some(prog)) =
-        (match emit_functions_after_lent(Start, functions, placement, functions.len(), counts) as λ out =>
-            EmitsAs(out, prog, rest, labels) →
-            (match out as λ _ => Option<Prog> {
-                None => None,
-                Some(o) => match o.prog.laid_out() { False => None, True => Some(o.prog) },
-            }) = Some(prog) {
-            None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held, None<Prog>() = Some(prog)),
-            Some(o) => λ held => j(sym(o.emits_as(prog, rest, labels, held).left),
-                λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(prog), decided),
-        })(emitted);
-    j(sym(eq_true_of_is_true(program_shallow(functions), shallow)),
-        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => lower_program_laid(functions, placement, counts) }) = Some(prog), laid_some)
+    (match emit_functions_after_lent(Start, functions, placement, functions.len(), counts, rooms) as λ out =>
+        EmitsAs(out, prog, rest, labels) →
+        (match out as λ _ => Option<Prog> {
+            None => None,
+            Some(o) => match o.prog.laid_out() { False => None, True => Some(o.prog) },
+        }) = Some(prog) {
+        None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held, None<Prog>() = Some(prog)),
+        Some(o) => λ held => j(sym(o.emits_as(prog, rest, labels, held).left),
+            λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(prog), decided),
+    })(emitted)
 }
 
-theorem emit_functions_start(placement: List<Place>, names: Nat): EmitsAs(emit_functions([], placement, names), Start, placement, names) {
-    emit_functions_lent_start(placement, names, [])
+theorem emit_functions_start(placement: List<Place>, names: Nat, rooms: Nat → Nat):
+    EmitsAs(emit_functions([], placement, names, rooms), Start, placement, names) {
+    emit_functions_lent_start(placement, names, [], rooms)
 }
 
-theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, prog: Prog, rest: List<Place>,
-    labels: Nat, before: EmitsAs(emit_functions(earlier, placement, names), prog, rest, labels), next_prog: Prog, next_rest: List<Place>,
-    next_labels: Nat, emitted: EmitsAs(last.emit(prog, earlier.len(), rest, labels), next_prog, next_rest, next_labels)):
-    EmitsAs(emit_functions(Cons(last, earlier), placement, names), next_prog, next_rest, next_labels) {
-    emit_functions_lent_next(last, earlier, placement, names, [], prog, rest, labels, before, next_prog, next_rest, next_labels, emitted)
-}
-
-theorem lower_program_emitted(functions: List<Function>, placement: List<Place>, prog: Prog, rest: List<Place>, labels: Nat,
-    emitted: EmitsAs(emit_functions(functions, placement, functions.len()), prog, rest, labels), laid: prog.laid_out().IsTrue(),
-    shallow: program_shallow(functions).IsTrue()): lower_program(functions, placement) = Some(prog) {
-    lower_program_lent_emitted(functions, placement, [], prog, rest, labels, emitted, laid, shallow)
+theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, rooms: Nat → Nat, prog: Prog,
+    rest: List<Place>, labels: Nat, before: EmitsAs(emit_functions(earlier, placement, names, rooms), prog, rest, labels), next_prog: Prog,
+    next_rest: List<Place>, next_labels: Nat, emitted: EmitsAs(last.emit(prog, earlier.len(), rest, labels, rooms), next_prog, next_rest, next_labels)):
+    EmitsAs(emit_functions(Cons(last, earlier), placement, names, rooms), next_prog, next_rest, next_labels) {
+    emit_functions_lent_next(last, earlier, placement, names, [], rooms, prog, rest, labels, before, next_prog, next_rest, next_labels, emitted)
 }
 
 // ---------------------------------------------------------------------------

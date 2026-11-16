@@ -807,9 +807,7 @@ impl Members<'_> {
             return Some(true);
         }
         reach.seen.push(abs);
-        let growth = self.psi.bindings.len() as u32 - abs as u32
-            + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32;
-        let mut ty = ty.shift_global(growth);
+        let mut ty = (**ty).clone();
         let mut cx = Cx::empty();
         for i in 0..args.len() {
             let Ok(Type::Pi { dom, dom_level, cod, .. }) = self.whnf(&cx, &ty, span) else {
@@ -1274,9 +1272,7 @@ impl Members<'_> {
             return None;
         };
         if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 { return None; }
-        let growth = self.psi.bindings.len() as u32 - info.abs
-            + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32;
-        let mut ty = ty.shift_global(growth);
+        let mut ty = (**ty).clone();
         let mut cx = Cx::empty();
         let at = at(&info.params)?;
         for (i, p) in info.params.iter().enumerate() {

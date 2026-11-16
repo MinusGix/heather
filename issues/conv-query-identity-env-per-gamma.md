@@ -1,11 +1,11 @@
 ---
 title: Every conversion query builds Γ's identity environment, so a match k cases deep pays Θ(k) per query
-status: open
+status: closed
 labels: [kernel,performance,inductives]
 area: kernel
 code: crates/kernel/src/conv.rs:624 @ 3e23503
 created: 2026-10-26
-updated: 2026-11-10
+updated: 2026-11-16
 ---
 
 Found by `inductive/isa-roundtrip` after
@@ -57,3 +57,4 @@ on `inductive/isa-roundtrip`), measured with `scripts/perf ab`.
 
 - 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/conv.rs`); [[indexed-families]] (`crates/kernel/src/conv.rs`).
 - 2026-11-10: The first direction is built, in [[conversion-query-identity-environment]]: an identity environment is a length (`Env::identity(n)` allocates nothing, a lookup below the base answers the variable at its level), and the conversion scope carries no value environment, so a query under `k` case layers no longer pays for Γ before it compares anything. Left open only for its acceptance, which was not re-run: `ident_id`'s gate against its counters from 128 to 256 forms on `inductive/isa-roundtrip`.
+- 2026-11-16: Acceptance re-run, release build at width one, `heather check --timings` on the bench's `inductive/isa-roundtrip` source. For `ident_id`, the gate grows like its counters from 128 to 256 forms: about 2.3× in gate time (6.4–6.7 ms to 15.1–15.4 ms over three runs), against 2.2× in steps (9,646 to 21,572), 2.4× in conversion misses (1,981 to 4,717), 2.2× in queries (4,220 to 9,212), and 2.2× in local substitution nodes (18,797 to 41,822). In the measurement that opened the issue, the counters grew about 4× and the time about 7×. Closed.

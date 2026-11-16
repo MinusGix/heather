@@ -299,6 +299,33 @@ clash). What differs from the table above:
   reflector's pin and the lowering's probes; the builder tr stays until a
   program can exit 1 on a failed write (issues/rt-io-exit-on-failed-write.md).
 
+**As built (round 4, 2026-11-16): a whole input, then a verdict.** The
+validator's shape is a loop that reads standard input into one buffer at a
+growing offset (`filled`), stopping when a read brings nothing or fails,
+then one lent call after the loop whose word is the exit status
+(`ascii_check` in `runtime_program_tests`, held to a reference by
+`native_tools`; the UTF-8 validator's `main` in `examples/utf8` is the
+same program over `utf8_valid_from`).
+
+- A lent function must pass its span's length on as it is, so the length
+  the program lends is the buffer's capacity and the count of bytes read
+  is one more word: the verdict function is
+  `f(span, length, filled, failed)` and validates the first `filled` bytes
+  (`utf8_valid_from(span, length, 0, filled)`); its theorem rests on a
+  window lemma over `s.take(filled)` (examples/utf8 `valid_prefix`).
+- A loop threading three locals or more reads a field of a field of its
+  state (`z.value.value.after`); `rt_settle_named` settles those a level at
+  a time.
+- `write-elf`'s certificate states `Prog::links` a check at a time
+  (`Prog::links_of`: evaluable a function per declaration, as
+  `compile-x86`'s is, then placeless, rowed, and the emitted functions), so
+  a program that links a validator's eight functions fits the kernel's
+  per-declaration fuel.
+- The span functions live in a module that imports `runtime` and the
+  program in one that imports `runtime_program`: a generated `Compile`
+  instance names its class unqualified, and a module that imports both
+  generators has two `runtime`s.
+
 ## 4. Three nodes a real program needs
 
 ### 4.1 A read at an offset

@@ -28,7 +28,7 @@ code.ComputesOn(machine, f, room, borrows, words, answer, leaves)
 
 ```heather
 theorem copy_span_native_returns<M>(machine: Machine<M>, s0, s1: Slice, a4, a5: BitVec(64)):
-    copy_span_native_code().ComputesInto(machine, 0, 136, [Mut(s0), Shared(s1)], [a4, a5],
+    copy_span_native_code().ComputesInto(machine, 0, 0, [Mut(s0), Shared(s1)], [a4, a5],
         native_tool_spans::copy_span(s0.bytes, s0.length(), s1.bytes, s1.length(), a4, a5))
 ```
 

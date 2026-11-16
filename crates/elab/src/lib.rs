@@ -3317,15 +3317,15 @@ impl Elaborator {
     /// by this occurrence's substitution aborted the kernel
     /// (issues/merged-call-through-upcast-panics.md).
     ///
-    /// Of the inline respellings only the reference's has a scratch-world
-    /// reading ([`GeneratedDefs::unspell_here_in`]); the sum and `Wf` ones read their
-    /// head at committed indices, so they are not asked here. A probe that
+    /// Of the inline respellings only the reference's is read here
+    /// ([`Self::unspell_here`], a constant, so the same in the scratch
+    /// world); the sum and `Wf` ones are not asked. A probe that
     /// meets a sum or a `Wf` wanted a `Π` and refuses either way.
     pub(crate) fn whnf_in(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type> {
         if scratch == 0 {
             return self.whnf(cx, ty, span);
         }
-        if let Some(inline) = GeneratedDefs(self).unspell_here_in(ty, scratch) {
+        if let Some(inline) = self.unspell_here(ty) {
             return Ok(inline);
         }
         let stand_in = GlobalBinding::Tm {
