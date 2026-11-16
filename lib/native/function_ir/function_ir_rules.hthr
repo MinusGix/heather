@@ -14,6 +14,7 @@
 import function_ir;
 import function_ir_eval;
 import function_ir_replay;
+import function_ir_state;
 import bitvec;
 import bitvec_bytes;
 import bitvec_nat;
@@ -26,6 +27,7 @@ import logic;
 import nat;
 import omega;
 import option;
+import vector;
 
 // ---------------------------------------------------------------------------
 // Rules by how many numbers they take
@@ -666,6 +668,85 @@ theorem join_word_sound(o, w, s, r, f, i: Nat): join_word(o, w, s, r, f, i).Soun
     }
 }
 
+// ---------------------------------------------------------------------------
+// A word's bytes in other words. `Low(x, w, sh)` says the low byte of `x`
+// is the low byte of `w` shifted right by `sh`: a byte store of `x` writes
+// that byte of `w`. A word narrowed to a byte and widened keeps its low
+// byte, and a shift under it adds to the shift. `Split(v, a, b, c, d)` says
+// the four bytes of the 32-bit word `v`, low first, are the low bytes of
+// `a` to `d`: four byte stores of those, at four indexes in a row, are one
+// store of `v` (`Paid::Together`). However the bytes were taken, the rules
+// meet at that fact: the low half's bytes from the highest are the half
+// swapped, and from the lowest the half itself.
+
+fn low_narrowed(x, b, a: Nat) → Clause { Clause([Is(Resize(64, 8, b, a)), Is(Resize(8, 64, x, b))], Low(x, a, 0)) }
+
+theorem low_narrowed_sound(x, b, a: Nat): low_narrowed(x, b, a).Sound() {
+    λ values buffers held => {
+        let word = values(64, a);
+        let byte = values(8, b);
+        let back: (values(64, x).resize(8) = byte) = trans(cong_fn(λ (z: BitVec(64)) => z.resize(8), held.right.left),
+            BitVec::resize_round_trip(8, 64, Nat::leb_sound(8, 64, trivial), byte));
+        trans(sym(BitVec::resize_truncate(8, 56, values(64, x))), trans(back, trans(held.left, BitVec::resize_truncate(8, 56, word))))
+    }
+}
+
+fn low_shifted(x, a, w, c, sh: Nat) → Clause { Clause([Low(x, a, sh), Is(LogicalShiftRight(64, a, w, c))], Low(x, w, c + sh)) }
+
+theorem low_shifted_sound(x, a, w, c, sh: Nat): low_shifted(x, a, w, c, sh).Sound() {
+    λ values buffers held => trans(held.left, cong_fn(λ (z: BitVec(64)) => low_byte(z),
+        trans(cong_fn(λ (z: BitVec(64)) => z.shift_right(sh), held.right.left), sym(values(64, w).shift_right_add(c, sh)))))
+}
+
+// The bytes of a word's low half swapped, low first, are the word's low
+// bytes from the highest of the half.
+theorem swapped_bytes(word: BitVec(64), v: BitVec(32), swapped: v = word.truncate(32, 32).byte_swap(4)):
+    (word_byte(v, 0) = low_byte(word.shift_right(24))) ∧ ((word_byte(v, 1) = low_byte(word.shift_right(16))) ∧
+        ((word_byte(v, 2) = low_byte(word.shift_right(8))) ∧ (word_byte(v, 3) = low_byte(word.shift_right(0))))) {
+    let at = λ (k: Nat) => cong_fn(λ (bytes: [BitVec(8); 4]) => vector_get(bytes, k, BitVec::zero()), BitVec::be_bytes_32(word));
+    j(sym(swapped), λ z _ => (word_byte(z, 0) = low_byte(word.shift_right(24))) ∧ ((word_byte(z, 1) = low_byte(word.shift_right(16))) ∧
+        ((word_byte(z, 2) = low_byte(word.shift_right(8))) ∧ (word_byte(z, 3) = low_byte(word.shift_right(0))))),
+        ⟨at(0), ⟨at(1), ⟨at(2), at(3)⟩⟩⟩)
+}
+
+// And of the half itself, from the lowest.
+theorem plain_bytes(word: BitVec(64), v: BitVec(32), narrowed: v = word.truncate(32, 32)):
+    (word_byte(v, 0) = low_byte(word.shift_right(0))) ∧ ((word_byte(v, 1) = low_byte(word.shift_right(8))) ∧
+        ((word_byte(v, 2) = low_byte(word.shift_right(16))) ∧ (word_byte(v, 3) = low_byte(word.shift_right(24))))) {
+    j(sym(narrowed), λ z _ => (word_byte(z, 0) = low_byte(word.shift_right(0))) ∧ ((word_byte(z, 1) = low_byte(word.shift_right(8))) ∧
+        ((word_byte(z, 2) = low_byte(word.shift_right(16))) ∧ (word_byte(z, 3) = low_byte(word.shift_right(24))))),
+        ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩)
+}
+
+fn split_swapped(v, r, w, x0, x1, x2, x3: Nat) → Clause {
+    Clause([Low(x0, w, 24), Low(x1, w, 16), Low(x2, w, 8), Low(x3, w, 0), Is(Resize(64, 32, r, w)), Is(ByteSwap(32, v, r))], Split(v, x0, x1, x2, x3))
+}
+
+theorem split_swapped_sound(v, r, w, x0, x1, x2, x3: Nat): split_swapped(v, r, w, x0, x1, x2, x3).Sound() {
+    λ values buffers held => {
+        let word = values(64, w);
+        let half: (values(32, r) = word.truncate(32, 32)) = trans(held.right.right.right.right.left, BitVec::resize_truncate(32, 32, word));
+        let swapped: (values(32, v) = word.truncate(32, 32).byte_swap(4)) = trans(held.right.right.right.right.right.left,
+            trans(cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), half), BitVec::swap_bytes_32(word.truncate(32, 32))));
+        let bytes = swapped_bytes(word, values(32, v), swapped);
+        ⟨trans(bytes.left, sym(held.left)), ⟨trans(bytes.right.left, sym(held.right.left)),
+            ⟨trans(bytes.right.right.left, sym(held.right.right.left)), trans(bytes.right.right.right, sym(held.right.right.right.left))⟩⟩⟩
+    }
+}
+
+fn split_plain(v, w, x0, x1, x2, x3: Nat) → Clause {
+    Clause([Low(x0, w, 0), Low(x1, w, 8), Low(x2, w, 16), Low(x3, w, 24), Is(Resize(64, 32, v, w))], Split(v, x0, x1, x2, x3))
+}
+
+theorem split_plain_sound(v, w, x0, x1, x2, x3: Nat): split_plain(v, w, x0, x1, x2, x3).Sound() {
+    λ values buffers held => {
+        let word = values(64, w);
+        let bytes = plain_bytes(word, values(32, v), trans(held.right.right.right.right.left, BitVec::resize_truncate(32, 32, word)));
+        ⟨trans(bytes.left, sym(held.left)), ⟨trans(bytes.right.left, sym(held.right.left)),
+            ⟨trans(bytes.right.right.left, sym(held.right.right.left)), trans(bytes.right.right.right, sym(held.right.right.right.left))⟩⟩⟩
+    }
+}
+
 fn always(args: List<Nat>) → Bool { True }
 
 // The table a plan's `Derive` steps index. A rule keeps its place: new
@@ -753,5 +834,14 @@ fn rules() → List<Rule> {
         Rule::when(λ n => num(n, 6).leb(num(n, 3)),
             λ n => within_sub(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
             λ n ok => within_sub_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+        // 40
+        Rule::when(always, λ n => low_narrowed(num(n, 0), num(n, 1), num(n, 2)), λ n _ => low_narrowed_sound(num(n, 0), num(n, 1), num(n, 2))),
+        Rule::when(always, λ n => low_shifted(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
+            λ n _ => low_shifted_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4))),
+        // 42
+        Rule::when(always, λ n => split_swapped(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+            λ n _ => split_swapped_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6))),
+        Rule::when(always, λ n => split_plain(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
+            λ n _ => split_plain_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
     ]
 }

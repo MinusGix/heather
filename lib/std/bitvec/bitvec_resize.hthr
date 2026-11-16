@@ -271,6 +271,14 @@ theorem BitVec::shift_right_one_first(n: Nat, x: BitVec(n), count: Nat):
     match count { Zero => refl, Succ(_, ih) => cong_fn(λ (z: BitVec(n)) => z.shift_right_one(), ih) }
 }
 
+// A shift after a shift is one shift by the sum.
+theorem BitVec::shift_right_add({n: Nat}, self x: BitVec(n), a, b: Nat): x.shift_right(a + b) = x.shift_right(a).shift_right(b) {
+    match b {
+        Zero => refl,
+        Succ(k, ih) => j(ih, λ y _ => x.shift_right(a + k).shift_right_one() = y.shift_right_one(), refl),
+    }
+}
+
 theorem BitVec::shift_right_zeros_under(n: Nat, v: BitVec(n), extra: Nat):
     BitVec::zeros_under(n, extra, v).shift_right(extra) = BitVec::zeros_over(n, extra, v)
 {

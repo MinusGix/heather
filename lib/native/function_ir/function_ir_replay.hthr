@@ -62,6 +62,7 @@ import nat;
 import nat_map;
 import omega;
 import option;
+import vector;
 
 // ---------------------------------------------------------------------------
 // Node equality
@@ -335,14 +336,95 @@ theorem orders_give_holds(values: Valuation(), wanted: Order, orders: List<Order
     }
 }
 
+// ---------------------------------------------------------------------------
+// A word's bytes in other words
+
+// What a word is to another by its bytes, over the valuation alone. `Lowest`:
+// the low byte of `id` is the low byte of `of` shifted right by `shift`.
+// `Quartered`: the four bytes of the 32-bit word `word`, low first, are the low
+// bytes of four words: what four byte stores of those words write is what
+// one store of `word` writes.
+inductive Part {
+    Lowest(id: Nat, of: Nat, shift: Nat),
+    Quartered(word: Nat, first: Nat, second: Nat, third: Nat, fourth: Nat),
+}
+
+// Byte `k` of a 32-bit word, low first, as `store_word` stores it.
+fn word_byte(word: BitVec(32), k: Nat) → BitVec(8) { vector_get(word.bytes_le(4), k, BitVec::zero()) }
+
+fn Part::Holds(self part: Part, values: Valuation()) → Type {
+    match part {
+        Lowest(id, of, shift) => low_byte(values(64, id)) = low_byte(values(64, of).shift_right(shift)),
+        Quartered(word, first, second, third, fourth) =>
+            (word_byte(values(32, word), 0) = low_byte(values(64, first))) ∧ ((word_byte(values(32, word), 1) = low_byte(values(64, second))) ∧
+                ((word_byte(values(32, word), 2) = low_byte(values(64, third))) ∧ (word_byte(values(32, word), 3) = low_byte(values(64, fourth))))),
+    }
+}
+
+fn PartsHold(values: Valuation(), parts: List<Part>) → Type {
+    match parts { Nil => True, Cons(part, rest) => part.Holds(values) ∧ PartsHold(values, rest) }
+}
+
+fn Part::same(self a: Part, b: Part) → Bool {
+    match a {
+        Lowest(id, of, shift) => match b { Lowest(id2, of2, shift2) => same3(id, of, shift, id2, of2, shift2), _ => False },
+        Quartered(word, first, second, third, fourth) => match b {
+            Quartered(word2, first2, second2, third2, fourth2) => word.same(word2) && same4(first, second, third, fourth, first2, second2, third2, fourth2),
+            _ => False,
+        },
+    }
+}
+
+theorem Part::same_sound(self a: Part): (b: Part) → a.same(b) = True → a = b {
+    match a {
+        Lowest(id, of, shift) => λ b => match b {
+            Lowest(id2, of2, shift2) => λ h => {
+                let e = same3_sound(id, of, shift, id2, of2, shift2, h);
+                trans(cong_fn<Nat, Part>(λ n => Lowest(n, of, shift), e.left),
+                    trans(cong_fn<Nat, Part>(λ n => Lowest(id2, n, shift), e.right.left), cong_fn<Nat, Part>(λ n => Lowest(id2, of2, n), e.right.right)))
+            },
+            _ => λ h => absurd(h),
+        },
+        Quartered(word, first, second, third, fourth) => λ b => match b {
+            Quartered(word2, first2, second2, third2, fourth2) => λ h => {
+                let p = Bool::and_true_parts(word.same(word2), same4(first, second, third, fourth, first2, second2, third2, fourth2), h);
+                let e = same4_sound(first, second, third, fourth, first2, second2, third2, fourth2, p.right);
+                trans(cong_fn<Nat, Part>(λ n => Quartered(n, first, second, third, fourth), word.same_sound(word2, p.left)),
+                    trans(cong_fn<Nat, Part>(λ n => Quartered(word2, n, second, third, fourth), e.left),
+                        trans(cong_fn<Nat, Part>(λ n => Quartered(word2, first2, n, third, fourth), e.right.left),
+                            trans(cong_fn<Nat, Part>(λ n => Quartered(word2, first2, second2, n, fourth), e.right.right.left),
+                                cong_fn<Nat, Part>(λ n => Quartered(word2, first2, second2, third2, n), e.right.right.right)))))
+            },
+            _ => λ h => absurd(h),
+        },
+    }
+}
+
+fn parts_have(parts: List<Part>, part: Part) → Bool {
+    match parts { Nil => False, Cons(known, rest) => known.same(part) || parts_have(rest, part) }
+}
+
+theorem parts_have_hold(values: Valuation(), part: Part, parts: List<Part>): PartsHold(values, parts) → parts_have(parts, part) = True →
+    part.Holds(values) {
+    match parts {
+        Nil => λ _ h => absurd(h),
+        Cons(known, rest) => λ held h => match Bool::or_true_parts(known.same(part), parts_have(rest, part), h) {
+            Inl(here) => j(known.same_sound(part, here), λ m _ => m.Holds(values), held.left),
+            Inr(there) => parts_have_hold(values, part, rest, held.right, there),
+        },
+    }
+}
+
 // What a replay knows. Of the valuation: a node's equation, a word's
-// range, or two words' order. Of the buffers as they are where the replay
-// stands: a node that read them, or a word that is bytes of one joined,
-// each known until something stores.
+// range, two words' order, or what a word is to another by its bytes. Of
+// the buffers as they are where the replay stands: a node that read them,
+// or a word that is bytes of one joined, each known until something stores.
 inductive Fact {
     Is(node: Node),
     Within(id: Nat, low: Nat, high: Nat),
     AtMost(low: Nat, add: Nat, high: Nat, more: Nat),
+    Low(id: Nat, of: Nat, shift: Nat),
+    Split(word: Nat, first: Nat, second: Nat, third: Nat, fourth: Nat),
     Loaded(node: Node),
     Joined(id: Nat, buffer: Nat, index: Nat, count: Nat, shift: Nat),
 }
@@ -352,6 +434,8 @@ fn Fact::Holds(self fact: Fact, values: Valuation(), buffers: Buffers()) → Typ
         Is(node) => NodeHolds(values, node),
         Within(id, low, high) => Range(low, high).Holds(values(64, id)),
         AtMost(low, add, high, more) => Order(low, add, high, more).Holds(values),
+        Low(id, of, shift) => Lowest(id, of, shift).Holds(values),
+        Split(word, first, second, third, fourth) => Quartered(word, first, second, third, fourth).Holds(values),
         Loaded(node) => Read(node).Holds(values, buffers),
         Joined(id, buffer, index, count, shift) => Bytes(id, buffer, index, count, shift).Holds(values, buffers),
     }
@@ -361,9 +445,9 @@ fn FactsHold(values: Valuation(), buffers: Buffers(), facts: List<Fact>) → Typ
     match facts { Nil => True, Cons(fact, rest) => fact.Holds(values, buffers) ∧ FactsHold(values, buffers, rest) }
 }
 
-record Facts { by: NatMap<List<Node>>, within: NatMap<Range>, orders: List<Order>, loaded: List<Memory> }
+record Facts { by: NatMap<List<Node>>, within: NatMap<Range>, orders: List<Order>, parts: List<Part>, loaded: List<Memory> }
 
-fn Facts::none() → Facts { Facts(NatMap::empty(), NatMap::empty(), [], []) }
+fn Facts::none() → Facts { Facts(NatMap::empty(), NatMap::empty(), [], [], []) }
 
 // The facts about the word `id`.
 fn Facts::about(self facts: Facts, id: Nat) → List<Node> { match nat_map_get(facts.by, id) { None => [], Some(nodes) => nodes } }
@@ -375,7 +459,7 @@ fn Facts::has_all(self facts: Facts, nodes: List<Node>) → Bool {
 }
 
 fn Facts::add(self facts: Facts, node: Node) → Facts {
-    Facts(nat_map_set(facts.by, node_output(node).id, Cons(node, facts.about(node_output(node).id))), facts.within, facts.orders, facts.loaded)
+    Facts(nat_map_set(facts.by, node_output(node).id, Cons(node, facts.about(node_output(node).id))), facts.within, facts.orders, facts.parts, facts.loaded)
 }
 
 // The range known of the word `id`.
@@ -383,20 +467,23 @@ fn Facts::range(self facts: Facts, id: Nat) → Range { match nat_map_get(facts.
 
 // The word `id` is in `range` too.
 fn Facts::bound(self facts: Facts, id: Nat, range: Range) → Facts {
-    Facts(facts.by, nat_map_set(facts.within, id, facts.range(id).meet(range)), facts.orders, facts.loaded)
+    Facts(facts.by, nat_map_set(facts.within, id, facts.range(id).meet(range)), facts.orders, facts.parts, facts.loaded)
 }
 
 // Two words are in `order` too.
-fn Facts::rank(self facts: Facts, order: Order) → Facts { Facts(facts.by, facts.within, Cons(order, facts.orders), facts.loaded) }
+fn Facts::rank(self facts: Facts, order: Order) → Facts { Facts(facts.by, facts.within, Cons(order, facts.orders), facts.parts, facts.loaded) }
+
+// A word is that to another by its bytes too.
+fn Facts::part(self facts: Facts, part: Part) → Facts { Facts(facts.by, facts.within, facts.orders, Cons(part, facts.parts), facts.loaded) }
 
 // Something more of the buffers as they are.
-fn Facts::keep(self facts: Facts, memory: Memory) → Facts { Facts(facts.by, facts.within, facts.orders, Cons(memory, facts.loaded)) }
+fn Facts::keep(self facts: Facts, memory: Memory) → Facts { Facts(facts.by, facts.within, facts.orders, facts.parts, Cons(memory, facts.loaded)) }
 
 // A node that read the buffers as they are.
 fn Facts::recall(self facts: Facts, node: Node) → Facts { facts.keep(Read(node)) }
 
 // The buffers may have changed: what was read of them is known no longer.
-fn Facts::forget(self facts: Facts) → Facts { Facts(facts.by, facts.within, facts.orders, []) }
+fn Facts::forget(self facts: Facts) → Facts { Facts(facts.by, facts.within, facts.orders, facts.parts, []) }
 
 // Everything kept of the buffers holds of `values` over `buffers`.
 fn Facts::Remembered(self facts: Facts, values: Valuation(), buffers: Buffers()) → Type { MemoriesHold(values, buffers, facts.loaded) }
@@ -404,11 +491,11 @@ fn Facts::Remembered(self facts: Facts, values: Valuation(), buffers: Buffers())
 // Every fact about the valuation holds of `values`.
 fn Facts::Hold(self facts: Facts, values: Valuation()) → Type {
     ((id: Nat) → (nodes: List<Node>) → nat_map_get(facts.by, id) = Some(nodes) → NodesHold(values, nodes)) ∧
-        (((id: Nat) → (range: Range) → nat_map_get(facts.within, id) = Some(range) → range.Holds(values(64, id))) ∧ OrdersHold(values, facts.orders))
+        (((id: Nat) → (range: Range) → nat_map_get(facts.within, id) = Some(range) → range.Holds(values(64, id))) ∧ (OrdersHold(values, facts.orders) ∧ PartsHold(values, facts.parts)))
 }
 
 theorem Facts::none_hold(values: Valuation()): Facts::none().Hold(values) {
-    ⟨λ id nodes got => absurd(got), ⟨λ id range got => absurd(got), trivial⟩⟩
+    ⟨λ id nodes got => absurd(got), ⟨λ id range got => absurd(got), ⟨trivial, trivial⟩⟩⟩
 }
 
 theorem Facts::range_holds(self facts: Facts, values: Valuation(), held: facts.Hold(values), id: Nat): facts.range(id).Holds(values(64, id)) {
@@ -436,7 +523,12 @@ theorem Facts::bound_hold(self facts: Facts, values: Valuation(), held: facts.Ho
 
 theorem Facts::rank_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), order: Order, holds: order.Holds(values)):
     facts.rank(order).Hold(values) {
-    ⟨held.left, ⟨held.right.left, ⟨holds, held.right.right⟩⟩⟩
+    ⟨held.left, ⟨held.right.left, ⟨⟨holds, held.right.right.left⟩, held.right.right.right⟩⟩⟩
+}
+
+theorem Facts::part_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), part: Part, holds: part.Holds(values)):
+    facts.part(part).Hold(values) {
+    ⟨held.left, ⟨held.right.left, ⟨held.right.right.left, ⟨holds, held.right.right.right⟩⟩⟩⟩
 }
 
 theorem Facts::about_hold(self facts: Facts, values: Valuation(), held: facts.Hold(values), id: Nat): NodesHold(values, facts.about(id)) {
@@ -486,6 +578,8 @@ fn Facts::knows(self facts: Facts, fact: Fact) → Bool {
         Is(node) => facts.has(node),
         Within(id, low, high) => facts.range(id).inside(Range(low, high)),
         AtMost(low, add, high, more) => orders_give(facts.orders, Order(low, add, high, more)),
+        Low(id, of, shift) => parts_have(facts.parts, Lowest(id, of, shift)),
+        Split(word, first, second, third, fourth) => parts_have(facts.parts, Quartered(word, first, second, third, fourth)),
         Loaded(node) => memories_have(facts.loaded, Read(node)),
         Joined(id, buffer, index, count, shift) => memories_have(facts.loaded, Bytes(id, buffer, index, count, shift)),
     }
@@ -496,7 +590,9 @@ theorem Facts::knows_holds(self facts: Facts, values: Valuation(), buffers: Buff
     match fact {
         Is(node) => λ h => facts.has_holds(values, held, node, h),
         Within(id, low, high) => λ h => facts.range(id).inside_holds(Range(low, high), values(64, id), h, facts.range_holds(values, held, id)),
-        AtMost(low, add, high, more) => λ h => orders_give_holds(values, Order(low, add, high, more), facts.orders, held.right.right, h),
+        AtMost(low, add, high, more) => λ h => orders_give_holds(values, Order(low, add, high, more), facts.orders, held.right.right.left, h),
+        Low(id, of, shift) => λ h => parts_have_hold(values, Lowest(id, of, shift), facts.parts, held.right.right.right, h),
+        Split(word, first, second, third, fourth) => λ h => parts_have_hold(values, Quartered(word, first, second, third, fourth), facts.parts, held.right.right.right, h),
         Loaded(node) => λ h => memories_have_hold(values, buffers, Read(node), facts.loaded, loaded, h),
         Joined(id, buffer, index, count, shift) => λ h => memories_have_hold(values, buffers, Bytes(id, buffer, index, count, shift), facts.loaded, loaded, h),
     }
@@ -522,6 +618,8 @@ fn Facts::with(self facts: Facts, fact: Fact) → Facts {
         Is(node) => facts.add(node),
         Within(id, low, high) => facts.bound(id, Range(low, high)),
         AtMost(low, add, high, more) => facts.rank(Order(low, add, high, more)),
+        Low(id, of, shift) => facts.part(Lowest(id, of, shift)),
+        Split(word, first, second, third, fourth) => facts.part(Quartered(word, first, second, third, fourth)),
         Loaded(node) => facts.recall(node),
         Joined(id, buffer, index, count, shift) => facts.keep(Bytes(id, buffer, index, count, shift)),
     }
@@ -533,6 +631,8 @@ theorem Facts::with_hold(self facts: Facts, values: Valuation(), buffers: Buffer
         Is(node) => λ holds => facts.add_hold(values, held, node, holds),
         Within(id, low, high) => λ holds => facts.bound_hold(values, held, id, Range(low, high), holds),
         AtMost(low, add, high, more) => λ holds => facts.rank_hold(values, held, Order(low, add, high, more), holds),
+        Low(id, of, shift) => λ holds => facts.part_hold(values, held, Lowest(id, of, shift), holds),
+        Split(word, first, second, third, fourth) => λ holds => facts.part_hold(values, held, Quartered(word, first, second, third, fourth), holds),
         Loaded(_) => λ _ => held,
         Joined(_, _, _, _, _) => λ _ => held,
     }
@@ -544,6 +644,8 @@ theorem Facts::with_remembered(self facts: Facts, values: Valuation(), buffers: 
         Is(_) => λ _ => loaded,
         Within(_, _, _) => λ _ => loaded,
         AtMost(_, _, _, _) => λ _ => loaded,
+        Low(_, _, _) => λ _ => loaded,
+        Split(_, _, _, _, _) => λ _ => loaded,
         Loaded(_) => λ holds => ⟨holds, loaded⟩,
         Joined(_, _, _, _, _) => λ holds => ⟨holds, loaded⟩,
     }
@@ -1076,6 +1178,60 @@ record Rule {
 }
 
 // ---------------------------------------------------------------------------
+// Stores held back
+
+// A step while stores are held back. A node that touches no buffer
+// computes the same before a store as after it, so the stores of a run of
+// nodes may all be written at its end: the files between differ, the
+// valuation and the file after do not.
+inductive Late {
+    // The next node of the old body, a store: held back.
+    Wait,
+    // The next node of the old body, which touches no buffer: written now.
+    Pass,
+    // A rule's conclusion at an instance whose premises are among the facts.
+    Know(rule: Nat, args: List<Nat>),
+}
+
+// A byte store: its output, its index and the word whose low byte it
+// stores.
+record Stored { output: Nat, index: Nat, value: Nat }
+
+fn Stored::node(self stored: Stored, buffer: Nat) → Node { BufferStore(stored.output, buffer, stored.index, stored.value) }
+
+// Four byte stores into one buffer, and the load of four bytes from the
+// first one's index that follows them in the old body: its output is what
+// a store of a word there leaves, so the store of the word `word` takes it.
+record Four { buffer: Nat, loaded: Nat, word: Nat, first: Stored, second: Stored, third: Stored, fourth: Stored }
+
+fn Four::stores(self four: Four) → List<Node> {
+    [four.first.node(four.buffer), four.second.node(four.buffer), four.third.node(four.buffer), four.fourth.node(four.buffer)]
+}
+
+fn Four::load(self four: Four) → Node { WideLoad(4, four.loaded, four.buffer, four.first.index) }
+
+fn Four::store(self four: Four) → Node { WideStore(4, four.loaded, four.buffer, four.first.index, four.word) }
+
+// What makes the four one: the word's bytes are the low bytes stored, in
+// their order, and the indexes are in a row as numbers (an index that
+// wrapped is not the next one).
+fn Four::premises(self four: Four) → List<Fact> {
+    [Split(four.word, four.first.value, four.second.value, four.third.value, four.fourth.value),
+     AtMost(four.first.index, 1, four.second.index, 0), AtMost(four.second.index, 0, four.first.index, 1),
+     AtMost(four.first.index, 2, four.third.index, 0), AtMost(four.third.index, 0, four.first.index, 2),
+     AtMost(four.first.index, 3, four.fourth.index, 0), AtMost(four.fourth.index, 0, four.first.index, 3)]
+}
+
+// How the stores held back are written.
+inductive Paid {
+    // Each as it was.
+    Each,
+    // The four of them as one store of a word, in the place of the load
+    // that follows them.
+    Together(four: Four),
+}
+
+// ---------------------------------------------------------------------------
 // The replayer
 
 inductive Step {
@@ -1093,6 +1249,9 @@ inductive Step {
     // The next node of the old body, which so read is a node the facts have
     // at the output `at`: a move of that word is written for it.
     Again(at: Nat, a: Nat, b: Nat),
+    // A run of the old body with its stores held back to its end, and how
+    // they are written there.
+    Holding(steps: List<Late>, paid: Paid),
 }
 
 record Replayed { nodes: List<Node>, facts: Facts }
@@ -1100,6 +1259,62 @@ record Replayed { nodes: List<Node>, facts: Facts }
 fn Facts::derive(self facts: Facts, table: List<Rule>, rule: Nat, args: List<Nat>) → Option<Facts> {
     table.nth(rule).and_then(λ found => found.make(args).and_then(λ clause =>
         facts.knows_all(clause.premises).then(Some(facts.with(clause.conclusion)))))
+}
+
+// What holding back leaves: the nodes written, the facts, the stores held
+// and the old nodes left.
+record Owed { nodes: List<Node>, facts: Facts, held: List<Node>, rest: List<Node> }
+
+fn Owed::after(node: Node, later: Option<Owed>) → Option<Owed> {
+    later.and_then(λ o => Some(Owed(Cons(node, o.nodes), o.facts, o.held, o.rest)))
+}
+
+// The facts follow the old body, store by store: they are of the file the
+// old nodes left, which is the file written once the stores held are.
+fn hold_back(table: List<Rule>, facts: Facts, held: List<Node>, nodes: List<Node>, steps: List<Late>) → Option<Owed> {
+    match steps {
+        Nil => Some(Owed([], facts, held, nodes)),
+        Cons(step, later) => match step {
+            Wait => match nodes {
+                Nil => None,
+                Cons(node, rest) => node.stores().then(hold_back(table, facts.learn(node), held ++ [node], rest, later)),
+            },
+            Pass => match nodes {
+                Nil => None,
+                Cons(node, rest) => node.pure().then(Owed::after(node, hold_back(table, facts.learn(node), held, rest, later))),
+            },
+            Know(rule, args) => match facts.derive(table, rule, args) {
+                None => None,
+                Some(more) => hold_back(table, more, held, nodes, later),
+            },
+        },
+    }
+}
+
+fn nodes_same(xs, ys: List<Node>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys { Nil => False, Cons(y, others) => x.same(y) && nodes_same(rest, others) },
+    }
+}
+
+// What writing the stores held leaves: the nodes written for them, the
+// facts, and the old nodes left.
+record Written { nodes: List<Node>, facts: Facts, rest: List<Node> }
+
+fn Paid::write(self paid: Paid, facts: Facts, held: List<Node>, rest: List<Node>) → Option<Written> {
+    match paid {
+        Each => Some(Written(held, facts, rest)),
+        Together(four) => match rest {
+            Nil => None,
+            Cons(node, left) => (nodes_same(held, four.stores()) && (node.same(four.load()) && facts.knows_all(four.premises()))).then(
+                Some(Written([four.store()], facts.learn(node), left))),
+        },
+    }
+}
+
+fn Replayed::past(nodes: List<Node>, rest: Option<Replayed>) → Option<Replayed> {
+    rest.and_then(λ r => Some(Replayed(nodes ++ r.nodes, r.facts)))
 }
 
 fn Replayed::after(node: Node, rest: Option<Replayed>) → Option<Replayed> {
@@ -1133,6 +1348,9 @@ fn replay(table: List<Rule>, facts: Facts, nodes: List<Node>, steps: List<Step>)
                 Cons(node, rest) => node.rereading(facts, a, b).and_then(λ new => (new.pure() && facts.has(new.at(at))).then(
                     Replayed::after(new.as_move(at), replay(table, facts.learn(node).add(new.as_move(at)), rest, later)))),
             },
+            Holding(holding, paid) => hold_back(table, facts, [], nodes, holding).and_then(λ owed =>
+                paid.write(owed.facts, owed.held, owed.rest).and_then(λ written =>
+                    Replayed::past(owed.nodes ++ written.nodes, replay(table, written.facts, written.rest, later)))),
         },
     }
 }
@@ -1156,6 +1374,175 @@ theorem Facts::derive_hold(self facts: Facts, table: List<Rule>, values: Valuati
     let concluded = sound(values, buffers, facts.knows_all_hold(values, buffers, held, loaded, clause.premises, c.left));
     j(Option::some_inj(facts.with(clause.conclusion), more, c.right), λ m _ => m.Hold(values) ∧ m.Remembered(values, buffers),
         ⟨facts.with_hold(values, buffers, held, clause.conclusion, concluded), facts.with_remembered(values, buffers, loaded, clause.conclusion, concluded)⟩)
+}
+
+theorem Owed::after_some(node: Node, later: Option<Owed>, owed: Owed, h: Owed::after(node, later) = Some(owed)):
+    Exists<Owed>(λ o => (later = Some(o)) ∧ (Owed(Cons(node, o.nodes), o.facts, o.held, o.rest) = owed)) {
+    let got = Option::and_then_some(later, λ (o: Owed) => Some(Owed(Cons(node, o.nodes), o.facts, o.held, o.rest)), owed, h);
+    Exists(got.witness, ⟨got.proof.left, Option::some_inj(Owed(Cons(node, got.witness.nodes), got.witness.facts, got.witness.held, got.witness.rest), owed, got.proof.right)⟩)
+}
+
+theorem Replayed::past_some(nodes: List<Node>, rest: Option<Replayed>, r: Replayed, h: Replayed::past(nodes, rest) = Some(r)):
+    Exists<Replayed>(λ r0 => (rest = Some(r0)) ∧ (Replayed(nodes ++ r0.nodes, r0.facts) = r)) {
+    let got = Option::and_then_some(rest, λ (r0: Replayed) => Some(Replayed(nodes ++ r0.nodes, r0.facts)), r, h);
+    Exists(got.witness, ⟨got.proof.left, Option::some_inj(Replayed(nodes ++ got.witness.nodes, got.witness.facts), r, got.proof.right)⟩)
+}
+
+theorem nodes_same_sound(xs: List<Node>): (ys: List<Node>) → nodes_same(xs, ys) = True → xs = ys {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ => refl, Cons(_, _) => λ h => absurd(h) },
+        Cons(x, rest) => λ ys => match ys {
+            Nil => λ h => absurd(h),
+            Cons(y, others) => λ h => {
+                let p = Bool::and_true_parts(x.same(y), nodes_same(rest, others), h);
+                trans(cong_fn<Node, List<Node>>(λ n => Cons(n, rest), x.same_sound(y, p.left)), cong_fn<List<Node>, List<Node>>(λ l => Cons(y, l), nodes_same_sound(rest, others, p.right)))
+            },
+        },
+    }
+}
+
+// What holding back owes. The nodes written run from the file before the
+// stores held to itself; the stores held run from it to the file the old
+// nodes had left, where the facts hold and the old nodes left run on.
+fn Owed::Sound(self owed: Owed, values: Valuation(), lag, after: Buffers()) → Type {
+    Exists<Buffers()>(λ real => NodesRun(owed.nodes, values, lag, lag) ∧ (NodesRun(owed.held, values, lag, real) ∧
+        (NodesRun(owed.rest, values, real, after) ∧ (owed.facts.Hold(values) ∧ owed.facts.Remembered(values, real)))))
+}
+
+theorem hold_back_sound(table: List<Rule>, values: Valuation(), steps: List<Late>): (facts: Facts) → (held, nodes: List<Node>) → (owed: Owed) →
+    hold_back(table, facts, held, nodes, steps) = Some(owed) → (lag, real, after: Buffers()) → facts.Hold(values) → facts.Remembered(values, real) →
+    NodesRun(held, values, lag, real) → NodesRun(nodes, values, real, after) → owed.Sound(values, lag, after) {
+    match steps {
+        Nil => λ facts held nodes owed made lag real after known loaded owes ran =>
+            j(Option::some_inj(Owed([], facts, held, nodes), owed, made), λ x _ => x.Sound(values, lag, after),
+                Exists(real, ⟨refl, ⟨owes, ⟨ran, ⟨known, loaded⟩⟩⟩⟩)),
+        Cons(step, later) => match step {
+            Wait => λ facts held nodes => match nodes {
+                Nil => λ owed made lag real after known loaded owes ran => absurd(made),
+                Cons(node, rest) => λ owed made lag real after known loaded owes ran => {
+                    let got = Bool::then_some(node.stores(), hold_back(table, facts.learn(node), held ++ [node], rest, later), owed, made);
+                    let mid = ran.witness;
+                    hold_back_sound(table, values, later, facts.learn(node), held ++ [node], rest, owed, got.right, lag, mid, after,
+                        facts.learn_hold(values, node, real, mid, known, ran.proof.left),
+                        facts.learn_remembered(values, node, real, mid, λ _ => loaded, ran.proof.left),
+                        nodes_run_append(values, held, [node], lag, real, mid, owes, Exists(mid, ⟨ran.proof.left, refl⟩)),
+                        ran.proof.right)
+                },
+            },
+            Pass => λ facts held nodes => match nodes {
+                Nil => λ owed made lag real after known loaded owes ran => absurd(made),
+                Cons(node, rest) => λ owed made lag real after known loaded owes ran => {
+                    let got = Bool::then_some(node.pure(), Owed::after(node, hold_back(table, facts.learn(node), held, rest, later)), owed, made);
+                    let inner = Owed::after_some(node, hold_back(table, facts.learn(node), held, rest, later), owed, got.right);
+                    let mid = ran.witness;
+                    // The node touches no buffer: the file after it is
+                    // the one before, and it runs from any file.
+                    let still = node.runs_still(values, real, mid, node.pure_quiet(got.left), ran.proof.left);
+                    let ih = hold_back_sound(table, values, later, facts.learn(node), held, rest, inner.witness, inner.proof.left, lag, mid, after,
+                        facts.learn_hold(values, node, real, mid, known, ran.proof.left),
+                        facts.learn_remembered(values, node, real, mid, λ _ => loaded, ran.proof.left),
+                        j(sym(still.left), λ m _ => NodesRun(held, values, lag, m), owes),
+                        ran.proof.right);
+                    j(inner.proof.right, λ x _ => x.Sound(values, lag, after),
+                        Exists(ih.witness, ⟨Exists(lag, ⟨node.pure_runs(values, lag, got.left, node.pure_holds(values, real, mid, got.left, ran.proof.left)),
+                            ih.proof.left⟩), ih.proof.right⟩))
+                },
+            },
+            Know(rule, args) => λ facts held nodes owed => (match facts.derive(table, rule, args) as λ o =>
+                facts.derive(table, rule, args) = o → (match o { Some(more) => hold_back(table, more, held, nodes, later), None => None }) = Some(owed) →
+                (lag, real, after: Buffers()) → facts.Hold(values) → facts.Remembered(values, real) → NodesRun(held, values, lag, real) →
+                NodesRun(nodes, values, real, after) → owed.Sound(values, lag, after) {
+                None => λ _ made lag real after known loaded owes ran => absurd(made),
+                Some(more) => λ derived made lag real after known loaded owes ran => {
+                    let k = facts.derive_hold(table, values, real, rule, args, more, known, loaded, derived);
+                    hold_back_sound(table, values, later, more, held, nodes, owed, made, lag, real, after, k.left, k.right, owes, ran)
+                },
+            })(refl),
+        },
+    }
+}
+
+theorem beside_same(x, y, k: Nat, up: x + k <= y + 0, down: y + 0 <= x + k): y = x + k { omega(up, down) }
+
+// Four byte stores of a word's bytes at four indexes in a row leave what
+// one store of the word leaves.
+theorem Four::stores_word(self four: Four, values: Valuation(), lag, real: Buffers(), ran: NodesRun(four.stores(), values, lag, real),
+    known: FactsHold(values, real, four.premises())):
+    real = store_word(lag, four.buffer, values(64, four.first.index).toNat(), 4, values(32, four.word)) {
+    let f = four.buffer;
+    let n = values(64, four.first.index).toNat();
+    let word = values(32, four.word);
+    let quarters = known.left;
+    let e1 = beside_same(n, values(64, four.second.index).toNat(), 1, known.right.left, known.right.right.left);
+    let e2 = beside_same(n, values(64, four.third.index).toNat(), 2, known.right.right.right.left, known.right.right.right.right.left);
+    let e3 = beside_same(n, values(64, four.fourth.index).toNat(), 3, known.right.right.right.right.right.left, known.right.right.right.right.right.right.left);
+    let r2 = ran.proof.right;
+    let r3 = r2.proof.right;
+    let r4 = r3.proof.right;
+    let b0 = low_byte(values(64, four.first.value));
+    let b1 = low_byte(values(64, four.second.value));
+    let b2 = low_byte(values(64, four.third.value));
+    let b3 = low_byte(values(64, four.fourth.value));
+    let n1 = values(64, four.second.index).toNat();
+    let n2 = values(64, four.third.index).toNat();
+    let n3 = values(64, four.fourth.index).toNat();
+    let g = λ (first: Buffers()) (a1: Nat) (a2: Nat) (a3: Nat) (c1: BitVec(8)) (c2: BitVec(8)) (c3: BitVec(8)) =>
+        store_byte(store_byte(store_byte(first, f, a1, c1), f, a2, c2), f, a3, c3);
+    let h = λ (c0: BitVec(8)) => store_byte(lag, f, n, c0);
+    let s4: (real = store_byte(r3.witness, f, n3, b3)) = trans(r4.proof.right, r4.proof.left.left);
+    let s3: (real = store_byte(store_byte(r2.witness, f, n2, b2), f, n3, b3)) =
+        trans(s4, cong_fn(λ (s: Buffers()) => store_byte(s, f, n3, b3), r3.proof.left.left));
+    let s2: (real = g(ran.witness, n1, n2, n3, b1, b2, b3)) =
+        trans(s3, cong_fn(λ (s: Buffers()) => store_byte(store_byte(s, f, n2, b2), f, n3, b3), r2.proof.left.left));
+    let s1: (real = g(h(b0), n1, n2, n3, b1, b2, b3)) = trans(s2, cong_fn(λ (s: Buffers()) => g(s, n1, n2, n3, b1, b2, b3), ran.proof.left.left));
+    let u1 = trans(s1, cong_fn(λ (a: Nat) => g(h(b0), a, n2, n3, b1, b2, b3), e1));
+    let u2 = trans(u1, cong_fn(λ (a: Nat) => g(h(b0), n + 1, a, n3, b1, b2, b3), e2));
+    let u3 = trans(u2, cong_fn(λ (a: Nat) => g(h(b0), n + 1, n + 2, a, b1, b2, b3), e3));
+    let v0 = trans(u3, cong_fn(λ (c: BitVec(8)) => g(h(c), n + 1, n + 2, n + 3, b1, b2, b3), sym(quarters.left)));
+    let v1 = trans(v0, cong_fn(λ (c: BitVec(8)) => g(h(word_byte(word, 0)), n + 1, n + 2, n + 3, c, b2, b3), sym(quarters.right.left)));
+    let v2 = trans(v1, cong_fn(λ (c: BitVec(8)) => g(h(word_byte(word, 0)), n + 1, n + 2, n + 3, word_byte(word, 1), c, b3), sym(quarters.right.right.left)));
+    let v3 = trans(v2, cong_fn(λ (c: BitVec(8)) => g(h(word_byte(word, 0)), n + 1, n + 2, n + 3, word_byte(word, 1), word_byte(word, 2), c), sym(quarters.right.right.right)));
+    trans(v3, sym(store_word_four(lag, f, n, word)))
+}
+
+// What writing the stores held owes: the nodes written run from the file
+// before the stores to one the old nodes left run on from, where the facts
+// hold.
+fn Written::Sound(self written: Written, values: Valuation(), lag, after: Buffers()) → Type {
+    Exists<Buffers()>(λ real => NodesRun(written.nodes, values, lag, real) ∧ (NodesRun(written.rest, values, real, after) ∧
+        (written.facts.Hold(values) ∧ written.facts.Remembered(values, real))))
+}
+
+theorem Paid::write_sound(self paid: Paid, values: Valuation(), facts: Facts, held: List<Node>): (rest: List<Node>) → (written: Written) →
+    paid.write(facts, held, rest) = Some(written) → (lag, real, after: Buffers()) → facts.Hold(values) → facts.Remembered(values, real) →
+    NodesRun(held, values, lag, real) → NodesRun(rest, values, real, after) → written.Sound(values, lag, after) {
+    match paid {
+        Each => λ rest written made lag real after known loaded owes ran =>
+            j(Option::some_inj(Written(held, facts, rest), written, made), λ x _ => x.Sound(values, lag, after),
+                Exists(real, ⟨owes, ⟨ran, ⟨known, loaded⟩⟩⟩)),
+        Together(four) => λ rest => match rest {
+            Nil => λ written made lag real after known loaded owes ran => absurd(made),
+            Cons(node, left) => λ written made lag real after known loaded owes ran => {
+                let ok = Bool::then_some(nodes_same(held, four.stores()) && (node.same(four.load()) && facts.knows_all(four.premises())),
+                    Some(Written([four.store()], facts.learn(node), left)), written, made);
+                let c1 = Bool::and_true_parts(nodes_same(held, four.stores()), node.same(four.load()) && facts.knows_all(four.premises()), ok.left);
+                let c2 = Bool::and_true_parts(node.same(four.load()), facts.knows_all(four.premises()), c1.right);
+                let mid = ran.witness;
+                // The node is the load: it holds over the file the stores
+                // left, and leaves it.
+                let load: four.load().Runs(values, real, mid) = j(node.same_sound(four.load(), c2.left), λ n _ => n.Runs(values, real, mid), ran.proof.left);
+                let stores: NodesRun(four.stores(), values, lag, real) = j(nodes_same_sound(held, four.stores(), c1.left), λ h _ => NodesRun(h, values, lag, real), owes);
+                let word = four.stores_word(values, lag, real, stores, facts.knows_all_hold(values, real, known, loaded, four.premises(), c2.right));
+                let one: four.store().Runs(values, lag, mid) =
+                    ⟨j(sym(load.right), λ m _ => m = store_word(lag, four.buffer, values(64, four.first.index).toNat(), 4, values(32, four.word)), word),
+                        j(sym(load.right), λ m _ => values(32, four.loaded) = buffer_word(m, four.buffer, values(64, four.first.index).toNat(), 4), load.left)⟩;
+                j(Option::some_inj(Written([four.store()], facts.learn(node), left), written, ok.right), λ x _ => x.Sound(values, lag, after),
+                    Exists(mid, ⟨Exists(mid, ⟨one, refl⟩), ⟨ran.proof.right,
+                        ⟨facts.learn_hold(values, node, real, mid, known, ran.proof.left),
+                            facts.learn_remembered(values, node, real, mid, λ _ => loaded, ran.proof.left)⟩⟩⟩))
+            },
+        },
+    }
 }
 
 // Whatever the plan, what the replayer returns runs wherever the old nodes
@@ -1261,12 +1648,88 @@ theorem replay_sound(table: List<Rule>, values: Valuation(), steps: List<Step>):
                         ⟨Exists(ran.witness, ⟨moved, ih.left⟩), ih.right⟩)
                 },
             },
+            Holding(holding, paid) => λ facts nodes r made before after held loaded ran => {
+                let a = Option::and_then_some(hold_back(table, facts, [], nodes, holding), λ (owed: Owed) =>
+                    paid.write(owed.facts, owed.held, owed.rest).and_then(λ written =>
+                        Replayed::past(owed.nodes ++ written.nodes, replay(table, written.facts, written.rest, later))), r, made);
+                let owed = a.witness;
+                let b = Option::and_then_some(paid.write(owed.facts, owed.held, owed.rest), λ (written: Written) =>
+                    Replayed::past(owed.nodes ++ written.nodes, replay(table, written.facts, written.rest, later)), r, a.proof.right);
+                let written = b.witness;
+                let got = Replayed::past_some(owed.nodes ++ written.nodes, replay(table, written.facts, written.rest, later), r, b.proof.right);
+                // Nothing is held at the start: the file before the
+                // stores is the one the old nodes run from.
+                let back = hold_back_sound(table, values, holding, facts, [], nodes, owed, a.proof.left, before, before, after, held, loaded, refl, ran);
+                let paying = paid.write_sound(values, owed.facts, owed.held, owed.rest, written, b.proof.left, before, back.witness, after,
+                    back.proof.right.right.right.left, back.proof.right.right.right.right, back.proof.right.left, back.proof.right.right.left);
+                let ih = replay_sound(table, values, later, written.facts, written.rest, got.witness, got.proof.left, paying.witness, after,
+                    paying.proof.right.right.left, paying.proof.right.right.right, paying.proof.right.left);
+                let first = nodes_run_append(values, owed.nodes, written.nodes, before, before, paying.witness, back.proof.left, paying.proof.left);
+                j(got.proof.right, λ x _ => NodesRun(x.nodes, values, before, after) ∧ (x.facts.Hold(values) ∧ x.facts.Remembered(values, after)),
+                    ⟨nodes_run_append(values, owed.nodes ++ written.nodes, got.witness.nodes, before, paying.witness, after, first, ih.left), ih.right⟩)
+            },
         },
     }
 }
 
 // ---------------------------------------------------------------------------
 // Structured regions
+
+// Leaves. What a leaf is matters to the lowering alone: a composition of
+// leaves runs as their nodes one after another.
+
+fn ports_none(ports: Ports) → Bool { match ports.entries { Nil => True, Cons(_, _) => False } }
+
+// The nodes of a region that is dataflow leaves with no ports, composed.
+fn StructuredRegion::flat(self region: StructuredRegion) → Option<List<Node>> {
+    match region {
+        Dataflow(body) => (ports_none(body.inputs) && ports_none(body.outputs)).then(Some(body.nodes)),
+        Compose(prefix, continuation) => prefix.flat().and_then(λ first => continuation.flat().and_then(λ rest => Some(first ++ rest))),
+        _ => None,
+    }
+}
+
+theorem StructuredRegion::flat_runs(self region: StructuredRegion, effects: Effects(), values: Valuation()): (nodes: List<Node>) →
+    region.flat() = Some(nodes) → (before, after: Buffers()) → StructuredRegionRunsOver(effects, values, region, before, after) →
+    NodesRun(nodes, values, before, after) {
+    match region {
+        Dataflow(body) => λ nodes made before after ran => {
+            let ok = Bool::then_some(ports_none(body.inputs) && ports_none(body.outputs), Some(body.nodes), nodes, made);
+            j(Option::some_inj(body.nodes, nodes, ok.right), λ ns _ => NodesRun(ns, values, before, after), ran)
+        },
+        Compose(prefix, continuation) => λ nodes made before after ran => {
+            let a = Option::and_then_some(prefix.flat(), λ (first: List<Node>) => continuation.flat().and_then(λ rest => Some(first ++ rest)), nodes, made);
+            let b = Option::and_then_some(continuation.flat(), λ (rest: List<Node>) => Some(a.witness ++ rest), nodes, a.proof.right);
+            j(Option::some_inj(a.witness ++ b.witness, nodes, b.proof.right), λ ns _ => NodesRun(ns, values, before, after),
+                nodes_run_append(values, a.witness, b.witness, before, ran.witness, after,
+                    prefix.flat_runs(effects, values, a.witness, a.proof.left, before, ran.witness, ran.proof.left),
+                    continuation.flat_runs(effects, values, b.witness, b.proof.left, ran.witness, after, ran.proof.right)))
+        },
+        _ => λ nodes made before after ran => absurd(made),
+    }
+}
+
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), nodes, Ports(Nil))) }
+
+// Nodes cut into leaves of the sizes given, the last taking what is left.
+fn leaves_cut(nodes: List<Node>, sizes: List<Nat>) → StructuredRegion {
+    match sizes {
+        Nil => leaf(nodes),
+        Cons(size, rest) => Compose(leaf(nodes.take(size)), leaves_cut(nodes.drop(size), rest)),
+    }
+}
+
+theorem leaves_cut_run(effects: Effects(), values: Valuation(), sizes: List<Nat>): (nodes: List<Node>) → (before, after: Buffers()) →
+    NodesRun(nodes, values, before, after) → StructuredRegionRunsOver(effects, values, leaves_cut(nodes, sizes), before, after) {
+    match sizes {
+        Nil => λ nodes before after ran => ran,
+        Cons(size, rest) => λ nodes before after ran => {
+            let parts = nodes_run_split(values, nodes.take(size), nodes.drop(size), before, after,
+                j(sym(nodes.take_append_drop(size)), λ ns _ => NodesRun(ns, values, before, after), ran));
+            Exists(parts.witness, ⟨parts.proof.left, leaves_cut_run(effects, values, rest, nodes.drop(size), parts.witness, after, parts.proof.right)⟩)
+        },
+    }
+}
 
 // A plan for a region, in the region's shape. `Same` leaves a region as it
 // is and learns nothing from it; a list of no steps keeps every node and
@@ -1296,6 +1759,10 @@ inductive Plan {
     // A loop from other inputs, which the facts say are the words it
     // started from, and its body.
     Inputs(inputs: List<Nat>, body: Plan),
+    // A composition of leaves with no ports as one list of nodes, and the
+    // sizes of the leaves the nodes written are cut into, the last taking
+    // what is left: what stores held back pass may be in other leaves.
+    Flat(steps: List<Step>, sizes: List<Nat>),
 }
 
 record Regioned { region: StructuredRegion, facts: Facts }
@@ -1493,6 +1960,8 @@ fn replay_region(table: List<Rule>, region: StructuredRegion) → Facts → Plan
             Both(first, second) => replay_region(table, prefix, facts, first).and_then(λ a =>
                 replay_region(table, continuation, a.facts, second).and_then(λ b =>
                     Some(Regioned(Compose(a.region, b.region), b.facts)))),
+            Flat(steps, sizes) => Compose(prefix, continuation).flat().and_then(λ nodes => replay(table, facts, nodes, steps).and_then(λ n =>
+                Some(Regioned(leaves_cut(n.nodes, sizes), n.facts)))),
             _ => None,
         },
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ facts plan => match plan {
@@ -1589,6 +2058,17 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
                     one.right.left, one.right.right, ran.proof.right);
                 j(Option::some_inj(Regioned(Compose(a.region, b.region), b.facts), r, more.proof.right),
                     λ x _ => x.Sound(effects, values, before, after), ⟨Exists(ran.witness, ⟨one.left, two.left⟩), two.right⟩)
+            },
+            Flat(steps, sizes) => λ r made values before after held loaded ran => {
+                let got = Option::and_then_some(Compose(prefix, continuation).flat(), λ (nodes: List<Node>) => replay(table, facts, nodes, steps).and_then(λ n =>
+                    Some(Regioned(leaves_cut(n.nodes, sizes), n.facts))), r, made);
+                let nodes = got.witness;
+                let more = Option::and_then_some(replay(table, facts, nodes, steps), λ (n: Replayed) => Some(Regioned(leaves_cut(n.nodes, sizes), n.facts)), r, got.proof.right);
+                let n = more.witness;
+                let flat = Compose(prefix, continuation).flat_runs(effects, values, nodes, got.proof.left, before, after, ran);
+                let ok = replay_sound(table, values, steps, facts, nodes, n, more.proof.left, before, after, held, loaded, flat);
+                j(Option::some_inj(Regioned(leaves_cut(n.nodes, sizes), n.facts), r, more.proof.right), λ x _ => x.Sound(effects, values, before, after),
+                    ⟨leaves_cut_run(effects, values, sizes, n.nodes, before, after, ok.left), ok.right⟩)
             },
             _ => λ r made values before after held loaded ran => absurd(made),
         },

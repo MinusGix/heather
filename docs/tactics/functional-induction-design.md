@@ -155,8 +155,6 @@ a designated name that would map to a *different* minted name
   (`xs.map(λ x => f(x))`): the leaf's calls under a `λ` get no IH.
 - **A structural function whose first test is not the match on the
   decreasing parameter**: no principle; the refusal is recorded.
-- **A structural function from another module** whose own module did not
-  build its principle (§6).
 - **Functional induction on a call nested in the goal at arguments that are
   not variables.** State the claim for variables and instantiate it, which
   is what the refusal says.
@@ -180,15 +178,27 @@ So the two kinds are built at different times:
   other modules (the SHA-256 padding loop is declared in `sha256_filling`
   and proved in `sha256_stream_agreement`), and there are few of them; the
   cold tree's time is master's, within noise.
-- **A structural function** is recorded as written
-  (`ModulePass::recursions`) and built the first time a declaration of its
-  module does `induct f(…)`, names `f::induct` or names one of its equations (`f::Cons`)
-  (`DeclarationsMut::demand_principles`, run before the declaration). Later
-  declarations, and importers, find it by its designated name. A module
-  that imports a structural function whose module never asked for its
-  principle cannot build it: the written body does not travel in a module
-  image (`issues/function-induction-across-modules.md`), and the step says
-  so.
+- **A structural function** is built the first time a declaration asks
+  for it: one that does `induct f(…)`, names `f::induct` or names one of
+  its equations (`f::Cons`) (`DeclarationsMut::demand_principles`, run
+  before the declaration). In `f`'s own module it is built from `f` as
+  recorded (`ModulePass::recursions`); in a module that imports `f`, from
+  the declaration `f`'s module image keeps, which for a structural
+  function is the one written (a `decreases` function's is its lowering,
+  which is why those are built with the function). Later declarations, and
+  importers, find it by its designated name.
+
+Two modules that both import `f` may each build `f::induct`, and a third
+that imports both then sees two declarations of `f#induct`. They are built
+by one generator from one written declaration, so they have one statement,
+and either is the theorem: resolution takes the first when every copy's
+interface (parameters and statement, as the image encodes it) is the same
+(`NameLookup::same_generated`), and reports the ambiguity otherwise. The
+second case is two different functions of one name in two modules, whose
+equations are different theorems; the step and the reference then say the
+designed path is ambiguous. Neither choice is trusted: a use is checked
+against the statement it names. `induct_import_tests` (with
+`induct_left_tests` and `induct_right_tests`) is the probe.
 
 ## 7. Where it lives
 

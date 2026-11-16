@@ -1,11 +1,11 @@
 ---
 title: Give each fold probe fresh variables (nested probes prove False)
-status: open
+status: closed
 labels: [kernel, soundness]
 area: kernel
 code: crates/kernel/src/eval/probe.rs:68 @ 01de61c
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 The fold classifier probes a step closure by applying it to neutral
@@ -65,3 +65,4 @@ Found by the kernel comment audit (2026-11-15).
 ## Log
 
 - 2026-11-15: filed.
+- 2026-11-16: Fixed: each running probe takes the block of reserved levels at its depth (`Eval::probing`, `probe_level`), shared by `probe.rs` and `transduce.rs`; the repro is `outer_three`/`outer_three_zero` in `lib/_tests/std/num/nat_tests.hthr`.
