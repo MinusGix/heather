@@ -1,10 +1,10 @@
 ---
 title: bv_omega takes a let-bound word apart where it cannot, and fails where the word as an atom would do
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 In the binary search's invariant (`examples/binary-search/search.hthr`,
@@ -22,3 +22,7 @@ Done when a word `bv_omega` cannot fully take apart is kept as an atom
 (its `toNat` bounded by `2^64` and by the facts in scope) instead of
 failing on its side conditions, so the three goals above are one
 `bv_omega` each with the full context in scope.
+
+## Log
+
+- 2026-11-16: Fixed: a word whose side conditions omega refuses is kept as an atom, bounded by its range and the facts that mention it (docs/tactics/bv-omega-design.md §5.1). The binary search's three range facts about `mid` are each one `bv_omega` in the invariant; next_le and le_of_lt_next are gone. Probes: lib/_tests/std/tactic/bitvec_omega_tests.hthr ("kept whole").
