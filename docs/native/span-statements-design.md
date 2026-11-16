@@ -87,8 +87,9 @@ theorem does not fix, so it cannot be replaced here by a statement about
 addresses (disjoint ranges) without choosing a memory model. For the byte
 memory model that statement exists (`DataRegion::loan`). Deriving `Lends`
 from "the `Mut` slices are disjoint from every other slice and from the
-stack below `top`" over that model is the follow-up
-(issues/span-footprint-automation.md is where it belongs).
+stack below `top`" over that model is the follow-up: the verdicts for it
+exist over address intervals (`SpanSet::disjoint`,
+`lib/std/data/set/span_set.hthr`).
 
 **The names are `Slice` and `Borrow`, not `Span` and `Lent`.** Both of
 those are taken by records that certificates import (`Span` in
