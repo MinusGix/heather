@@ -21,9 +21,10 @@ use crate::{Cx, Elaborator};
 
 
 /// How many times a refused proof is written again with more words kept
-/// as atoms (§5.1). Each round keeps every word a failing side condition
-/// names, so a few rounds reach the innermost words a fact mentions.
-pub(crate) const ATOM_ROUNDS: usize = 3;
+/// as atoms (§5.1). Each round keeps the words every failing side
+/// condition names; a second round is for a word whose side conditions
+/// fail only once the first round's words are atoms.
+pub(crate) const ATOM_ROUNDS: usize = 2;
 
 #[derive(Clone)]
 pub(crate) struct Generated {
@@ -52,8 +53,7 @@ pub(crate) struct Obligation {
     /// statement under the binders that take them, and the `λ` that does.
     pub probe: Option<(String, String)>,
     /// The words to keep as atoms when this side condition fails (§5.1):
-    /// the innermost words under its own that a fact in scope mentions, or
-    /// its own word when none is.
+    /// the innermost words under its own that a fact in scope mentions.
     pub atoms: Vec<String>,
 }
 
@@ -757,9 +757,9 @@ impl<'w, 'a> Emitter<'w, 'a> {
     }
 
     /// Each side condition's words to keep as atoms should it fail (§5.1):
-    /// the innermost words under its own that `mentioned` holds of, those
-    /// a fact in scope bounds, else its own word, whose range is then all
-    /// that is known of it.
+    /// the innermost words under its own (itself included) that
+    /// `mentioned` holds of, those a fact in scope bounds. A word no fact
+    /// mentions would be known by its range alone, so none is kept.
     fn choose_atoms(&mut self, mentioned: &dyn Fn(usize) -> bool) {
         for i in 0..self.obligations.len() {
             let n = self.obligation_nodes[i];
@@ -773,7 +773,6 @@ impl<'w, 'a> Emitter<'w, 'a> {
                     !inner.iter().any(|&k| k != m && !matches!(self.walk.nodes[k].kind, Kind::Defined(..)) && mentioned(k))
                 })
                 .collect();
-            let kept = if kept.is_empty() { vec![n] } else { kept };
             self.obligations[i].atoms = kept.iter().map(|&m| self.walk.nodes[m].word.clone()).collect();
         }
     }

@@ -1064,18 +1064,32 @@ impl Checking<'_> {
                 // (docs/tactics/bv-omega-design.md §5.1), and the proof is
                 // written again. Each round keeps more words whole, so this
                 // ends; a refusal still diagnoses the first attempt's proof.
+                // Past the first failing side condition (the diagnosis), only
+                // those that would keep a word are probed.
                 let diagnosed = generated.clone();
                 let refused = checked.as_ref().err().cloned();
+                let mut diagnosis: Option<(usize, ElabError)> = None;
                 let mut kept = generated.clone();
                 let mut rounds = 0;
                 while checked.is_err() && rounds < bv_omega::ATOM_ROUNDS {
-                    rounds += 1;
                     let mut more = Vec::new();
-                    for obligation in &kept.obligations {
-                        if side(obligation, &kept.prelude)?.is_err() {
-                            more.extend(obligation.atoms.iter().filter(|w| !opaque.contains(*w)).cloned());
+                    for (i, obligation) in kept.obligations.iter().enumerate() {
+                        let first = rounds == 0 && diagnosis.is_none();
+                        if !first && obligation.atoms.iter().all(|w| opaque.contains(w)) {
+                            continue;
+                        }
+                        if let Err(failure) = side(obligation, &kept.prelude)? {
+                            if first {
+                                diagnosis = Some((i, failure));
+                            }
+                            for word in &obligation.atoms {
+                                if !opaque.contains(word) && !more.contains(word) {
+                                    more.push(word.clone());
+                                }
+                            }
                         }
                     }
+                    rounds += 1;
                     if more.is_empty() {
                         break;
                     }
@@ -1100,13 +1114,12 @@ impl Checking<'_> {
                         // (§5).
                         let generated = diagnosed;
                         let error = refused.unwrap_or(last);
-                        for obligation in &generated.obligations {
-                            if let Err(failure) = side(obligation, &generated.prelude)? {
-                                return err(
-                                    format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{failure}", obligation.why, obligation.shown),
-                                    e.span,
-                                );
-                            }
+                        if let Some((i, failure)) = diagnosis {
+                            let obligation = &generated.obligations[i];
+                            return err(
+                                format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{failure}", obligation.why, obligation.shown),
+                                e.span,
+                            );
                         }
                         Err(ElabError::Elab {
                             msg: format!("{error}\n  generated `bv_omega` proof: {}", generated.source),

@@ -224,7 +224,8 @@ whatever their head, their `toNat` an atom bounded by its range and by the
 facts that mention it. Which words: under the failing condition's word
 (itself included), the innermost ones whose `toNat` a fact in scope or a
 comparison bridge mentions, since a fact is the only thing an atom is known
-by; with none, the word itself. For `mid + 1 <= hi`, the failing condition
+by. A word no fact mentions would be known by its range alone, so it is
+never kept, and a refusal with only such words fails as before. For `mid + 1 <= hi`, the failing condition
 is `mid + 1`'s, and both `mid + 1` and `mid` are mentioned; `mid` is
 innermost, so `mid + 1` is still taken apart over it, and its bound follows
 from `mid < hi`.
@@ -232,7 +233,10 @@ from `mid < hi`.
 The proof is then written again, carefully, with those words kept whole,
 for at most `ATOM_ROUNDS` rounds, each keeping more. It only ever runs
 after the careful proof failed, so a goal `bv_omega` proved before is
-proved as before. If no round succeeds, the refusal is the careful proof's,
+proved as before. A refusal pays for it where it is common, as in a
+`decreases` discharge or a `simp_only` branch the context does not decide:
+past the first failing condition, which the diagnosis needs anyway, only a
+condition that would keep a new word is re-checked. If no round succeeds, the refusal is the careful proof's,
 naming its first failing condition: keeping words whole explains nothing a
 user can act on.
 
