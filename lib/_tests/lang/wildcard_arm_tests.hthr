@@ -1,0 +1,73 @@
+// A `_` arm sees a scrutinee it names as the constructor it stands for
+// (issues/wildcard-arm-sees-its-constructor.md,
+// docs/language/matching/nested-match-patterns-design.md §4.1): in the arm
+// for `C`, the name is `C` applied to fields the arm cannot spell. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat; import list; import option;
+
+inductive Shape { Dot(n: Nat), Pair(m: Nat, k: Nat), Empty }
+
+fn Shape::is_dot(self s: Shape) -> Bool { match s { Dot(_) => True, _ => False } }
+
+// The issue's example: a goal over the scrutinee, closed by a lemma about any
+// value. The `_` arm checks at `p(Pair(_, _))` and at `p(Empty)`.
+theorem wild_runs(s: Shape, p: (x: Shape) → Type, dots: (x: Shape) → x.is_dot() = True → p(x), other: (x: Shape) → p(x)): p(s) {
+    match s { Dot(n) => dots(Dot(n), refl), _ => other(s) }
+}
+
+// A parameter of the type: the constructor's parameters come from the
+// scrutinee's own type, nullary constructors included.
+theorem wild_param<T>(o: Option<T>, p: (x: Option<T>) → Type, other: (x: Option<T>) → p(x)): p(o) {
+    match o { _ => other(o) }
+}
+
+theorem wild_list<T>(l: List<T>, p: (x: List<T>) → Type, other: (x: List<T>) → p(x)): p(l) {
+    match l { Nil => other(Nil), _ => other(l) }
+}
+
+// A hypothesis about the scrutinee is refined with it, so the two still agree.
+theorem wild_hypothesis(s: Shape, q: (x: Shape) → Type, h: q(s), use: (x: Shape) → q(x) → Nat): Nat {
+    match s { Dot(n) => n, _ => use(s, h) }
+}
+
+// A value: the arm computes at the constructor, at a literal and at a neutral
+// scrutinee.
+fn Shape::bump(self s: Shape) -> Shape { match s { Dot(n) => Dot(n + 1), _ => s } }
+theorem bump_pair(m, k: Nat): Pair(m, k).bump() = Pair(m, k) { refl }
+theorem bump_empty(): Empty.bump() = Empty { refl }
+
+// The scrutinee is a field of an enclosing arm. The structural lowerings bind
+// that as a projection of the matched value, not as a local, and the `_` arm
+// still sees it as its constructor: the shape of `Stmt::emits_extends`.
+inductive Leaf { Base(n: Nat), Grow(a: Nat, b: Nat), Twig(a: Nat) }
+inductive Node { Hold(l: Leaf), Stop(x: Nat) }
+
+fn Leaf::scoped(self l: Leaf) -> Bool { match l { Base(_) => False, _ => True } }
+fn Leaf::code(self l: Leaf, k: Nat) -> Option<Nat> { match l { Base(n) => Some(n), Grow(a, b) => Some(a + b + k), Twig(a) => Some(a) } }
+fn Node::emits(self s: Node, k: Nat) -> Option<Nat> {
+    match s { Hold(l) => match l { Base(n) => Some(n), _ => if l.scoped() { l.code(k) } else { None } }, Stop(x) => Some(x) }
+}
+theorem Leaf::extends(self l: Leaf, k, c: Nat, e: (if l.scoped() { l.code(k) } else { None }) = Some(c)): Nat { c }
+theorem Node::extends(self s: Node): (k: Nat) → (c: Nat) → s.emits(k) = Some(c) → Nat {
+    match s {
+        Hold(l) => match l {
+            Base(n) => λ k c e => n,
+            _ => λ k c e => l.extends(k, c, e),
+        },
+        Stop(x) => λ k c e => x,
+    }
+}
+
+// Negative control: the arm binds the scrutinee, not the fields. A field
+// name of a constructor the `_` covers is not in scope.
+// expect-error: unbound name `m`
+fn Shape::wild_field(self s: Shape) -> Nat { match s { Dot(n) => n, _ => m } }
+
+// Negative control: a constructor only deep arms name keeps the plain `_`,
+// whose scrutinee is not rebound (the generated inner match's columns are
+// not its constructor's), so the goal it was refined to is not met.
+// expect-error: is expected here
+theorem wild_under_deep(p: (x: Option<Shape>) → Type, other: (x: Option<Shape>) → p(x)): (o: Option<Shape>) → p(o) {
+    λ o => match o { Some(Dot(n)) => other(Some(Dot(n))), _ => other(o) }
+}

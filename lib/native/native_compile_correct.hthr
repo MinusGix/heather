@@ -187,12 +187,7 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
     match s {
         Compute(region) => match region {
             Dataflow(body) => λ p out known names c emitted => p.within_computes_best(layout, out, body.nodes, names, c, emitted),
-            Sequence(prefix, continuation) => λ p out known names c emitted => Sequence(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
-            Compose(prefix, continuation) => λ p out known names c emitted => Compose(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
-            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_extends(layout, p, out, names, c, emitted),
-            Lend(views, callee, arguments, result) => λ p out known names c emitted => Lend(views, callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
-            Call(callee, arguments, result) => λ p out known names c emitted => Call(callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
-            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_extends(layout, p, out, names, c, emitted),
+            _ => λ p out known names c emitted => region.region_extends(layout, p, out, names, c, emitted),
         },
         Invoke(shape) => λ p out known names c => match shape {
             Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
@@ -660,12 +655,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
         Compute(region) => match region {
             Dataflow(body) => λ p out facts names c emitted within checked n env k _ exits next => t.goes_computes_best(out, env, p, body.nodes, names, c, emitted, within,
                 k(Onward(env.compute(call, Dataflow(body)))), checked, next(env.compute(call, Dataflow(body)))),
-            Sequence(prefix, continuation) => λ p out facts names c emitted within checked n env k _ => Sequence(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Compose(prefix, continuation) => λ p out facts names c emitted within checked n env k _ => Compose(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out facts names c emitted within checked n env k _ => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Lend(views, callee, arguments, result) => λ p out facts names c emitted within checked n env k _ => Lend(views, callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Call(callee, arguments, result) => λ p out facts names c emitted within checked n env k _ => Call(callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out facts names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            _ => λ p out facts names c emitted within checked n env k _ => region.region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
         },
         Invoke(shape) => λ p out facts names c => match shape {
             Reads(fd, buf, at, len, result) => (match layout.words_fit([fd, at, len, result]) as λ b => layout.words_fit([fd, at, len, result]) = b → (match b {
@@ -757,29 +747,11 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                                 t.then_pair(body, rest, call, perform, ih_rest, p, out, names, c, f, fs, carried, emitted, within, checked)(n, env, k),
                         })(refl)
                     },
-                    Sequence(a, b) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Sequence(a, b)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Compose(a, b) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Compose(a, b)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Conditional(i, d, a, o, y, w) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Conditional(i, d, a, o, y, w)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Lend(v, e, a, o) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Lend(v, e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Call(e, a, o) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Call(e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Loop(i, b, a, d, y, x, e, o, h) => λ ih p out facts names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Loop(i, b, a, d, y, x, e, o, h)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
+                    _ => λ ih p out facts names c emitted within checked n env k _ =>
+                        t.then_nil(Compute(region), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                 },
-                Then(a, b) => λ ih p out facts names c emitted within checked n env k _ =>
-                    t.then_nil(Then(a, b), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Branch(d, y, w) => λ ih p out facts names c emitted within checked n env k _ =>
-                    t.then_nil(Branch(d, y, w), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Repeat(b, a) => λ ih p out facts names c emitted within checked n env k _ =>
-                    t.then_nil(Repeat(b, a), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Arg(i, b, l) => λ ih p out facts names c emitted within checked n env k _ =>
-                    t.then_nil(Arg(i, b, l), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Perform(g, a, r) => λ ih p out facts names c emitted within checked n env k _ =>
-                    t.then_nil(Perform(g, a, r), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
+                _ => λ ih p out facts names c emitted within checked n env k _ =>
+                    t.then_nil(first, rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
             })(ih_first)
         },
         Branch(condition, yes, no) => λ p out facts names c => {
