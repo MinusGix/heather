@@ -99,10 +99,9 @@ theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) →
     match ids {
         Nil => λ i _ never => false_elim(never),
         Cons(id, rest) => λ i fit m => {
-            let both = Bool::both(fit);
             match m {
-                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
-                Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
+                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, known)),
+                Inr(later) => layout.words_fit_mem(rest, i, known, later),
             }
         },
     }
@@ -1042,21 +1041,17 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         let region = Call(callee, arguments, result);
         let live = live_before(arguments, result, out);
         let k = program_lent(t.functions, callee);
-        let f1 = Bool::both(fit);
-        let f2 = Bool::both(f1.right);
-        let f3 = Bool::both(f2.right);
-        let f4 = Bool::both(f3.right);
-        let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), f1.left);
-        let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, f3.left);
+        let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), known);
+        let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, known);
         let small: (k <= 3) = omega(few);
-        let has: (k <= t.caps.len()) = Nat::leb_sound(k, t.caps.len(), f4.right);
-        let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f4.left, m);
+        let has: (k <= t.caps.len()) = Nat::leb_sound(k, t.caps.len(), known);
+        let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, known, m);
         let words = env.words_at(arguments);
         let answer = call(env.buffers, callee, words);
         let left = Env(env.words, answer.buffers, env.args);
         let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
         let arity: arity_fits(program_arity(t.functions, callee), 2 * k + words.len()).IsTrue() =
-            j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
+            j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), known);
         let mean_eq: (region.meaning(call, env) = left.set_word(result, answer.word)) = env.call_meaning(call, callee, arguments, result);
         let back = p.calls(layout, Succ(callee), k, arguments);
         let w_back: back.Within(t.program) = Prog::within_trans(back.within_word_from(layout, out, result, Rax), within);
