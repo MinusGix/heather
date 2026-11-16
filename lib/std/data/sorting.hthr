@@ -415,6 +415,50 @@ instance<A: LinearOrder(R) + DecidableRel(R)>(R: A → A → Type) LinearOrder<L
 }
 
 // ---------------------------------------------------------------------------
+// Sorted by index: each element `R`-below every later one, which is how a
+// sort over a span states it (`s[i] <= s[k]` for `i < k`). Under a
+// preorder `Sorted` gives it; the converse needs no order.
+
+theorem List::sorted_nth<A: Preorder(R)>(R: A → A → Type, self xs: List<A>, s: xs.Sorted(R)):
+    (i, k: Nat) → (a, b: A) → i < k → xs.nth(i) = Some(a) → xs.nth(k) = Some(b) → R(a, b)
+{
+    match xs {
+        Nil => λ i k a b _ none => absurd(none),
+        Cons(h, t) => λ i k => match i {
+            Zero => match k {
+                Zero => λ a b no => false_elim(no),
+                Succ(m) => λ a b _ ea eb => j(Option::some_inj(h, a, ea), λ c _ => R(c, b), t.sorted_le_mem(R, h, s, b, t.nth_mem(m, b, eb))),
+            },
+            Succ(p) => match k {
+                Zero => λ a b no => false_elim(no),
+                Succ(m) => λ a b lt ea eb => t.sorted_nth(R, s.right, p, m, a, b, lt, ea, eb),
+            },
+        },
+    }
+}
+
+theorem List::sorted_of_nth<A>(R: A → A → Type, self xs: List<A>,
+    ordered: (i, k: Nat) → (a, b: A) → i < k → xs.nth(i) = Some(a) → xs.nth(k) = Some(b) → R(a, b)): xs.Sorted(R)
+{
+    match xs {
+        Nil => trivial,
+        Cons(h, t) => {
+            let head = (match t as λ u => ((i, k: Nat) → (a, b: A) → i < k → Cons(h, u).nth(i) = Some(a) → Cons(h, u).nth(k) = Some(b) → R(a, b)) → List::LeHead(R, h, u) {
+                Nil => λ _ => trivial,
+                Cons(h2, _) => λ o => o(0, 1, h, h2, trivial, refl, refl),
+            })(ordered);
+            And(head, t.sorted_of_nth(R, λ i k a b lt ea eb => ordered(Succ(i), Succ(k), a, b, lt, ea, eb)))
+        },
+    }
+}
+
+theorem List::sorted_iff_nth<A: Preorder(R)>(R: A → A → Type, self xs: List<A>):
+    xs.Sorted(R) ↔ ((i, k: Nat) → (a, b: A) → i < k → xs.nth(i) = Some(a) → xs.nth(k) = Some(b) → R(a, b))
+{
+    Iff(mp := λ (s: xs.Sorted(R)) => xs.sorted_nth(R, s), mpr := xs.sorted_of_nth(R))
+}
+
+// ---------------------------------------------------------------------------
 // Strict chains. `Sorted` at an irreflexive, transitive relation is a strictly
 // ascending chain; the two laws are arguments, so no order class is needed.
 
