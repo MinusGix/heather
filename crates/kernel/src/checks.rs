@@ -18,12 +18,19 @@
 //!   tests choose this: random well-scoped terms are the corpus the memo's
 //!   scoping rules are meant to be exhaustive over, and a disagreement is a
 //!   `law!`-shaped failure.
-//! - [`SkipVerification::Sampled`] — one skip in [`SAMPLE_EVERY`], the
-//!   default. A memo defect is systematic (a node kind's scoping, not a rare
-//!   term), so a sample over the millions of skips a library check makes
-//!   finds it with near certainty at a few percent of the cost, and every
-//!   elaborator acceptance suite keeps sweeping real term shapes.
-//! - [`SkipVerification::Off`] — never.
+//! - [`SkipVerification::Sampled`] — one skip in [`SAMPLE_EVERY`]. A memo
+//!   defect is systematic (a node kind's scoping, not a rare term), so a
+//!   sample over the millions of skips a library check makes finds it with
+//!   near certainty. Its cost is not a fixed share: a skip costs a constant
+//!   and its check the term skipped, so a traversal that skips the same
+//!   large closed term again and again (a `runtime fn` generator shifting
+//!   its reified program) pays many times its own work
+//!   (`issues/kernel-self-check-cost-on-skipped-terms.md`).
+//! - [`SkipVerification::Off`] — never, the default (2026-11-16). The
+//!   property tests and the `--long` lane are where these checks run;
+//!   catching an optimization that disagrees with its traversal on the
+//!   library's own terms is an independent checker's job, which checks
+//!   every declaration rather than a sample of one kernel's steps.
 //!
 //! A check is one derivation ([`rederive`]): nothing is checked inside it and
 //! it moves no counter, so checking every claim costs about what the claims
@@ -50,7 +57,7 @@ pub const SAMPLE_EVERY: u32 = 16;
 const OFF: u8 = 0;
 const SAMPLED: u8 = 1;
 const FULL: u8 = 2;
-const DEFAULT: u8 = if cfg!(feature = "long-checks") { FULL } else { SAMPLED };
+const DEFAULT: u8 = if cfg!(feature = "long-checks") { FULL } else { OFF };
 
 static LEVEL: AtomicU8 = AtomicU8::new(DEFAULT);
 

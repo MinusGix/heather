@@ -60,11 +60,13 @@ the lanes are cut this way is `docs/infrastructure/testing-architecture-design.m
   `scripts/test` is the exact image policy, which re-elaborates every library
   module after a compiler edit; it is the nightly master sentinel's lane, so
   run it yourself only for the two rows above that name it.
-- **`--fast` and `--pr` run the `heather` binary with the kernel's sampled
-  self-checks off** (`HEATHER_KERNEL_SELF_CHECKS=off`): the sample is most of
-  a `runtime fn` generator module's check under the test profile
-  (`issues/kernel-self-check-cost-on-skipped-terms.md`). To time a module as
-  those lanes see it with `target/debug/heather`, set it too.
+- **The kernel's slow self-checks are off by default in every lane**
+  (`crates/kernel/src/checks.rs`): a sample of them was most of a `runtime
+  fn` generator module's check under the test profile
+  (`issues/kernel-self-check-cost-on-skipped-terms.md`). The kernel's
+  property tests and `--long` run them in full;
+  `HEATHER_KERNEL_SELF_CHECKS=sampled` or `full` turns them on for one
+  `heather` run.
 - **`--fast`** also skips the whole-library acceptance tests, the mutation
   controls and the native x86 certificate gates
   (`crates/cli/tests/native*.rs`): the `SKIP` list in `scripts/test`.

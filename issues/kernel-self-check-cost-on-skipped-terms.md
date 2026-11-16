@@ -1,10 +1,10 @@
 ---
 title: A sampled skip check walks the whole skipped term: twenty times a generator module's check
-status: open
+status: closed
 labels: [performance,testing,kernel]
 area: infrastructure
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-16
 ---
 
 The kernel's debug self-checks (`crates/kernel/src/checks.rs`) re-derive one claim in sixteen. For a substitution's skip the derivation is the whole walk the skip stepped over, so a check costs the size of the skipped term while the skip cost a constant. The module docs expect "a few percent"; on a module of `runtime fn` generators the sample is more than twenty times the module, and those modules were most of the library gate's cold build step under the test profile's binary.
@@ -50,6 +50,22 @@ The sample should be bounded by work, not by count, so the default level is affo
 - Spend checks from a budget fed by the nodes ordinary traversals walk: verify a sampled skip only while the nodes re-walked so far are under a fixed fraction of the nodes walked. It stays a function of the claims a run makes.
 - Check a node's skip claim once per mapper and depth rather than every sixteenth time it is made: the claim is about the node, and the generator makes the same claim about the same node thousands of times.
 - The comparison after the walk (`mapped == **t`) is a second traversal of the same term.
+
+## Off by default (2026-11-16)
+
+Minus, 2026-11-16: "I'm considering just turning it off, this is more the role of a dumb kernel", then "Let's just make it default Off". The kernel's default level is now `Off` (`Full` under `long-checks`), the kernel's property tests still set `Full` themselves, and `scripts/test` exports nothing: `HEATHER_KERNEL_SELF_CHECKS=sampled` or `full` is how one `heather` run opts in. A sample bounded by work (a check only while the nodes checks re-walked were within a sixteenth of the nodes ordinary substitutions visited) was built and measured first and then dropped for this.
+
+What prompted it: the default lane's library gate was 27 to 37 minutes of a 43 to 77 minute suite after an elaborator change. Its build step alone on a four-core cloud box at master 112767e, every module elaborated and every declaration's verdict from the store (`heather check --build-jobs 4 --build-only lib --build-times`, the test profile's binary):
+
+| level | wall | CPU | the seventeen generator modules | the other 587 |
+|---|---|---|---|---|
+| off | 420 s | 1586 s | 291 s | 1371 s |
+| sampled, one in sixteen | 1139 s | 3365 s | 2174 s | 1274 s |
+| sampled, bounded by work | 437 s | 1650 s | 299 s | 1429 s |
+
+The seventeen (`sha256_*`, `runtime_held_*_tests`, `lexer_scan`, `lexer_span`, `lexer_records`) were the whole difference, and seven of them are one import chain (`sha256_schedule` to `sha256_stream_agreement`), so the step was as long as that chain. `sha256_compression` took 246 s of a 300 s rail.
+
+What the default gives up: between `--long` sweeps nothing re-derives a skip, a typing memo hit, a conversion cache hit or a shared-equality hit on the library's own terms. An independent checker covers that for every declaration once there is one; until then `--long` on a schedule would.
 
 ## Done when
 
