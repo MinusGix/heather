@@ -454,13 +454,13 @@ theorem Target::held_rsp(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: 
 }
 
 // Fewer words live.
-theorem Target::held_sub(self t: Target, live, wider: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(wider, env, g, m),
+theorem Target::held_sub(self t: Target, {live, wider: List<Nat>}, {env: Env}, {g: Gprs}, {m: X86Memory(t.r.profile)}, held: t.Held(wider, env, g, m),
     sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.Held(live, env, g, m) {
     Exists(held.witness, ⟨held.proof.left, ⟨λ i m2 => held.proof.right.left(i, sub(i, m2)), held.proof.right.right⟩⟩)
 }
 
 // The environment is the same.
-theorem Target::held_same(self t: Target, live: List<Nat>, env, other: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+theorem Target::held_same(self t: Target, {live: List<Nat>}, {env, other: Env}, {g: Gprs}, {m: X86Memory(t.r.profile)}, held: t.Held(live, env, g, m),
     same: env = other): t.Held(live, other, g, m) {
     j(same, λ e _ => t.Held(live, e, g, m), held)
 }

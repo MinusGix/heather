@@ -681,7 +681,7 @@ theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: En
     let stored = t.goes_word_from(live, out, env, p, result, Rax, inside, refl, sub, apart, within, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, other, g, m), next);
     t.goes_weaken(stored,
-        λ s held => ⟨held.left, λ g2 m2 after _ => t.held_same(out, env.set_word(result, read_gpr(Rax, s.gprs)), other, g2, m2, after, held.right)⟩)
+        λ s held => ⟨held.left, λ g2 m2 after _ => t.held_same(after, held.right)⟩)
 }
 
 // The word's low bit in `register`, zero-extended; RBX one.

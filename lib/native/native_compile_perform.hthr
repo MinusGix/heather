@@ -461,7 +461,7 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
         ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_words(ids, values), g2, m2) → t.Spares(g, g2) → q(g2, m2)))) {
     let layout = t.layout();
     match ids {
-        Nil => λ registers values p live env sub _ _ _ _ _ _ _ next => t.goes_weaken(next, λ s held => held.right.right(s.gprs, s.memory, t.held_sub(out, live, env, s.gprs, s.memory, held.left, λ i m => sub(i, out.mem_minus_nil(i, m))),
+        Nil => λ registers values p live env sub _ _ _ _ _ _ _ next => t.goes_weaken(next, λ s held => held.right.right(s.gprs, s.memory, t.held_sub(held.left, λ i m => sub(i, out.mem_minus_nil(i, m))),
                 λ x _ _ => refl)),
         Cons(id, rest) => λ registers => match registers {
             Nil => λ _ _ _ _ _ _ _ _ _ short => false_elim(Nat::not_succ_le_zero(rest.len(), short)),
@@ -1608,7 +1608,7 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
                 t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rax, g) = BitVec::ofNat(0))) {
             False => λ within next => {
                 let later = t.goes_zeroes(env, tree, rest, p, Cons(id, live), λ i m => ok(i, Inr(m)), λ i m unfit => Inr(beyond(i, Inr(m), unfit)), within, next);
-                t.goes_weaken(later, λ s h => ⟨t.held_sub(Cons(id, live), live, env, s.gprs, s.memory, h.left, λ i m => match m {
+                t.goes_weaken(later, λ s h => ⟨t.held_sub(h.left, λ i m => match m {
                         Inl(e) => j(sym(e), λ x _ => Mem(x, live), beyond(id, Inl(refl), fit)),
                         Inr(m2) => m2,
                     }), h.right⟩)
@@ -1690,7 +1690,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let w_mov = mov.within_before(0, Store(store), t.program, w_saved);
     // The words zeroed, from the frame opened.
     let final: t.Goes(prog_len(fm.zeroes(layout, live)), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live.onto(unfit), env, s.gprs, s.memory)) = t.goes_weaken(next,
-        λ s h => t.held_sub(live, live.onto(unfit), env, s.gprs, s.memory, h, λ i m => live.mem_onto(i, unfit, m)));
+        λ s h => t.held_sub(h, λ i m => live.mem_onto(i, unfit, m)));
     let zeroed = t.goes_zeroes(env, tree, live, fm, unfit, λ i m => ⟨t.homes.slotted_home(live, slotted, i, m), refl⟩,
         λ i m no => live.mem_filter_of(fits_not, i, cong_fn<Bool, Bool>(λ b => !b, no), m), within, final);
     let at_frame = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(unfit, env, u.gprs, u.memory) ∧ (read_gpr(Rax, u.gprs) = BitVec::ofNat(0));

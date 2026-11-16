@@ -485,7 +485,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
             Nil => λ registers p q env some within _ _ _ next => {
                 let same: (p = q) = Option::some_inj(p, q, some);
                 t.goes_weaken(j(sym(same), λ x _ => t.At(prog_len(x), out, tree, env), next),
-                    λ s held => t.held_sub(out, out.minus(Nil), env, s.gprs, s.memory, held.left,
+                    λ s held => t.held_sub(held.left,
                         λ i m => out.mem_filter_of(λ (id: Nat) => absent(id, Nil), i, refl, m)))
             },
             Cons(_, _) => λ registers p q env none => absurd(none),
@@ -517,7 +517,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         t.goes_weaken(head, λ s held => ⟨held.left, λ g2 m2 put spares => {
                                 let number: (read_gpr(register, s.gprs).toNat() = values(port.width, port.id).toNat()) =
                                     port_rep_number(values, port, read_gpr(register, s.gprs), held.right.left);
-                                ⟨t.held_same(after, env.set_word(word, read_gpr(register, s.gprs)), settled, g2, m2, put,
+                                ⟨t.held_same(put,
                                     cong_fn<Nat, Env>(λ k => Env(env.words.put(word, k, 0), env.buffers, env.args), number)),
                                  ports_at_same(values, rest, later, s.gprs, g2, λ r k => spares(r, unused(r, Inr(k)),
                                     Rbx.absent_mem(later, Rbx.absent_rest(register, later, rbx), r, k)), held.right.right)⟩
@@ -587,7 +587,7 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                             let entered: t.Goes(prog_len(loaded), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q_in(s.gprs, s.memory)) = t.goes_weaken(at_loaded,
                                 λ s held => {
                                     let kept = t.held_kept(left, env, s.gprs, execute_block_normal(code, s).gprs, s.memory,
-                                        t.held_sub(left, live, env, s.gprs, s.memory, held.left, narrowed),
+                                        t.held_sub(held.left, narrowed),
                                         execute_block_kept<X86Memory(t.r.profile)>(code, s, Cons(Rsp, layout.taken), leaves));
                                     ⟨j(sym(execute_block_memory<X86Memory(t.r.profile)>(code, s)), λ m _ => t.Held(left, env, execute_block_normal(code, s).gprs, m), kept),
                                      region.lower_correct<X86Memory(t.r.profile)>(ins, outs, place_into(outs), code, values, s, lowered, held.right, holds)⟩

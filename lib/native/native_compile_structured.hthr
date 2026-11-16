@@ -60,10 +60,10 @@ import set_tactic;
 // Moving between environments
 
 // Code that needs fewer words live runs where more are.
-theorem Target::at_sub(self t: Target, at: Nat, live, wider: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), env: Env,
-    sub: (i: Nat) → Mem(i, live) → Mem(i, wider), goes: t.At(at, live, tree, env)): t.At(at, wider, tree, env) {
+theorem Target::at_sub(self t: Target, {at: Nat}, {live, wider: List<Nat>}, {tree: ITree<BitVec(64)>(Events::linux())}, {env: Env},
+    goes: t.At(at, live, tree, env), sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.At(at, wider, tree, env) {
     t.goes_weaken(goes,
-        λ s held => t.held_sub(live, wider, env, s.gprs, s.memory, held, sub))
+        λ s held => t.held_sub(held, sub))
 }
 
 // A JMP to a label ahead or behind, the live words held.
@@ -933,8 +933,8 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
     let closed_sub = λ (i: Nat) (mi: Mem(i, h.head)) => h.head.within_mem(set, h.closed, i, mi);
     let zero_leaf = λ (now: Env) (goes: t.At(prog_len(k.z.prog), zero_out, tree, now.steps(loop_zero(count, exhausted)))) =>
-        t.at_sub(prog_len(hp), h.head, set, tree, now, closed_sub,
-            t.leaf_goes(zero_out, loop_zero(count, exhausted), hp, k.e.names, k.z, k.z_is, w_z, h.head, h.head_ok, trivial, now, tree, goes));
+        t.at_sub(t.leaf_goes(zero_out, loop_zero(count, exhausted), hp, k.e.names, k.z, k.z_is, w_z, h.head, h.head_ok, trivial, now, tree, goes),
+            closed_sub);
     match m {
         Zero => λ now state fits counted held args kept run => {
             let ez = now.steps(loop_zero(count, exhausted));
@@ -952,7 +952,7 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                     λ x cl => trans(za.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), kept(x, cl))⟩⟩⟩⟩;
             zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
                 λ _ => t.at_jmp(zt, again, w_zjump, djump, Block([]), w_dj, tree, zero_out, ez,
-                    t.at_sub(prog_len(djump), done, zero_out, tree, ez, λ i mi => Inr(t.homes.region_live(body, after).union_right(done, i, mi)), ends(ez, ended))),
+                    t.at_sub(ends(ez, ended), λ i mi => Inr(t.homes.region_live(body, after).union_right(done, i, mi)))),
                 λ (clear: ez.bit(exhausted) = False) => absurd(trans(sym(set_bit), clear))))
         },
         Succ(k2) => λ now state fits counted held args kept run => {
@@ -1014,9 +1014,11 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                         cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run_t)),
                     ⟨trans(sa.left, cong_fn<LoopState, Nat>(λ s => bit_value(s.end.exhausted, 1).toNat(), run_t)),
                         λ x cl => trans(sa.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), m_kept(x, cl))⟩⟩⟩⟩;
-                t.at_sub(prog_len(mt), stop, exit_out, tree, em, λ i mi => Inr(stop.union_left(down, i, mi)),
-                    t.leaf_goes(done, loop_stop(exhausted), mt, k.m.names, k.x, k.x_is, w_x, stop, h.stop_ok, trivial, em, tree,
-                        t.at_jmp(k.x.prog, again, w_xjump, djump, Block([]), w_dj, tree, done, ex, ends(ex, ended))))
+                let widened: t.At(prog_len(mt), exit_out, tree, em) =
+                    t.at_sub(t.leaf_goes(done, loop_stop(exhausted), mt, k.m.names, k.x, k.x_is, w_x, stop, h.stop_ok, trivial, em, tree,
+                            t.at_jmp(k.x.prog, again, w_xjump, djump, Block([]), w_dj, tree, done, ex, ends(ex, ended))),
+                        λ i mi => Inr(stop.union_left(down, i, mi)));
+                widened
             };
             let d_leg = λ (clear_exit: em.bit(exit) = False) => {
                 let ed = em.steps(loop_down(count, exhausted));
@@ -1039,17 +1041,18 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                     k, h, within, shape, bs, body_scoped, bits, body_runs, env, tree, final, ends,
                     k2, ed, after_next, Nat::lt_trans(k2, Succ(k2), Nat::pow(2, 64), k2.lt_succ_self(), fits), d_count, d_held,
                     trans(da.right.right.right, m_args), d_kept, run_f);
-                t.at_sub(prog_len(xl), down, exit_out, tree, em, λ i mi => Inr(stop.union_right(down, i, mi)),
-                    t.leaf_goes(set, loop_down(count, exhausted), xl, k.x.names, k.d, k.d_is, w_d, down, h.down_ok, trivial, em, tree,
-                        t.at_jmp(k.d.prog, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, ed, rest)))
+                let widened: t.At(prog_len(xl), exit_out, tree, em) =
+                    t.at_sub(t.leaf_goes(set, loop_down(count, exhausted), xl, k.x.names, k.d, k.d_is, w_d, down, h.down_ok, trivial, em, tree,
+                            t.at_jmp(k.d.prog, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, ed, rest)),
+                        λ i mi => Inr(stop.union_right(down, i, mi)));
+                widened
             };
             let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, enter, inside_exit, Inl(refl), w_mt, w_xl.witness, xjump, Block([]), w_xl.proof, tree, x_leg, d_leg);
             let body_leg = body_runs(ez, tree, t.leaf_goes(exit_out, moves(parameters, next), k.b.prog, k.b.names, k.m, k.m_is, w_m, after, h.after_ok,
                 moves_wide(parameters, next), mb, tree, m_leg));
             zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
                 λ (set_bit: ez.bit(exhausted) = True) => absurd(trans(sym(set_bit), clear_bit)),
-                λ _ => t.at_sub(prog_len(zl), t.homes.region_live(body, after), zero_out, tree, ez,
-                    λ i mi => Inr(t.homes.region_live(body, after).union_left(done, i, mi)), body_leg)))
+                λ _ => t.at_sub(body_leg, λ i mi => Inr(t.homes.region_live(body, after).union_left(done, i, mi)))))
         },
     }
 }
@@ -1245,13 +1248,13 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                         let run_no = when_false.code_runs(t, call, fns, ok.right, other, out, y.names, nc, n_is, w_no, nl, nl_is);
                         let r: t.Computes(region, call, arms, out, p, joined) = λ env tree next => t.goes_tests(arms, env, p, condition, names, inside, Inl(refl),
                             w_tested, w_other.witness, jumped, Block([]), w_other.proof, tree,
-                            λ (set: env.bit(condition) = True) => t.at_sub(prog_len(tested), yl, arms, tree, env, λ i m => Inr(yl.union_left(nl, i, m)),
-                                run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
+                            λ (set: env.bit(condition) = True) => t.at_sub(run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
                                     j(set, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)))),
-                            λ (clear: env.bit(condition) = False) => t.at_sub(prog_len(jumped), nl, arms, tree, env, λ i m => Inr(yl.union_right(nl, i, m)),
-                                run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))));
+                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))),
+                                λ i m => Inr(yl.union_left(nl, i, m))),
+                            λ (clear: env.bit(condition) = False) => t.at_sub(run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
+                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)),
+                                λ i m => Inr(yl.union_right(nl, i, m))));
                         r
                     })(within))
             })))))

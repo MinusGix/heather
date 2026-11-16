@@ -428,7 +428,7 @@ theorem Region::paired(self body: Region, rest: Stmt, homes: Homes, out: List<Na
 }
 
 // A tree the same as one the code runs as.
-theorem Target::at_similar(self t: Target, at: Nat, live: List<Nat>, tree, other: ITree<BitVec(64)>(Events::linux()), env: Env,
+theorem Target::at_similar(self t: Target, {at: Nat}, {live: List<Nat>}, {tree, other: ITree<BitVec(64)>(Events::linux())}, {env: Env},
     same: ITree::Same(Events::linux(), tree, other), goes: t.At(at, live, other, env)): t.At(at, live, tree, env) {
     t.site().goes_same(t.io(), at, tree, other, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), same, goes)
 }
@@ -480,12 +480,11 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Writer
                         after_set, after,
                         λ s here resident held =>
                             t.goes_repeat(body, again, call, perform, n, p, names, b, out, set, inside, within, head_within, closed, runs, k, exits, next, m2, after,
-                                s, here, resident, t.held_sub(set, after_set, after, s.gprs, s.memory, held, widen)))),
+                                s, here, resident, t.held_sub(held, widen)))),
                 λ (clear: after.bit(again) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), after_set,
                         after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
-                    t.at_sub(prog_len(jumped), out, after_set, k(Onward(after)), after, outer, next(after))));
-            t.at_similar(prog_len(p), set, ITree::bind(Events::linux(), ITree::iter(Events::linux(), Succ(m2), f, env), k), ITree::bind(Events::linux(), d, k2), env,
-                same, t.at_sub(prog_len(p), body.live_in(t.homes, after_set), set, ITree::bind(Events::linux(), d, k2), env, closed, runs(n, env, k2, exits, looped)))
+                    t.at_sub(next(after), outer)));
+            t.at_similar(same, t.at_sub(runs(n, env, k2, exits, looped), closed))
         },
     }
 }
@@ -562,9 +561,7 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
                     Exited(status) => Ret(Exited(status)),
                 };
                 let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(prog_len(p), first.live_in(t.homes, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), ITree::bind(Events::linux(), first.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), first.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
+                t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
                     run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
@@ -601,10 +598,7 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), p
                     Exited(status) => Ret(Exited(status)),
                 };
                 let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)),
-                    ITree::bind(Events::linux(), ITree::bind(Events::linux(), first.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), first.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
+                t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
                     run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
@@ -647,15 +641,10 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
                 let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
                 let after = env.computes(nodes);
                 let knows = j(pair.left, λ l _ => after.Knows(l), env.computes_knows(nodes));
-                t.at_similar(prog_len(p), nodes_live_in(nodes, rest.live_in(t.homes, out)),
-                    ITree::bind(Events::linux(), ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), leaf.denote(call, perform, n, env), h, k),
-                    t.at_sub(prog_len(p), nodes_live_in(nodes, before), nodes_live_in(nodes, rest.live_in(t.homes, out)),
-                        ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env,
-                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), guard.right),
-                        t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), guard.left,
-                            run_rest(n, after, k, knows, exits, next))))
+                t.at_similar(ITree::bind_assoc(Events::linux(), leaf.denote(call, perform, n, env), h, k),
+                    t.at_sub(t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), guard.left,
+                            run_rest(n, after, k, knows, exits, next)),
+                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), guard.right)))
             }
         },
     })(refl, emitted)
@@ -838,18 +827,16 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                                                     True => yes.denote(call, perform, n, env),
                                                     False => no.denote(call, perform, n, env),
                                                 }, k), env),
-                                            t.at_sub(prog_len(tested), yes.live_in(t.homes, out), live, ITree::bind(Events::linux(), yes.denote(call, perform, n, env), k), env,
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)),
-                                                run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
-                                                    k(Onward(after)), out, after, next(after))))),
+                                            t.at_sub(run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
+                                                    k(Onward(after)), out, after, next(after))),
+                                                λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)))),
                                         λ (clear: env.bit(condition) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), live,
                                                 ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
                                                     True => yes.denote(call, perform, n, env),
                                                     False => no.denote(call, perform, n, env),
                                                 }, k), env),
-                                            t.at_sub(prog_len(jumped), no.live_in(t.homes, out), live, ITree::bind(Events::linux(), no.denote(call, perform, n, env), k), env,
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)),
-                                                run_no(n, env, k, exits, next))))
+                                            t.at_sub(run_no(n, env, k, exits, next),
+                                                λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)))))
                                 }),
                         })
                     },

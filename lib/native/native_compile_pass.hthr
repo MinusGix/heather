@@ -217,7 +217,7 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
                     t.goes_weaken(next, held));
                 let ran = t.goes_computes(out, env, p, better, names, d, at, j(sym(same), λ x _ => x.prog.Within(t.program), within), tree, parts.left, after);
                 t.goes_weaken(ran,
-                    λ s h => t.held_sub(nodes_live_in(better, out), nodes_live_in(nodes, out), env, s.gprs, s.memory, h,
+                    λ s h => t.held_sub(h,
                         nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
             },
         }),
