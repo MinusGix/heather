@@ -123,7 +123,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_head_takes_its_count_as_gnu_head
         --skip compiled_decimals_round_trip_the_widest_words
         --skip source_to_native_binary
-        --skip utf8_validator_agrees_with_rust
+        --skip utf8_validator_agrees_with_rust --skip utf8_program_exits_as_rust_decides
         --skip binary_search_agrees_with_partition_point --skip sort_agrees_with_slice_sort
         --skip linked_exports_are_what_the_compiler_emits)
 elif [[ "${1:-}" == --pr ]]; then
@@ -300,7 +300,7 @@ native_bin_warmup() {
 }
 
 # The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
-# library gate, the showcase gate and native_cat.rs/native_tools.rs's
+# library gate, the showcase gate and native_cat.rs/native_tools.rs/native_utf8.rs's
 # `write-elf` share. Every module is keyed by its own closure
 # (docs/infrastructure/module-dag-design.md), so `write-elf` replays what the gate built;
 # cold, it would have to build its closure itself, most of the library, which
@@ -400,7 +400,8 @@ else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
   fi
-  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]]; then
+  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]] ||
+     [[ "$requested" == *"--test native_utf8"* ]]; then
     cli_images_warmup
   fi
   whole_elab=false
