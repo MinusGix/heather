@@ -10,6 +10,8 @@ import function_ir;
 import function_ir_eval;
 import function_ir_replay;
 import function_ir_rules;
+import function_ir_rule_sound;
+import tactic;
 import function_ir_state;
 import bitvec;
 import bitvec_bytes;
@@ -71,3 +73,38 @@ theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n,
     λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: u64) => z.shift_left(c), held.left),
         join_shift_words(buffer_join(buffers, f, values(64, i).toNat(), n), sh, c)))
 }
+
+// The same four by the tactic.
+theorem add_zero_by(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() { by rule_sound(add_zero_words) }
+
+
+theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
+
+theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
+
+theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() {
+    by rule_sound(within_add_words, given := [leb_below(b + d, word_top(), fits)])
+}
+
+// A bit known and a range: two premises about one word, the second no
+// longer a definition once the first is written out.
+theorem below_left_words(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, Succ(b)).Holds(r)):
+    Range(0, b).Holds(l) {
+    let bit: (l.unsigned_lt_bit(r) = True) = trans(sym(BitVec::head_bit_ofBool(l.unsigned_lt_bit(r))),
+        trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), below), BitVec::head_bit_ofBool(True)));
+    let lt: (l.toNat() < r.toNat()) = BitVec::borrow_sub_bit_true_iff(64, l, r).mp(bit);
+    ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
+}
+
+theorem below_left_by(c, l, r, b: Nat): below_left(c, l, r, b).Sound() { by rule_sound(below_left_words) }
+
+// No node at all: the library's own lemma about numbers is the rule.
+theorem order_join_by(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v + (m + p)) = True): order_join(a, m, b, n, p, c, q, u, v).Sound() {
+    by rule_sound(order_joined, given := [leb_below(u + (n + q), v + (m + p), slack)])
+}
+
+// Two joins, two orders and an or: the lemma about buffers is the rule.
+theorem join_or_by(o, a, b, f, i, j, n, m, sh: Nat): join_or(o, a, b, f, i, j, n, m, sh).Sound() { by rule_sound(joins_meet) }
+
+// Two loads of one byte: nothing is left to prove.
+theorem load_again_by(b, a, f, i: Nat): load_again(b, a, f, i).Sound() { by rule_sound(rfl) }

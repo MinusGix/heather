@@ -1,0 +1,287 @@
+// `rule_sound(theorem)`: a clause's soundness from a theorem about words
+// (docs/native/optimizer-rules-design.md §5).
+//
+// A clause (function_ir_replay) says its conclusion of a valuation that
+// satisfies its premises. A premise that is an equation for a word of the
+// valuation defines it: a node's (`values(w, o) = values(w, l).add(values(w, r))`),
+// or a fact that a word is bytes joined. The tactic takes each in turn and
+// writes the right side for the left in everything else: the premises
+// after it, the facts kept so far and the goal. What is left speaks only of
+// the words the nodes read, which is how a theorem about words states it.
+// The theorem is applied, and its hypotheses are the facts left, the
+// locals of the `by` and the proofs the call names.
+//
+// Statements are read as far as their definitions spell an equation or a
+// statement of a word, and no further, so a range stays `Range(a, b).Holds(x)`
+// and meets the theorem's hypothesis as it is written.
+import tactic;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+// A proof of `P(a)` from one of `P(b)` along `a = b`, and the other way.
+theorem rule_backward(A: Type, P: A → Type, a, b: A, e: a = b, p: P(b)): P(a) { j(sym(e), λ y _ => P(y), p) }
+theorem rule_forward(A: Type, P: A → Type, a, b: A, e: a = b, p: P(a)): P(b) { j(e, λ y _ => P(y), p) }
+
+// An equation as a term, for a motive's body.
+fn rule_equal(A: Type, x, y: A) → Type { x = y }
+
+fn rule_apps(f: Expr, args: List<Expr>) → Expr { match args { Nil => f, Cons(a, rest) => rule_apps(App(f, a), rest) } }
+
+// What the walk carries: the two transports, `rule_equal`, the valuation,
+// and the local a motive's word is bound under.
+record RuleWalk { backward: GlobalRef, forward: GlobalRef, equal: GlobalRef, values: LocalRef, under: LocalRef }
+
+// A handle to the term an expression stands for: a hole of its type,
+// solved by it.
+fn rule_handle(e: Expr) → Tac<Handle> {
+    infer(e).or_fail("rule_sound: a statement rewritten: ").bind(λ ty => hole(ty).or_fail("rule_sound: a statement rewritten: ").bind(λ h =>
+        defeq(Hd(h), e).bind(λ solved => match solved {
+            True => pure(h),
+            False => fail("rule_sound: a statement rewritten is not a term of its type", []),
+        })))
+}
+
+// Whether a local applied is the valuation at a word.
+fn rule_word(walk: RuleWalk, x: LocalRef, args: List<Handle>) → Bool {
+    match args { Nil => False, Cons(_, _) => x.id.same(walk.values.id) }
+}
+
+// A term with `with` written for each occurrence of the term `a`, and
+// whether there was one.
+record RuleOver { body: Expr, found: Bool }
+
+fn rule_over_args(args: List<SpineArg>, over: Handle → Tac<RuleOver>, so_far: Expr, found: Bool) → Tac<RuleOver> {
+    match args {
+        Nil => pure(RuleOver(so_far, found)),
+        Cons(arg, rest) => over(arg.arg).bind(λ one => rule_over_args(rest, over, App(so_far, one.body), found || one.found)),
+    }
+}
+
+fn rule_over(fuel: Nat, walk: RuleWalk, h: Handle, a: Handle, with: Expr) → Tac<RuleOver> {
+    match fuel {
+        Zero => pure(RuleOver(Hd(h), False)),
+        Succ(n) => view(h).bind(λ v => match v {
+            HLocal(x, args) => match rule_word(walk, x, args) {
+                False => pure(RuleOver(Hd(h), False)),
+                True => defeq(Hd(h), Hd(a)).bind(λ same => match same { True => pure(RuleOver(with, True)), False => pure(RuleOver(Hd(h), False)) }),
+            },
+            HEq(l, r) => rule_over(n, walk, l, a, with).bind(λ x => rule_over(n, walk, r, a, with).bind(λ y => match x.found || y.found {
+                False => pure(RuleOver(Hd(h), False)),
+                True => infer(Hd(l)).or_fail("rule_sound: an equation's type: ").bind(λ ty =>
+                    pure(RuleOver(rule_apps(Global(walk.equal), [Hd(ty), x.body, y.body]), True))),
+            })),
+            HGlobal(_, _, _) => spine(h).bind(λ c => match c {
+                Refused(_) => pure(RuleOver(Hd(h), False)),
+                Accepted(s) => match s.args {
+                    Nil => pure(RuleOver(Hd(h), False)),
+                    Cons(_, _) => rule_over_args(s.args, λ k => rule_over(n, walk, k, a, with), Hd(s.head), False).bind(λ done =>
+                        match done.found { True => pure(done), False => pure(RuleOver(Hd(h), False)) }),
+                },
+            }),
+            _ => pure(RuleOver(Hd(h), False)),
+        }),
+    }
+}
+
+// Whether a term applies the valuation somewhere `rule_over` reaches.
+fn rule_mentions_args(args: List<SpineArg>, mentions: Handle → Tac<Bool>) → Tac<Bool> {
+    match args {
+        Nil => pure(False),
+        Cons(arg, rest) => mentions(arg.arg).bind(λ here => match here { True => pure(True), False => rule_mentions_args(rest, mentions) }),
+    }
+}
+
+fn rule_mentions(fuel: Nat, walk: RuleWalk, h: Handle) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(n) => view(h).bind(λ v => match v {
+            HLocal(x, args) => pure(rule_word(walk, x, args)),
+            HEq(l, r) => rule_mentions(n, walk, l).bind(λ left => match left { True => pure(True), False => rule_mentions(n, walk, r) }),
+            HGlobal(_, _, _) => spine(h).bind(λ c => match c {
+                Refused(_) => pure(False),
+                Accepted(s) => rule_mentions_args(s.args, λ k => rule_mentions(n, walk, k)),
+            }),
+            _ => pure(False),
+        }),
+    }
+}
+
+// The two sides of a statement that is an equation, as written or as
+// `rule_equal` of them.
+record RuleSides { left: Handle, right: Handle }
+
+fn rule_sides(walk: RuleWalk, h: Handle) → Tac<Option<RuleSides>> {
+    view(h).bind(λ v => match v {
+        HEq(l, r) => pure(Some(RuleSides(l, r))),
+        HGlobal(g, _, _) => match g.id.same(walk.equal.id) {
+            False => pure(None),
+            True => spine(h).bind(λ c => match c {
+                Refused(_) => pure(None),
+                Accepted(s) => match s.args {
+                    Cons(_, more) => match more {
+                        Cons(x, last) => match last { Cons(y, _) => pure(Some(RuleSides(x.arg, y.arg))), Nil => pure(None) },
+                        Nil => pure(None),
+                    },
+                    Nil => pure(None),
+                },
+            }),
+        },
+        _ => pure(None),
+    })
+}
+
+// The statement as the type it is in head normal form, where that is an
+// equation.
+fn rule_as_equation(h: Handle) → Tac<Option<Handle>> {
+    as_type(Hd(h)).bind(λ t => match t {
+        Refused(_) => pure(None),
+        Accepted(ty) => whnf_or(ty).bind(λ w => view(w).bind(λ v => match v { HEq(_, _) => pure(Some(w)), _ => pure(None) })),
+    })
+}
+
+// A fact's statement spelled through its definitions as far as an equation
+// or a statement of a word of the valuation.
+fn rule_spelled(fuel: Nat, walk: RuleWalk, h: Handle) → Tac<Handle> {
+    match fuel {
+        Zero => pure(h),
+        Succ(n) => view(h).bind(λ v => match v {
+            HEq(_, _) => pure(h),
+            _ => rule_mentions(64, walk, h).bind(λ there => match there {
+                True => rule_as_equation(h).bind(λ eq => match eq { Some(w) => pure(w), None => pure(h) }),
+                False => next_spelling(Hd(h)).bind(λ c => match c {
+                    Refused(_) => rule_as_equation(h).bind(λ eq => match eq { Some(w) => pure(w), None => pure(h) }),
+                    Accepted(next) => rule_spelled(n, walk, next),
+                }),
+            }),
+        }),
+    }
+}
+
+// A fact in hand: its proof and its statement, spelled.
+record RuleHyp { proof: Expr, says: Handle }
+
+// The premises of a clause, from the proof that they all hold: a
+// conjunction nested to the right, ending in `True`.
+fn rule_premises(fuel: Nat, walk: RuleWalk, held: Expr) → Tac<List<RuleHyp>> {
+    match fuel {
+        Zero => pure([]),
+        Succ(n) => fields(held).bind(λ c => match c {
+            Refused(_) => pure([]),
+            Accepted(p) => match p.fields {
+                Cons(first, more) => match more {
+                    Cons(second, none) => match none {
+                        Nil => infer(Hd(first.term)).or_fail("rule_sound: a premise: ").bind(λ ty => rule_spelled(8, walk, ty).bind(λ says =>
+                            rule_premises(n, walk, Hd(second.term)).bind(λ rest => pure(Cons(RuleHyp(Hd(first.term), says), rest))))),
+                        Cons(_, _) => pure([]),
+                    },
+                    Nil => pure([]),
+                },
+                Nil => pure([]),
+            },
+        }),
+    }
+}
+
+// The two sides of a premise that defines a word: an equation whose left
+// side is the valuation applied.
+fn rule_defines(walk: RuleWalk, says: Handle) → Tac<Option<RuleSides>> {
+    rule_sides(walk, says).bind(λ sides => match sides {
+        None => pure(None),
+        Some(s) => view(s.left).bind(λ lv => match lv {
+            HLocal(x, _) => match x.id.same(walk.values.id) { True => pure(Some(s)), False => pure(None) },
+            _ => pure(None),
+        }),
+    })
+}
+
+// A fact with a defined word written out, by `rule_forward`.
+fn rule_hyp_over(walk: RuleWalk, carrier: Handle, d: RuleSides, e: Expr, h: RuleHyp) → Tac<RuleHyp> {
+    assume(Hd(carrier), "word", Some(walk.under)).or_fail("rule_sound: a word: ").bind(λ k =>
+        rule_over(64, walk, h.says, d.left, Local(k.ref)).bind(λ motive => match motive.found {
+            False => pure(h),
+            True => rule_over(64, walk, h.says, d.left, Hd(d.right)).bind(λ after => rule_handle(after.body).bind(λ says =>
+                pure(RuleHyp(rule_apps(Global(walk.forward), [Hd(carrier), Lam(k.ref, motive.body), Hd(d.left), Hd(d.right), e, h.proof]), says)))),
+        }))
+}
+
+fn rule_hyps_over(walk: RuleWalk, carrier: Handle, d: RuleSides, e: Expr, hyps: List<RuleHyp>) → Tac<List<RuleHyp>> {
+    match hyps {
+        Nil => pure([]),
+        Cons(h, rest) => rule_hyp_over(walk, carrier, d, e, h).bind(λ one =>
+            rule_hyps_over(walk, carrier, d, e, rest).bind(λ others => pure(Cons(one, others)))),
+    }
+}
+
+// A fact that is the goal, among those in hand; then a local of the `by`.
+fn rule_assumed(hyps: List<RuleHyp>, all: List<RuleHyp>) → Tac<Expr> {
+    match hyps {
+        Nil => attempt(assumption()).bind(λ out => match out {
+            Done(e) => pure(e),
+            Failed(_, _) => goal().bind(λ g => fail("rule_sound: a hypothesis of the theorem is no premise left, nor a local, nor given",
+                Cons(At(Hd(g.target), Tried("the hypothesis", "not in hand")), all.map(λ h => At(Hd(h.says), Tried("in hand", "not it")))))),
+        }),
+        Cons(h, rest) => goal().bind(λ g => defeq(Hd(h.says), Hd(g.target)).bind(λ same => match same {
+            True => pure(h.proof),
+            False => rule_assumed(rest, all),
+        })),
+    }
+}
+
+// Each defining premise written out of the rest, then `close` at what is
+// left of the goal with the facts kept.
+fn rule_walk(fuel: Nat, walk: RuleWalk, locals: List<LocalInfo>, todo: List<RuleHyp>, kept: List<RuleHyp>, target: Handle,
+    close: List<RuleHyp> → Tac<Expr>) → Tac<Expr> {
+    match fuel {
+        Zero => fail("rule_sound: more premises than the tactic walks", []),
+        Succ(n) => match todo {
+            Nil => as_type(Hd(target)).or_fail("rule_sound: the goal rewritten: ").bind(λ ty => focus(GoalInfo(ty, locals), close(kept))),
+            Cons(h, rest) => rule_defines(walk, h.says).bind(λ found => match found {
+                None => rule_walk(n, walk, locals, rest, kept ++ [h], target, close),
+                Some(d) => infer(Hd(d.left)).or_fail("rule_sound: a word's type: ").bind(λ carrier =>
+                    rule_hyps_over(walk, carrier, d, h.proof, rest).bind(λ rest2 =>
+                    rule_hyps_over(walk, carrier, d, h.proof, kept).bind(λ kept2 =>
+                    assume(Hd(carrier), "word", Some(walk.under)).or_fail("rule_sound: a word: ").bind(λ k =>
+                    rule_over(64, walk, target, d.left, Local(k.ref)).bind(λ motive => match motive.found {
+                        False => rule_walk(n, walk, locals, rest2, kept2, target, close),
+                        True => rule_over(64, walk, target, d.left, Hd(d.right)).bind(λ after => rule_handle(after.body).bind(λ target2 =>
+                            rule_walk(n, walk, locals, rest2, kept2, target2, close).bind(λ p =>
+                                pure(rule_apps(Global(walk.backward), [Hd(carrier), Lam(k.ref, motive.body), Hd(d.left), Hd(d.right), h.proof, p]))))),
+                    }))))),
+            }),
+        },
+    }
+}
+
+fn rule_given(given: List<Expr>) → Tac<List<RuleHyp>> {
+    match given {
+        Nil => pure([]),
+        Cons(e, rest) => infer(e).or_fail("rule_sound: a proof given: ").bind(λ ty => rule_given(rest).bind(λ others => pure(Cons(RuleHyp(e, ty), others)))),
+    }
+}
+
+// `rule_sound(theorem, given := [proofs])`: the goal `clause.Sound()` from
+// `theorem`, a statement about words whose conclusion is the clause's with
+// every defining premise written out and whose hypotheses are the clause's
+// other premises, the `by`'s locals or the proofs given.
+fn rule_sound(theorem: Expr, given: List<Expr> := []) → Tac<Expr> {
+    let backward <- lookup("function_ir_rule_sound::rule_backward").or_fail("rule_sound: ");
+    let forward <- lookup("function_ir_rule_sound::rule_forward").or_fail("rule_sound: ");
+    let equal <- lookup("function_ir_rule_sound::rule_equal").or_fail("rule_sound: ");
+    let extra <- rule_given(given);
+    let g <- goal();
+    let sound <- whnf_or(g.target);
+    let values <- open(sound, "values").or_fail("rule_sound: the goal is no clause's soundness: ");
+    let buffers <- open(values.body, "buffers").or_fail("rule_sound: the goal is no clause's soundness: ");
+    let implies <- whnf_or(buffers.body);
+    let held <- open(implies, "held").or_fail("rule_sound: the goal is no clause's soundness: ");
+    let walk = RuleWalk(backward, forward, equal, values.local.ref, held.local.ref);
+    let target <- rule_spelled(8, walk, held.body);
+    let premises <- rule_premises(64, walk, Local(held.local.ref));
+    let p <- rule_walk(64, walk, Cons(held.local, Cons(buffers.local, Cons(values.local, g.locals))), premises, [], target,
+        λ kept => apply(theorem, rule_assumed(kept ++ extra, kept ++ extra)));
+    pure(Lam(values.local.ref, Lam(buffers.local.ref, Lam(held.local.ref, p))))
+}
