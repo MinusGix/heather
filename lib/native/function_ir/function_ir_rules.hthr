@@ -549,9 +549,12 @@ fn rules() → List<Rule> { entries_rules(library()) }
 
 // The rules the search applies wherever their statement fits
 // (function_ir_match): each rewrites a node as the one its conclusion
-// gives. One is added here and nothing else is written for it.
+// gives, or, where its conclusion is that a bit is a constant, decides
+// the bit (a comparison whose operands' ranges lie apart, an or of bits
+// decided). One is added here and nothing else is written for it.
 fn matchable() → List<Matchable> {
-    [add_zero_entry.at(0), narrow_back_entry.at(15), swap_twice_entry.at(44)]
+    [add_zero_entry.at(0), below_yes_entry.at(7), below_no_entry.at(8), narrow_back_entry.at(15), or_of_clear_entry.at(36), or_of_set_entry.at(37),
+        or_of_set_right_entry.at(38), swap_twice_entry.at(44)]
 }
 
 // The rules that give the range of the word a node writes, read the same
