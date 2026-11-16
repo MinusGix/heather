@@ -1,0 +1,76 @@
+// Programs that do their own I/O as `runtime fn`s (runtime_program,
+// docs/native/io-programs-design.md §3): each one's `Source` and the
+// theorem that it reads as the function. Tests, not library: nothing
+// imports this module; `crates/cli/tests/native_tools.rs` writes `tr_upper`
+// and holds it to GNU tr.
+
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_rec;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+import linux_world_while;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
+import rt_io_bridge;
+import rt_io_program;
+import native_tool_spans;
+import runtime_program;
+
+// Echo: read up to 64 bytes, write them, while a read brings something.
+runtime fn echo_all(mut io: Io, buf: ByteBuffer(64)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
+        let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+        buf := r.buf;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+// What the generator states, written out: the Source's tree, read against
+// any world, is `echo_all` from a zeroed buffer of 64 bytes.
+fn echo_whole() → Io::Reads<BitVec(64)>(echo_all::source.tree_co([]), λ io => echo_all(io, List::replicate(zero_byte(), 64))) { echo_all::reads }
+
+// tr: read into the buffer, raise what came back in place (a `runtime fn`
+// over a span, lent the buffer), write it; while a read brings something.
+runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(256));
+        let m = raise_span(r.buf, BitVec::ofNat(r.buf.len()), r.result, BitVec::ofNat(0));
+        let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
+        buf := m.after;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+fn tr_whole() → Io::Reads<BitVec(64)>(tr_upper::source.tree_co([]), λ io => tr_upper(io, List::replicate(zero_byte(), 256))) { tr_upper::reads }
+
+// Its Source calls `raise_span`'s program, lent the buffer.
+theorem tr_upper_functions(): tr_upper::source.functions = raise_span::program { refl }

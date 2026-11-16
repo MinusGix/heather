@@ -441,7 +441,9 @@ fn Known::any_repr_typed(self k: Known, hs: List<Handle>) → Tac<Bool> {
     }
 }
 
-fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
+// A type alias (a definition such as `ByteBuffer(n)`, a list of bytes) is
+// read as what it stands for, a few definitions deep.
+fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
     view(h).bind(λ v => match v {
         HGlobal(g, name, args) => match g.id.same(k.nat) {
           True => pure(Count),
@@ -467,7 +469,16 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
                         Some(i) => pure(Named(i)),
-                        None => k.repr_ty(h, name),
+                        None => repr_of(h).bind(λ c => match c {
+                            Accepted(_) => k.repr_ty(h, name),
+                            Refused(_) => match fuel {
+                                Zero => k.repr_ty(h, name),
+                                Succ(f) => whnf(h).bind(λ u => match u {
+                                    Accepted(x) => k.ty_within(f, x),
+                                    Refused(_) => k.repr_ty(h, name),
+                                }),
+                            },
+                        }),
                     },
                 },
             },
@@ -476,6 +487,8 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
         _ => rt_refuse("a type with no runtime layout under the reflected fragment"),
     })
 }
+
+fn Known::ty(self k: Known, h: Handle) → Tac<Ty> { k.ty_within(4, h) }
 
 fn Known::ty_of(self k: Known, h: Handle) → Tac<Ty> {
     infer(Hd(h)).bind(λ c => rt_accepted("a node's type", c)).bind(λ t => k.ty(t))
