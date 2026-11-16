@@ -274,7 +274,9 @@ fn eight_words_are_called_from_rust() {
     let text = std::fs::read_to_string(&assembly).unwrap();
     assert!(text.contains("# signature: eight(word, word, word, word, word, word, word, word) -> word"), "{text}");
     let certificate = std::fs::read_to_string(dir.join("eight.certificate.hthr")).unwrap();
-    assert!(certificate.contains("stack.Passed([a0, a1, a2, a3, a4, a5, a6, a7], i, s)"), "the contract passes eight words");
+    // `Prog::Computes` at the eight words: its `Stack::Passed` is the contract's.
+    assert!(certificate.contains("_code().Computes(machine, ") && certificate.contains(", [a0, a1, a2, a3, a4, a5, a6, a7], "),
+        "the contract passes eight words");
     let driver = dir.join("driver.rs");
     std::fs::write(&driver, r#"
 std::arch::global_asm!(include_str!("eight.s"), options(att_syntax));

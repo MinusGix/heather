@@ -166,4 +166,3 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
         machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
         program_run(functions, before, f, arguments), refl)
 }
-
