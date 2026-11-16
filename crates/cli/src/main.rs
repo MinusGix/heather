@@ -687,17 +687,6 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));
         let position: std::collections::HashMap<&str, usize> =
             modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
-        // The modules the path names, which this run reports on; the rest
-        // are there as their imports, and an import's image is replayed
-        // only into the worlds that hold it (`SemanticSession::check_import`).
-        // A root that cannot be told from an import makes every module one
-        // the run reports on.
-        let asked: std::collections::HashSet<PathBuf> = roots.iter().filter_map(|r| r.canonicalize().ok()).collect();
-        let mut is_root: Vec<bool> =
-            modules.iter().map(|m| m.path.canonicalize().map_or(true, |p| asked.contains(&p))).collect();
-        if asked.len() != roots.len() || is_root.iter().filter(|r| **r).count() != roots.len() {
-            is_root.fill(true);
-        }
         let mut checked = vec![false; modules.len()];
         let mut pending: Vec<usize> = (0..modules.len()).collect();
         while !pending.is_empty() {
@@ -713,10 +702,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             checked[i] = true;
             let m = &modules[i];
             elab.reset_value_metrics();
-            let outcome = match is_root[i] {
-                true => semantic.check(&mut elab, m, m.lint_profile()),
-                false => semantic.check_import(&mut elab, m, m.lint_profile()),
-            };
+            let outcome = semantic.check(&mut elab, m, m.lint_profile());
             if report_metrics {
                 if let Some(snapshot) = elab.value_metrics() {
                     eprintln!("value metrics {}: {snapshot:?}", display_path(&m.path, path));
@@ -1329,16 +1315,12 @@ fn build_worker(opts: &Opts) -> ExitCode {
                 ok = false;
             }
             Ok(modules) => {
-                for (i, m) in modules.iter().enumerate() {
+                for m in &modules {
                     if !given.insert(m.name.clone()) {
                         ok &= !unchecked.contains(&m.name);
                         continue;
                     }
-                    // The module asked for is the last of its own closure.
-                    let outcome = match i + 1 == modules.len() {
-                        true => semantic.check(&mut elab, m, m.lint_profile()),
-                        false => semantic.check_import(&mut elab, m, m.lint_profile()),
-                    };
+                    let outcome = semantic.check(&mut elab, m, m.lint_profile());
                     for notice in &outcome.notices {
                         eprintln!("{notice}");
                     }

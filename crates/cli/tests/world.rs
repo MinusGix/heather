@@ -231,57 +231,18 @@ fn a_replay_that_passed_is_vouched_for_whole_next_time() {
     let second = check(&root, &["lib/c"]);
     assert_eq!(replayed(&second), 3);
     assert!(second.contains("0 declarations kernel-checked"), "{second}");
-    // `user` is the module asked about and the other two are its imports,
-    // replayed only into its world (`SemanticSession::check_import`): one
-    // over the prelude alone, where that world starts, the other moved
-    // above it, and then `user` itself. Before imports were deferred each
-    // of the two was also replayed over the prelude on its own, four
-    // replays in all.
+    // `colour` and `base` replay over the prelude alone the first warm time
+    // and record it, and one of them again moved above the other, under
+    // `user`; `user`'s world is theirs.
     let third = check(&root, &["lib/c"]);
     assert!(third.contains("0 declarations kernel-checked"), "{third}");
-    assert!(third.contains("(3 vouched for whole)"), "{third}");
+    assert!(third.contains("(4 vouched for whole)"), "{third}");
     // Nothing is asked about one declaration at a time, the moved import's
     // bindings included.
     assert_eq!(accepted(&third), 0, "{second}{third}");
     // An edit to `base` changes its image and every world above it.
     std::fs::write(root.join("lib/b/base.hthr"), "inductive Base { One, Two, Three }\nfn base_one() → Base { One }\n").unwrap();
     let edited = check(&root, &["lib/c"]);
-    // Only `colour` is unchanged, and it is an import: it is replayed once,
-    // moved above the new `base`, a pair of worlds no verdict names yet, so
-    // its declarations are asked about one at a time.
-    assert_eq!(replayed(&edited), 1, "{edited}");
-    assert!(!edited.contains("vouched") && accepted(&edited) > 0, "{edited}");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// An import whose image was taken without a replay
-/// (`SemanticSession::check_import`) and then will not load is checked as
-/// it was before imports were deferred. `client` opened `dep`'s proof of
-/// `wit`, so its image holds for that proof alone; a new proof of the same
-/// statement leaves `dep`'s interface, and so `client`'s key, as they were,
-/// and the image is found again. Its replay into `top`'s world refuses it,
-/// `client` is elaborated over the new proof, and `top` checks.
-#[test]
-fn a_deferred_import_that_will_not_replay_is_checked_again() {
-    let dep = |wit: &str| {
-        format!(
-            "fn add(m: Nat, n: Nat) -> Nat {{\n    match m {{\n        Zero => n,\n        Succ(k, ih) => Succ(ih),\n    }}\n}}\n\n\
-             record Wit {{ n: Nat, ok: n = 2 }}\n\ntheorem wit(): Wit {{ {wit} }}\n"
-        )
-    };
-    let root = library("deferred-opened", &[
-        ("lib/a/dep.hthr", &dep("Wit(n := 2, ok := refl)")),
-        ("lib/a/client.hthr", "import dep;\ntheorem wit_two(): wit().n = 2 { refl }\nfn after() -> Nat { 3 }\n"),
-        ("lib/b/top.hthr", "import client;\nfn top() -> Nat { after() }\n"),
-    ]);
-    let first = check(&root, &["lib/b"]);
-    assert!(first.contains("lib/b: ok"), "{first}");
-    assert_eq!(replayed(&check(&root, &["lib/b"])), 3);
-    std::fs::write(root.join("lib/a/dep.hthr"), dep("Wit(n := add(1, 1), ok := refl)")).unwrap();
-    let edited = check(&root, &["lib/b"]);
-    assert!(edited.contains("lib/b: ok"), "{edited}");
-    // `client` was not replayed whole: its opener was elaborated again.
-    assert!(replayed(&edited) < 3, "{edited}");
-    assert_eq!(replayed(&check(&root, &["lib/b"])), 3);
+    assert!(edited.contains("(1 vouched for whole)"), "only `colour` is unchanged: {edited}");
     let _ = std::fs::remove_dir_all(&root);
 }
