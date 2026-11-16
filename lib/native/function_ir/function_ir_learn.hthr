@@ -1074,6 +1074,7 @@ fn Plan::decided(self plan: Plan) → Nat {
         Derived(_, body) => body.decided(),
         Args(_) => 0,
         Inputs(_, body) => body.decided(),
+        Flat(_, _) => 0,
     }
 }
 
@@ -1097,6 +1098,7 @@ fn Plan::written(self plan: Plan) → Nat {
         Derived(steps, body) => steps_written(steps) + body.written(),
         Args(_) => 0,
         Inputs(_, body) => body.written(),
+        Flat(steps, _) => steps_written(steps),
     }
 }
 

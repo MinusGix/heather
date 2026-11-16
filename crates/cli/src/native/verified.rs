@@ -558,7 +558,10 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 ///
 /// Last, where bytes of a span are joined into a word, a load of the word
 /// is put beside them and the join found a move of it (`find_worded`); the
-/// byte loads then go with the sweep.
+/// byte loads then go with the sweep. And where a word's bytes are stored
+/// one at a time at an index and the next three, the word's load is put
+/// after the stores (`find_stores`) and a replay pays the four as one
+/// store in its place (`find_paid`).
 ///
 /// What the stages made is kept where it is within the search's room
 /// (`Function::fits`) and the lowering takes it with the planner's
@@ -572,6 +575,10 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// nothing, and its code would be emitted all the same. The certificate
 /// states the list of the functions reached as a literal, and that the
 /// program is closed under it (`program_closed`), by evaluation.
+/// How many groups of four byte stores a function has written as one store
+/// each, a group a round.
+const STORES_MOST: usize = 8;
+
 fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
     let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
@@ -722,6 +729,39 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                         replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
                     made = worded;
+                    placement = Some(places);
+                }
+            }
+        }
+        // A word stored a byte at a time, written as one store: the word's
+        // half, swap and a load of four bytes at the first index are put
+        // after the fourth store, and the replay holds the four stores back
+        // and pays them as one store in the load's place; a group at a time,
+        // as long as one is found (`stores_most`). Then the walks drop the
+        // shifts, narrowings and tests no access reads any more. Kept where
+        // the lowering takes it.
+        {
+            let past = if made.iter().any(|staged| staged.stage == Stage::Guard) { "_past" } else { "" };
+            let mut stored = made.clone();
+            for round in 0..STORES_MOST {
+                let last = stored.last().map(|last| last.function.clone());
+                let put = run(&mut fork, &mut modules, &format!("s{round}_"), &named(&stored), last, &[(Stage::Inline, format!("find_stores{past}({earlier})"))])?;
+                if put.is_empty() { break; }
+                let mut tried = stored.clone();
+                tried.extend(put);
+                let last = tried.last().map(|last| last.function.clone());
+                let paid = run(&mut fork, &mut modules, &format!("y{round}_"), &named(&tried), last, &[replay(&format!("find_paid{past}()"))])?;
+                if paid.is_empty() { break; }
+                tried.extend(paid);
+                stored = tried;
+            }
+            if stored.len() > made.len() {
+                let last = stored.last().map(|last| last.function.clone());
+                stored.extend(run(&mut fork, &mut modules, "z", &named(&stored), last,
+                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")),
+                        replay(&format!("find_swept{past}()"))])?);
+                if let Some(places) = lowers(&mut fork, &modules, &stored, "stored_")? {
+                    made = stored;
                     placement = Some(places);
                 }
             }
