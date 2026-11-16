@@ -484,8 +484,8 @@ impl Receivers<'_> {
         }
         // One equation: `g`'s subject domain under its `n` type binders is
         // the field's carrier under the instance's `n` type binders. The
-        // contexts line up binder for binder, so only the global prefix
-        // differs — `g`'s type is scoped before `g`, the body before `inst`.
+        // contexts line up binder for binder, and both name committed
+        // definitions as constants, so the two compare as spelled.
         let Some(GlobalBinding::Tm { ty: gty, .. }) = self.psi.bindings.get(g) else {
             return false;
         };
@@ -500,7 +500,7 @@ impl Receivers<'_> {
             let same = match (&**dom, *idom) {
                 (Type::Ty(_), Type::Ty(_)) => true,
                 (Type::Ty(_), _) | (_, Type::Ty(_)) => false,
-                (gd, id) => gd.shift_global((inst - g) as u32) == *id,
+                (gd, id) => *gd == *id,
             };
             if !same {
                 return false;
@@ -515,12 +515,12 @@ impl Receivers<'_> {
                 let Type::Pi { dom: cdom, .. } = &**field_ty else {
                     return false;
                 };
-                gdom.shift_global((inst - g) as u32) == **cdom
+                **gdom == **cdom
             }
             None => self
                 .declared_field_carrier(inst, n, idx)
                 .is_some_and(|cdom| {
-                    gdom.shift_global((self.psi.bindings.len() - g) as u32) == cdom
+                    **gdom == cdom
                 }),
         }
     }
@@ -537,7 +537,7 @@ impl Receivers<'_> {
             return None;
         };
         let oracle = self.semantic_oracle();
-        let mut cur = ty.shift_global((self.psi.bindings.len() - inst) as u32);
+        let mut cur = (**ty).clone();
         let mut gamma = LocalCtx::nil();
         for _ in 0..n {
             let Type::Pi { dom_level, dom, cod, .. } = cur else {

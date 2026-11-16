@@ -60,9 +60,9 @@ impl Polymorphic<'_> {
                 ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(meta));
                 level = cod_level;
             }
-            let pattern = GeneratedDefs(self).unspell_deep_now(&ty, k).unwrap_or(ty);
+            let pattern = GeneratedDefs(self).unspell_ty_deep(&ty).unwrap_or(ty);
             let subject = partially_zonked(parameter, n, sols, &cx.gamma);
-            let subject = GeneratedDefs(self).unspell_deep_now(&subject, n).unwrap_or(subject);
+            let subject = GeneratedDefs(self).unspell_ty_deep(&subject).unwrap_or(subject);
             let type_args = |t: &Term, d: u32| AppUnify(self).spine_type_args(cx, t, d, argument.span);
             let canonical_head = |t: &Term, d: u32| AppUnify(self).canonical_head(cx, t, d);
             let respell = |t: &Type| GeneratedDefs(self).respell_ty(cx, t);

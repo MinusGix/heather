@@ -13,22 +13,22 @@
 //! payload: the Ψ length its free globals count from. The inventory, by
 //! `DeltaEvent` variant, is the match in [`Mover::event`]; every variant is
 //! named there, so a new event kind fails to compile until its payloads are
-//! classified. The guard copies of a declaration's lowering, which the
-//! registry compares raw, record the Ψ length they were cut at
-//! (`DeltaEvent::GenTyCode`'s `at`): no other position says it.
+//! classified. The guard copies of a declaration's lowering and a derived
+//! instance's goal name constants only, so they have no scope: they move
+//! through [`Mover::closed_ty`], which refuses a global variable.
 //!
 //! Nothing here is trusted. A relocated delta goes through
 //! [`crate::Elaborator::replay_module_delta`] like any decoded image: the
 //! kernel (or the verdict store, by content key) judges every binding, and
 //! the registry events face the same preflight.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use heather_kernel::rc::Rc;
 
 use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, LocalVar, SealedProof, Term, Type};
 
-use crate::gendefs::{GenDef, SpineCodes, TyCodeFn, WfSlots};
+use crate::gendefs::{SpineCodes, TyCodeFn, WfSlots};
 use crate::metaprograms::MetaDef;
 use crate::module_delta::{DeltaEvent, ModuleDelta, ModuleDependencyIdentity};
 use crate::names::Scope;
@@ -62,13 +62,18 @@ pub struct RelocationTarget<'a> {
 const NO_COUNTERPART: RelocationRefusal =
     RelocationRefusal("a referenced dependency binding has no counterpart in the new world");
 
+const NOT_CLOSED: RelocationRefusal =
+    RelocationRefusal("a payload that names constants only names a global variable, or a binding with no counterpart");
+
+/// The scope a [`WorldHasher`] is given for a payload that names constants
+/// only: a constant is hashed through its position whatever the scope, so
+/// any length covering the world will do.
+const CLOSED: usize = u32::MAX as usize;
+
 struct Mover<'a> {
     old_base: usize,
     new_base: usize,
     map: &'a mut dyn FnMut(usize) -> Option<usize>,
-    /// `D#shape`'s position per tag, from this delta's own `GenDef` events:
-    /// the scope of the `Wf` slot guard's decoded copy.
-    shape_at: HashMap<u32, u32>,
 }
 
 impl Mover<'_> {
@@ -131,6 +136,23 @@ impl Mover<'_> {
         t.reindex_global(&mut |r| self.reference(p, p2, r)).ok_or(NO_COUNTERPART)
     }
 
+    /// A payload that names committed definitions only: each constant moves
+    /// to its counterpart, and a free global variable is refused.
+    fn closed(&mut self, r: GlobalRef) -> Option<GlobalRef> {
+        match r {
+            GlobalRef::Var(_) => None,
+            GlobalRef::Const(a) => Some(GlobalRef::Const(u32::try_from(self.abs(a as usize)?).ok()?)),
+        }
+    }
+
+    fn closed_ty(&mut self, t: &Type) -> Result<Type, RelocationRefusal> {
+        t.reindex_global(&mut |r| self.closed(r)).ok_or(NOT_CLOSED)
+    }
+
+    fn closed_tm(&mut self, t: &Term) -> Result<Term, RelocationRefusal> {
+        t.reindex_global(&mut |r| self.closed(r)).ok_or(NOT_CLOSED)
+    }
+
     /// A payload of the dependency prefix, scoped at its old position `p`
     /// there: an opened proof.
     fn dependency_tm(&mut self, p: usize, t: &Term) -> Result<Term, RelocationRefusal> {
@@ -152,59 +174,42 @@ impl Mover<'_> {
                 direct_dependencies: direct_dependencies.clone(),
             },
             DeltaEvent::GenDef { key, abs } => DeltaEvent::GenDef { key: *key, abs: self.own(*abs)? },
-            // The guard copies are scoped at the Ψ length they were cut at,
-            // which the event records (`register_ty_code`): they are
-            // committed after the definitions minted from them, so no
-            // position in the delta says it.
-            DeltaEvent::GenTyCode { tag, inline, level, at } => DeltaEvent::GenTyCode {
+            DeltaEvent::GenTyCode { tag, inline, level } => DeltaEvent::GenTyCode {
                 tag: *tag,
-                inline: Rc::new(self.ty(*at as usize, inline)?),
+                inline: Rc::new(self.closed_ty(inline)?),
                 level: level.clone(),
-                at: self.scope32(*at)?,
             },
-            DeltaEvent::GenTyCodeFn { tag, entry, at } => DeltaEvent::GenTyCodeFn {
+            DeltaEvent::GenTyCodeFn { tag, entry } => DeltaEvent::GenTyCodeFn {
                 tag: *tag,
                 entry: TyCodeFn {
-                    template: Rc::new(self.ty(*at as usize, &entry.template)?),
-                    stmt: Rc::new(self.ty(*at as usize, &entry.stmt)?),
+                    template: Rc::new(self.closed_ty(&entry.template)?),
+                    stmt: Rc::new(self.closed_ty(&entry.stmt)?),
                     ..entry.clone()
                 },
-                at: self.scope32(*at)?,
             },
-            DeltaEvent::GenSpineCodes { tag, codes, at } => {
+            DeltaEvent::GenSpineCodes { tag, codes } => {
                 let mut moved = |parts: &[(Rc<Type>, heather_kernel::level::Level)]| {
                     parts
                         .iter()
-                        .map(|(ty, l)| Ok((Rc::new(self.ty(*at as usize, ty)?), l.clone())))
+                        .map(|(ty, l)| Ok((Rc::new(self.closed_ty(ty)?), l.clone())))
                         .collect::<Result<Vec<_>, RelocationRefusal>>()
                 };
                 let ctors = moved(&codes.ctors)?;
                 let nodes = moved(&codes.nodes)?;
-                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, nodes }, at: self.scope32(*at)? }
+                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, nodes } }
             }
-            // The inline copy and the arity are cut from the lowering, like
-            // the copies above; the decoded copy is `El` of `D#shape`'s body,
-            // scoped at that definition's own position
-            // (`Elaborator::wf_slot_refs`).
-            DeltaEvent::GenWfSlots { tag, slots, at } => {
-                let Some(&shape_at) = self.shape_at.get(tag) else {
-                    return Err(RelocationRefusal("a Wf slot guard has no shape code in its module"));
-                };
-                DeltaEvent::GenWfSlots {
-                    tag: *tag,
-                    slots: WfSlots {
-                        shape: Rc::new(self.ty(*at as usize, &slots.shape)?),
-                        shape_decoded: Rc::new(self.ty(shape_at as usize, &slots.shape_decoded)?),
-                        arity: Rc::new(self.tm(*at as usize, &slots.arity)?),
-                        level: slots.level.clone(),
-                    },
-                    at: self.scope32(*at)?,
-                }
-            }
+            DeltaEvent::GenWfSlots { tag, slots } => DeltaEvent::GenWfSlots {
+                tag: *tag,
+                slots: WfSlots {
+                    shape: Rc::new(self.closed_ty(&slots.shape)?),
+                    shape_decoded: Rc::new(self.closed_ty(&slots.shape_decoded)?),
+                    arity: Rc::new(self.closed_tm(&slots.arity)?),
+                    level: slots.level.clone(),
+                },
+            },
             DeltaEvent::Derived(info) => DeltaEvent::Derived(DerivedInst {
                 abs: self.own(info.abs)?,
-                ty: self.ty(info.at as usize, &info.ty)?,
-                at: self.scope32(info.at)?,
+                ty: self.closed_ty(&info.ty)?,
                 ..info.clone()
             }),
             DeltaEvent::Meta { module, name, slot, definition } => DeltaEvent::Meta {
@@ -236,16 +241,6 @@ impl Mover<'_> {
     }
 }
 
-fn shape_positions(events: &[DeltaEvent]) -> HashMap<u32, u32> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            DeltaEvent::GenDef { key: GenDef::ShapeCode(tag), abs } => Some((*tag, *abs)),
-            _ => None,
-        })
-        .collect()
-}
-
 impl ModuleDelta {
     /// This delta over another dependency world: every Ψ position it holds
     /// moved through `to.map` (dependency positions) or with the module's
@@ -260,7 +255,6 @@ impl ModuleDelta {
             old_base,
             new_base: to.dependency_psi.bindings.len(),
             map: to.map,
-            shape_at: shape_positions(&self.events),
         };
         let extension = self
             .extension
@@ -402,7 +396,6 @@ impl RegistryPart {
         if !self.known {
             return None;
         }
-        let shape_at = shape_positions(&self.events);
         let mut out = crate::module_image::encode_interface_scope(&self.scope);
         let mut hashes = Vec::new();
         for e in &self.events {
@@ -411,37 +404,34 @@ impl RegistryPart {
                     hashes.push(h.binding(*abs as usize)?);
                     DeltaEvent::GenDef { key: *key, abs: 0 }
                 }
-                DeltaEvent::GenTyCode { tag, inline, level, at } => {
-                    hashes.push(h.ty(*at as usize, inline)?);
-                    DeltaEvent::GenTyCode { tag: *tag, inline: Rc::new(Type::Nat), level: level.clone(), at: 0 }
+                DeltaEvent::GenTyCode { tag, inline, level } => {
+                    hashes.push(h.ty(CLOSED, inline)?);
+                    DeltaEvent::GenTyCode { tag: *tag, inline: Rc::new(Type::Nat), level: level.clone() }
                 }
-                DeltaEvent::GenTyCodeFn { tag, entry, at } => {
-                    hashes.push(h.ty(*at as usize, &entry.template)?);
-                    hashes.push(h.ty(*at as usize, &entry.stmt)?);
+                DeltaEvent::GenTyCodeFn { tag, entry } => {
+                    hashes.push(h.ty(CLOSED, &entry.template)?);
+                    hashes.push(h.ty(CLOSED, &entry.stmt)?);
                     DeltaEvent::GenTyCodeFn {
                         tag: *tag,
                         entry: TyCodeFn { template: Rc::new(Type::Nat), stmt: Rc::new(Type::Nat), ..entry.clone() },
-                        at: 0,
                     }
                 }
-                DeltaEvent::GenSpineCodes { tag, codes, at } => {
+                DeltaEvent::GenSpineCodes { tag, codes } => {
                     let blank = |parts: &[(Rc<Type>, heather_kernel::level::Level)]| {
                         parts.iter().map(|(_, l)| (Rc::new(Type::Nat), l.clone())).collect::<Vec<_>>()
                     };
                     for (ty, _) in codes.ctors.iter().chain(&codes.nodes) {
-                        hashes.push(h.ty(*at as usize, ty)?);
+                        hashes.push(h.ty(CLOSED, ty)?);
                     }
                     DeltaEvent::GenSpineCodes {
                         tag: *tag,
                         codes: SpineCodes { ctors: blank(&codes.ctors), nodes: blank(&codes.nodes) },
-                        at: 0,
                     }
                 }
-                DeltaEvent::GenWfSlots { tag, slots, at } => {
-                    let shape_at = *shape_at.get(tag)? as usize;
-                    hashes.push(h.ty(*at as usize, &slots.shape)?);
-                    hashes.push(h.ty(shape_at, &slots.shape_decoded)?);
-                    hashes.push(h.tm(*at as usize, &slots.arity)?);
+                DeltaEvent::GenWfSlots { tag, slots } => {
+                    hashes.push(h.ty(CLOSED, &slots.shape)?);
+                    hashes.push(h.ty(CLOSED, &slots.shape_decoded)?);
+                    hashes.push(h.tm(CLOSED, &slots.arity)?);
                     DeltaEvent::GenWfSlots {
                         tag: *tag,
                         slots: WfSlots {
@@ -450,13 +440,12 @@ impl RegistryPart {
                             arity: Rc::new(Term::Var(LocalVar(0))),
                             level: slots.level.clone(),
                         },
-                        at: 0,
                     }
                 }
                 DeltaEvent::Derived(info) => {
                     hashes.push(h.binding(info.abs as usize)?);
-                    hashes.push(h.ty(info.at as usize, &info.ty)?);
-                    DeltaEvent::Derived(DerivedInst { abs: 0, at: 0, ty: Type::Nat, ..info.clone() })
+                    hashes.push(h.ty(CLOSED, &info.ty)?);
+                    DeltaEvent::Derived(DerivedInst { abs: 0, ty: Type::Nat, ..info.clone() })
                 }
                 DeltaEvent::Meta { module, name, slot, definition } => {
                     let at = definition.psi_len as usize;
