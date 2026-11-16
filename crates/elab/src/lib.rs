@@ -1158,8 +1158,8 @@ impl matching::MotiveSynthesisElab for Elaborator {
         self.whnf(cx, ty, span).ok()
     }
 
-    fn read_motive_term(&self, cx: &Cx, term: &Term, span: Span) -> Option<Rc<Term>> {
-        self.whnf_tm(cx, term, span).ok()
+    fn read_motive_term(&self, cx: &Cx, term: &Term, _span: Span) -> Option<Rc<Term>> {
+        self.semantic_oracle().whnf_term_probing(&cx.gamma, term).ok().map(Rc::new)
     }
 
     fn motive_candidate_converts(

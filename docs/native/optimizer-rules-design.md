@@ -596,8 +596,26 @@ the matcher, for the rules whose conclusion is a node.
   the matcher to say what it tried), and the page of every registered
   rule.
 
-What is left of step 3: the rules that decide a bit or give an order, and
-the ones a branch's test gives in an arm, are still proposed by hand; the
+- **A rule that decides a bit is found the same way.** A rule whose
+  conclusion is that a bit is a constant (`l.below(r) = 1`, `a | b = 0`)
+  is no rewrite: the node stays and the walk keeps the bit
+  (`decided_among`, `Seen::settled_bit`). `below_yes`, `below_no` and the
+  three `or_of_…` rules are in `matchable()`, and the arms of the search
+  that named them by place are gone. A premise `a = 1` about a bit is read
+  in the bits the walk decided (`Walked::of_kind`), since no node made the
+  bit a constant. A program's own rule of this shape is used with nothing
+  more written.
+
+- **A rule is tried only where it can fit.** A `Matchable` keeps the kind
+  of the node that writes the word its conclusion is about
+  (`RulePattern::head`), and a node of another kind is not read against
+  it. The search is evaluated by the kernel wherever a test states a plan
+  by `refl`, so what a table costs is steps of every such proof: without
+  this each node paid for every rule of the table.
+
+What is left of step 3: the rules that decide a bit from an order or give
+an order, and the ones a branch's test gives in an arm, are still proposed
+by hand; the
 strategies are not registered learners yet, and "Accepted" is not proved.
 The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules
