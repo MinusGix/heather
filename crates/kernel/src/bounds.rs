@@ -61,9 +61,9 @@
 //! counter uses: every skip taken on this metadata is re-verified in debug
 //! builds by running the real traversal and asserting it was a no-op
 //! (`sub_ty`/`sub_tm` in subst.rs), and the test suite runs in the dev
-//! profile — including the 300-seed substitution laws over generated terms
+//! profile — including the substitution laws over generated terms
 //! covering every variant. A binder count here that drifts from the
-//! traversal's dep table fails those tests; it cannot silently ship.
+//! traversal's dep table fails those tests on any skip they take.
 
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
