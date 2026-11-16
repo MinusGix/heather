@@ -1,5 +1,5 @@
 //! The **comparison domain**: the boundary through which [`super::Conv`]'s
-//! arms reach their inputs (docs/kernel/nbe-conversion-design.md §13, stage 2a).
+//! arms reach their inputs (docs/kernel/nbe-conversion-design.md §13).
 //!
 //! Conversion is a structural comparison of two weak head normal forms. *What
 //! a weak head normal form is* is the only thing that changes when the checker
@@ -31,24 +31,24 @@
 //!   ([`Dom::embed_ty`]), and synthesizing the types the rules build
 //!   (`Π`, `Vec`, `El`, …). These are methods rather than call-site syntax
 //!   because at the value domain they are closure application and environment
-//!   extension, not substitution: leaving them at the call sites is what would
-//!   make stage 2b a rewrite instead of an instantiation.
+//!   extension, not substitution, so at the call sites they would be written
+//!   twice.
 //!
 //! The syntax instantiation is asymmetric — `Ty = Type` but `Tm = Rc<Term>`
 //! — and that is a measured choice, not an oversight. A conversion's *root*
-//! is a `&Type` the caller lends us, and wrapping it cost 1.3× on
-//! `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`; a
-//! conversion's *neutral spines* hand the same term to the neutral judgment
-//! twice over, and copying it there cost as much again. See
+//! is a `&Type` the caller lends us, and wrapping it is a visible cost when
+//! every conversion is as small as `Nat ≈ Nat`; a conversion's *neutral
+//! spines* hand the same term to the neutral judgment twice over, and
+//! copying it there costs as much again. See
 //! [`Dom::whnf_ty_root`].
 //!
-//! Two things are deliberately *not* abstracted, and stage 2b owns both:
-//! [`super::Env<'v>`]'s Γ stays a syntactic [`LocalCtx`] (only its length and base
-//! are read by the telescope helpers — entry *types* are read only by
-//! `tm_ne`'s variable arm, through [`Dom::var_type`]), and the recursor
-//! telescope tables in [`crate::rec`] keep producing syntax, which the arms
-//! then embed. See the stage-2a log entry in
-//! `issues/nbe-conversion-round.md`.
+//! Two things are deliberately *not* abstracted: [`super::Env<'v>`]'s Γ stays
+//! a syntactic [`LocalCtx`] (only its length and base are read by the
+//! telescope helpers — entry *types* are read only by `tm_ne`'s variable arm,
+//! through [`Dom::var_type`]; the value domain fills it with placeholder
+//! entries, `issues/kernel-filler-contexts.md`), and the recursor telescope
+//! tables in [`crate::rec`] keep producing syntax, which the arms then
+//! embed.
 
 use crate::rc::Rc;
 
@@ -463,8 +463,8 @@ pub(super) trait Dom<'v>: Sized {
     /// operation — at the value domain, evaluation in the identity
     /// environment of Γ (design §3.2). It exists as a method rather than as
     /// `embed` + [`Dom::whnf_ty`] because the syntax domain can then reduce
-    /// the borrow in place: wrapping every root cost 1.3× on
-    /// `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`.
+    /// the borrow in place, where wrapping every root is a visible cost
+    /// when every conversion is as small as `Nat ≈ Nat`.
     fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Self::Ty>;
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Self::Tm>;
     fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
@@ -609,8 +609,7 @@ pub(super) trait Dom<'v>: Sized {
     /// extended context, and de Bruijn does the rest. At the value domain
     /// only the *body syntax* is; the environment the closure captured is
     /// still in the outer scope, and the two have to be brought back together
-    /// (`value::shift`, and the stage-2b log for why stage 1's argument does
-    /// not cover this case).
+    /// (`value::shift`).
     fn under_tele_ty(
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
@@ -634,8 +633,8 @@ pub(super) trait Dom<'v>: Sized {
     /// Do the two substitutions have the same tail? Stated as a predicate
     /// rather than as equality because the value domain's tail deliberately
     /// carries less than the syntax's (`VTail` drops the source context's
-    /// length, which an environment machine has no opportunity to renormalize
-    /// — stage 1's log).
+    /// length, which an environment machine has no opportunity to
+    /// renormalize).
     fn subst_tails_agree(a: &Self::Subst, b: &Self::Subst) -> bool;
     /// `T[δ|ₖ]` — a target-context entry type carried back along the first
     /// `k` steps of `δ`. With `k = δ.terms.len()` this is `T[δ]`, the type of
@@ -799,8 +798,8 @@ pub(super) trait Dom<'v>: Sized {
     ///
     /// `Ok(None)` means only that this domain — or this Σ, or these values —
     /// has no word to compare; the ordinary η arm follows and decides exactly
-    /// the pairs it decides today, so this is a fast path and never a new
-    /// verdict. `Err(NotConvertible)` is a verdict: two canonical bits that
+    /// the pairs it decides without this, so this is a fast path and never a
+    /// new verdict. `Err(NotConvertible)` is a verdict: two canonical bits that
     /// differ, which is one comparison rather than a walk to the difference.
     #[allow(clippy::too_many_arguments)]
     fn bit_vec_eq(
@@ -987,8 +986,8 @@ pub(super) trait Dom<'v>: Sized {
 /// Every accessor is total, so every one returns `Ok`.
 ///
 /// Every method is `#[inline]`: they are thin adapters that must fold into
-/// the arms, and leaving them as calls — a view returned through memory, a
-/// whnf moved twice — cost 1.3× on `nat/check-numeral`.
+/// the arms; as calls, a view is returned through memory and a whnf moved
+/// twice, on the hottest path there is.
 pub(super) struct Syn;
 
 /// `Γ ⊢ x : T` — the identity substitution of `env`'s Γ, weakened past the
@@ -2255,9 +2254,7 @@ impl<'v> Dom<'v> for Syn {
 thread_local! {
     /// The two closed forms of [`Dom::nat`] / [`Dom::zero`], allocated once
     /// per thread. Conversion synthesizes them once per comparison node on
-    /// its hottest paths, and an `Rc::new` there is measurable: building them
-    /// per checker cost 1.5× on `nat/check-numeral` (`scripts/bench --check`,
-    /// 2026-07-31).
+    /// its hottest paths, and an `Rc::new` there is measurable.
     static NAT: Rc<Type> = Rc::new(Type::Nat);
     static ZERO: Rc<Term> = Rc::new(Term::Zero);
 }
