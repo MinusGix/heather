@@ -312,32 +312,25 @@ pub(crate) enum DeltaEvent {
         direct_dependencies: Vec<String>,
     },
     GenDef { key: GenDef, abs: u32 },
-    /// The four guard-copy events carry `at`: the Ψ length their kernel
-    /// payloads were built at, which their free globals count from. The
-    /// registry ignores it (a guard copy is compared raw); relocating a
-    /// module onto another world needs it
-    /// (`docs/infrastructure/module-interface-cutoff-design.md` §3). `GenWfSlots`'s
-    /// decoded copy is the exception, scoped at `D#shape`'s own position.
+    /// The four guard-copy events' kernel payloads name committed
+    /// definitions only, as constants, so they read the same in every world
+    /// that extends the one they were cut in, and record no scope.
     GenTyCode {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
-        at: u32,
     },
     GenTyCodeFn {
         tag: u32,
         entry: TyCodeFn,
-        at: u32,
     },
     GenWfSlots {
         tag: u32,
         slots: WfSlots,
-        at: u32,
     },
     GenSpineCodes {
         tag: u32,
         codes: SpineCodes,
-        at: u32,
     },
     GenFamLevels {
         tag: u32,
@@ -540,13 +533,11 @@ impl DeltasMut<'_> {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
-        at: u32,
     ) {
         Deltas(self).record_module_event(|| DeltaEvent::GenTyCode {
             tag,
             inline: Rc::clone(&inline),
             level: level.clone(),
-            at,
         });
         // The guard copy names committed definitions only, which is what
         // lets every later world read it as stored.
@@ -554,31 +545,31 @@ impl DeltasMut<'_> {
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
     }
 
-    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn, at: u32) {
+    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn) {
         Deltas(self).record_module_event(|| DeltaEvent::GenTyCodeFn {
             tag,
             entry: entry.clone(),
-            at,
         });
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&entry.template), 0);
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&entry.stmt), 0);
         self.types.gdefs_mut().insert_ty_code_fn(tag, entry);
     }
 
-    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots, at: u32) {
+    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots) {
         Deltas(self).record_module_event(|| DeltaEvent::GenWfSlots {
             tag,
             slots: slots.clone(),
-            at,
         });
         debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&slots.shape), 0);
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&slots.shape_decoded), 0);
         debug_assert_eq!(heather_kernel::subst::global_var_bound_tm(&slots.arity), 0);
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
     }
 
-    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes, at: u32) {
+    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes) {
         Deltas(self).record_module_event(|| DeltaEvent::GenSpineCodes {
             tag,
             codes: codes.clone(),
-            at,
         });
         debug_assert!(codes.ctors.iter().chain(&codes.nodes).all(|(ty, _)| heather_kernel::subst::global_var_bound_ty(ty) == 0));
         self.types.gdefs_mut().insert_spine_codes(tag, codes);
@@ -654,6 +645,7 @@ impl DeltasMut<'_> {
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
         Deltas(self).record_module_event(|| DeltaEvent::Derived(info.clone()));
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&Rc::new(info.ty.clone())), 0);
         self.traits.commit_derived(info);
     }
 
@@ -1505,18 +1497,12 @@ impl DeltasMut<'_> {
                 self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
             }
             DeltaEvent::GenDef { key, abs } => self.semantic_commit_gen_def(key, abs),
-            DeltaEvent::GenTyCode { tag, inline, level, at } => {
-                self.semantic_commit_gen_ty_code(tag, inline, level, at);
+            DeltaEvent::GenTyCode { tag, inline, level } => {
+                self.semantic_commit_gen_ty_code(tag, inline, level);
             }
-            DeltaEvent::GenTyCodeFn { tag, entry, at } => {
-                self.semantic_commit_gen_ty_code_fn(tag, entry, at);
-            }
-            DeltaEvent::GenWfSlots { tag, slots, at } => {
-                self.semantic_commit_gen_wf_slots(tag, slots, at);
-            }
-            DeltaEvent::GenSpineCodes { tag, codes, at } => {
-                self.semantic_commit_gen_spine_codes(tag, codes, at);
-            }
+            DeltaEvent::GenTyCodeFn { tag, entry } => self.semantic_commit_gen_ty_code_fn(tag, entry),
+            DeltaEvent::GenWfSlots { tag, slots } => self.semantic_commit_gen_wf_slots(tag, slots),
+            DeltaEvent::GenSpineCodes { tag, codes } => self.semantic_commit_gen_spine_codes(tag, codes),
             DeltaEvent::GenFamLevels { tag, level, index_level } => {
                 self.semantic_commit_gen_fam_levels(tag, level, index_level);
             }

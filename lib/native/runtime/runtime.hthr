@@ -963,8 +963,15 @@ fn World::of(tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs
 
 fn runtime_fail<A>(why: String) → Tac<A> { fail("runtime: " ++ why, []) }
 
+// A name the generator reads, where the `runtime fn` is: one of this
+// module's own is reached by its module's key even where `runtime` is not
+// imported, as in a module of programs, which imports `runtime_program`
+// in its place (its `runtime` and this one would clash).
 fn runtime_ref(name: String) → Tac<GlobalRef> {
-    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): ")
+    lookup(name).bind(λ c => match c {
+        Accepted(g) => pure(g),
+        Refused(_) => lookup("runtime::" ++ name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): "),
+    })
 }
 
 fn runtime_global(name: String) → Tac<Expr> { runtime_ref(name).bind(λ g => pure(Global(g))) }

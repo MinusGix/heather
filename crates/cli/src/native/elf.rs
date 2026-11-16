@@ -118,12 +118,17 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
-    if positional.len() != 2 || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+    if !(1..=2).contains(&positional.len()) || output.is_none() {
+        return Err("usage: heather write-elf <file.hthr> [<source>] -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
-    let (source, symbol, output) = (Path::new(positional[0]), positional[1], output.unwrap());
-    if !symbol_ok(symbol) {
-        return Err("the source must be a plain identifier".into());
+    // The source: a function of no arguments that builds a `Source` or a
+    // `Tool` (`tr`), or the `Source` a `runtime fn` program publishes, by
+    // its path (`tr_upper::source`); `main::source` when none is named
+    // (docs/native/io-programs-design.md §5, D1).
+    let (source, symbol, output) = (Path::new(positional[0]), positional.get(1).copied().unwrap_or("main::source"), output.unwrap());
+    let path = symbol.contains("::");
+    if !symbol.split("::").all(symbol_ok) {
+        return Err("the source must be an identifier, or a path such as `main::source`".into());
     }
     let certificate = output.with_extension("certificate.hthr");
     for path in [&output, &certificate] {
@@ -169,7 +174,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
 
     // The program and its bytes, read on forks: a misreading is not a
     // hazard, since the kernel checks every literal below; it is a refusal.
-    let prefix = format!("{symbol}_elf");
+    let prefix = format!("{}_elf", symbol.replace("::", "_"));
     let p = &prefix;
     let imports = IMPORTS.iter().map(|module| format!("import {module};\n")).collect::<String>();
     let probe = format!("{p}_probe");
@@ -179,13 +184,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
         fn {p}_whole() → Nat {{ {symbol}().opened(0).procedures.len() + {symbol}().opened(0).functions.len() }}\n");
     let mut tool_fork = elab.fork();
-    let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
+    let is_tool = !path && tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
     // A tool with procedures, or one that calls functions of its program
     // (`call`, native_build), is lowered whole, as a literal like any
     // source: the part-at-a-time lowering (`parts`) walks `main` only.
     let in_parts = is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_whole")).map_err(|e| format!("`{symbol}` (procedures): {e}"))? == 0;
     drop(tool_fork);
-    let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
+    let source = if is_tool { format!("{symbol}().source()") } else if path { symbol.to_string() } else { format!("{symbol}()") };
     let (src, lowered, lowered_is, shapes) = if in_parts {
         let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
         (format!("{p}_lowered"), stated.defs, stated.theorems, Some(stated.shapes))
@@ -207,6 +212,9 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
                 let theorem = format!("theorem {p}_lowered_is(): {source} = {p}_lowered() {{ refl }}\n");
                 (format!("{p}_lowered"), text, theorem, Some(shapes))
             }
+            // A published `Source` is a value, not a function to call: it
+            // is compiled through its literal.
+            None if path => return Err(format!("`{symbol}` did not read back as a literal")),
             None => (symbol.to_string(), String::new(), String::new(), None),
         }
     };
@@ -271,7 +279,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     };
     let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
-        first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: functions > 0 }))?;
+        first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: usize::try_from(functions).map_err(|_| format!("`{symbol}`'s functions did not read back"))? }))?;
     // Where the values of the functions the source calls go, from the
     // function compiler's heuristic (`plan_program`,
     // function_ir_lower_calls), spelled: a proposal the functions' lowering

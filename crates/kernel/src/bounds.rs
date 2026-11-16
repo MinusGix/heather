@@ -69,6 +69,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
 use crate::rc::{Rc, USES_BITS};
+use crate::rec;
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, Type};
 
@@ -459,8 +460,9 @@ impl Walk {
     }
 
     // The binder counts below (the `.under(k)` arguments) are the LOCAL column
-    // of subst.rs's traversal — `dep(_, _, k)` in map_type/map_term/map_motives/
-    // map_branches — and must stay identical to it. Other-context children
+    // of subst.rs's traversal — `dep(_, _, k)` in map_type/map_term/map_motives
+    // — and must stay identical to it; the branches' come from the one table
+    // both read, `rec::BRANCH_DEPTHS`. Other-context children
     // (everything subst.rs routes through other_ty/other_tm/other_ctx) are
     // omitted entirely, matching `LOCAL_OP` scoping.
 
@@ -773,72 +775,10 @@ impl Walk {
     }
 
     fn branches_use(&mut self, b: &Branches) -> LocalUse {
-        LocalUse::CLOSED
-            .join(self.term_use(&b.ty_nat))
-            .join(self.term_use(&b.ty_pi).under(2))
-            .join(self.term_use(&b.ty_ty))
-            .join(self.term_use(&b.ty_el).under(1))
-            .join(self.term_use(&b.ty_id).under(3))
-            .join(self.term_use(&b.ty_sigma).under(2))
-            .join(self.term_use(&b.ty_unit))
-            .join(self.term_use(&b.ty_empty))
-            .join(self.term_use(&b.tm_var))
-            .join(self.term_use(&b.tm_nat))
-            .join(self.term_use(&b.tm_pi).under(2))
-            .join(self.term_use(&b.tm_ty))
-            .join(self.term_use(&b.tm_zero))
-            .join(self.term_use(&b.tm_succ).under(1))
-            .join(self.term_use(&b.tm_elim_nat).under(4))
-            .join(self.term_use(&b.tm_lam).under(2))
-            .join(self.term_use(&b.tm_app).under(4))
-            .join(self.term_use(&b.tm_id).under(3))
-            .join(self.term_use(&b.tm_refl).under(2))
-            .join(self.term_use(&b.tm_j).under(6))
-            .join(self.term_use(&b.tm_sigma).under(2))
-            .join(self.term_use(&b.tm_pair).under(4))
-            .join(self.term_use(&b.tm_fst).under(3))
-            .join(self.term_use(&b.tm_snd).under(3))
-            .join(self.term_use(&b.tm_unit))
-            .join(self.term_use(&b.tm_empty))
-            .join(self.term_use(&b.tm_triv))
-            .join(self.term_use(&b.tm_elim_empty).under(2))
-            .join(self.term_use(&b.ty_sum).under(2))
-            .join(self.term_use(&b.tm_sum).under(2))
-            .join(self.term_use(&b.tm_inl).under(3))
-            .join(self.term_use(&b.tm_inr).under(3))
-            .join(self.term_use(&b.tm_case).under(6))
-            .join(self.term_use(&b.ty_w).under(2))
-            .join(self.term_use(&b.tm_w).under(2))
-            .join(self.term_use(&b.tm_sup).under(4))
-            .join(self.term_use(&b.tm_elim_w).under(5))
-            .join(self.term_use(&b.ty_vec).under(2))
-            .join(self.term_use(&b.tm_vec).under(2))
-            .join(self.term_use(&b.ty_fin).under(1))
-            .join(self.term_use(&b.tm_fin).under(1))
-            .join(self.term_use(&b.ty_wf).under(2))
-            .join(self.term_use(&b.tm_wf).under(2))
-            .join(self.term_use(&b.tm_supf).under(4))
-            .join(self.term_use(&b.tm_elim_wf).under(5))
-            .join(self.term_use(&b.ty_seq).under(3))
-            .join(self.term_use(&b.tm_seq).under(3))
-            .join(self.term_use(&b.ty_sempty))
-            .join(self.term_use(&b.tm_sempty))
-            .join(self.term_use(&b.tm_srefl).under(2))
-            .join(self.term_use(&b.tm_elim_sempty).under(2))
-            .join(self.term_use(&b.ty_squash).under(1))
-            .join(self.term_use(&b.tm_squash).under(1))
-            .join(self.term_use(&b.tm_squash_in).under(2))
-            .join(self.term_use(&b.tm_elim_squash).under(4))
-            .join(self.term_use(&b.ty_m).under(5))
-            .join(self.term_use(&b.tm_m).under(5))
-            .join(self.term_use(&b.tm_corec).under(8))
-            .join(self.term_use(&b.tm_out).under(6))
-            .join(self.term_use(&b.ty_dvec).under(2))
-            .join(self.term_use(&b.tm_dvec).under(2))
-            .join(self.term_use(&b.ty_iwf).under(6))
-            .join(self.term_use(&b.tm_iwf).under(6))
-            .join(self.term_use(&b.tm_sup_i).under(7))
-            .join(self.term_use(&b.tm_elim_iwf).under(9))
+        rec::branch_terms(b)
+            .into_iter()
+            .zip(rec::BRANCH_DEPTHS)
+            .fold(LocalUse::CLOSED, |u, (t, (_, _, local))| u.join(self.term_use(t).under(local)))
     }
 }
 

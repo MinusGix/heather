@@ -41,23 +41,23 @@ linked!("scan_tokens.s");
 // (the crate's comment): nothing a caller passes can make the call
 // misbehave, and the unproved part is the platform's, not the callee's.
 unsafe extern "sysv64" {
-    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 272 bytes.
+    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
     pub safe fn sha512_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 272 bytes.
+    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
     pub safe fn sha512_t2(a: u64, b: u64, c: u64) -> u64;
-    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 272 bytes.
+    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
     pub safe fn sha512_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `sha256_t1` of `lib/native/crypto/sha256_round.hthr`. STACK: 136 bytes.
+    /// `sha256_t1` of `lib/native/crypto/sha256_round.hthr`. STACK: 0 bytes.
     pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-    /// `sha256_t2` of `lib/native/crypto/sha256_round.hthr`. STACK: 136 bytes.
+    /// `sha256_t2` of `lib/native/crypto/sha256_round.hthr`. STACK: 0 bytes.
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
-    /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 136 bytes.
+    /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 0 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 408 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 176 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
-    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 136 bytes.
+    /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 0 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
-    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 136 bytes.
+    /// `scan_begin` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 0 bytes.
     pub safe fn scan_begin(previous: u64) -> u64;
 }
 
@@ -81,14 +81,14 @@ mod raw {
     }
 }
 
-/// `Sha256::compress` of `lib/native/crypto/sha256_one_block.hthr`. STACK: 1088 bytes.
+/// `Sha256::compress` of `lib/native/crypto/sha256_one_block.hthr`. STACK: 656 bytes.
 pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_compress_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `ctx`, `block`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -109,14 +109,14 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     unsafe { raw::sha256_compress(ctx.as_mut_ptr(), ctx.len() as u64, block.as_ptr(), block.len() as u64) }
 }
 
-/// `Sha256::init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 408 bytes.
+/// `Sha256::init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 224 bytes.
 pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_init_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `ctx`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -137,14 +137,14 @@ pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     unsafe { raw::sha256_init(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
-/// `Sha256::update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 1496 bytes.
+/// `Sha256::update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 936 bytes.
 pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_update_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `ctx`, `message`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -165,14 +165,14 @@ pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     unsafe { raw::sha256_update(ctx.as_mut_ptr(), ctx.len() as u64, message.as_ptr(), message.len() as u64) }
 }
 
-/// `Sha256::finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 1496 bytes.
+/// `Sha256::finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 920 bytes.
 pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_finish_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `ctx`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -193,14 +193,14 @@ pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     unsafe { raw::sha256_finish(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
-/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 272 bytes.
+/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 88 bytes.
 pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     // SAFETY (the premises of `count_newlines_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -214,14 +214,14 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     unsafe { raw::count_newlines(text.as_ptr(), text.len() as u64, count) }
 }
 
-/// `raise_span` of `lib/native/native_tool_spans.hthr`. STACK: 136 bytes.
+/// `raise_span` of `lib/native/native_tool_spans.hthr`. STACK: 0 bytes.
 pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
     // SAFETY (the premises of `raise_span_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -242,14 +242,14 @@ pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
     unsafe { raw::raise_span(text.as_mut_ptr(), text.len() as u64, count, from) }
 }
 
-/// `List::raise_letters` of `lib/native/native_tool_spans.hthr`. STACK: 136 bytes.
+/// `List::raise_letters` of `lib/native/native_tool_spans.hthr`. STACK: 0 bytes.
 pub fn list_raise_letters(text: &mut [u8], count: u64, from: u64) -> u64 {
     // SAFETY (the premises of `list_raise_letters_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -270,14 +270,14 @@ pub fn list_raise_letters(text: &mut [u8], count: u64, from: u64) -> u64 {
     unsafe { raw::list_raise_letters(text.as_mut_ptr(), text.len() as u64, count, from) }
 }
 
-/// `copy_span` of `lib/native/native_tool_spans.hthr`. STACK: 136 bytes.
+/// `copy_span` of `lib/native/native_tool_spans.hthr`. STACK: 0 bytes.
 pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     // SAFETY (the premises of `copy_span_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -298,14 +298,14 @@ pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     unsafe { raw::copy_span(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, count, from) }
 }
 
-/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 272 bytes.
+/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 88 bytes.
 pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     // SAFETY (the premises of `copy_window_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -326,14 +326,14 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
-/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 680 bytes.
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 400 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `source`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -347,14 +347,14 @@ pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     unsafe { raw::scan_token(source.as_ptr(), source.len() as u64, at, previous) }
 }
 
-/// `List::scan_tokens` of `lib/lang/lexer/lexer_records.hthr`. STACK: 816 bytes.
+/// `List::scan_tokens` of `lib/lang/lexer/lexer_records.hthr`. STACK: 520 bytes.
 pub fn scan_tokens(out: &mut [u8], source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_tokens_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `source`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an

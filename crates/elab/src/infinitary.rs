@@ -120,7 +120,7 @@ impl WParts {
 
     /// `Π(y : P a). W₀`'s level, the leaf equation's.
     fn lf(&self) -> Level {
-        Level::join(self.lp.clone(), self.lw.clone())
+        Level::max(self.lp.clone(), self.lw.clone())
     }
 
     fn w0(&self) -> Type {
@@ -367,7 +367,7 @@ impl Infinitary<'_> {
             level: lp.clone(),
             tm: Rc::new(ptree),
         };
-        let lw = Level::join(ls.clone(), lp.clone());
+        let lw = Level::max(ls.clone(), lp.clone());
         let mut p = WParts {
             g: cx.gamma.clone(),
             ls: ls.clone(),
@@ -405,9 +405,9 @@ impl Infinitary<'_> {
             dom: Rc::new(p.pos_at(k, v)),
             cod: Rc::new(ty_lw.clone()),
         };
-        let lih = Level::join(lp.clone(), succ_lw.clone());
-        let qin = Level::join(lih.clone(), succ_lw.clone());
-        let lq = Level::join(lf.clone(), qin.clone());
+        let lih = Level::max(lp.clone(), succ_lw.clone());
+        let qin = Level::max(lih.clone(), succ_lw.clone());
+        let lq = Level::max(lf.clone(), qin.clone());
         // Q(v) = Π(f' : Π(y : P v). W₀). Π(ih' : Π(y : P v). Ty lw). Ty lw
         let q = |k: u32, v: Rc<Term>| Type::Pi {
             dom_level: lf.clone(),
@@ -728,7 +728,7 @@ impl Infinitary<'_> {
                 dom: Rc::new(p.pos_at(4, var(1))),
                 cod: Rc::new(motive.shift_local(3)),
             },
-            Level::join(p.lp.clone(), mlvl.clone()),
+            Level::max(p.lp.clone(), mlvl.clone()),
         );
         let step = self.const_case_tree(
             &c3,
@@ -893,7 +893,7 @@ impl Infinitary<'_> {
         let spine = self.spine(scrut_ty, &p.lw, n, span)?;
         let g = &cx.gamma;
         let lf = p.lf();
-        let lmp = Level::join(p.lw.clone(), mlvl.clone());
+        let lmp = Level::max(p.lw.clone(), mlvl.clone());
         // `M[⟨t, c⟩]` at depth `k`.
         let m_at = |k: u32, t: Rc<Term>, c: Rc<Term>| {
             motive.apply_local(&embed(g, k).extended(Rc::new(p.pair(k, t, c))))
@@ -914,9 +914,9 @@ impl Infinitary<'_> {
             cod: Rc::new(mp_at(k + 1, app_at(Rc::new(f.shift_local(1)), var(0)))),
         };
         let msup = |k: u32, v: Rc<Term>, f: Rc<Term>| mp_at(k, Rc::new(p.sup(k, v, f)));
-        let lihm = Level::join(p.lp.clone(), lmp.clone());
-        let qmin = Level::join(lihm.clone(), lmp.clone());
-        let lqm = Level::join(lf.clone(), qmin.clone());
+        let lihm = Level::max(p.lp.clone(), lmp.clone());
+        let qmin = Level::max(lihm.clone(), lmp.clone());
+        let lqm = Level::max(lf.clone(), qmin.clone());
         // Q_M(v) = Π(f'). Π(ih' : Π(y : P v). M'(f' y)). M'(sup(v; f'))
         let q_m = |k: u32, v: Rc<Term>| Type::Pi {
             dom_level: lf.clone(),

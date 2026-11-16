@@ -69,7 +69,7 @@ Built (with the file to read):
 | `ETm::lower`, `lower_reads` | `rt_io_lower.hthr` | built |
 | `ELoop` (`Seq`, `While`), `ELoop::lower_reads` | `rt_io_loop.hthr` | built |
 | `Lend`: a computation calls a span `runtime fn` that may write | `rt_io.hthr`, PR #581 | built as a term; not reflected |
-| `tr` as one `ELoop` term, through `write-elf`, held to GNU tr | `rt_io_lend_tests.hthr`, `native_tools.rs` | built, written by hand as an `ELoop` |
+| `tr` as one `ELoop` term, through `write-elf`, held to GNU tr | `rt_io_lend_tests.hthr`, `native_tools.rs` | built; since round 2 the `runtime fn tr_upper` (`runtime_program_tests.hthr`), compiled as `tr_upper::source` |
 | `write-elf` of any nullary `Source`, `<s>_elf_simulates` | `crates/cli/src/native/elf.rs`, `native_compile_elf` | built |
 | Data segment sized to the program (1 MiB buffers) | issue `native-data-capacity` | built |
 
@@ -260,6 +260,71 @@ directly: every trace of the process is a trace the world-threading meaning
 once, as the surface `Io::tr_upper`, a `runtime fn`, compiled from its
 reflection; its hand-written `ELoop` and its builder version go. Then the
 demo thread's programs.
+
+**As built (2026-11-16).** `lib/native/runtime/runtime_program.hthr`; a
+module of programs imports it in place of `runtime` (its `runtime` is
+`runtime`'s with the program mode in front, and the two names would
+clash). What differs from the table above:
+
+- The group is `f::eloop`, `f::lents` (the table), `f::bridge`,
+  `f::source` and `f::reads`. A group's members cannot name each other
+  (a generator builds every term before it publishes), so the lowering,
+  the program and the start are not members: `f::source` is
+  `Program::source(eloop, lents, g, functions, caps)`, and the statements
+  are `Program::stmt`/`Program::result` of the same arguments.
+- A buffer parameter is `buf: ByteBuffer(n)` (a list of bytes, of which
+  the process starts with `n` zeroes); `[u8; N]` waits on I/O over
+  vectors. The reflector reads a type alias as what it stands for.
+- The world is plain (`ETm::plain_world()`): a lent function's callees
+  are its own program's business, and a table entry names the program
+  function it is (`Lent::entry`), not `w.sigs.len() + f`. A pure term
+  that calls a function is refused for now.
+- The functions a program lends its buffer to are found in its body
+  (`program_lends_in`: a callee with a generated `runs_over`); one for
+  now, since programs of two are not linked into one. Its agreement is
+  `Lent::agrees_span` from its `runs_over` (`Words::All` turns the
+  curried theorem into one over the word list).
+- The exit: an exited flow reads back as its status, and
+  `Stmt::exit_eutt`/`Stmt::exit_reads` (`rt_io_program`) make the
+  lowering's theorem one about `Then(stmt, Exit(result))`, so `f::reads`
+  is `Stmt::exit_reads(…, Program::reads(…))` with the bridge at the
+  zeroed buffers (`Program::reads` is `lower_reads` then `reads_back`).
+- `write-elf <file> [<source>]` takes a path (`tr_upper::source`), and
+  `main::source` when none is named; the certificate's names take the
+  path with `::` as `_` (`tr_upper_source_elf_…`). `Source::elf_reads`
+  is not written yet: the certificate and `f::reads` meet at
+  `f::source`'s tree.
+- `tr`: `runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256))` is the
+  gate's tr. The hand `ELoop` in `rt_io_lend_tests` stays as the
+  reflector's pin and the lowering's probes; the builder tr stays until a
+  program can exit 1 on a failed write (issues/rt-io-exit-on-failed-write.md).
+
+**As built (round 4, 2026-11-16): a whole input, then a verdict.** The
+validator's shape is a loop that reads standard input into one buffer at a
+growing offset (`filled`), stopping when a read brings nothing or fails,
+then one lent call after the loop whose word is the exit status
+(`ascii_check` in `runtime_program_tests`, held to a reference by
+`native_tools`; the UTF-8 validator's `main` in `examples/utf8` is the
+same program over `utf8_valid_from`).
+
+- A lent function must pass its span's length on as it is, so the length
+  the program lends is the buffer's capacity and the count of bytes read
+  is one more word: the verdict function is
+  `f(span, length, filled, failed)` and validates the first `filled` bytes
+  (`utf8_valid_from(span, length, 0, filled)`); its theorem rests on a
+  window lemma over `s.take(filled)` (examples/utf8 `valid_prefix`).
+- A loop threading three locals or more reads a field of a field of its
+  state (`z.value.value.after`); `rt_settle_named` settles those a level at
+  a time.
+- `write-elf`'s certificate states `Prog::links` a check at a time
+  (`Prog::links_of`: evaluable a function per declaration, as
+  `compile-x86`'s is, then placeless, rowed, and the emitted functions), so
+  a program that links a validator's eight functions fits the kernel's
+  per-declaration fuel.
+- The span functions live in a module that imports `runtime` and the
+  program in one that imports `runtime_program`: a generated `Compile`
+  instance names its class unqualified, and a module that imports both
+  generators has two `runtime`s.
 
 ## 4. Three nodes a real program needs
 

@@ -407,7 +407,7 @@ impl MParts {
     }
 
     fn lf(&self) -> Level {
-        Level::join(self.lp.clone(), self.lw.clone())
+        Level::max(self.lp.clone(), self.lw.clone())
     }
 
     /// `out`'s type, `Σ(s : S). Π(p : P s). ⟦D⟧(o(j, s, p))` (the kernel's
@@ -911,7 +911,7 @@ impl Codata<'_> {
                 &spine,
                 spine.root(),
                 motive,
-                &Level::join(lp.clone(), li.clone()),
+                &Level::max(lp.clone(), li.clone()),
                 var(0),
                 1,
                 &mut |bcx2, i, d, value| {
@@ -1532,7 +1532,7 @@ impl Codata<'_> {
         let target = |d: u32, pos: Rc<Term>| {
             self.child_sum(&p, &unit, d, p.next_tm(d, Rc::new(label.shift_local(d)), pos))
         };
-        let tlvl = Level::join(Level::Zero, p.lw.clone());
+        let tlvl = Level::max(Level::Zero, p.lw.clone());
         let kids = p.kids_lam(2, Rc::clone(&lab2), &comps, &tails, &target, &tlvl, &mut |r, d, y, pos| {
             // `d` is past Γ; the children are scoped in Γ.
             let tree = self.kid_at(&p, &children[r], d, &label, y, &comps, &tails, r);
@@ -1750,7 +1750,7 @@ impl Codata<'_> {
 
     /// `Π(p : P s). X(o) + ⟦D⟧(o)` over `s = Var(0)` at depth `k + 1`.
     fn step_kids_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Type::Pi {
             dom_level: p.lp.clone(),
             cod_level: kf,
@@ -1762,7 +1762,7 @@ impl Codata<'_> {
     /// `⟨label, kids⟩` at the step type `Σ(s : S). Π(p : P s). X(o) + ⟦D⟧(o)`,
     /// at depth `k`, in the kernel's `m_step_ty` levels.
     fn step_pair(&self, p: &MParts, k: u32, label: Rc<Term>, carrier: &Carrier, kids: Term) -> Term {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Term::Pair {
             fst_level: p.ls.clone(),
             snd_level: kf,
@@ -1775,7 +1775,7 @@ impl Codata<'_> {
 
     /// The step type at depth `k`.
     fn step_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Type::Sigma {
             fst_level: p.ls.clone(),
             snd_level: kf,
@@ -1865,7 +1865,7 @@ impl Codata<'_> {
         // A child's type at depth `k` and its level: `⟦D⟧(o)` under `out`,
         // `C + ⟦D⟧` over a free carrier (unindexed).
         let kid_level = match over {
-            Some(c) => Level::join(c.level.clone(), p.lw.clone()),
+            Some(c) => Level::max(c.level.clone(), p.lw.clone()),
             None => p.lw.clone(),
         };
         let kid_ty = |k: u32, label: Rc<Term>, pos: Rc<Term>| match over {
@@ -1878,7 +1878,7 @@ impl Codata<'_> {
             dom: Rc::new(p.pos_at(k, Rc::clone(&label))),
             cod: Rc::new(kid_ty(k + 1, Rc::new(label.shift_local(1)), var(0))),
         };
-        let lf = Level::join(p.lp.clone(), kid_level.clone());
+        let lf = Level::max(p.lp.clone(), kid_level.clone());
         let o_level = match over {
             Some(c) => Self::node_level(p, c),
             None => p.lw.clone(),
@@ -1911,7 +1911,7 @@ impl Codata<'_> {
             });
         }
         let spine = self.spine(&p.shape_inline(self, span)?, &p.ls, n, span)?;
-        let lq = Level::join(lf.clone(), mlvl.clone());
+        let lq = Level::max(lf.clone(), mlvl.clone());
         // Q(v), over (Γ, o, v) at depth `k` = 2.
         let q = |k: u32, v: Rc<Term>| Type::Pi {
             dom_level: lf.clone(),
@@ -2276,8 +2276,8 @@ impl Codata<'_> {
         }
         let carrier = levels.last().expect("level 0").clone();
         let step_ty = self.step_ty(&p, 0, &carrier);
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
-        let step_level = Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf.clone()));
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
+        let step_level = Level::max(p.ls.clone(), Level::max(p.lp.clone(), kf.clone()));
         let free = match free_parts {
             Some((ty, friends)) => {
                 Some(Rc::new(UpTo(self).free_arms(cx, &ind, &p, &carrier, ty, friends, &decl.name, &step_level)?))
@@ -2330,7 +2330,7 @@ impl Codata<'_> {
     /// The level of a node `F(C) = Σ(s : S). Π(p : P s). C + ⟦D⟧` over the
     /// carrier `C`.
     fn node_level(p: &MParts, carrier: &Carrier) -> Level {
-        Level::join(p.ls.clone(), Level::join(p.lp.clone(), Level::join(carrier.level.clone(), p.lw.clone())))
+        Level::max(p.ls.clone(), Level::max(p.lp.clone(), Level::max(carrier.level.clone(), p.lw.clone())))
     }
 
     /// The body's expected type and level under `site`.
@@ -2496,7 +2496,7 @@ impl Codata<'_> {
     fn corec_child_index(&self, cx: &Cx, p: &MParts, carrier: &Carrier, d: u32, expected: &Type, span: Span) -> Option<Rc<Term>> {
         if !p.indexed {
             let want = self.child_sum(p, carrier, d, triv());
-            let lvl = Level::join(carrier.level.clone(), p.lw.clone());
+            let lvl = Level::max(carrier.level.clone(), p.lw.clone());
             let ok = *expected == want || {
                 let head = self.whnf(cx, expected, span).ok();
                 matches!(head, Some(Type::Sum { .. })) && self.conv_types(cx, expected, &want, &lvl)
@@ -2673,7 +2673,7 @@ impl Codata<'_> {
                     return err(nested_guard_msg(&site.selfref.written_name), at);
                 }
                 let d_here = p.d_of(1, Rc::clone(&idx));
-                let fn_level = Level::join(dom_level.clone(), p.lw.clone());
+                let fn_level = Level::max(dom_level.clone(), p.lw.clone());
                 let fn_ty = Type::Pi {
                     dom_level: dom_level.clone(),
                     cod_level: p.lw.clone(),
@@ -2687,7 +2687,7 @@ impl Codata<'_> {
                 };
                 return Ok(Some(Term::Lam {
                     dom_level,
-                    cod_level: Level::join(carrier.level.clone(), p.lw.clone()),
+                    cod_level: Level::max(carrier.level.clone(), p.lw.clone()),
                     dom,
                     body: Rc::new(Term::Inr {
                         lhs_level: carrier.level.clone(),
@@ -2763,7 +2763,7 @@ impl Codata<'_> {
     /// child an existing tree.
     fn observe_node(&self, p: &MParts, k: u32, carrier: &Carrier, step_level: &Level, t: Rc<Term>) -> Term {
         let o_ty = Rc::new(p.out_ty(k));
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         let lab = Rc::new(p.out_fst(k + 1, var(0)));
         let child_idx = p.next_tm(k + 2, Rc::new(lab.shift_local(1)), var(0));
         let kids = Term::Lam {
@@ -2806,7 +2806,7 @@ impl Codata<'_> {
     /// ⟦D⟧` (which brings them back to [`Self::corec_check`]).
     #[allow(clippy::too_many_arguments)]
     fn corec_node(&self, cx: &Cx, p: &MParts, ind: &Inductive, carrier: &Carrier, i: usize, args: &[&Expr], span: Span) -> R<Term> {
-        let tlvl = Level::join(carrier.level.clone(), p.lw.clone());
+        let tlvl = Level::max(carrier.level.clone(), p.lw.clone());
         let child_at = |d: u32, label: Rc<Term>, pos: Rc<Term>| {
             self.child_sum(p, carrier, d, p.next_tm(d, label, pos))
         };
@@ -2905,7 +2905,7 @@ impl Codata<'_> {
         let case = Term::Case {
             lhs_level: cj.level.clone(),
             rhs_level: lw.clone(),
-            motive_level: Level::join(up.level.clone(), lw.clone()),
+            motive_level: Level::max(up.level.clone(), lw.clone()),
             lhs: Rc::new(cj.at(b + 1, &o1)),
             rhs: Rc::new(q.d_of(b + 1, Rc::clone(&o1))),
             motive: Rc::new(self.child_sum(q, &up, b + 2, Rc::clone(&o2))),
@@ -2927,7 +2927,7 @@ impl Codata<'_> {
         };
         let kids = Term::Lam {
             dom_level: q.lp.clone(),
-            cod_level: Level::join(up.level.clone(), lw),
+            cod_level: Level::max(up.level.clone(), lw),
             dom: Rc::new(q.pos_at(b, Rc::clone(&label))),
             body: Rc::new(case),
         };

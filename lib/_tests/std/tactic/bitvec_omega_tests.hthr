@@ -336,6 +336,13 @@ theorem range_not_below_top(x: BitVec(8)): x.toNat() < 255 { omega }
 // A closed word is its value.
 theorem closed_word(k: Nat): BitVec::ofNat(5, n := 64).toNat() + k = k + 5 { omega }
 
+// A conjunction in scope is read side by side (`m.left`, `m.right`), and a
+// side restated over a word the walk takes apart is rebound under a fresh
+// name: a projection path is no binder (it once wrote `(m.left: …) →`).
+theorem conjunct_fact_restated(lo, hi: BitVec(64), h: lo.toNat() < hi.toNat(), gap: (hi - lo).toNat() + lo.toNat() = hi.toNat(),
+    m: And<(lo + ((hi - lo) >> 1)).toNat() = lo.toNat() + ((hi - lo) >> 1).toNat(), (lo + ((hi - lo) >> 1)).toNat() < hi.toNat()>):
+    (hi - ((lo + ((hi - lo) >> 1)) + 1)).toNat() < (hi - lo).toNat() { bv_omega }
+
 // ---- A word widened by zeros has the narrower word's value ----
 
 // A byte read as a `u64` and compared, as a program spells its tests.

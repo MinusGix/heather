@@ -616,6 +616,21 @@ fn deny_axioms_is_a_check_policy() {
     assert!(!err.contains("axioms::clean"), "{err}");
 }
 
+/// An axiom a tactic reaches by resolving a name *string* is a dependency
+/// like a written one: the edges are read off the checked proof term
+/// (issues/axiom-provenance-misses-tactic-references.md). Before that,
+/// `absurd`'s `1 = 0` here checked under `--deny-axioms`.
+#[test]
+fn deny_axioms_sees_an_axiom_a_tactic_names() {
+    let std_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib/std");
+    let out = heather(&["check", "--deny-axioms", "-L", std_dir, "axioms_by_name.hthr"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("`axioms_by_name::through_tactic` depends on forbidden axiom axioms_by_name::stuck_is_zero"), "{err}");
+    assert!(err.contains("`axioms_by_name::absurd` depends on forbidden axiom axioms_by_name::stuck_is_zero"), "{err}");
+    assert!(!err.contains("axioms_by_name::clean"), "{err}");
+}
+
 /// After an edit, the module's unchanged declarations are reproduced from
 /// its previous image and the `(cache)` line says how many
 /// (`docs/infrastructure/declaration-slice-replay-design.md`).

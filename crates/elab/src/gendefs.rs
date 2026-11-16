@@ -325,11 +325,8 @@ pub(crate) struct TyCodeFn {
 /// at their own depths and are never confused, because they are matched by
 /// position in the template and live in different sorts of slot.
 struct Holes<'a> {
-    /// The registry, for [`Holes::see_through`], and the scratch anchor the
-    /// references inside the subject are numbered at
-    /// ([`GeneratedDefs::unspell_here_in`]). The anchor is carried rather than
-    /// assumed because a reference read at the wrong one names a *different*
-    /// definition rather than none.
+    /// The registry, for [`Holes::see_through`], and the scratch width the
+    /// subject is scoped under.
     el: &'a Elaborator,
     g: u32,
     /// The subject's context base and length, for [`strengthened_ty`]: a hole
@@ -425,11 +422,11 @@ impl Holes<'_> {
     /// because a quote can be a multi-megabyte literal while a reference
     /// unspells to the copy the walk was already comparing.
     fn see_through(&self, ty: &Type) -> Option<Type> {
-        GeneratedDefs(self.el).unspell_here_in(ty, self.g)
+        self.el.unspell_here(ty)
     }
 
     /// [`Self::see_through`] at a **code**: the inline copy a code reference
-    /// names, quoted again. [`GeneratedDefs::unspell_here_in`] reads the `El`'s
+    /// names, quoted again. [`Elaborator::unspell_here`] reads the `El`'s
     /// code and never its level, so the level here is scaffolding for that
     /// call and not a claim about the code's sort.
     fn see_through_code(&self, t: &Term) -> Option<Term> {
@@ -1463,11 +1460,6 @@ impl GeneratedDefsMut<'_> {
         let Ok((d_ty, l)) = self.lower_instance(&cx, ind, &[], &[], span) else {
             return;
         };
-        // The Ψ length `d_ty` counts its globals from, and so do the guard
-        // copies cut from it below, though they are committed after more
-        // definitions land: recorded with them for relocation
-        // (`docs/infrastructure/module-interface-cutoff-design.md` §3).
-        let at = self.lowering_scope();
         // The recognizer's own precondition, checked here rather than assumed:
         // `respell_ty` finds this code by running `tag_of` over a type and
         // looking the answer up, so a lowering `tag_of` does not route back to
@@ -1499,7 +1491,7 @@ impl GeneratedDefsMut<'_> {
             // `Wf(El (D#shape^δ); app(D#arity^δ; x))` and one δ of this code
             // then exposes exactly that, where the literal body made the
             // kernel walk the inline shape against the reference.
-            self.register_wf_slots(ind, &d_ty, &l, at, span);
+            self.register_wf_slots(ind, &d_ty, &l, span);
             let named = match &d_ty {
                 Type::Wf { level, shape, arity } => GeneratedDefs(self)
                     .wf_slot_refs(shape, arity)
@@ -1514,7 +1506,7 @@ impl GeneratedDefsMut<'_> {
                 .and_then(|t| crate::code::code_of(&t))
                 .unwrap_or_else(inline_body)
         } else {
-            match self.register_spine_codes(ind, &d_ty, &l, at, span) {
+            match self.register_spine_codes(ind, &d_ty, &l, span) {
                 Some(named) => named,
                 // One constructor (every record) has no spine to name, but
                 // its field types still do: the emission spelling, as a
@@ -1532,7 +1524,7 @@ impl GeneratedDefsMut<'_> {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            DeltasMut(self).semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone(), at);
+            DeltasMut(self).semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone());
         }
     }
 
@@ -1559,7 +1551,6 @@ impl GeneratedDefsMut<'_> {
         let Some(CodeFnAt { template, l, targs, ty, ty_level, body }) = GeneratedDefs(self).tycode_fn_at_profile(ind, &profile, span) else {
             return;
         };
-        let at = self.lowering_scope();
         if self
             .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
             .is_ok()
@@ -1572,7 +1563,6 @@ impl GeneratedDefsMut<'_> {
                     param_levels: targs.iter().map(|(_, l)| l.clone()).collect(),
                     level: l,
                 },
-                at,
             );
         }
     }
@@ -1824,7 +1814,6 @@ impl GeneratedDefsMut<'_> {
         ind: &Rc<Inductive>,
         d_ty: &Type,
         l: &Level,
-        at: u32,
         span: Span,
     ) -> Option<Term> {
         let n = ind.ctors.len();
@@ -1884,7 +1873,6 @@ impl GeneratedDefsMut<'_> {
                 ctors: spine.ctors,
                 nodes: spine.nodes,
             },
-            at,
         );
         Some(whole)
     }
@@ -2490,7 +2478,7 @@ impl GeneratedDefsMut<'_> {
     /// Best-effort like every other piece here, and **all-or-nothing**: the
     /// guard entry is written only when both definitions passed the gate, so a
     /// half-registered pair can never hand out half a spelling.
-    fn register_wf_slots(&mut self, ind: &Rc<Inductive>, d_ty: &Type, l: &Level, at: u32, span: Span) {
+    fn register_wf_slots(&mut self, ind: &Rc<Inductive>, d_ty: &Type, l: &Level, span: Span) {
         let Type::Wf { shape, arity, .. } = d_ty else {
             // Non-recursive: a sum-of-Σs has no slots to name. `TyCode` is the
             // whole story there.
@@ -2521,7 +2509,7 @@ impl GeneratedDefsMut<'_> {
         // moved no miss and cost evaluator steps (the δs are paid wherever
         // the arity is *computed*, not only where it is compared).
         // Measured on `lib/certgen/ir_v1.hthr` + `lib/certgen/certgen_code.hthr`, 2026-10-03.
-        let scode = match self.register_spine_codes(ind, d_ty, l, at, span) {
+        let scode = match self.register_spine_codes(ind, d_ty, l, span) {
             Some(named) => named,
             None => {
                 // A spine that declined part way pushed its first payloads.
@@ -2579,7 +2567,6 @@ impl GeneratedDefsMut<'_> {
                     arity: Rc::clone(arity),
                     level: l.clone(),
                 },
-                at,
             );
         }
     }
@@ -2650,7 +2637,7 @@ impl GeneratedDefs<'_> {
         let ty = Type::clone(&entry.stmt);
         let level = match &ty {
             Type::Ty(level) => Level::succ(level.clone()),
-            Type::Pi { dom_level, cod_level, .. } => Level::join(dom_level.clone(), cod_level.clone()),
+            Type::Pi { dom_level, cod_level, .. } => Level::max(dom_level.clone(), cod_level.clone()),
             _ => return None,
         };
         Some((head, ty, level))
@@ -2991,13 +2978,6 @@ impl GeneratedDefs<'_> {
     /// (`docs/elaborator/telescoped-record-projections-design.md` §2.1).
     pub(crate) fn ty_code_fn_entry(&self, tag: u32) -> Option<TyCodeFn> {
         self.types.gdefs().ty_code_fn(&tag).cloned()
-    }
-
-    /// The Ψ length a reference minted `g` scratch globals deep counts from —
-    /// [`Elaborator::gen_ref`]'s own numbering, goal arena and `meta fn` padding
-    /// included.
-    fn gen_ref_len(&self, g: u32) -> u32 {
-        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset() + g
     }
 
     /// `body[ā]` for an application `u^δ ā` of the registered definition
@@ -3645,7 +3625,7 @@ impl GeneratedDefs<'_> {
     /// every reference inside a case tree's annotations back to the registry's
     /// inline copy. `None` when nothing unspelled; a term that is not a case
     /// tree is left as it is (it carried no references in the first place).
-    fn unspell_arity_deep(&self, len_at: u32, t: &Term) -> Option<Term> {
+    fn unspell_arity_deep(&self, t: &Term) -> Option<Term> {
         match t {
             Term::Case {
                 lhs_level,
@@ -3658,10 +3638,10 @@ impl GeneratedDefs<'_> {
                 case_r,
                 scrut,
             } => {
-                let nl = self.unspell_ty_deep(len_at, lhs);
-                let nr = self.unspell_ty_deep(len_at, rhs);
-                let cl = self.unspell_arity_deep(len_at, case_l);
-                let cr = self.unspell_arity_deep(len_at, case_r);
+                let nl = self.unspell_ty_deep(lhs);
+                let nr = self.unspell_ty_deep(rhs);
+                let cl = self.unspell_arity_deep(case_l);
+                let cr = self.unspell_arity_deep(case_r);
                 if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
                     return None;
                 }
@@ -3678,7 +3658,7 @@ impl GeneratedDefs<'_> {
                 })
             }
             Term::Succ(p) => self
-                .unspell_arity_deep(len_at, p)
+                .unspell_arity_deep(p)
                 .map(|np| Term::Succ(Rc::new(np))),
             _ => None,
         }
@@ -3686,10 +3666,11 @@ impl GeneratedDefs<'_> {
 }
 
 impl Elaborator {
-    /// `El (D#tycode^δ)` back to the registry's inline `⟦D⟧`, at the head only
-    /// and in the **current** Ψ world (goal and meta padding included, which is
-    /// what [`Self::gen_def_of`] knows and [`GeneratedDefs::unspell_ty_deep`]'s explicit
-    /// anchor deliberately does not assume).
+    /// `El (D#tycode^δ)` or `El (app(D#tycode_fn^δ; ā))` back to the
+    /// registry's inline copy, at the head only. A generated definition is
+    /// referenced as a constant, so this reads the same in every world: under
+    /// the goals, under a `meta fn`'s binders, and in an application's
+    /// scratch world.
     ///
     /// This is the elaborator's `whnf` of a reference
     /// (`docs/inductives/wf-shape-code-design.md` §3.3): δ+decode gives a type that is
@@ -3698,38 +3679,31 @@ impl Elaborator {
     /// use-site guard is written against. Closed by construction, so nothing
     /// is shifted.
     pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
-        GeneratedDefs(self).unspell_here_in(ty, 0)
+        GeneratedDefs(self).unspell_ref(ty)
     }
 }
 
 impl GeneratedDefs<'_> {
-    /// [`Elaborator::unspell_here`] for a type living in an application's **scratch
-    /// world** ([`Self::respell_ty_deep_in`]'s `scratch`), where `g`
-    /// metavariables sit below the committed globals. The recognizer runs
-    /// there too ([`Holes::see_through`]), and reading a reference at the
-    /// wrong anchor would name a *different* definition rather than none, so
-    /// the anchor is carried instead of assumed. At `g = 0` this is
-    /// [`Elaborator::gen_def_of`]'s own numbering, unchanged.
-    pub(crate) fn unspell_here_in(&self, ty: &Type, g: u32) -> Option<Type> {
+    /// [`Elaborator::unspell_here`].
+    fn unspell_ref(&self, ty: &Type) -> Option<Type> {
         let gdefs = self.types.gdefs();
         if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
-        let len = self.gen_ref_len(g);
         if let Term::GlobalTm { var, .. } = &**tm {
-            return self.inline_of_code_key(self.code_key_at(len, *var)?);
+            return self.inline_of_code_key(self.gen_def_of(*var)?);
         }
         // `El (app(D#tycode_fn^δ; ā))`, the applied spelling
         // (`docs/inductives/per-instantiation-type-codes-design.md` §4.2). Without this
         // arm a structural reader gets the kernel's lazy *decode* of the
         // instantiation instead of the registry's own copy, and every
         // use-site guard declines silently.
-        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of_at(len, tm)? else {
+        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of(tm)? else {
             return None;
         };
         let entry = self.ty_code_fn_entry(tag)?;
-        let args = self.inlined_arguments(&entry, &args, |el| self.unspell_here_in(el, g))?;
+        let args = self.inlined_arguments(&entry, &args, |el| self.unspell_ref(el))?;
         Some(instance_of_template(&entry, &args))
     }
 
@@ -3766,32 +3740,6 @@ impl GeneratedDefs<'_> {
                 })
                 .collect(),
         )
-    }
-
-    /// Which definition a `GlobalVar` denotes in a type whose globals count
-    /// from `len_at` — [`Self::unspell_ty_deep`]'s explicit anchor, which
-    /// deliberately does not go through [`Elaborator::gen_def_of`]'s padding.
-    fn code_key_at(&self, len_at: u32, var: GlobalVar) -> Option<GenDef> {
-        let abs = var.position(len_at as usize)? as u32;
-        self.types.gdefs().key_for_abs(&abs).copied()
-    }
-
-    /// [`Elaborator::gen_app_of`] at [`Self::unspell_ty_deep`]'s anchor.
-    fn gen_app_of_at(&self, len_at: u32, t: &Term) -> Option<(GenDef, Vec<Rc<Term>>)> {
-        let mut args = Vec::new();
-        let mut cur = t;
-        while let Some((fun, arg)) = crate::spelling::app_of(cur) {
-            args.push(Rc::clone(arg));
-            cur = fun;
-        }
-        if args.is_empty() {
-            return None;
-        }
-        args.reverse();
-        let Term::GlobalTm { var, .. } = cur else {
-            return None;
-        };
-        Some((self.code_key_at(len_at, *var)?, args))
     }
 
     /// The registry's inline copy behind a code key that names a type
@@ -3898,28 +3846,6 @@ impl GeneratedDefs<'_> {
             .map(|slots| (*slots.shape).clone())
     }
 
-    /// [`Self::unspell_ty_deep`] anchored at the **current** world — goal and
-    /// meta padding included, as [`Elaborator::gen_def_of`] counts it — plus
-    /// `scratch` metavariables.
-    ///
-    /// The spelling a structural reader that is *not* the `whnf` choke point
-    /// needs: [`crate::unification::unify_ty`] is a syntactic congruence, so a
-    /// reference standing where it expects a former hides the very structure
-    /// an implicit is solved from (`docs/inductives/per-instantiation-type-codes-design.md`
-    /// §4.2, amended 2026-09-10). One walk per unification attempt, `None`
-    /// when nothing unspelled.
-    pub(crate) fn unspell_deep_now(&self, ty: &Type, scratch: u32) -> Option<Type> {
-        let gdefs = self.types.gdefs();
-        if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
-            return None;
-        }
-        let len_at = self.psi.bindings.len() as u32
-            + self.global_padding()
-            + self.meta_offset()
-            + scratch;
-        self.unspell_ty_deep(len_at, ty)
-    }
-
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
     /// boundary (`Elaborator::fn_type_code`): rebuild `ty` with every
     /// `El (D#tycode^δ)` reference replaced by the registry's inline lowering.
@@ -3935,20 +3861,20 @@ impl GeneratedDefs<'_> {
     /// the reference yields, so the analyzer sees the very type it saw
     /// before the respell existed. Closed types, so no depth bookkeeping.
     ///
-    /// `len_at` anchors the reference resolution: the Ψ length the type's
-    /// `GlobalVar`s count from — the *current* length for a type rescoped by
-    /// `shift_global` (`fn_type_code`), the binding's own `abs` for a raw
-    /// prefix-scoped statement (`sig_peel` over `global_body`). Goal and
-    /// meta padding never applies to either, which is why this does not go
-    /// through [`Elaborator::gen_def_of`].
-    pub(crate) fn unspell_ty_deep(&self, len_at: u32, ty: &Type) -> Option<Type> {
+    /// Also the spelling a structural reader that is *not* the `whnf` choke
+    /// point needs: [`crate::unification::unify_ty`] is a syntactic
+    /// congruence, so a reference standing where it expects a former hides
+    /// the very structure an implicit is solved from
+    /// (`docs/inductives/per-instantiation-type-codes-design.md` §4.2, amended
+    /// 2026-09-10). One walk per unification attempt.
+    pub(crate) fn unspell_ty_deep(&self, ty: &Type) -> Option<Type> {
         let gdefs = self.types.gdefs();
         if !gdefs.has_ty_codes() && !gdefs.has_ty_code_fns() {
             return None;
         }
         if let Type::El { tm, .. } = ty
             && let Term::GlobalTm { var, .. } = &**tm
-            && let Some(key) = self.code_key_at(len_at, *var)
+            && let Some(key) = self.gen_def_of(*var)
             && let Some(inline) = self.inline_of_code_key(key)
         {
             return Some(inline);
@@ -3958,10 +3884,10 @@ impl GeneratedDefs<'_> {
         // inline instantiation, exactly as it hands it the inline `⟦D⟧` behind
         // a closed code.
         if let Type::El { tm, .. } = ty
-            && let Some((GenDef::TyCodeFn(tag), args)) = self.gen_app_of_at(len_at, tm)
+            && let Some((GenDef::TyCodeFn(tag), args)) = self.gen_app_of(tm)
             && let Some(entry) = self.ty_code_fn_entry(tag)
             && let Some(args) =
-                self.inlined_arguments(&entry, &args, |el| self.unspell_ty_deep(len_at, el))
+                self.inlined_arguments(&entry, &args, |el| self.unspell_ty_deep(el))
         {
             let inline = instance_of_template(&entry, &args);
             // An argument that is itself a type constructor — a partial
@@ -3975,9 +3901,9 @@ impl GeneratedDefs<'_> {
                     h = fun;
                 }
                 matches!(h, Term::GlobalTm { var, .. }
-                    if matches!(self.code_key_at(len_at, *var), Some(GenDef::TyCodeFn(_))))
+                    if matches!(self.gen_def_of(*var), Some(GenDef::TyCodeFn(_))))
             });
-            if constructor_arg && let Some(deeper) = self.unspell_ty_deep(len_at, &inline) {
+            if constructor_arg && let Some(deeper) = self.unspell_ty_deep(&inline) {
                 return Some(deeper);
             }
             return Some(inline);
@@ -3993,8 +3919,8 @@ impl GeneratedDefs<'_> {
                 dom,
                 cod,
             } => {
-                let ndom = self.unspell_ty_deep(len_at, dom);
-                let ncod = self.unspell_ty_deep(len_at, cod);
+                let ndom = self.unspell_ty_deep(dom);
+                let ncod = self.unspell_ty_deep(cod);
                 if ndom.is_none() && ncod.is_none() {
                     return None;
                 }
@@ -4011,8 +3937,8 @@ impl GeneratedDefs<'_> {
                 fst,
                 snd,
             } => {
-                let nfst = self.unspell_ty_deep(len_at, fst);
-                let nsnd = self.unspell_ty_deep(len_at, snd);
+                let nfst = self.unspell_ty_deep(fst);
+                let nsnd = self.unspell_ty_deep(snd);
                 if nfst.is_none() && nsnd.is_none() {
                     return None;
                 }
@@ -4029,8 +3955,8 @@ impl GeneratedDefs<'_> {
                 lhs,
                 rhs,
             } => {
-                let nl = self.unspell_ty_deep(len_at, lhs);
-                let nr = self.unspell_ty_deep(len_at, rhs);
+                let nl = self.unspell_ty_deep(lhs);
+                let nr = self.unspell_ty_deep(rhs);
                 if nl.is_none() && nr.is_none() {
                     return None;
                 }
@@ -4042,7 +3968,7 @@ impl GeneratedDefs<'_> {
                 })
             }
             Type::Vec { level, elem, len } => {
-                let ne = self.unspell_ty_deep(len_at, elem)?;
+                let ne = self.unspell_ty_deep(elem)?;
                 Some(Type::Vec {
                     level: level.clone(),
                     elem: Rc::new(ne),
@@ -4054,8 +3980,8 @@ impl GeneratedDefs<'_> {
                 shape,
                 arity,
             } => {
-                let ns = self.unspell_ty_deep(len_at, shape);
-                let na = self.unspell_arity_deep(len_at, arity);
+                let ns = self.unspell_ty_deep(shape);
+                let na = self.unspell_arity_deep(arity);
                 if ns.is_none() && na.is_none() {
                     return None;
                 }
@@ -4071,7 +3997,7 @@ impl GeneratedDefs<'_> {
                 lhs,
                 rhs,
             } => {
-                let nt = self.unspell_ty_deep(len_at, ty)?;
+                let nt = self.unspell_ty_deep(ty)?;
                 Some(Type::Id {
                     level: level.clone(),
                     ty: Rc::new(nt),
@@ -4085,7 +4011,7 @@ impl GeneratedDefs<'_> {
                 lhs,
                 rhs,
             } => {
-                let nt = self.unspell_ty_deep(len_at, ty)?;
+                let nt = self.unspell_ty_deep(ty)?;
                 Some(Type::SEq {
                     level: level.clone(),
                     ty: Rc::new(nt),
@@ -4305,14 +4231,16 @@ impl GeneratedDefs<'_> {
 }
 
 impl Elaborator {
-    /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,
-    /// a `GlobalVar` occurring in a term denotes. This is the whole of the
+    /// The inverse of [`Self::gen_ref`]: which definition, if any, a
+    /// `GlobalVar` occurring in a term denotes. This is the whole of the
     /// recognizers' key — a reader asks "is this global *the* `D#fam`", not
-    /// "does it have its shape".
+    /// "does it have its shape". A generated definition is committed, so it
+    /// is referenced as a constant in every world, and a variable (a goal, a
+    /// metavariable, a `meta fn` binder) names none.
     pub(crate) fn gen_def_of(&self, var: GlobalVar) -> Option<GenDef> {
-        // Fully checked: a `GlobalVar` reaching here can be anything the term
-        // it came out of contains, including one that is out of scope.
-        let abs = var.position(self.lowering_scope() as usize)? as u32;
+        let heather_kernel::term::GlobalRef::Const(abs) = var.view() else {
+            return None;
+        };
         self.types.gdefs().key_for_abs(&abs).copied()
     }
 }

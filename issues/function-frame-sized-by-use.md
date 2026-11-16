@@ -1,6 +1,6 @@
 ---
 title: Size a compiled function's frame by what it uses
-status: open
+status: closed
 labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes,nh-library]
@@ -21,3 +21,16 @@ The cost is in the contract and not in the instructions: the stack an export sta
 ## Done when
 
 A leaf export that saves nothing states the eight bytes of its return address, and `scan_token`'s line is the sum of the frames on its deepest path.
+
+## Built (2026-11-16)
+
+A function's frame is `8 * (slots + saves)`: eight call slots where its body calls and none in a leaf, the saves directly above them (`Function::frame`, `call_slots`, `frame_size`, `function_ir_lower_calls.hthr`). The body's theorems are bound by the frame's top (`w`) in place of the one depth, and a call's guard is `Stack::CallFrame`.
+
+The contract's room is a table `rooms: Nat → Nat`, a parameter of every program theorem (`lower_program_roomed`, `lower_program_roomed_correct`, `_needs`, `_quiet_correct`; `compiled_returns*`, `compiler_correct*`, `Ending::returns_*` take it after the placement). The lowering checks each function against its row (`Function::roomy`: the frame fits, a call's 24 bytes below it, each callee's row below that, `StructuredRegion::Fits`), so any table it accepts is sound and the table is a choice, not a premise to trust. `program_rooms_by(functions, saves)` is the least table for a count of saves per function: its frame and the deepest callee's room with the call's 24 bytes. `program_room` (every function saving six) is the table `lower_program` and `lower_program_lent` keep, `program_room_planned` the planner's; `compile-x86` reads each function's saves off its placement, states the table as a literal (`{prefix}_rooms()`) and lowers under it.
+
+Figures (`STACK:` in `crates/linked/generated/exports.rs`): every leaf that saves nothing, `sha256_t2` among them, 136 → 0; `scan_accept` 0; `scan_token` 680 → 400; `List::scan_tokens` 816 → 520; `Sha256::compress` 1,088 → 656; `Sha256::update` 1,496 → 936; `copy_window` 272 → 88.
+
+Left, not this issue's:
+- An empty frame still opens and closes with `ADD RSP, 0` (four bytes each way). Emitting no instruction for it is a branch of `frame_allocated`/`frame_freed` and the body proof's first block.
+- The statement compiler's functions (`Prog::links`) are emitted under `index_rooms()` (`136 * Succ(g)`), the bound the statements' calls are stated with; following the planned table there is a change to `Target::roomy` and `native_compile_function.hthr`'s call steps.
+

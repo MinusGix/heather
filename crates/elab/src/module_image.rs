@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x24";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1e";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x25";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1f";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -2040,13 +2040,13 @@ fn get_designation(r: &mut Reader<'_>) -> Result<DesignationInfo, ModuleImageDec
 }
 
 fn put_derived(w: &mut Writer, info: &DerivedInst) {
-    w.string(&info.name); w.u32(info.abs); put_type(w, &info.ty); put_level(w, &info.level); w.u32(info.at);
+    w.string(&info.name); w.u32(info.abs); put_type(w, &info.ty); put_level(w, &info.level);
     w.option(info.head.as_ref(), |w, head| w.string(head));
 }
 
 fn get_derived(r: &mut Reader<'_>) -> Result<DerivedInst, ModuleImageDecodeError> {
     Ok(DerivedInst {
-        name: r.string()?, abs: r.u32()?, ty: get_type(r)?, level: get_level(r)?, at: r.u32()?,
+        name: r.string()?, abs: r.u32()?, ty: get_type(r)?, level: get_level(r)?,
         head: r.option(|r| r.string())?,
     })
 }
@@ -2132,12 +2132,12 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             }
         }
         DeltaEvent::GenDef { key, abs } => { w.byte(2); put_gen_def(w, *key); w.u32(*abs); }
-        DeltaEvent::GenTyCode { tag, inline, level, at } => {
-            w.byte(3); w.u32(*tag); put_type(w, inline); put_level(w, level); w.u32(*at);
+        DeltaEvent::GenTyCode { tag, inline, level } => {
+            w.byte(3); w.u32(*tag); put_type(w, inline); put_level(w, level);
         }
-        DeltaEvent::GenWfSlots { tag, slots, at } => {
+        DeltaEvent::GenWfSlots { tag, slots } => {
             w.byte(4); w.u32(*tag); put_type(w, &slots.shape); put_type(w, &slots.shape_decoded);
-            put_term(w, &slots.arity); put_level(w, &slots.level); w.u32(*at);
+            put_term(w, &slots.arity); put_level(w, &slots.level);
         }
         DeltaEvent::GenFamLevels { tag, level, index_level } => {
             w.byte(5); w.u32(*tag); put_level(w, level); put_level(w, index_level);
@@ -2178,15 +2178,14 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(15); w.string(module); w.string(name); w.option(slot.as_ref(), |w, slot| put_slot(w, *slot));
             put_meta(w, definition);
         }
-        DeltaEvent::GenTyCodeFn { tag, entry, at } => {
+        DeltaEvent::GenTyCodeFn { tag, entry } => {
             w.byte(17); w.u32(*tag); put_type(w, &entry.template); put_type(w, &entry.stmt);
-            w.vec(&entry.param_levels, put_level); put_level(w, &entry.level); w.u32(*at);
+            w.vec(&entry.param_levels, put_level); put_level(w, &entry.level);
         }
-        DeltaEvent::GenSpineCodes { tag, codes, at } => {
+        DeltaEvent::GenSpineCodes { tag, codes } => {
             w.byte(16); w.u32(*tag);
             w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
             w.vec(&codes.nodes, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
-            w.u32(*at);
         }
     }
 }
@@ -2199,11 +2198,11 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
             direct_dependencies: r.vec(Reader::string)?,
         },
         2 => DeltaEvent::GenDef { key: get_gen_def(r)?, abs: r.u32()? },
-        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: type_rc(r)?, level: get_level(r)?, at: r.u32()? },
+        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: type_rc(r)?, level: get_level(r)? },
         4 => DeltaEvent::GenWfSlots { tag: r.u32()?, slots: WfSlots {
             shape: type_rc(r)?, shape_decoded: type_rc(r)?,
             arity: term_rc(r)?, level: get_level(r)?,
-        }, at: r.u32()? },
+        } },
         5 => DeltaEvent::GenFamLevels { tag: r.u32()?, level: get_level(r)?, index_level: get_level(r)? },
         6 => DeltaEvent::Inductive { module: r.string()?, info: Rc::new(get_inductive(r)?) },
         7 => DeltaEvent::Class { key: r.string()?, info: get_class(r)? },
@@ -2238,11 +2237,11 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         17 => DeltaEvent::GenTyCodeFn { tag: r.u32()?, entry: TyCodeFn {
             template: type_rc(r)?, stmt: type_rc(r)?,
             param_levels: r.vec(get_level)?, level: get_level(r)?,
-        }, at: r.u32()? },
+        } },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
             ctors: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
             nodes: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
-        }, at: r.u32()? },
+        } },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
 }

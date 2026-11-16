@@ -37,7 +37,9 @@ pub(super) struct Compiled {
     /// shape lists them.
     pub entries: Vec<usize>,
     /// The stack the exported function's theorem asks for below its return
-    /// address (`stack_room`: 136 bytes a level of calls), and each other
+    /// address (its row of the room table, `program_rooms_by`: its frame,
+    /// sized by what it saves and whether it calls, and the deepest
+    /// callee's room with a call's 24 bytes below it), and each other
     /// exported function's, as `entries` lists them.
     pub room: u64,
     pub rooms: Vec<u64>,
@@ -50,7 +52,7 @@ const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower
 
 /// What a program that is lent buffers needs besides: that it stores into
 /// none, and the laws its buffers are lent under.
-const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state"];
+const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state", "function_ir_borrows"];
 
 /// And what one that stores into them needs: the run of a program over a
 /// file, and the ending the generator states it with.
@@ -77,6 +79,11 @@ pub(super) struct Shape {
     /// `{prefix}_evaluable` and `{prefix}_agrees`.
     pub agreement: String,
     pub answer: String,
+    /// For a program that is lent spans, the same over the slices
+    /// `s0, s1, …` the certificate's `_returns` is stated at
+    /// (`Prog::ComputesOn`, function_ir_borrows): each span its slice's
+    /// bytes and its length word the slice's length.
+    pub on: String,
     /// For a program that is lent spans (a `runtime fn` reading
     /// `List<BitVec(8)>` parameters): how many buffers each function takes,
     /// by function. The code's arguments are then each span's address and
@@ -142,6 +149,7 @@ impl Shape {
             definitions,
             agreement: agreement_text(prefix, program),
             answer: root.answer(&arguments(root.arity)),
+            on: String::new(),
             lent: None,
             marks: None,
             tables: None,
@@ -176,7 +184,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -193,6 +201,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
         let at_file: Vec<String> = parameters.iter().enumerate()
             .map(|(i, a)| if i < 2 * spans && i % 2 == 0 { format!("now.span({})", i / 2) } else { a.clone() }).collect();
         let answer = format!("{source}({})", at_file.join(", "));
+        let on = format!("{source}({})", on_slices(&parameters, spans, 0).join(", "));
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
         for name in LENT_IMPORTS { definitions.push_str(&format!("import {name};\n")); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
@@ -226,7 +235,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -256,6 +265,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
             .collect::<Vec<_>>().join(", ");
         let comma = if own.is_empty() { "" } else { ", " };
         let answer = format!("{over}(span{comma}{own})");
+        let on = format!("{over}({})", on_slices(&parameters, spans, 0).join(", "));
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
         for name in LENT_IMPORTS.iter().chain(WRITTEN_IMPORTS) { definitions.push_str(&format!("import {name};\n")); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
@@ -302,7 +312,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
     }
 }
 
@@ -598,7 +608,7 @@ fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imp
     let placed = format!("{probe}_opt_placed");
     fork.define(&placed, &format!("{imports}import {source};
 fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List<Nat> {{
-    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts()) {{
+    match function.emit_lent(Start, k, places, {prefix}_counts().len(), {prefix}_counts(), index_rooms()) {{
         None => [0],
         Some(_) => Cons(1, places.map(λ (place: Place) => place.number())),
     }}
@@ -929,9 +939,9 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     // lent buffers where it has them.
     let lent = program.lent.is_some();
     let emit = |prog: &str, k: usize, places: &str, names: u64| if lent {
-        format!("{stem}_fn{k}().emit_lent({prog}, {k}, {places}, {names}, {prefix}_counts())")
+        format!("{stem}_fn{k}().emit_lent({prog}, {k}, {places}, {names}, {prefix}_counts(), {prefix}_rooms())")
     } else {
-        format!("{stem}_fn{k}().emit({prog}, {k}, {places}, {names})")
+        format!("{stem}_fn{k}().emit({prog}, {k}, {places}, {names}, {prefix}_rooms())")
     };
     // Evaluated on a fork, which only defines: the certificate's statements
     // are the session's to check. A function at a time, each read from the
@@ -944,9 +954,6 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     for k in 0..m {
         plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {stem}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
     }
-    // How deep each function's calls go, which its room is stated by
-    // (`stack_room`), of the program lowered.
-    plans.push_str(&format!("fn {prefix}_depths() → List<Nat> {{ program_depths({stem}_program()) }}\n"));
     // The last `d` items' numbers, as `Prog::numbers` writes them.
     plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
@@ -957,13 +964,14 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     fork.define(&probe, &first);
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
-    let depths = read(&mut fork, &probe, "depths")?;
-    if depths.len() != m { return Err("the program's depths did not read back".into()); }
-    let room = |function: usize| 136 * (depths[function] + 1);
     let mut placement = Vec::new();
+    // What each function's placement asks it to save (`placement_saves`),
+    // which its frame is sized by.
+    let mut saves = Vec::new();
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
         let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
+        saves.push(match planned.first() { Some(&n) if (17..32).contains(&n) => n - 17, _ => 0 });
         for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
@@ -976,6 +984,24 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
         }
     }
     let rest = |left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
+    // The room table the code is lowered under: each function's frame as
+    // its placement sizes it, and its callees' rooms below
+    // (`program_rooms_by`). The lowering checks it a function at a time
+    // (`Function::roomy`); the certificate states it as a literal.
+    let reading_rooms = format!("{probe}_rooms");
+    let numbers = |values: &[u64]| values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+    fork.define(&reading_rooms, &format!("{imports}import {probe};
+fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f)) }}
+", numbers(&saves)));
+    let table_rooms = read(&mut fork, &reading_rooms, "rooms_read")?;
+    if table_rooms.len() != m { return Err("the program's room table did not read back".into()); }
+    let room = |function: usize| table_rooms[function];
+    let rooms_definition = format!("
+// The stack each function asks for below its return address: its frame
+// and its callees' rooms below it (`program_rooms_by`), checked by the
+// lowering a function at a time (`Function::roomy`).
+fn {prefix}_rooms() → Nat → Nat {{ λ (f: Nat) => rooms_at([{}], f) }}
+", numbers(&table_rooms));
     // Function `k`'s code and what the placement has left after it, as the
     // certificate states them and as the next function's read starts from.
     let stated = |k: usize, items: &[(u64, String)], left: usize| {
@@ -992,7 +1018,9 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
     let mut items: Vec<(u64, String)> = Vec::new();
     // (items so far, places left, next label) after each function.
     let mut after: Vec<(usize, usize, u64)> = Vec::new();
-    let mut modules = vec![probe.clone()];
+    let rooms_module = format!("{probe}_table_rooms");
+    fork.define(&rooms_module, &format!("{imports}import {probe};\n{rooms_definition}"));
+    let mut modules = vec![probe.clone(), rooms_module];
     let uses = |modules: &[String]| modules.iter().map(|name| format!("import {name};\n")).collect::<String>();
     for k in 0..m {
         let (taken, left, names) = after.last().copied().unwrap_or((0, placement.len(), m as u64));
@@ -1022,7 +1050,7 @@ fn {prefix}_read_{k}() → List<Nat> {{
                 let counts = if lent { format!("{prefix}_counts()") } else { "[]".to_string() };
                 let why = format!("{probe}_refusal");
                 let text = format!("{imports}import function_ir_refusal;\n{}
-fn {prefix}_refused() → List<Nat> {{ {stem}_fn{k}().refusal_bytes({k}, {names}, {counts}) }}
+fn {prefix}_refused() → List<Nat> {{ {stem}_fn{k}().refusal_bytes({k}, {names}, {counts}, {prefix}_rooms()) }}
 fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
 ", uses(&modules));
                 let defined = fork.define_now(&why, &text).is_ok();
@@ -1115,7 +1143,7 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     text.push_str(&format!("
 // The placement the heuristic chose; the theorem holds for any.
 fn {prefix}_placement() → List<Place> {{ {} }}
-", rest(placement.len())));
+{rooms_definition}", rest(placement.len())));
     // The literal: `{prefix}_at_{c}` its first `c` items at each cut, and
     // each function's code the cut it ends at.
     text.push_str(&super::emission::code(prefix, &items, &cuts));
@@ -1128,13 +1156,13 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
 ", rest(left)));
         let earlier = if k == 0 { "Nil".to_string() } else { format!("{stem}_first_{}()", k - 1) };
         let (started, functions, next) = if lent {
-            (if k == 0 { format!("emit_functions_lent_start({prefix}_placement(), {m}, {prefix}_counts())") } else { format!("{prefix}_emitted_{}()", k - 1) },
-                format!("emit_functions_after_lent(Start, {stem}_first_{k}(), {prefix}_placement(), {m}, {prefix}_counts())"),
-                format!("emit_functions_lent_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_counts(), "))
+            (if k == 0 { format!("emit_functions_lent_start({prefix}_placement(), {m}, {prefix}_counts(), {prefix}_rooms())") } else { format!("{prefix}_emitted_{}()", k - 1) },
+                format!("emit_functions_after_lent(Start, {stem}_first_{k}(), {prefix}_placement(), {m}, {prefix}_counts(), {prefix}_rooms())"),
+                format!("emit_functions_lent_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_counts(), {prefix}_rooms(), "))
         } else {
-            (if k == 0 { format!("emit_functions_start({prefix}_placement(), {m})") } else { format!("{prefix}_emitted_{}()", k - 1) },
-                format!("emit_functions({stem}_first_{k}(), {prefix}_placement(), {m})"),
-                format!("emit_functions_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, "))
+            (if k == 0 { format!("emit_functions_start({prefix}_placement(), {m}, {prefix}_rooms())") } else { format!("{prefix}_emitted_{}()", k - 1) },
+                format!("emit_functions({stem}_first_{k}(), {prefix}_placement(), {m}, {prefix}_rooms())"),
+                format!("emit_functions_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_rooms(), "))
         };
         text.push_str(&format!("
 theorem {prefix}_emits_{k}(): EmitsAs({emitted}, {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
@@ -1148,6 +1176,7 @@ theorem {prefix}_emitted_{k}(): EmitsAs({functions}, {prefix}_code_{k}(), {prefi
 ", emitted = emit(&before.0, k, &before.1, before.2), prog = before.0, places = before.1, labels = before.2));
         before = (format!("{prefix}_code_{k}()"), format!("{prefix}_rest_{k}()"), names);
     }
+    let lent_counts = if lent { format!("{prefix}_counts()") } else { "[]".to_string() };
     text.push_str(&format!("
 // The code's layout, by a table of its labels checked a stretch at a time.
 {table}{layout}
@@ -1160,19 +1189,13 @@ theorem {prefix}_laid(): {prefix}_code().laid_out().IsTrue() {{
     {prefix}_table().laid_out_of({prefix}_code(), {length}, {prefix}_checked_{count}(), {prefix}_holes(), {prefix}_reads())
 }}
 
-// The program's calls respect the depth table its rooms are stated by
-// (`program_shallow`, function_ir_lower_calls).
-theorem {prefix}_shallow(): program_shallow({stem}_program()).IsTrue() {{ trivial }}
-
 theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
     {lowers}{prefix}_code(), {prefix}_rest_{last}(), {labels}, {prefix}_emitted_{last}(),
-        {prefix}_laid(), {prefix}_shallow())
+        {prefix}_laid())
 }}
 ", last = m - 1, labels = before.2, count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts),
-        lowered = if lent { format!("lower_program_lent({stem}_program(), {prefix}_placement(), {prefix}_counts())") }
-            else { format!("lower_program({stem}_program(), {prefix}_placement())") },
-        lowers = if lent { format!("lower_program_lent_emitted({stem}_program(), {prefix}_placement(), {prefix}_counts(), ") }
-            else { format!("lower_program_emitted({stem}_program(), {prefix}_placement(), ") }));
+        lowered = format!("lower_program_roomed({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms())"),
+        lowers = format!("lower_program_roomed_emitted({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms(), ")));
     text.push_str(&format!("
 {agreement}
 // The published bytes, a piece at a time from the last item: no one
@@ -1191,6 +1214,14 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
         ("_through", format!("{prefix}_program(), {stem}_program()"), format!("{prefix}_quiet(), {stem}_quiet()"))
     } else { ("", format!("{prefix}_program()"), format!("{prefix}_quiet()")) };
     let keeps = |function: usize| if program.optimize { format!(" {prefix}_cut_keeps({function}, refl),") } else { String::new() };
+    // A function of spans is stated over its slices: `s{k}` for span `k`,
+    // lent `Mut` where the program stores into it, and its words after.
+    let slices: Vec<String> = (0..program.lent.as_ref().map_or(0, |counts| counts[f] as usize)).map(|k| format!("s{k}")).collect();
+    let borrows = slices.iter().enumerate()
+        .map(|(k, s)| if program.marks.as_ref().is_some_and(|marks| marks[k]) { format!("Mut({s})") } else { format!("Shared({s})") })
+        .collect::<Vec<_>>().join(", ");
+    let words: Vec<String> = parameters.iter().skip(2 * slices.len()).cloned().collect();
+    let typed_words = if words.is_empty() { String::new() } else { format!("{}: BitVec(64)", words.join(", ")) };
     if program.marks.is_some() {
         // A writer: the file is any whose first span is `span`, and the
         // lending lets the marked buffers be written, so `loan` asks of
@@ -1214,19 +1245,39 @@ fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{
     Lending::writing({prefix}_counts(), addresses, now, {prefix}_marks())
 }}
 
-theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
+theorem {prefix}_returns_over<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
     {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, Cons(span, rest)), {f}, {room}, {list}, Cons(span, rest),
         Ending(word := {call}.value, buffers := Cons({call}.after, rest))) {{
     λ origin last => {returns}
 }}
-", room = room(f), returns = if program.tables.is_some() {
+
+// The same read as the function's signature (`Prog::ComputesInto`,
+// function_ir_borrows; docs/native/span-statements-design.md): over the
+// slices {slices}, the first lent to be written and the rest to be read,
+// each passed as its address and its length, the code returns the source
+// function's word and leaves the function's span in the first slice and
+// the others as they were, wherever the slices lie that the lending's laws
+// hold (`Machine::Lends`).
+theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{typed_words}):
+    {prefix}_code().ComputesInto(machine, {f}, {room}, [{borrows}], [{words}], {on}) {{
+    {prefix}_code().computes_on(machine, {f}, {room}, [{borrows}], [{words}], {prefix}_counts(), λ (b: Nat) => marked({prefix}_marks(), b), refl,
+        λ b held => held, Ending(word := {on}.value, buffers := [{left}]),
+        λ top loan => {prefix}_returns_over<M>(machine, top, [{ats}], s0.bytes, [{others}], loan, {passed}))
+}}
+", slices = slices.join(", "), borrows = borrows, words = words.join(", "),
+            comma_words = if words.is_empty() { "" } else { ", " }, on = program.on,
+            left = std::iter::once(format!("{}.after", program.on)).chain(slices[1..].iter().map(|s| format!("{s}.bytes"))).collect::<Vec<_>>().join(", "),
+            ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
+            others = slices[1..].iter().map(|s| format!("{s}.bytes")).collect::<Vec<_>>().join(", "),
+            passed = on_slices(&parameters, slices.len(), 1).join(", "),
+            room = room(f), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
-            format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
+            format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
         {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         } else {
-            format!("Ending::returns_written{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
+            format!("Ending::returns_written{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_within(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), loan, {f}, trivial,{keeps}
         {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         }));
@@ -1249,15 +1300,33 @@ theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVe
 // not reach.
 fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{ Lending::reading({prefix}_counts(), addresses, now) }}
 
-theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
+theorem {prefix}_returns_over<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
     {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, now), {f}, {room}, {list}, now,
         Ending(word := {call}, buffers := now)) {{
-    λ origin last => compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(),
+    λ origin last => compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_lending(addresses, now), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, top, loan, {f}, trivial,{keeps}
         {list}, trivial, now, {call}, {prefix}_agrees(now{comma}{arguments}))
 }}
-", room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
+
+// The same read as the function's signature (`Prog::ComputesOn`,
+// function_ir_borrows; docs/native/span-statements-design.md): over the
+// slices {slices}, lent to be read and each passed as its address and its
+// length, the code returns the source function's value at their bytes and
+// leaves them as they were, wherever they lie that the lending's laws hold
+// (`Machine::Lends`).
+theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{typed_words}):
+    {prefix}_code().ComputesOn(machine, {f}, {room}, [{borrows}], [{words}], {on}, [{left}]) {{
+    {prefix}_code().computes_on(machine, {f}, {room}, [{borrows}], [{words}], {prefix}_counts(), λ (_: Nat) => False, refl,
+        λ b held => absurd(held), Ending(word := {on}, buffers := [{left}]),
+        λ top loan => {prefix}_returns_over<M>(machine, top, [{ats}], [{left}], loan, {passed}))
+}}
+", slices = slices.join(", "), borrows = borrows, words = words.join(", "),
+            comma_words = if words.is_empty() { "" } else { ", " }, on = program.on,
+            left = slices.iter().map(|s| format!("{s}.bytes")).collect::<Vec<_>>().join(", "),
+            ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
+            passed = on_slices(&parameters, slices.len(), 1).join(", "),
+            room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
     } else {
         text.push_str(&format!("
 // The code computes the source function (`Prog::Computes`,
@@ -1268,7 +1337,7 @@ theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVe
 // leaves memory as it was but for stores into its own room below that
 // address (`Stack::Wrote`): on every machine, loaded anywhere.
 theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {room}, {list}, {call}) {{
-    compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+    compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
 
@@ -1293,11 +1362,11 @@ theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(
         let comma = if parameters.is_empty() { "" } else { ", " };
         let arguments = parameters.join(", ");
         let proved = if lent {
-            format!("compiled_returns_unlent{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
+            format!("compiled_returns_unlent{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
         {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial,{keeps} refl, {list}, trivial,
         {call}({arguments}), {symbol}_native_agrees({arguments}))", keeps = keeps(g))
         } else {
-            format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+            format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial, {list}, trivial, {call}({arguments}),
         {symbol}_native_agrees({arguments}))")
         };
@@ -1354,7 +1423,12 @@ fn binders(parameters: &[String]) -> String {
 /// where reading them off the callees would force each callee's code
 /// (issues/compile-x86-certificate-memory.md).
 fn evaluable_text(prefix: &str, functions: usize, arities: &str) -> String {
-    let (program, table) = (format!("{prefix}_program()"), format!("{prefix}_arities()"));
+    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities)
+}
+
+/// [`evaluable_text`] of any program, spelled as `program`.
+pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str) -> String {
+    let table = format!("{prefix}_arities()");
     let mut text = format!("// How many words each function takes, the last function's first.
 fn {prefix}_arities() → List<Nat> {{ {arities} }}
 
@@ -1538,6 +1612,19 @@ theorem {name}_agrees({typed}): {name}().eval({sources}, {list}) = {answer} {{
 }
 
 /// A function's arguments as the certificate names them.
+/// The code's words as a statement over slices spells them: span `k`'s
+/// address `s{k}.at` (or, where the source function takes the span, its
+/// bytes) and its length `s{k}.length()`, then the words as they are.
+/// `form` 0 is the source function's arguments, 1 the code's.
+fn on_slices(parameters: &[String], spans: usize, form: usize) -> Vec<String> {
+    parameters.iter().enumerate().map(|(i, a)| match (i < 2 * spans, i % 2, form) {
+        (true, 0, 0) => format!("s{}.bytes", i / 2),
+        (true, 0, _) => format!("s{}.at", i / 2),
+        (true, _, _) => format!("s{}.length()", i / 2),
+        _ => a.clone(),
+    }).collect()
+}
+
 fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).collect() }
 
 fn typed(arguments: &[String]) -> String {

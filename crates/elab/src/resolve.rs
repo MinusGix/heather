@@ -155,10 +155,6 @@ pub(crate) struct DerivedInst {
     /// conversion.
     pub ty: Type,
     pub level: Level,
-    /// The Ψ length when the entry was minted. A stored type's `GlobalVar`s
-    /// are relative to the Ψ that was, and Ψ only grows, so a lookup rebases
-    /// by the difference (the same bookkeeping the pending queue does).
-    pub at: u32,
     /// The goal carrier's head the search was ordered by, when it was read
     /// ([`Classes::solver_carrier_head`](crate::traits::Classes::solver_carrier_head)). A lookup at a goal with a
     /// *different* known head skips the conversion: two goals at different
@@ -1516,7 +1512,7 @@ impl Resolution<'_> {
                 body: Rc::new(tm),
             };
             ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(ty) };
-            level = Level::join(dom_level, level);
+            level = Level::max(dom_level, level);
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
         if pending.iter().any(|(t, _, h, open)| open.is_some() && h.as_deref() == Some(head.as_str()) && *t == ty) {
@@ -1646,7 +1642,6 @@ impl ResolutionMut<'_> {
             abs,
             ty: ty.clone(),
             level: lvl.clone(),
-            at: abs,
             head: head.map(str::to_string),
         };
         DeltasMut(self).semantic_commit_derived(derived);
@@ -1845,9 +1840,6 @@ impl ResolutionMut<'_> {
             abs,
             ty: goal.clone(),
             level: lvl.clone(),
-            // The Ψ length *before* the push above — the world the stored
-            // type is scoped in.
-            at: abs,
             head: prefer.map(str::to_string),
         };
         DeltasMut(self).semantic_commit_derived(derived);

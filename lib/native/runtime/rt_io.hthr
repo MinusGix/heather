@@ -166,18 +166,18 @@ fn Effect::push(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::En
 
 // A compiled function of the program that a computation hands a buffer and
 // words (docs/native/native-one-compiler-design.md §2.6): how many words it takes
-// after the buffer, and what it does with them, the bytes it leaves and the
-// word it answers. A function that only reads leaves the bytes as they
+// after the buffer, which of the program's functions it is, and what it
+// does with them, the bytes it leaves and the word it answers. A function that only reads leaves the bytes as they
 // were. The buffer's length is the function's to read off the bytes, as its
 // home's length word is (`stated_homes`), so it is not a word here.
-record Lent { arity: Nat, run: List<BitVec(8)> → List<BitVec(64)> → Mutated<List<BitVec(8)>, BitVec(64)> }
+record Lent { arity: Nat, entry: Nat, run: List<BitVec(8)> → List<BitVec(64)> → Mutated<List<BitVec(8)>, BitVec(64)> }
 
-// The program's functions that write, after its pure ones: function `f` of
-// the table is the program's `w.sigs.len() + f`. Past the table's end, a
-// function of no words that leaves the bytes (refused by the lowering).
+// Function `f` of the table, which a call names as the program's
+// `Lent::at(ls, f).entry`. Past the table's end, a function of no words
+// that leaves the bytes (refused by the lowering).
 fn Lent::at(ls: List<Lent>, f: Nat) → Lent {
     match ls {
-        Nil => Lent(0, λ own _ => Mutated(own, BitVec::zero())),
+        Nil => Lent(0, 0, λ own _ => Mutated(own, BitVec::zero())),
         Cons(l, rest) => match f { Zero => l, Succ(k) => Lent::at(rest, k) },
     }
 }

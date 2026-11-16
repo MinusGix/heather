@@ -501,8 +501,7 @@ impl NameLookup<'_> {
         // that unfolds: hand the analyzer the inline lowering the reference
         // decodes to, i.e. exactly the type it analyzed before the respell
         // existed.
-        let len = self.psi.bindings.len() as u32;
-        let ty = match GeneratedDefs(self).unspell_ty_deep(len, &ty) {
+        let ty = match GeneratedDefs(self).unspell_ty_deep(&ty) {
             Some(t) => t,
             None => ty,
         };

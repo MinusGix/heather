@@ -1246,12 +1246,38 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions)) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()) {
                 None => None,
                 Some(out) => Some(out.prog),
             },
         },
     }
+}
+
+// What `links` answers, a check at a time: each its own declaration, so a
+// certificate pays the kernel's per-declaration fuel for the largest piece
+// and not for all of them at once (`write-elf`'s `_deep`; evaluability a
+// function at a time, `program_scan_at_drop`).
+theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
+    evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions)).map(λ out => out.prog) = Some(q)):
+    p.links(functions, places, names) = Some(q)
+{
+    let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
+        Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
+            Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
+    match functions as λ fs => program_linkable(fs) = True →
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs)).map(λ out => out.prog) = Some(q) →
+        p.links(fs, places, names) = Some(q) {
+        Nil => λ _ e => e,
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) {
+                None => None, Some(out) => Some(out.prog) } }) = Some(q),
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) as λ r =>
+                r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
+                None => λ h => h,
+                Some(_) => λ h => h,
+            }(e)),
+    }(linkable, emitted)
 }
 
 // A source with procedures or functions: `main` naming its labels past

@@ -77,6 +77,24 @@ runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
 
 theorem count_down_runs(n, acc: BitVec(64)): program_eval(count_down::program, 0, [n, acc]) = count_down(n, acc) { count_down::agrees(n, acc) }
 
+// An `on` clause over a test nested under the one it reads: the body is
+// the inner `match` under the obligation's binding, applied, which the
+// reflector contracts as `View` does (it once answered "it is not a
+// `match`").
+runtime fn count_down_odd(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: 0 < n {
+        if odd: n.band(1) = 1 { count_down_odd(n - 1, acc + n) } else { acc }
+    } else {
+        acc
+    }
+    on ?dec1 := { let positive = h; bv_omega };
+}
+
+theorem count_down_odd_runs(n, acc: BitVec(64)): program_eval(count_down_odd::program, 0, [n, acc]) = count_down_odd(n, acc) {
+    count_down_odd::agrees(n, acc)
+}
+theorem count_down_odd_lit(): count_down_odd(7, 0) = 7 { refl }
+
 // A loop counting up in a word, its measure the distance to the bound: the
 // decrease is `bv_omega`'s, reading `h`, with no `on ?dec1`
 // (issues/decreases-word-measures-by-hand.md).

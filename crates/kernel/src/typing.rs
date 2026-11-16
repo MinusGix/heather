@@ -2548,7 +2548,7 @@ impl Tc {
                 self.ty_check(env, dom, dom_level)?;
                 let e = env.push_entry(Rc::clone(dom), dom_level.clone());
                 self.ty_check(&e, cod, cod_level)?;
-                Ok(Level::join(dom_level.clone(), cod_level.clone()))
+                Ok(Level::max(dom_level.clone(), cod_level.clone()))
             }
             Type::Ty(l) => {
                 self.level_wf(env, l)?;
@@ -2607,7 +2607,7 @@ impl Tc {
                 self.ty_check(env, fst, fst_level)?;
                 let e = env.push_entry(Rc::clone(fst), fst_level.clone());
                 self.ty_check(&e, snd, snd_level)?;
-                Ok(Level::join(fst_level.clone(), snd_level.clone()))
+                Ok(Level::max(fst_level.clone(), snd_level.clone()))
             }
             // Unit/Empty-formation (extension beyond ch. 04):
             // ⊢_i Unit^l @ l, ⊢_i Empty^l @ l.
@@ -2628,7 +2628,7 @@ impl Tc {
                 self.level_wf(env, rhs_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                Ok(Level::join(lhs_level.clone(), rhs_level.clone()))
+                Ok(Level::max(lhs_level.clone(), rhs_level.clone()))
             }
             // W-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i W^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
@@ -2638,7 +2638,7 @@ impl Tc {
                 self.ty_check(env, shape, shape_level)?;
                 let e = env.push_entry(Rc::clone(shape), shape_level.clone());
                 self.ty_check(&e, pos, pos_level)?;
-                Ok(Level::join(shape_level.clone(), pos_level.clone()))
+                Ok(Level::max(shape_level.clone(), pos_level.clone()))
             }
             // Vec-formation (extension; docs/kernel/wf-former-design.md §1.1):
             // ⊢_i Vec^l(T; k) @ l ⟸ ⊢_i T @ l, ⊢_i k : Nat @ 0. The length
@@ -2990,7 +2990,7 @@ impl Tc {
         self.level_wf(env, cod_level)?;
         self.lev_eq(dom_level, &pd)?;
         self.lev_eq(cod_level, &pc)?;
-        self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
+        self.lev_eq(l, &Level::max(dom_level.clone(), cod_level.clone()))?;
         // The expected Π is presupposed well-formed, so a domain spelled as
         // its domain is a well-formed type at `pd` and needs neither the
         // judgment nor the conversion. An elaborator copies the expected
@@ -3529,7 +3529,7 @@ impl Tc {
                 let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form else {
                     return Err(TypeError::HeadMismatch);
                 };
-                self.lev_eq(l, &Level::join(fst_level.clone(), snd_level.clone()))?;
+                self.lev_eq(l, &Level::max(fst_level.clone(), snd_level.clone()))?;
                 self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
                 let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
                 self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
@@ -3547,7 +3547,7 @@ impl Tc {
                 let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
                     return Err(TypeError::HeadMismatch);
                 };
-                self.lev_eq(l, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+                self.lev_eq(l, &Level::max(lhs_level.clone(), rhs_level.clone()))?;
                 let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
                     (rhs, rhs_level)
                 } else {
@@ -3596,7 +3596,7 @@ impl Tc {
         let depth = env.gamma.entries.len() as u32;
         let mut level = l.clone();
         for (sel, (lhs_level, rhs_level)) in selections.into_iter().zip(levels) {
-            self.lev_eq(&level, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+            self.lev_eq(&level, &Level::max(lhs_level.clone(), rhs_level.clone()))?;
             level = match sel { Sel::Lhs => lhs_level, _ => rhs_level };
             expected = ITy::Sel { of: Rc::new(expected), sel, at_depth: depth };
             crate::stats::intro_at_nodes(1);
@@ -3656,7 +3656,7 @@ impl Tc {
                     &Type::Ty(cod_level.clone()),
                     &Level::succ(cod_level.clone()),
                 )?;
-                let lmax = Level::join(dom_level.clone(), cod_level.clone());
+                let lmax = Level::max(dom_level.clone(), cod_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             Term::TmTy(l) => {
@@ -3693,7 +3693,7 @@ impl Tc {
                     &Type::Ty(snd_level.clone()),
                     &Level::succ(snd_level.clone()),
                 )?;
-                let lmax = Level::join(fst_level.clone(), snd_level.clone());
+                let lmax = Level::max(fst_level.clone(), snd_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             // Encodings of Unit/Empty (extension): Unit^l, Empty^l : Ty l.
@@ -3738,7 +3738,7 @@ impl Tc {
                     &Type::Ty(rhs_level.clone()),
                     &Level::succ(rhs_level.clone()),
                 )?;
-                let lmax = Level::join(lhs_level.clone(), rhs_level.clone());
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             // Encoding of W (extension): W^{l,l'}(x:s).t : Ty (l⊔l').
@@ -3760,7 +3760,7 @@ impl Tc {
                     &Type::Ty(pos_level.clone()),
                     &Level::succ(pos_level.clone()),
                 )?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             // Encoding of Vec (extension; docs/kernel/wf-former-design.md §6):
@@ -4028,7 +4028,7 @@ impl Tc {
                         fst: Rc::clone(fst_ty),
                         snd: Rc::clone(snd_ty),
                     },
-                    Level::join(fst_level.clone(), snd_level.clone()),
+                    Level::max(fst_level.clone(), snd_level.clone()),
                 ))
             }
             // fst^{l,l'}(x:S.T; p) : S @ l.
@@ -4049,7 +4049,7 @@ impl Tc {
                     env,
                     pair,
                     &sigma,
-                    &Level::join(fst_level.clone(), snd_level.clone()),
+                    &Level::max(fst_level.clone(), snd_level.clone()),
                 )?;
                 Ok(((**fst_ty).clone(), fst_level.clone()))
             }
@@ -4071,7 +4071,7 @@ impl Tc {
                     env,
                     pair,
                     &sigma,
-                    &Level::join(fst_level.clone(), snd_level.clone()),
+                    &Level::max(fst_level.clone(), snd_level.clone()),
                 )?;
                 let fst_p = Term::Fst {
                     fst_level: fst_level.clone(),
@@ -4183,7 +4183,7 @@ impl Tc {
                         lhs: Rc::clone(lhs),
                         rhs: Rc::clone(rhs),
                     },
-                    Level::join(lhs_level.clone(), rhs_level.clone()),
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
                 ))
             }
             // inr^{l,l'}(A; B; b) : A +^{l,l'} B @ l⊔l'.
@@ -4201,7 +4201,7 @@ impl Tc {
                         lhs: Rc::clone(lhs),
                         rhs: Rc::clone(rhs),
                     },
-                    Level::join(lhs_level.clone(), rhs_level.clone()),
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
                 ))
             }
             // case^{l,l',l''}(z. M; A; B; x. c_l; y. c_r; t) : M[t/z] @ l''.
@@ -4222,7 +4222,7 @@ impl Tc {
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                let lmax = Level::join(lhs_level.clone(), rhs_level.clone());
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
                 let sum = Type::Sum {
                     lhs_level: lhs_level.clone(),
                     rhs_level: rhs_level.clone(),
@@ -4272,7 +4272,7 @@ impl Tc {
                 let e = env.push_entry(Rc::clone(shape_ty), shape_level.clone());
                 self.ty_check(&e, pos_ty, pos_level)?;
                 self.tm_check_rc(env, label, shape_ty, shape_level)?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 let w = Type::W {
                     shape_level: shape_level.clone(),
                     pos_level: pos_level.clone(),
@@ -4292,7 +4292,7 @@ impl Tc {
                     env,
                     children,
                     &f_ty,
-                    &Level::join(pos_level.clone(), lmax.clone()),
+                    &Level::max(pos_level.clone(), lmax.clone()),
                 )?;
                 Ok((w, lmax))
             }
@@ -4314,7 +4314,7 @@ impl Tc {
                 self.ty_check(env, shape, shape_level)?;
                 let e_x = env.push_entry(Rc::clone(shape), shape_level.clone());
                 self.ty_check(&e_x, pos, pos_level)?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 let w = Type::W {
                     shape_level: shape_level.clone(),
                     pos_level: pos_level.clone(),
@@ -4334,7 +4334,7 @@ impl Tc {
                     dom: Rc::clone(pos),
                     cod: Rc::new(w.shift_local(2)),
                 };
-                let f_level = Level::join(pos_level.clone(), lmax.clone());
+                let f_level = Level::max(pos_level.clone(), lmax.clone());
                 let e_af = e_a.push_entry(Rc::new(f_ty), f_level);
                 // f y in (Γ, a, f, y : T[a/x]): f = Var 1, y = Var 0.
                 let f_y = Term::App {
@@ -4354,7 +4354,7 @@ impl Tc {
                     dom: Rc::new(pos.shift_local(1)),
                     cod: Rc::new(ih_cod),
                 };
-                let ih_level = Level::join(pos_level.clone(), motive_level.clone());
+                let ih_level = Level::max(pos_level.clone(), motive_level.clone());
                 let e_step = e_af.push_entry(Rc::new(ih_ty), ih_level);
                 // s : M[sup(a, f)/z] with sup built in (Γ, a, f), then
                 // weakened past ih.
@@ -4497,7 +4497,7 @@ impl Tc {
                 let fl = sig.family_level();
                 let step_ty = m_step_ty(sig, carrier_level, carrier).shift_local(1);
                 let e_ix = e_i.push_entry(Rc::clone(carrier), carrier_level.clone());
-                let step_level = Level::join(sig.level.clone(), Level::join(carrier_level.clone(), fl.clone()));
+                let step_level = Level::max(sig.level.clone(), Level::max(carrier_level.clone(), fl.clone()));
                 self.tm_check_ty(&e_ix, step, &step_ty, &step_level)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 self.tm_check_ty(env, seed, &carrier.inst_top(0, index), carrier_level)?;
@@ -4511,7 +4511,7 @@ impl Tc {
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 let fl = sig.family_level();
                 self.tm_check_ty(env, scrut, &sig.at(Rc::clone(index)), &fl)?;
-                Ok((m_out_ty(sig, index), Level::join(sig.level.clone(), fl)))
+                Ok((m_out_ty(sig, index), Level::max(sig.level.clone(), fl)))
             }
 
             // -- dependent functions ----------------------------------------
@@ -4534,7 +4534,7 @@ impl Tc {
                         dom: Rc::clone(dom),
                         cod,
                     },
-                    Level::join(dom_level.clone(), cod_level.clone()),
+                    Level::max(dom_level.clone(), cod_level.clone()),
                 ))
             }
             Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
@@ -4554,7 +4554,7 @@ impl Tc {
                     env,
                     fun,
                     &pi,
-                    &Level::join(dom_level.clone(), cod_level.clone()),
+                    &Level::max(dom_level.clone(), cod_level.clone()),
                 )?;
                 self.tm_check_rc(env, arg, dom, dom_level)?;
                 Ok((

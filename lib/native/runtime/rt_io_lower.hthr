@@ -1247,9 +1247,8 @@ theorem ETm::call_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, n
 // ---------------------------------------------------------------------------
 // A function lent the first buffer (docs/native/native-one-compiler-design.md §2.6)
 //
-// `Lend` is a `Compute` of a region `Call` of the program's function
-// `base + f`, where `base` counts the program's pure functions (the world's
-// signatures): its words are where the word variables live, its answer
+// `Lend` is a `Compute` of a region `Call` of the program's function the
+// table's entry names (`Lent::entry`): its words are where the word variables live, its answer
 // lands in a fresh word. A program lends a function a prefix of its file
 // (`program_writers`), so the buffer handed over is the file's first, and
 // the lowering refuses a buffer variable that lives anywhere else
@@ -1259,18 +1258,18 @@ theorem ETm::call_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, n
 
 // The program's calls answer the table: over every file with a first
 // buffer, function `f` of the table, called as the program's function
-// `base + f` on as many words as it takes, answers its word and leaves its
+// `Lent::at(ls, f).entry` on as many words as it takes, answers its word and leaves its
 // bytes in the first buffer, the rest of the file as it was. What
 // `program_writers` answers for a `runtime fn` lent a span
 // (`raise_span_called`, native_tool_spans).
-fn ETm::LentsAgree(base: Nat, ls: List<Lent>, call: Writers()) → Type {
+fn ETm::LentsAgree(ls: List<Lent>, call: Writers()) → Type {
     (f: Nat) → Succ(f).leb(ls.len()).IsTrue() → (own: List<BitVec(8)>) → (rest: Buffers()) → (words: List<BitVec(64)>) →
         words.len() = Lent::at(ls, f).arity →
-        call(Cons(own, rest), base + f, words) = Ending(Lent::at(ls, f).run(own, words).value, Cons(Lent::at(ls, f).run(own, words).after, rest))
+        call(Cons(own, rest), Lent::at(ls, f).entry, words) = Ending(Lent::at(ls, f).run(own, words).value, Cons(Lent::at(ls, f).run(own, words).after, rest))
 }
 
 // A table nothing calls agrees with every program.
-theorem ETm::lents_agree_none(base: Nat, call: Writers()): ETm::LentsAgree(base, Nil, call) {
+theorem ETm::lents_agree_none(call: Writers()): ETm::LentsAgree(Nil, call) {
     λ f never own rest words _ => false_elim(never)
 }
 
@@ -1309,8 +1308,8 @@ theorem ETm::word_ids_sound(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: L
 // buffer 0 gone.
 record LentCall { region: StructuredRegion, locs: List<Loc> }
 
-fn ETm::lend_call(base, next, f: Nat, ids: List<Nat>, locs: List<Loc>) → LentCall {
-    LentCall(Call(base + f, ids, next), Cons(InWord(next), Cons(InBuffer(0), Loc::forget_all(locs, 0))))
+fn ETm::lend_call(entry, next: Nat, ids: List<Nat>, locs: List<Loc>) → LentCall {
+    LentCall(Call(entry, ids, next), Cons(InWord(next), Cons(InBuffer(0), Loc::forget_all(locs, 0))))
 }
 
 // A function of the table, on as many words as it takes; the buffer
@@ -1318,7 +1317,7 @@ fn ETm::lend_call(base, next, f: Nat, ids: List<Nat>, locs: List<Loc>) → LentC
 fn ETm::lower_lend(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next, f, cap, buf: Nat, args: List<Nat>) → Option<LentCall> {
     Tm::check_true(Succ(f).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())).and_then(λ _ =>
         ETm::operand(g, locs, Bytes(cap), buf).and_then(λ b => Tm::check_true(b.matches(0)).and_then(λ _ =>
-            ETm::word_ids(g, locs, args).and_then(λ ids => Some(ETm::lend_call(w.sigs.len(), next, f, ids, locs))))))
+            ETm::word_ids(g, locs, args).and_then(λ ids => Some(ETm::lend_call(Lent::at(ls, f).entry, next, ids, locs))))))
 }
 
 // The call's region, from where the variables live and with the program's
@@ -1327,7 +1326,7 @@ fn ETm::lower_lend(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, n
 fn ETm::LendHolds(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next, f, cap, buf: Nat, args: List<Nat>, r: Option<LentCall>) → Type {
     match r {
         None => True,
-        Some(k) => (call: Writers()) → ETm::LentsAgree(w.sigs.len(), ls, call) → (env: Env) → (vals: rt::Env(w.tys, g)) →
+        Some(k) => (call: Writers()) → ETm::LentsAgree(ls, call) → (env: Env) → (vals: rt::Env(w.tys, g)) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) →
             LocsHold(w.tys, env.compute(call, k.region), Ty::bind_onto(Lent::results(cap), g), k.locs,
                 Effect::push(w.tys, Lent::results(cap), g, vals, Lent::answer(w.tys, ls, g, vals, f, cap, buf, args)))
@@ -1338,8 +1337,8 @@ fn ETm::LendHolds(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, ne
 theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next, f, cap, buf: Nat, args: List<Nat>):
     ETm::LendHolds(w, ls, g, locs, next, f, cap, buf, args, ETm::lower_lend(w, ls, g, locs, next, f, cap, buf, args)) {
     let P = λ (r: Option<LentCall>) => ETm::LendHolds(w, ls, g, locs, next, f, cap, buf, args, r);
-    let base = w.sigs.len();
-    let tail_ids = λ (ids: List<Nat>) => Some(ETm::lend_call(base, next, f, ids, locs));
+    let entry = Lent::at(ls, f).entry;
+    let tail_ids = λ (ids: List<Nat>) => Some(ETm::lend_call(entry, next, ids, locs));
     let after_zero = λ (_: True) => ETm::word_ids(g, locs, args).and_then(tail_ids);
     let after_b = λ (b: Nat) => Tm::check_true(b.matches(0)).and_then(λ z => ETm::word_ids(g, locs, args).and_then(tail_ids));
     Option::and_then_elim(P, trivial, Tm::check_true(Succ(f).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())),
@@ -1361,15 +1360,15 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
             let ws: (words_of(env.valuation(), ids) = words) = ETm::word_ids_sound(tys, env, g, locs, vals, held, args, ids, e_ids);
             let arity: (words.len() = Lent::at(ls, f).arity) =
                 trans(Lent::words_len(tys, g, vals, args), sym(Lent::at(ls, f).arity.matches_eq(args.len(), parts.right)));
-            let answered: (call(Cons(bytes, rest), base + f, words) = Ending(m.value, Cons(m.after, rest))) =
+            let answered: (call(Cons(bytes, rest), entry, words) = Ending(m.value, Cons(m.after, rest))) =
                 lents(f, parts.left, bytes, rest, words, arity);
-            let region = ETm::lend_call(base, next, f, ids, locs).region;
+            let region = ETm::lend_call(entry, next, ids, locs).region;
             let values = env.valuation();
             let after = Valuation::set(values, next, word_value(m.value));
             let K = λ (answer: Ending) => State(Valuation::set(values, next, word_value(answer.word)), answer.buffers);
             let ran: (region.run(call, values, env.buffers) = State(after, Cons(m.after, rest))) =
                 j(sym(file), λ fb _ => region.run(call, values, fb) = State(after, Cons(m.after, rest)),
-                    j(sym(ws), λ u _ => shared(call(Cons(bytes, rest), base + f, u), K) = State(after, Cons(m.after, rest)),
+                    j(sym(ws), λ u _ => shared(call(Cons(bytes, rest), entry, u), K) = State(after, Cons(m.after, rest)),
                         cong_fn<Ending, State>(K, answered)));
             // The call's word settled in `next`, its file in place of the
             // caller's: the first buffer set to the bytes left.
@@ -1453,7 +1452,7 @@ fn ETm::LowerHolds(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs:
     match r {
         None => True,
         Some(l) => l.stmt.straight().IsTrue() ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) →
-            ETm::LentsAgree(w.sigs.len(), ls, call) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
+            ETm::LentsAgree(ls, call) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             ETm::Lands(t.ty(w, g), w.tys, l.result, Stmt::thread(l.stmt, call, env, io), t.sem(w, ls, g, vals, io))
                 ∧ t.EndHolds(w, ls, g, vals, io, next, l, Stmt::thread(l.stmt, call, env, io))),
@@ -1561,8 +1560,11 @@ fn Ty::read_back(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat) → t.sem(
     }
 }
 
+// A flow that left the program reads back as its status, the word an
+// `Exit` after the statements would have reported (`Stmt::exit_reads`); no
+// lowering's statements leave the program (`Flow::Keeps`).
 fn Flow::read_back(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: Nat) → t.sem(tys) {
-    match flow { Onward(env) => t.read_back(tys, env, id), Exited(_) => t.default(tys) }
+    match flow { Onward(env) => t.read_back(tys, env, id), Exited(status) => t.read_back(tys, native_source::Env([status.toNat()], [], []), 0) }
 }
 
 theorem Ty::read_back_kept(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat): (v: t.sem(tys)) → t.Kept(tys, env, InWord(id), v) →
@@ -1593,7 +1595,7 @@ theorem Flow::read_back_keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: 
 // environment that holds the variables.
 fn ETm::lower_reads(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: t.lower(w, ls, g, locs, next) = Some(l),
     call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
-    lents: ETm::LentsAgree(w.sigs.len(), ls, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
+    lents: ETm::LentsAgree(ls, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
     held: LocsHold(w.tys, env, g, locs, vals), below: LocsBelow(locs, next), pos: 0 < next) →
     Io::Reads<t.ty(w, g).sem(w.tys)>(CoTree::map(Events::linux(), l.stmt.denote_co(call, perform)(env), λ flow => flow.read_back(t.ty(w, g), w.tys, l.result)),
         λ io => CRet(t.sem(w, ls, g, vals, io)))

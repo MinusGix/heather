@@ -56,13 +56,13 @@ fn pair() → List<Function> { [add_double(), double()] }
 
 fn pair_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()]))
+        .label(1).put(Block([frame_allocate(0)]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free()])).put(Ret)
-        .label(2).put(Block([frame_allocate()]))
+        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .label(2).put(Block([frame_allocate(64)]))
         .saving().put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring()
         .put(Block([AddRR(Rax, Rsi)]))
-        .put(Block([])).put(Block([frame_free()])).put(Ret)
+        .put(Block([])).put(Block([frame_free(64)])).put(Ret)
 }
 
 theorem pair_lowers(): lower_program(pair(), [Into(Rax), Into(Rax)]) = Some(pair_program()) { refl }
@@ -73,7 +73,7 @@ theorem add_double_at(): asm_labels(pair_program())(2) = 15 { refl }
 // Each function meets its contract, resident anywhere, with any stack.
 theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), program_depth(pair()), 2) {
+    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), program_room(pair()), 2) {
     lower_program_correct<M>(pair(), [Into(Rax), Into(Rax)], pair_program(), pair_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -82,9 +82,9 @@ theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
 theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
     Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, 15,
-        stack.CalleePre(program_callees(pair()), program_depth(pair()), 1, [a, b], result), stack.CalleePost(result)) {
+        stack.CalleePre(program_callees(pair()), program_room(pair()), 1, [a, b], result), stack.CalleePost(result)) {
     j(add_double_at(), λ entry _ => Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, entry,
-            stack.CalleePre(program_callees(pair()), program_depth(pair()), 1, [a, b], result), stack.CalleePost(result)),
+            stack.CalleePre(program_callees(pair()), program_room(pair()), 1, [a, b], result), stack.CalleePost(result)),
         pair_calls<M>(fetch, data, last, origin, stack)(1, Nat::le_refl(2), [a, b], result))
 }
 
@@ -106,20 +106,20 @@ fn three() → List<Function> { [pick(), add_double(), double()] }
 
 fn three_program() → Prog {
     pair_program()
-        .label(3).put(Block([frame_allocate()]))
+        .label(3).put(Block([frame_allocate(64)]))
         .put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
         .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 4))
         .saving().put(Block([])).put(Block([MovRR(Rdi, Rsi)])).put(CallTo(1)).put(Block([])).restoring().put(Jmp(5))
         .label(4).put(Block([MovRR(Rax, Rdi)]))
         .label(5)
-        .put(Block([])).put(Block([frame_free()])).put(Ret)
+        .put(Block([])).put(Block([frame_free(64)])).put(Ret)
 }
 
 theorem three_lowers(): lower_program(three(), [Into(Rax), Into(Rax), Into(Rax), Into(Rax)]) = Some(three_program()) { refl }
 
 theorem three_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, three_program(), last, origin).Calls(stack, program_callees(three()), program_depth(three()), 3) {
+    Site<M>(fetch, data, three_program(), last, origin).Calls(stack, program_callees(three()), program_room(three()), 3) {
     lower_program_correct<M>(three(), [Into(Rax), Into(Rax), Into(Rax), Into(Rax)], three_program(), three_lowers(), fetch, data, last, origin, stack)
 }
 

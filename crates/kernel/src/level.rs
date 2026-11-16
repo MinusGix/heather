@@ -319,8 +319,7 @@ impl Level {
         }
     }
 
-    /// `a ⊔ b`. With canonical levels there is one spelling of the result,
-    /// so this and [`Level::join`] are the same operation.
+    /// `a ⊔ b`. With canonical levels there is one spelling of the result.
     pub fn max(a: Level, b: Level) -> Level {
         if a == Level::Omega || b == Level::Omega {
             return Level::Omega;
@@ -335,12 +334,6 @@ impl Level {
         c.add(a, 0);
         c.add(b, 0);
         c.finish()
-    }
-
-    /// `a ⊔ b`; the same as [`Level::max`], under the name the inference
-    /// sites use (`issues/kernel-vestigial-apis.md`).
-    pub fn join(a: Level, b: Level) -> Level {
-        Level::max(a, b)
     }
 
     /// Constant level `n`.

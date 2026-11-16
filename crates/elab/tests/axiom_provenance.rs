@@ -28,8 +28,13 @@ fn direct_and_transitive_paths_are_reported() {
     assert!(e.axiom_report("clean").unwrap().axioms.is_empty());
 }
 
+/// The edges are read off the checked proof term
+/// (issues/axiom-provenance-misses-tactic-references.md), so a proof that
+/// only *mentions* an axiom's constant, here in `refl`'s annotation, depends
+/// on it: a term cannot tell a mention from a use, and a tactic's reference
+/// is one the source never spells. An axiom nothing mentions taints nothing.
 #[test]
-fn unused_axioms_and_statement_only_mentions_do_not_taint_a_proof() {
+fn a_mention_in_the_proof_term_is_a_dependency_and_an_unused_axiom_is_not() {
     let mut e = Elaborator::new();
     e.elab_source(
         "axiom witness(): Nat;\n\
@@ -37,7 +42,9 @@ fn unused_axioms_and_statement_only_mentions_do_not_taint_a_proof() {
          theorem unrelated(): Nat { 0 }",
     )
     .unwrap();
-    assert!(e.axiom_report("says_something_about_it").unwrap().axioms.is_empty());
+    let mentions = e.axiom_report("says_something_about_it").unwrap();
+    assert_eq!(mentions.axioms.len(), 1);
+    assert_eq!(mentions.axioms[0].axiom, "main::witness");
     assert!(e.axiom_report("unrelated").unwrap().axioms.is_empty());
 }
 

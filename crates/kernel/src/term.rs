@@ -1630,6 +1630,48 @@ impl LocalCtx {
     }
 }
 
+/// What the β helpers and the code-recursor telescopes read of a Γ: its
+/// base and how many entries it has. They build identity substitutions
+/// `id_Γ` and nothing else, so a caller with no syntactic Γ (the value
+/// machine, whose binders' types are values) hands them this and no
+/// entries at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtxShape {
+    pub base: CtxBase,
+    pub len: u32,
+}
+
+impl CtxShape {
+    /// The shape under `by` more global variables: a context variable base
+    /// is renumbered, as [`LocalCtx::shift_global`] renumbers it.
+    pub fn shift_global(self, by: u32) -> CtxShape {
+        let base = match self.base {
+            CtxBase::Nil => CtxBase::Nil,
+            CtxBase::Var(g) => CtxBase::Var(g.shifted(by)),
+        };
+        CtxShape { base, len: self.len }
+    }
+}
+
+impl LocalCtx {
+    /// Γ's [`CtxShape`].
+    pub fn shape(&self) -> CtxShape {
+        CtxShape { base: self.base, len: self.entries.len() as u32 }
+    }
+}
+
+impl From<&LocalCtx> for CtxShape {
+    fn from(c: &LocalCtx) -> CtxShape {
+        c.shape()
+    }
+}
+
+impl From<&CtxShape> for CtxShape {
+    fn from(c: &CtxShape) -> CtxShape {
+        *c
+    }
+}
+
 #[derive(Clone, Eq)]
 pub struct CtxEntry {
     pub ty: Rc<Type>,
@@ -1798,19 +1840,6 @@ impl CtxEntries {
     /// Outermost-first, owned.
     pub fn to_vec(&self) -> Vec<CtxEntry> {
         self.iter().cloned().collect()
-    }
-
-    /// `n` copies of one entry — the filler contexts that the shared β
-    /// helpers read only the *length* of (`reduce.rs` module doc;
-    /// `issues/kernel-filler-contexts.md`). One cell per entry; both callers are
-    /// off the hot path (a code recursor's scope, and `Wf`'s step
-    /// telescope), which is why this is a loop and not a shared spine.
-    pub fn repeat(entry: CtxEntry, n: usize) -> CtxEntries {
-        let mut c = CtxEntries::empty();
-        for _ in 0..n {
-            c.push(entry.clone());
-        }
-        c
     }
 }
 
@@ -3324,7 +3353,7 @@ pub struct IWfSig {
 impl IWfSig {
     /// The family's level, `l ⊔ li` (design §1.2).
     pub fn family_level(&self) -> Level {
-        Level::join(self.level.clone(), self.idx_level.clone())
+        Level::max(self.level.clone(), self.idx_level.clone())
     }
 
 }
@@ -3488,7 +3517,7 @@ pub struct MSig {
 impl MSig {
     /// The family's level, `l ⊔ l' ⊔ li` (design §1.1).
     pub fn family_level(&self) -> Level {
-        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+        Level::max(Level::max(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 
     /// `S[j/i]`, in Γ for `j` in Γ.
@@ -3607,7 +3636,7 @@ pub fn m_out_ty(sig: &Rc<MSig>, j: &Term) -> Type {
 /// ```
 pub fn m_step_ty(sig: &Rc<MSig>, carrier_level: &Level, carrier: &Type) -> Type {
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // In (Γ, i, s, p): the child's index, its seed's type and its tree type.
     let o = sig.next.as_ref();
     let child_seed = carrier.inst_top(3, o);
@@ -3654,7 +3683,7 @@ pub fn m_out_corec(
 ) -> Term {
     let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // The step's type at j, in Γ: Σ(s : S[j]). Π(p : P[j, s]). X[o] + M(o).
     let Type::Sigma { snd: step_snd, .. } = m_step_ty(sig, carrier_level, carrier).inst_top(0, j) else {
         unreachable!("m_step_ty builds a Σ")
@@ -3738,7 +3767,7 @@ pub fn m_out_corec(
 /// the binder `x` was — which is the same shortcut `elim_W`'s rules take
 /// with `T[a/x]`.
 pub fn wf_step_telescope(
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     level: &Level,
     motive_level: &Level,
     shape: &Rc<Type>,
@@ -3776,7 +3805,7 @@ pub fn wf_step_telescope(
 /// `wf_step_telescope` is one call to it.
 #[allow(clippy::too_many_arguments)]
 pub fn wf_step_telescope_at(
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     level: &Level,
     motive_level: &Level,
     shape: &Rc<Type>,
@@ -3785,6 +3814,7 @@ pub fn wf_step_telescope_at(
     d_ty: &Type,
     slots: Option<(&Rc<Type>, &Rc<Term>)>,
 ) -> (Type, Type, Type) {
+    let gamma: CtxShape = gamma.into();
     let wf = d_ty.clone();
     // Every *arity* written below is an annotation like `d_ty` is — a `Vec`
     // length, a `Fin` length, `nth`'s length — so it takes `slots`' spelling

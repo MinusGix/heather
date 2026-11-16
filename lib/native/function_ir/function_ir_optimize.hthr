@@ -710,9 +710,10 @@ fn Function::find_paid_past(self function: Function) → Option<Found> {
 // the program's function `k` under its counts of lent buffers. The
 // compiler asks this of what the searches made before it keeps it: the
 // planner can run out of registers in a function that inlining made larger
-// (issues/function-ir-planner-register-pressure.md).
+// (issues/function-ir-planner-register-pressure.md). The room table is one
+// every frame fits (`index_rooms`): the question is the placement's.
 fn Function::lowers(self function: Function, k: Nat, counts: List<Nat>) → Bool {
-    match function.emit_lent(Start, k, function.plan(), counts.len(), counts) { None => False, Some(_) => True }
+    match function.emit_lent(Start, k, function.plan(), counts.len(), counts, index_rooms()) { None => False, Some(_) => True }
 }
 
 // `None`, or the plan on one line and the function on the next, as the
