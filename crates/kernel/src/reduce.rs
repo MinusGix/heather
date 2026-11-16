@@ -482,6 +482,8 @@ pub fn step_type_delta(t: &Type, gamma: impl Into<CtxShape>, defs: Defs<'_>) -> 
 struct Frames {
     depth: std::cell::Cell<u32>,
     exhausted: std::cell::Cell<bool>,
+    /// Frames entered in all, for `stats::reduce_frames`.
+    entered: std::cell::Cell<u64>,
 }
 
 impl Frames {
@@ -492,6 +494,7 @@ impl Frames {
             return false;
         }
         self.depth.set(depth + 1);
+        self.entered.set(self.entered.get() + 1);
         true
     }
 
@@ -500,6 +503,8 @@ impl Frames {
     }
 
     fn answer<T>(&self, next: Option<T>) -> Result<Option<T>, OutOfFuel> {
+        crate::stats::reduce_steps(1);
+        crate::stats::reduce_frames(self.entered.get());
         if self.exhausted.get() { Err(OutOfFuel) } else { Ok(next) }
     }
 }
