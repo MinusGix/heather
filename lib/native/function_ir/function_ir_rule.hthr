@@ -38,6 +38,7 @@ import bitvec_bytes;
 import bitvec_resize;
 import bitvec_rotate;
 import bool;
+import char;
 import list;
 import logic;
 import nat;
@@ -124,9 +125,11 @@ inductive PatternFact {
 record RulePattern { arity: Nat, premises: List<PatternFact>, conclusion: PatternFact }
 
 // What a `rule theorem` publishes, registered: the rule, its clause's
-// shape, and whether it is one of the library's own (function_ir_rules),
-// which have their places in `rules()`; any other is added after them.
-record RuleEntry { library: Bool, rule: Rule, pattern: RulePattern }
+// shape, the theorem's name as its characters' codes (for the report of
+// what the optimizer did, function_ir_explain), and whether it is one of
+// the library's own (function_ir_rules), which have their places in
+// `rules()`; any other is added after them.
+record RuleEntry { library: Bool, name: List<Nat>, rule: Rule, pattern: RulePattern }
 
 fn rule_of_entry(x: RuleEntry) → RuleEntry { x }
 fn rule_of_slot(x: PatternSlot) → PatternSlot { x }
@@ -973,6 +976,8 @@ fn rule_shapes_of(cx: RuleCx, to: RuleShapes, facts: List<Expr>) → Tac<List<Ex
 // ---------------------------------------------------------------------------
 // The generator
 
+fn rule_codes(chars: List<Char>) → List<Expr> { match chars { Nil => [], Cons(c, rest) => Cons(NatLit(c.code), rule_codes(rest)) } }
+
 // `rule theorem name(…): statement { proof }` publishes `name_entry`, and
 // registers it.
 fn rule(name: String) → Tac<List<Decl>> {
@@ -1022,7 +1027,10 @@ fn rule(name: String) → Tac<List<Decl>> {
     let no <- rule_ctor(bools, "False");
     let listed <- lookup("function_ir_rules::" ++ name);
     let library = match listed { Accepted(g) => match rule_same(g, theorem) { True => yes, False => no }, Refused(_) => no };
-    let entry = rule_apps(entry_of, [library, made, pattern]);
+    let codes <- rule_ctors(name_of(rule_of_numbers));
+    let no_code <- rule_ctor(codes, "Nil");
+    let code_then <- rule_ctor(codes, "Cons");
+    let entry = rule_apps(entry_of, [library, rule_list(no_code, code_then, rule_codes(name.chars)), made, pattern]);
     let entered <- infer(entry).or_fail("rule: the rule's entry: ");
     pure([Decl(AsRegistered("RuleEntry"), name ++ "_entry", [], Hd(entered), entry)])
 }
