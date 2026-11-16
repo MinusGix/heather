@@ -4,7 +4,7 @@ status: open
 labels: [performance,testing,kernel]
 area: infrastructure
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-16
 ---
 
 The kernel's debug self-checks (`crates/kernel/src/checks.rs`) re-derive one claim in sixteen. For a substitution's skip the derivation is the whole walk the skip stepped over, so a check costs the size of the skipped term while the skip cost a constant. The module docs expect "a few percent"; on a module of `runtime fn` generators the sample is more than twenty times the module, and those modules were most of the library gate's cold build step under the test profile's binary.
@@ -50,6 +50,22 @@ The sample should be bounded by work, not by count, so the default level is affo
 - Spend checks from a budget fed by the nodes ordinary traversals walk: verify a sampled skip only while the nodes re-walked so far are under a fixed fraction of the nodes walked. It stays a function of the claims a run makes.
 - Check a node's skip claim once per mapper and depth rather than every sixteenth time it is made: the claim is about the node, and the generator makes the same claim about the same node thousands of times.
 - The comparison after the walk (`mapped == **t`) is a second traversal of the same term.
+
+## Bounded by work (2026-11-16)
+
+The first direction, as two counters a thread keeps in a debug build (`checks::sample_work`): the nodes its own substitutions visit and the nodes its checks walk again. A sampled check runs only while the second is within one part in `REWALK_SHARE` (sixteen) of the first, so the sample costs a fixed share of the substitution work it samples plus the one check that took it over. The stride still advances at every claim, and `Full` is unchanged. `crates/kernel/tests/deep_terms.rs` holds the bound on a closed chain shifted ten thousand times.
+
+What prompted it: the default lane's library gate was 27 to 37 minutes of a 43 to 77 minute suite after an elaborator change. Its build step alone on a four-core cloud box at master 112767e, every module elaborated and every declaration's verdict from the store (`heather check --build-jobs 4 --build-only lib --build-times`, the test profile's binary):
+
+| level | wall | CPU | the seventeen generator modules | the other 587 |
+|---|---|---|---|---|
+| off | 420 s | 1586 s | 291 s | 1371 s |
+| sampled, one in sixteen | 1139 s | 3365 s | 2174 s | 1274 s |
+| sampled, bounded by work | 437 s | 1650 s | 299 s | 1429 s |
+
+The seventeen (`sha256_*`, `runtime_held_*_tests`, `lexer_scan`, `lexer_span`, `lexer_records`) were the whole difference, and seven of them are one import chain (`sha256_schedule` to `sha256_stream_agreement`), so the step was as long as that chain: 1139 s. `sha256_compression` took 246 s of a 300 s rail.
+
+Still open: `scripts/test --fast` and `--pr` export `off`. With the bound the default level costs a few percent on this step, so they could stop; that is a change to the lanes and was left alone.
 
 ## Done when
 
