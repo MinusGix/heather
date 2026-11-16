@@ -1,6 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
 # signature: sha256_finish(span mut) -> word
-# stack: 4080 bytes below the return address
+# stack: 1496 bytes below the return address
 .text
 .globl sha256_finish
 .type sha256_finish, @function

@@ -89,7 +89,7 @@ theorem triangle_lowers(): lower_program([triangle()], triangle_placement()) = S
 
 theorem triangle_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, triangle_program(), last, origin).Calls(stack, program_callees([triangle()]), 1) {
+    Site<M>(fetch, data, triangle_program(), last, origin).Calls(stack, program_callees([triangle()]), program_depth([triangle()]), 1) {
     lower_program_correct<M>([triangle()], triangle_placement(), triangle_program(), triangle_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -153,7 +153,7 @@ theorem gcd_lowers(): lower_program([gcd()], gcd_placement()) = Some(gcd_program
 
 theorem gcd_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, gcd_program(), last, origin).Calls(stack, program_callees([gcd()]), 1) {
+    Site<M>(fetch, data, gcd_program(), last, origin).Calls(stack, program_callees([gcd()]), program_depth([gcd()]), 1) {
     lower_program_correct<M>([gcd()], gcd_placement(), gcd_program(), gcd_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -210,7 +210,7 @@ theorem scaled_lowers(): lower_program(scaled(), scale_placement()) = Some(scale
 
 theorem scaled_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, scaled_program(), last, origin).Calls(stack, program_callees(scaled()), 2) {
+    Site<M>(fetch, data, scaled_program(), last, origin).Calls(stack, program_callees(scaled()), program_depth(scaled()), 2) {
     lower_program_correct<M>(scaled(), scale_placement(), scaled_program(), scaled_lowers(), fetch, data, last, origin, stack)
 }
 

@@ -105,7 +105,7 @@ theorem leaf_lowers(): lower_program([twice_more()], leaf_places()) = Some(leaf_
 // caller finds every callee-saved register as it left it.
 theorem leaf_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, leaf_program(), last, origin).Calls(stack, program_callees([twice_more()]), 1) {
+    Site<M>(fetch, data, leaf_program(), last, origin).Calls(stack, program_callees([twice_more()]), program_depth([twice_more()]), 1) {
     lower_program_correct<M>([twice_more()], leaf_places(), leaf_program(), leaf_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -196,7 +196,7 @@ theorem pair_lowers(): lower_program(pair(), pair_places()) = Some(pair_program(
 
 theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), 2) {
+    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), program_depth(pair()), 2) {
     lower_program_correct<M>(pair(), pair_places(), pair_program(), pair_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -205,7 +205,7 @@ theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
 theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
     Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, asm_labels(pair_program())(2),
-        stack.CalleePre(program_callees(pair()), 1, [a, b], result), stack.CalleePost(result)) {
+        stack.CalleePre(program_callees(pair()), program_depth(pair()), 1, [a, b], result), stack.CalleePost(result)) {
     pair_calls<M>(fetch, data, last, origin, stack)(1, Nat::le_refl(2), [a, b], result)
 }
 
