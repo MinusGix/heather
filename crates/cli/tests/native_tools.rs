@@ -225,7 +225,7 @@ fn compiled_ascii_check_reads_its_whole_input_then_answers() {
     let binary = dir.join("ascii");
     write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "ascii_check::source", &binary, false);
     let mut random = Bytes::seeded("ascii-check");
-    let text = random.take(4000, |r| b"abcxyz ABC\n019~"[(r % 16) as usize]);
+    let text = random.take(4000, |r| b"abcxyz ABC\n019~"[(r % 15) as usize]);
     let mut late = text.clone();
     late[3999] = 0x80;
     let mut early = text.clone();
