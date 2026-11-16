@@ -9,6 +9,17 @@ use crate::read_loop_fixture::checker_with;
 // refused, and so is a rotation scheduled without its staging move.
 const EXAMPLES: &str = include_str!("fixtures/function_ir_compile_examples.hthr");
 
+// Each test elaborates the whole fixture in an elaborator of its own, and
+// one such check peaks near two GiB since call slots are sized by use
+// (#717): three at once in the one process overrun the suite's 6 GiB
+// address-space rail, so they take turns. A test that panics poisons the
+// lock; the others still run.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn checker() -> heather_elab::Elaborator {
     checker_with(&[
         ("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
@@ -49,6 +60,7 @@ fn checker() -> heather_elab::Elaborator {
 
 #[test]
 fn compiled_programs_check() {
+    let _turn = one_at_a_time();
     let mut elaborator = checker();
     if let Err(error) = elaborator.elab_module_source("function_ir_compile_examples", EXAMPLES) {
         panic!("the compiled examples did not check: {}", error.render(EXAMPLES));
@@ -59,6 +71,7 @@ fn compiled_programs_check() {
 fn a_wrong_source_is_refused() {
     let mutant = EXAMPLES.replace("= y.sub(z).add(x) { refl }", "= z.sub(y).add(x) { refl }");
     assert_ne!(mutant, EXAMPLES, "the mutation site moved");
+    let _turn = one_at_a_time();
     let mut elaborator = checker();
     assert!(elaborator.elab_module_source("function_ir_compile_examples", &mutant).is_err(),
         "an evaluation was equated with the wrong source");
@@ -68,6 +81,7 @@ fn a_wrong_source_is_refused() {
 fn a_rotation_needs_its_staging_move() {
     let mutant = EXAMPLES.replace("rotation_file().call_moves([1, 2, 0])).len() = 4", "rotation_file().call_moves([1, 2, 0])).len() = 3");
     assert_ne!(mutant, EXAMPLES, "the mutation site moved");
+    let _turn = one_at_a_time();
     let mut elaborator = checker();
     assert!(elaborator.elab_module_source("function_ir_compile_examples", &mutant).is_err(),
         "a rotation scheduled in three moves");
