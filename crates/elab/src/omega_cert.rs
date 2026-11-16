@@ -2102,7 +2102,7 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
 }
 
 /// `tm` with the argument `outward` applications from the outside replaced.
-fn with_arg_at(tm: &Rc<Term>, outward: usize, new: &Rc<Term>) -> Rc<Term> {
+pub(crate) fn with_arg_at(tm: &Rc<Term>, outward: usize, new: &Rc<Term>) -> Rc<Term> {
     // The checked spelling carries no annotation that a replaced argument
     // could leave stale (docs/elaborator/app-by-head-type-design.md §6.2).
     if let Term::AppAt { fun, arg } = &**tm {
@@ -3858,7 +3858,7 @@ const GUARD_ROUND_LIMIT: usize = 6;
 const GUARD_BRANCHES: usize = 8;
 
 /// One connective off a Bool guard (`b` in `b.IsTrue()`).
-enum GuardShape<'a> {
+pub(crate) enum GuardShape<'a> {
     And(&'a Rc<Term>, &'a Rc<Term>),
     Or(&'a Rc<Term>, &'a Rc<Term>),
     Not(&'a Rc<Term>),
@@ -3880,7 +3880,7 @@ enum GuardShape<'a> {
     Other,
 }
 
-fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
+pub(crate) fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
     let args = |name| named_args(elab, b, name);
     if let Some(args) = args("bool::Bool::and") && let [x, y] = args.as_slice() {
         return GuardShape::And(x, y);
@@ -3925,7 +3925,7 @@ fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
 }
 
 /// `b` in a fact `b.IsTrue()`.
-fn is_true_arg<'a>(elab: &Elaborator, ty: &'a Type) -> Option<&'a Rc<Term>> {
+pub(crate) fn is_true_arg<'a>(elab: &Elaborator, ty: &'a Type) -> Option<&'a Rc<Term>> {
     let Type::El { tm, .. } = ty else {
         return None;
     };
@@ -3940,7 +3940,7 @@ fn is_true_arg<'a>(elab: &Elaborator, ty: &'a Type) -> Option<&'a Rc<Term>> {
 /// the first with a connective at its head (`F.canonical(mag, bexp)` through
 /// its `let`s to its `&&` chain), under any negations; `None` when it has one
 /// already or never reaches one. As §11 unfolds a defined proposition.
-fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
+pub(crate) fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
     match guard_shape(elab, b) {
         GuardShape::Not(x) => Some(with_arg_at(b, 0, &unfold_guard(elab, cx, x)?)),
         GuardShape::Atom if head_is_global(b) && !is_ctor_value(b) => {
@@ -3962,7 +3962,7 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
 /// Either way round, `True = b` as `b = True` (`flipped`), what a test
 /// written `True = x.unsigned_lt_bit(y)` states. A side that is itself a
 /// literal is no guard.
-fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool, bool)> {
+pub(crate) fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool, bool)> {
     let decoded = crate::inductive::decoded(ty);
     let Type::Id { ty, lhs, rhs, .. } = &*decoded else {
         return None;
