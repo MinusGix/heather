@@ -965,19 +965,24 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
-    // What each function's placement asks it to save (`placement_saves`),
-    // which its frame is sized by.
-    let mut saves = Vec::new();
+    // What each function's placement asks it to save (`placement_saves`)
+    // and how many call slots it asks for (`placement_slots`, eight with no
+    // head), which its frame is sized by.
+    let (mut saves, mut slots) = (Vec::new(), Vec::new());
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
         let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
-        saves.push(match planned.first() { Some(&n) if (17..32).contains(&n) => n - 17, _ => 0 });
+        // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
+        let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
+        saves.push(saving.unwrap_or(0));
+        slots.push(planned.get(usize::from(saving.is_some())).filter(|&&n| (24..33).contains(&n)).map_or(8, |&n| n - 24));
         for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // What a call saves, a mask, and a function's count of
-                // saves (`Place::number`).
-                n if n >= 32 => format!("Spilling({})", n - 32),
+                // What a call saves, a mask, a function's count of call
+                // slots and its count of saves (`Place::number`).
+                n if n >= 33 => format!("Spilling({})", n - 33),
+                n if n >= 24 => format!("CallSlots({})", n - 24),
                 n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });
@@ -991,8 +996,8 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let reading_rooms = format!("{probe}_rooms");
     let numbers = |values: &[u64]| values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
     fork.define(&reading_rooms, &format!("{imports}import {probe};
-fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f)) }}
-", numbers(&saves)));
+fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f), λ (f: Nat) => rooms_at([{}], f)) }}
+", numbers(&slots), numbers(&saves)));
     let table_rooms = read(&mut fork, &reading_rooms, "rooms_read")?;
     if table_rooms.len() != m { return Err("the program's room table did not read back".into()); }
     let room = |function: usize| table_rooms[function];

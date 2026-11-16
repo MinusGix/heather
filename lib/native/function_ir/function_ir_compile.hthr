@@ -620,7 +620,8 @@ theorem emit_functions_next(last: Function, earlier: List<Function>, placement: 
 // compiler to read back and state as a literal; the placement's here.
 
 // A place: its register's index, or 16 folded; a function's count of saves,
-// 17 and the count (at most six); what a call saves, 32 and the mask.
+// 17 and the count (at most six); its count of call slots, 24 and the count
+// (at most eight); what a call saves, 33 and the mask.
 fn Place::number(self place: Place) → Nat {
-    match place { Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, Spilling(mask) => 32 + mask }
+    match place { Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask }
 }

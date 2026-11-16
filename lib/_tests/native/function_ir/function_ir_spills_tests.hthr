@@ -55,6 +55,14 @@ theorem every_mask_is_allowed(): saves_ok(8, masked(saved_registers(), 133)) = T
 // A call saving three registers needs three of the frame's slots.
 theorem three_saves_need_three_slots(): saves_ok(2, masked(saved_registers(), 133)) = False { refl }
 
+// A placement's call slots: a `CallSlots` head after the saves, or eight.
+theorem slots_head_read(): placement_slots([Saving(1), CallSlots(3), Into(Rax)]) = 3 { refl }
+theorem slots_head_alone(): placement_slots([CallSlots(0), Into(Rax)]) = 0 { refl }
+theorem no_slots_head_is_eight(): placement_slots([Saving(1), Into(Rax)]) = 8 { refl }
+theorem slots_head_is_not_a_place(): placement_body([Saving(1), CallSlots(3), Into(Rax)]) = [Into(Rax)] { refl }
+// The planner asks for the most any one call saves.
+theorem planned_slots_most_saved(): places_slots([Spilling(4), Into(Rax), Spilling(133)]) = 3 { refl }
+
 // The file after a call: the result, what was saved, and nothing where a
 // caller-saved register was left out; a register the callee keeps is as
 // it was whatever the mask.
@@ -130,5 +138,20 @@ theorem wrong_saved_refused(): lower_program(pair(), [Into(Rax), Spilling(8), In
 
 // The planner asks for what is read after the call, and its placement
 // lowers to the one store and load.
-theorem planner_saves_the_live(): add_double().plan() = [Spilling(4), Into(Rax)] { refl }
-theorem planned_lowers(): lower_program(pair(), plan_program(pair())) = Some(one_saved_program()) { refl }
+theorem planner_saves_the_live(): add_double().plan() = [CallSlots(1), Spilling(4), Into(Rax)] { refl }
+
+// Its head asks for the one slot that save needs, so the frame is one word
+// where a call with no head gets eight.
+fn one_slot_program() → Prog {
+    Start
+        .label(1).put(Block([]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([])).put(Ret)
+        .label(2).put(Block([frame_allocate(8)]))
+        .saving([Rsi]).put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring([Rsi])
+        .put(Block([AddRR(Rax, Rsi)]))
+        .put(Block([])).put(Block([frame_free(8)])).put(Ret)
+}
+theorem planned_lowers(): lower_program(pair(), plan_program(pair())) = Some(one_slot_program()) { refl }
+// A head asking for fewer slots than a call saves is refused at that call.
+theorem too_few_slots_refused(): lower_program(pair(), [Into(Rax), CallSlots(0), Spilling(4), Into(Rax)]) = None { refl }
