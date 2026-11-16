@@ -62,8 +62,7 @@ import set_tactic;
 // Code that needs fewer words live runs where more are.
 theorem Target::at_sub(self t: Target, at: Nat, live, wider: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), env: Env,
     sub: (i: Nat) → Mem(i, live) → Mem(i, wider), goes: t.At(at, live, tree, env)): t.At(at, wider, tree, env) {
-    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(wider, env, s.gprs, s.memory), goes,
+    t.goes_weaken(goes,
         λ s held => t.held_sub(live, wider, env, s.gprs, s.memory, held, sub))
 }
 
@@ -109,8 +108,7 @@ theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),
     goes: t.At(at, live, tree, a)): t.At(at, live, tree, b) {
-    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, a, s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, b, s.gprs, s.memory), goes,
+    t.goes_weaken(goes,
         λ s held => t.held_like(live, b, a, s.gprs, s.memory, held, like))
 }
 

@@ -214,13 +214,9 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
                 let held = λ (s: MachineState<X86Memory(t.r.profile)>) (h: t.Held(out, env.computes(better), s.gprs, s.memory)) =>
                     t.held_agree(out, env.computes(better), env.computes(nodes), s.gprs, s.memory, h, agree.left, agree.right.left, agree.right.right);
                 let after: t.At(prog_len(d.prog), out, tree, env.computes(better)) = j(sym(same), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(better)),
-                    t.goes_weaken(prog_len(c.prog), tree,
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(nodes), s.gprs, s.memory),
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(better), s.gprs, s.memory), next, held));
+                    t.goes_weaken(next, held));
                 let ran = t.goes_computes(out, env, p, better, names, d, at, j(sym(same), λ x _ => x.prog.Within(t.program), within), tree, parts.left, after);
-                t.goes_weaken(prog_len(p), tree,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(better, out), env, s.gprs, s.memory),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(nodes, out), env, s.gprs, s.memory), ran,
+                t.goes_weaken(ran,
                     λ s h => t.held_sub(nodes_live_in(better, out), nodes_live_in(nodes, out), env, s.gprs, s.memory, h,
                         nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
             },

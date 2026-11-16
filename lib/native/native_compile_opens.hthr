@@ -82,14 +82,12 @@ theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         (t.site().Resident(s.memory) → (a: CloseResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ (u: MachineState<X86Memory(t.r.profile)>) =>
             t.site().Resident(u.memory) ∧ after(a, u)));
     let q1 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
-    let at_w1 = t.goes_weaken(prog_len(w1), Vis(c, tree), call_pre, λ (s: MachineState<X86Memory(t.r.profile)>) => q1(s.gprs, s.memory), called,
+    let at_w1: t.Goes(prog_len(w1), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => q1(s.gprs, s.memory)) = t.goes_weaken(called,
         λ s held => held(s.flags, s.rip));
     let at_w0 = t.goes_known_to(live, env, w0, known, fd, Rdi, in_fd, m_fd, w_w1, Vis(c, tree), q1, at_w1);
     let post0 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
         q1(write_gpr(Rdi, env.word(fd), t.rbx_known_gprs(known, env, fd, u.gprs)), u.memory);
-    t.goes_weaken(prog_len(p), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => post0(execute_block_normal([MovRI(Rax, BitVec::ofNat(3))], s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        t.goes_block(p, 0, [MovRI(Rax, BitVec::ofNat(3))], w_w0, Vis(c, tree), post0, at_w0),
+    t.goes_weaken(t.goes_block(p, 0, [MovRI(Rax, BitVec::ofNat(3))], w_w0, Vis(c, tree), post0, at_w0),
         λ s held => ⟨held, t.rbx_known_cases(known, env, fd, execute_block_normal([MovRI(Rax, BitVec::ofNat(3))], s).gprs,
             λ (g1: Gprs) => q1(write_gpr(Rdi, env.word(fd), g1), s.memory),
             λ _ _ f rip => ⟨⟨⟨refl, refl⟩, trivial⟩,
@@ -523,11 +521,7 @@ theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t
                 }, at_byte(byte));
             load(u, here2, res2, Exists(byte, ⟨b.proof.left, ⟨b.proof.right.left, ⟨⟨at, ⟨refl, ⟨b.proof.right.right, short⟩⟩⟩, refl⟩⟩⟩))
         });
-    t.goes_weaken(prog_len(head), tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => pre1(execute_block_normal([CmpRR(R8, Rcx)], u).gprs,
-            execute_block_normal([CmpRR(R8, Rcx)], u).flags, execute_block_normal([CmpRR(R8, Rcx)], u).memory),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => t.PathAt(env, buf, path, vals, i, u.gprs, u.memory),
-        t.goes_block_jcc(head, 0, [CmpRR(R8, Rcx)], w_cmp, tree, E, pre1, jumped1, λ _ => refl),
+    t.goes_weaken(t.goes_block_jcc(head, 0, [CmpRR(R8, Rcx)], w_cmp, tree, E, pre1, jumped1, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 
@@ -719,10 +713,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         ((read_gpr(Rcx, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_cl(g, m)) ∧
         ((read_gpr(Rcx, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_cl(write_gpr(Rcx, read_gpr(R9, g), g), m));
     let q_r0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g).toNat() = env.number(len));
-    let at_r0 = t.goes_weaken(prog_len(r0), Vis(c, tree),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => clamp_pre(execute_block_normal([MovRI(R9, BitVec::ofNat(cap))], s).gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q_r0(s.gprs, s.memory),
-        t.goes_block(r0, 0, [MovRI(R9, BitVec::ofNat(cap))], w_r1, Vis(c, tree),
+    let at_r0: t.Goes(prog_len(r0), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => q_r0(s.gprs, s.memory)) = t.goes_weaken(t.goes_block(r0, 0, [MovRI(R9, BitVec::ofNat(cap))], w_r1, Vis(c, tree),
             λ (u: MachineState<X86Memory(t.r.profile)>) => clamp_pre(u.gprs, u.memory), at_r1),
         λ s held => {
             let rcx = read_gpr(Rcx, s.gprs);
@@ -733,11 +724,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
             ⟨λ kept => ⟨held.left, trans(sym(BitVec::clamp_kept(rcx, bound, kept)), both)⟩,
              λ over => ⟨held.left, trans(sym(BitVec::clamp_bound(rcx, bound, over)), both)⟩⟩
         });
-    t.goes_weaken(prog_len(p), Vis(c, tree),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_r0(write_gpr(Rcx, env.word(len), t.rbx_known_gprs(known, env, len, s.gprs)), s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        t.goes_known_to(live, env, p, known, len, Rcx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
+    t.goes_weaken(t.goes_known_to(live, env, p, known, len, Rcx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
         λ s held => ⟨held, ⟨t.held_rbx_known(live, env, s.gprs, s.memory, held, known, env, len),
             t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
 }

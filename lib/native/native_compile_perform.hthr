@@ -294,15 +294,9 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
         ((g2: Gprs) → t.Held(live, env, g2, m) → env.InRegisters(g2, ids, registers) → g2.KeepsOutside(g, registers) → q(g2, m))) {
     let layout = t.layout();
     match ids {
-        Nil => λ registers p _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory),
-            λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-                ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Nil, registers) → g2.KeepsOutside(u.gprs, registers) → q(g2, u.memory)),
-            next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
+        Nil => λ registers p _ _ _ _ next => t.goes_weaken(next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
         Cons(id, rest) => λ registers => match registers {
-            Nil => λ p _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory),
-                λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-                    ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Cons(id, rest), Nil) → g2.KeepsOutside(u.gprs, Nil) → q(g2, u.memory)),
-                next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
+            Nil => λ p _ _ _ _ next => t.goes_weaken(next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
             Cons(register, more) => λ p ok scratch distinct within next => {
                 let loaded = p.word_to(layout, id, register);
                 let w_loaded = Prog::within_trans(Prog::within_words_to(layout, rest, more, loaded), within);
@@ -317,11 +311,7 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
                 let q1 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
                     ((g2: Gprs) → t.Held(live, env, g2, m) → env.InRegisters(g2, rest, more) → g2.KeepsOutside(g, more) → q(g2, m));
                 let word = t.goes_word_to(live, env, p, id, register, inside.left, inside.right, w_loaded, tree, q1, later);
-                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-                        q1(write_gpr(register, w, t.rbx_gprs(env, id, u.gprs)), u.memory),
-                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-                        ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Cons(id, rest), Cons(register, more)) → g2.KeepsOutside(u.gprs, Cons(register, more)) → q(g2, u.memory)),
-                    word, λ u held => {
+                t.goes_weaken(word, λ u held => {
                     let g = u.gprs;
                     let m = u.memory;
                     let g0 = t.rbx_gprs(env, id, g);
@@ -428,10 +418,9 @@ theorem Target::goes_deep(self t: Target, dp: Prog, within: dp.deep_exit(t.layou
     let w_lab = lab.within_before(0, Block(set_list), t.program, w_set);
     let called = t.io().goes_exit(t.program, t.origin, t.code_fits(), within.witness, set, 0, within.proof, tree, call_depth_status(), exits);
     let moved = t.goes_block(lab, 0, set_list, w_set, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(u, call_depth_status()), called);
-    let into = t.goes_weaken(prog_len(lab), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(execute_block_normal(set_list, u), call_depth_status()),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => True, moved, λ s _ => ⟨refl, refl⟩);
+    let into: t.Goes(prog_len(lab), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => True) = t.goes_weaken(moved, λ s _ => ⟨refl, refl⟩);
     let labelled = t.goes_block(dp, t.layout().deep_label(), [], w_lab, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => True, into);
-    t.goes_weaken(prog_len(dp), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => True, pre, labelled, λ s _ => trivial)
+    t.goes_weaken(labelled, λ s _ => trivial)
 }
 
 // ---------------------------------------------------------------------------
@@ -472,10 +461,7 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
         ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_words(ids, values), g2, m2) → t.Spares(g, g2) → q(g2, m2)))) {
     let layout = t.layout();
     match ids {
-        Nil => λ registers values p live env sub _ _ _ _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory),
-            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (s.gprs.Holding(registers, values) ∧
-                ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env, g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2))),
-            next, λ s held => held.right.right(s.gprs, s.memory, t.held_sub(out, live, env, s.gprs, s.memory, held.left, λ i m => sub(i, out.mem_minus_nil(i, m))),
+        Nil => λ registers values p live env sub _ _ _ _ _ _ _ next => t.goes_weaken(next, λ s held => held.right.right(s.gprs, s.memory, t.held_sub(out, live, env, s.gprs, s.memory, held.left, λ i m => sub(i, out.mem_minus_nil(i, m))),
                 λ x _ _ => refl)),
         Cons(id, rest) => λ registers => match registers {
             Nil => λ _ _ _ _ _ _ _ _ _ short => false_elim(Nat::not_succ_le_zero(rest.len(), short)),
@@ -494,11 +480,7 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
                         ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env1.set_words(rest, vs), g2, m2) → t.Spares(g, g2) → q(g2, m2)));
                     let moved = t.goes_word_from(live, out1, env, p, id, register, inside(id, Inl(refl)), trans(Rbx.same_comm(register), Rbx.absent_head(register, more, rbx)),
                         λ i m ne => sub(i, out.mem_minus_cons(rest, i, id, m, ne)), aparts.left, w_step, tree, q1, later);
-                    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-                            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out1, env.set_word(id, read_gpr(register, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) → q1(g2, m2)),
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (s.gprs.Holding(Cons(register, more), Cons(value, vs)) ∧
-                            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_words(Cons(id, rest), Cons(value, vs)), g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2))),
-                        moved, λ s held => ⟨held.left, λ g2 m2 held2 spares => ⟨j(held.right.left.left, λ v _ => t.Held(out1, env.set_word(id, v), g2, m2), held2),
+                    t.goes_weaken(moved, λ s held => ⟨held.left, λ g2 m2 held2 spares => ⟨j(held.right.left.left, λ v _ => t.Held(out1, env.set_word(id, v), g2, m2), held2),
                             ⟨t.holding_spares(s.gprs, g2, spares, vs, more, outs.right, Rbx.absent_rest(register, more, rbx), held.right.left.right),
                             λ g3 m3 held3 spares3 => held.right.right(g3, m3, held3, t.spares_trans(s.gprs, g2, g3, spares, spares3))⟩⟩⟩)
                 },
@@ -1229,9 +1211,7 @@ theorem Target::goes_saves(self t: Target, env: Env, room: Nat, tree: ITree<BitV
             let at_spill: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<Nat>(λ k => (stack_address(u.gprs, spill.offset) = t.stack.at(k)) ∧
                 ((k + 8 <= t.stack.size) ∧ post(spill.after(t.writes(), u))));
             let moved = t.goes_block(p, 0, rsp_down(), w_down, tree, at_spill, spilled);
-            t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => at_spill(execute_block_normal(rsp_down(), u)),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, room, i + 8 * Succ(rest.len()), above, s.gprs, s.memory) ∧ s.gprs.Outside(g0, [Rax, R11, Rsp]),
-                moved, λ s pre => {
+            t.goes_weaken(moved, λ s pre => {
                     let g = s.gprs;
                     let m = s.memory;
                     let low = read_gpr(Rsp, g).add(BitVec::ofNat(256 - 8, n := 8).sign_extend(56));
@@ -1273,9 +1253,7 @@ theorem Target::goes_restores(self t: Target, env: Env, room: Nat, tree: ITree<B
     match registers {
         Nil => λ p i above _ _ _ next => {
             let same: (i + 8 * 0 = i) = omega();
-            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, room, i + 8 * 0, above, s.gprs, s.memory) ∧
-                    (((x: Gpr) → Mem(x, Nil<Gpr>) → read_gpr(x, s.gprs) = read_gpr(x, g0)) ∧ q(s.gprs)),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, room, i, above, s.gprs, s.memory) ∧ q(s.gprs), next,
+            t.goes_weaken(next,
                 λ s pre => ⟨j(sym(same), λ k _ => t.Bare(env, room, k, above, s.gprs, s.memory), pre.left), ⟨λ x never => false_elim(never), pre.right⟩⟩)
         },
         Cons(r, rest) => λ p i above outside keep within next => {
@@ -1294,13 +1272,8 @@ theorem Target::goes_restores(self t: Target, env: Env, room: Nat, tree: ITree<B
             let up = t.goes_block(loaded, 0, [rsp_up()], within, tree, final, next);
             let post = λ (u: MachineState<X86Memory(t.r.profile)>) => final(execute_block_normal([rsp_up()], u));
             let reloaded = t.goes_reload(before, 0, load, w_loaded, tree, post, up);
-            let popped = t.goes_weaken(prog_len(before), tree,
-                λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ k => (stack_address(s.gprs, load.offset) = t.stack.at(k)) ∧
-                    ((k + 8 <= t.stack.size) ∧ Exists<BitVec(64)>(λ w => (read_word(t.site().data, s.memory, t.stack.at(k)) = Some(w)) ∧
-                        post(load.after(w, s))))),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, room, j1, Cons(word, above), s.gprs, s.memory) ∧
-                    (((x: Gpr) → Mem(x, rest) → read_gpr(x, s.gprs) = read_gpr(x, g0)) ∧ q(s.gprs)),
-                reloaded, λ s pre => {
+            let popped: t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, room, j1, Cons(word, above), s.gprs, s.memory) ∧
+                    (((x: Gpr) → Mem(x, rest) → read_gpr(x, s.gprs) = read_gpr(x, g0)) ∧ q(s.gprs))) = t.goes_weaken(reloaded, λ s pre => {
                     let g = s.gprs;
                     let m = s.memory;
                     let bare = pre.left;
@@ -1380,9 +1353,7 @@ theorem Target::goes_callee_entry(self t: Target, env: Env, pre: Prog, proc: Pro
     let fits: ((t.index + 8 * t.words) + 8 * kept.len() <= t.stack.size) = omega(lens, t.framed);
     let at_frame = λ (fs: List<BitVec(64)>) => t.Goes(prog_len(sv), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
         t.Bare(env, t.room, t.index + 8 * t.words, fs, s.gprs, s.memory) ∧ s.gprs.Outside(g0, [Rax, R11, Rsp]));
-    let framed: at_frame(t.frames) = t.goes_weaken(prog_len(sv), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => p_wf(execute_block_normal(frame_down(t.words), s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, t.index + 8 * t.words, t.frames, s.gprs, s.memory) ∧ s.gprs.Outside(g0, [Rax, R11, Rsp]),
-        opened, λ s held => {
+    let framed: at_frame(t.frames) = t.goes_weaken(opened, λ s held => {
             let g = s.gprs;
             let size: BitVec(64) = BitVec::ofNat(8 * t.words);
             let low = read_gpr(Rsp, g).sub(size);
@@ -1458,9 +1429,7 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
     // registers.
     let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, t.frames, i0) ∧ ((read_gpr(Rsp, g) = t.frame()) ∧ g.Holding(regs, aw));
     let based: Nat → X86Memory(t.r.profile) → Type = λ n m => Exists<Nat → BitVec(8)>(λ v => t.Based(after, n, v, m));
-    let closing_from = t.goes_weaken(prog_len(cu), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => closing(t.frames, execute_block_normal(frame_up(t.words), s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => based(Succ(t.room), s.memory) ∧ r(s.gprs, s.memory), closed, λ s held => {
+    let closing_from: t.Goes(prog_len(cu), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => based(Succ(t.room), s.memory) ∧ r(s.gprs, s.memory)) = t.goes_weaken(closed, λ s held => {
             let g = s.gprs;
             let size: BitVec(64) = BitVec::ofNat(8 * t.words);
             let high = read_gpr(Rsp, g).add(size);
@@ -1483,15 +1452,11 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
         },
         w_cu, tree, closing_from);
     let q: Gprs → X86Memory(t.r.profile) → Type = λ g m => t.Held(results, after, g, m) ∧ g.Holding(regs, aw);
-    let leaving = t.goes_weaken(prog_len(p1), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => based(t.room, s.memory) ∧ r(s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory), counted, λ s held =>
+    let leaving: t.Goes(prog_len(p1), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory)) = t.goes_weaken(counted, λ s held =>
             ⟨Exists(held.left.proof.left.witness, t.held_based(results, after, s.gprs, s.memory, held.left)),
                 ⟨t.held_frames(results, after, s.gprs, s.memory, held.left), ⟨t.held_rsp(results, after, s.gprs, s.memory, held.left), held.right⟩⟩⟩);
     let words = t.goes_words_to(results, after, tree, q, results, regs, b, λ i m => ⟨inside(i, m), m⟩, trivial, trivial, w_p1, leaving);
-    t.goes_weaken(prog_len(b), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory) ∧
-            ((g2: Gprs) → t.Held(results, after, g2, s.memory) → after.InRegisters(g2, results, regs) → g2.KeepsOutside(s.gprs, regs) → q(g2, s.memory)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory), words,
+    t.goes_weaken(words,
         λ s held => ⟨held, λ g2 held2 passed _ => ⟨held2, passed⟩⟩)
 }
 
@@ -1635,8 +1600,7 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rax, g) = BitVec::ofNat(0))) {
     let layout = t.layout();
     match ids {
-        Nil => λ p live _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = BitVec::ofNat(0)), next, λ s h => h.left),
+        Nil => λ p live _ _ _ next => t.goes_weaken(next, λ s h => h.left),
         Cons(id, rest) => λ p live ok beyond => (match fit: layout.word_fits(id) as λ b =>
                 (match b { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest).Within(t.program) →
                 t.GoesR(prog_len((match b { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest)), tree,
@@ -1644,10 +1608,7 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
                 t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rax, g) = BitVec::ofNat(0))) {
             False => λ within next => {
                 let later = t.goes_zeroes(env, tree, rest, p, Cons(id, live), λ i m => ok(i, Inr(m)), λ i m unfit => Inr(beyond(i, Inr(m), unfit)), within, next);
-                t.goes_weaken(prog_len(p), tree,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(Cons(id, live), env, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = BitVec::ofNat(0)),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = BitVec::ofNat(0)),
-                    later, λ s h => ⟨t.held_sub(Cons(id, live), live, env, s.gprs, s.memory, h.left, λ i m => match m {
+                t.goes_weaken(later, λ s h => ⟨t.held_sub(Cons(id, live), live, env, s.gprs, s.memory, h.left, λ i m => match m {
                         Inl(e) => j(sym(e), λ x _ => Mem(x, live), beyond(id, Inl(refl), fit)),
                         Inr(m2) => m2,
                     }), h.right⟩)
@@ -1659,11 +1620,7 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
                 let w_stored = Prog::within_trans(Prog::within_zeroes(layout, rest, stored), within);
                 let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(Cons(id, live), env, g, m) ∧ (read_gpr(Rax, g) = BitVec::ofNat(0));
                 let store = t.goes_word_store(p, id, Rax, inside, w_stored, tree, q, later);
-                t.goes_weaken(prog_len(p), tree,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => (read_gpr(Rsp, s.gprs) = t.frame()) ∧
-                        q(t.slot_gprs(id, s.gprs), t.r.profile.store(s.memory, t.slot(id), word_bytes(read_gpr(Rax, t.slot_gprs(id, s.gprs))))),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = BitVec::ofNat(0)),
-                    store, λ s h => {
+                t.goes_weaken(store, λ s h => {
                         let g = s.gprs;
                         let m = s.memory;
                         let g2 = t.slot_gprs(id, g);
@@ -1732,15 +1689,14 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let w_saved = saved.within_before(0, Block(set3), t.program, w_mov3);
     let w_mov = mov.within_before(0, Store(store), t.program, w_saved);
     // The words zeroed, from the frame opened.
-    let final = t.goes_weaken(prog_len(fm.zeroes(layout, live)), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live.onto(unfit), env, s.gprs, s.memory), next,
+    let final: t.Goes(prog_len(fm.zeroes(layout, live)), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live.onto(unfit), env, s.gprs, s.memory)) = t.goes_weaken(next,
         λ s h => t.held_sub(live, live.onto(unfit), env, s.gprs, s.memory, h, λ i m => live.mem_onto(i, unfit, m)));
     let zeroed = t.goes_zeroes(env, tree, live, fm, unfit, λ i m => ⟨t.homes.slotted_home(live, slotted, i, m), refl⟩,
         λ i m no => live.mem_filter_of(fits_not, i, cong_fn<Bool, Bool>(λ b => !b, no), m), within, final);
     let at_frame = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(unfit, env, u.gprs, u.memory) ∧ (read_gpr(Rax, u.gprs) = BitVec::ofNat(0));
     let opened = t.goes_block(sv, 0, open, w_fm, tree, at_frame, zeroed);
     let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, top, t.frames, u.gprs, u.memory);
-    let framed = t.goes_weaken(prog_len(sv), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => at_frame(execute_block_normal(open, u)), post, opened,
+    let framed: t.Goes(prog_len(sv), tree, post) = t.goes_weaken(opened,
         λ u held => {
             let g = u.gprs;
             let low = read_gpr(Rsp, g).sub(size);

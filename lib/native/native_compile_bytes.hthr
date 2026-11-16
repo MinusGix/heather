@@ -780,9 +780,7 @@ theorem Target::goes_bytes_init(self t: Target, live: List<Nat>, buf, cap: Nat, 
         Cons(c, rest) => λ room => match room {
             Zero => λ i p env sum within next => {
                 let stored = Cons(c, rest);
-                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) =>
-                        t.Held(live, Env(env.words, stored.stored(buf, i, env.buffers), env.args), u.gprs, u.memory),
-                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory), next,
+                t.goes_weaken(next,
                     λ u held => t.held_stored_past(live, buf, cap, found, stored, i, env, u.gprs, u.memory, omega(sum), held))
             },
             Succ(r) => λ i p env sum within next => {

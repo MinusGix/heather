@@ -1817,10 +1817,11 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     // What the count keeps: the stack's words, RSP, and the registers it
     // does not write.
     let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
-    let after = λ (d: Nat) (eq: t.room = Succ(d)) => t.goes_weaken(prog_len(counted), tree,
-        λ (v: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, d, i1, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]),
-        λ (v: MachineState<X86Memory(t.r.profile)>) => based(d, v.memory) ∧ r(v.gprs, v.memory),
-        more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
+    let after = λ (d: Nat) (eq: t.room = Succ(d)) => {
+        let weak: t.Goes(prog_len(counted), tree, λ (v: MachineState<X86Memory(t.r.profile)>) => based(d, v.memory) ∧ r(v.gprs, v.memory)) =
+            t.goes_weaken(more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
+        weak
+    };
     let count = t.goes_count_down(env, t.room, lbl, w_count, deep_k, deep_before, deep_item, deep_at, tree, r,
         λ g g2 m h same => ⟨h.left, ⟨trans(same(Rsp, refl, refl), h.right.left),
             λ x absent => trans(same(x, x.absent_head(Rax, [R11, Rsp], absent), x.absent_head(R11, [Rsp], x.absent_rest(Rax, [R11, Rsp], absent))),
@@ -1834,10 +1835,7 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
         zero, after);
     let labelled = t.goes_block(pre_i, label, [], w_lbl, tree,
         λ (v: MachineState<X86Memory(t.r.profile)>) => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
-    let entered = t.goes_weaken(prog_len(pre_i), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => based(t.room, s.memory) ∧ r(s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0),
-        labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
+    let entered: t.Goes(prog_len(pre_i), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
             λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩⟩⟩);
     j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
         λ at _ => t.Goes(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
@@ -1985,12 +1983,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
                     rets, aw, cb, live, mixed, λ i m => args.union_right(saved, i, m),
                     inside_results, fp.right.right.right.right.right, trivial, trivial, res_le6, res_le_aw, within,
                     next(mixed.set_words(results, aw)));
-                t.goes_weaken(prog_len(cb), tk,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, mixed, s.gprs, s.memory) ∧ (s.gprs.Holding(rets, aw) ∧
-                        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, mixed.set_words(results, aw), g2, m2) → t.Spares(s.gprs, g2) →
-                            t.Held(out, mixed.set_words(results, aw), g2, m2))),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, mixed, s.gprs, s.memory) ∧ s.gprs.Holding(rets, aw),
-                    gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩)
+                t.goes_weaken(gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩)
             },
             Exited(status) => λ u at exited => exits(status, u, at, exited),
         };

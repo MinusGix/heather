@@ -266,7 +266,7 @@ theorem Prog::tests_within(self p: Prog, layout: Layout, condition, else_name: N
 // ---------------------------------------------------------------------------
 // Items
 
-theorem Target::goes_weaken(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), pre, entry: MachineState<X86Memory(t.r.profile)> → Type,
+theorem Target::goes_weaken(self t: Target, {at: Nat}, {tree: ITree<BitVec(64)>(Events::linux())}, {pre, entry: MachineState<X86Memory(t.r.profile)> → Type},
     goes: t.Goes(at, tree, pre), into: (s: MachineState<X86Memory(t.r.profile)>) → entry(s) → pre(s)): t.Goes(at, tree, entry) {
     t.site().goes_weaken(t.io(), at, tree, pre, entry, goes, into)
 }
@@ -622,7 +622,7 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                 False => refl,
             };
             let n = j(p.word_from_dead(layout, out, id, register, dead_out), λ x _ => t.GoesR(prog_len(x), tree, q), next);
-            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory), goal, n,
+            t.goes_weaken(n,
                 λ s held => held.right(s.gprs, s.memory, t.held_dead(live, after, env, id, read_gpr(register, s.gprs), s.gprs, s.memory, held.left, sub, dead),
                     λ x _ _ => refl))
         },
@@ -632,9 +632,7 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                 let a = t.slot(id);
                 let stored = t.goes_word_store(p, id, register, inside, j(code, λ x _ => x.Within(t.program), within), tree, q,
                     j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
-                t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => (read_gpr(Rsp, s.gprs) = t.frame()) ∧
-                        q(t.slot_gprs(id, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, t.slot_gprs(id, s.gprs))))),
-                    goal, stored, λ s held => {
+                t.goes_weaken(stored, λ s held => {
                         let g1 = t.slot_gprs(id, s.gprs);
                         let w = read_gpr(register, s.gprs);
                         let m1 = t.r.profile.store(s.memory, a, word_bytes(w));
@@ -652,9 +650,7 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                 let code = p.word_from_reg(layout, out, id, register, dead_out, k, slot);
                 let moved = t.goes_block(p, 0, [MovRR(home_register(k), register)], j(code, λ x _ => x.Within(t.program), within), tree,
                     λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
-                t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
-                        q(execute_block_normal([MovRR(home_register(k), register)], s).gprs, execute_block_normal([MovRR(home_register(k), register)], s).memory),
-                    goal, moved, λ s held => {
+                t.goes_weaken(moved, λ s held => {
                         let w = read_gpr(register, s.gprs);
                         held.right(write_gpr(home_register(k), w, s.gprs), s.memory,
                             t.held_reg_set(live, after, env, id, w, s.gprs, s.memory, held.left, sub, k, slot, apart),
@@ -684,10 +680,7 @@ theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: En
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (env.set_word(result, read_gpr(Rax, g)) = other)) {
     let stored = t.goes_word_from(live, out, env, p, result, Rax, inside, refl, sub, apart, within, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, other, g, m), next);
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_word(result, read_gpr(Rax, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) →
-                t.Held(out, other, g2, m2)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (env.set_word(result, read_gpr(Rax, s.gprs)) = other), stored,
+    t.goes_weaken(stored,
         λ s held => ⟨held.left, λ g2 m2 after _ => t.held_same(out, env.set_word(result, read_gpr(Rax, s.gprs)), other, g2, m2, after, held.right)⟩)
 }
 
@@ -779,13 +772,8 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         (is_zero_bits(64, read_gpr(Rax, g).band(read_gpr(Rax, g))) = !env.bit(condition));
     let loaded = t.goes_bit_to(live, env, p, condition, Rax, inside, holds, w_bits, tree, q,
-        t.goes_weaken(prog_len(bits), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
-            execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
-            λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), flagged, λ u held => held));
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ {
-            let g = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(Rax, env.word(condition), t.rbx_gprs(env, condition, s.gprs)));
-            q(write_gpr(Rax, read_gpr(Rax, g).band(read_gpr(Rbx, g)), g), s.memory)
-        }, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), loaded,
+        t.goes_weaken(flagged, λ u held => held));
+    t.goes_weaken(loaded,
         λ s held => ⟨held, ⟨t.held_rbx(live, env, s.gprs, s.memory, held, env, condition), bit_tests_zero(env.number(condition))⟩⟩)
 }
 
@@ -804,11 +792,8 @@ theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, k
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         (read_gpr(Rax, write_gpr(Rax, BitVec::ofNat(60), g)) = BitVec::ofNat(60)) ∧ (read_gpr(Rdi, write_gpr(Rax, BitVec::ofNat(60), g)) = env.word(status));
     let loaded = t.goes_known_to(live, env, p, known, status, Rdi, inside, holds, w_word, tree, q,
-        t.goes_weaken(prog_len(word), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(execute_block_normal([MovRI(Rax, BitVec::ofNat(60))], u), env.word(status)),
-            λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), moved, λ u held => held));
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q(write_gpr(Rdi, env.word(status), t.rbx_known_gprs(known, env, status, s.gprs)), s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), loaded, λ s held => ⟨held, ⟨refl, refl⟩⟩)
+        t.goes_weaken(moved, λ u held => held));
+    t.goes_weaken(loaded, λ s held => ⟨held, ⟨refl, refl⟩⟩)
 }
 
 // Off the end of `main`: exit 0.
@@ -821,7 +806,5 @@ theorem Target::goes_finish(self t: Target, p: Prog,
     let called = t.io().goes_exit(t.program, t.origin, t.code_fits(), within.witness, set, 0, within.proof, tree, BitVec::ofNat(0), exits);
     let moved = t.goes_block(p, 0, [MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))], set.within_before(0, Syscall, t.program, within), tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(u, BitVec::ofNat(0)), called);
-    t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) =>
-            LinuxExits(execute_block_normal([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))], u), BitVec::ofNat(0)),
-        pre, moved, λ s held => ⟨refl, refl⟩)
+    t.goes_weaken(moved, λ s held => ⟨refl, refl⟩)
 }

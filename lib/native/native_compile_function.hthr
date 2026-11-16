@@ -954,9 +954,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
     // The homes into their registers and R10 into RBX.
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ env.InRegisters(g, arguments, regs);
     let carry = t.goes_block(passes_to, 0, block, w_carried, tree, pre4, did);
-    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(prog_len(passes_to), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => pre4(execute_block_normal(block, s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), carry, λ s h => {
+    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(carry, λ s h => {
             let u = execute_block_normal(block, s);
             let c = t.homes_carried(s, words, lent, small, h.right);
             let held_u: t.Held(live, env, u.gprs, u.memory) = j(sym(c.left), λ m _ => t.Held(live, env, u.gprs, m),
@@ -1071,10 +1069,6 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
             t.function_performs(call, answers, callee, below), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
-            λ _ => t.goes_weaken(prog_len(back), tree,
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧
-                    (left.set_word(result, read_gpr(Rax, s.gprs)) = region.meaning(call, env)),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧ s.gprs.Holding(result_registers(), [answer.word]),
-                taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
+            λ _ => t.goes_weaken(taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
     }
 }
