@@ -345,3 +345,14 @@ fn as_argument(mut io: Io) → ReadResult {
     let r = answer(io.read(Io::stdin(), 8));
     r
 }
+
+// Linux reads a descriptor as 32 bits: a write to the word 2^32 + 1 is sent
+// to descriptor 1, and a read of the word 2^32 is received from descriptor 0
+// (issues/linux-descriptor-upper-half.md). A word naming another
+// descriptor still sends nothing there.
+theorem write_to_upper_half_word_reaches_stdout(bytes: List<BitVec(8)>, count: Nat):
+    @LinuxCmd::sent<Nat>(WriteCmd(BitVec::ofNat(4294967297), bytes), BitVec::ofNat(1), Wrote(count)) = bytes.take(count) { refl }
+theorem read_of_upper_half_word_comes_from_stdin(bytes: List<BitVec(8)>):
+    @LinuxCmd::received<Nat>(ReadCmd(BitVec::ofNat(4294967296), 8), BitVec::ofNat(0), ReadBytes(bytes)) = bytes { refl }
+theorem write_to_another_descriptor_sends_nothing(bytes: List<BitVec(8)>, count: Nat):
+    @LinuxCmd::sent<Nat>(WriteCmd(BitVec::ofNat(2), bytes), BitVec::ofNat(1), Wrote(count)) = [] { refl }

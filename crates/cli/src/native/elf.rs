@@ -511,9 +511,9 @@ theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = S
         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
 }}
 
-theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {{
-    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65536,
-        j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
+theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {{
+    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65535,
+        j(sym({p}_length()), λ n _ => 232 + n <= 65535, Nat::leb_sound(232 + {length}, 65535, trivial)))
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
