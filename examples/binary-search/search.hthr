@@ -25,55 +25,6 @@ import list_window;
 import fintype;
 import bitvec_fintype;
 
-// A difference that does not borrow is the difference of the numbers.
-theorem sub_toNat_fits(a, b: u64, le: b.toNat() <= a.toNat()): (a - b).toNat() + b.toNat() = a.toNat() { bv_omega }
-
-// The gap below `hi`, as a number: no borrow when `lo < hi`.
-theorem gap_toNat(lo, hi: u64, h: lo < hi): (hi - lo).toNat() + lo.toNat() = hi.toNat() { bv_omega }
-
-// The midpoint `lo + (hi - lo) / 2` as a number is `lo` plus the half gap:
-// the sum does not overflow.
-theorem midpoint_toNat(lo, hi: u64, h: lo < hi): (lo + ((hi - lo) >> 1)).toNat() = lo.toNat() + ((hi - lo) >> 1).toNat() {
-    let gap = gap_toNat(lo, hi, h);
-    let twice = BitVec::toNat_half_twice_le(64, hi - lo);
-    let below = BitVec::toNat_lt_pow(64, hi);
-    BitVec::toNat_add_of_lt(64, lo, (hi - lo) >> 1, omega)
-}
-
-// So the midpoint lies in `[lo, hi)`.
-theorem midpoint_from(lo, hi: u64, h: lo < hi): lo.toNat() <= (lo + ((hi - lo) >> 1)).toNat() {
-    let mid = midpoint_toNat(lo, hi, h);
-    omega
-}
-
-theorem midpoint_below(lo, hi: u64, h: lo < hi): (lo + ((hi - lo) >> 1)).toNat() < hi.toNat() {
-    let mid = midpoint_toNat(lo, hi, h);
-    let gap = gap_toNat(lo, hi, h);
-    let twice = BitVec::toNat_half_twice_le(64, hi - lo);
-    omega
-}
-
-// Both halves the search goes on to are smaller than the range it had.
-theorem right_smaller(lo, hi: u64, h: lo < hi): (hi - ((lo + ((hi - lo) >> 1)) + 1)).toNat() < (hi - lo).toNat() {
-    let mid = lo + ((hi - lo) >> 1);
-    let from = midpoint_from(lo, hi, h);
-    let below = midpoint_below(lo, hi, h);
-    let gap = gap_toNat(lo, hi, h);
-    let pow = BitVec::toNat_lt_pow(64, hi);
-    let next: ((mid + 1).toNat() = mid.toNat() + 1) = BitVec::toNat_add_of_lt(64, mid, 1, omega);
-    let rest = sub_toNat_fits(hi, mid + 1, omega);
-    omega
-}
-
-theorem left_smaller(lo, hi: u64, h: lo < hi): ((lo + ((hi - lo) >> 1)) - lo).toNat() < (hi - lo).toNat() {
-    let mid = lo + ((hi - lo) >> 1);
-    let from = midpoint_from(lo, hi, h);
-    let below = midpoint_below(lo, hi, h);
-    let gap = gap_toNat(lo, hi, h);
-    let part = sub_toNat_fits(mid, lo, from);
-    omega
-}
-
 // The first offset from `lo` below `hi` whose byte is at least `key`, or
 // `hi` when there is none: in a sorted span, where `key` would go.
 runtime fn lower_bound_in(s: List<u8>, n, key, lo, hi: u64) → u64 decreases (hi - lo).toNat() {
@@ -87,8 +38,6 @@ runtime fn lower_bound_in(s: List<u8>, n, key, lo, hi: u64) → u64 decreases (h
     } else {
         lo
     }
-    on ?dec1 := { right_smaller(lo, hi, h) };
-    on ?dec2 := { left_smaller(lo, hi, h) };
 }
 
 runtime fn lower_bound(s: List<u8>, n, key: u64) → u64 { lower_bound_in(s, n, key, 0, n) }
@@ -105,42 +54,37 @@ fn Below(s: List<u8>, n, key, r: u64) → Type { (j: u64) → j < r → s.byte_w
 fn Above(s: List<u8>, n, key, r: u64) → Type { (j: u64) → r <= j → j < n → ¬(s.byte_within(n, j).zero_extend(56) < key) }
 
 // The loop keeps both sides: what lies below `lo` is below `key`, what lies
-// from `hi` on is not, and the answer stays in the range.
+// from `hi` on is not, and the answer stays in the range. One arm per way
+// the function can go, each with the induction hypothesis for its call.
 theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s, n), order: lo <= hi, fits: hi <= n,
     below: Below(s, n, key, lo), above: Above(s, n, key, hi)):
     And<lower_bound_in(s, n, key, lo, hi) <= hi, And<Below(s, n, key, lower_bound_in(s, n, key, lo, hi)), Above(s, n, key, lower_bound_in(s, n, key, lo, hi))>>
-    decreases (hi - lo).toNat()
 {
-    if h: lo < hi {
-        let mid = lo + ((hi - lo) >> 1);
-        let start: (lo <= mid) = midpoint_from(lo, hi, h);
-        let end: (mid < hi) = midpoint_below(lo, hi, h);
-        let real: (mid < n) = bv_omega;
-        if less: s.byte_within(n, mid).zero_extend(56) < key {
-            let smaller = right_smaller(lo, hi, h);
+    induct lower_bound_in(s, n, key, lo, hi) {
+        // The byte at `mid` is below `key`: so is every byte up to it.
+        True::True => {
+            let mid = lo + ((hi - lo) >> 1);
             let below2: Below(s, n, key, mid + 1) = λ j before => {
-                let up = asc(j, mid, bv_omega, real);
+                let up = asc(j, mid, bv_omega, bv_omega);
                 bv_omega
             };
-            let ih = lower_bound_in_splits(s, n, key, mid + 1, hi, asc, bv_omega, fits, below2, above);
-            let step: (lower_bound_in(s, n, key, lo, hi) = lower_bound_in(s, n, key, mid + 1, hi)) = simp_only(lower_bound_in, discharge := bv_omega);
-            rewrite(step, ih)
-        } else {
-            let smaller = left_smaller(lo, hi, h);
+            ih(asc, bv_omega, fits, below2, above)
+        },
+        // It is not: neither is any byte from it on.
+        True::False => {
+            let mid = lo + ((hi - lo) >> 1);
             let above2: Above(s, n, key, mid) = λ j after within reached => {
                 let up = asc(mid, j, after, within);
-                less(bv_omega)
+                bv_omega
             };
-            let ih = lower_bound_in_splits(s, n, key, lo, mid, asc, start, omega, below, above2);
-            let r = lower_bound_in(s, n, key, lo, mid);
-            let within: (r <= hi) = r.toNat().le_trans(mid.toNat(), hi.toNat(), ih.left, mid.toNat().le_of_lt(hi.toNat(), end));
-            let step: (lower_bound_in(s, n, key, lo, hi) = r) = simp_only(lower_bound_in, discharge := bv_omega);
-            rewrite(step, ⟨within, ih.right⟩)
-        }
-    } else {
-        let same: (lo = hi) = bv_omega;
-        let step: (lower_bound_in(s, n, key, lo, hi) = lo) = simp_only(lower_bound_in, discharge := bv_omega);
-        rewrite(step, ⟨order, ⟨below, λ (j: u64) (after: lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩)
+            let r = ih(asc, bv_omega, bv_omega, below, above2);
+            ⟨{ let rl = r.left; bv_omega }, r.right⟩
+        },
+        // The range is empty: `lo` is `hi`.
+        False => {
+            let same: (lo = hi) = bv_omega;
+            ⟨order, ⟨below, λ (j: u64) (after: lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩
+        },
     }
 }
 
@@ -174,6 +118,9 @@ theorem lower_bound_splits(s: List<u8>, n, key: u64, asc: Ascending(s, n)):
 // Bloch found in the JDK's binary search in 2006, after nine years.) The
 // program above computes `lo + (hi - lo) / 2`, which `midpoint_from` and
 // `midpoint_below` keep in `[lo, hi)`.
+theorem midpoint_from(lo, hi: u64, h: lo < hi): lo <= lo + ((hi - lo) >> 1) { bv_omega }
+theorem midpoint_below(lo, hi: u64, h: lo < hi): lo + ((hi - lo) >> 1) < hi { bv_omega }
+
 theorem naive_midpoint_escapes(): ¬((lo, hi: u64) → lo < hi → lo <= (lo + hi) >> 1) {
     λ claim => {
         let lo: u64 = 0x8000000000000000;

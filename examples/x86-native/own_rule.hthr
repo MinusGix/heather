@@ -1,0 +1,45 @@
+// A program that brings its own optimizer rule.
+//
+// `or_zero` is an ordinary theorem about words under the `rule` prefix
+// (docs/native/optimizer-rules-design.md). Declaring it is all there is:
+// the prefix registers it, `compile-x86` takes the rules registered in the
+// program's modules beside the library's, the search finds where the
+// statement fits, and the certificate's replay uses the rule's soundness,
+// which the prefix proved from the theorem.
+//
+//     heather compile-x86 examples/x86-native/own_rule.hthr first_or_zero -o own_rule.s
+//
+// With the rule the compiled function has no `or`; without it, one.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import function_ir_rule;
+import runtime;
+
+rule theorem or_zero({w: Nat}, x: BitVec(w)): x | 0 = x {
+    trans(cong_fn(λ (z: BitVec(w)) => x | z, BitVec::ofNat_zero(w)), BitVec::bor_zero_r(w, x))
+}
+
+// The first byte of a span, or zero of an empty one, with a zero or-ed in.
+runtime fn first_or_zero(s: List<u8>, n: u64) → u64 {
+    if h: 0 < n {
+        s.byte_within(n, 0).zero_extend(56) | 0
+    } else {
+        0
+    }
+}

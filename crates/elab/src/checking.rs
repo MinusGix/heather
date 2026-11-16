@@ -408,10 +408,10 @@ impl Checking<'_> {
                 self.elab_check_skel_slots(&inner, &built, expected, lvl, hint, skel, capture_slots)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
-                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF)
+                if matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF || name == crate::function_induction::INDUCT_LEAF_DEFAULT)
                     && named.is_empty() =>
             {
-                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL);
+                let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF_DEFAULT);
                 crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }

@@ -511,10 +511,10 @@ the matcher, for the rules whose conclusion is a node.
   and hands the fact premises to the theorem. `given` passes proofs of the
   theorem's guards.
 - **`rule theorem`** (`function_ir_rule.hthr`): the theorem is published as
-  written, and beside it `name_rule: Rule`, the clause the statement stands
-  for with its guard and its soundness.
+  written, and beside it `name_entry`, whose `rule` is the clause the
+  statement stands for with its guard and its soundness.
 - **All 45 rules** of `function_ir_rules.hthr` are `rule theorem`s, and
-  `rules()` lists each `name_rule` in its old place. No clause, no
+  `rules()` lists each `name_entry.rule` in its old place. No clause, no
   soundness proof over a valuation and no unpacking of numbers is written
   by hand there any more.
 - **A rule's numbers** are its binders in the order written, then the word
@@ -533,7 +533,7 @@ the matcher, for the rules whose conclusion is a node.
   numbers from the statement.
 
 - **The matcher** (`function_ir_match.hthr`): a `rule theorem` also
-  publishes `name_pattern: RulePattern`, the shape of its clause: each
+  publishes the shape of its clause (`name_entry.pattern`): each
   premise's kind, and which of its numbers are the rule's own and which
   are computed (a literal, a sum). `Matchable::found_at` starts from the
   premise that writes what the conclusion writes, follows each operand to
@@ -549,10 +549,38 @@ the matcher, for the rules whose conclusion is a node.
   their plans are the same. `add_zero` had no recogniser: it fires now
   because it is stated and listed.
 
-What is left of step 3: the matcher reads a rule whose conclusion is a
-node, with node and range premises. A rule that concludes a range or an
-order (most of `Seen::pass`) is still proposed by hand there, the
+- **`ranging()`** lists the nine rules that give the range of the word a
+  node writes (`within_const`, `_move`, `_add`, `_shift`, `_narrow`, `_or`,
+  `_and`, `_and_right`, `_sub`). `Seen::bounding` tries them at each node
+  passed and keeps the narrowest range found, the first of equals; the
+  arms of `Seen::pass` that named those rules by place are gone. For that
+  `within_narrow` states its bound (`Nat::pow(2, from) - 1`) and no longer
+  takes it as a number with a guard: a number only a guard constrains is
+  one the matcher cannot find.
+
+- **A rule registers itself.** `rule theorem name` publishes one value,
+  `name_entry: RuleEntry` (the rule, its clause's shape, and whether it is
+  one of the library's own), with the declaration form `AsRegistered`, so
+  `registered(RuleEntry)` lists it wherever its module is imported.
+- **A compilation's tables are the library's rules and the program's.**
+  `Tables::of(entries)` (`function_ir_rules.hthr`) keeps the library's
+  rules in their places in `rules()` and adds every other registered rule
+  after them: to the replayer's table, and to the search by its shape (a
+  rule that concludes a node rewrites, one that concludes a range gives
+  ranges). The stages and the searches take the entries as a parameter
+  whose default is `registered(RuleEntry)`, which is read where the call
+  is: `compile-x86`'s reads and its certificate are modules that import
+  the program, so they get the program's rules with no text naming them.
+- **`examples/x86-native/own_rule.hthr`** is a program that declares
+  `or_zero` and is compiled with it: the `or` is gone from its code, and
+  stays without the rule (`crates/cli/tests/native_own_rule.rs`).
+
+What is left of step 3: the rules that decide a bit or give an order, and
+the ones a branch's test gives in an arm, are still proposed by hand; the
 strategies are not registered learners yet, and "Accepted" is not proved.
+The library's own rules keep their hand-written places (`rules()`,
+`matchable()`, `ranging()`) while recognisers in `learn` still name rules
+by place; a user's rule needs no list.
 
 What a statement can say, as built:
 
@@ -576,7 +604,7 @@ Where the build differs from the sections above, for now:
 
 | The doc writes | Built |
 |---|---|
-| `swap_twice::rule` | `swap_twice_rule`: a member cannot attach to a theorem |
+| `swap_twice::rule` | `swap_twice_entry.rule`: a member cannot attach to a theorem |
 | `x.nat()` | `x.toNat()` |
 | `f: Buffer` | `f: BufferNow`: `Buffer` is the source language's buffer declaration |
-| registered by name, plans name rules by key | not yet: a generator cannot publish a `register def`. That needs a new declaration form in the tactic host, an elaborator change |
+| plans name rules by key, `rules()` goes | a rule registers itself and a user's rule joins the table, but plans still name a rule by its place: the library's first, then the registered ones in key order |

@@ -96,6 +96,27 @@ theorem BitVec::toNat_shift_right(n: Nat, x: BitVec(n), k: Nat): x.shift_right(k
     trans(BitVec::toNat_shift_right_shr(n, x, k), Nat::shr_eq_div(k, x.toNat()))
 }
 
+// The quotient as the two bounds a linear search reads, with `2^k` a
+// literal at a literal count: `bv_omega` takes `x >> k` apart by these
+// (`x >> 1` in a midpoint `lo + ((hi - lo) >> 1)`).
+theorem BitVec::toNat_shift_right_le(n: Nat, x: BitVec(n), k: Nat):
+    x.shift_right(k).toNat() * Nat::pow(2, k) <= x.toNat()
+{
+    let v = x.toNat();
+    rewrite(BitVec::toNat_shift_right(n, x, k),
+        rewrite(sym(v.div_mul_add_mod(Nat::pow(2, k))), (v.div(Nat::pow(2, k)) * Nat::pow(2, k)).le_add_l(v.mod(Nat::pow(2, k))), at := 2))
+}
+
+theorem BitVec::toNat_shift_right_lt(n: Nat, x: BitVec(n), k: Nat):
+    x.toNat() < x.shift_right(k).toNat() * Nat::pow(2, k) + Nat::pow(2, k)
+{
+    let v = x.toNat();
+    let p = Nat::pow(2, k);
+    rewrite(BitVec::toNat_shift_right(n, x, k),
+        j(v.div_mul_add_mod(p), λ y _ => Succ(y) <= v.div(p) * p + p,
+            (v.div(p) * p).add_le_mono_l(Succ(v.mod(p)), p, v.mod_lt(p))))
+}
+
 // ---------------------------------------------------------------------------
 // Low masks. `low_mask(k)` has its low `k` bits set and the rest clear; from
 // `k = n` on it is all ones. It is built bit by bit, so it costs the width

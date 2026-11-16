@@ -192,6 +192,24 @@ proof never unfolds a callee; that is also what lets a caller call a
 function deciding through a connective (`calls_either` in
 `branches.hthr`).
 
+## A program's own optimizer rule
+
+`own_rule.hthr` declares a rule beside the function it compiles:
+
+```heather
+rule theorem or_zero({w: Nat}, x: BitVec(w)): x | 0 = x { … }
+```
+
+It is an ordinary theorem about words. The `rule` prefix reads the
+statement as what the optimizer may do (an `or` with a zero constant is a
+move of the other word), proves that sound from the theorem, and registers
+it. `compile-x86` then uses the rules registered in the program's modules
+beside the library's own, and the certificate's replay is over both, so
+nothing about the rule is trusted beyond the theorem the kernel checked.
+`first_or_zero` compiles to 54 bytes with the rule and 63 without: the
+`or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
+`docs/native/optimizer-rules-design.md`).
+
 ## Per-function certificates and `build-x86`: burned
 
 Before the verified lowering, each function got a certificate generated for

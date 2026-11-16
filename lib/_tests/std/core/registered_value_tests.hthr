@@ -60,3 +60,63 @@ register def untyped = Row("a", "b");
 
 // expect-error: names no record or inductive type here
 def not_a_type: List<Row> = registered(rows);
+
+// ---------------------------------------------------------------------------
+// A generator registers what it publishes (`AsRegistered`)
+
+record Count { n: Nat }
+
+fn counts(cs: List<Count> := registered(Count)) → List<Count> { cs }
+
+fn count_made(n: Nat) → Count { Count(n) }
+
+fn count_of(n: Nat) → Tac<Expr> {
+    match <- lookup(name_of(count_made)) { Accepted(make) => pure(App(Global(make), NatLit(n))), Refused(why) => fail(why, []) }
+}
+
+fn typed(e: Expr) → Tac<Handle> { match <- infer(e) { Accepted(ty) => pure(ty), Refused(why) => fail(why, []) } }
+
+// `counted fn f …` publishes `f_count: Count`, registered under `Count`.
+fn counted(name: String) → Tac<List<Decl>> {
+    let value <- count_of(7);
+    let ty <- typed(value);
+    pure([Decl(AsRegistered("Count"), name ++ "_count", [], Hd(ty), value)])
+}
+
+counted fn seven(n: Nat) → Nat { n }
+
+theorem generated_value(): seven_count.n = 7 { refl }
+
+theorem generated_registered(): counts() = [seven_count] { refl }
+
+// Under a type the value is not of.
+fn miscounted(name: String) → Tac<List<Decl>> {
+    let value <- count_of(7);
+    let ty <- typed(value);
+    pure([Decl(AsRegistered("Row"), name ++ "_count", [], Hd(ty), value)])
+}
+
+// expect-error: under a type that is not the value's type
+miscounted fn eight(n: Nat) → Nat { n }
+
+// Under a type with parameters, and under no type.
+fn optioned(name: String) → Tac<List<Decl>> {
+    let value <- count_of(7);
+    let ty <- typed(value);
+    pure([Decl(AsRegistered("Option"), name ++ "_count", [], Hd(ty), value)])
+}
+
+// expect-error: has parameters
+optioned fn nine(n: Nat) → Nat { n }
+
+fn untyped_entry(name: String) → Tac<List<Decl>> {
+    let value <- count_of(7);
+    let ty <- typed(value);
+    pure([Decl(AsRegistered("no such type"), name ++ "_count", [], Hd(ty), value)])
+}
+
+// expect-error: is not a type's name
+untyped_entry fn ten(n: Nat) → Nat { n }
+
+// Nothing a refused generator published is registered.
+theorem still_one(): counts() = [seven_count] { refl }

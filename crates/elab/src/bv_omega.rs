@@ -340,6 +340,7 @@ impl<'a> Walk<'a> {
         if let Kind::Leaf = self.nodes[index].kind {
             self.mask_bound(&w, word, &spelled)?;
             self.zero_extend_value(word, &spelled)?;
+            self.shift_right_value(&w, word, &spelled)?;
         }
         Ok(Some(index))
     }
@@ -366,6 +367,35 @@ impl<'a> Walk<'a> {
         };
         if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
             self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
+        }
+        Ok(())
+    }
+
+    /// A word shifted right by a numeral, `x >> k`, is the quotient of
+    /// `x` by `2^k`: its leaf gets the two bounds `q * 2^k <= x` and
+    /// `x < q * 2^k + 2^k`, and `x` is a word of its own, so a midpoint
+    /// `lo + ((hi - lo) >> 1)` reads as one. Only where
+    /// `bitvec_shift_nat` is loaded, which states them.
+    fn shift_right_value(&mut self, w: &str, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        const LE: &str = "bitvec_shift_nat::BitVec::toNat_shift_right_le";
+        const LT: &str = "bitvec_shift_nat::BitVec::toNat_shift_right_lt";
+        let Some(args) = named_args(self.elab, word, "bitvec::BitVec::shift_right") else { return Ok(()) };
+        let [_, x, count] = args.as_slice() else { return Ok(()) };
+        let Some(k) = self.literal(count).filter(|k| *k < 127) else { return Ok(()) };
+        if self.elab.key_of(LE).is_none() {
+            return Ok(());
+        }
+        let Some(xs) = self.elab.spell_term_source(self.cx, x) else { return Ok(()) };
+        if self.word_at(w.to_string(), x)?.is_none() {
+            return Ok(());
+        }
+        let power = (1i128 << k).to_string();
+        let quotient = mul(&format!("bitvec::BitVec::toNat({spelled})"), &power);
+        let value = format!("bitvec::BitVec::toNat({xs})");
+        for (statement, lemma) in [(le(&quotient, &value), LE), (lt(&value, &add(&quotient, &power)), LT)] {
+            if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+                self.bridges.push((format!("__bv_shifted{}", self.bridges.len()), statement, format!("{lemma}({w}, {xs}, {k})")));
+            }
         }
         Ok(())
     }
@@ -1338,8 +1368,12 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
                     }
                 }
                 let ns = nat_term_source(elab, cx, n)?;
-                let av = elab.spell_term_source(cx, a).ok_or("could not spell comparison operand")?;
-                let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
+                // A fact whose operands have no spelling here (a binder the
+                // context shadows) is left out rather than failing the goal.
+                let (Some(av), Some(bv)) = (elab.spell_term_source(cx, a), elab.spell_term_source(cx, b)) else {
+                    walk = before;
+                    continue;
+                };
                 let at = format!("bitvec::BitVec::toNat({av})");
                 let bt = format!("bitvec::BitVec::toNat({bv})");
                 let (x, y) = if fact.swapped { (&bt, &at) } else { (&at, &bt) };
@@ -1730,7 +1764,7 @@ fn stated_words(elab: &Elaborator, cx: &Cx, ty: &Type, out: &mut HashSet<String>
     }
 }
 
-/// Whether `ty` mentions the `toNat` of a word: where a stuck `omega` has
+/// Whether `ty` compares words or mentions the `toNat` of one: where a stuck `omega` has
 /// `bv_omega` to fall back on.
 pub(crate) fn mentions_word(elab: &Elaborator, ty: &Type) -> bool {
     fn go(elab: &Elaborator, tm: &Rc<Term>) -> bool {
@@ -1742,9 +1776,16 @@ pub(crate) fn mentions_word(elab: &Elaborator, ty: &Type) -> bool {
         }
         crate::spelling::app_spine(tm).1.into_iter().any(|arg| go(elab, arg))
     }
+    // A word's own order, `a < b` or `a <= b` at a word, and a word's test
+    // bit stated equal to a constructor.
+    let compares = |tm: &Rc<Term>| {
+        ["bitvec::BitVec::unsigned_lt", "bitvec::BitVec::unsigned_le", "bitvec::BitVec::unsigned_lt_bit", "bitvec::BitVec::unsigned_le_bit", "bitvec::BitVec::eq_bit"]
+            .iter()
+            .any(|name| named_args(elab, tm, name).is_some())
+    };
     match ty {
-        Type::El { tm, .. } => go(elab, tm),
-        Type::Id { lhs, rhs, .. } => go(elab, lhs) || go(elab, rhs),
+        Type::El { tm, .. } => compares(tm) || go(elab, tm),
+        Type::Id { lhs, rhs, .. } => compares(lhs) || compares(rhs) || go(elab, lhs) || go(elab, rhs),
         _ => false,
     }
 }
