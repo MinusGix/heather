@@ -640,6 +640,10 @@ fn entries_testing(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     }
 }
 
+// Every rule of a compilation in its place, for what is said of a plan.
+fn entries_placed(entries: List<RuleEntry>) → List<RuleEntry> { library() ++ entries_added(entries) }
+
+// The rules a plan's steps index where `entries` are registered.
 fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rules(entries_added(entries)) }
 
 fn Tables::of(entries: List<RuleEntry>) → Tables {
