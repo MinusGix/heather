@@ -516,3 +516,10 @@ it, so it can run in another thread at the same time.
    gone), then D3's literals (§4.3), then the rest of
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).
+6. **After the UTF-8 program (2026-11-16, Minus's order).** Generated
+   declarations resolve outside the program's own imports, so
+   `import runtime_program` is enough; then D2's local buffers. Filed for
+   later: printing (`issues/io-program-prints-output.md`), the sort and binary-search
+   demos as programs (`issues/io-program-demo-mains.md`), and the
+   whole-program theorem over the read loop and exit
+   (`issues/io-program-whole-theorem.md`).
