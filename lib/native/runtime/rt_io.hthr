@@ -206,6 +206,114 @@ fn Lent::answer(tys: Nat → RecInfo, ls: List<Lent>, g: List<Ty>, env: rt::Env(
 }
 
 // ---------------------------------------------------------------------------
+// What a branch joins
+
+// A statement `if` whose arms assign locals joins them once, into the
+// state `Mutated(v₁, Mutated(v₂, …))` of the locals in the order the arms
+// first assign them, the world among them when an arm calls Linux, and
+// reads each back out of it (`imperative.rs`, sequencing design §5.1). A
+// part of that state is the world, or a value of code `t` that the `yes`
+// arm leaves in its end context's variable `y` and the `no` arm in its
+// variable `n`.
+inductive Part {
+    PWorld,
+    PVar(t: Ty, y: Nat, n: Nat),
+}
+
+fn Part::ty(self p: Part, tys: Nat → RecInfo) → Type {
+    match p { PWorld => Io, PVar(t, _, _) => t.sem(tys) }
+}
+
+// The joined state: the one part, or the parts nested in `Mutated`.
+fn Part::State(tys: Nat → RecInfo, ps: List<Part>) → Type {
+    match ps {
+        Nil => True,
+        Cons(p, rest) => match rest { Nil => p.ty(tys), Cons(_, _) => Mutated<p.ty(tys), Part::State(tys, rest)> },
+    }
+}
+
+// A state's first part, and the parts after it.
+fn Part::head(tys: Nat → RecInfo, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → p.ty(tys) {
+    match rest as λ r => Part::State(tys, Cons(p, r)) → p.ty(tys) { Nil => λ st => st, Cons(_, _) => λ st => st.after }
+}
+
+fn Part::tail(tys: Nat → RecInfo, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → Part::State(tys, rest) {
+    match rest as λ r => Part::State(tys, Cons(p, r)) → Part::State(tys, r) { Nil => λ _ => trivial, Cons(_, _) => λ st => st.value }
+}
+
+fn Part::cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys)) → Part::State(tys, rest) → Part::State(tys, Cons(p, rest)) {
+    match rest as λ r => Part::State(tys, r) → Part::State(tys, Cons(p, r)) { Nil => λ _ => v, Cons(_, _) => λ more => Mutated(v, more) }
+}
+
+// Which arm's variable a part is read from.
+fn Part::pick(side: Bool, y: Nat, n: Nat) → Nat { match side { True => y, False => n } }
+
+// A part at the end of an arm: the world the arm left, or its variable cast
+// to the part's code.
+fn Part::one(self p: Part, tys: Nat → RecInfo, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → p.ty(tys) {
+    match p as λ x => x.ty(tys) {
+        PWorld => io,
+        PVar(t, y, n) => Ty::cast(tys, Ty::at(ce, Part::pick(side, y, n)), t, Env::get(tys, ce, ve, Part::pick(side, y, n))),
+    }
+}
+
+// The state an arm ends in.
+fn Part::state(tys: Nat → RecInfo, ps: List<Part>, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → Part::State(tys, ps) {
+    match ps as λ q => Part::State(tys, q) {
+        Nil => trivial,
+        Cons(p, rest) => Part::cons(tys, p, rest, p.one(tys, side, ce, ve, io), Part::state(tys, rest, side, ce, ve, io)),
+    }
+}
+
+// The context after the join: each value part bound in order onto `g`, the
+// last one variable 0 (the world is no variable).
+fn Part::onto(self p: Part, g: List<Ty>) → List<Ty> { match p { PWorld => g, PVar(t, _, _) => Cons(t, g) } }
+
+fn Part::ctx(ps: List<Part>, g: List<Ty>) → List<Ty> {
+    match ps { Nil => g, Cons(p, rest) => Part::ctx(rest, p.onto(g)) }
+}
+
+fn Part::add(self p: Part, tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), v: p.ty(tys)) → rt::Env(tys, p.onto(g)) {
+    match p as λ x => x.ty(tys) → rt::Env(tys, x.onto(g)) { PWorld => λ _ => env, PVar(_, _, _) => λ x => Pair(x, env) }(v)
+}
+
+// The environment after the join: the state's value parts bound onto it.
+fn Part::push(tys: Nat → RecInfo, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, g) → Part::State(tys, ps) → rt::Env(tys, Part::ctx(ps, g)) {
+    match ps {
+        Nil => λ g env _ => env,
+        Cons(p, rest) => λ g env st => Part::push(tys, rest, p.onto(g), p.add(tys, g, env, Part::head(tys, p, rest, st)), Part::tail(tys, p, rest, st)),
+    }
+}
+
+// The world after the join: the state's world part, or the world before it
+// when no arm calls Linux.
+fn Part::world(tys: Nat → RecInfo, ps: List<Part>) → Part::State(tys, ps) → Io → Io {
+    match ps {
+        Nil => λ _ io => io,
+        Cons(p, rest) => match p as λ x => Part::State(tys, Cons(x, rest)) → Io → Io {
+            PWorld => λ st _ => Part::head(tys, PWorld, rest, st),
+            PVar(t, y, n) => λ st io => Part::world(tys, rest, Part::tail(tys, PVar(t, y, n), rest, st), io),
+        },
+    }
+}
+
+// Whether the world is a part.
+fn Part::has_world(ps: List<Part>) → Bool {
+    match ps { Nil => False, Cons(p, rest) => match p { PWorld => True, PVar(_, _, _) => Part::has_world(rest) } }
+}
+
+// The codes of the value parts, in order.
+fn Part::codes(ps: List<Part>) → List<Ty> {
+    match ps { Nil => Nil, Cons(p, rest) => match p { PWorld => Part::codes(rest), PVar(t, _, _) => Cons(t, Part::codes(rest)) } }
+}
+
+// The branch: the `yes` state where the condition holds, the `no` one where
+// not.
+fn Part::branch(tys: Nat → RecInfo, ps: List<Part>, b: Bool, yes: Part::State(tys, ps), no: Part::State(tys, ps)) → Part::State(tys, ps) {
+    match b as λ _ => Part::State(tys, ps) { True => yes, False => no }
+}
+
+// ---------------------------------------------------------------------------
 // Computations
 
 inductive ETm {
@@ -219,7 +327,16 @@ inductive ETm {
     // `Bytes(cap)`) and the word variables `args`: `body` sees the bytes it
     // left as variable 1 and its word as variable 0.
     Lend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>, body: ETm),
+    // `if cond { yes } else { no }` over the world: the arm the bit `cond`
+    // picks runs, the state `parts` names is read off its end (`Part`), and
+    // `body` sees the state's value parts bound in order, its world part
+    // as the world.
+    If(cond: Tm, yes: ETm, no: ETm, parts: List<Part>, body: ETm),
 }
+
+// A condition's value as a bit (a bit's own; the lowering refuses any other
+// code).
+fn ETm::truth(tys: Nat → RecInfo, t: Ty, v: t.sem(tys)) → Bool { Ty::cast(tys, t, Bit, v) }
 
 // The code a computation returns.
 fn ETm::ty(self t: ETm, w: rt::World, g: List<Ty>) → Ty {
@@ -228,7 +345,52 @@ fn ETm::ty(self t: ETm, w: rt::World, g: List<Ty>) → Ty {
         Let(e, body) => body.ty(w, Cons(e.ty(w, g), g)),
         Invoke(e, _, body) => body.ty(w, Ty::bind_onto(e.results(), g)),
         Lend(_, cap, _, _, body) => body.ty(w, Ty::bind_onto(Lent::results(cap), g)),
+        If(_, _, _, parts, body) => body.ty(w, Part::ctx(parts, g)),
     }
+}
+
+// The context a computation's value is computed in: every variable its
+// `Let`s and calls bound, on top of `g`.
+fn ETm::ctx_end(self t: ETm, w: rt::World, g: List<Ty>) → List<Ty> {
+    match t {
+        Pure(_) => g,
+        Let(e, body) => body.ctx_end(w, Cons(e.ty(w, g), g)),
+        Invoke(e, _, body) => body.ctx_end(w, Ty::bind_onto(e.results(), g)),
+        Lend(_, cap, _, _, body) => body.ctx_end(w, Ty::bind_onto(Lent::results(cap), g)),
+        If(_, _, _, parts, body) => body.ctx_end(w, Part::ctx(parts, g)),
+    }
+}
+
+// The environment there, with the world after the calls: what a loop's
+// pass rebinds its state from, and an arm its join.
+fn ETm::sem_end(self t: ETm, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, t.ctx_end(w, g))> {
+    match t {
+        Pure(_) => λ g env io => Mutated(io, env),
+        Let(e, body) => λ g env io => body.sem_end(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Invoke(e, args, body) => λ g env io =>
+            body.sem_end(w, ls, Ty::bind_onto(e.results(), g),
+                Effect::push(w.tys, e.results(), g, env,
+                    Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                        e.params(), e.sem(w.tys, io), args).value),
+                Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                    e.params(), e.sem(w.tys, io), args).after),
+        Lend(f, cap, buf, args, body) => λ g env io =>
+            body.sem_end(w, ls, Ty::bind_onto(Lent::results(cap), g),
+                Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
+        If(cond, yes, no, parts, body) => λ g env io => shared(
+            Part::branch(w.tys, parts, ETm::truth(w.tys, cond.ty(w, g), cond.sem(w, g, env)),
+                Part::state(w.tys, parts, True, yes.ctx_end(w, g), yes.sem_end(w, ls, g, env, io).value, yes.sem_end(w, ls, g, env, io).after),
+                Part::state(w.tys, parts, False, no.ctx_end(w, g), no.sem_end(w, ls, g, env, io).value, no.sem_end(w, ls, g, env, io).after)), λ st =>
+            body.sem_end(w, ls, Part::ctx(parts, g), Part::push(w.tys, parts, g, env, st), Part::world(w.tys, parts, st, io))),
+    }
+}
+
+// The state an `if` joins: the arm the condition picks, run from `env` and
+// `io`, read off its end.
+fn ETm::joined(w: rt::World, ls: List<Lent>, g: List<Ty>, env: rt::Env(w.tys, g), io: Io, cond: Tm, yes: ETm, no: ETm, parts: List<Part>) → Part::State(w.tys, parts) {
+    Part::branch(w.tys, parts, ETm::truth(w.tys, cond.ty(w, g), cond.sem(w, g, env)),
+        Part::state(w.tys, parts, True, yes.ctx_end(w, g), yes.sem_end(w, ls, g, env, io).value, yes.sem_end(w, ls, g, env, io).after),
+        Part::state(w.tys, parts, False, no.ctx_end(w, g), no.sem_end(w, ls, g, env, io).value, no.sem_end(w, ls, g, env, io).after))
 }
 
 // The meaning: a world-threading function, at the code it returns. The
@@ -247,36 +409,8 @@ fn ETm::sem(self t: ETm, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt:
         Lend(f, cap, buf, args, body) => λ g env io =>
             body.sem(w, ls, Ty::bind_onto(Lent::results(cap), g),
                 Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
-    }
-}
-
-// The context a computation's value is computed in: every variable its
-// `Let`s and calls bound, on top of `g`.
-fn ETm::ctx_end(self t: ETm, w: rt::World, g: List<Ty>) → List<Ty> {
-    match t {
-        Pure(_) => g,
-        Let(e, body) => body.ctx_end(w, Cons(e.ty(w, g), g)),
-        Invoke(e, _, body) => body.ctx_end(w, Ty::bind_onto(e.results(), g)),
-        Lend(_, cap, _, _, body) => body.ctx_end(w, Ty::bind_onto(Lent::results(cap), g)),
-    }
-}
-
-// The environment there, with the world after the calls: what a loop's
-// pass rebinds its state from.
-fn ETm::sem_end(self t: ETm, w: rt::World, ls: List<Lent>) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, t.ctx_end(w, g))> {
-    match t {
-        Pure(_) => λ g env io => Mutated(io, env),
-        Let(e, body) => λ g env io => body.sem_end(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
-        Invoke(e, args, body) => λ g env io =>
-            body.sem_end(w, ls, Ty::bind_onto(e.results(), g),
-                Effect::push(w.tys, e.results(), g, env,
-                    Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
-                        e.params(), e.sem(w.tys, io), args).value),
-                Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
-                    e.params(), e.sem(w.tys, io), args).after),
-        Lend(f, cap, buf, args, body) => λ g env io =>
-            body.sem_end(w, ls, Ty::bind_onto(Lent::results(cap), g),
-                Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
+        If(cond, yes, no, parts, body) => λ g env io => shared(ETm::joined(w, ls, g, env, io, cond, yes, no, parts), λ st =>
+            body.sem(w, ls, Part::ctx(parts, g), Part::push(w.tys, parts, g, env, st), Part::world(w.tys, parts, st, io))),
     }
 }
 
@@ -296,6 +430,10 @@ theorem ETm::sem_end_after(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<
         Lend(f, cap, buf, args, body) => λ g env io =>
             body.sem_end_after(w, ls, Ty::bind_onto(Lent::results(cap), g),
                 Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
+        If(cond, yes, no, parts, body) => λ g env io => {
+            let st = ETm::joined(w, ls, g, env, io, cond, yes, no, parts);
+            body.sem_end_after(w, ls, Part::ctx(parts, g), Part::push(w.tys, parts, g, env, st), Part::world(w.tys, parts, st, io))
+        },
     }
 }
 

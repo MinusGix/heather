@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import list;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list;
 
 // ---- The test, read from the context as it is written ----
 
@@ -361,6 +361,27 @@ theorem widened_step(c: u8, t: c.toNat() < 0x80): c.zero_extend(56).toNat() < 20
 // expect-error: `omega` got stuck
 theorem widened_not_below_top(c: u8): c.zero_extend(56) < 255 { bv_omega }
 
+// ---- A shift right by a numeral is a quotient ----
+
+// `x >> k` is `x.toNat()` divided by `2^k`, read as its two bounds: the
+// midpoint `lo + ((hi - lo) >> 1)` stays in `[lo, hi)`, and the range left on
+// either side shrinks.
+theorem shr_midpoint_from(lo, hi: BitVec(64), h: lo < hi): lo <= lo + ((hi - lo) >> 1) { bv_omega }
+theorem shr_midpoint_below(lo, hi: BitVec(64), h: lo < hi): lo + ((hi - lo) >> 1) < hi { bv_omega }
+theorem shr_right_smaller(lo, hi: BitVec(64), h: lo < hi): (hi - ((lo + ((hi - lo) >> 1)) + 1)).toNat() < (hi - lo).toNat() { bv_omega }
+// A count past one, and an open width.
+theorem shr_quarter(w: Nat, x: BitVec(w)): (x >> 2).toNat() + (x >> 2).toNat() + (x >> 2).toNat() + (x >> 2).toNat() <= x.toNat() { bv_omega }
+
+// So a halving search terminates with no `on` clause.
+fn halving_steps(lo, hi: BitVec(64)) → Nat decreases (hi - lo).toNat() {
+    if h: lo < hi { 1 + halving_steps(lo, lo + ((hi - lo) >> 1)) } else { 0 }
+}
+theorem halving_steps_lit(): halving_steps(0, 8) = 4 { refl }
+
+// Negative control: at zero the half is not smaller.
+// expect-error: got stuck
+theorem shr_smaller_wrong(x: BitVec(64)): x >> 1 < x { bv_omega }
+
 // ---- `omega` reads a word's comparison bit as the comparison ----
 // (issues/omega-if-bit-word-comparison.md). An `if x < y` branch that does
 // not name its test keeps the bit's equation; `omega` reads it as the
@@ -420,6 +441,8 @@ theorem midpoint_le_of_lt_next(lo, hi, j: u64, end: (lo + ((hi - lo) >> 1)) < hi
 // An open width, with the bound as a Nat fact.
 theorem kept_whole_open(n: Nat, a, b, c: BitVec(n), room: (a + (b >> 1)).toNat() < c.toNat()): (a + (b >> 1)) + 1 <= c { bv_omega }
 // Control: nothing bounds the kept word, so its successor may wrap, and
-// the refusal still names the first proof's side condition.
-// expect-error: may overflow 64 bits
+// the refusal still names the first proof's side condition. Since the shift
+// is read as a quotient, that is the gap `hi - lo` it divides, which may
+// borrow when nothing orders `lo` and `hi`.
+// expect-error: may borrow
 theorem kept_whole_unbounded(lo, hi: u64): (lo + ((hi - lo) >> 1)).toNat() < ((lo + ((hi - lo) >> 1)) + 1).toNat() { bv_omega }

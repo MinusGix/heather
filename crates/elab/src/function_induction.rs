@@ -311,9 +311,21 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
                     }
                     sigma.push((x.clone(), value));
                 }
-                PathTest::Bool { .. } => {
+                PathTest::Bool { written, .. } => {
                     for (n, t) in &step.params {
-                        binders.push((n.clone(), subst_ty_all(t, &sigma)));
+                        // The case states the hypothesis under the name the
+                        // body wrote (`if less: …` gives `less`, where the
+                        // equations number it `less2`), so an arm of
+                        // `induct` reads as the body does; later binders
+                        // and the equation see it renamed.
+                        let name = match written {
+                            Some(w) if !binders.iter().any(|(b, _)| b == w) && !decl.params.iter().any(|p| &p.name == w) => w.clone(),
+                            _ => n.clone(),
+                        };
+                        binders.push((name.clone(), subst_ty_all(t, &sigma)));
+                        if name != *n {
+                            sigma.push((n.clone(), var(&name, span)));
+                        }
                         values.push(var(n, span));
                         eq_extra.push(var(n, span));
                     }
@@ -393,6 +405,20 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
     let all: Vec<usize> = (0..eqs.len()).collect();
     let mut bits = 0usize;
     let proof = tree(eqs, &cases, &all, 0, &[], &mut bits, span)?;
+    let mut body = block(proof, span);
+    // A measured principle recurses where `f` does, in the same order, so
+    // its calls owe `f`'s decrease obligations: the `on ?decN` clauses that
+    // discharged them in `f` discharge them here, under the same names
+    // (each test's hypothesis is bound under its own name in `tree`, and a
+    // leaf's `let`s are inlined, as the obligation's statement is). One the
+    // principle's context cannot check is a refusal of the principle, as
+    // before.
+    if recursion == Recursion::Measure {
+        body.ons = decl.body.ons.iter()
+            .filter(|o| matches!(&o.target, heather_syntax::ast::OnTarget::Name(n) if n.strip_prefix("dec").is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))))
+            .cloned()
+            .collect();
+    }
     Ok(Decl {
         kind: DeclKind::Theorem,
         is_meta: false,
@@ -407,7 +433,7 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
         result,
         decreases: if recursion == Recursion::Measure { decl.decreases.clone() } else { None },
         unfolding: Vec::new(),
-        body: block(proof, span),
+        body,
         span: decl.span,
     })
 }
@@ -435,9 +461,14 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
     }
     let sub = |arm: &str| -> Vec<usize> { group.iter().copied().filter(|&k| eqs[k].path[depth].arm == arm).collect() };
     match &first.test {
-        PathTest::Bool { scrut, prop } => {
+        PathTest::Bool { scrut, prop, .. } => {
             *bits += 1;
-            let e = format!("#induct_bit{bits}");
+            // A lexable name, as the parser's `if h:` gives its bit's
+            // equation where a branch leaves `h` unnamed: the hypothesis
+            // `h` is a `let` over it, and a lifted decrease obligation whose
+            // `on` names `h` quantifies `h` and what it is defined from,
+            // which a `#` name cannot be (`measure::Rewrite`'s scope).
+            let e = format!("__induct_bit{bits}");
             let mut arms = Vec::new();
             for arm in ["True", "False"] {
                 let ks = sub(arm);
@@ -455,10 +486,21 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                     None => var(&e, span),
                 };
                 let inner = tree(eqs, cases, &ks, depth + 1, sigma, bits, span)?;
-                let (h, _) = step.params.first().ok_or("a test without its hypothesis")?;
+                // Typed as the case states it, so a lifted decrease
+                // obligation whose `on` names `h` can quantify it: the
+                // walk's binder types are read off `f`'s own elaboration,
+                // which this `let` is not part of.
+                let (h, h_ty) = step.params.first().ok_or("a test without its hypothesis")?;
+                let h_ty = prop.as_ref().map(|_| subst_ty_all(h_ty, sigma));
+                let mut stmts = vec![Stmt::Let { name: h.clone(), ty: h_ty.clone(), expr: evidence, span, opaque: false }];
+                // Also under the body's own name, which `f`'s `on ?decN`
+                // clauses (carried over to the principle) use.
+                if let PathTest::Bool { written: Some(w), .. } = &step.test {
+                    stmts.push(Stmt::Let { name: w.clone(), ty: h_ty, expr: var(h, span), span, opaque: false });
+                }
                 let body = Expr {
                     kind: ExprKind::Block(Box::new(Block {
-                        stmts: vec![Stmt::Let { name: h.clone(), ty: None, expr: evidence, span, opaque: false }],
+                        stmts,
                         result: Box::new(inner),
                         ons: Vec::new(),
                         span,
@@ -539,6 +581,11 @@ use crate::{Elaborator, R, err};
 /// (an arm of its own) only restates them.
 pub(crate) const INDUCT_LEAF_ALL: &str = "\0induct-leaf-all";
 pub(crate) const INDUCT_LEAF: &str = "\0induct-leaf";
+/// The leaf of a case the arms leave out: the case's name (a string), then
+/// the case's induction hypotheses. Their premises and the goal are proved
+/// by `known` (a hypothesis, a side of a conjunction, then `omega` and
+/// `bv_omega`), so arms are written only for the cases that need thought.
+pub(crate) const INDUCT_LEAF_DEFAULT: &str = "\0induct-leaf-default";
 const GOAL_ALIAS: &str = "#induct_goal";
 
 /// One case binder of `f::induct`, read off its surface statement.
@@ -815,21 +862,21 @@ impl FunctionInduction<'_> {
             }
             let map: Vec<(String, Expr)> = c.binders.iter().zip(&names).map(|(b, n)| (b.clone(), var(n, span))).collect();
             let at_k: Vec<Expr> = c.at.iter().map(|e| subst_all(e, &map)).collect();
-            let leaf_body = match body {
-                Ok(b) => b.clone(),
+            // An arm's block, the block for all goals, or, for a case the
+            // arms leave out, `known` on its premises and goal.
+            let (leaf_head, leaf_body) = match body {
+                Ok(b) => (INDUCT_LEAF_ALL, b.clone()),
                 Err(arms) => {
                     let want = &c.name[CASE_PREFIX.len()..];
                     match arms.iter().find(|a| a.ctor.replace("::", "_") == want) {
-                        Some(a) => a.body.clone(),
-                        None => {
-                            return err(format!("`induct {head}(…)`: no arm for the case `{}`", want.replace('_', "::")), span);
-                        }
+                        Some(a) => (INDUCT_LEAF, a.body.clone()),
+                        None => (INDUCT_LEAF_DEFAULT, Expr { kind: ExprKind::Str(want.replace('_', "::")), span }),
                     }
                 }
             };
             let mut leaf_args = vec![leaf_body];
             leaf_args.extend(c.ihs.iter().map(|&i| var(&names[i], span)));
-            let leaf = marker(if body.is_ok() { INDUCT_LEAF_ALL } else { INDUCT_LEAF }, leaf_args, span);
+            let leaf = marker(leaf_head, leaf_args, span);
             let leaf = if reverted_names.is_empty() {
                 leaf
             } else {
@@ -867,6 +914,31 @@ impl FunctionInduction<'_> {
         let [body, ihs @ ..] = args else {
             return err("internal `induct` leaf has the wrong arity", span);
         };
+        // A case the arms leave out (`INDUCT_LEAF_DEFAULT`): `known`, and a
+        // refusal names the case.
+        let (case, known);
+        let body = match &body.kind {
+            ExprKind::Str(name) => {
+                case = Some(name.clone());
+                known = Expr { kind: ExprKind::Var(crate::tested::KNOWN.to_string()), span };
+                &known
+            }
+            _ => {
+                case = None;
+                body
+            }
+        };
+        let out = self.induct_leaf_with(cx, body, ihs, discharge, expected, lvl, span);
+        match (case, out) {
+            (Some(case), Err(crate::ElabError::Elab { msg, span })) => err(
+                format!("`induct`: no arm for the case `{case}`, and its default did not close it: {msg}; write an arm `{case} => …`"),
+                span,
+            ),
+            (_, out) => out,
+        }
+    }
+
+    fn induct_leaf_with(&self, cx: &Cx, body: &Expr, ihs: &[Expr], discharge: bool, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
         let mut cur = cx.clone();
         // (dom, level, value) of each restated hypothesis, outermost first.
         let mut bound: Vec<(Type, Level, Term)> = Vec::new();

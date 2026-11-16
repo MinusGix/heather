@@ -37,8 +37,6 @@ runtime fn lower_bound_in(s: List<u8>, n, key, lo, hi: u64) → u64 decreases (h
     } else {
         lo
     }
-    on ?dec1 := { right_smaller(lo, hi, h) };
-    on ?dec2 := { left_smaller(lo, hi, h) };
 }
 
 runtime fn lower_bound(s: List<u8>, n, key: u64) → u64 { lower_bound_in(s, n, key, 0, n) }
@@ -49,15 +47,13 @@ runtime fn lower_bound(s: List<u8>, n, key: u64) → u64 { lower_bound_in(s, n, 
 each step.
 
 The `decreases` clause says the range `hi - lo` gets smaller on each call.
-Heather cannot see that alone, because both calls go through the midpoint, so
-the two `on` lines discharge it with `right_smaller` and `left_smaller`. Those
-two lemmas rest on what the midpoint is:
+Both calls go through the midpoint, and Heather proves this itself:
+`bv_omega` reads `x >> 1` as half of `x`, rounded down, so the facts about
+the midpoint are each one line.
 
 ```text
-theorem midpoint_toNat(lo, hi: u64, h: lo < hi):
-    (lo + ((hi - lo) >> 1)).toNat() = lo.toNat() + ((hi - lo) >> 1).toNat()
-theorem midpoint_from(lo, hi: u64, h: lo < hi): lo.toNat() <= (lo + ((hi - lo) >> 1)).toNat()
-theorem midpoint_below(lo, hi: u64, h: lo < hi): (lo + ((hi - lo) >> 1)).toNat() < hi.toNat()
+theorem midpoint_from(lo, hi: u64, h: lo < hi): lo <= lo + ((hi - lo) >> 1) { bv_omega }
+theorem midpoint_below(lo, hi: u64, h: lo < hi): lo + ((hi - lo) >> 1) < hi { bv_omega }
 ```
 
 ## The midpoint everyone writes
@@ -79,8 +75,8 @@ theorem naive_midpoint_escapes(): ¬((lo, hi: u64) → lo < hi → lo <= (lo + h
 
 The counterexample is checked by evaluation. At `lo = 2^63` and
 `hi = 2^63 + 1` the sum wraps to `1`, so the midpoint is `0`. The program
-uses `lo + (hi - lo) / 2`, and `midpoint_from` and `midpoint_below` prove
-that it stays in `[lo, hi)`.
+uses `lo + (hi - lo) / 2`, and `midpoint_from` and `midpoint_below` above
+prove that it stays in `[lo, hi)`.
 
 ## What is proved
 
@@ -108,8 +104,11 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
 ```
 
 What lies below `lo` is below `key`, and what lies from `hi` on is not. Each
-step keeps that true. It goes by induction on the same measure as the
-program, one case per branch:
+step keeps that true. The proof is outside the program, and it follows the
+program's own recursion: `induct lower_bound_in(s, n, key, lo, hi)` has one
+arm per way the function can go. Each arm sees the tests that led there
+under the names the program gave them (`h`, `less`), and an induction
+hypothesis `ih` for the call it makes:
 
 - When the byte at `mid` is below `key`, every byte up to `mid` is too,
   because the span ascends. So `Below` holds at `mid + 1`.
@@ -117,20 +116,13 @@ program, one case per branch:
   `mid`.
 - When the range is empty, `lo = hi`, and the two sides meet.
 
-Each case takes one step of the loop with
-`simp_only(lower_bound_in, discharge := bv_omega)`. Heather generates an
-equation per branch of a function, and `simp_only` picks the one the facts
-in scope decide: with the range not empty and the byte below the key, the
-call is the call at `mid + 1`.
+The proof never mentions the termination argument or the equations of the
+function: the induction principle reuses the function's own. An arm left out
+is closed by `known` (a hypothesis, a side of a conjunction, `omega` or
+`bv_omega`) when it can be; here every case needs a line of thought.
 
 The theorems are checked with the rest of the file:
 `heather check examples/binary-search/search.hthr`.
-
-The range facts about `mid` (`mid < n`, `mid + 1 <= hi`, `j <= mid`) are
-each one `bv_omega` in the invariant's context. `bv_omega` reads `mid`
-through its `let` and cannot see through the shift that its addition does
-not overflow; it then keeps `mid` whole, a number bounded by the facts that
-mention it (`docs/tactics/bv-omega-design.md` §5.1).
 
 ## What the proof does not cover
 

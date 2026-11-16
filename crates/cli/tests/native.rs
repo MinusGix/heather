@@ -86,3 +86,27 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
     assert!(rows.len() >= declarations + imports.len(), "{} rows for {declarations} declarations", rows.len());
     assert!(rows.iter().any(|name| name == "mix_native_bytes"));
 }
+
+/// A certificate is a theorem about the source function, so an axiom the
+/// function's body reaches is a premise of it. `compile-x86` publishes
+/// neither the bytes nor the certificate for such a program, and names the
+/// axiom (issues/compile-x86-certifies-over-axioms.md).
+#[test]
+fn a_program_that_rests_on_an_axiom_is_not_certified() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let output = root.join(format!("target/native-assumed-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&output).unwrap();
+    let assembly = output.join("mix.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather"))
+        .current_dir(&root)
+        .args(["compile-x86", "crates/cli/tests/fixtures/assumed_mix.hthr", "mix", "-o"])
+        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .output().unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "certified over an axiom: {stderr}");
+    assert!(stderr.contains("rests on the axiom `assumed_mix::sum_keeps_order`"), "{stderr}");
+    assert!(!assembly.exists(), "no bytes are published");
+    assert!(!output.join("mix.certificate.hthr").exists(), "and no certificate");
+    std::fs::remove_dir_all(output).unwrap();
+}

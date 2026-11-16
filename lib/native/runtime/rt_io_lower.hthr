@@ -1393,6 +1393,755 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
         }))))
 }
 
+// Where a statement leaves the program: on, with every variable of a
+// context kept where it lives.
+fn Flow::KeepsAll(self flow: Flow, tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g)) → Type {
+    match flow { Onward(env) => LocsHold(tys, env, g, locs, vals), Exited(_) => False }
+}
+
+// ---------------------------------------------------------------------------
+// Moving values to their places: a loop's state back to where it lives
+// before the loop, an `if`'s joined parts to where both arms leave them
+
+// A region that does nothing.
+fn Loc::nothing() → StructuredRegion { Dataflow(Region(Ports(Nil), Nil, Ports(Nil))) }
+
+fn Loc::skip() → Stmt { Compute(Loc::nothing()) }
+
+// `src` moved to the word `out`, at `width`.
+fn Loc::move_region(width: Nat, out: Nat, src: Nat) → StructuredRegion {
+    Compose(Loc::nothing(), Dataflow(Region(Ports(Nil), [Move(width, out, src)], Ports(Nil))))
+}
+
+// The words of a layout.
+fn Loc::words(locs: List<Loc>) → List<Nat> {
+    match locs {
+        Nil => Nil,
+        Cons(l, rest) => match l { InWord(id) => Cons(id, Loc::words(rest)), InBuffer(_) => Loc::words(rest), Gone => Loc::words(rest) },
+    }
+}
+
+theorem Loc::clear_nil(locs: List<Loc>): Loc::clear(locs, Nil).IsTrue() {
+    match locs {
+        Nil => trivial,
+        Cons(l, rest) => Bool::is_true_and_intro(l.clear_one(Nil), Loc::clear(rest, Nil),
+            match l as λ k => k.clear_one(Nil).IsTrue() { InWord(_) => trivial, InBuffer(_) => trivial, Gone => trivial },
+            Loc::clear_nil(rest)),
+    }
+}
+
+// Clear of a list headed by `x`: clear of `x`, and of the rest.
+theorem Loc::clear_cons(locs: List<Loc>, x: Nat, ws: List<Nat>): Loc::clear(locs, Cons(x, ws)).IsTrue() →
+    Loc::clear(locs, [x]).IsTrue() ∧ Loc::clear(locs, ws).IsTrue() {
+    match locs {
+        Nil => λ _ => ⟨trivial, trivial⟩,
+        Cons(l, rest) => λ h => {
+            let parts = Bool::is_true_and(l.clear_one(Cons(x, ws)), Loc::clear(rest, Cons(x, ws)), h);
+            let more = Loc::clear_cons(rest, x, ws, parts.right);
+            let one = match l as λ k => k.clear_one(Cons(x, ws)).IsTrue() → k.clear_one([x]).IsTrue() ∧ k.clear_one(ws).IsTrue() {
+                InWord(id) => λ c => {
+                    let p = Bool::is_true_and(id.differs(x), absent(id, ws), c);
+                    ⟨Bool::is_true_and_intro(id.differs(x), True, p.left, trivial), p.right⟩
+                },
+                InBuffer(_) => λ _ => ⟨trivial, trivial⟩,
+                Gone => λ _ => ⟨trivial, trivial⟩,
+            }(parts.left);
+            ⟨Bool::is_true_and_intro(l.clear_one([x]), Loc::clear(rest, [x]), one.left, more.left),
+                Bool::is_true_and_intro(l.clear_one(ws), Loc::clear(rest, ws), one.right, more.right)⟩
+        },
+    }
+}
+
+// One variable moved back: a word or a bit from where the pass left it to
+// its word, a buffer left in its own buffer (or a gone one anywhere).
+fn Loc::move_one(t: Ty, d: Loc, s: Loc, more: Stmt) → Option<Stmt> {
+    match t {
+        Word(_) => match d { InWord(dw) => match s { InWord(sw) => Some(Then(Compute(Loc::move_region(t.width(), dw, sw)), more)), InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
+        Bit => match d { InWord(dw) => match s { InWord(sw) => Some(Then(Compute(Loc::move_region(t.width(), dw, sw)), more)), InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
+        Bytes(_) => match d {
+            InWord(_) => None,
+            InBuffer(b) => match s { InWord(_) => None, InBuffer(b2) => match b.eq_dec(b2) { Inl(_) => Some(more), Inr(_) => None }, Gone => None },
+            Gone => Some(more),
+        },
+        Lines => None,
+        Named(_) => None,
+        Count => None,
+    }
+}
+
+// The moves for every variable, in order: each move writes no word a later
+// one reads, and no later one writes a word an earlier one wrote.
+fn Loc::moves(g: List<Ty>, dsts: List<Loc>, srcs: List<Loc>) → Option<Stmt> {
+    match g {
+        Nil => match dsts { Nil => match srcs { Nil => Some(Loc::skip()), Cons(_, _) => None }, Cons(_, _) => None },
+        Cons(t, rest) => match dsts {
+            Nil => None,
+            Cons(d, ds) => match srcs {
+                Nil => None,
+                Cons(s, ss) => Tm::check_true(Loc::clear(ss, Loc::words([d]))).and_then(λ _ =>
+                    Tm::check_true(Loc::clear([d], Loc::words(ds))).and_then(λ _ =>
+                        Loc::moves(rest, ds, ss).and_then(λ more => Loc::move_one(t, d, s, more)))),
+            },
+        },
+    }
+}
+
+// Where a statement leaves the program: on, every place of `frame` as it
+// was in `env`.
+fn Flow::Frames(self flow: Flow, frame: List<Loc>, env: Env) → Type {
+    match flow { Onward(env2) => Loc::AllSame(frame, env, env2), Exited(_) => False }
+}
+
+// What the moves promise: loop-free, the world untouched, every variable
+// moved from its source to its place, and every place no move writes kept.
+fn Loc::MovesHold(tys: Nat → RecInfo, g: List<Ty>, dsts: List<Loc>, srcs: List<Loc>, r: Option<Stmt>) → Type {
+    match r {
+        None => True,
+        Some(st) => st.straight().IsTrue() ∧ ((call: Writers()) → (env: Env) → (vals: rt::Env(tys, g)) → (io: Io) → LocsHold(tys, env, g, srcs, vals) →
+            (Stmt::thread(st, call, env, io).after = io) ∧ (Stmt::thread(st, call, env, io).value.KeepsAll(tys, g, dsts, vals)
+                ∧ ((frame: List<Loc>) → Loc::clear(frame, Loc::words(dsts)).IsTrue() → Stmt::thread(st, call, env, io).value.Frames(frame, env)))),
+    }
+}
+
+// Doing nothing keeps every place.
+theorem Loc::skip_same(env: Env, call: Writers(), frame: List<Loc>): Loc::AllSame(frame, env, env.compute(call, Loc::nothing())) {
+    Loc::same_compute(env, call, Loc::nothing(), env.compute_buffers(call, no_function, Writers::still_none(call), Loc::nothing(), trivial, trivial), frame, Loc::clear_nil(frame))
+}
+
+// Keeping the head where the rest's statements keep it.
+theorem Loc::keeps_cons(tys: Nat → RecInfo, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, v: t.sem(tys), vs: rt::Env(tys, rest), env: Env,
+    kept: t.Kept(tys, env, d, v)): (flow: Flow) → flow.KeepsAll(tys, rest, ds, vs) → flow.Frames([d], env) →
+    flow.KeepsAll(tys, Cons(t, rest), Cons(d, ds), Pair(v, vs)) {
+    λ flow => match flow {
+        Onward(env2) => λ ka fr => ⟨t.kept_same(tys, env, env2, d, fr.left, v, kept), ka⟩,
+        Exited(_) => λ never => false_elim(never),
+    }
+}
+
+theorem Loc::frames_trans(frame: List<Loc>, env, env1: Env, same: Loc::AllSame(frame, env, env1)): (flow: Flow) →
+    flow.Frames(frame, env1) → flow.Frames(frame, env) {
+    λ flow => match flow {
+        Onward(env2) => λ fr => Loc::same_trans(frame, env, env1, env2, same, fr),
+        Exited(_) => λ never => false_elim(never),
+    }
+}
+
+// A word or a bit moved: kept at its place, the rest's sources and every
+// other place untouched.
+theorem Loc::move_word_sound(tys: Nat → RecInfo, t: Ty, one: t.Scalar(), rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
+    ih: Loc::MovesHold(tys, rest, ds, ss, Some(more)), dw, sw: Nat,
+    c1: Loc::clear(ss, [dw]).IsTrue(), c2: Loc::clear([InWord(dw)], Loc::words(ds)).IsTrue()):
+    Loc::MovesHold(tys, Cons(t, rest), Cons(InWord(dw), ds), Cons(InWord(sw), ss),
+        Some(Then(Compute(Loc::move_region(t.width(), dw, sw)), more))) {
+    let mr = Loc::move_region(t.width(), dw, sw);
+    ⟨Bool::is_true_and_intro(True, more.straight(), trivial, ih.left), λ call env vals io held => {
+        let env1 = env.compute(call, mr);
+        let keeps1: (env1.buffers = env.buffers) = env.compute_buffers(call, no_function, Writers::still_none(call), mr, trivial, trivial);
+        let held1 = locs_hold_same(tys, env, env1, rest, ss, vals.snd, Loc::same_compute(env, call, mr, keeps1, ss, c1), held.right);
+        let kept1: t.Kept(tys, env1, InWord(dw), vals.fst) = t.kept_moved(tys, env1, dw, env.valuation(), sw, one, vals.fst,
+            t.kept_holds(tys, env, InWord(sw), vals.fst, held.left), env.compute_moved(call, no_function, Writers::still_none(call), Loc::nothing(), trivial, trivial, t.width(), dw, sw));
+        let r = ih.right(call, env1, vals.snd, io, held1);
+        ⟨r.left, ⟨Loc::keeps_cons(tys, t, rest, InWord(dw), ds, vals.fst, vals.snd, env1, kept1, Stmt::thread(more, call, env1, io).value,
+                r.right.left, r.right.right([InWord(dw)], c2)),
+            λ frame h => {
+                let parts = Loc::clear_cons(frame, dw, Loc::words(ds), h);
+                Loc::frames_trans(frame, env, env1, Loc::same_compute(env, call, mr, keeps1, frame, parts.left),
+                    Stmt::thread(more, call, env1, io).value, r.right.right(frame, parts.right))
+            }⟩⟩
+    }⟩
+}
+
+// A buffer left where it is, or a gone one: nothing moved.
+theorem Loc::move_stay_sound(tys: Nat → RecInfo, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, s: Loc, ss: List<Loc>, more: Stmt,
+    ih: Loc::MovesHold(tys, rest, ds, ss, Some(more)), stay: (env: Env) → (v: t.sem(tys)) → t.Kept(tys, env, s, v) → t.Kept(tys, env, d, v),
+    c2: Loc::clear([d], Loc::words(ds)).IsTrue(), wd: Loc::words(Cons(d, ds)) = Loc::words(ds)):
+    Loc::MovesHold(tys, Cons(t, rest), Cons(d, ds), Cons(s, ss), Some(more)) {
+    ⟨ih.left, λ call env vals io held => {
+        let r = ih.right(call, env, vals.snd, io, held.right);
+        ⟨r.left, ⟨Loc::keeps_cons(tys, t, rest, d, ds, vals.fst, vals.snd, env, stay(env, vals.fst, held.left), Stmt::thread(more, call, env, io).value,
+                r.right.left, r.right.right([d], c2)),
+            λ frame h => r.right.right(frame, j(wd, λ ws _ => Loc::clear(frame, ws).IsTrue(), h))⟩⟩
+    }⟩
+}
+
+theorem Loc::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
+    ih: Loc::MovesHold(tys, rest, ds, ss, Some(more))): (t: Ty) → (d: Loc) → (s: Loc) →
+    Loc::clear(ss, Loc::words([d])).IsTrue() → Loc::clear([d], Loc::words(ds)).IsTrue() →
+    Loc::MovesHold(tys, Cons(t, rest), Cons(d, ds), Cons(s, ss), Loc::move_one(t, d, s, more)) {
+    λ t => match t {
+        Word(wd) => λ d => match d {
+            InWord(dw) => λ s => match s {
+                InWord(sw) => λ c1 c2 => Loc::move_word_sound(tys, Word(wd), trivial, rest, ds, ss, more, ih, dw, sw, c1, c2),
+                InBuffer(_) => λ _ _ => trivial,
+                Gone => λ _ _ => trivial,
+            },
+            InBuffer(_) => λ s _ _ => trivial,
+            Gone => λ s _ _ => trivial,
+        },
+        Bit => λ d => match d {
+            InWord(dw) => λ s => match s {
+                InWord(sw) => λ c1 c2 => Loc::move_word_sound(tys, Bit, trivial, rest, ds, ss, more, ih, dw, sw, c1, c2),
+                InBuffer(_) => λ _ _ => trivial,
+                Gone => λ _ _ => trivial,
+            },
+            InBuffer(_) => λ s _ _ => trivial,
+            Gone => λ s _ _ => trivial,
+        },
+        Bytes(c) => λ d => match d {
+            InWord(_) => λ s _ _ => trivial,
+            InBuffer(b) => λ s => match s {
+                InWord(_) => λ _ _ => trivial,
+                InBuffer(b2) => λ c1 c2 => match b.eq_dec(b2) as λ q => Loc::MovesHold(tys, Cons(Bytes(c), rest), Cons(InBuffer(b), ds), Cons(InBuffer(b2), ss),
+                        match q as λ _ => Option<Stmt> { Inl(_) => Some(more), Inr(_) => None }) {
+                    Inl(e) => Loc::move_stay_sound(tys, Bytes(c), rest, InBuffer(b), ds, InBuffer(b2), ss, more, ih,
+                        λ env v (k: env.buffers.nth(b2) = Some(v)) => j(sym(e), λ x _ => env.buffers.nth(x) = Some(v), k), c2, refl),
+                    Inr(_) => trivial,
+                },
+                Gone => λ _ _ => trivial,
+            },
+            Gone => λ s c1 c2 => Loc::move_stay_sound(tys, Bytes(c), rest, Gone, ds, s, ss, more, ih, λ env v _ => trivial, c2, refl),
+        },
+        Lines => λ d s _ _ => trivial,
+        Named(_) => λ d s _ _ => trivial,
+        Count => λ d s _ _ => trivial,
+    }
+}
+
+theorem Loc::moves_sound(tys: Nat → RecInfo, g: List<Ty>): (dsts: List<Loc>) → (srcs: List<Loc>) →
+    Loc::MovesHold(tys, g, dsts, srcs, Loc::moves(g, dsts, srcs)) {
+    match g {
+        Nil => λ dsts => match dsts {
+            Nil => λ srcs => match srcs {
+                Nil => ⟨trivial, λ call env vals io held => ⟨refl, ⟨trivial, λ frame _ => Loc::skip_same(env, call, frame)⟩⟩⟩,
+                Cons(_, _) => trivial,
+            },
+            Cons(_, _) => λ srcs => trivial,
+        },
+        Cons(t, rest) => λ dsts => match dsts {
+            Nil => λ srcs => trivial,
+            Cons(d, ds) => λ srcs => match srcs {
+                Nil => trivial,
+                Cons(s, ss) => {
+                    let P = λ (r: Option<Stmt>) => Loc::MovesHold(tys, Cons(t, rest), Cons(d, ds), Cons(s, ss), r);
+                    Option::and_then_elim(P, trivial, Tm::check_true(Loc::clear(ss, Loc::words([d]))),
+                        λ _ => Tm::check_true(Loc::clear([d], Loc::words(ds))).and_then(λ _ =>
+                            Loc::moves(rest, ds, ss).and_then(λ more => Loc::move_one(t, d, s, more))), λ c1 _ =>
+                    Option::and_then_elim(P, trivial, Tm::check_true(Loc::clear([d], Loc::words(ds))),
+                        λ _ => Loc::moves(rest, ds, ss).and_then(λ more => Loc::move_one(t, d, s, more)), λ c2 _ =>
+                    Option::and_then_elim(P, trivial, Loc::moves(rest, ds, ss), λ more => Loc::move_one(t, d, s, more), λ more e_more =>
+                        Loc::move_one_sound(tys, rest, ds, ss, more,
+                            j(e_more, λ r _ => Loc::MovesHold(tys, rest, ds, ss, r), Loc::moves_sound(tys, rest, ds, ss)), t, d, s, c1, c2))))
+                },
+            },
+        },
+    }
+}
+
+// The condition's code is a bit.
+fn Ty::check_bit(t: Ty) → Option<t = Bit> {
+    match t.equation(Bit) { Inl(e) => Some(e), Inr(_) => None }
+}
+
+// ---------------------------------------------------------------------------
+// A branch: the condition's flag
+
+// A condition's flag word, read as a bit, is the condition.
+theorem ETm::head_bool(v: Bool): ETm::word_at(64, BitVec::ofBool(v).toNat()).head_bit() = v {
+    match v { True => refl, False => refl }
+}
+
+theorem ETm::bit_kept(tys: Nat → RecInfo, env: Env, c: Nat, t: Ty, e: t = Bit): (v: t.sem(tys)) → t.Kept(tys, env, InWord(c), v) →
+    env.bit(c) = ETm::truth(tys, t, v) {
+    j(sym(e), λ x _ => (v: x.sem(tys)) → x.Kept(tys, env, InWord(c), v) → env.bit(c) = ETm::truth(tys, x, v),
+        λ v (k: env.number(c) = BitVec::ofBool(v).toNat()) =>
+            trans(cong_fn(λ (n: Nat) => ETm::word_at(64, n).head_bit(), k), trans(ETm::head_bool(v), sym(Ty::cast_self(tys, Bit, v)))))
+}
+
+// A variable's value cast along an equation of codes is kept where it was.
+theorem Ty::kept_cast(tys: Nat → RecInfo, env: Env, l: Loc, a, b: Ty, e: a = b, v: a.sem(tys), k: a.Kept(tys, env, l, v)):
+    b.Kept(tys, env, l, Ty::cast(tys, a, b, v)) {
+    j(e, λ x _ => x.Kept(tys, env, l, Ty::cast(tys, a, x, v)),
+        j(sym(Ty::cast_self(tys, a, v)), λ y _ => a.Kept(tys, env, l, y), k))
+}
+
+// ---------------------------------------------------------------------------
+// A branch: the variables before it, at the end of an arm
+
+// The environment before a computation, out of the one at its end: each
+// variable it bound dropped.
+fn Effect::pop(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, Ty::bind_onto(rs, g)) → rt::Env(tys, g) {
+    match rs { Nil => λ g e => e, Cons(r, rest) => λ g e => Effect::pop(tys, rest, Cons(r, g), e).snd }
+}
+
+fn Loc::pop(rs: List<Ty>, el: List<Loc>) → List<Loc> {
+    match rs { Nil => el, Cons(_, rest) => Loc::pop(rest, el).tail() }
+}
+
+fn Part::drop(self p: Part, tys: Nat → RecInfo, g: List<Ty>) → rt::Env(tys, p.onto(g)) → rt::Env(tys, g) {
+    match p as λ x => rt::Env(tys, x.onto(g)) → rt::Env(tys, g) { PWorld => λ e => e, PVar(_, _, _) => λ e => e.snd }
+}
+
+fn Part::pop(tys: Nat → RecInfo, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, Part::ctx(ps, g)) → rt::Env(tys, g) {
+    match ps { Nil => λ g e => e, Cons(p, rest) => λ g e => p.drop(tys, g, Part::pop(tys, rest, p.onto(g), e)) }
+}
+
+fn Part::drop_locs(self p: Part, el: List<Loc>) → List<Loc> { match p { PWorld => el, PVar(_, _, _) => el.tail() } }
+
+fn Part::pop_locs(ps: List<Part>, el: List<Loc>) → List<Loc> {
+    match ps { Nil => el, Cons(p, rest) => p.drop_locs(Part::pop_locs(rest, el)) }
+}
+
+fn ETm::base(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, t.ctx_end(w, g)) → rt::Env(w.tys, g) {
+    match t {
+        Pure(_) => λ g ve => ve,
+        Let(e, body) => λ g ve => body.base(w, Cons(e.ty(w, g), g), ve).snd,
+        Invoke(e, _, body) => λ g ve => Effect::pop(w.tys, e.results(), g, body.base(w, Ty::bind_onto(e.results(), g), ve)),
+        Lend(_, cap, _, _, body) => λ g ve => Effect::pop(w.tys, Lent::results(cap), g, body.base(w, Ty::bind_onto(Lent::results(cap), g), ve)),
+        If(_, _, _, parts, body) => λ g ve => Part::pop(w.tys, parts, g, body.base(w, Part::ctx(parts, g), ve)),
+    }
+}
+
+fn ETm::base_locs(self t: ETm, el: List<Loc>) → List<Loc> {
+    match t {
+        Pure(_) => el,
+        Let(_, body) => body.base_locs(el).tail(),
+        Invoke(e, _, body) => Loc::pop(e.results(), body.base_locs(el)),
+        Lend(_, cap, _, _, body) => Loc::pop(Lent::results(cap), body.base_locs(el)),
+        If(_, _, _, parts, body) => Part::pop_locs(parts, body.base_locs(el)),
+    }
+}
+
+theorem Effect::pop_push(tys: Nat → RecInfo, rs: List<Ty>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (x: Ty::Flats(rs)) →
+    Effect::pop(tys, rs, g, Effect::push(tys, rs, g, env, x)) = env {
+    match rs {
+        Nil => λ g env x => refl,
+        Cons(r, rest) => λ g env x => cong_fn(λ (e: rt::Env(tys, Cons(r, g))) => e.snd,
+            Effect::pop_push(tys, rest, Cons(r, g), Pair(r.of_flat(tys, x.fst), env), x.snd)),
+    }
+}
+
+theorem Part::pop_push(tys: Nat → RecInfo, ps: List<Part>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (st: Part::State(tys, ps)) →
+    Part::pop(tys, ps, g, Part::push(tys, ps, g, env, st)) = env {
+    match ps {
+        Nil => λ g env st => refl,
+        Cons(p, rest) => λ g env st => {
+            let v = Part::head(tys, p, rest, st);
+            trans(cong_fn(λ (e: rt::Env(tys, p.onto(g))) => p.drop(tys, g, e),
+                    Part::pop_push(tys, rest, p.onto(g), p.add(tys, g, env, v), Part::tail(tys, p, rest, st))),
+                match p as λ x => (v: x.ty(tys)) → x.drop(tys, g, x.add(tys, g, env, v)) = env { PWorld => λ _ => refl, PVar(_, _, _) => λ _ => refl }(v))
+        },
+    }
+}
+
+// The variables before a computation are at its end as they were.
+theorem ETm::base_end(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty>) → (env: rt::Env(w.tys, g)) → (io: Io) →
+    t.base(w, g, t.sem_end(w, ls, g, env, io).value) = env {
+    match t {
+        Pure(_) => λ g env io => refl,
+        Let(e, body) => λ g env io => cong_fn(λ (x: rt::Env(w.tys, Cons(e.ty(w, g), g))) => x.snd,
+            body.base_end(w, ls, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io)),
+        Invoke(e, args, body) => λ g env io => {
+            let a = Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                e.params(), e.sem(w.tys, io), args);
+            let g2 = Ty::bind_onto(e.results(), g);
+            trans(cong_fn(λ (x: rt::Env(w.tys, g2)) => Effect::pop(w.tys, e.results(), g, x),
+                    body.base_end(w, ls, g2, Effect::push(w.tys, e.results(), g, env, a.value), a.after)),
+                Effect::pop_push(w.tys, e.results(), g, env, a.value))
+        },
+        Lend(f, cap, buf, args, body) => λ g env io => {
+            let g2 = Ty::bind_onto(Lent::results(cap), g);
+            let x = Lent::answer(w.tys, ls, g, env, f, cap, buf, args);
+            trans(cong_fn(λ (y: rt::Env(w.tys, g2)) => Effect::pop(w.tys, Lent::results(cap), g, y),
+                    body.base_end(w, ls, g2, Effect::push(w.tys, Lent::results(cap), g, env, x), io)),
+                Effect::pop_push(w.tys, Lent::results(cap), g, env, x))
+        },
+        If(cond, yes, no, parts, body) => λ g env io => {
+            let st = ETm::joined(w, ls, g, env, io, cond, yes, no, parts);
+            let g2 = Part::ctx(parts, g);
+            trans(cong_fn(λ (y: rt::Env(w.tys, g2)) => Part::pop(w.tys, parts, g, y),
+                    body.base_end(w, ls, g2, Part::push(w.tys, parts, g, env, st), Part::world(w.tys, parts, st, io))),
+                Part::pop_push(w.tys, parts, g, env, st))
+        },
+    }
+}
+
+// Dropping the variable a context's head is.
+theorem locs_hold_tail(tys: Nat → RecInfo, env: Env, t: Ty, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, Cons(t, g))) →
+    LocsHold(tys, env, Cons(t, g), locs, vals) → LocsHold(tys, env, g, locs.tail(), vals.snd) {
+    λ locs => match locs {
+        Nil => λ vals never => false_elim(never),
+        Cons(_, _) => λ vals h => h.right,
+    }
+}
+
+theorem Effect::pop_holds(tys: Nat → RecInfo, env: Env, rs: List<Ty>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Ty::bind_onto(rs, g))) →
+    LocsHold(tys, env, Ty::bind_onto(rs, g), el, e) → LocsHold(tys, env, g, Loc::pop(rs, el), Effect::pop(tys, rs, g, e)) {
+    match rs {
+        Nil => λ g el e h => h,
+        Cons(r, rest) => λ g el e h => locs_hold_tail(tys, env, r, g, Loc::pop(rest, el), Effect::pop(tys, rest, Cons(r, g), e),
+            Effect::pop_holds(tys, env, rest, Cons(r, g), el, e, h)),
+    }
+}
+
+theorem Part::pop_holds(tys: Nat → RecInfo, env: Env, ps: List<Part>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Part::ctx(ps, g))) →
+    LocsHold(tys, env, Part::ctx(ps, g), el, e) → LocsHold(tys, env, g, Part::pop_locs(ps, el), Part::pop(tys, ps, g, e)) {
+    match ps {
+        Nil => λ g el e h => h,
+        Cons(p, rest) => λ g el e h => {
+            let inner = Part::pop_holds(tys, env, rest, p.onto(g), el, e, h);
+            match p as λ x => (q: rt::Env(tys, x.onto(g))) → LocsHold(tys, env, x.onto(g), Part::pop_locs(rest, el), q) →
+                    LocsHold(tys, env, g, x.drop_locs(Part::pop_locs(rest, el)), x.drop(tys, g, q)) {
+                PWorld => λ q k => k,
+                PVar(t, _, _) => λ q k => locs_hold_tail(tys, env, t, g, Part::pop_locs(rest, el), q, k),
+            }(Part::pop(tys, rest, p.onto(g), e), inner)
+        },
+    }
+}
+
+theorem ETm::base_holds(self t: ETm, w: rt::World, env: Env): (g: List<Ty>) → (el: List<Loc>) → (ve: rt::Env(w.tys, t.ctx_end(w, g))) →
+    LocsHold(w.tys, env, t.ctx_end(w, g), el, ve) → LocsHold(w.tys, env, g, t.base_locs(el), t.base(w, g, ve)) {
+    match t {
+        Pure(_) => λ g el ve h => h,
+        Let(e, body) => λ g el ve h => locs_hold_tail(w.tys, env, e.ty(w, g), g, body.base_locs(el), body.base(w, Cons(e.ty(w, g), g), ve),
+            body.base_holds(w, env, Cons(e.ty(w, g), g), el, ve, h)),
+        Invoke(e, _, body) => λ g el ve h => Effect::pop_holds(w.tys, env, e.results(), g, body.base_locs(el), body.base(w, Ty::bind_onto(e.results(), g), ve),
+            body.base_holds(w, env, Ty::bind_onto(e.results(), g), el, ve, h)),
+        Lend(_, cap, _, _, body) => λ g el ve h => Effect::pop_holds(w.tys, env, Lent::results(cap), g, body.base_locs(el),
+            body.base(w, Ty::bind_onto(Lent::results(cap), g), ve), body.base_holds(w, env, Ty::bind_onto(Lent::results(cap), g), el, ve, h)),
+        If(_, _, _, parts, body) => λ g el ve h => Part::pop_holds(w.tys, env, parts, g, body.base_locs(el), body.base(w, Part::ctx(parts, g), ve),
+            body.base_holds(w, env, Part::ctx(parts, g), el, ve, h)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A branch: the joined state's parts
+
+// The value parts of a state, as an environment over their codes.
+fn Part::vals(tys: Nat → RecInfo, ps: List<Part>) → Part::State(tys, ps) → rt::Env(tys, Part::codes(ps)) {
+    match ps {
+        Nil => λ _ => trivial,
+        Cons(p, rest) => match p as λ x => Part::State(tys, Cons(x, rest)) → rt::Env(tys, Part::codes(Cons(x, rest))) {
+            PWorld => λ st => Part::vals(tys, rest, Part::tail(tys, PWorld, rest, st)),
+            PVar(t, y, n) => λ st => Pair(Part::head(tys, PVar(t, y, n), rest, st), Part::vals(tys, rest, Part::tail(tys, PVar(t, y, n), rest, st))),
+        },
+    }
+}
+
+theorem Part::head_cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
+    Part::head(tys, p, rest, Part::cons(tys, p, rest, v, x)) = v {
+    match rest as λ r => (x: Part::State(tys, r)) → Part::head(tys, p, r, Part::cons(tys, p, r, v, x)) = v {
+        Nil => λ _ => refl,
+        Cons(_, _) => λ _ => refl,
+    }(x)
+}
+
+theorem Part::tail_cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
+    Part::tail(tys, p, rest, Part::cons(tys, p, rest, v, x)) = x {
+    match rest as λ r => (x: Part::State(tys, r)) → Part::tail(tys, p, r, Part::cons(tys, p, r, v, x)) = x {
+        Nil => λ _ => refl,
+        Cons(_, _) => λ _ => refl,
+    }(x)
+}
+
+// Where each value part lives at the end of an arm, its code checked.
+fn Part::sources(ps: List<Part>, side: Bool, ce: List<Ty>, el: List<Loc>) → Option<List<Loc>> {
+    match ps {
+        Nil => Some(Nil),
+        Cons(p, rest) => match p {
+            PWorld => Part::sources(rest, side, ce, el),
+            PVar(t, y, n) => match Ty::at(ce, Part::pick(side, y, n)).equation(t) {
+                Inl(_) => Loc::at(el, Part::pick(side, y, n)).and_then(λ l => Part::sources(rest, side, ce, el).and_then(λ ls => Some(Cons(l, ls)))),
+                Inr(_) => None,
+            },
+        },
+    }
+}
+
+fn Part::SourcesHold(tys: Nat → RecInfo, ps: List<Part>, side: Bool, ce: List<Ty>, el: List<Loc>, r: Option<List<Loc>>) → Type {
+    match r {
+        None => True,
+        Some(srcs) => (env: Env) → (ve: rt::Env(tys, ce)) → (io: Io) → LocsHold(tys, env, ce, el, ve) →
+            LocsHold(tys, env, Part::codes(ps), srcs, Part::vals(tys, ps, Part::state(tys, ps, side, ce, ve, io))),
+    }
+}
+
+theorem Part::sources_sound(tys: Nat → RecInfo, side: Bool, ce: List<Ty>, el: List<Loc>, ps: List<Part>):
+    Part::SourcesHold(tys, ps, side, ce, el, Part::sources(ps, side, ce, el)) {
+    match ps {
+        Nil => λ env ve io _ => trivial,
+        Cons(p, rest) => match p {
+            PWorld => match Part::sources(rest, side, ce, el) as λ r => Part::SourcesHold(tys, rest, side, ce, el, r) →
+                    Part::SourcesHold(tys, Cons(PWorld, rest), side, ce, el, r) {
+                None => λ _ => trivial,
+                Some(srcs) => λ ih env ve io held => j(sym(Part::tail_cons(tys, PWorld, rest, io, Part::state(tys, rest, side, ce, ve, io))),
+                    λ s _ => LocsHold(tys, env, Part::codes(rest), srcs, Part::vals(tys, rest, s)), ih(env, ve, io, held)),
+            }(Part::sources_sound(tys, side, ce, el, rest)),
+            PVar(t, y, n) => {
+                let k = Part::pick(side, y, n);
+                let P = λ (r: Option<List<Loc>>) => Part::SourcesHold(tys, Cons(PVar(t, y, n), rest), side, ce, el, r);
+                match Ty::at(ce, k).equation(t) as λ q => P(match q as λ _ => Option<List<Loc>> {
+                        Inl(_) => Loc::at(el, k).and_then(λ l => Part::sources(rest, side, ce, el).and_then(λ ls => Some(Cons(l, ls)))),
+                        Inr(_) => None,
+                    }) {
+                    Inl(e) => Option::and_then_elim(P, trivial, Loc::at(el, k), λ l => Part::sources(rest, side, ce, el).and_then(λ ls => Some(Cons(l, ls))),
+                        λ l e_l => Option::and_then_elim(P, trivial, Part::sources(rest, side, ce, el), λ ls => Some(Cons(l, ls)), λ ls e_ls =>
+                            λ env ve io held => {
+                                let one = PVar(t, y, n).one(tys, side, ce, ve, io);
+                                let more = Part::state(tys, rest, side, ce, ve, io);
+                                let ih = j(e_ls, λ r _ => Part::SourcesHold(tys, rest, side, ce, el, r), Part::sources_sound(tys, side, ce, el, rest))(env, ve, io, held);
+                                ⟨j(sym(Part::head_cons(tys, PVar(t, y, n), rest, one, more)), λ v _ => t.Kept(tys, env, l, v),
+                                        Ty::kept_cast(tys, env, l, Ty::at(ce, k), t, e, Env::get(tys, ce, ve, k), locs_hold_at(tys, env, ce, el, ve, held, k, l, e_l))),
+                                    j(sym(Part::tail_cons(tys, PVar(t, y, n), rest, one, more)), λ s _ => LocsHold(tys, env, Part::codes(rest), ls, Part::vals(tys, rest, s)), ih)⟩
+                            })),
+                    Inr(_) => trivial,
+                }
+            },
+        },
+    }
+}
+
+// Where the joined variables live after the join: each value part at its
+// place, bound onto the places of the variables before.
+fn Part::locs(ps: List<Part>, dsts: List<Loc>, base: List<Loc>) → List<Loc> {
+    match ps {
+        Nil => base,
+        Cons(p, rest) => match p {
+            PWorld => Part::locs(rest, dsts, base),
+            PVar(_, _, _) => match dsts { Nil => base, Cons(d, ds) => Part::locs(rest, ds, Cons(d, base)) },
+        },
+    }
+}
+
+theorem Part::push_holds(tys: Nat → RecInfo, env: Env, ps: List<Part>): (g: List<Ty>) → (base: List<Loc>) → (vals: rt::Env(tys, g)) →
+    (dsts: List<Loc>) → (st: Part::State(tys, ps)) →
+    LocsHold(tys, env, Part::codes(ps), dsts, Part::vals(tys, ps, st)) → LocsHold(tys, env, g, base, vals) →
+    LocsHold(tys, env, Part::ctx(ps, g), Part::locs(ps, dsts, base), Part::push(tys, ps, g, vals, st)) {
+    match ps {
+        Nil => λ g base vals dsts st _ hb => hb,
+        Cons(p, rest) => match p {
+            PWorld => λ g base vals dsts st hd hb =>
+                Part::push_holds(tys, env, rest, g, base, vals, dsts, Part::tail(tys, PWorld, rest, st), hd, hb),
+            PVar(t, y, n) => λ g base vals dsts => match dsts {
+                Nil => λ st never _ => false_elim(never),
+                Cons(d, ds) => λ st hd hb => Part::push_holds(tys, env, rest, Cons(t, g), Cons(d, base),
+                    Pair(Part::head(tys, PVar(t, y, n), rest, st), vals), ds, Part::tail(tys, PVar(t, y, n), rest, st), hd.right, ⟨hd.left, hb⟩),
+            },
+        },
+    }
+}
+
+// Which world the join leaves.
+fn Part::world_pick(has: Bool, a: Io, b: Io) → Io { match has { True => a, False => b } }
+
+theorem Part::world_state(tys: Nat → RecInfo, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), a: Io, io: Io, ps: List<Part>):
+    Part::world(tys, ps, Part::state(tys, ps, side, ce, ve, a), io) = Part::world_pick(Part::has_world(ps), a, io) {
+    match ps {
+        Nil => refl,
+        Cons(p, rest) => match p {
+            PWorld => Part::head_cons(tys, PWorld, rest, a, Part::state(tys, rest, side, ce, ve, a)),
+            PVar(t, y, n) => trans(cong_fn(λ (s: Part::State(tys, rest)) => Part::world(tys, rest, s, io),
+                    Part::tail_cons(tys, PVar(t, y, n), rest, PVar(t, y, n).one(tys, side, ce, ve, a), Part::state(tys, rest, side, ce, ve, a))),
+                Part::world_state(tys, side, ce, ve, a, io, rest)),
+        },
+    }
+}
+
+// A computation that calls nothing on Linux, so leaves the world as it was.
+fn ETm::silent(self t: ETm) → Bool {
+    match t {
+        Pure(_) => True,
+        Let(_, body) => body.silent(),
+        Invoke(_, _, _) => False,
+        Lend(_, _, _, _, body) => body.silent(),
+        If(_, yes, no, _, body) => yes.silent() && (no.silent() && body.silent()),
+    }
+}
+
+theorem Part::world_same(has: Bool, io: Io): Part::world_pick(has, io, io) = io { match has { True => refl, False => refl } }
+
+theorem ETm::silent_after(self t: ETm, w: rt::World, ls: List<Lent>): t.silent().IsTrue() → (g: List<Ty>) → (env: rt::Env(w.tys, g)) → (io: Io) →
+    t.sem_end(w, ls, g, env, io).after = io {
+    match t {
+        Pure(_) => λ _ g env io => refl,
+        Let(e, body) => λ s g env io => body.silent_after(w, ls, s, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Invoke(_, _, _) => λ never g env io => false_elim(never),
+        Lend(f, cap, buf, args, body) => λ s g env io => body.silent_after(w, ls, s, Ty::bind_onto(Lent::results(cap), g),
+            Effect::push(w.tys, Lent::results(cap), g, env, Lent::answer(w.tys, ls, g, env, f, cap, buf, args)), io),
+        If(cond, yes, no, parts, body) => λ s g env io => {
+            let s1 = Bool::is_true_and(yes.silent(), no.silent() && body.silent(), s);
+            let s2 = Bool::is_true_and(no.silent(), body.silent(), s1.right);
+            let ys = yes.sem_end(w, ls, g, env, io);
+            let ns = no.sem_end(w, ls, g, env, io);
+            let yst = Part::state(w.tys, parts, True, yes.ctx_end(w, g), ys.value, ys.after);
+            let nst = Part::state(w.tys, parts, False, no.ctx_end(w, g), ns.value, ns.after);
+            let st = Part::branch(w.tys, parts, ETm::truth(w.tys, cond.ty(w, g), cond.sem(w, g, env)), yst, nst);
+            let at_world: (Part::world(w.tys, parts, st, io) = io) =
+                match ETm::truth(w.tys, cond.ty(w, g), cond.sem(w, g, env)) as λ b => Part::world(w.tys, parts, Part::branch(w.tys, parts, b, yst, nst), io) = io {
+                    True => trans(Part::world_state(w.tys, True, yes.ctx_end(w, g), ys.value, ys.after, io, parts),
+                        j(sym(yes.silent_after(w, ls, s1.left, g, env, io)), λ a _ => Part::world_pick(Part::has_world(parts), a, io) = io,
+                            Part::world_same(Part::has_world(parts), io))),
+                    False => trans(Part::world_state(w.tys, False, no.ctx_end(w, g), ns.value, ns.after, io, parts),
+                        j(sym(no.silent_after(w, ls, s2.left, g, env, io)), λ a _ => Part::world_pick(Part::has_world(parts), a, io) = io,
+                            Part::world_same(Part::has_world(parts), io))),
+                };
+            trans(body.silent_after(w, ls, s2.right, Part::ctx(parts, g), Part::push(w.tys, parts, g, env, st), Part::world(w.tys, parts, st, io)), at_world)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A branch: where the joined variables go
+
+// The place two arms leave a variable of code `t` in: one word, or for a
+// buffer one buffer, or none (gone, which a later use refuses).
+fn Loc::meet(t: Ty, a: Loc, b: Loc) → Option<Loc> {
+    match t {
+        Word(_) => match a { InWord(x) => match b { InWord(y) => match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }, InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
+        Bit => match a { InWord(x) => match b { InWord(y) => match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }, InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
+        Bytes(_) => match a { InWord(_) => None, Gone => Some(Gone), InBuffer(x) => match b { InWord(_) => None, Gone => Some(Gone),
+            InBuffer(y) => match x.eq_dec(y) { Inl(_) => Some(InBuffer(x)), Inr(_) => Some(Gone) } } },
+        Lines => None,
+        Named(_) => None,
+        Count => None,
+    }
+}
+
+fn Loc::MeetHolds(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc, r: Option<Loc>) → Type {
+    match r {
+        None => True,
+        Some(m) => (env: Env) → (v: t.sem(tys)) → (t.Kept(tys, env, a, v) → t.Kept(tys, env, m, v)) ∧ (t.Kept(tys, env, b, v) → t.Kept(tys, env, m, v)),
+    }
+}
+
+theorem Loc::meet_word(tys: Nat → RecInfo, t: Ty, x, y: Nat):
+    Loc::MeetHolds(tys, t, InWord(x), InWord(y), match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }) {
+    match x.eq_dec(y) as λ d => Loc::MeetHolds(tys, t, InWord(x), InWord(y), match d { Inl(_) => Some(InWord(x)), Inr(_) => None }) {
+        Inl(e) => λ env v => ⟨λ k => k, λ k => j(sym(e), λ z _ => t.Kept(tys, env, InWord(z), v), k)⟩,
+        Inr(_) => trivial,
+    }
+}
+
+theorem Loc::meet_sound(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc): Loc::MeetHolds(tys, t, a, b, Loc::meet(t, a, b)) {
+    match t {
+        Word(wd) => match a {
+            InWord(x) => match b { InWord(y) => Loc::meet_word(tys, Word(wd), x, y), InBuffer(_) => trivial, Gone => trivial },
+            InBuffer(_) => trivial,
+            Gone => trivial,
+        },
+        Bit => match a {
+            InWord(x) => match b { InWord(y) => Loc::meet_word(tys, Bit, x, y), InBuffer(_) => trivial, Gone => trivial },
+            InBuffer(_) => trivial,
+            Gone => trivial,
+        },
+        Bytes(c) => match a {
+            InWord(_) => trivial,
+            Gone => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
+            InBuffer(x) => match b {
+                InWord(_) => trivial,
+                Gone => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
+                InBuffer(y) => match x.eq_dec(y) as λ d => Loc::MeetHolds(tys, Bytes(c), InBuffer(x), InBuffer(y),
+                        match d { Inl(_) => Some(InBuffer(x)), Inr(_) => Some(Gone) }) {
+                    Inl(e) => λ env v => ⟨λ k => k, λ k => j(sym(e), λ z _ => Bytes(c).Kept(tys, env, InBuffer(z), v), k)⟩,
+                    Inr(_) => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
+                },
+            },
+        },
+        Lines => trivial,
+        Named(_) => trivial,
+        Count => trivial,
+    }
+}
+
+fn Loc::meets(g: List<Ty>, a: List<Loc>, b: List<Loc>) → Option<List<Loc>> {
+    match g {
+        Nil => match a { Nil => match b { Nil => Some(Nil), Cons(_, _) => None }, Cons(_, _) => None },
+        Cons(t, rest) => match a {
+            Nil => None,
+            Cons(x, xs) => match b {
+                Nil => None,
+                Cons(y, ys) => Loc::meet(t, x, y).and_then(λ m => Loc::meets(rest, xs, ys).and_then(λ ms => Some(Cons(m, ms)))),
+            },
+        },
+    }
+}
+
+fn Loc::MeetsHold(tys: Nat → RecInfo, g: List<Ty>, a: List<Loc>, b: List<Loc>, r: Option<List<Loc>>) → Type {
+    match r {
+        None => True,
+        Some(m) => (env: Env) → (vals: rt::Env(tys, g)) →
+            (LocsHold(tys, env, g, a, vals) → LocsHold(tys, env, g, m, vals)) ∧ (LocsHold(tys, env, g, b, vals) → LocsHold(tys, env, g, m, vals)),
+    }
+}
+
+theorem Loc::meets_sound(tys: Nat → RecInfo, g: List<Ty>): (a: List<Loc>) → (b: List<Loc>) → Loc::MeetsHold(tys, g, a, b, Loc::meets(g, a, b)) {
+    match g {
+        Nil => λ a => match a {
+            Nil => λ b => match b as λ q => Loc::MeetsHold(tys, Nil, Nil, q, Loc::meets(Nil, Nil, q)) {
+                Nil => λ env vals => ⟨λ h => h, λ h => h⟩,
+                Cons(_, _) => trivial,
+            },
+            Cons(_, _) => λ b => trivial,
+        },
+        Cons(t, rest) => λ a => match a {
+            Nil => λ b => trivial,
+            Cons(x, xs) => λ b => match b {
+                Nil => trivial,
+                Cons(y, ys) => {
+                    let P = λ (r: Option<List<Loc>>) => Loc::MeetsHold(tys, Cons(t, rest), Cons(x, xs), Cons(y, ys), r);
+                    Option::and_then_elim(P, trivial, Loc::meet(t, x, y), λ m => Loc::meets(rest, xs, ys).and_then(λ ms => Some(Cons(m, ms))), λ m e_m =>
+                    Option::and_then_elim(P, trivial, Loc::meets(rest, xs, ys), λ ms => Some(Cons(m, ms)), λ ms e_ms => λ env vals => {
+                        let one = j(e_m, λ r _ => Loc::MeetHolds(tys, t, x, y, r), Loc::meet_sound(tys, t, x, y))(env, vals.fst);
+                        let more = j(e_ms, λ r _ => Loc::MeetsHold(tys, rest, xs, ys, r), Loc::meets_sound(tys, rest, xs, ys))(env, vals.snd);
+                        ⟨λ h => ⟨one.left(h.left), more.left(h.right)⟩, λ h => ⟨one.right(h.left), more.right(h.right)⟩⟩
+                    }))
+                },
+            },
+        },
+    }
+}
+
+// The fresh places of the joined variables, from `next` on: a word or a bit
+// in a fresh word, a buffer where both arms leave it (or gone).
+record Dests { locs: List<Loc>, next: Nat }
+
+fn Part::dests(codes: List<Ty>, sy: List<Loc>, sn: List<Loc>, next: Nat) → Option<Dests> {
+    match codes {
+        Nil => Some(Dests(Nil, next)),
+        Cons(t, rest) => match sy {
+            Nil => None,
+            Cons(a, ys) => match sn {
+                Nil => None,
+                Cons(b, ns) => match t {
+                    Bytes(_) => Loc::meet(t, a, b).and_then(λ m => Part::dests(rest, ys, ns, next).and_then(λ d => Some(Dests(Cons(m, d.locs), d.next)))),
+                    _ => Part::dests(rest, ys, ns, Succ(next)).and_then(λ d => Some(Dests(Cons(InWord(next), d.locs), d.next))),
+                },
+            },
+        },
+    }
+}
+
+// Every word of a layout below `next`, decided.
+fn Loc::below(locs: List<Loc>, next: Nat) → Bool {
+    match locs {
+        Nil => True,
+        Cons(l, rest) => match l { InWord(id) => Succ(id).leb(next) && Loc::below(rest, next), InBuffer(_) => Loc::below(rest, next), Gone => Loc::below(rest, next) },
+    }
+}
+
+theorem Loc::below_sound(locs: List<Loc>, next: Nat): Loc::below(locs, next).IsTrue() → LocsBelow(locs, next) {
+    match locs {
+        Nil => λ _ => trivial,
+        Cons(l, rest) => match l {
+            InWord(id) => λ h => {
+                let parts = Bool::is_true_and(Succ(id).leb(next), Loc::below(rest, next), h);
+                ⟨Succ(id).leb_sound(next, parts.left), Loc::below_sound(rest, next, parts.right)⟩
+            },
+            InBuffer(_) => λ h => ⟨trivial, Loc::below_sound(rest, next, h)⟩,
+            Gone => λ h => ⟨trivial, Loc::below_sound(rest, next, h)⟩,
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The lowering
 
@@ -1400,6 +2149,48 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
 // The statements, the word the value lands in, the next fresh word, and
 // where every variable of the end context lives after them.
 record ELowered { stmt: Stmt, result: Nat, next: Nat, locs: List<Loc> }
+
+// ---------------------------------------------------------------------------
+// A branch, lowered
+
+// What each arm runs after its statements, the places of the variables
+// after the join, and the next fresh word.
+record Joined { yes: Stmt, no: Stmt, locs: List<Loc>, next: Nat }
+
+// The join of two lowered arms: each arm's value parts moved to fresh
+// places (a buffer stays where both arms leave it), the variables before
+// the branch where both arms leave them, the world a part when an arm calls
+// Linux. Decided here, used once in the proof: the moves write no place a
+// variable before the branch lives in, and every word is below the next
+// fresh one.
+fn ETm::join_lower(w: rt::World, g: List<Ty>, next: Nat, yes: ETm, no: ETm, parts: List<Part>, ly: ELowered, ln: ELowered) → Option<Joined> {
+    Tm::check_true(Part::has_world(parts) || (yes.silent() && no.silent())).and_then(λ _ =>
+    Part::sources(parts, True, yes.ctx_end(w, g), ly.locs).and_then(λ sy =>
+    Part::sources(parts, False, no.ctx_end(w, g), ln.locs).and_then(λ sn =>
+    Loc::meets(g, yes.base_locs(ly.locs), no.base_locs(ln.locs)).and_then(λ m =>
+    Part::dests(Part::codes(parts), sy, sn, ly.next.max(ln.next)).and_then(λ ds =>
+    Loc::moves(Part::codes(parts), ds.locs, sy).and_then(λ my =>
+    Loc::moves(Part::codes(parts), ds.locs, sn).and_then(λ mn =>
+    Tm::check_true(Loc::clear(yes.base_locs(ly.locs), Loc::words(ds.locs)) && (Loc::clear(no.base_locs(ln.locs), Loc::words(ds.locs))
+        && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+        Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next))))))))))
+}
+
+// `if cond { yes } else { no }` then `body`: the condition into its flag,
+// a `Branch` on it to each arm's statements and moves, then the body's,
+// from the places the join leaves. The arms and the body are lowered by
+// the caller (`ylow`, `nlow`, `blow`), which recurses.
+fn ETm::lower_if(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, cond: Tm, yes: ETm, no: ETm, parts: List<Part>,
+    ylow: Nat → Option<ELowered>, nlow: Nat → Option<ELowered>, blow: List<Loc> → Nat → Option<ELowered>) → Option<ELowered> {
+    Ty::check_bit(Tm::ty(cond, w, g)).and_then(λ _ =>
+    ETm::lower_value(cond, w, g, locs, next).and_then(λ c =>
+    ylow(c.next).and_then(λ ly =>
+    nlow(c.next).and_then(λ ln =>
+    ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln).and_then(λ jn =>
+    blow(jn.locs, jn.next).and_then(λ lb =>
+        Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+            lb.result, lb.next, lb.locs))))))))
+}
 
 fn ETm::lower(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat) → Option<ELowered> {
     match t {
@@ -1416,6 +2207,8 @@ fn ETm::lower(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List
         Lend(f, cap, buf, args, body) => ETm::lower_lend(w, ls, g, locs, next, f, cap, buf, args).and_then(λ k =>
             body.lower(w, ls, Ty::bind_onto(Lent::results(cap), g), k.locs, Succ(next)).and_then(λ lb =>
                 Some(ELowered(Then(Compute(k.region), lb.stmt), lb.result, lb.next, lb.locs)))),
+        If(cond, yes, no, parts, body) => ETm::lower_if(w, g, locs, next, cond, yes, no, parts,
+            λ n => yes.lower(w, ls, g, locs, n), λ n => no.lower(w, ls, g, locs, n), λ l2 n => body.lower(w, ls, Part::ctx(parts, g), l2, n)),
     }
 }
 
@@ -1429,12 +2222,6 @@ fn Flow::Keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, result: Nat, v: t.s
 // and the value in the result word.
 fn ETm::Lands(t: Ty, tys: Nat → RecInfo, result: Nat, m: Mutated<Io, Flow>, e: Mutated<Io, t.sem(tys)>) → Type {
     (m.after = e.after) ∧ m.value.Keeps(t, tys, result, e.value)
-}
-
-// Where a statement leaves the program: on, with every variable of a
-// context kept where it lives.
-fn Flow::KeepsAll(self flow: Flow, tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g)) → Type {
-    match flow { Onward(env) => LocsHold(tys, env, g, locs, vals), Exited(_) => False }
 }
 
 // After the statements: every variable of the end context kept where the
@@ -1457,6 +2244,288 @@ fn ETm::LowerHolds(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs:
             ETm::Lands(t.ty(w, g), w.tys, l.result, Stmt::thread(l.stmt, call, env, io), t.sem(w, ls, g, vals, io))
                 ∧ t.EndHolds(w, ls, g, vals, io, next, l, Stmt::thread(l.stmt, call, env, io))),
     }
+}
+
+// ---------------------------------------------------------------------------
+// A branch, sound
+
+// An arm and its moves land where the join says: the world the state's
+// world part is (or the one before, when no arm calls), and the flow on,
+// holding the state's value parts and the variables before the branch at
+// the join's places.
+fn ETm::ArmLands(w: rt::World, ls: List<Lent>, g: List<Ty>, parts: List<Part>, arm: ETm, l: ELowered, mv: Stmt, side: Bool, jlocs: List<Loc>,
+    call: Writers(), env: Env, vals: rt::Env(w.tys, g), io: Io) → Type {
+    (Stmt::thread(Then(l.stmt, mv), call, env, io).after = Part::world(w.tys, parts,
+        Part::state(w.tys, parts, side, arm.ctx_end(w, g), arm.sem_end(w, ls, g, vals, io).value, arm.sem_end(w, ls, g, vals, io).after), io))
+    ∧ Stmt::thread(Then(l.stmt, mv), call, env, io).value.KeepsAll(w.tys, Part::ctx(parts, g), jlocs, Part::push(w.tys, parts, g, vals,
+        Part::state(w.tys, parts, side, arm.ctx_end(w, g), arm.sem_end(w, ls, g, vals, io).value, arm.sem_end(w, ls, g, vals, io).after)))
+}
+
+theorem ETm::arm_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, parts: List<Part>, side: Bool,
+    arm: ETm, l: ELowered, ah: ETm::LowerHolds(arm, w, ls, g, locs, next, Some(l)),
+    srcs: List<Loc>, sh: Part::SourcesHold(w.tys, parts, side, arm.ctx_end(w, g), l.locs, Some(srcs)),
+    dsts: List<Loc>, mv: Stmt, mh: Loc::MovesHold(w.tys, Part::codes(parts), dsts, srcs, Some(mv)),
+    m: List<Loc>, meet: (e: Env) → (vals: rt::Env(w.tys, g)) → LocsHold(w.tys, e, g, arm.base_locs(l.locs), vals) → LocsHold(w.tys, e, g, m, vals),
+    clear: Loc::clear(arm.base_locs(l.locs), Loc::words(dsts)).IsTrue(), quiet: (Part::has_world(parts) || arm.silent()).IsTrue(),
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    lents: ETm::LentsAgree(ls, call), env: Env, vals: rt::Env(w.tys, g), io: Io,
+    held: LocsHold(w.tys, env, g, locs, vals), below: LocsBelow(locs, next), pos: 0 < next):
+    ETm::ArmLands(w, ls, g, parts, arm, l, mv, side, Part::locs(parts, dsts, m), call, env, vals, io)
+{
+    let r = ah.right(call, still, agree, lents, env, vals, io, held, below, pos);
+    let ce = arm.ctx_end(w, g);
+    let ve = arm.sem_end(w, ls, g, vals, io).value;
+    let a_end = arm.sem_end(w, ls, g, vals, io).after;
+    let st = Part::state(w.tys, parts, side, ce, ve, a_end);
+    let mb = Stmt::thread(l.stmt, call, env, io);
+    let wa: (mb.after = a_end) = trans(r.left.left, sym(arm.sem_end_after(w, ls, g, vals, io)));
+    let wj: (Part::world(w.tys, parts, st, io) = a_end) = trans(Part::world_state(w.tys, side, ce, ve, a_end, io, parts),
+        match Part::has_world(parts) as λ h => (h || arm.silent()).IsTrue() → Part::world_pick(h, a_end, io) = a_end {
+            True => λ _ => refl,
+            False => λ s => sym(arm.silent_after(w, ls, s, g, vals, io)),
+        }(quiet));
+    let base = arm.base_locs(l.locs);
+    let moved: (flow: Flow) → (e2: Env) → flow.KeepsAll(w.tys, Part::codes(parts), dsts, Part::vals(w.tys, parts, st)) → flow.Frames(base, e2) →
+        LocsHold(w.tys, e2, g, base, vals) → flow.KeepsAll(w.tys, Part::ctx(parts, g), Part::locs(parts, dsts, m), Part::push(w.tys, parts, g, vals, st)) =
+        λ flow => match flow {
+            Onward(e3) => λ e2 kd fr hb => Part::push_holds(w.tys, e3, parts, g, m, vals, dsts, st, kd,
+                meet(e3, vals, locs_hold_same(w.tys, e2, e3, g, base, vals, fr, hb))),
+            Exited(_) => λ e2 never _ _ => false_elim(never),
+        };
+    let step: (flow: Flow) → (a: Io) → flow.KeepsAll(w.tys, ce, l.locs, ve) →
+        (Stmt::then_thread(mv, call, Mutated(a, flow)).after = a)
+            ∧ Stmt::then_thread(mv, call, Mutated(a, flow)).value.KeepsAll(w.tys, Part::ctx(parts, g), Part::locs(parts, dsts, m), Part::push(w.tys, parts, g, vals, st)) =
+        λ flow => match flow {
+            Onward(e2) => λ a held2 => {
+                let hs = sh(e2, ve, a_end, held2);
+                let mres = mh.right(call, e2, Part::vals(w.tys, parts, st), a, hs);
+                let hb = j(arm.base_end(w, ls, g, vals, io), λ v _ => LocsHold(w.tys, e2, g, base, v), arm.base_holds(w, e2, g, l.locs, ve, held2));
+                let m3 = Stmt::thread(mv, call, e2, a);
+                ⟨mres.left, moved(m3.value, e2, mres.right.left, mres.right.right(base, clear), hb)⟩
+            },
+            Exited(_) => λ a never => false_elim(never),
+        };
+    let res = step(mb.value, mb.after, r.right.left);
+    ⟨trans(res.left, trans(wa, sym(wj))), res.right⟩
+}
+
+// What a join promises: straight moves, the next fresh word past the
+// arms', every word of the join's places below it, and each arm landing
+// where the join says from an environment holding the variables.
+fn ETm::JoinHolds(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, yes: ETm, no: ETm, parts: List<Part>, ly: ELowered, ln: ELowered,
+    r: Option<Joined>) → Type {
+    match r {
+        None => True,
+        Some(jn) => (jn.yes.straight() && jn.no.straight()).IsTrue() ∧ ((next <= jn.next) ∧ (LocsBelow(jn.locs, jn.next) ∧
+            ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) →
+                ETm::LentsAgree(ls, call) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
+                LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
+                ETm::ArmLands(w, ls, g, parts, yes, ly, jn.yes, True, jn.locs, call, env, vals, io)
+                    ∧ ETm::ArmLands(w, ls, g, parts, no, ln, jn.no, False, jn.locs, call, env, vals, io)))),
+    }
+}
+
+theorem ETm::quiet_yes(h: Bool, a, b: Bool): (h || (a && b)).IsTrue() → (h || a).IsTrue() {
+    match h { True => λ _ => trivial, False => λ s => Bool::is_true_and(a, b, s).left }
+}
+
+theorem ETm::quiet_no(h: Bool, a, b: Bool): (h || (a && b)).IsTrue() → (h || b).IsTrue() {
+    match h { True => λ _ => trivial, False => λ s => Bool::is_true_and(a, b, s).right }
+}
+
+theorem ETm::join_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, yes: ETm, no: ETm, parts: List<Part>,
+    ly: ELowered, ln: ELowered, yh: ETm::LowerHolds(yes, w, ls, g, locs, next, Some(ly)), nh: ETm::LowerHolds(no, w, ls, g, locs, next, Some(ln))):
+    ETm::JoinHolds(w, ls, g, locs, next, yes, no, parts, ly, ln, ETm::join_lower(w, g, next, yes, no, parts, ly, ln)) {
+    let P = λ (r: Option<Joined>) => ETm::JoinHolds(w, ls, g, locs, next, yes, no, parts, ly, ln, r);
+    let codes = Part::codes(parts);
+    let yb = yes.base_locs(ly.locs);
+    let nb = no.base_locs(ln.locs);
+    let top = ly.next.max(ln.next);
+    Option::and_then_elim(P, trivial, Tm::check_true(Part::has_world(parts) || (yes.silent() && no.silent())), λ _ =>
+        Part::sources(parts, True, yes.ctx_end(w, g), ly.locs).and_then(λ sy =>
+        Part::sources(parts, False, no.ctx_end(w, g), ln.locs).and_then(λ sn =>
+        Loc::meets(g, yb, nb).and_then(λ m =>
+        Part::dests(codes, sy, sn, top).and_then(λ ds =>
+        Loc::moves(codes, ds.locs, sy).and_then(λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next))))))))), λ quiet _ =>
+    Option::and_then_elim(P, trivial, Part::sources(parts, True, yes.ctx_end(w, g), ly.locs), λ sy =>
+        Part::sources(parts, False, no.ctx_end(w, g), ln.locs).and_then(λ sn =>
+        Loc::meets(g, yb, nb).and_then(λ m =>
+        Part::dests(codes, sy, sn, top).and_then(λ ds =>
+        Loc::moves(codes, ds.locs, sy).and_then(λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next)))))))), λ sy e_sy =>
+    Option::and_then_elim(P, trivial, Part::sources(parts, False, no.ctx_end(w, g), ln.locs), λ sn =>
+        Loc::meets(g, yb, nb).and_then(λ m =>
+        Part::dests(codes, sy, sn, top).and_then(λ ds =>
+        Loc::moves(codes, ds.locs, sy).and_then(λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next))))))), λ sn e_sn =>
+    Option::and_then_elim(P, trivial, Loc::meets(g, yb, nb), λ m =>
+        Part::dests(codes, sy, sn, top).and_then(λ ds =>
+        Loc::moves(codes, ds.locs, sy).and_then(λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next)))))), λ m e_m =>
+    Option::and_then_elim(P, trivial, Part::dests(codes, sy, sn, top), λ ds =>
+        Loc::moves(codes, ds.locs, sy).and_then(λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next))))), λ ds _ =>
+    Option::and_then_elim(P, trivial, Loc::moves(codes, ds.locs, sy), λ my =>
+        Loc::moves(codes, ds.locs, sn).and_then(λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next)))), λ my e_my =>
+    Option::and_then_elim(P, trivial, Loc::moves(codes, ds.locs, sn), λ mn =>
+        Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))).and_then(λ _ =>
+            Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next))), λ mn e_mn =>
+    Option::and_then_elim(P, trivial, Tm::check_true(Loc::clear(yb, Loc::words(ds.locs)) && (Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)))),
+        λ _ => Some(Joined(my, mn, Part::locs(parts, ds.locs, m), ds.next)), λ ok _ => {
+        let c1 = Bool::is_true_and(Loc::clear(yb, Loc::words(ds.locs)), Loc::clear(nb, Loc::words(ds.locs))
+            && (Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next)), ok);
+        let c2 = Bool::is_true_and(Loc::clear(nb, Loc::words(ds.locs)), Loc::below(Part::locs(parts, ds.locs, m), ds.next) && next.leb(ds.next), c1.right);
+        let c3 = Bool::is_true_and(Loc::below(Part::locs(parts, ds.locs, m), ds.next), next.leb(ds.next), c2.right);
+        let mhy = j(e_my, λ r _ => Loc::MovesHold(w.tys, codes, ds.locs, sy, r), Loc::moves_sound(w.tys, codes, ds.locs, sy));
+        let mhn = j(e_mn, λ r _ => Loc::MovesHold(w.tys, codes, ds.locs, sn, r), Loc::moves_sound(w.tys, codes, ds.locs, sn));
+        let shy = j(e_sy, λ r _ => Part::SourcesHold(w.tys, parts, True, yes.ctx_end(w, g), ly.locs, r), Part::sources_sound(w.tys, True, yes.ctx_end(w, g), ly.locs, parts));
+        let shn = j(e_sn, λ r _ => Part::SourcesHold(w.tys, parts, False, no.ctx_end(w, g), ln.locs, r), Part::sources_sound(w.tys, False, no.ctx_end(w, g), ln.locs, parts));
+        let mt = j(e_m, λ r _ => Loc::MeetsHold(w.tys, g, yb, nb, r), Loc::meets_sound(w.tys, g, yb, nb));
+        ⟨Bool::is_true_and_intro(my.straight(), mn.straight(), mhy.left, mhn.left), ⟨next.leb_sound(ds.next, c3.right),
+            ⟨Loc::below_sound(Part::locs(parts, ds.locs, m), ds.next, c3.left),
+            λ call still agree lents env vals io held below pos =>
+                ⟨ETm::arm_sound(w, ls, g, locs, next, parts, True, yes, ly, yh, sy, shy, ds.locs, my, mhy, m, λ e v h => mt(e, v).left(h),
+                    c1.left, ETm::quiet_yes(Part::has_world(parts), yes.silent(), no.silent(), quiet),
+                    call, still, agree, lents, env, vals, io, held, below, pos),
+                ETm::arm_sound(w, ls, g, locs, next, parts, False, no, ln, nh, sn, shn, ds.locs, mn, mhn, m, λ e v h => mt(e, v).right(h),
+                    c2.left, ETm::quiet_no(Part::has_world(parts), yes.silent(), no.silent(), quiet),
+                    call, still, agree, lents, env, vals, io, held, below, pos)⟩⟩⟩⟩
+    }))))))))
+}
+
+// After the branch: the body from the join's places, at the joined state.
+fn ETm::IfGoal(w: rt::World, ls: List<Lent>, g: List<Ty>, parts: List<Part>, body: ETm, vals: rt::Env(w.tys, g), io: Io, next: Nat, lb: ELowered,
+    st: Part::State(w.tys, parts), m: Mutated<Io, Flow>) → Type {
+    ETm::Lands(body.ty(w, Part::ctx(parts, g)), w.tys, lb.result, m,
+        body.sem(w, ls, Part::ctx(parts, g), Part::push(w.tys, parts, g, vals, st), Part::world(w.tys, parts, st, io)))
+    ∧ (m.value.KeepsAll(w.tys, body.ctx_end(w, Part::ctx(parts, g)), lb.locs,
+            body.sem_end(w, ls, Part::ctx(parts, g), Part::push(w.tys, parts, g, vals, st), Part::world(w.tys, parts, st, io)).value)
+        ∧ (LocsBelow(lb.locs, lb.next) ∧ (next <= lb.next)))
+}
+
+theorem ETm::if_tail(w: rt::World, ls: List<Lent>, g: List<Ty>, parts: List<Part>, body: ETm, jn: Joined, lb: ELowered,
+    bh: ETm::LowerHolds(body, w, ls, Part::ctx(parts, g), jn.locs, jn.next, Some(lb)),
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    lents: ETm::LentsAgree(ls, call), vals: rt::Env(w.tys, g), io: Io, next: Nat, le: next <= jn.next, below: LocsBelow(jn.locs, jn.next), pos: 0 < jn.next,
+    st: Part::State(w.tys, parts)): (a: Io) → (flow: Flow) → (a = Part::world(w.tys, parts, st, io)) →
+    flow.KeepsAll(w.tys, Part::ctx(parts, g), jn.locs, Part::push(w.tys, parts, g, vals, st)) →
+    ETm::IfGoal(w, ls, g, parts, body, vals, io, next, lb, st, Stmt::then_thread(lb.stmt, call, Mutated(a, flow)))
+{
+    let g2 = Part::ctx(parts, g);
+    let v2 = Part::push(w.tys, parts, g, vals, st);
+    λ a flow => match flow {
+        Onward(e3) => λ wa held3 => {
+            let r = bh.right(call, still, agree, lents, e3, v2, a, held3, below, pos);
+            let m = Stmt::thread(lb.stmt, call, e3, a);
+            j(wa, λ x _ => ETm::Lands(body.ty(w, g2), w.tys, lb.result, m, body.sem(w, ls, g2, v2, x))
+                    ∧ (m.value.KeepsAll(w.tys, body.ctx_end(w, g2), lb.locs, body.sem_end(w, ls, g2, v2, x).value) ∧ (LocsBelow(lb.locs, lb.next) ∧ (next <= lb.next))),
+                ⟨r.left, ⟨r.right.left, ⟨r.right.right.left, Nat::le_trans(next, jn.next, lb.next, le, r.right.right.right)⟩⟩⟩)
+        },
+        Exited(_) => λ _ never => false_elim(never),
+    }
+}
+
+theorem ETm::lower_if_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, cond: Tm, yes: ETm, no: ETm, parts: List<Part>, body: ETm,
+    ylow: Nat → Option<ELowered>, nlow: Nat → Option<ELowered>, blow: List<Loc> → Nat → Option<ELowered>,
+    yh: (n: Nat) → ETm::LowerHolds(yes, w, ls, g, locs, n, ylow(n)), nh: (n: Nat) → ETm::LowerHolds(no, w, ls, g, locs, n, nlow(n)),
+    bh: (l2: List<Loc>) → (n: Nat) → ETm::LowerHolds(body, w, ls, Part::ctx(parts, g), l2, n, blow(l2, n))):
+    ETm::LowerHolds(ETm::If(cond, yes, no, parts, body), w, ls, g, locs, next, ETm::lower_if(w, g, locs, next, cond, yes, no, parts, ylow, nlow, blow))
+{
+    let P = λ (r: Option<ELowered>) => ETm::LowerHolds(ETm::If(cond, yes, no, parts, body), w, ls, g, locs, next, r);
+    Option::and_then_elim(P, trivial, Ty::check_bit(Tm::ty(cond, w, g)), λ _ =>
+        ETm::lower_value(cond, w, g, locs, next).and_then(λ c =>
+        ylow(c.next).and_then(λ ly =>
+        nlow(c.next).and_then(λ ln =>
+        ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln).and_then(λ jn =>
+        blow(jn.locs, jn.next).and_then(λ lb =>
+            Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+                lb.result, lb.next, lb.locs))))))), λ eb _ =>
+    Option::and_then_elim(P, trivial, ETm::lower_value(cond, w, g, locs, next), λ c =>
+        ylow(c.next).and_then(λ ly =>
+        nlow(c.next).and_then(λ ln =>
+        ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln).and_then(λ jn =>
+        blow(jn.locs, jn.next).and_then(λ lb =>
+            Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+                lb.result, lb.next, lb.locs)))))), λ c e_c =>
+    Option::and_then_elim(P, trivial, ylow(c.next), λ ly =>
+        nlow(c.next).and_then(λ ln =>
+        ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln).and_then(λ jn =>
+        blow(jn.locs, jn.next).and_then(λ lb =>
+            Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+                lb.result, lb.next, lb.locs))))), λ ly e_ly =>
+    Option::and_then_elim(P, trivial, nlow(c.next), λ ln =>
+        ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln).and_then(λ jn =>
+        blow(jn.locs, jn.next).and_then(λ lb =>
+            Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+                lb.result, lb.next, lb.locs)))), λ ln e_ln =>
+    Option::and_then_elim(P, trivial, ETm::join_lower(w, g, c.next, yes, no, parts, ly, ln), λ jn =>
+        blow(jn.locs, jn.next).and_then(λ lb =>
+            Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+                lb.result, lb.next, lb.locs))), λ jn e_jn =>
+    Option::and_then_elim(P, trivial, blow(jn.locs, jn.next), λ lb =>
+        Some(ELowered(Then(Compute(c.region), Then(Branch(c.result, Then(ly.stmt, jn.yes), Then(ln.stmt, jn.no)), lb.stmt)),
+            lb.result, lb.next, lb.locs)), λ lb e_lb => {
+        let vh = j(e_c, λ r _ => ETm::ValueHolds(cond, w, g, locs, next, r), ETm::value_sound(cond, w, g, locs, next));
+        let yH = j(e_ly, λ r _ => ETm::LowerHolds(yes, w, ls, g, locs, c.next, r), yh(c.next));
+        let nH = j(e_ln, λ r _ => ETm::LowerHolds(no, w, ls, g, locs, c.next, r), nh(c.next));
+        let jH = j(e_jn, λ r _ => ETm::JoinHolds(w, ls, g, locs, c.next, yes, no, parts, ly, ln, r), ETm::join_sound(w, ls, g, locs, c.next, yes, no, parts, ly, ln, yH, nH));
+        let bH = j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, Part::ctx(parts, g), jn.locs, jn.next, r), bh(jn.locs, jn.next));
+        let js = Bool::is_true_and(jn.yes.straight(), jn.no.straight(), jH.left);
+        let Y = Then(ly.stmt, jn.yes);
+        let N = Then(ln.stmt, jn.no);
+        let straight = Bool::is_true_and_intro(True, Branch(c.result, Y, N).straight() && lb.stmt.straight(), trivial,
+            Bool::is_true_and_intro(Branch(c.result, Y, N).straight(), lb.stmt.straight(),
+                Bool::is_true_and_intro(Y.straight(), N.straight(),
+                    Bool::is_true_and_intro(ly.stmt.straight(), jn.yes.straight(), yH.left, js.left),
+                    Bool::is_true_and_intro(ln.stmt.straight(), jn.no.straight(), nH.left, js.right)),
+                bH.left));
+        ⟨straight, λ call still agree lents env vals io held below pos => {
+            let ran = vh.right(call, still, agree, env, vals, held, below, pos);
+            let env1 = env.compute(call, c.region);
+            let held1: LocsHold(w.tys, env1, g, locs, vals) = ran.right.right;
+            let cle: (next <= c.next) = Nat::le_trans(next, c.result, c.next, ran.left,
+                j(sym(vh.left), λ n _ => c.result <= n, Nat::le_succ_r(c.result, c.result, c.result.le_refl())));
+            let below1 = locs_below_mono(locs, next, c.next, cle, below);
+            let pos1 = Nat::lt_of_lt_of_le(0, next, c.next, pos, cle);
+            let jle: (next <= jn.next) = Nat::le_trans(next, c.next, jn.next, cle, jH.right.left);
+            let jpos = Nat::lt_of_lt_of_le(0, next, jn.next, pos, jle);
+            let arms = jH.right.right.right(call, still, agree, lents, env1, vals, io, held1, below1, pos1);
+            let bit = ETm::bit_kept(w.tys, env1, c.result, Tm::ty(cond, w, g), eb, Tm::sem(cond, w, g, vals), ran.right.left);
+            let ys = Part::state(w.tys, parts, True, yes.ctx_end(w, g), yes.sem_end(w, ls, g, vals, io).value, yes.sem_end(w, ls, g, vals, io).after);
+            let ns = Part::state(w.tys, parts, False, no.ctx_end(w, g), no.sem_end(w, ls, g, vals, io).value, no.sem_end(w, ls, g, vals, io).after);
+            let tail = ETm::if_tail(w, ls, g, parts, body, jn, lb, bH, call, still, agree, lents, vals, io, next, jle, jH.right.right.left, jpos);
+            let truth = ETm::truth(w.tys, Tm::ty(cond, w, g), Tm::sem(cond, w, g, vals));
+            let at_truth = match truth as λ b => ETm::IfGoal(w, ls, g, parts, body, vals, io, next, lb, Part::branch(w.tys, parts, b, ys, ns),
+                    Stmt::then_thread(lb.stmt, call, match b as λ _ => Mutated<Io, Flow> { True => Stmt::thread(Y, call, env1, io), False => Stmt::thread(N, call, env1, io) })) {
+                True => tail(ys, Stmt::thread(Y, call, env1, io).after, Stmt::thread(Y, call, env1, io).value, arms.left.left, arms.left.right),
+                False => tail(ns, Stmt::thread(N, call, env1, io).after, Stmt::thread(N, call, env1, io).value, arms.right.left, arms.right.right),
+            };
+            j(sym(bit), λ x _ => ETm::IfGoal(w, ls, g, parts, body, vals, io, next, lb, Part::branch(w.tys, parts, truth, ys, ns),
+                    Stmt::then_thread(lb.stmt, call, match x as λ _ => Mutated<Io, Flow> { True => Stmt::thread(Y, call, env1, io), False => Stmt::thread(N, call, env1, io) })),
+                at_truth)
+        }⟩
+    }))))))
 }
 
 // The theorem, by induction over the computation.
@@ -1541,6 +2610,9 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty
                 }⟩
             }))
         },
+        If(cond, yes, no, parts, body) => λ g locs next => ETm::lower_if_sound(w, ls, g, locs, next, cond, yes, no, parts, body,
+            λ n => yes.lower(w, ls, g, locs, n), λ n => no.lower(w, ls, g, locs, n), λ l2 n => body.lower(w, ls, Part::ctx(parts, g), l2, n),
+            λ n => yes.lower_sound(w, ls, g, locs, n), λ n => no.lower_sound(w, ls, g, locs, n), λ l2 n => body.lower_sound(w, ls, Part::ctx(parts, g), l2, n)),
     }
 }
 

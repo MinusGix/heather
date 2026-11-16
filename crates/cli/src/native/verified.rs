@@ -486,7 +486,7 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
 
 /// What the optimizer needs besides: its stage, the plans' types, and the
 /// search.
-const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rules", "function_ir_tidy",
+const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
     "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
@@ -852,7 +852,7 @@ fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
 ", rest(0)));
             statements.push_str(&format!("
 theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
-    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {},
+    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {}, registered(RuleEntry),
         {prefix}_opt_made_{k}_g(), {joined})
 }}
 ", rest(0)));

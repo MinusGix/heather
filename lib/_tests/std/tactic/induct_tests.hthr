@@ -120,6 +120,41 @@ theorem loop_count_len<A>(xs: List<A>): loop_count(xs) = xs.len() {
         }, 0, refl)
 }
 
+// ---- A decrease proved by hand, an arm naming the test, arms left out ----
+
+// `omega` cannot read `half`, so the decrease is the function's own `on`
+// clause, and the principle reuses it rather than proving it again.
+theorem half_below(x: Nat, h: 0 < x): x.half() < x { let d = x.half_add_le(); omega }
+fn halves(x, acc: Nat) → Nat decreases x {
+    if h: 0 < x { halves(x.half(), acc + 1) } else { acc }
+    on ?dec1 := { half_below(x, h) };
+}
+
+theorem halves_grows(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc); all_goals { omega }
+}
+
+// An arm sees the test under the name the function gave it.
+theorem halves_named(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) {
+        True => { let pos: (0 < x) = h; let next = ih; omega },
+        False => omega,
+    }
+}
+
+// A case with no arm is closed by `known`: here the IH, or `omega` over it.
+theorem halves_default(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) {}
+}
+theorem halves_some_arms(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) { False => omega }
+}
+// A premise of the IH is discharged in a case with no arm, as under
+// `all_goals`.
+theorem up_default(i, n, acc: Nat, below: i <= n): up(i, n, acc) + i = acc + n {
+    induct up(i, n, acc) {}
+}
+
 // ---- Negative controls ----
 
 fn plain(n: Nat) → Nat { n + 1 }
@@ -145,4 +180,10 @@ theorem induct_leaf_fails(i, n, acc: Nat): up(i, n, acc) = acc {
 // asked for.
 theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
     induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+}
+
+// A case with no arm that `known` cannot close names the case.
+// expect-error: no arm for the case `True`
+theorem halves_default_fails(x, acc: Nat): halves(x, acc) = acc {
+    induct halves(x, acc) {}
 }

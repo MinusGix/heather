@@ -574,6 +574,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
     }
     checked?;
+    refuse_assumptions(&elab, &certificate_module, &unchecked)?;
     // The answers the certificate stands on, now that it has checked: a
     // read that went into a refused one is never remembered.
     let (remembered, evaluated) = answers.counts();
@@ -594,6 +595,30 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     for (entry, _, at) in &exported[1..] { println!("  `{entry}`, a function of the same program, at offset {at}"); }
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+/// A certificate proves what it says only as far as the axioms it reaches
+/// hold: an index bound or a specification the source assumed is a premise
+/// of every theorem about the function, and the bytes carry no check for
+/// it. So a certificate that reaches one is refused, by name, before
+/// anything is published (issues/compile-x86-certifies-over-axioms.md).
+pub(crate) fn refuse_assumptions(elab: &Elaborator, certificate_module: &str, unchecked: &Path) -> Result<(), String> {
+    let own = format!("{certificate_module}::");
+    let assumed: std::collections::BTreeSet<String> = elab
+        .axiom_violations()
+        .into_iter()
+        .filter(|report| report.target.starts_with(&own))
+        .flat_map(|report| report.axioms.into_iter().map(|used| used.axiom))
+        .collect();
+    if assumed.is_empty() {
+        return Ok(());
+    }
+    let names = assumed.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+    Err(format!(
+        "the certificate rests on the axiom{} {names}: the compiled bytes are certified only for a program proved without assumptions (the unpublished certificate is {})",
+        if assumed.len() == 1 { "" } else { "s" },
+        unchecked.display(),
+    ))
 }
 
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {

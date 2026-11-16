@@ -1,0 +1,7 @@
+# GitHub has no Heather grammar, so borrow Rust's for highlighting in file
+# and diff views: `//` comments, strings and 'c' characters, `::` paths,
+# `<...>` generics, braces and `fn`/`let`/`match`/`impl`/`self` all line up.
+# Heather-only keywords (`theorem`, `inductive`, `record`, ...) stay plain.
+# `linguist-detectable=false` keeps .hthr out of the repo's language stats,
+# so the library isn't counted as Rust.
+*.hthr linguist-language=Rust linguist-detectable=false
