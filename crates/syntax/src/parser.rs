@@ -224,6 +224,12 @@ struct Parser {
     /// may omit its `else` (docs/language/sequencing-surface-design.md §4). Taken by
     /// the `if` it reaches first, so nothing nested inherits it.
     elseless_if: bool,
+    /// The names the `on` discharges at the head of the declaration body
+    /// being read mention: an `if h: P` whose branches never name `h` binds
+    /// its evidence anyway when one of them does, since the obligation it
+    /// discharges is raised inside the branch (`if h: 0 < n { f(n - 1) }`
+    /// with `on ?dec1 := { … h … }`).
+    body_on_names: Vec<String>,
     /// `mut x: T` and `mut self x: T` parameters of the parameter list just
     /// read, by name, with whether each is the receiver
     /// (docs/language/sequencing-surface-design.md §8.2). Taken by [`Parser::decl`].
@@ -685,6 +691,7 @@ impl Parser {
             motive_body: false,
             spec_failed: std::collections::HashSet::new(),
             next_hygienic: 0,
+            body_on_names: Vec::new(),
             record_facts: Vec::new(),
             propagation_count: 0,
             propagation_depth: 0,
@@ -703,6 +710,35 @@ impl Parser {
     fn names_from(&self, from: usize, name: Option<&str>) -> bool {
         let Some(name) = name else { return false };
         self.toks[from..self.pos].iter().any(|t| matches!(&t.kind, TokKind::Ident(n) if n == name))
+            || self.body_on_names.iter().any(|n| n == name)
+    }
+
+    /// The identifiers of the `on` clauses at the head of the block that
+    /// opens here (`{ … on ?dec1 := …; }`), read ahead of it: `on` at the
+    /// block's own depth, up to the `;` that ends the clause.
+    fn on_names_ahead(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return out;
+        }
+        let mut depth = 0usize;
+        let mut in_on = false;
+        for tok in &self.toks[self.pos..] {
+            match &tok.kind {
+                TokKind::LBrace => depth += 1,
+                TokKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                TokKind::Semi if depth == 1 => in_on = false,
+                TokKind::Ident(n) if depth == 1 && n == "on" => in_on = true,
+                TokKind::Ident(n) if in_on => out.push(n.clone()),
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Whether an `on` discharge of a block enclosing this point names
@@ -3240,7 +3276,10 @@ impl Parser {
             self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
             self.pending_mut = (!mut_params.is_empty()).then(|| mut_params.clone());
             self.own_method = mut_self.is_some().then(|| name.rsplit("::").next().unwrap_or(&name).to_string());
+            let ahead = self.on_names_ahead();
+            let on_names = std::mem::replace(&mut self.body_on_names, ahead);
             let body = self.block();
+            self.body_on_names = on_names;
             self.pending_mut = None;
             self.own_method = None;
             self.propagation_depth = saved;

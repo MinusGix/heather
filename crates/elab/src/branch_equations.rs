@@ -353,7 +353,14 @@ impl Walk<'_> {
             if !b.ons.is_empty() {
                 break;
             }
-            lets.extend(b.stmts.iter().cloned());
+            // A claimed call (`let below = s.byte_within(…)` in a `mut
+            // self` body is `\0mutated(…)`) spelled as the two `let`s it
+            // binds, so a test that reads `below` states the value, which a
+            // hypothesis outside the block can elaborate.
+            match crate::measure::rebind_marked(&b.stmts, b.span, false) {
+                Ok(stmts) => lets.extend(stmts),
+                Err(_) => lets.extend(b.stmts.iter().cloned()),
+            }
             e = &b.result;
         }
         if self.too_many {
@@ -508,7 +515,9 @@ pub(crate) fn candidate(decl: &Decl) -> bool {
         return false;
     }
     let mut e = &*decl.body.result;
-    let mut ons = !decl.body.ons.is_empty();
+    // A measured body's own `on`s discharge its obligations, which are no
+    // part of its equations, as they are none of `f_unfold`'s.
+    let mut ons = decl.decreases.is_none() && !decl.body.ons.is_empty();
     while let ExprKind::Block(b) = &e.kind {
         ons |= !b.ons.is_empty();
         e = &b.result;
@@ -570,7 +579,10 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
     let args: Vec<Expr> = decl.params.iter().map(|p| var(&p.name, span)).collect();
     let lhs = call(companion_ref(decl, &decl.name, span), args.clone());
     let mut w = Walk { decl, reading, fields, result_name, taken, recursion, lhs: lhs.clone(), leaves: Vec::new(), too_many: false };
-    let top = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
+    // A measured body's `on`s discharge its obligations, which are no part
+    // of its equations (`candidate`).
+    let ons = if decl.decreases.is_some() { Vec::new() } else { decl.body.ons.clone() };
+    let top = Expr { kind: ExprKind::Block(Box::new(Block { ons, ..decl.body.clone() })), span };
     w.walk(&top, Vec::new(), Vec::new());
     if w.too_many {
         return Err(format!("the body has more than {MAX_LEAVES} branches"));

@@ -2740,7 +2740,13 @@ impl Host<'_> {
     fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
-        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let mut t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        // A β-redex is its contractum, as `View` shows it: a body whose
+        // `on` clauses bind obligations is the match under their `λ`s,
+        // applied (a `runtime fn` with `on ?dec := …`).
+        while let Some(r) = crate::spelling::beta_head(&t) {
+            t = r;
+        }
         let mut spine = Vec::new();
         let mut head = &t;
         while let Term::AppAt { fun, arg } = head {
