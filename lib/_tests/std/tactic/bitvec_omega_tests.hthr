@@ -394,3 +394,32 @@ theorem omega_unnamed_branch(a, b: u8): BitVec::unsigned_le(a, b) ∨ BitVec::un
 // Control: the bit says `a < b`, not `b < a`.
 // expect-error: `omega` got stuck
 theorem omega_lt_bit_wrong_way(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = True): b.toNat() < a.toNat() { omega }
+
+// ---- A word whose side conditions fail is kept whole ----
+
+// A `let`-bound midpoint is read through its `let`, and its addition's
+// overflow is not visible through the shift; kept as an atom, the facts
+// that mention it are enough (issues/bv-omega-let-alias-taken-apart.md).
+theorem midpoint_kept_whole(lo, hi, n: u64, h: lo < hi, fits: hi <= n,
+    end: (lo + ((hi - lo) >> 1)) < hi): (lo + ((hi - lo) >> 1)) < n {
+    let mid = lo + ((hi - lo) >> 1);
+    let real: (mid < n) = bv_omega;
+    real
+}
+// The next word after it does not wrap: `mid + 1` is taken apart over `mid` as an atom.
+theorem midpoint_next_le(lo, hi: u64, end: (lo + ((hi - lo) >> 1)) < hi): (lo + ((hi - lo) >> 1)) + 1 <= hi {
+    let mid = lo + ((hi - lo) >> 1);
+    bv_omega
+}
+theorem midpoint_le_of_lt_next(lo, hi, j: u64, end: (lo + ((hi - lo) >> 1)) < hi,
+    before: j < (lo + ((hi - lo) >> 1)) + 1): j <= lo + ((hi - lo) >> 1) {
+    let mid = lo + ((hi - lo) >> 1);
+    let up: (j <= mid) = bv_omega;
+    up
+}
+// An open width, with the bound as a Nat fact.
+theorem kept_whole_open(n: Nat, a, b, c: BitVec(n), room: (a + (b >> 1)).toNat() < c.toNat()): (a + (b >> 1)) + 1 <= c { bv_omega }
+// Control: nothing bounds the kept word, so its successor may wrap, and
+// the refusal still names the first proof's side condition.
+// expect-error: may overflow 64 bits
+theorem kept_whole_unbounded(lo, hi: u64): (lo + ((hi - lo) >> 1)).toNat() < ((lo + ((hi - lo) >> 1)) + 1).toNat() { bv_omega }
