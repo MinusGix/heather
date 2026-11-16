@@ -85,7 +85,6 @@ theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n,
 // The same four by the tactic.
 theorem add_zero_by(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() { by rule_sound(add_zero_words) }
 
-
 theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
 
 theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
