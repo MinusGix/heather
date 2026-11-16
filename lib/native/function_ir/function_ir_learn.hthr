@@ -389,8 +389,7 @@ fn Known::then(self first: Known, second: Known) → Known {
     shared(first.order.add + second.order.add, λ up => shared(first.order.more + second.order.more, λ down =>
         shared(match up.leb(down) { True => up, False => down }, λ both =>
             Known(Order(first.order.low, up - both, second.order.high, down - both),
-                first.why ++ (second.why ++ [Derive(24, [first.order.low, first.order.add, first.order.high, first.order.more,
-                    second.order.add, second.order.high, second.order.more, up - both, down - both])])))))
+                first.why ++ (second.why ++ [Derive(24, [first.order.low, first.order.high, second.order.high, first.order.add, first.order.more, second.order.add, second.order.more, up - both, down - both])])))))
 }
 
 // What `new` gives with each order known that ends where it starts or
@@ -420,13 +419,13 @@ fn Seen::knowing(self seen: Seen, new: Known) → Seen {
 // and the constant, both ways (rules 25 and 26).
 fn Seen::ordered_by(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
     match bit {
-        True => seen.knowing(Known(Order(l, 1, r, 0), [Derive(20, [c, l, r])])),
-        False => shared(seen.knowing(Known(Order(r, 0, l, 0), [Derive(21, [c, l, r])])), λ known => match nat_map_get(known.order.sums, l) {
+        True => seen.knowing(Known(Order(l, 1, r, 0), [Derive(20, [l, r, c])])),
+        False => shared(seen.knowing(Known(Order(r, 0, l, 0), [Derive(21, [l, r, c])])), λ known => match nat_map_get(known.order.sums, l) {
             None => known,
             Some(sum) => match sum.of.same(r) {
                 False => known,
-                True => known.knowing(Known(Order(r, sum.value, l, 0), [Derive(21, [c, l, r]), Derive(25, [l, r, sum.constant, sum.value])]))
-                    .knowing(Known(Order(l, 0, r, sum.value), [Derive(21, [c, l, r]), Derive(26, [l, r, sum.constant, sum.value])])),
+                True => known.knowing(Known(Order(r, sum.value, l, 0), [Derive(21, [l, r, c]), Derive(25, [r, sum.value, l, sum.constant])]))
+                    .knowing(Known(Order(l, 0, r, sum.value), [Derive(21, [l, r, c]), Derive(26, [r, sum.value, l, sum.constant])])),
             },
         }),
     }
@@ -474,14 +473,14 @@ fn Seen::sum_orders(self seen: Seen, at: Nat) → Option<Stepped> {
         None => None,
         Some(sum) => match known_roomy(seen.order.known, sum.of, sum.value) {
             Some(k) => Some(Stepped(k.why ++ [
-                Derive(27, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
-                Derive(28, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
+                Derive(27, [sum.of, k.order.high, sum.value, k.order.add, k.order.more, at, sum.constant]),
+                Derive(28, [sum.of, k.order.high, sum.value, k.order.add, k.order.more, at, sum.constant]),
             ], seen.written(k.order))),
             None => shared(seen.of(sum.of), λ range => match (range.high + sum.value).leb(word_top()) {
                 False => None,
                 True => shared(explain(100, seen.how, seen.proved, [sum.of]), λ why => Some(Stepped(why.steps ++ [
-                    Derive(34, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
-                    Derive(35, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
+                    Derive(34, [sum.of, sum.value, range.low, range.high, at, sum.constant]),
+                    Derive(35, [sum.of, sum.value, range.low, range.high, at, sum.constant]),
                 ], seen.proving(why.proved)))),
             }),
         },
@@ -507,17 +506,17 @@ fn Seen::summed(self seen: Seen, at: Nat) → Option<Seen> {
 fn Seen::ordered_known(self seen: Seen, c, l, r: Nat) → Option<Passed> {
     shared(seen.bound_written(c, l), λ emit =>
         match known_find(seen.order.known, Order(l, 1, r, 0)) {
-            Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, True, [], Derive(22, [c, l, r]), emit)),
+            Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, True, [], Derive(22, [l, r, c]), emit)),
             None => match known_find(seen.order.known, Order(r, 0, l, 0)) {
-                Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, False, [], Derive(23, [c, l, r]), [])),
+                Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, False, [], Derive(23, [l, r, c]), [])),
                 None => match nat_map_get(seen.order.sums, l) {
                     None => None,
                     Some(sum) => match known_room(seen.order.known, sum.of, r, sum.value) {
                         None => None,
                         Some(k) => Some(seen.written(k.order).owing(k.why ++ [
-                            Derive(28, [l, sum.of, sum.constant, sum.value, k.order.add, r, k.order.more]),
-                            Derive(24, [l, 0, sum.of, sum.value, k.order.add, r, k.order.more, 1, 0]),
-                        ]).decided(c, True, [], Derive(22, [c, l, r]), emit)),
+                            Derive(28, [sum.of, r, sum.value, k.order.add, k.order.more, l, sum.constant]),
+                            Derive(24, [l, sum.of, r, 0, sum.value, k.order.add, k.order.more, 1, 0]),
+                        ]).decided(c, True, [], Derive(22, [l, r, c]), emit)),
                     },
                 },
             },
@@ -579,9 +578,9 @@ fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
 fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
     shared(Seen(nat_map_set(seen.made, c, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins), λ noted =>
         shared(seen.of(l), λ a => shared(seen.of(r), λ b => match Succ(a.high).leb(b.low) {
-            True => noted.decided(c, True, [l, r], Derive(7, [c, l, r, a.high, b.low]), seen.bound_written(c, l)),
+            True => noted.decided(c, True, [l, r], Derive(7, [l, r, a.high, b.low, c]), seen.bound_written(c, l)),
             False => match b.high.leb(a.low) {
-                True => noted.decided(c, False, [l, r], Derive(8, [c, l, r, a.low, b.high]), []),
+                True => noted.decided(c, False, [l, r], Derive(8, [l, r, a.low, b.high, c]), []),
                 False => match noted.ordered(c, l, r) {
                     Some(passed) => passed,
                     None => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) }),
@@ -595,17 +594,17 @@ fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
 fn Seen::or_decided(self seen: Seen, o, l, r: Nat) → Passed {
     match nat_map_get(seen.bits, l) {
         Some(left) => match left {
-            True => seen.decided(o, True, [], Derive(37, [o, l, r]), []),
+            True => seen.decided(o, True, [], Derive(37, [l, r, o]), []),
             False => match nat_map_get(seen.bits, r) {
                 Some(right) => match right {
-                    True => seen.decided(o, True, [], Derive(38, [o, l, r]), []),
-                    False => seen.decided(o, False, [], Derive(36, [o, l, r]), []),
+                    True => seen.decided(o, True, [], Derive(38, [l, r, o]), []),
+                    False => seen.decided(o, False, [], Derive(36, [l, r, o]), []),
                 },
                 None => Passed([], seen),
             },
         },
         None => match nat_map_get(seen.bits, r) {
-            Some(right) => match right { True => seen.decided(o, True, [], Derive(38, [o, l, r]), []), False => Passed([], seen) },
+            Some(right) => match right { True => seen.decided(o, True, [], Derive(38, [l, r, o]), []), False => Passed([], seen) },
             None => Passed([], seen),
         },
     }
@@ -614,7 +613,7 @@ fn Seen::or_decided(self seen: Seen, o, l, r: Nat) → Passed {
 fn Seen::pass(self seen: Seen, node: Node) → Passed {
     match node {
         Const(w, o, v) => match w.same(64) && v.leb(word_top()) {
-            True => Passed([], seen.learn(o, Range(v, v), [], Derive(2, [o, v]))),
+            True => Passed([], seen.learn(o, Range(v, v), [], Derive(2, [v, o]))),
             False => Passed([], seen),
         },
         Move(w, o, s) => match w.same(64) {
@@ -627,19 +626,19 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
         Add(w, o, l, r) => match w.same(64) {
             False => Passed([], seen),
             True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
-                True => Passed([], seen.learn(o, Range(a.low + b.low, a.high + b.high), [l, r], Derive(4, [o, l, r, a.low, a.high, b.low, b.high]))),
+                True => Passed([], seen.learn(o, Range(a.low + b.low, a.high + b.high), [l, r], Derive(4, [l, r, a.low, a.high, b.low, b.high, o]))),
                 False => Passed([], seen),
             })),
         },
         ShiftLeft(w, o, v, n) => match w.same(64) {
             False => Passed([], seen),
             True => shared(seen.of(v), λ a => shared(Nat::pow(2, n), λ scale => match (a.high * scale).leb(word_top()) {
-                True => Passed([], seen.learn(o, Range(a.low * scale, a.high * scale), [v], Derive(5, [o, v, n, a.low, a.high]))),
+                True => Passed([], seen.learn(o, Range(a.low * scale, a.high * scale), [v], Derive(5, [v, n, a.low, a.high, o]))),
                 False => Passed([], seen),
             })),
         },
         Resize(from, to, o, s) => match to.same(64) && from.leb(63) {
-            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], shared(seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])), λ learned =>
+            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], shared(seen.learn(o, Range(0, high), [], Derive(6, [from, s, high, o])), λ learned =>
                 match from.same(32) { True => learned.making(o, node), False => learned }))),
             False => Passed([], match from.same(64) { True => seen.making(o, node), False => seen }),
         },
@@ -649,7 +648,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
         Sub(w, o, l, r) => match w.same(64) {
             False => Passed([], seen),
             True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match b.high.leb(a.low) {
-                True => Passed([], seen.learn(o, Range(a.low - b.high, a.high - b.low), [l, r], Derive(39, [o, l, r, a.low, a.high, b.low, b.high]))),
+                True => Passed([], seen.learn(o, Range(a.low - b.high, a.high - b.low), [l, r], Derive(39, [l, r, a.low, a.high, b.low, b.high, o]))),
                 False => Passed([], seen),
             })),
         },
@@ -658,7 +657,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
             False => match w.same(64) {
                 False => Passed([], seen),
                 True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
-                    True => Passed([], seen.learn(o, Range(0, a.high + b.high), [l, r], Derive(16, [o, l, r, a.high, b.high]))),
+                    True => Passed([], seen.learn(o, Range(0, a.high + b.high), [l, r], Derive(16, [l, r, a.high, b.high, o]))),
                     False => Passed([], seen),
                 })),
             },
@@ -669,9 +668,9 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
             True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match a.high.leb(b.high) {
                 True => match a.high.same(word_top()) {
                     True => Passed([], seen),
-                    False => Passed([], seen.learn(o, Range(0, a.high), [l], Derive(17, [o, l, r, a.high]))),
+                    False => Passed([], seen.learn(o, Range(0, a.high), [l], Derive(17, [l, r, a.high, o]))),
                 },
-                False => Passed([], seen.learn(o, Range(0, b.high), [r], Derive(18, [o, l, r, b.high]))),
+                False => Passed([], seen.learn(o, Range(0, b.high), [r], Derive(18, [l, r, b.high, o]))),
             })),
         },
         _ => Passed([], seen),
@@ -727,7 +726,7 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
                         True => shared(seen.of(s), λ range => match Succ(range.high).leb(Nat::pow(2, from)) {
                             False => None,
                             True => shared(explain(100, seen.how, seen.proved, [s]), λ why =>
-                                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [b, a, s, from, range.high]), Emit(Move(64, b, s))])),
+                                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [s, from, range.high, b, a]), Emit(Move(64, b, s))])),
                                     Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
                                         .learn(b, range, [s], Derive(3, [b, s, range.low, range.high])).from(b, s)))),
                         }),
@@ -774,8 +773,8 @@ fn Seen::beside(self seen: Seen, hi, lo: Join) → Option<Stepped> {
     seen.sum_orders(lo.at).and_then(λ second => match hi.past {
         Zero => Some(second),
         Succ(_) => second.seen.sum_orders(hi.at).and_then(λ first => Some(Stepped(second.steps ++ (first.steps ++ [
-            Derive(24, [hi.at, 0, hi.base, hi.past, lo.past, lo.at, 0, hi.count, 0]),
-            Derive(24, [lo.at, 0, hi.base, lo.past, hi.past, hi.at, 0, 0, hi.count]),
+            Derive(24, [hi.at, hi.base, lo.at, 0, hi.past, lo.past, 0, hi.count, 0]),
+            Derive(24, [lo.at, hi.base, hi.at, 0, lo.past, hi.past, 0, 0, hi.count]),
         ]), first.seen))),
     })
 }
@@ -902,11 +901,11 @@ record Narrowed { left: Option<Narrower>, right: Option<Narrower> }
 fn narrowing(c, l, r: Nat, bit: Bool, a, b: Range) → Narrowed {
     match bit {
         True => Narrowed(
-            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [c, l, r, b.high - 1]))), False => None },
-            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [c, l, r, a.low]))), False => None }),
+            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [l, r, b.high - 1, c]))), False => None },
+            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [l, r, a.low, c]))), False => None }),
         False => Narrowed(
-            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [c, l, r, b.low]))), False => None },
-            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [c, l, r, a.high]))), False => None }),
+            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [l, r, b.low, c]))), False => None },
+            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [l, r, a.high, c]))), False => None }),
     }
 }
 
@@ -937,7 +936,7 @@ fn Seen::taking_in(self seen: Seen, depth, c: Nat, bit: Bool) → Seen {
                     True => known,
                     False => match depth {
                         Zero => known,
-                        Succ(less) => known.owing([Derive(13, [c, a, b]), Derive(14, [c, a, b])]).taking_in(less, a, False).taking_in(less, b, False),
+                        Succ(less) => known.owing([Derive(13, [a, b, c]), Derive(14, [a, b, c])]).taking_in(less, a, False).taking_in(less, b, False),
                     },
                 },
                 _ => known,

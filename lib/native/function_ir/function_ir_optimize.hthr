@@ -481,10 +481,10 @@ record StoreGroup { at: Nat, last: Nat, buffer: Nat, word: Nat, swapped: Bool, f
 // the tests of the first three against the length: each order below the
 // length, then the next sum's two orders from it.
 fn row_why(i0, len, c0, c1, c2, i1, i2, i3, k1, k2, k3: Nat) → List<Late> {
-    [Know(20, [c0, i0, len]),
-     Know(27, [i1, i0, k1, 1, 1, len, 0]), Know(28, [i1, i0, k1, 1, 1, len, 0]), Know(20, [c1, i1, len]), Know(24, [i0, 1, i1, 0, 1, len, 0, 2, 0]),
-     Know(27, [i2, i0, k2, 2, 2, len, 0]), Know(28, [i2, i0, k2, 2, 2, len, 0]), Know(20, [c2, i2, len]), Know(24, [i0, 2, i2, 0, 1, len, 0, 3, 0]),
-     Know(27, [i3, i0, k3, 3, 3, len, 0]), Know(28, [i3, i0, k3, 3, 3, len, 0])]
+    [Know(20, [i0, len, c0]),
+     Know(27, [i0, len, 1, 1, 0, i1, k1]), Know(28, [i0, len, 1, 1, 0, i1, k1]), Know(20, [i1, len, c1]), Know(24, [i0, i1, len, 1, 0, 1, 0, 2, 0]),
+     Know(27, [i0, len, 2, 2, 0, i2, k2]), Know(28, [i0, len, 2, 2, 0, i2, k2]), Know(20, [i2, len, c2]), Know(24, [i0, i2, len, 2, 0, 1, 0, 3, 0]),
+     Know(27, [i0, len, 3, 3, 0, i3, k3]), Know(28, [i0, len, 3, 3, 0, i3, k3])]
 }
 
 // The shifts of the four bytes, from the highest or from the lowest.

@@ -26,8 +26,7 @@ import nat;
 import omega;
 import option;
 
-// x + 0 = x.
-// The clauses of the two rules the library now states as `rule theorem`s
+// The clauses of rules the library now states as `rule theorem`s
 // (function_ir_rules), as they were written by hand.
 fn add_zero_clause(w, o, x, z: Nat) → Clause { Clause([Is(Const(w, z, 0)), Is(Add(w, o, x, z))], Is(Move(w, o, x))) }
 
@@ -35,6 +34,17 @@ fn swap_twice_clause(v, h, x, s, w: Nat) → Clause {
     Clause([Is(ByteSwap(32, s, w)), Is(Resize(32, 64, x, s)), Is(Resize(64, 32, h, x)), Is(ByteSwap(32, v, h))], Is(Move(32, v, w)))
 }
 
+fn within_add_clause(o, l, r, a, b, c, d: Nat) → Clause {
+    Clause([Is(Add(64, o, l, r)), Within(l, a, b), Within(r, c, d)], Within(o, a + c, b + d))
+}
+
+fn below_left_clause(c, l, r, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, Succ(b))], Within(l, 0, b))
+}
+
+fn order_join_clause(a, m, b, n, p, c, q, u, v: Nat) → Clause { Clause([AtMost(a, m, b, n), AtMost(b, p, c, q)], AtMost(a, u, c, v)) }
+
+// x + 0 = x.
 theorem add_zero_words(w: Nat, x: BitVec(w)): x.add(BitVec::ofNat(0)) = x { BitVec::add_zero(w, x) }
 
 theorem add_zero_glue(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() {
@@ -51,7 +61,7 @@ theorem within_add_words(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l),
     j(sym(sum), λ n _ => (a + c <= n) ∧ (n <= b + d), ⟨Nat::add_le_mono(a, l.toNat(), c, r.toNat(), left.left, right.left), high⟩)
 }
 
-theorem within_add_glue(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() {
+theorem within_add_glue(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add_clause(o, l, r, a, b, c, d).Sound() {
     λ values _ held => j(sym(held.left), λ w _ => Range(a + c, b + d).Holds(w),
         within_add_words(values(64, l), values(64, r), a, b, c, d, held.right.left, held.right.right.left, leb_below(b + d, word_top(), fits)))
 }
@@ -89,7 +99,7 @@ theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Soun
 
 theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
 
-theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() {
+theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add_clause(o, l, r, a, b, c, d).Sound() {
     by rule_sound(within_add_words, given := [leb_below(b + d, word_top(), fits)])
 }
 
@@ -103,10 +113,10 @@ theorem below_left_words(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_
     ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
 }
 
-theorem below_left_by(c, l, r, b: Nat): below_left(c, l, r, b).Sound() { by rule_sound(below_left_words) }
+theorem below_left_by(c, l, r, b: Nat): below_left_clause(c, l, r, b).Sound() { by rule_sound(below_left_words) }
 
 // No node at all: the library's own lemma about numbers is the rule.
-theorem order_join_by(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v + (m + p)) = True): order_join(a, m, b, n, p, c, q, u, v).Sound() {
+theorem order_join_by(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v + (m + p)) = True): order_join_clause(a, m, b, n, p, c, q, u, v).Sound() {
     by rule_sound(order_joined, given := [leb_below(u + (n + q), v + (m + p), slack)])
 }
 

@@ -161,9 +161,15 @@ fn RuleCx::fact(self cx: RuleCx, name: String, fields: List<Expr>) → Tac<Expr>
 // Reading terms
 
 // The numbers taken so far and the premises found, in order.
-record RuleRead { next: Nat, premises: List<Expr> }
+// A term already read: the word its operator writes.
+record RuleSeen { term: Handle, id: Expr, width: Expr }
 
-fn RuleRead::with(self read: RuleRead, premise: Expr) → RuleRead { RuleRead(read.next, read.premises ++ [premise]) }
+record RuleRead { next: Nat, premises: List<Expr>, seen: List<RuleSeen> }
+
+fn RuleRead::with(self read: RuleRead, premise: Expr) → RuleRead { RuleRead(read.next, read.premises ++ [premise], read.seen) }
+fn RuleRead::saw(self read: RuleRead, term: Handle, id: Expr, width: Expr) → RuleRead {
+    RuleRead(read.next, read.premises, Cons(RuleSeen(term, id, width), read.seen))
+}
 
 // A term read: the word it is, by its number, and its width.
 record RuleTerm { read: RuleRead, id: Expr, width: Expr }
@@ -283,6 +289,67 @@ fn rule_root(cx: RuleCx, term: RuleRead → Handle → Tac<RuleTerm>, read: Rule
     })
 }
 
+// Two words of a statement: the same where their ids are.
+fn rule_alike_ids(a, b: List<Handle>) → Tac<Bool> {
+    match a {
+        Cons(_, more) => match more {
+            Cons(id, _) => match b {
+                Cons(_, more2) => match more2 { Cons(id2, _) => defeq(Hd(id), Hd(id2)), Nil => pure(False) },
+                Nil => pure(False),
+            },
+            Nil => pure(False),
+        },
+        Nil => pure(False),
+    }
+}
+
+fn rule_alike_all(a, b: List<Handle>, alike: Handle → Handle → Tac<Bool>) → Tac<Bool> {
+    match a {
+        Nil => match b { Nil => pure(True), Cons(_, _) => pure(False) },
+        Cons(x, rest) => match b {
+            Nil => pure(False),
+            Cons(y, rest2) => alike(x, y).bind(λ same => match same { True => rule_alike_all(rest, rest2, alike), False => pure(False) }),
+        },
+    }
+}
+
+// Whether two terms of a statement are written the same: the same operator
+// of the same operands, the same word, the same number. Not conversion,
+// under which every word of a statement while it is read is one.
+fn rule_alike(fuel: Nat, cx: RuleCx, a, b: Handle) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(n) => view(a).bind(λ av => view(b).bind(λ bv => match av {
+            HGlobal(g, _, args) => match bv {
+                HGlobal(g2, _, args2) => match rule_same(g, g2) {
+                    False => pure(False),
+                    True => match rule_same(g, cx.ops.marker) {
+                        True => rule_alike_ids(args, args2),
+                        False => rule_alike_all(args, args2, λ x y => rule_alike(n, cx, x, y)),
+                    },
+                },
+                _ => pure(False),
+            },
+            _ => match bv {
+                HGlobal(_, _, _) => pure(False),
+                _ => defeq(Hd(a), Hd(b)),
+            },
+        })),
+    }
+}
+
+// The word of a term read before, if it was: one node for a term written
+// twice.
+fn rule_seen(cx: RuleCx, seen: List<RuleSeen>, t: Handle, width: Expr) → Tac<Option<RuleSeen>> {
+    match seen {
+        Nil => pure(None),
+        Cons(s, rest) => defeq(s.width, width).bind(λ wide => match wide {
+            False => rule_seen(cx, rest, t, width),
+            True => rule_alike(64, cx, s.term, t).bind(λ same => match same { True => pure(Some(s)), False => rule_seen(cx, rest, t, width) }),
+        }),
+    }
+}
+
 // A term as a word: a binder's, or the next number for what the term's
 // outermost operator writes, with that node a premise after its operands'.
 fn rule_term(fuel: Nat, cx: RuleCx, read: RuleRead, t: Handle) → Tac<RuleTerm> {
@@ -294,8 +361,12 @@ fn rule_term(fuel: Nat, cx: RuleCx, read: RuleRead, t: Handle) → Tac<RuleTerm>
                     Cons(w, more) => match more { Cons(id, _) => pure(RuleTerm(read, Hd(id), Hd(w))), Nil => rule_not_ir(t) },
                     Nil => rule_not_ir(t),
                 },
-                False => rule_root(cx, λ r h => rule_term(n, cx, r, h), RuleRead(Succ(read.next), read.premises), t, cx.number(read.next)).bind(λ root =>
-                    cx.fact("Is", [root.node]).bind(λ is => pure(RuleTerm(root.read.with(is), cx.number(read.next), root.width)))),
+                False => rule_width(t).bind(λ width => rule_seen(cx, read.seen, t, width).bind(λ before => match before {
+                    Some(s) => pure(RuleTerm(read, s.id, s.width)),
+                    None => rule_root(cx, λ r h => rule_term(n, cx, r, h), RuleRead(Succ(read.next), read.premises, read.seen), t, cx.number(read.next)).bind(λ root =>
+                        cx.fact("Is", [root.node]).bind(λ is =>
+                            pure(RuleTerm(root.read.with(is).saw(t, cx.number(read.next), width), cx.number(read.next), root.width)))),
+                })),
             },
             _ => rule_not_ir(t),
         }),
@@ -484,6 +555,17 @@ fn rule_at(theorem: Expr, values: Expr, args: List<RuleArg>) → Expr {
     }
 }
 
+// The words the theorem is stated about, at a valuation.
+fn rule_words(values: Expr, args: List<RuleArg>) → List<Expr> {
+    match args {
+        Nil => [],
+        Cons(arg, rest) => match arg {
+            Number(_) => rule_words(values, rest),
+            WordOf(width, id) => Cons(rule_apps(values, [width, id]), rule_words(values, rest)),
+        },
+    }
+}
+
 // The statements of the hypotheses of `f`, as written, and its conclusion.
 record RuleStated { hypotheses: List<Handle>, conclusion: Handle }
 
@@ -595,7 +677,7 @@ fn rule(name: String) → Tac<List<Decl>> {
     let cx = RuleCx(ops, nodes, facts, Local(numbers.ref));
     let applied <- rule_applied(cx, Global(theorem), kinds, [], 0);
     let stated <- rule_stated(applied.hypotheses, applied.f);
-    let hypotheses <- rule_read_hypotheses(cx, bit, RuleRead(applied.used, []), stated.hypotheses);
+    let hypotheses <- rule_read_hypotheses(cx, bit, RuleRead(applied.used, [], []), stated.hypotheses);
     let concluded <- rule_fact(cx, hypotheses.read, stated.conclusion);
     let clause = rule_apps(clause_of, [rule_list(nil, cons, concluded.read.premises), concluded.fact]);
     let bits = rule_bits(both, yes, hypotheses.guards);
@@ -603,7 +685,7 @@ fn rule(name: String) → Tac<List<Decl>> {
     let guarded <- rule_guards_hold(holds, both, left, right, yes, hypotheses.guards, Local(ok.ref));
     let under <- rule_ref(name_of(rule_under));
     let goal <- as_type(rule_apps(Global(under), [bits, Local(ok.ref), App(Global(sound_of), clause)])).or_fail("rule: the clause: ");
-    let proof <- focus(GoalInfo(goal, [ok, numbers]), rule_sound_by(λ values kept =>
+    let proof <- focus(GoalInfo(goal, [ok, numbers]), rule_sound_by(λ values => rule_words(values, applied.args), λ values kept =>
         rule_closed(applied.hypotheses, rule_at(Global(theorem), values, applied.args), rule_assumed(kept ++ guarded, kept ++ guarded))));
     let made = rule_apps(Global(when), [Lam(numbers.ref, bits), Lam(numbers.ref, clause), Lam(numbers.ref, Lam(ok.ref, proof))]);
     let ty <- infer(made).or_fail("rule: the rule made: ");

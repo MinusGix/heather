@@ -40,7 +40,7 @@ theorem premise_missing(): replay(rules(), Facts::none(), sums(), [Drop, Derive(
 // store dropped.
 theorem emit_unknown(): replay(rules(), Facts::none(), sums(), [Emit(Move(64, 3, 0))]).map(λ r => r.nodes) = None { refl }
 
-theorem rule_unknown(): replay(rules(), Facts::none(), sums(), [Drop, Drop, Derive(9, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+theorem rule_unknown(): replay(rules(), Facts::none(), sums(), [Drop, Drop, Derive(9, [2, 0, 1, 64])]).map(λ r => r.nodes) = None { refl }
 
 theorem store_dropped(): replay(rules(), Facts::none(), [BufferStore(2, 0, 0, 1)], [Drop]).map(λ r => r.nodes) = None { refl }
 
@@ -205,8 +205,8 @@ fn span_test() → List<Node> { [Const(64, 2, 4), Add(64, 3, 0, 2), UnsignedLess
 // sum is at least the index (21), so it is the index and 4 (25); the sum is
 // at most the length (21); so the index and 4 are at most the length (24).
 fn span_known() → List<Step> {
-    [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]), Derive(21, [5, 1, 3]),
-        Derive(24, [0, 4, 3, 0, 0, 1, 0, 4, 0])]
+    [Derive(13, [4, 5, 6]), Derive(14, [4, 5, 6]), Derive(21, [3, 0, 4]), Derive(25, [0, 4, 3, 2]), Derive(21, [1, 3, 5]),
+        Derive(24, [0, 3, 1, 4, 0, 0, 0, 4, 0])]
 }
 
 // The byte two past the index is below the length: its index is the index
@@ -214,7 +214,7 @@ fn span_known() → List<Step> {
 // the length (24), and the comparison is one (22).
 fn span_byte() → List<Node> { [Const(64, 7, 2), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)] }
 
-fn span_decided() → List<Step> { [Derive(28, [8, 0, 7, 2, 4, 1, 0]), Derive(24, [8, 0, 0, 2, 4, 1, 0, 1, 0]), Derive(22, [9, 8, 1]), Emit(Const(1, 9, 1))] }
+fn span_decided() → List<Step> { [Derive(28, [0, 1, 2, 4, 0, 8, 7]), Derive(24, [8, 0, 1, 0, 2, 4, 0, 1, 0]), Derive(22, [8, 1, 9]), Emit(Const(1, 9, 1))] }
 
 fn span_clear() → Facts { Facts::none().learn_all(span_test()).add(Const(1, 6, 0)) }
 
@@ -222,27 +222,27 @@ theorem span_within(): replay(rules(), span_clear(), span_byte(), span_known() +
     Some(span_byte() ++ [Const(1, 9, 1)]) { refl }
 
 // And the index itself is, by the order alone.
-theorem span_first(): replay(rules(), span_clear(), [UnsignedLessThan(64, 9, 0, 1)], span_known() ++ [Keep, Derive(22, [9, 0, 1]), Emit(Const(1, 9, 1))])
+theorem span_first(): replay(rules(), span_clear(), [UnsignedLessThan(64, 9, 0, 1)], span_known() ++ [Keep, Derive(22, [0, 1, 9]), Emit(Const(1, 9, 1))])
     .map(λ r => r.nodes) = Some([UnsignedLessThan(64, 9, 0, 1), Const(1, 9, 1)]) { refl }
 
 // Not the byte four past it: there is room for 4, and it needs 5.
 theorem span_past(): replay(rules(), span_clear(), [Const(64, 7, 4), Add(64, 8, 0, 7), UnsignedLessThan(64, 9, 8, 1)],
-    span_known() ++ [Keep, Keep, Keep, Derive(28, [8, 0, 7, 4, 4, 1, 0]), Derive(24, [8, 0, 0, 4, 4, 1, 0, 1, 0])]).map(λ r => r.nodes) = None { refl }
+    span_known() ++ [Keep, Keep, Keep, Derive(28, [0, 1, 4, 4, 0, 8, 7]), Derive(24, [8, 0, 1, 0, 4, 4, 0, 1, 0])]).map(λ r => r.nodes) = None { refl }
 
 // Nor anything where the test's bit is not known clear, nor from an order
 // claimed with more between the words than the two joined have.
 theorem span_untested(): replay(rules(), Facts::none().learn_all(span_test()), span_byte(), span_known()).map(λ r => r.nodes) = None { refl }
 
-theorem span_overclaimed(): replay(rules(), span_clear(), [], [Derive(13, [6, 4, 5]), Derive(14, [6, 4, 5]), Derive(21, [4, 3, 0]), Derive(25, [3, 0, 2, 4]),
-    Derive(21, [5, 1, 3]), Derive(24, [0, 4, 3, 0, 0, 1, 0, 5, 0])]).map(λ r => r.nodes) = None { refl }
+theorem span_overclaimed(): replay(rules(), span_clear(), [], [Derive(13, [4, 5, 6]), Derive(14, [4, 5, 6]), Derive(21, [3, 0, 4]), Derive(25, [0, 4, 3, 2]),
+    Derive(21, [1, 3, 5]), Derive(24, [0, 3, 1, 4, 0, 0, 0, 5, 0])]).map(λ r => r.nodes) = None { refl }
 
 // A set comparison orders its operands, and that order decides the same
 // comparison made again; a clear one decides it the other way.
 theorem order_from_set(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 1)), [UnsignedLessThan(64, 3, 0, 1)],
-    [Derive(20, [2, 0, 1]), Keep, Derive(22, [3, 0, 1]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 1)]) { refl }
+    [Derive(20, [0, 1, 2]), Keep, Derive(22, [0, 1, 3]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 1)]) { refl }
 
 theorem order_from_clear(): replay(rules(), Facts::none().learn_all([UnsignedLessThan(64, 2, 0, 1)]).add(Const(1, 2, 0)), [UnsignedLessThan(64, 3, 0, 1)],
-    [Derive(21, [2, 0, 1]), Keep, Derive(23, [3, 0, 1]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 0)]) { refl }
+    [Derive(21, [0, 1, 2]), Keep, Derive(23, [0, 1, 3]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([UnsignedLessThan(64, 3, 0, 1), Const(1, 3, 0)]) { refl }
 
 // ---------------------------------------------------------------------------
 // Bytes joined into a word (rules 29 to 33)
@@ -314,24 +314,24 @@ theorem word_unswapped(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 
 // (34), and the test that it wrapped is clear (23): what a function's test
 // at its entry is where the function is inlined at an index with a range.
 fn roomy() → List<Node> { [Const(64, 1, 31), BitAnd(64, 2, 0, 1), Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2)] }
-fn roomy_ranged() → List<Step> { [Keep, Keep, Keep, Keep, Keep, Derive(2, [1, 31]), Derive(18, [2, 0, 1, 31])] }
+fn roomy_ranged() → List<Step> { [Keep, Keep, Keep, Keep, Keep, Derive(2, [31, 1]), Derive(18, [0, 1, 31, 2])] }
 
-theorem sum_in_range(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 31]), Derive(23, [5, 4, 2]), Emit(Const(1, 5, 0))])
+theorem sum_in_range(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [2, 4, 0, 31, 4, 3]), Derive(23, [4, 2, 5]), Emit(Const(1, 5, 0))])
     .map(λ r => r.nodes) = Some(roomy() ++ [Const(1, 5, 0)]) { refl }
 
 // The other way (35), and the two orders are the sum's equation: the sum
 // is at most itself through its operand (24).
-theorem sum_in_range_high(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 31]), Derive(35, [4, 2, 3, 4, 0, 31]),
-    Derive(24, [4, 0, 2, 4, 4, 4, 0, 0, 0])]).map(λ r => r.nodes) = Some(roomy()) { refl }
+theorem sum_in_range_high(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [2, 4, 0, 31, 4, 3]), Derive(35, [2, 4, 0, 31, 4, 3]),
+    Derive(24, [4, 2, 4, 0, 4, 4, 0, 0, 0])]).map(λ r => r.nodes) = Some(roomy()) { refl }
 
 // Not of an operand no range is known of, nor with a range claimed for it
 // that the facts do not have, nor where the range reaches a word's top.
-theorem sum_unranged(): replay(rules(), Facts::none(), roomy(), [Keep, Keep, Keep, Keep, Keep, Derive(34, [4, 2, 3, 4, 0, 31])]).map(λ r => r.nodes) = None { refl }
-theorem sum_range_claimed(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 4, 0, 15])]).map(λ r => r.nodes) = None { refl }
-theorem sum_to_the_top(): replay(rules(), Facts::none(), [Const(64, 3, 4), Add(64, 4, 0, 3)], [Keep, Keep, Derive(34, [4, 0, 3, 4, 0, 18446744073709551615])])
+theorem sum_unranged(): replay(rules(), Facts::none(), roomy(), [Keep, Keep, Keep, Keep, Keep, Derive(34, [2, 4, 0, 31, 4, 3])]).map(λ r => r.nodes) = None { refl }
+theorem sum_range_claimed(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [2, 4, 0, 15, 4, 3])]).map(λ r => r.nodes) = None { refl }
+theorem sum_to_the_top(): replay(rules(), Facts::none(), [Const(64, 3, 4), Add(64, 4, 0, 3)], [Keep, Keep, Derive(34, [0, 4, 0, 18446744073709551615, 4, 3])])
     .map(λ r => r.nodes) = None { refl }
 // Not with another constant than the sum adds.
-theorem sum_other_constant(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [4, 2, 3, 5, 0, 31])]).map(λ r => r.nodes) = None { refl }
+theorem sum_other_constant(): replay(rules(), Facts::none(), roomy(), roomy_ranged() ++ [Derive(34, [2, 5, 0, 31, 4, 3])]).map(λ r => r.nodes) = None { refl }
 
 // A difference that cannot borrow: 6 less the low two bits of a word is
 // from 3 to 6 (39), so it is below 8 (7).
@@ -339,31 +339,31 @@ fn backward(from, bound: Nat) → List<Node> {
     [Const(64, 1, 3), BitAnd(64, 2, 0, 1), Const(64, 3, from), Sub(64, 4, 3, 2), Const(64, 5, bound), UnsignedLessThan(64, 6, 4, 5)]
 }
 fn backward_ranged(from, bound: Nat) → List<Step> {
-    [Keep, Keep, Keep, Keep, Keep, Keep, Derive(2, [1, 3]), Derive(18, [2, 0, 1, 3]), Derive(2, [3, from]), Derive(2, [5, bound])]
+    [Keep, Keep, Keep, Keep, Keep, Keep, Derive(2, [3, 1]), Derive(18, [0, 1, 3, 2]), Derive(2, [from, 3]), Derive(2, [bound, 5])]
 }
 
-theorem difference_in_range(): replay(rules(), Facts::none(), backward(6, 8), backward_ranged(6, 8) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
-    Derive(7, [6, 4, 5, 6, 8]), Emit(Const(1, 6, 1))]).map(λ r => r.nodes) = Some(backward(6, 8) ++ [Const(1, 6, 1)]) { refl }
+theorem difference_in_range(): replay(rules(), Facts::none(), backward(6, 8), backward_ranged(6, 8) ++ [Derive(39, [3, 2, 6, 6, 0, 3, 4]),
+    Derive(7, [4, 5, 6, 8, 6]), Emit(Const(1, 6, 1))]).map(λ r => r.nodes) = Some(backward(6, 8) ++ [Const(1, 6, 1)]) { refl }
 
 // It is at least 3, so not below 3 (8); it may be 3, so it is not known to
 // be at least 4.
-theorem difference_least(): replay(rules(), Facts::none(), backward(6, 3), backward_ranged(6, 3) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
-    Derive(8, [6, 4, 5, 3, 3]), Emit(Const(1, 6, 0))]).map(λ r => r.nodes) = Some(backward(6, 3) ++ [Const(1, 6, 0)]) { refl }
-theorem difference_not_more(): replay(rules(), Facts::none(), backward(6, 4), backward_ranged(6, 4) ++ [Derive(39, [4, 3, 2, 6, 6, 0, 3]),
-    Derive(8, [6, 4, 5, 4, 4])]).map(λ r => r.nodes) = None { refl }
+theorem difference_least(): replay(rules(), Facts::none(), backward(6, 3), backward_ranged(6, 3) ++ [Derive(39, [3, 2, 6, 6, 0, 3, 4]),
+    Derive(8, [4, 5, 3, 3, 6]), Emit(Const(1, 6, 0))]).map(λ r => r.nodes) = Some(backward(6, 3) ++ [Const(1, 6, 0)]) { refl }
+theorem difference_not_more(): replay(rules(), Facts::none(), backward(6, 4), backward_ranged(6, 4) ++ [Derive(39, [3, 2, 6, 6, 0, 3, 4]),
+    Derive(8, [4, 5, 4, 4, 6])]).map(λ r => r.nodes) = None { refl }
 
 // Not where it may borrow: 2 less a word up to 3.
-theorem difference_borrows(): replay(rules(), Facts::none(), backward(2, 8), backward_ranged(2, 8) ++ [Derive(39, [4, 3, 2, 2, 2, 0, 3])]).map(λ r => r.nodes) = None { refl }
+theorem difference_borrows(): replay(rules(), Facts::none(), backward(2, 8), backward_ranged(2, 8) ++ [Derive(39, [3, 2, 2, 2, 0, 3, 4])]).map(λ r => r.nodes) = None { refl }
 
 // An or of two clear bits is clear (36); an or with a set bit is set,
 // whichever side it is on (37, 38).
 fn or_bits(left, right: Nat) → Facts { Facts::none().learn_all([BitOr(1, 3, 1, 2)]).add(Const(1, 1, left)).add(Const(1, 2, right)) }
 
-theorem or_both_clear(): replay(rules(), or_bits(0, 0), [], [Derive(36, [3, 1, 2]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([Const(1, 3, 0)]) { refl }
-theorem or_left_set(): replay(rules(), or_bits(1, 0), [], [Derive(37, [3, 1, 2]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
-theorem or_right_set(): replay(rules(), or_bits(0, 1), [], [Derive(38, [3, 1, 2]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
+theorem or_both_clear(): replay(rules(), or_bits(0, 0), [], [Derive(36, [1, 2, 3]), Emit(Const(1, 3, 0))]).map(λ r => r.nodes) = Some([Const(1, 3, 0)]) { refl }
+theorem or_left_set(): replay(rules(), or_bits(1, 0), [], [Derive(37, [1, 2, 3]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
+theorem or_right_set(): replay(rules(), or_bits(0, 1), [], [Derive(38, [1, 2, 3]), Emit(Const(1, 3, 1))]).map(λ r => r.nodes) = Some([Const(1, 3, 1)]) { refl }
 
 // Not clear with one bit set or one unknown, and not set by a clear bit.
-theorem or_not_clear(): replay(rules(), or_bits(0, 1), [], [Derive(36, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }
-theorem or_half_known(): replay(rules(), Facts::none().learn_all([BitOr(1, 3, 1, 2)]).add(Const(1, 1, 0)), [], [Derive(36, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }
-theorem or_not_set(): replay(rules(), or_bits(0, 1), [], [Derive(37, [3, 1, 2])]).map(λ r => r.nodes) = None { refl }
+theorem or_not_clear(): replay(rules(), or_bits(0, 1), [], [Derive(36, [1, 2, 3])]).map(λ r => r.nodes) = None { refl }
+theorem or_half_known(): replay(rules(), Facts::none().learn_all([BitOr(1, 3, 1, 2)]).add(Const(1, 1, 0)), [], [Derive(36, [1, 2, 3])]).map(λ r => r.nodes) = None { refl }
+theorem or_not_set(): replay(rules(), or_bits(0, 1), [], [Derive(37, [1, 2, 3])]).map(λ r => r.nodes) = None { refl }

@@ -21,9 +21,9 @@ Steps (design §10), each landing alone with the same code out of the optimizer:
 6. Domains (ranges first, joins where paths meet, the loop check).
 7. Open fact forms, the order graph, tagged library theorems replacing composite rules, rules found by machine.
 
-Built (design §12): `rule_sound` (`function_ir_rule_sound.hthr`), the `rule` prefix generator (`function_ir_rule.hthr`, publishing `name_rule: Rule`), and rules 0 (`add_zero`) and 44 (`swap_twice`) stated as `rule theorem`s in `function_ir_rules.hthr`. Tests: `lib/_tests/native/function_ir/function_ir_rule_tests.hthr` (the generator) and `function_ir_rule_words_tests.hthr` (`rule_sound` by hand).
+Built (design §12): `rule_sound` (`function_ir_rule_sound.hthr`), the `rule` prefix generator (`function_ir_rule.hthr`, publishing `name_rule: Rule`), and 31 of the 45 rules of `function_ir_rules.hthr` stated as `rule theorem`s. Tests: `lib/_tests/native/function_ir/function_ir_rule_tests.hthr` (the generator) and `function_ir_rule_words_tests.hthr` (`rule_sound` by hand).
 
-Left of step 2: port rules 1 to 43; read the memory facts (`Loaded`, `Joined`, `Low`, `Split`) and a buffer binder; registration by name, which needs the tactic host to publish a `register def` (a new `DeclForm`, an elaborator change).
+Left of step 2: the fourteen rules that speak of a buffer's bytes or have no operator (1, 3, 19, 29 to 33, 40 to 43), for which the reader needs the memory facts (`Loaded`, `Joined`, `Low`, `Split`) and a buffer binder; registration by name, which needs the tactic host to publish a `register def` (a new `DeclForm`, an elaborator change).
 
 Found on the way: a tactic failure whose message prints a very large goal can run the checker out of memory while the message is read back; the generator avoids `whnf` on statements for that reason.
 
