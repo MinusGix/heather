@@ -214,7 +214,9 @@ fn binder<'v>(arena: &'v ValueArena<'v>, c: &'v TmClo<'v>, pending: u32, work: &
             // (based at `·`) does not have.
             let used = crate::bounds::term_local_use(body);
             (pending..used.bound).all(|i| {
-                if i < 64 && used.uses & (1u64 << i) == 0 {
+                // Past the mask an index is counted by the bound alone, so
+                // it is read as used.
+                if i < crate::rc::USES_BITS && used.uses & (1u64 << i) == 0 {
                     return true;
                 }
                 match env.lookup(arena, i - pending) {

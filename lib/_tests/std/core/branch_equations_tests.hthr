@@ -77,7 +77,36 @@ theorem clamp_simp(n: Nat, h: n < 10): clamp(n) + 1 = n + 1 { simp_only(clamp::T
 // expect-error: but `clamp(n) = 10` is expected here
 theorem clamp_wrong(n: Nat, h: n < 10): clamp(n) = 10 { clamp::True(n, h) }
 
-// A recursion's equations are its unfolding's, not these.
+// A measured recursion has them too, each proved from its unfolding: the
+// leaf's recursive call stays the call, and the measure's own `on` is no
+// part of an equation.
+fn halve(n: Nat) → Nat decreases n {
+    if h: 1 < n { if small: n < 100 { 1 + halve(n - 2) } else { 50 } } else { 0 }
+    on ?dec1 := { let more = h; omega };
+}
+theorem halve_step(n: Nat, h: 1 < n, small: n < 100): halve(n) = 1 + halve(n - 2) { halve::True::True(n, h, small) }
+theorem halve_big(n: Nat, h: 1 < n, big: ¬(n < 100)): halve(n) = 50 { halve::True::False(n, h, big) }
+theorem halve_four(): halve(4) = 1 + halve(2) { halve::True::True(4, omega, omega) }
+// expect-error: but `halve(n) = 0` is expected here
+theorem halve_wrong(n: Nat, h: 1 < n, small: n < 100): halve(n) = 0 { halve::True::True(n, h, small) }
+
+// A `let` the recursive call reads, under named tests the measure's `on`
+// reads: the obligation the body lifts quantifies the tests' equations
+// (they are about the `let`), and the unfolding's companions cite it over
+// the same ones, though they read the `let` inlined.
+fn hop(n: Nat) → Nat decreases n {
+    if h: 0 < n {
+        let w = n.min(2);
+        if z: w = 0 { 0 } else { 1 + hop(n - w) }
+    } else {
+        0
+    }
+    on ?dec1 := { let pos = h; omega };
+}
+theorem hop_on(n: Nat, h: 0 < n, z: ¬(n.min(2) = 0)): hop(n) = 1 + hop(n - n.min(2)) { hop::True::False(n, h, z) }
+
+// An unmeasured recursion's equations would be its unfolding's, which it
+// has none of.
 fn tally(b: Bool, n: Nat) → Nat { if b { 0 } else { match n { Zero => 0, Succ(m) => tally(b, m) } } }
 // expect-error: no branch equation `tally::True`
 theorem tally_true(n: Nat): tally(True, n) = 0 { tally::True(True, n, refl) }

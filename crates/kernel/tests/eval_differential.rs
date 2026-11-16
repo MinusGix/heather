@@ -1613,6 +1613,63 @@ fn a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued() {
     }
 }
 
+/// A withheld call stays withheld at an argument that reads a local
+/// variable from under a binder, however far out the variable is
+/// (`eval/withheld.rs`, issues/withheld-closedness-past-the-uses-mask.md).
+/// The walk reads a binder's body by its mask of used indices, which stops
+/// at `USES_BITS`: the four indices past it that the walk still read as bits
+/// were read as unused, so the function was judged closed and the call
+/// unfolded.
+#[test]
+fn a_withheld_call_at_a_function_reading_a_far_variable_stays_withheld() {
+    let nil = || LocalCtx { base: CtxBase::Nil, entries: (vec![]).into() };
+    let nat = || Rc::new(Type::Nat);
+    let arrow = || Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), cod: nat() });
+    let lam = |body: Rc<Term>| Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), body });
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+    // Ψ = w := λ f. 0 — withheld until one argument.
+    let w_ty = Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: arrow(), cod: nat() });
+    let w = Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: arrow(), body: Rc::new(Term::Zero) });
+    let mut withheld = Withheld::new();
+    withheld.insert(0, 1);
+    let psi = GlobalCtx::new(vec![GlobalBinding::defined_tm(nil(), Layer::Code, w_ty, Level::Zero, w)])
+        .withholding(Some(Rc::new(withheld)));
+    let call = |arg: Rc<Term>| {
+        Rc::new(Term::App {
+            fun: Rc::new(Term::GlobalTm {
+                var: GlobalVar::index(0),
+                subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: arrow(),
+            cod: nat(),
+            arg,
+        })
+    };
+    let gamma = LocalCtx::nil();
+    let arena = ValueArena::new();
+    let root = Env::identity(80);
+    let mut ev = Eval::new(FUEL, Defs::transparent(&psi), gamma.base, &arena);
+    // The control: a function that reads nothing is closed, and glued.
+    let v = ev.eval_tm(&call(lam(var(0))), &root).expect("one call");
+    assert!(matches!(&*v, Val::Neutral(n) if n.unfold.is_some()), "the call at a closed function is glued");
+    for (what, arg) in [
+        ("a near variable", lam(var(3))),
+        ("the last index under the mask", lam(var(59))),
+        ("an index past the mask", lam(var(61))),
+        ("the first index past the mask", lam(var(60))),
+        ("the last index the walk used to read as a bit", lam(var(63))),
+        ("a far index under two binders", lam(lam(var(70)))),
+    ] {
+        let v = ev.eval_tm(&call(arg), &root).expect("one call");
+        assert!(
+            matches!(&*v, Val::Neutral(n) if n.unfold.is_none()),
+            "the call at a function reading {what} stays withheld"
+        );
+    }
+}
+
 #[test]
 fn a_failed_thunk_is_not_poisoned() {
     heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);

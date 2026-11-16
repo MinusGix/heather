@@ -484,8 +484,8 @@ impl AppUnify<'_> {
             let meta = Term::GlobalTm { var: GlobalVar::index(slot), subst: LocalSubst::id(&cx.gamma) };
             conclusion = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(meta)));
         }
-        let pat = GeneratedDefs(self).unspell_deep_now(&conclusion, n).unwrap_or(conclusion);
-        let subj = GeneratedDefs(self).unspell_deep_now(goal, 0);
+        let pat = GeneratedDefs(self).unspell_ty_deep(&conclusion).unwrap_or(conclusion);
+        let subj = GeneratedDefs(self).unspell_ty_deep(goal);
         let subj = subj.as_ref().unwrap_or(goal);
         let mut sols = vec![Sol::Unsolved; n as usize];
         let clash = unification::Clash::default();
@@ -649,9 +649,9 @@ impl AppUnify<'_> {
         // spelled, it solves nothing and the writer is told to give the type
         // argument. The pattern is in the call's scratch world and the subject
         // in the committed one, which is the whole of the bookkeeping.
-        let dom_inline = GeneratedDefs(self).unspell_deep_now(dom_orig, n);
+        let dom_inline = GeneratedDefs(self).unspell_ty_deep(dom_orig);
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
-        let arg_inline = GeneratedDefs(self).unspell_deep_now(arg_ty, 0);
+        let arg_inline = GeneratedDefs(self).unspell_ty_deep(arg_ty);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
         let unify_checked =
             |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, None, span) };
@@ -757,9 +757,9 @@ impl AppUnify<'_> {
         // elab-unifier-completeness's question, and this round answered it.
         // The same inline-spelling pre-pass `unify_arg_ty` takes, for the same
         // reason (§4.2, amended 2026-09-10).
-        let inline_result = GeneratedDefs(self).unspell_deep_now(result_ty, n);
+        let inline_result = GeneratedDefs(self).unspell_ty_deep(result_ty);
         let result_ty = inline_result.as_ref().unwrap_or(result_ty);
-        let inline_expected = GeneratedDefs(self).unspell_deep_now(expected, 0);
+        let inline_expected = GeneratedDefs(self).unspell_ty_deep(expected);
         let expected = inline_expected.as_ref().unwrap_or(expected);
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
@@ -780,7 +780,7 @@ impl AppUnify<'_> {
                 return Ok(());
             }
             let head = self.whnf(cx, expected, span)?;
-            let head = GeneratedDefs(self).unspell_deep_now(&head, 0).unwrap_or(head);
+            let head = GeneratedDefs(self).unspell_ty_deep(&head).unwrap_or(head);
             self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, None, span);
             return Ok(());
         };
@@ -791,7 +791,7 @@ impl AppUnify<'_> {
         sols[m] = Sol::Withheld;
         self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
         let expected_head = self.whnf(cx, expected, span)?;
-        let expected_head = GeneratedDefs(self).unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
+        let expected_head = GeneratedDefs(self).unspell_ty_deep(&expected_head).unwrap_or(expected_head);
         self.unify_root(cx, result_ty, &expected_head, n, sols, meta_doms, span);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are

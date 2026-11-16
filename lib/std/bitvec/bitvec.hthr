@@ -2158,6 +2158,10 @@ theorem BitVec::concat_zero_toNat(n: Nat): (m: Nat) → (lo: BitVec(n)) → (lo.
     }
 }
 
+theorem BitVec::toNat_zero_extend(n, extra: Nat, x: BitVec(n)): x.zero_extend(extra).toNat() = x.toNat() {
+    BitVec::concat_zero_toNat(n, extra, x)
+}
+
 // Sign extension of a vector whose sign bit is clear is zero extension, so
 // it keeps the value (a small positive displacement reads as itself).
 theorem BitVec::sign_extend_clear_toNat(n, extra: Nat, x: BitVec(Succ(n)), clear: x.sign_bit() = False):

@@ -22,6 +22,11 @@ fn Bool::xor(self a, b: Bool) → Bool { match a { False => b, True => !b } }
 
 // TODO: xor theorems
 
+// Two bits whose exclusive or is clear are one bit.
+theorem Bool::eq_of_not_xor(a, b: Bool, same: !(a.xor(b)) = True): a = b {
+    match a { False => match b { False => refl, True => absurd(same) }, True => match b { False => absurd(same), True => refl } }
+}
+
 theorem Bool::and_assoc(self a, b, c: Bool): (a && b) && c = a && (b && c) {
     match a { False => refl, True => refl }
 }
@@ -326,6 +331,10 @@ theorem eq_true_of_is_true(b: Bool, p: b.IsTrue()): b = True {
         False => λ u => false_elim(u),
         True => λ u => refl,
     }(p)
+}
+
+theorem eq_false_of_not_is_true(b: Bool, no: ¬b.IsTrue()): b = False {
+    match b { False => refl, True => false_elim(no(trivial)) }
 }
 
 // A conjunction's verdict and its parts' verdicts.
