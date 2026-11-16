@@ -1,6 +1,6 @@
 ---
 title: A byte string reaching a write is a constant buffer of the program's Source
-status: open
+status: closed
 labels: [native,runtime-fn,literals]
 area: heather-in-heather
 milestone: [hih-native-heather]
@@ -42,3 +42,15 @@ What it needs, from what is there (the machine half is already built:
 
 Done when a `runtime fn` program writes `b"valid\n"` and `write-elf` builds
 it with no per-program proof, and a native gate holds its output.
+
+## Log
+
+- 2026-11-16: Built, not as the plan above had it: a byte string is read as
+  one more *parameter* of the program (D2's parameter form), so there is no
+  new term in the reading and no change to the lowering or its theorem; the
+  `Source` gives the parameter a buffer that starts as its bytes, and
+  `f::reads` holds it by `refl` at `Source::start`. "Never written" needs no
+  check: a read into it overwrites it as it would a parameter, and the
+  lowering forgets it there. docs/native/io-programs-design.md §4.3 has the
+  shape; `ascii_say` (runtime_program_tests) and its native gate
+  (`native_tools.rs`) are the probes. Closing.

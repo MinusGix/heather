@@ -413,10 +413,28 @@ yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_st
 to the collection literal of its numerals at `[u8; n]`, or at
 `List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
 exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
-`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it. **The native half**
-(a literal reaching a write as a constant buffer of the `Source`) is
-`issues/byte-string-constant-buffers.md`: today the reflector refuses it as a
-`Cons` onto a buffer.
+`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it.
+
+**The native half (built, 2026-11-16): a byte string is one more buffer
+parameter.** D2's move, applied by the reflector: before reading a program,
+`rt_const_scan` finds every closed list of byte literals in its body (each
+once, by its bytes, in the order the walk meets them), and the reading
+takes each as a parameter after the function's own (`Known::consts`, its
+level; `rt_const_bytes` reads a `Cons` spine at a byte buffer as that
+parameter, where it used to refuse it as a `Cons` onto a buffer). So
+nothing below the reflector is new: the lowering places the parameter in
+a buffer like any other (`Program::locs`), and its theorem is unchanged.
+The generator gives the `Source` one buffer per string after the
+parameters' (`Program::all_buffers`: `Program::constant(bs)`, of its own
+length, `initial := bs`), states `f::reads` at no argument for the strings,
+and proves the reading's environment holds each, `rt_bytes([…])` of its
+bytes, by `refl` at `Source::start` (`Program::held_cons`), as it does for
+the zeroed buffers; the bridge's environment holds the same terms
+(`bridge_consts`), which convert with the literal in the body. A string the
+program reads into is then a buffer the read overwrites, as a parameter
+is, and the lowering forgets it there, so "never written" needs no check
+of its own. `ascii_say` in `runtime_program_tests` says its verdict with
+two strings by an `if`, and `native_tools.rs` holds its output.
 
 ## 5. Decisions (Minus, 2026-11-15)
 
