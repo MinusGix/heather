@@ -675,10 +675,26 @@ the matcher, for the rules whose conclusion is a node.
   not registered yet: those are searches `compile-x86` names in its own
   order (`verified.rs`, `optimize`).
 
+- **"Accepted" is proved for a step** (§7.1,
+  `function_ir_accepted.hthr`). `Among(had, at, facts)` says the
+  replayer's facts have what the walk has where a rule is read: the node
+  that made each word, each bit decided, and a range at least as narrow of
+  each word. Under it an instance found is a step the replayer takes:
+  `Matchable::found_accepted` (a rewrite or a bit), `ranged_accepted`,
+  `told_accepted`, and `Proposed::accepted` for what a learner proposes.
+  Each is one theorem for every rule, a program's own included, because
+  an instance is the rule's own clause with each premise checked against
+  the walk (`Among::knows_all`, `Among::derives`). So a rule or a learner
+  a program adds cannot be why a plan is refused at its step. What is
+  not proved is that the walk keeps `Among` from node to node (that it
+  derives each range before a step reads it, `explain` and `pending`),
+  which is the statement about a whole plan.
+
 What is left of step 3: the rules that decide a bit from an order or give
 an order are still proposed by hand, and go with the order graph of §9.3;
 the library's strategies are not registered learners yet, a learner
-proposes rewrites only (no bit, no range), and "Accepted" is not proved.
+proposes rewrites only (no bit, no range), and "Accepted" is a step's, not
+yet a whole plan's.
 The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules
 by place; a user's rule needs no list.
