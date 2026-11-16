@@ -55,8 +55,7 @@
 //! [`ity::ITy`]: syntax, or an un-spelled *description* of a component of
 //! something that reduces to a former
 //! (`docs/elaborator/intro-by-type-design.md` §3.2). Every rule but the five checked
-//! spellings produces `Syn` and behaves exactly as it did before
-//! descriptions existed; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
+//! spellings produces `Syn`; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
 //! consume `Sel`, whose point is that the component is never spelled — as
 //! syntax it is `3.5ⁿ` in the nesting and as a value graph linear, so the
 //! checker names it instead of building it. A description is consumed by exactly two
@@ -103,8 +102,8 @@
 //! - **Deterministic, so a hit may skip fuel.** Whether a lookup hits
 //!   depends only on which node and scope objects the rules pass along,
 //!   which the term's sharing decides, not on addresses or reference counts.
-//!   Every
-//!   eligible node gets an entry, chosen by its kind, and nothing is evicted.
+//!   Every eligible node gets an entry, chosen by its kind, and nothing is
+//!   evicted.
 //!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
 //!   input, at any worker count.
 //! - **Strengthened scopes** (issues/indexed-family-recursion-gate-cost.md).
@@ -115,8 +114,8 @@
 //!   interned in [`Tc::strengthened`]) instead of Γ, so the same node under
 //!   another Γ ending in the same entries is a hit. That is the shape a
 //!   case tree's inner nodes have inside a motive re-checked at every level
-//!   of a convoy: before, a family's index functions were judged once per
-//!   level and per constructor. A check keeps it only when the expected type
+//!   of a convoy, where a family's index functions would otherwise be
+//!   judged once per level and per constructor. A check keeps it only when the expected type
 //!   is syntax inside the same entries, and an inferred type only when it
 //!   is, since a description is relative to Γ's length. "Which entries" is
 //!   the node's own bounds (`bounds::term_local_use`), a function of the
@@ -139,8 +138,8 @@
 //!   sum spelled in an inductive's shape is judged at every case of every
 //!   tree over that shape, in a Γ one binder longer each time: a mutual
 //!   group's signature carries several such trees in every occurrence of the
-//!   family, and judging the shape's tails there was most of the group's
-//!   gate. Substitution shares a closed subtree (`bounds.rs`), so the node
+//!   family, and judging the shape's tails there would be most of the
+//!   group's gate. Substitution shares a closed subtree (`bounds.rs`), so the node
 //!   keeps its identity under every binder. Closedness is decided at a
 //!   node's second judgment, never its first, so one-shot types pay one
 //!   table entry and no bounds walk; the decision is a function of the
@@ -154,8 +153,8 @@
 //!   reference at the empty substitution is) is kept under the cross-head
 //!   memo's key less Γ's identity. A type spelled by its
 //!   registered code, `El(D#tycode^δ)`, against its inline lowering is the
-//!   case: a structural recursion's case tree met it once per node, each
-//!   under one more binder, and each decoded the code and walked the sum.
+//!   case: a structural recursion's case tree meets it once per node, each
+//!   under one more binder, and each would decode the code and walk the sum.
 //!   Successes only, sampled hits re-converted in debug builds.
 
 use std::cell::{Cell, RefCell};
@@ -860,9 +859,9 @@ fn spell_checked_ty(
 ///
 /// Under [`Tc::eager`] every [`ity::ITy::Sel`] is materialized through the
 /// rewriter as soon as it would be formed, and the five `@` rules view
-/// their annotation through the rewriter too — so this *is* the checker as
-/// it stood before descriptions existed, running the same arms on the same
-/// input. `tests/typing_differential.rs` runs the pair over `wt.rs`'s
+/// their annotation through the rewriter too — so this is the checker with
+/// no descriptions at all, running the same arms on the same input.
+/// `tests/typing_differential.rs` runs the pair over `wt.rs`'s
 /// well-typed streams with the checked spellings on and requires
 /// verdict-for-verdict agreement, which is machine adequacy
 /// (`docs/kernel/nbe-conversion-design.md` §11.2) applied at the typing seam.
@@ -1117,8 +1116,6 @@ impl Env {
     }
 }
 
-/// Ψ-lookup: 0 is innermost; the result is scoped over its *prefix* of Ψ —
-/// callers shift by `v + 1`.
 /// Whether `delta` is the identity on a source of as many entries as it has
 /// terms: every entry the variable that names it (`LocalSubst::id`'s
 /// expansion). The caller holds the count to the source's.
@@ -1193,7 +1190,7 @@ struct Tc {
     /// The `var` rule's answers: an entry's type weakened past the entries
     /// after it, by the type's node and how many there are, with the node
     /// kept so that the address stays its. A variable is read many times
-    /// under one scope, and each reading walked and allocated the type
+    /// under one scope, and each reading would walk and allocate the type
     /// again; kept, the readings also share one node, which is what the
     /// memos keyed by a type's address and the reflexivity shortcut want.
     weakened: RefCell<PtrMap<(usize, u32), (Rc<Type>, Rc<Type>)>>,
@@ -1539,9 +1536,8 @@ fn owned_expected(ty: ITyRef) -> ITy {
 
 /// The kernel checker's four modes (issues/kernel-checker-mode-enum.md).
 /// One value, so the arms ask a named question ([`TcMode::eager`],
-/// [`TcMode::spellings`], [`TcMode::refused_slot`]) and the twelve
-/// combinations of the four fields it replaced that no checker was built
-/// with cannot be built.
+/// [`TcMode::spellings`], [`TcMode::refused_slot`]), and a combination
+/// of settings no checker uses cannot be built.
 enum TcMode {
     /// The gate: descriptions stay lazy, every memo is used.
     Gate,
@@ -1582,9 +1578,9 @@ impl TcMode {
     ///
     /// Under it an [`ITy::Sel`] is spelled the moment it would be formed,
     /// and the five `@` rules view their annotation through the rewriter,
-    /// so the checker is the one that existed before descriptions did. That is what makes `tests/typing_differential.rs`
-    /// test *only* the new thing — that evaluating a description and
-    /// rewriting it agree.
+    /// so the checker keeps no description at all. That is what makes
+    /// `tests/typing_differential.rs` test *only* that evaluating a
+    /// description and rewriting it agree.
     #[inline]
     fn eager(&self) -> bool {
         matches!(self, TcMode::Oracle | TcMode::Spell { .. })
@@ -1634,7 +1630,7 @@ impl TcMode {
 
 /// How many expected types one node keeps per scope. A node checked
 /// against more distinct types than this in one scope pays from then on, as
-/// it did before the memo; the bound is a count, so which checks hit stays
+/// with no memo; the bound is a count, so which checks hit stays
 /// deterministic.
 const CHECKED_PER_SCOPE: usize = 4;
 
@@ -1826,15 +1822,12 @@ impl Tc {
     /// **descriptions** (`docs/elaborator/intro-by-type-design.md` §3.3).
     ///
     /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
-    /// it is the α-test it has always been (in the shared size of the two
-    /// sides, `syntax_eq.rs`), and two equal selections are the
-    /// same type by Determinacy. A query with a selection on either side
-    /// skips the cross-head memo — the memo's bucket key is built from a
-    /// `Type`'s outer constructor and anchor, a selection has neither, and
-    /// keeping the key exactly as it was is what makes the counters on an
-    /// `@`-free declaration identical to the unit. Such a query goes
-    /// straight to [`conv_ity_cached`], whose arena is this query's, as
-    /// `conv_type_cached`'s always was.
+    /// it is the α-test (in the shared size of the two sides,
+    /// `syntax_eq.rs`), and two equal selections are the same type by
+    /// Determinacy. A query with a selection on either side skips the
+    /// cross-head memo — the memo's bucket key is built from a `Type`'s outer
+    /// constructor and anchor, and a selection has neither — and goes
+    /// straight to [`conv_ity_cached`], whose arena is this query's.
     fn conv_ty(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
         // `Conv::ty_root` spends one unit before the same syntactic
         // reflexivity test. Preserve that exact zero-fuel boundary while
@@ -2066,8 +2059,8 @@ impl Tc {
             .map_err(|_| TypeError::OutOfFuel)
     }
 
-    /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter, exactly as
-    /// before; a selection is spelled first, and paying for that is the
+    /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter; a
+    /// selection is spelled first, and paying for that is the
     /// point of [`crate::stats`]'s `ity_materialized`.
     fn whnf(&self, env: &Env, t: ITyRef) -> R<Type> {
         match t.as_syn() {
@@ -2082,9 +2075,9 @@ impl Tc {
     /// **Spell a description** (`docs/elaborator/intro-by-type-design.md` §3.5): whnf
     /// the `of` through the rewriter and take the component's syntax.
     ///
-    /// This is the current checker's answer — which is why it is complete
-    /// and why it is never silently wrong — and it is exponential exactly
-    /// where the current checker is. Its callers are the four λ inference
+    /// This is the rewriter's answer — which is why it is complete and why
+    /// it is never silently wrong — and it is exponential exactly where the
+    /// rewriter is. Its callers are the four λ inference
     /// arms, which must put a `Type` inside a `Π`/`ΠΠ`/`Πg`/`ΠU`, and the
     /// "other formers" branch of [`Tc::view`]. Unlike the value domain the
     /// rewriter is a *syntax* machine, so each step is run in the Γ its
@@ -2946,12 +2939,11 @@ impl Tc {
     /// shared syntax — every rule but the checked spellings.
     ///
     /// The two wrappers exist so the rules can keep spelling their expected
-    /// type the way each already holds it; both now **construct nothing**
-    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Between them
-    /// they are 86 call sites, so what they build lands 86 times in their
-    /// callers' frames — and until the checking direction started borrowing,
-    /// this one also paid an `Arc` increment and decrement per checked
-    /// subterm.
+    /// type the way each already holds it; both **construct nothing**
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). They have many
+    /// call sites, so whatever they built would land in every caller's frame,
+    /// and an owned expected type would cost an `Arc` increment and decrement
+    /// per checked subterm.
     #[inline(always)]
     fn tm_check_rc(&self, env: &Env, t: &Rc<Term>, ty: &Rc<Type>, l: &Level) -> R {
         self.tm_check(env, t, ITyRef::Syn(ty), l)
@@ -2971,7 +2963,7 @@ impl Tc {
     ///
     /// **Outlined deliberately, and measured**
     /// (`issues/ity-widens-the-checker-per-node-constant.md`). It is the one
-    /// arm that takes a [`TyForm`] — 200 bytes, two [`ITy`] components it
+    /// arm that takes a [`TyForm`] — a large value, two [`ITy`] components it
     /// then holds across its own recursive descent — while the arm the
     /// checker actually recurses *through*, once per term node, is the
     /// fall-through below. Left in [`Tc::tm_check_inner`] those temporaries
@@ -3122,14 +3114,12 @@ impl Tc {
     /// `⊢_i t : ? @ ?` — infer the canonical type and level.
     ///
     /// **`inline(always)` is load-bearing, and measured**
-    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Before stage
-    /// 1b this was a tail call with its callee's own signature, so LLVM
-    /// merged the two; the `@` dispatch and the `ITy::Owned` wrap made it a
-    /// non-tail call, and it fell out of line — putting a fresh 96-byte
-    /// frame *and* two 96-byte copies of the inferred `(type, level)` on the
-    /// checker's recursion cycle, once per term node. The wrap itself is
-    /// free: `ITy` is 72 bytes, exactly `Type`'s, because the tag rides in a
-    /// niche.
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). The `@`
+    /// dispatch and the `ITy::Owned` wrap make this a non-tail call, and out
+    /// of line it would put a fresh frame *and* two copies of the inferred
+    /// `(type, level)` on the checker's recursion cycle, once per term node.
+    /// The wrap itself is free: `ITy` is exactly `Type`'s size, because the
+    /// tag rides in a niche.
     #[inline(always)]
     fn tm_infer(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
@@ -3304,12 +3294,11 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok((ity, level))
             }
-            // `fst@(p) : S` — **no annotation at all** (design §2.1,
-            // revised): the receiver infers its own type and the Σ is viewed
-            // out of that, so a projection of a `pair@` costs the pair's
-            // annotation and nothing more. This is the rule that made the
-            // first draft's `fst@(T; p)` unnecessary: `T` was always the type
-            // `p` already infers.
+            // `fst@(p) : S` — **no annotation at all** (design §2.1): the
+            // receiver infers its own type and the Σ is viewed out of that,
+            // so a projection of a `pair@` costs the pair's annotation and
+            // nothing more. An annotation `T` would be the type `p` already
+            // infers.
             Term::FstAt { pair } => {
                 if !self.mode.eager() {
                     return self.projection_at_spine(env, t);
@@ -3352,7 +3341,7 @@ impl Tc {
             // type is literally a Π — a global's statement, a local's type,
             // the previous node of a spine — returns `T[a/x]` as syntax, the
             // same `apply_local` the `app` rule returns, so what follows
-            // sees the syntax it always saw. Only a head whose type needs
+            // sees the `app` rule's syntax. Only a head whose type needs
             // reduction to show its Π (a projected record field, a
             // type-level definition) is viewed in the value domain and
             // answers a description: §3.3 of the intro design, the rewriter
@@ -3577,7 +3566,7 @@ impl Tc {
     /// twin of [`Tc::projection_at_spine`]. Per node, layer `j`'s type is a
     /// selection `j` deep and its view replays all `j`: a constructor value
     /// of an `n`-constructor declaration is up to `n − 1` injections deep, so
-    /// that was Θ(k²) evaluation for the `k`-th constructor
+    /// that would be Θ(k²) evaluation for the `k`-th constructor
     /// (`issues/wide-inductive-constructor-mention-cost.md`). The rules and
     /// the descriptions are the per-node ones; the eager oracle and the
     /// recording translator keep the per-node path.
@@ -4098,8 +4087,7 @@ impl Tc {
                 ))
             }
 
-
-            // -- unit and empty (extension beyond ch. 04) -------------------
+            // -- vectors, unit and empty (extension beyond ch. 04) ----------
             // [b₀, …, b_{w-1}]^l(T; z, o) : Vec^l(T; w) @ l
             // (docs/kernel/bitvector-literal-entry-design.md §3.1). Two elements are
             // checked, not `w`: every element *is* `zero` or `one`, which is
@@ -4131,7 +4119,7 @@ impl Tc {
             // of the pair chain it spells (`term::vec_items_unfold`): `T` a
             // type at `l` and every element a `T`, the chain's `snd`
             // premises being `Vec`s of the same `T`. Checked in a loop, which
-            // is the node's reason to exist: the chain recursed once per
+            // is the node's reason to exist: the chain would recurse once per
             // element. A compact spelling like `VecLit`, so refused where
             // that is.
             Term::VecItems { level, elem, items, from } => {
@@ -4841,11 +4829,6 @@ impl Tc {
     }
 }
 
-/// A cheap identity hint for partitioning the conversion memo. A mismatch is
-/// allowed to miss a structurally equal entry; a match is never trusted until
-/// the complete judgment has been compared. Cloning Heather syntax preserves
-/// these child `Rc`s, which distinguishes the mostly-fresh types produced by
-/// inference without recursively hashing them.
 /// The variant name of a term, for the sampler's site column.
 #[cfg(feature = "value-metrics")]
 fn term_head(t: &Term) -> &'static str {
@@ -4910,10 +4893,9 @@ fn term_head(t: &Term) -> &'static str {
         Term::BoxTm(..) => "BoxTm",
         Term::LetBoxTy { .. } => "LetBoxTy",
         Term::LetBoxTm { .. } => "LetBoxTm",
-        // The checked spellings (docs/elaborator/intro-by-type-design.md). Stage 1a
-        // added the `Term` variants and missed this match; the sampler is
-        // behind `value-metrics`, which nothing in `scripts/test` builds, so
-        // nothing said so.
+        // The checked spellings (docs/elaborator/intro-by-type-design.md).
+        // This match compiles only under `value-metrics`, which nothing in
+        // `scripts/test` builds, so a variant missing here goes unreported.
         Term::PairAt { .. } => "PairAt",
         Term::InlAt { .. } => "InlAt",
         Term::InrAt { .. } => "InrAt",
@@ -5031,6 +5013,11 @@ fn first_difference_excerpt(expected: &Type, inferred: &Type) -> String {
     out
 }
 
+/// A cheap identity hint for partitioning the conversion memo. A mismatch is
+/// allowed to miss a structurally equal entry; a match is never trusted until
+/// the complete judgment has been compared. Cloning Heather syntax preserves
+/// these child `Rc`s, which distinguishes the mostly-fresh types produced by
+/// inference without recursively hashing them.
 fn type_anchor(ty: &Type) -> TypeAnchor {
     match ty {
         Type::Pi { dom, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(dom))),
@@ -5091,8 +5078,8 @@ mod memo_tests {
         }
     }
 
-    /// The tests below predate [`ITy`] and state their judgments in syntax;
-    /// wrapping at the call is the whole adaptation.
+    /// The tests below state their judgments in syntax, wrapped as an
+    /// [`ITy`] at the call.
     fn s(t: Type) -> ITy {
         ITy::Syn(Rc::new(t))
     }
