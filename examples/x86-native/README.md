@@ -206,7 +206,7 @@ move of the other word), proves that sound from the theorem, and registers
 it. `compile-x86` then uses the rules registered in the program's modules
 beside the library's own, and the certificate's replay is over both, so
 nothing about the rule is trusted beyond the theorem the kernel checked.
-`first_or_zero` compiles to 54 bytes with the rule and 63 without: the
+`first_or_zero` compiles to 46 bytes with the rule and 55 without: the
 `or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
 `docs/native/optimizer-rules-design.md`).
 
