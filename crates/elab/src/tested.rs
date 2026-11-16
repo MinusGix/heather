@@ -37,6 +37,8 @@ use heather_kernel::term::Type;
 use heather_syntax::{Expr, ExprKind, LamBinder, NamedArg, Span, Ty, TyKind};
 
 use crate::context::Alias;
+use crate::inductive::Inductives;
+use crate::subst_local::{Injected, LocalSubsts};
 use crate::{Cx, Elaborator, R, code, defaults, err, goal_combinators};
 
 /// The type a tested call gives, by its qualified name.
@@ -492,6 +494,22 @@ impl Tested<'_> {
                 if fits {
                     return self.elab_check(cx, &candidate, expected, lvl);
                 }
+            }
+        }
+        // `True` is proved outright.
+        if let Ok(Type::Unit { level }) = self.goal_oracle().bounded(256).whnf_type(&cx.gamma, expected) {
+            return Ok(heather_kernel::term::Term::Triv { level });
+        }
+        // A hypothesis equating two different constructors, or (through
+        // `inj`) whose fields do, proves anything: the arm of a refused test
+        // (issues/constructor-equations-in-context.md).
+        for name in &names {
+            let Ok((term, ty, _)) = self.resolve_reading(cx, name, span) else { continue };
+            if !matches!(self.goal_oracle().bounded(256).whnf_type(&cx.gamma, &ty), Ok(Type::Id { .. })) {
+                continue;
+            }
+            if let Some(Injected::Clash(proof, proof_ty)) = LocalSubsts(self).injected(cx, term, &ty, span, false, 0) {
+                return Inductives(self).absurd_of_term(cx, proof, &proof_ty, expected, lvl, span);
             }
         }
         // A conjunction is found side by side: `?`'s stated condition is the

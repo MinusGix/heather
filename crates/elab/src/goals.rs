@@ -688,19 +688,29 @@ impl GoalArena {
                     .statement_spelling
                     .clone()
                     .unwrap_or_else(|| display(&goal.cx, &goal.ty));
-                let mut context = Vec::new();
-                for (i, (name, entry)) in
-                    goal.cx.names.iter().zip(&goal.cx.gamma.entries).enumerate()
-                {
-                    if !name.starts_with('#') {
+                // What each name means at the goal: a binder or alias that a
+                // later one of the same name shadows is not listed, so a
+                // local a split or a case re-bound shows once, at its
+                // re-bound type. Aliases are listed after the binders.
+                let names: Vec<&str> = goal.cx.names.iter().collect();
+                let aliases: Vec<_> = goal.cx.aliases.iter().collect();
+                let mut context: Vec<(String, String)> = Vec::new();
+                for (i, (name, entry)) in names.iter().zip(&goal.cx.gamma.entries).enumerate() {
+                    let shadowed = names[i + 1..].contains(name)
+                        || aliases.iter().any(|a| a.name == *name && a.depth > i);
+                    if !name.starts_with('#') && !shadowed {
                         context.push((name.to_string(), display(&goal.cx.prefix(i), &entry.ty)));
                     }
                 }
-                for alias in goal.cx.aliases.iter() {
-                    context.push((
-                        alias.name.clone(),
-                        display(&goal.cx.prefix(alias.depth), &alias.ty),
-                    ));
+                for (k, alias) in aliases.iter().enumerate() {
+                    let shadowed = aliases[k + 1..].iter().any(|b| b.name == alias.name)
+                        || names.iter().skip(alias.depth).any(|n| *n == alias.name);
+                    if !alias.name.starts_with('#') && !shadowed {
+                        context.push((
+                            alias.name.clone(),
+                            display(&goal.cx.prefix(alias.depth), &alias.ty),
+                        ));
+                    }
                 }
                 GoalReport {
                     name: goal.name.clone(),

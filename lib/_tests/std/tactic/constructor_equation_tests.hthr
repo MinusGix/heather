@@ -1,0 +1,115 @@
+// Probes of constructor equations in context
+// (issues/constructor-equations-in-context.md): `subst` injects through two
+// applications of one constructor and substitutes the local a field reaches,
+// a clash of constructors closes the goal, `known` closes a goal from a
+// clash in scope and proves `True`, and `split_all` injects what a split
+// leaves. Each over a literal and a computed side, an open element type,
+// and a checking position, with refusals as controls
+// (docs/testing-generated-terms.md). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import option; import bool; import list; import logic; import nat; import omega;
+
+record Out { code: List<Nat>, names: Nat }
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+
+fn leaf(w: Nat, p: List<Nat>, names: Nat) → Option<Out> {
+    match fits(w) { False => None, True => Some(Out(Cons(w, p), names)) }
+}
+
+// `p` is a suffix of `q`.
+fn Within(p, q: List<Nat>) → Type { Exists<List<Nat>>(λ pre => List::append(pre, p) = q) }
+
+theorem within_refl(p: List<Nat>): Within(p, p) { Exists([], refl) }
+theorem within_cons(x: Nat, p: List<Nat>): Within(p, Cons(x, p)) { Exists([x], refl) }
+
+// ---- `subst` through a constructor ----
+
+// The local is a field of the field: `Some(Out(…)) = Some(c)` substitutes `c`.
+theorem subst_some(p: List<Nat>, names: Nat, c: Out, same: Some(Out(p, names)) = Some(c)): Within(p, c.code) {
+    subst(same, within_refl(p))
+}
+
+// The local on the left.
+theorem subst_some_left(p: List<Nat>, names: Nat, c: Out, same: Some(c) = Some(Out(p, names))): Within(p, c.code) {
+    subst(same, within_refl(p))
+}
+
+// A side that computes to the constructor: the arm's call, not a literal.
+// Each arm: the refused test's is a clash.
+theorem subst_computed(w: Nat, p: List<Nat>, names: Nat, c: Out, same: (match fits(w) { False => None, True => Some(Out(Cons(w, p), names)) }) = Some(c)): Within(p, c.code) {
+    match fits(w) {
+        False => subst(same, within_refl(p)),
+        True => subst(same, within_cons(w, p)),
+    }
+}
+
+// Two fields, each a local: both are substituted.
+theorem subst_two_fields(a, b, x, y: Nat, e: Out([a], b) = Out([x], y)): x + y = a + b { subst(e, refl) }
+
+// An open element type, through `Cons`'s two fields.
+theorem subst_open<A>(x, y: A, xs, ys: List<A>, e: Cons(x, xs) = Cons(y, ys)): List::append([y], ys) = Cons(x, xs) {
+    subst(e, refl)
+}
+
+// In a checking position: the argument of a call.
+theorem subst_argument(p: List<Nat>, names: Nat, c: Out, same: Some(Out(p, names)) = Some(c)): Exists<List<Nat>>(λ q => q = c.code) {
+    Exists(p, subst(same, refl))
+}
+
+// A clash closes the goal, at the top or under a field.
+theorem subst_clash(c: Out, none: Some(c) = None): Within([], c.code) { subst(none, within_refl([])) }
+theorem subst_clash_field<A>(x: A, e: Some(Some(x)) = Some(None)): False { subst(e, trivial) }
+
+// Control: a field equation with no local side and no constructor is not
+// one `subst` can eliminate.
+// expect-error: nor are they constructor applications whose fields have one
+theorem subst_no_local(f: Nat → Nat, x, y: Nat, e: Some(f(x)) = Some(f(y))): f(x) = f(y) { subst(e, refl) }
+
+// ---- `known` ----
+
+theorem known_true(n: Nat): True { known }
+
+// A clash of constructors in scope proves anything.
+theorem known_clash(c: Out, none: Some(c) = None): Within([], c.code) { known }
+theorem known_clash_field<A>(x: A, e: Some(Some(x)) = Some(None)): 1 = 2 { known }
+theorem known_clash_nat(n: Nat, e: Succ(n) = 0): n = 5 { known }
+
+// The arm of a refused test, by computation.
+theorem known_refused(w: Nat, p: List<Nat>, names: Nat, c: Out, same: (match fits(w) { False => None, True => Some(Out(Cons(w, p), names)) }) = Some(c)): Within(p, c.code) {
+    match fits(w) {
+        False => known,
+        True => subst(same, within_cons(w, p)),
+    }
+}
+
+// Control: one constructor on both sides is no clash.
+// expect-error: `known` found no hypothesis
+theorem known_same_ctor(x, y: Nat, e: Some(x) = Some(y)): 1 = 2 { known }
+
+// ---- `split_all` ----
+
+// The refused test closes, and the leaf is written at `c` replaced.
+theorem split_leaf(w: Nat, p: List<Nat>, names: Nat, c: Out, same: leaf(w, p, names) = Some(c)): Within(p, c.code) {
+    split_all; all_goals { within_cons(w, p) }
+}
+
+// ---- `induct` ----
+
+inductive Run { Step(w: Nat), Again(body: Run) }
+
+fn Run::emits(self r: Run, p: List<Nat>, names: Nat) → Option<Out> {
+    match r {
+        Step(w) => match fits(w) { False => None, True => Some(Out(Cons(w, p), names)) },
+        Again(body) => body.emits(p, names),
+    }
+}
+
+// The refused test's case is closed by the default leaf (`known`), and the
+// other is written at `c` replaced.
+theorem induct_refused(r: Run, p: List<Nat>, names: Nat, c: Out, e: r.emits(p, names) = Some(c)): Within(p, c.code) {
+    induct Run::emits(r, p, names) {
+        Step::True => subst(e, within_cons(w, p)),
+        Again => ih(c, e),
+    }
+}
