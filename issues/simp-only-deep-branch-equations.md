@@ -1,6 +1,6 @@
 ---
 title: simp_only(f) never tries a measured function's branch equations seven tests deep
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 created: 2026-11-16
@@ -31,3 +31,7 @@ and so on).
 Done when those five steps are `simp_only(utf8_valid_from, …,
 discharge := bv_omega)` like the other eight, or the report says which
 part of a deep law did not match.
+
+## Log
+
+- 2026-11-16: Fixed: simp_only(f) looks branch equations up along the body's tests (a measured fn's from its f_unfold) at any depth; the five UTF-8 steps use simp_only. Exposed and fixed: a failed discharge dropped the declaration's goal-slot restart request, so bv_omega failed at an omega atom list instead of restarting. Cost kept near: complement skip, larger-arm-first order, discharge reserves slots for 4 runs; valid_window_decides about twice master's elaboration time for its 5 more simp_only steps (failed bv_omega side conditions dominate).
