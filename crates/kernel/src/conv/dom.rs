@@ -42,13 +42,11 @@
 //! copying it there costs as much again. See
 //! [`Dom::whnf_ty_root`].
 //!
-//! Two things are deliberately *not* abstracted: [`super::Env<'v>`]'s Γ stays
-//! a syntactic [`LocalCtx`] (only its length and base are read by the
-//! telescope helpers — entry *types* are read only by `tm_ne`'s variable arm,
-//! through [`Dom::var_type`]; the value domain fills it with placeholder
-//! entries, `issues/kernel-filler-contexts.md`), and the recursor telescope
-//! tables in [`crate::rec`] keep producing syntax, which the arms then
-//! embed.
+//! Two things are deliberately *not* abstracted: [`super::Env<'v>`]'s Γ is
+//! read by the telescope helpers as a [`CtxShape`] (its length and base;
+//! entry *types* are read only by `tm_ne`'s variable arm, through
+//! [`Dom::var_type`]), and the recursor telescope tables in [`crate::rec`]
+//! keep producing syntax, which the arms then embed.
 
 use crate::rc::Rc;
 
@@ -57,7 +55,7 @@ use crate::rec;
 use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, OutOfFuel};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, Branches, IWfSig, MSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, Branches, CtxShape, IWfSig, MSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
 use super::{Conv, ConvError, Env, R, NC};
@@ -993,8 +991,8 @@ pub(super) struct Syn;
 /// `Γ ⊢ x : T` — the identity substitution of `env`'s Γ, weakened past the
 /// `k` binders `cur` has and `home` does not.
 fn id_at<'v>(home: &Env<'v>, cur: &Env<'v>) -> LocalSubst {
-    let k = (cur.gamma.entries.len() - home.gamma.entries.len()) as u32;
-    LocalSubst::id(&home.gamma).shift_local(k)
+    let k = cur.len - home.len;
+    LocalSubst::id(home.shape()).shift_local(k)
 }
 
 /// An `M` signature's view at the syntax domain: its own components.
@@ -1052,13 +1050,13 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Type> {
-        step_ty(cv, env, t, step_type)
+        step_ty(cv, env, t, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Rc<Term>> {
         let mut cur = t.clone();
-        while let Some(next) = stepped(step_term(&cur, &env.gamma))? {
+        while let Some(next) = stepped(step_term(&cur, env.shape()))? {
             cv.spend()?;
             cur = next;
         }
@@ -1073,32 +1071,32 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Type>) -> R<Type> {
-        step_ty(cv, env, t, step_type)
+        step_ty(cv, env, t, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
-        step_tm(cv, env, t, step_term)
+        step_tm(cv, env, t, |t, g| step_term(t, g))
     }
 
     #[inline]
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
         let defs = cv.defs(env);
-        let Some(first) = stepped(step_type_delta(w, &env.gamma, defs))? else {
+        let Some(first) = stepped(step_type_delta(w, env.shape(), defs))? else {
             return Ok(w.clone());
         };
         cv.spend()?;
-        step_ty(cv, env, &first, step_type)
+        step_ty(cv, env, &first, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> R<Rc<Term>> {
         let defs = cv.defs(env);
-        let Some(first) = stepped(step_term_delta(w, &env.gamma, defs))? else {
+        let Some(first) = stepped(step_term_delta(w, env.shape(), defs))? else {
             return Ok(Rc::clone(w));
         };
         cv.spend()?;
-        step_tm(cv, env, &Rc::new(first), step_term)
+        step_tm(cv, env, &Rc::new(first), |t, g| step_term(t, g))
     }
 
     fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, mut w: Rc<Term>) -> R<Rc<Term>> {
@@ -1573,7 +1571,7 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn var_type(_cv: &mut Conv<'v, Self>, env: &Env<'v>, x: LocalVar) -> R<(Rc<Type>, Level)> {
-        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+        let Some(e) = env.syntax_entry(x) else {
             return Err(NC);
         };
         Ok((Rc::new(e.ty.shift_local(x.0 + 1)), e.level.clone()))
@@ -2060,7 +2058,7 @@ impl<'v> Dom<'v> for Syn {
         // to the App's bound variable, Γ weakens by 2. Built once and shared
         // by the two sides.
         let cod_ann = Rc::new(
-            cod.apply_local(&LocalSubst::id(&outer.gamma).shift_local(2).extended(var0())),
+            cod.apply_local(&LocalSubst::id(outer.shape()).shift_local(2).extended(var0())),
         );
         let dom_up = Rc::new(dom.shift_local(1));
         let app = |t: &Rc<Term>| {
@@ -2156,7 +2154,7 @@ impl<'v> Dom<'v> for Syn {
         motive: &Rc<Type>,
     ) -> R<(Rc<Type>, Rc<Type>, Rc<Type>)> {
         let (cs, ih, step) =
-            wf_step_telescope(&env.gamma, level, motive_level, shape, arity, motive);
+            wf_step_telescope(env.shape(), level, motive_level, shape, arity, motive);
         Ok((Rc::new(cs), Rc::new(ih), Rc::new(step)))
     }
 
@@ -2224,7 +2222,7 @@ impl<'v> Dom<'v> for Syn {
             code_level.clone(),
             ctx.clone(),
             (**scrut).clone(),
-            &env.gamma,
+            env.shape(),
         )))
     }
 
@@ -2246,7 +2244,7 @@ impl<'v> Dom<'v> for Syn {
             ctx.clone(),
             (**ty).clone(),
             (**scrut).clone(),
-            &env.gamma,
+            env.shape(),
         )))
     }
 }
@@ -2273,10 +2271,11 @@ fn step_ty<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Type,
-    step: impl Fn(&Type, &LocalCtx) -> Result<Option<Type>, OutOfFuel>,
+    step: impl Fn(&Type, &CtxShape) -> Result<Option<Type>, OutOfFuel>,
 ) -> R<Type> {
+    let gamma = env.shape();
     let mut cur = t.clone();
-    while let Some(next) = stepped(step(&cur, &env.gamma))? {
+    while let Some(next) = stepped(step(&cur, &gamma))? {
         cv.spend()?;
         cur = next;
     }
@@ -2287,13 +2286,14 @@ fn step_tm<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Rc<Term>,
-    step: impl Fn(&Term, &LocalCtx) -> Result<Option<Term>, OutOfFuel>,
+    step: impl Fn(&Term, &CtxShape) -> Result<Option<Term>, OutOfFuel>,
 ) -> R<Rc<Term>> {
-    let Some(mut cur) = stepped(step(t, &env.gamma))? else {
+    let gamma = env.shape();
+    let Some(mut cur) = stepped(step(t, &gamma))? else {
         return Ok(Rc::clone(t));
     };
     cv.spend()?;
-    while let Some(next) = stepped(step(&cur, &env.gamma))? {
+    while let Some(next) = stepped(step(&cur, &gamma))? {
         cv.spend()?;
         cur = next;
     }

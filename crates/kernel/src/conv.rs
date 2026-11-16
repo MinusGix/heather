@@ -82,7 +82,7 @@ use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
 use crate::reduce::{Defs, GlobalCache, NATIVE_DEPTH_LIMIT};
 use crate::term::{
-    Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
+    Branches, CtxEntries, CtxEntry, CtxShape, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
 use crate::typing::ity::ITy;
@@ -847,14 +847,16 @@ pub mod oracle {
 /// consulted), so it is not tracked. Extending a namespace clones this
 /// handle; the parts that grow are shared, so a clone is cheap.
 ///
-/// Γ is carried **twice**. The syntactic [`LocalCtx`] survives because three
-/// consumers read only its *length and base* (`rec::branch_specs`, the shared
-/// `wf_step_telescope`, the identity substitutions inside the syntax domain's
-/// [`Dom::inst_ty`]); at the value domain its entry types are fillers
-/// (`issues/kernel-filler-contexts.md`). The scope a *value* needs — the
-/// environment ρ of neutral variables, and each entry's type as a domain
-/// object for [`Dom::var_type`] — is [`Env<'v>::rho`] and [`Env<'v>::vtys`], which
-/// the syntax domain never reads.
+/// Γ is carried as its length, the syntax of a prefix of it, and the
+/// domain objects of the rest. `gamma` holds an entry's syntax only when
+/// the entry has some: every entry at the syntax domain, and at the value
+/// domain only the Γ the conversion started in (and what [`Under`] pushes
+/// before any value binder), since a binder conversion pushes there has a
+/// value for its type and no syntax. The helpers that build identity
+/// substitutions read Γ's [`CtxShape`] ([`Env::shape`]) and no entry. The
+/// scope a *value* needs — the environment ρ of neutral variables, and each
+/// entry's type as a domain object for [`Dom::var_type`] — is
+/// [`Env<'v>::rho`] and [`Env<'v>::vtys`].
 #[derive(Clone)]
 struct Env<'v> {
     /// Query-local storage for value closures and persistent environments.
@@ -871,8 +873,11 @@ struct Env<'v> {
     /// Shared, not copied: a binder push clones the whole scope, and
     /// [`crate::term::CtxEntries`] is a spine, so extending Γ costs one cell
     /// and cloning this field costs a refcount bump
-    /// (issues/context-representation-clones.md).
+    /// (issues/context-representation-clones.md). A prefix of Γ: the
+    /// entries whose type is known as syntax ([`Env::syntax_entry`]).
     gamma: LocalCtx,
+    /// `|Γ|`, counting the entries past `gamma`.
+    len: u32,
     layer: Layer,
     /// The entry types of the binders **conversion itself pushed**, as domain
     /// objects, innermost first: those are the ones with no syntax in
@@ -959,6 +964,7 @@ impl<'v> Env<'v> {
             psi: Rc::new(psi.clone()),
             cache,
             gamma: gamma.clone(),
+            len: gamma.entries.len() as u32,
             layer,
             vtys: TyEnv::empty(),
             vbase: gamma.entries.len() as u32,
@@ -972,7 +978,22 @@ impl<'v> Env<'v> {
     /// carry it: pushing a binder is pushing Γ, and no outer shift moves a
     /// variable.
     fn rho(&self) -> value::Env<'v> {
-        value::Env::identity(self.gamma.entries.len() as u32)
+        value::Env::identity(self.len)
+    }
+
+    /// Γ's [`CtxShape`]: all the identity substitutions of the shared
+    /// helpers read of it.
+    fn shape(&self) -> CtxShape {
+        CtxShape { base: self.gamma.base, len: self.len }
+    }
+
+    /// The syntax of the entry `x` names, when Γ holds it as syntax: always
+    /// at the syntax domain, and at the value domain for the Γ a conversion
+    /// started in.
+    fn syntax_entry(&self, x: LocalVar) -> Option<&CtxEntry> {
+        let i = self.len.checked_sub(1 + x.0)?;
+        let have = self.gamma.entries.len() as u32;
+        self.gamma.entries.nth_inner(have.checked_sub(1 + i)?)
     }
 
     fn with_layer(&self, layer: Layer) -> Env<'v> {
@@ -985,25 +1006,29 @@ impl<'v> Env<'v> {
     /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env<'v> {
         let vbase = gamma.entries.len() as u32;
-        Env { gamma, layer, vtys: TyEnv::empty(), vbase, tele: (0, 0, 0), ..self.clone() }
+        Env { gamma, len: vbase, layer, vtys: TyEnv::empty(), vbase, tele: (0, 0, 0), ..self.clone() }
     }
 
     /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
     /// at the value domain pushing a binder also extends ρ with the binder's
     /// fresh neutral, and records the entry's type as a domain object.
     ///
-    /// The syntactic entry is a **filler** unless the caller has real syntax
-    /// (only [`Env<'v>::in_ctx`] and [`Env<'v>::new`] do): nothing reads it but the
-    /// length and the base.
+    /// An entry with syntax extends `gamma` while `gamma` is the whole of Γ;
+    /// past a binder with no syntax it is a domain object only.
     fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env<'v> {
         let vty = self.arena.ty(TyClo::new(self.rho(), Rc::clone(&ty)));
-        self.push_entry(ty, vty, level)
+        self.push_entry(Some(ty), vty, level)
     }
 
-    fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
+    fn push_entry(&self, ty: Option<Rc<Type>>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
         e.vtys = e.vtys.push(vty, level.clone());
-        e.gamma.entries.push(CtxEntry { ty, level });
+        if let Some(ty) = ty
+            && e.gamma.entries.len() as u32 == e.len
+        {
+            e.gamma.entries.push(CtxEntry { ty, level });
+        }
+        e.len += 1;
         e
     }
 
@@ -1027,6 +1052,7 @@ impl<'v> Env<'v> {
             psi,
             cache,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
+            len: self.len,
             layer: self.layer,
             vtys,
             vbase: self.vbase,
@@ -3926,7 +3952,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
         // G_Typ G_Trm: the 65 branches, each at its instantiated motive
         // type under its telescope.
-        for (spec, x, y) in branch_table(a, b, &env.gamma) {
+        for (spec, x, y) in branch_table(a, b, env.shape()) {
             let e = D::push_spec(env, &spec.tele);
             let x = D::embed_tm_at(&a.rec, &e, x);
             let y = D::embed_tm_at(&b.rec, &e, y);
@@ -3947,7 +3973,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 fn branch_table<'v, D: Dom<'v>>(
     a: &RecSide<'_, 'v, D>,
     b: &RecSide<'_, 'v, D>,
-    gamma: &LocalCtx,
+    gamma: CtxShape,
 ) -> Vec<(rec::BranchSpec, Rc<Term>, Rc<Term>)> {
     let specs = rec::branch_specs(&a.motives, a.l1, a.l2, gamma);
     let ba = rec::branch_terms(&a.branches);
@@ -3974,7 +4000,7 @@ impl<'v> Conv<'v, Values> {
         {
             return Ok(());
         }
-        let d = env.gamma.entries.len() as u32;
+        let d = env.len;
         let mut wa = dom::values::eval_ity(self, env, a, d, false)?;
         let mut wb = dom::values::eval_ity(self, env, b, d, false)?;
         self.ty_w(env, &mut wa, &mut wb, l)

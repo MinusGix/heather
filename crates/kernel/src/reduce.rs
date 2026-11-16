@@ -9,8 +9,9 @@
 //!   stuck terms (e.g. `elim_Nat` on a λ), which the classification
 //!   predicates deliberately do not cover.
 //! - The ambient local context `Γ` parameterizes reduction because
-//!   β-substitutions materialize `id_Γ` explicitly; only Γ's *shape*
-//!   (length and base) is read, entry types are never inspected.
+//!   β-substitutions materialize `id_Γ` explicitly. Only Γ's
+//!   [`CtxShape`] (length and base) is read, so the reducer takes that and
+//!   the public entry points accept a [`LocalCtx`] for it.
 //! - Recursor β instantiates the branch telescopes (documented on
 //!   [`Branches`]) in three stages: universe instantiation
 //!   (innermost-first), global instantiation (payloads outermost-first),
@@ -39,7 +40,7 @@ use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     iwf_children_ty, iwf_ih, iwf_motive_scrut_ty, iwf_step_telescope, m_out_corec, m_step_ty, nth,
-    wf_step_telescope, IWfSig, MSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    wf_step_telescope, IWfSig, MSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, CtxShape,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -399,17 +400,19 @@ impl<'a> Defs<'a> {
 /// Reflexive-transitive closure of type reduction, to WHNF/neutral (or an
 /// ill-typed stuck form), spending one fuel per step. Ψ-free: no definition
 /// unfolds (see [`Defs`]).
-pub fn whnf_type(t: &Type, gamma: &LocalCtx, fuel: u64) -> Result<Type, OutOfFuel> {
+pub fn whnf_type(t: &Type, gamma: impl Into<CtxShape>, fuel: u64) -> Result<Type, OutOfFuel> {
+    let gamma = &gamma.into();
     whnf_type_delta(t, gamma, Defs::opaque(), fuel)
 }
 
 /// [`whnf_type`] with a δ-environment.
 pub fn whnf_type_delta(
     t: &Type,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     defs: Defs<'_>,
     mut fuel: u64,
 ) -> Result<Type, OutOfFuel> {
+    let gamma = &gamma.into();
     let mut cur = t.clone();
     while let Some(next) = step_type_delta(&cur, gamma, defs)? {
         if fuel == 0 {
@@ -424,17 +427,19 @@ pub fn whnf_type_delta(
 /// Reflexive-transitive closure of term reduction, to WHNF/neutral (or an
 /// ill-typed stuck form), spending one fuel per step. Ψ-free: no definition
 /// unfolds (see [`Defs`]).
-pub fn whnf_term(t: &Term, gamma: &LocalCtx, fuel: u64) -> Result<Term, OutOfFuel> {
+pub fn whnf_term(t: &Term, gamma: impl Into<CtxShape>, fuel: u64) -> Result<Term, OutOfFuel> {
+    let gamma = &gamma.into();
     whnf_term_delta(t, gamma, Defs::opaque(), fuel)
 }
 
 /// [`whnf_term`] with a δ-environment.
 pub fn whnf_term_delta(
     t: &Term,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     defs: Defs<'_>,
     mut fuel: u64,
 ) -> Result<Term, OutOfFuel> {
+    let gamma = &gamma.into();
     let mut cur = t.clone();
     while let Some(next) = step_term_delta(&cur, gamma, defs)? {
         if fuel == 0 {
@@ -452,13 +457,15 @@ pub fn whnf_term_delta(
 
 /// Single-step type reduction `T ⇝ T'`: the `El` decode rules plus
 /// congruence into the encoding.
-pub fn step_type(t: &Type, gamma: &LocalCtx) -> Result<Option<Type>, OutOfFuel> {
+pub fn step_type(t: &Type, gamma: impl Into<CtxShape>) -> Result<Option<Type>, OutOfFuel> {
+    let gamma = &gamma.into();
     step_type_delta(t, gamma, Defs::opaque())
 }
 
 /// [`step_type`] with a δ-environment. Type-level bindings have no bodies —
 /// a `U^δ` is opaque at every layer — so δ reaches types only through `El`.
-pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Option<Type>, OutOfFuel> {
+pub fn step_type_delta(t: &Type, gamma: impl Into<CtxShape>, defs: Defs<'_>) -> Result<Option<Type>, OutOfFuel> {
+    let gamma = &gamma.into();
     let frames = Frames::default();
     let next = step_type_in(t, gamma, defs, &frames);
     frames.answer(next)
@@ -497,7 +504,7 @@ impl Frames {
     }
 }
 
-fn step_type_in(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
+fn step_type_in(t: &Type, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
     if !frames.enter() {
         return None;
     }
@@ -506,7 +513,7 @@ fn step_type_in(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> 
     next
 }
 
-fn step_term_in(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+fn step_term_in(t: &Term, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
     if !frames.enter() {
         return None;
     }
@@ -515,7 +522,7 @@ fn step_term_in(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> 
     next
 }
 
-fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
+fn step_type_frame(t: &Type, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) -> Option<Type> {
     match t {
         Type::El { level, tm } => match &**tm {
             // El^0 Nat ⇝ Nat
@@ -693,7 +700,8 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
 
 /// Single-step term reduction `t ⇝ t'`: β for all elimination forms plus
 /// congruence at head positions.
-pub fn step_term(t: &Term, gamma: &LocalCtx) -> Result<Option<Term>, OutOfFuel> {
+pub fn step_term(t: &Term, gamma: impl Into<CtxShape>) -> Result<Option<Term>, OutOfFuel> {
+    let gamma = &gamma.into();
     step_term_delta(t, gamma, Defs::opaque())
 }
 
@@ -701,7 +709,8 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Result<Option<Term>, OutOfFuel> 
 /// `u^δ ⇝ t[δ]` when `u` is a definition of `defs` (extension). It needs no
 /// arm of its own anywhere else — every congruence below already steps its
 /// head/scrutinee, so a defined global unblocks the whole spine.
-pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Option<Term>, OutOfFuel> {
+pub fn step_term_delta(t: &Term, gamma: impl Into<CtxShape>, defs: Defs<'_>) -> Result<Option<Term>, OutOfFuel> {
+    let gamma = &gamma.into();
     let frames = Frames::default();
     let next = step_term_in(t, gamma, defs, &frames);
     frames.answer(next)
@@ -713,7 +722,7 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Opt
 /// reducer unseals: a bare `u a⃗` with no elimination waiting on it stays
 /// stuck, so a proof is opened exactly where something needs to compute
 /// with what it built.
-fn step_scrut(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+fn step_scrut(t: &Term, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
     unseal_spine(t, defs).or_else(|| step_term_in(t, gamma, defs, frames))
 }
 
@@ -806,7 +815,7 @@ fn unfold_withheld(t: &Term, defs: Defs<'_>) -> Option<Term> {
     rebuild(t, defs, var)
 }
 
-fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+fn step_term_frame(t: &Term, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
     // A saturated closed call of a withheld definition unfolds its head, as a
     // definition's `u^δ` would; any other application of one stays stuck.
     if matches!(t, Term::App { .. } | Term::AppAt { .. }) {
@@ -1303,7 +1312,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         } => {
             // Fixed order: the type annotation (scoped in Δ, not Γ) reduces
             // to weak head normal form first, then the scrutinee.
-            if let Some(ty) = step_type_in(ty, ctx, defs, frames) {
+            if let Some(ty) = step_type_in(ty, &ctx.shape(), defs, frames) {
                 return Some(Term::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
@@ -1408,7 +1417,7 @@ fn fire(
     phi: &[Level],
     globals: Vec<GlobalEntry>,
     locals: Vec<Rc<Term>>,
-    gamma: &LocalCtx,
+    gamma: &CtxShape,
 ) -> Term {
     let t = branch.inst_univ(phi);
     let t = t.apply_global(&GlobalSubst { entries: globals });
@@ -1495,7 +1504,7 @@ pub(crate) fn beta_elim_ty(
     rec: &Rec,
     delta: &LocalCtx,
     code: &Rc<Type>,
-    gamma: &LocalCtx,
+    gamma: &CtxShape,
 ) -> Option<Term> {
     let b = &**rec.branches;
     match &**code {
@@ -1783,7 +1792,7 @@ pub(crate) fn beta_elim_tm(
     ann_ty: &Rc<Type>,
     code_level: &Level,
     code: &Rc<Term>,
-    gamma: &LocalCtx,
+    gamma: &CtxShape,
 ) -> Option<Term> {
     let b = &**rec.branches;
     match &**code {

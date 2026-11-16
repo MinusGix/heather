@@ -26,7 +26,7 @@ use crate::level::{Level, UnivVar};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty,
-    wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
+    wf_step_telescope, Branches, CtxEntry, CtxShape, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
     LocalSubst, LocalVar, Motives, SealedProof, Term, Type,
 };
 
@@ -114,7 +114,7 @@ pub(crate) fn inst_ty_motive(
     lp: Level,
     gp: LocalCtx,
     xp: Term,
-    gamma_tele: &LocalCtx,
+    gamma_tele: impl Into<CtxShape>,
 ) -> Type {
     m.shift_univ_above(tu, 1)
         .shift_global_above(tg, 1)
@@ -133,7 +133,7 @@ pub(crate) fn inst_tm_motive(
     gp: LocalCtx,
     up: Type,
     xp: Term,
-    gamma_tele: &LocalCtx,
+    gamma_tele: impl Into<CtxShape>,
 ) -> Type {
     m.shift_univ_above(tu, 1)
         .shift_global_above(tg, 2)
@@ -466,7 +466,7 @@ pub fn branch_shapes(
     motives: &Motives,
     l1: &Level,
     l2: &Level,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
 ) -> Vec<BranchShape> {
     branch_specs(motives, l1, l2, gamma)
         .into_iter()
@@ -694,11 +694,13 @@ pub(crate) fn branch_specs(
     motives: &Motives,
     l1: &Level,
     l2: &Level,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
 ) -> [BranchSpec; 65] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
-    let gt = |tu: u32, tg: u32| gamma.shift_univ(tu).shift_global(tg);
+    let gamma: CtxShape = gamma.into();
+    // Universe binders move no part of a shape.
+    let gt = |_tu: u32, tg: u32| gamma.shift_global(tg);
 
     // -- G_Typ --------------------------------------------------------------
 
@@ -4693,7 +4695,7 @@ pub(crate) fn branch_specs(
     // five globals `g, I, S, P, o` ([`m_sig_globals`]); `x_I … x_o` are its
     // recursive results, each at the motive over the context its piece lives
     // in.
-    let m_sig_locals = |coded: bool, univs: u32, tg: u32, v: &MView, gt: &LocalCtx| {
+    let m_sig_locals = |coded: bool, univs: u32, tg: u32, v: &MView, gt: &CtxShape| {
         let sig = &v.sig;
         let (l, lp, li) = (&sig.level, &sig.pos_level, &sig.idx_level);
         let k = tg - 5;
@@ -4994,7 +4996,7 @@ pub(crate) fn branch_specs(
     // the signature's six globals `g, I, S, n, o, c` ([`iwf_sig_globals`]),
     // and `x_I … x_c` are its recursive results, each at the motive over the
     // context its piece lives in.
-    let iwf_sig_locals = |coded: bool, univs: u32, tg: u32, v: &IWfView, gt: &LocalCtx| {
+    let iwf_sig_locals = |coded: bool, univs: u32, tg: u32, v: &IWfView, gt: &CtxShape| {
         let sig = &v.sig;
         let (l, li) = (&sig.level, &sig.idx_level);
         let k = tg - 6;

@@ -162,7 +162,7 @@ use crate::rec;
 use crate::few_map::FewMap;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, CtxShape, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -2504,10 +2504,11 @@ impl LocalCtx {
 }
 
 impl LocalSubst {
-    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded.
-    pub fn id(ctx: &LocalCtx) -> LocalSubst {
-        let m = ctx.entries.len() as u32;
-        let tail = match ctx.base {
+    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded. It reads
+    /// only Γ's [`CtxShape`].
+    pub fn id(ctx: impl Into<CtxShape>) -> LocalSubst {
+    let CtxShape { base, len: m } = ctx.into();
+    let tail = match base {
             CtxBase::Nil => SubstTail::Empty,
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };

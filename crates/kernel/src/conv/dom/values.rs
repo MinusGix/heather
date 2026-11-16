@@ -41,8 +41,8 @@ use crate::level::Level;
 use crate::rec;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, CtxEntries,
-    IWfSig, MSig, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, CtxShape,
+    IWfSig, MSig, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
     self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VMSig, VNeTy, VNeutral,
@@ -84,7 +84,7 @@ pub(crate) struct TmC<'v> {
 pub(crate) struct RecEnv<'v>(value::Env<'v>);
 
 fn glen<'v>(env: &Env<'v>) -> u32 {
-    env.gamma.entries.len() as u32
+    env.len
 }
 
 #[cfg(test)]
@@ -569,13 +569,6 @@ fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &VNeutral<'v>) -> &'v Val<'v> {
         spine,
         unfold,
     })))
-}
-
-thread_local! {
-    /// The filler Γ entry: at the value domain nothing reads an entry's
-    /// syntax (`Env<'v>::vtys` carries the domain object), only the length and
-    /// the base (`issues/kernel-filler-contexts.md`).
-    static FILLER: Rc<Type> = Rc::new(Type::Nat);
 }
 
 /// Scoped identity for terms, including bounded congruence of suspended
@@ -1077,14 +1070,14 @@ impl<'v> Dom<'v> for Values {
 
     fn push_entry(env: &Env<'v>, ty: &TyC<'v>, level: &Level) -> Env<'v> {
         let vty = open_ty(env, ty, 0);
-        env.push_entry(FILLER.with(Rc::clone), vty, level.clone())
+        env.push_entry(None, vty, level.clone())
     }
 
     fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v> {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
             let vty = e.arena.ty(TyClo::new(e.rho(), Rc::clone(ty)));
-            e = e.push_entry(Rc::clone(ty), vty, level.clone());
+            e = e.push_entry(Some(Rc::clone(ty)), vty, level.clone());
         }
         e.tele.2 = tele.locals.len() as u32;
         e
@@ -1110,7 +1103,7 @@ impl<'v> Dom<'v> for Values {
             };
             return Ok((TyC::here(env, clo), level.clone()));
         }
-        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+        let Some(e) = env.syntax_entry(x) else {
             return Err(NC);
         };
         let rho = value::Env::identity(i);
@@ -1862,13 +1855,7 @@ impl<'v> Dom<'v> for Values {
         if senv.len() != aenv.len() || senv.len() != menv.len() {
             return Err(NC);
         }
-        let gamma = LocalCtx {
-            base: env.gamma.base,
-            entries: CtxEntries::repeat(
-                CtxEntry { ty: FILLER.with(Rc::clone), level: Level::Zero },
-                senv.len() as usize,
-            ),
-        };
+        let gamma = CtxShape { base: env.gamma.base, len: senv.len() };
         // The three bodies are mixed into one telescope, so they must be
         // read in one scope: each spends its closure's pending global offset
         // here (`docs/kernel/lazy-global-offset-design.md` §5), and the telescope is
