@@ -613,9 +613,26 @@ the matcher, for the rules whose conclusion is a node.
   by `refl`, so what a table costs is steps of every such proof: without
   this each node paid for every rule of the table.
 
+- **What a branch's test says in its arm is found the same way.**
+  `below_left`, `below_right`, `above_left` and `above_right` conclude a
+  range of an operand, a word no premise writes, so they are read at the
+  node whose bit their premises test (`RulePattern::tested`,
+  `RuleEntry::at_test`, the table `testing()`), where the walk has taken
+  the arm and knows the bit. `Seen::narrowed` narrows a word's range where
+  a rule says more than is known (`narrowed_among`); the arithmetic that
+  named rules 9 to 12 is gone. A program's own rule with a premise
+  `l.below(r) = 1` and a range for its conclusion joins that table.
+- **A pattern keeps literals, and `Succ` of a rule's number.** A slot is
+  `Exactly(n)` for a literal, so a node of another width or a bit of the
+  other value fails as it is read and the rule is not made; in a range it
+  is an end the known range need only be inside. `After(k)` is `Succ` of
+  the rule's number `k`: `r.within(0, Succ(b))` gives `b` from the range
+  read, which a computed slot could not.
+- **Premises are read until every number is found**, which is one round
+  for most rules.
+
 What is left of step 3: the rules that decide a bit from an order or give
-an order, and the ones a branch's test gives in an arm, are still proposed
-by hand; the
+an order are still proposed by hand; the
 strategies are not registered learners yet, and "Accepted" is not proved.
 The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules

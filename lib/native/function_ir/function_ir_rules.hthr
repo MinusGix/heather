@@ -574,14 +574,22 @@ fn ranging() → List<Matchable> {
     ]
 }
 
+// The rules a branch's test gives in the arm taken: each is read at the
+// node whose bit its premises test, where the walk knows the bit, and
+// narrows the range of the word its conclusion is about.
+fn testing() → List<Matchable> {
+    [below_left_entry.at_test(9), below_right_entry.at_test(10), above_left_entry.at_test(11), above_right_entry.at_test(12)]
+}
+
 // ---------------------------------------------------------------------------
 // The tables of one compilation
 
 // The library's rules in their places, then the rules registered from
 // anywhere else (`RuleEntry`, function_ir_rule), in the order they are
 // listed; and of those, the ones the search applies by matching: a rule
-// that concludes a node rewrites, one that concludes a range gives ranges.
-record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Matchable> }
+// that concludes a node rewrites, one that concludes a range gives ranges
+// or says what a test gives.
+record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Matchable>, testing: List<Matchable> }
 
 fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     match entries {
@@ -600,23 +608,42 @@ fn entries_rewriting(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     }
 }
 
+// A rule that concludes a range gives the range of the word a node
+// writes where a premise is that node, and otherwise says what a test
+// gives, where its premises test a bit.
 fn entries_ranging(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     match entries {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
-            Ranges(_, _, _) => Cons(entry.at(place), entries_ranging(rest, Succ(place))),
+            Ranges(_, _, _) => match entry.pattern.head() {
+                Some(_) => Cons(entry.at(place), entries_ranging(rest, Succ(place))),
+                None => entries_ranging(rest, Succ(place)),
+            },
             _ => entries_ranging(rest, Succ(place)),
         },
     }
 }
 
-// Every rule of a compilation in its place, for what is said of a plan.
-fn entries_placed(entries: List<RuleEntry>) → List<RuleEntry> { library() ++ entries_added(entries) }
+fn entries_testing(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
+    match entries {
+        Nil => [],
+        Cons(entry, rest) => match entry.pattern.conclusion {
+            Ranges(_, _, _) => match entry.pattern.head() {
+                Some(_) => entries_testing(rest, Succ(place)),
+                None => match entry.pattern.tested() {
+                    Some(_) => Cons(entry.at_test(place), entries_testing(rest, Succ(place))),
+                    None => entries_testing(rest, Succ(place)),
+                },
+            },
+            _ => entries_testing(rest, Succ(place)),
+        },
+    }
+}
 
-// The rules a plan's steps index where `entries` are registered.
 fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rules(entries_added(entries)) }
 
 fn Tables::of(entries: List<RuleEntry>) → Tables {
     shared(entries_added(entries), λ added => shared(rules(), λ library => shared(library.len(), λ first =>
-        Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first)))))
+        Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first),
+            testing() ++ entries_testing(added, first)))))
 }
