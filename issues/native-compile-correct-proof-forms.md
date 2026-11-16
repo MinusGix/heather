@@ -41,7 +41,7 @@ Each step is its own PR, checked with `scripts/test --pr` (it touches `lib/`), w
 Steps 1 to 4 are written, the procedures part included, since stating it is the test of the forms whether or not U5 deletes it.
 
 - Step 1: `Prog::Within` is `<=` with a `Transitive` instance; every chain is a `calc`, and `Prog::within_trans` takes its three programs implicitly (216 callers).
-- Step 2: 23 `subst(Option::some_inj(x, c, same), e)`; `_` arms for the refuted constructors.
+- Step 2: 23 `subst(same, e)` (through `Option::some_inj` until [[constructor-equations-in-context]] landed); `_` arms for the refuted constructors.
 - Step 3: `goes_weaken`, `at_sub`, `held_sub`, `held_same` and `at_similar` take their points implicitly. A caller in a `let` with no expected type then states the type it builds, which reads better than the five arguments did. `at_sub` takes its hypothesis before the inclusion so the inclusion is checked against a known set.
 - Step 4: 95 of 143 `λ (s: MachineState<X86Memory(t.r.profile)>) =>` binders left to the expected type (the 48 left are `let`s with none). The three `then_` lemmas share `Target::then_at` over `Stmt::and_then`; their inversions of `emits` stay three ([[induct-through-result-matches]]).
 - `Bool::both({a, b}, h: (a && b).IsTrue())` beside `Bool::is_true_and(a, b, h)`: all 91 splits in the `native_compile_*` files infer their tests, the four- and five-rung ladders included. The other 433 callers in `lib/` are left to their owners; nothing needed `is_true_and`'s explicit form.
