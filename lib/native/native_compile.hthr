@@ -1260,19 +1260,19 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
 // function at a time, `program_scan_at_drop`).
 theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
     evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
-    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions)).map(λ out => out.prog) = Some(q)):
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()).map(λ out => out.prog) = Some(q)):
     p.links(functions, places, names) = Some(q)
 {
     let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
         Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
             Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
     match functions as λ fs => program_linkable(fs) = True →
-        emit_functions_after_lent(p, fs, places, names, program_counts(fs)).map(λ out => out.prog) = Some(q) →
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs), index_rooms()).map(λ out => out.prog) = Some(q) →
         p.links(fs, places, names) = Some(q) {
         Nil => λ _ e => e,
-        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) {
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), index_rooms()) {
                 None => None, Some(out) => Some(out.prog) } }) = Some(q),
-            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) as λ r =>
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), index_rooms()) as λ r =>
                 r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
                 None => λ h => h,
                 Some(_) => λ h => h,
