@@ -332,6 +332,52 @@ hash.update(b"abc");
 let digest: [u8; 32] = hash.finish();
 ```
 
+## Optimizations are theorems
+
+The compiler's optimizer rewrites a function's code by rules, and a rule is
+a theorem about machine words, marked `rule`:
+
+<!-- checked: lib/native/function_ir/function_ir_rules.hthr -->
+```heather
+// x + 0 is x. Its numbers: the width, `x`, the sum, the literal 0.
+rule theorem add_zero({w: Nat}, x: BitVec(w)): x + 0 = x { BitVec::add_zero(w, x) }
+
+rule theorem swap_twice(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes() = w { … }
+```
+
+From the statement, `rule` makes the rewrite over the compiler's IR and
+proves it sound from the theorem. The optimizer is proved once for any
+table of sound rules, so a rule costs its own proof and nothing else. All
+of the optimizer's rules are written this way (ranges, orders, loads,
+bytes joined into words); see
+[the design](docs/native/optimizer-rules-design.md).
+
+`swap_twice` is why copying a big-endian word costs no byte swaps. Reading
+one is four byte loads joined (`u32_be_within`), which the optimizer turns
+into one 32-bit load and a `BSWAP`; storing one is the same with the swap
+first; and between them the two swaps cancel:
+
+<!-- checked: examples/readme/copy.hthr -->
+```heather
+// Copies the big-endian word at `from` to `to`.
+runtime fn List::copy_word(mut self s: List<u8>, n, from, to: u64) → u64 {
+    let w = s.u32_be_within(n, from);
+    s.put_u32_be_within(n, to, w);
+    0
+}
+```
+
+```text
+    mov    (%r8),%r8d       ; the four bytes at `from`, one load
+    …
+    mov    %r8d,(%rdx)      ; stored at `to` as they were
+```
+
+That is the path where both words are inside the span; the bounds test
+before it is the reads' own. Rules are a fixed table for now: registering
+your own `rule theorem` from any module, and a search that proposes it
+wherever its statement matches, are the next steps.
+
 ## Plain mathematics
 
 The same language, with nothing compiled:
