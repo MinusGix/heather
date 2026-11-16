@@ -121,3 +121,21 @@ library's hundred heaviest declarations.
 Related: [[elab-whnf-copies-straight-continuations]] (the type-side
 readback this extends), [[elaborator-whnf-probes-on-computing-types]]
 (closed: the probe/spell split), [[whnf-sharing-term-growth]].
+
+## Log
+
+- 2026-11-16: **Two callers fixed; the reducer and the readback are as they were.** Traced first: every slow reduction in `pad_long` and `clamp_literal` ended in `OutOfFuel`. The reducer spent its whole fuel (2^20 steps, seconds) on a head the value machine had, and the caller, motive exposure, carried on without the answer. A word comparison is one step for the machine and a walk over 64 bits for the reducer, so those heads were never within its reach.
+
+  - `SemanticOracle::whnf_term_probing` (`oracle.rs`): `whnf_term` for a caller that carries on without an answer. The value probe keeps the oracle's fuel; the reducer's spelling of a declined canonical head is bounded by `DECLINED_SPELLING_STEPS`. `Elaborator::read_motive_term` (so `matching::expose`) uses it. `whnf_tm` and every caller that decides something keep the full fuel: `absurd(cong_fn(λ word => word.toNat(), same))` in `stream_filter_spec` needs a spelling 50,000 steps away and gets it. (Bounding `whnf_term` itself was tried first and broke exactly that proof.)
+  - `reduce_and_name` (`omega_cert.rs`) leaves `BitVec::toNat` of a word that is not a constructor value alone. Its gate ("an argument is a constructor value or a numeral") let every word value through on the width. Traced on `block_spread`: 2,431 calls on five distinct terms, each walking 511 reducer steps over a stuck fold and naming nothing.
+
+  Bench cases, before → after (master 31de154, where `bv_omega` changes merged since the baselines had made `omega/block-spread` 1.9 times slower on their own):
+
+  | case | seconds | reducer frames |
+  |---|---|---|
+  | `reduce/pad-long` | 59.5 → 1.1 | 755 M → 0.23 M |
+  | `reduce/clamp-literal` | 13.0 → 0.02 | 177 M → 0.11 M |
+  | `omega/block-spread` | 18.4 → 9.6 | 45.6 M → 0.49 M |
+  | `omega/sched-expand` | 24.3 → 21.9 | 58.5 M → 1.3 M |
+
+  What is left, and why this stays open: the readback still declines an annotated pair and a literal, so a caller that needs the spelling (`absurd`, `whnf_tm` at large) still pays the reducer, and one whose head is past the fuel still fails after seconds. The exact fix is the first lever above: the value has to say which spelling it came from (`Term::Pair`, `Term::PairAt` with its un-reduced annotation, or a vector's unfolding), which is a field in the kernel's `SigAnn`. `Sched::expand` barely moved in seconds although its reducer work fell forty-fold: its cost is now omega's own search and the evaluator, not this reducer.

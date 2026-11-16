@@ -1927,6 +1927,18 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     if NAT_PRIMITIVES.iter().any(|name| named_args(elab, tm, name).is_some()) {
         return None;
     }
+    // A word's value is `bv_omega`'s atom, and the gate above lets every one
+    // through: the width is a numeral argument. `toNat` folds over the
+    // word's bits, so at a word that is not a constructor value the walk
+    // below spends its whole budget on a stuck fold and names nothing, once
+    // per hypothesis that mentions the word
+    // (issues/small-step-reducer-on-computed-terms.md). A closed word was
+    // already a numeral (`nat_value_within`, in the caller).
+    if let Some(args) = named_args(elab, tm, "bitvec::BitVec::toNat")
+        && !args.last().is_some_and(|word| is_ctor_value(word))
+    {
+        return None;
+    }
     let candidates = recursive_field_candidates(elab, cx, tm);
     let named = named_arithmetic_reduct(elab, cx, tm, &candidates, depth)?;
     (*named != **tm).then_some(named)
