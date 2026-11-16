@@ -215,7 +215,9 @@ rules and get the same theorem with less proof.
 
 ## 4. Rules: an optimization is a theorem
 
-What an author should write, with the spelling only illustrative:
+What an author should write, with the spelling only illustrative (the
+proposal that covers the rules as they became, facts and conditions
+included, is `optimizer-rules-design.md`):
 
 ```heather
 rule rotate_right({w: Nat}, a, b: Nat, x: BitVec(w), fits: a + b = w):

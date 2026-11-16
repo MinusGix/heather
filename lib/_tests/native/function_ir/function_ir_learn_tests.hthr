@@ -43,8 +43,8 @@ fn inner_test() → StructuredRegion {
 // written after its comparison, for the lowering's bounds test to read,
 // and the conditional is its arm.
 fn inner_plan() → Plan {
-    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [1, 16]), Derive(9, [2, 0, 1, 15]), Derive(2, [3, 64]),
-        Derive(4, [4, 3, 0, 64, 64, 0, 15]), Derive(2, [5, 128]), Derive(7, [6, 4, 5, 79, 128]), Emit(Const(1, 6, 1))]), Arm(True, Same)), Same))
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [16, 1]), Derive(9, [0, 1, 15, 2]), Derive(2, [64, 3]),
+        Derive(4, [3, 0, 64, 64, 0, 15, 4]), Derive(2, [128, 5]), Derive(7, [4, 5, 79, 128, 6]), Emit(Const(1, 6, 1))]), Arm(True, Same)), Same))
 }
 
 theorem inner_decided(): replay_region(rules(), inner_test(), Facts::none(), inner_plan()).map(λ r => r.region) = Some(
@@ -56,20 +56,20 @@ theorem inner_decided(): replay_region(rules(), inner_test(), Facts::none(), inn
 
 // Not without the outer test's bound: the sum's rule asks for i's range.
 theorem unbounded(): replay_region(rules(), inner_test(), Facts::none(),
-    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [3, 64]), Derive(4, [4, 3, 0, 64, 64, 0, 15])]), Same), Same))).map(λ r => r.region) = None { refl }
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [64, 3]), Derive(4, [3, 0, 64, 64, 0, 15, 4])]), Same), Same))).map(λ r => r.region) = None { refl }
 
 // Not an arm whose bit no fact gives.
 theorem unknown_arm(): replay_region(rules(), inner_test(), Facts::none(), Both(Nodes([]), Arm(True, Same))).map(λ r => r.region) = None { refl }
 
 // Not the other arm.
 theorem wrong_arm(): replay_region(rules(), inner_test(), Facts::none(),
-    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [1, 16]), Derive(9, [2, 0, 1, 15]), Derive(2, [3, 64]),
-        Derive(4, [4, 3, 0, 64, 64, 0, 15]), Derive(2, [5, 128]), Derive(7, [6, 4, 5, 79, 128])]), Arm(False, Same)), Same))).map(λ r => r.region) = None { refl }
+    Both(Nodes([]), Arms(Both(Nodes([Keep, Keep, Keep, Keep, Derive(2, [16, 1]), Derive(9, [0, 1, 15, 2]), Derive(2, [64, 3]),
+        Derive(4, [3, 0, 64, 64, 0, 15, 4]), Derive(2, [128, 5]), Derive(7, [4, 5, 79, 128, 6])]), Arm(False, Same)), Same))).map(λ r => r.region) = None { refl }
 
 // A sum that may wrap has no range.
 theorem wraps(): replay(rules(), Facts::none(), [Const(64, 1, 18446744073709551615), Const(64, 2, 1), Add(64, 3, 1, 2)],
-    [Keep, Keep, Keep, Derive(2, [1, 18446744073709551615]), Derive(2, [2, 1]),
-        Derive(4, [3, 1, 2, 18446744073709551615, 18446744073709551615, 1, 1])]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Keep, Derive(2, [18446744073709551615, 1]), Derive(2, [1, 2]),
+        Derive(4, [1, 2, 18446744073709551615, 18446744073709551615, 1, 1, 3])]).map(λ r => r.nodes) = None { refl }
 
 // ---------------------------------------------------------------------------
 // The search: a test at the entry, and what is decided past it
@@ -106,9 +106,9 @@ fn pair_plan() → Plan {
         Both(Nodes([Keep, Keep]), Arms(Both(Nodes([Keep]), Arms(Both(Nodes([Keep]), Both(Nodes([Keep, Keep]),
             Arms(Both(Nodes([Keep]), Nodes([Keep])), Nodes([Keep])))), Nodes([Keep]))), Nodes([Keep]))),
         Both(Nodes([Keep, Keep]), Arms(
-            Both(Nodes([Keep, Derive(2, [14, 16]), Derive(11, [15, 1, 14, 16]), Derive(2, [3, 8]), Derive(9, [4, 2, 3, 7]),
-                    Derive(7, [5, 2, 1, 7, 16]), Emit(Const(1, 5, 1))]),
-                Arm(True, Both(Nodes([Keep]), Both(Nodes([Keep, Keep, Derive(4, [7, 2, 3, 0, 7, 8, 8]), Derive(7, [8, 7, 1, 15, 16]), Emit(Const(1, 8, 1))]),
+            Both(Nodes([Keep, Derive(2, [16, 14]), Derive(11, [1, 14, 16, 15]), Derive(2, [8, 3]), Derive(9, [2, 3, 7, 4]),
+                    Derive(7, [2, 1, 7, 16, 5]), Emit(Const(1, 5, 1))]),
+                Arm(True, Both(Nodes([Keep]), Both(Nodes([Keep, Keep, Derive(4, [2, 3, 0, 7, 8, 8, 7]), Derive(7, [7, 1, 15, 16, 8]), Emit(Const(1, 8, 1))]),
                     Arm(True, Both(Nodes([Keep]), Nodes([Keep]))))))),
             Nodes([Keep])))))
 }
@@ -204,33 +204,33 @@ theorem drifting_refused(): replay_function(rules(), drifting().guarded(first_gu
 // `narrow_back` asks that 255 is below 2^8. The widening is dropped once
 // the facts have its equation, and the move is written in its place.
 theorem byte_back(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
-    [Keep, Keep, Drop, Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
+    [Keep, Keep, Drop, Derive(15, [1, 8, 255, 3, 2]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
     Some([BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Move(64, 3, 1)]) { refl }
 
 // So is the byte a store wrote, which is the store's own output.
 theorem stored_back(): replay(rules(), Facts::none(), [BufferStore(2, 0, 0, 1), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
-    [Keep, Keep, Drop, Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    [Keep, Keep, Drop, Derive(15, [2, 8, 255, 4, 3]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
     Some([BufferStore(2, 0, 0, 1), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
 
 // Not of a word no range is known of: 0 is the function's parameter.
 theorem any_word_kept(): replay(rules(), Facts::none(), [Resize(64, 8, 1, 0), Resize(8, 64, 2, 1)],
-    [Keep, Drop, Derive(15, [2, 1, 0, 8, 255]), Emit(Move(64, 2, 0))]).map(λ r => r.nodes) = None { refl }
+    [Keep, Drop, Derive(15, [0, 8, 255, 2, 1]), Emit(Move(64, 2, 0))]).map(λ r => r.nodes) = None { refl }
 
 // Not at a width the range does not fit: 255 goes through eight bits and
 // 256 does not, whatever bound the plan claims for it.
 theorem fits_eight(): replay(rules(), Facts::none(), [Const(64, 1, 255), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
-    [Keep, Keep, Drop, Derive(2, [1, 255]), Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
+    [Keep, Keep, Drop, Derive(2, [255, 1]), Derive(15, [1, 8, 255, 3, 2]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) =
     Some([Const(64, 1, 255), Resize(64, 8, 2, 1), Move(64, 3, 1)]) { refl }
 
 theorem past_eight(): replay(rules(), Facts::none(), [Const(64, 1, 256), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
-    [Keep, Keep, Drop, Derive(2, [1, 256]), Derive(15, [3, 2, 1, 8, 256]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Drop, Derive(2, [256, 1]), Derive(15, [1, 8, 256, 3, 2]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
 
 theorem bound_claimed(): replay(rules(), Facts::none(), [Const(64, 1, 256), Resize(64, 8, 2, 1), Resize(8, 64, 3, 2)],
-    [Keep, Keep, Drop, Derive(2, [1, 256]), Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Drop, Derive(2, [256, 1]), Derive(15, [1, 8, 255, 3, 2]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
 
 // Not through a narrowing to another width than the widening is from.
 theorem widths_apart(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), Resize(64, 8, 2, 1), Resize(16, 64, 3, 2)],
-    [Keep, Keep, Drop, Derive(15, [3, 2, 1, 8, 255]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Drop, Derive(15, [1, 8, 255, 3, 2]), Emit(Move(64, 3, 1))]).map(λ r => r.nodes) = None { refl }
 
 // A word joined of two has at most the sum of their bounds (`within_or`),
 // and a word masked has the bound of either side (`within_and`,
@@ -238,22 +238,22 @@ theorem widths_apart(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), Res
 // word masked to its low byte goes through eight.
 theorem joined_back(): replay(rules(), Facts::none(),
     [BufferLoad(1, 0, 0), ShiftLeft(64, 2, 1, 8), BufferLoad(3, 0, 0), BitOr(64, 4, 2, 3), Resize(64, 16, 5, 4), Resize(16, 64, 6, 5)],
-    [Keep, Keep, Keep, Keep, Keep, Drop, Derive(5, [2, 1, 8, 0, 255]), Derive(16, [4, 2, 3, 65280, 255]), Derive(15, [6, 5, 4, 16, 65535]),
+    [Keep, Keep, Keep, Keep, Keep, Drop, Derive(5, [1, 8, 0, 255, 2]), Derive(16, [2, 3, 65280, 255, 4]), Derive(15, [4, 16, 65535, 6, 5]),
         Emit(Move(64, 6, 4))]).map(λ r => r.nodes) =
     Some([BufferLoad(1, 0, 0), ShiftLeft(64, 2, 1, 8), BufferLoad(3, 0, 0), BitOr(64, 4, 2, 3), Resize(64, 16, 5, 4), Move(64, 6, 4)]) { refl }
 
 theorem masked_back(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 0, 1), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
-    [Keep, Keep, Keep, Drop, Derive(2, [1, 255]), Derive(18, [2, 0, 1, 255]), Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    [Keep, Keep, Keep, Drop, Derive(2, [255, 1]), Derive(18, [0, 1, 255, 2]), Derive(15, [2, 8, 255, 4, 3]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
     Some([Const(64, 1, 255), BitAnd(64, 2, 0, 1), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
 
 // The mask on the left is the other rule, and neither is the rule for the
 // side the mask is not on.
 theorem masked_left(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 1, 0), Resize(64, 8, 3, 2), Resize(8, 64, 4, 3)],
-    [Keep, Keep, Keep, Drop, Derive(2, [1, 255]), Derive(17, [2, 1, 0, 255]), Derive(15, [4, 3, 2, 8, 255]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
+    [Keep, Keep, Keep, Drop, Derive(2, [255, 1]), Derive(17, [1, 0, 255, 2]), Derive(15, [2, 8, 255, 4, 3]), Emit(Move(64, 4, 2))]).map(λ r => r.nodes) =
     Some([Const(64, 1, 255), BitAnd(64, 2, 1, 0), Resize(64, 8, 3, 2), Move(64, 4, 2)]) { refl }
 
 theorem masked_wrong_side(): replay(rules(), Facts::none(), [Const(64, 1, 255), BitAnd(64, 2, 1, 0)],
-    [Keep, Keep, Derive(2, [1, 255]), Derive(18, [2, 1, 0, 255])]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Derive(2, [255, 1]), Derive(18, [1, 0, 255, 2])]).map(λ r => r.nodes) = None { refl }
 
 // The search writes those plans. Two bytes of a span joined, the first the
 // high one, each load under its own test: both bytes' narrowings and the

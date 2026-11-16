@@ -352,12 +352,17 @@ inductive Part {
 // Byte `k` of a 32-bit word, low first, as `store_word` stores it.
 fn word_byte(word: BitVec(32), k: Nat) → BitVec(8) { vector_get(word.bytes_le(4), k, BitVec::zero()) }
 
+// The four bytes of a 32-bit word, low first, are the low bytes of four
+// words: what `Quartered` says, as a statement about words.
+fn BitVec::quarters(self v: BitVec(32), a, b, c, d: BitVec(64)) → Type {
+    (word_byte(v, 0) = low_byte(a)) ∧ ((word_byte(v, 1) = low_byte(b)) ∧ ((word_byte(v, 2) = low_byte(c)) ∧ (word_byte(v, 3) = low_byte(d))))
+}
+
 fn Part::Holds(self part: Part, values: Valuation()) → Type {
     match part {
         Lowest(id, of, shift) => low_byte(values(64, id)) = low_byte(values(64, of).shift_right(shift)),
         Quartered(word, first, second, third, fourth) =>
-            (word_byte(values(32, word), 0) = low_byte(values(64, first))) ∧ ((word_byte(values(32, word), 1) = low_byte(values(64, second))) ∧
-                ((word_byte(values(32, word), 2) = low_byte(values(64, third))) ∧ (word_byte(values(32, word), 3) = low_byte(values(64, fourth))))),
+            values(32, word).quarters(values(64, first), values(64, second), values(64, third), values(64, fourth)),
     }
 }
 
