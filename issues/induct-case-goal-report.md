@@ -19,3 +19,11 @@ Also seen: `split_all` lists the hypothesis it leaves (`__split_all_x7`) twice.
 ## Done when
 
 The three are probes in `lib/_tests/std/tactic/induct_tests.hthr` (an `// expect-error:` hole under `all_goals` that names each case), and the goal report for the model's `Seq` case shows each local once, with `eq`'s right side as the source's match.
+
+## Log
+
+- 2026-11-16: Item 2 and the `split_all` note done: the goal listing
+  (`Goals::reports`, `crates/elab/src/goals.rs`) leaves out a binder or
+  alias that a later one of the same name shadows, so a re-bound local shows
+  once, at its re-bound type (`goal_holes.rs`
+  `a_shadowed_local_is_listed_once`). Items 1 and 3 stay open.
