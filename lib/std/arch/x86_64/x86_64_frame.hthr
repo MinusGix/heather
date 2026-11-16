@@ -1,0 +1,199 @@
+// The frame rule for a call: what the call did not write is still there
+// (issues/compiled-call-frame-rule.md).
+//
+// A call entered at stack offset `i` promises its stores: words of its own
+// room below `i` (`Stack::Wrote`, x86_64_stack) and, when it is lent spans
+// to write, bytes into those (`Stack::WroteIn`, x86_64_lending). What a
+// caller keeps across the call is whatever one such store keeps. This
+// module says that once, for any predicate on memory:
+//
+// - `Stack::Stable(i, P)`: a word stored below `i` keeps `P`.
+//   `Stack::StableIn(i, spans, P)`: so do bytes stored into a span of
+//   `spans` that may be written.
+// - `Stack::wrote_frame`, `Stack::wrote_in_frame`: a stable predicate
+//   that held before the call's stores holds after them.
+// - `Site::returns_frame`: the same as a rule on a function's contract
+//   (`Site::Returns`): a stable predicate joins its precondition and its
+//   postcondition.
+// - The predicates a caller asks for, stable: a word of its own frame
+//   (`Stack::stable_word`, `Loan::stable_word`), code where it lies
+//   (`Stack::stable_resident`, `Loan::stable_resident`), a span the call
+//   may not write (`Loan::stable_reads`); two at once (`Stack::stable_and`,
+//   `Stack::stable_in_and`), and under a fact that is not about memory
+//   (`Stack::stable_given`, `Stack::stable_in_given`).
+//
+// `Stack::wrote_unchanged`, `Stack::wrote_resident`, `Loan::unchanged`,
+// `Loan::resident` and `Loan::unwritten_reads` are instances of the rule;
+// they stay as they are for the proofs that cite them.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import relation;
+import transition;
+
+// ---------------------------------------------------------------------------
+// Stable predicates
+
+// `P` holds of memory after a word is stored below `i`, if it held before:
+// what a call entered at `i` that writes no span leaves true.
+fn Stack::Stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, P: M → Type) → Type {
+    (memory: M) → (k: Nat) → k + 8 <= i → (word: BitVec(64)) → P(memory) →
+        P(stack.writes.store(memory, stack.at(k), word_bytes(word)))
+}
+
+// And after bytes are stored into a span the call may write, from a byte
+// inside it and as far as the span goes: what a call entered at `i` and
+// lent `spans` leaves true.
+fn Stack::StableIn<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    P: M → Type) → Type {
+    stack.Stable(i, P) ∧ ((memory: M) → (b, k: Nat) → spans.written(b) = True → k < spans.size(b) → (bytes: List<BitVec(8)>) →
+        k + bytes.len() <= spans.size(b) → P(memory) → P(stack.writes.store(memory, spans.byte(b, k), bytes)))
+}
+
+// ---------------------------------------------------------------------------
+// The frame rule
+
+// What held before a call's own stores and is stable under one holds
+// after them.
+theorem Stack::wrote_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, stable: stack.Stable(i, P), before, after: M, wrote: stack.Wrote(i, before, after), held: P(before)): P(after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), P,
+        λ m n was step => j(sym(step.proof.right.proof), λ x _ => P(x),
+            stable(m, step.witness, step.proof.left, step.proof.right.witness, was)),
+        before, after, held, wrote)
+}
+
+// The same for a call lent spans to write.
+theorem Stack::wrote_in_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {P: M → Type}, stable: stack.StableIn(i, spans, P), before, after: M, wrote: stack.WroteIn(i, spans, before, after), held: P(before)):
+    P(after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, spans, m, n), P,
+        λ m n was step => match step {
+            Inl(own) => j(sym(own.proof.right.proof), λ x _ => P(x),
+                stable.left(m, own.witness, own.proof.left, own.proof.right.witness, was)),
+            Inr(put) => j(sym(put.proof.proof.right.proof.right), λ x _ => P(x),
+                stable.right(m, put.witness, put.proof.witness, put.proof.proof.left.left, put.proof.proof.left.right,
+                    put.proof.proof.right.witness, put.proof.proof.right.proof.left, was)),
+        }, before, after, held, wrote)
+}
+
+// The rule on a contract. A function whose postcondition gives its stores
+// (`wrote`) keeps any predicate stable under them: `frame`, which may
+// speak of the offset the function was entered at, joins what it is
+// called under and what it promises.
+theorem Site::returns_frame<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.Returns(stack, entry, pre, post), spans: Spans,
+    wrote: (i: Nat) → (s, t: MachineState<M>) → post(i, s, t) → stack.WroteIn(i, spans, s.memory, t.memory),
+    {frame: Nat → M → Type}, stable: (i: Nat) → i + 8 <= stack.size → stack.StableIn(i, spans, frame(i))):
+    site.Returns(stack, entry, λ (i: Nat) (s: MachineState<M>) => pre(i, s) ∧ frame(i, s.memory),
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => post(i, s, t) ∧ frame(i, t.memory)) {
+    λ s here resident i rsp room held ret saved => {
+        let ran = returns(s, here, resident, i, rsp, room, held.left, ret, saved);
+        let done = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨done, stack.wrote_in_frame(i, spans, stable(i, room), s.memory, ran.witness.memory,
+                wrote(i, s, ran.witness, done), held.right)⟩⟩⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stability, composed
+
+// Two stable predicates are stable together.
+theorem Stack::stable_and<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, {P, Q: M → Type},
+    first: stack.Stable(i, P), second: stack.Stable(i, Q)): stack.Stable(i, λ (m: M) => P(m) ∧ Q(m)) {
+    λ memory k below word held => ⟨first(memory, k, below, word, held.left), second(memory, k, below, word, held.right)⟩
+}
+
+theorem Stack::stable_in_and<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {P, Q: M → Type}, first: stack.StableIn(i, spans, P), second: stack.StableIn(i, spans, Q)):
+    stack.StableIn(i, spans, λ (m: M) => P(m) ∧ Q(m)) {
+    ⟨stack.stable_and(i, first.left, second.left),
+     λ memory b k written inside bytes fits held => ⟨first.right(memory, b, k, written, inside, bytes, fits, held.left),
+        second.right(memory, b, k, written, inside, bytes, fits, held.right)⟩⟩
+}
+
+// A fact that is not about memory rides along, and the stable predicate may
+// lean on it: how a frame speaks of the offset the call was entered at
+// ("the word at `k`, when `k` is at or above it").
+theorem Stack::stable_given<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, {A: Type},
+    {P: M → Type}, stable: A → stack.Stable(i, P)): stack.Stable(i, λ (m: M) => A ∧ P(m)) {
+    λ memory k below word held => ⟨held.left, stable(held.left, memory, k, below, word, held.right)⟩
+}
+
+theorem Stack::stable_in_given<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {A: Type}, {P: M → Type}, stable: A → stack.StableIn(i, spans, P)): stack.StableIn(i, spans, λ (m: M) => A ∧ P(m)) {
+    ⟨λ memory k below word held => ⟨held.left, stable(held.left).left(memory, k, below, word, held.right)⟩,
+     λ memory b k written inside bytes fits held => ⟨held.left, stable(held.left).right(memory, b, k, written, inside, bytes, fits, held.right)⟩⟩
+}
+
+// Stable under the stores of a call entered higher, stable under those of
+// one entered lower: a callee's callee stores less.
+theorem Stack::stable_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat, le: d <= i,
+    {P: M → Type}, stable: stack.Stable(i, P)): stack.Stable(d, P) {
+    λ memory k below word held => stable(memory, k, omega(below, le), word, held)
+}
+
+// With no span to write, stable under the call's own stores is all.
+theorem Stack::stable_in_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    none: (b: Nat) → spans.written(b) = False, {P: M → Type}, stable: stack.Stable(i, P)): stack.StableIn(i, spans, P) {
+    ⟨stable, λ memory b k written inside bytes fits held => absurd(trans(sym(written), none(b)))⟩
+}
+
+// ---------------------------------------------------------------------------
+// What a caller keeps, as stable predicates
+
+// A word of the stack at or above `i`: the caller's frame, the return
+// address at `i` itself.
+theorem Stack::stable_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, k: Nat,
+    above: i <= k, fits: k + 8 <= stack.size, value: Option<BitVec(64)>):
+    stack.Stable(i, λ (m: M) => read_word(data, m, stack.at(k)) = value) {
+    λ memory own below word held => trans(stack.apart(memory, own, k, omega(below, above, fits), fits, Inl(omega(below, above)), word), held)
+}
+
+// Code where it lies.
+theorem Stack::stable_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64)): stack.Stable(i, λ (m: M) => CodeResident(fetch, m, bytes, at)) {
+    λ memory k below word held => stack.keeps_code(memory, k, omega(below, room), word, bytes, at, held)
+}
+
+// Under a loan, a word of the stack from `i` up to `top`.
+theorem Loan::stable_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i, k: Nat, above: i <= k, fits: k + 8 <= top, value: Option<BitVec(64)>):
+    stack.StableIn(i, spans, λ (m: M) => read_word(data, m, stack.at(k)) = value) {
+    ⟨stack.stable_word(i, k, above, omega(fits, loan.room), value),
+     λ memory b at written inside bytes stored held => trans(loan.keeps(memory, b, at, written, inside, bytes, stored, k, fits), held)⟩
+}
+
+// Code where it lies.
+theorem Loan::stable_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, bytes: List<BitVec(8)>, at: BitVec(64)):
+    stack.StableIn(i, spans, λ (m: M) => CodeResident(fetch, m, bytes, at)) {
+    ⟨stack.stable_resident(i, omega(low, loan.room), bytes, at),
+     λ memory b k written inside stored fits held => loan.keeps_code(memory, b, k, written, inside, stored, fits, bytes, at, held)⟩
+}
+
+// The bytes of a span the call may not write.
+theorem Loan::stable_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, only_read: spans.written(c) = False,
+    ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c)): stack.StableIn(i, spans, λ (m: M) => Readable(data, m, spans.at(c), ys)) {
+    ⟨λ memory k below word held => loan.own_reads(memory, k, omega(below, low), word, c, ys, fits, held),
+     λ memory b k written inside bytes stored held => loan.store_keeps(memory, b, k, written, inside, bytes, stored, c,
+        λ same => absurd(trans(sym(j(same, λ u _ => spans.written(u) = True, written)), only_read)), ys, fits, held)⟩
+}
