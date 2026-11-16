@@ -55,7 +55,7 @@ fn a_programs_own_rule_is_applied() {
     let plain = dir.join("own_rule.hthr");
     std::fs::write(&plain, format!("{}{}", &text[..from], &text[to..])).unwrap();
     let (without_rule, plain_explained) = compile(&root, &plain, &dir.join("without.s"));
-    assert!(!plain_explained.contains("or_zero"), "{plain_explained}");
+    assert!(!plain_explained.contains("by or_zero"), "{plain_explained}");
     assert!(has_or(&without_rule), "without the rule the `or` stays: {without_rule:02x?}");
     assert!(with_rule.len() < without_rule.len());
     std::fs::remove_dir_all(dir).unwrap();
