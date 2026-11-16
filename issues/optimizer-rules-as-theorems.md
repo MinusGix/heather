@@ -23,6 +23,8 @@ Steps (design §10), each landing alone with the same code out of the optimizer:
 
 Built (design §12): `rule_sound` (`function_ir_rule_sound.hthr`), the `rule` prefix generator (`function_ir_rule.hthr`, publishing `name_rule: Rule`), and all 45 rules of `function_ir_rules.hthr` stated as `rule theorem`s. Tests: `lib/_tests/native/function_ir/function_ir_rule_tests.hthr` (the generator) and `function_ir_rule_words_tests.hthr` (`rule_sound` by hand).
 
+Step 3, first part (design §12): `function_ir_match.hthr` finds a rule's numbers from the shape the generator publishes beside it (`name_pattern`), for a rule whose conclusion is a node; `matchable()` lists `add_zero`, `narrow_back` and `swap_twice`, and the two hand recognisers in `Seen::replaced` are gone. Tests: `function_ir_match_tests.hthr`, and `plus_zero_made` in `function_ir_learn_tests.hthr`. Left of step 3: rules that conclude a range or an order (the rest of `Seen::pass`), the strategies as registered learners, and "Accepted".
+
 Left of step 2: registration by name, which needs the tactic host to publish a `register def` (a new `DeclForm`, an elaborator change); with it plans name rules by key and `rules()` goes.
 
 Found on the way: a tactic failure whose message prints a very large goal can run the checker out of memory while the message is read back; the generator avoids `whnf` on statements for that reason.

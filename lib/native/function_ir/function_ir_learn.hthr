@@ -86,6 +86,7 @@ import function_ir_views;
 import function_ir_stage;
 import function_ir_fresh;
 import function_ir_guard;
+import function_ir_match;
 import function_ir_replay;
 import function_ir_rules;
 import bitvec;
@@ -677,10 +678,25 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
     }
 }
 
-// A node the walk writes another for, with the steps that do: a word
-// narrowed and widened again within the narrow width is a move of the word
-// it was. The widening is dropped once the facts have its equation, the
-// rule gives the move, and the move is written.
+// A node a rule's statement fits (function_ir_match), written as the node
+// the rule's conclusion gives: the old one is dropped once the facts have
+// its equation, the rule gives the new one, and that is written. Where the
+// rule reads ranges, what is owed and the steps that derive them come
+// first. A word narrowed and widened again within the narrow width is so a
+// move of the word it was (rule 15), and a word swapped, widened, narrowed
+// and swapped again a move of the word (rule 44).
+fn Seen::matched(self seen: Seen, node: Node) → Option<Passed> {
+    matched_among(matchable(), node, seen.made, seen.range).and_then(λ found => match found.needs {
+        Nil => shared(seen.pass(found.node), λ written =>
+            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen))),
+        Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
+            shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+                .pass(found.node), λ written =>
+                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))), written.seen)))),
+    })
+}
+
+// A node the walk writes another for, with the steps that do.
 fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
     match node {
         // A bit's constant from an earlier walk, where this one decided the
@@ -693,49 +709,7 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
                 Some(bit) => match v.same(match bit { True => 1, False => 0 }) { True => Some(Passed([Drop], seen)), False => None },
             },
         },
-        // A word swapped, widened, narrowed and swapped again is the word
-        // (rule 44): the second swap is a move of it, and the store that
-        // read it reads the word once the walk that reads through has
-        // been.
-        ByteSwap(w, v, h) => match w.same(32) {
-            False => None,
-            True => nat_map_get(seen.made, h).and_then(λ narrowing => match narrowing {
-                Resize(wide, narrow, _, x) => match wide.same(64) && narrow.same(32) {
-                    False => None,
-                    True => nat_map_get(seen.made, x).and_then(λ widening => match widening {
-                        Resize(half, full, _, s) => match half.same(32) && full.same(64) {
-                            False => None,
-                            True => nat_map_get(seen.made, s).and_then(λ first => match first {
-                                ByteSwap(width, _, word) => width.same(32).then(Some(Passed([Drop, Derive(44, [word, v, h, x, s]), Emit(Move(32, v, word))], seen))),
-                                _ => None,
-                            }),
-                        },
-                        _ => None,
-                    }),
-                },
-                _ => None,
-            }),
-        },
-        Resize(from, to, b, a) => match to.same(64) && from.leb(63) {
-            False => None,
-            True => match nat_map_get(seen.made, a) {
-                None => None,
-                Some(narrowing) => match narrowing {
-                    Resize(wide, narrow, _, s) => match wide.same(64) && narrow.same(from) {
-                        False => None,
-                        True => shared(seen.of(s), λ range => match Succ(range.high).leb(Nat::pow(2, from)) {
-                            False => None,
-                            True => shared(explain(100, seen.how, seen.proved, [s]), λ why =>
-                                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [s, from, range.high, b, a]), Emit(Move(64, b, s))])),
-                                    Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
-                                        .learn(b, range, [s], Derive(3, [s, b, range.low, range.high])).from(b, s)))),
-                        }),
-                    },
-                    _ => None,
-                },
-            },
-        },
-        _ => None,
+        _ => seen.matched(node),
     }
 }
 

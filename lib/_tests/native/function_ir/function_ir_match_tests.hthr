@@ -1,0 +1,51 @@
+// Probes for the matcher (lib/native/function_ir/function_ir_match.hthr):
+// a rule's numbers found from a node and what the walk has passed, in the
+// clause's order, and no instance where a premise or the guard fails.
+
+import function_ir;
+import function_ir_match;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import list;
+import nat;
+import nat_map;
+import option;
+
+fn no_nodes() → NatMap<Node> { NatMap::empty() }
+fn no_ranges() → NatMap<Range> { NatMap::empty() }
+
+// `x + 0` where the zero's constant was passed: the add is a move of `x`.
+theorem add_zero_found(): matched_among(matchable(), Add(64, 7, 5, 6), nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges()) =
+    Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }
+
+// The constant is not zero: the shape fits, and the rule's clause at the
+// numbers is not what was passed.
+theorem add_one_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), nat_map_set(no_nodes(), 6, Const(64, 6, 1)), no_ranges()) = None { refl }
+
+// Nothing made the right operand.
+theorem add_unknown_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }
+
+// A word narrowed to a byte and widened again, known to be a byte: the
+// range read is the guard's number, and the word is one whose range the
+// plan derives first.
+theorem narrow_back_found(): matched_among(matchable(), Resize(8, 64, 4, 3), nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
+    nat_map_set(no_ranges(), 2, Range(0, 200))) = Some(Matched(15, [2, 8, 200, 4, 3], Move(64, 4, 2), [2])) { refl }
+
+// The word may not fit the narrow width: the guard refuses.
+theorem narrow_back_guarded(): matched_among(matchable(), Resize(8, 64, 4, 3), nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
+    nat_map_set(no_ranges(), 2, Range(0, 300))) = None { refl }
+
+// Four nodes deep: each operand followed to what made it.
+fn swapped() → NatMap<Node> {
+    nat_map_set(nat_map_set(nat_map_set(no_nodes(), 4, ByteSwap(32, 4, 9)), 3, Resize(32, 64, 3, 4)), 2, Resize(64, 32, 2, 3))
+}
+
+theorem swap_twice_found(): matched_among(matchable(), ByteSwap(32, 1, 2), swapped(), no_ranges()) =
+    Some(Matched(44, [9, 1, 2, 3, 4], Move(32, 1, 9), [])) { refl }
+
+// A width the statement does not have.
+theorem swap_wide_not_found(): matched_among(matchable(), ByteSwap(64, 1, 2), swapped(), no_ranges()) = None { refl }
+
+// A rule whose conclusion is no node is not one the matcher applies.
+theorem range_rule_not_matched(): matched_among([Matchable(4, within_add_rule, within_add_pattern)], Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }

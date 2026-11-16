@@ -17,6 +17,7 @@
 // alone is a guard: the rule answers `None` where it fails.
 import function_ir;
 import function_ir_eval;
+import function_ir_match;
 import function_ir_replay;
 import function_ir_rule;
 import function_ir_state;
@@ -537,4 +538,11 @@ fn rules() → List<Rule> {
         // 44
         swap_twice_rule,
     ]
+}
+
+// The rules the search applies wherever their statement fits
+// (function_ir_match): each rewrites a node as the one its conclusion
+// gives. One is added here and nothing else is written for it.
+fn matchable() → List<Matchable> {
+    [Matchable(0, add_zero_rule, add_zero_pattern), Matchable(15, narrow_back_rule, narrow_back_pattern), Matchable(44, swap_twice_rule, swap_twice_pattern)]
 }
