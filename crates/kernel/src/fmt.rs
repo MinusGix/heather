@@ -42,7 +42,7 @@ use crate::term::{
 const NODE_BUDGET: isize = 512;
 
 /// Maximum nesting depth printed (bounds stack: debug-build formatter frames
-/// are several KB each, and test threads get a 2 MB stack).
+/// are several KB each, and a spawned thread's default stack is 2 MiB).
 const DEPTH_BUDGET: u32 = 64;
 
 /// Where the current thread is in a format call. One value rather than a

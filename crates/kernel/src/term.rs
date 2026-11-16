@@ -384,9 +384,8 @@ pub enum Type {
     /// substrate of `IWf` (docs/kernel/iwf-former-design.md §1.1); its projection is
     /// the derived [`dnth`], not a former.
     ///
-    /// Code since the rec.rs round (design §13 step 4): `TmDVec` and the
-    /// `ty_dvec`/`tm_dvec` branches, as `Vec` became at its phase 3. A
-    /// takes-a-binder former rather than a
+    /// Has a code (design §13 step 4): `TmDVec` and the `ty_dvec`/`tm_dvec`
+    /// branches, as `Vec` has. A takes-a-binder former rather than a
     /// family argument because Heather has no type-valued functions. `Vec^l(T;
     /// k)` and `DVec^l(k; _. T)` agree reduct for reduct at a canonical
     /// length and are distinct neutral types at a neutral one; they are not
@@ -413,8 +412,7 @@ pub enum Type {
     /// a third larger, and the checker's recursion holds `Type`s in each
     /// frame (`docs/kernel/native-depth-budget-design.md`).
     ///
-    /// Code since the rec.rs round (design §13 step 4), as [`Type::DVec`]:
-    /// `TmIWf`, and the `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
+    /// Has a code (design §13 step 4), as [`Type::DVec`]: `TmIWf`, and the `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
     IWf { sig: Rc<IWfSig>, index: Rc<Term> },
     /// `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` — the indexed final
     /// coalgebra, the dual of [`Type::W`] with [`Type::IWf`]'s index
@@ -862,7 +860,7 @@ pub enum Term {
     // exactly the payload of a `box`.
     //
     // **The intros' annotation is optional** and the projections carry none
-    // (design §2.1, revised after stage 2's first measurement). An
+    // (design §2.1). An
     // unannotated intro is *not inferable* — the verdict `box` already gets —
     // and is checked against the expected type, which the checker holds as an
     // `ITy` and views in the value domain; that is what lets a constructor
@@ -1806,7 +1804,8 @@ impl CtxEntries {
     }
 
     /// `n` copies of one entry — the filler contexts that the shared β
-    /// helpers read only the *length* of (`reduce.rs` module doc). One cell
+    /// helpers read only the *length* of (`reduce.rs` module doc;
+    /// `issues/kernel-filler-contexts.md`). One cell
     /// per entry rather than the `Vec`'s single allocation; both callers are
     /// off the hot path (a code recursor's scope, and `Wf`'s step
     /// telescope), which is why this is a loop and not a shared spine.
@@ -3764,7 +3763,7 @@ pub fn wf_step_telescope(
 /// rebuilt from `shape`/`arity`.
 ///
 /// The elaborator passes `El (D#tycode^δ)` here
-/// (`docs/inductives/family-type-code-defs-design.md`, 2026-08-12 extension): those two
+/// (`docs/inductives/family-type-code-defs-design.md`): those two
 /// positions are ordinary type annotations, so any type convertible with
 /// `Wf(shape). arity` stands in them, and naming `⟦D⟧` once is what stops the
 /// `match` lowering from carrying every field type verbatim through Θ(arms)
@@ -3854,8 +3853,8 @@ mod size_tests {
 
     /// The checker's recursion holds `Type`s and `Term`s in every frame
     /// (`docs/kernel/native-depth-budget-design.md`), so a variant that outgrows the
-    /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
-    /// constructor value overflow the 8 MiB stack. A former with many
+    /// rest grows every frame of it: a flat `IWf` signature made a deep
+    /// constructor value overflow the stack. A former with many
     /// components keeps them behind one pointer (`IWfSig`). The annotated
     /// formers carry up to three `Level`s, a word each
     /// (`issues/kernel-level-eight-bytes.md`).

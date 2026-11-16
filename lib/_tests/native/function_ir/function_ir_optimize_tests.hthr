@@ -576,3 +576,128 @@ theorem be_fixed_lowers(): word_moves(be_fixed(8)).map(λ (f: Function) => f.low
 
 // Not at an offset whose last byte's index wraps: the range has no room.
 theorem be_fixed_wraps(): be_fixed(18446744073709551614).asked() = [] { refl }
+
+// ---------------------------------------------------------------------------
+// A word stored a byte at a time, written as one store (step 5)
+
+// Leaves in a row, as the walks leave SHA-256's moves of its working
+// variables: a leaf a node, a comparison with its bit.
+fn chain(leaves: List<List<Node>>) → StructuredRegion {
+    match leaves { Nil => nodes([]), Cons(leaf, rest) => match rest { Nil => nodes(leaf), Cons(_, _) => Compose(nodes(leaf), chain(rest)) } }
+}
+
+// The byte of the word 3 shifted right by `shift`, narrowed and widened
+// into `x`, through `a` and `b`.
+fn byte_nodes_of(word, a, b, x, shift: Nat) → List<List<Node>> {
+    match shift {
+        Zero => [[Resize(64, 8, b, word)], [Resize(8, 64, x, b)]],
+        Succ(_) => [[LogicalShiftRight(64, a, word, shift)], [Resize(64, 8, b, a)], [Resize(8, 64, x, b)]],
+    }
+}
+
+fn byte_nodes(a, b, x, shift: Nat) → List<List<Node>> { byte_nodes_of(3, a, b, x, shift) }
+
+// The word 3 stored at the base 2 of the span 0 of length 1 and the next
+// three indexes, each index compared below the length with its bit
+// written: the bytes at shifts `s0` to `s3`, the third store's index the
+// base and `k2`, `between` before the third store, and the second index
+// tested only where `tested`.
+fn tested_leaf(tested: Bool) → List<List<Node>> { match tested { True => [[UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1)]], False => [] } }
+
+fn st_with(k2, s0, s1, s2, s3: Nat, between: List<Node>, tested: Bool) → Function {
+    Function([0, 1, 2, 3], chain(
+        [[UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]] ++ (byte_nodes(5, 6, 7, s0) ++ ([[BufferStore(8, 0, 2, 7)],
+        [Const(64, 9, 1)], [Add(64, 10, 2, 9)]] ++ (tested_leaf(tested) ++
+            (byte_nodes(11, 12, 14, s1) ++ ([[BufferStore(15, 0, 10, 14)],
+        [Const(64, 16, k2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++ (byte_nodes(18, 19, 21, s2) ++ ([between, [BufferStore(22, 0, 17, 21)],
+        [Const(64, 23, 3)], [Add(64, 24, 2, 23)], [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes(30, 25, 27, s3) ++
+        [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+}
+
+// Big-endian: the word's bytes from the highest.
+fn st_bytes() → Function { st_with(2, 24, 16, 8, 0, [], True) }
+
+fn byte_stores(function: Function) → Option<Nat> { function.body.flat().map(λ (ns: List<Node>) => stores_at(ns, 0).len()) }
+
+// The moves in the order the compiler runs them: the word's half, swap
+// and load put after the fourth store, the four paid as one store in the
+// load's place, and what nothing reads swept.
+fn st_moves(function: Function) → Option<Function> {
+    made(function.find_stores([])).and_then(λ (f: Function) => made(f.find_paid())).and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+// The put: three nodes at ids from 30, in a leaf after the fourth store's.
+fn st_put() → Option<List<Nat>> { made(st_bytes().find_stores([])).map(λ (f: Function) => f.body.leaf_sizes()) }
+
+theorem st_put_leaves(): st_put() = Some([2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 2, 1, 1, 1, 3, 0, 1]) { refl }
+
+// What is left: the tests of the indexes (the walk that decides them is
+// what drops the three no access reads), the half, its swap, and one store
+// last in the leaf that holds them.
+fn st_word() → Function {
+    Function([0, 1, 2, 3], Compose(nodes([UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]),
+        Compose(nodes([Const(64, 9, 1), Add(64, 10, 2, 9), UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1), Const(64, 16, 2), Add(64, 17, 2, 16),
+            UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1), Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1),
+            Resize(64, 32, 30, 3), ByteSwap(32, 31, 30), WideStore(4, 32, 0, 2, 31)]),
+        Compose(nodes([]), Compose(nodes([]), Compose(nodes([Const(64, 29, 0)]), nodes([]))))))))), 29, 1)
+}
+
+theorem st_staged(): st_moves(st_bytes()) = Some(st_word()) { refl }
+
+// The lowering takes both: four byte stores, and one `MOV [base], r32`.
+theorem st_bytes_lower(): st_bytes().lowers(0, [1]) = True { refl }
+theorem st_word_lowers(): st_word().lowers(0, [1]) = True { refl }
+
+// Little-endian, the bytes from the lowest: the half is stored with no
+// swap.
+theorem st_plain_stored(): st_moves(st_with(2, 0, 8, 16, 24, [], True)).and_then(byte_stores) = Some(0) { refl }
+theorem st_plain_lowers(): st_moves(st_with(2, 0, 8, 16, 24, [], True)).map(λ (f: Function) => f.lowers(0, [1])) = Some(True) { refl }
+
+// No replay pays stores whose load was not put.
+theorem st_unput(): made(st_bytes().find_paid()) = None { refl }
+
+// Nothing is put where the four are not one word's store: the third
+// index not the next one, the bytes out of order, a load between the
+// stores, or an index with no test against the length that says the sum
+// did not wrap.
+theorem st_gapped(): made(st_with(3, 24, 16, 8, 0, [], True).find_stores([])) = None { refl }
+theorem st_misordered(): made(st_with(2, 16, 24, 8, 0, [], True).find_stores([])) = None { refl }
+theorem st_loaded_between(): made(st_with(2, 24, 16, 8, 0, [BufferLoad(34, 0, 2)], True).find_stores([])) = None { refl }
+theorem st_untested(): made(st_with(2, 24, 16, 8, 0, [], False).find_stores([])) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A word copied big-endian: its two swaps cancel (rule 44)
+
+// The word at the index 3 of the span loaded and swapped, both its first
+// and last byte tested, then stored big-endian at the base 2 as above.
+fn st_copy() → Function {
+    Function([0, 1, 2, 3], Compose(chain([[UnsignedLessThan(64, 31, 3, 1), Const(1, 31, 1)],
+        [Const(64, 32, 3), Add(64, 33, 3, 32), UnsignedLessThan(64, 34, 33, 1), Const(1, 34, 1)],
+        [WideLoad(4, 35, 0, 3), ByteSwap(32, 36, 35), Resize(32, 64, 30, 36)]]),
+        chain([[UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]] ++ (byte_nodes_of(30, 5, 6, 7, 24) ++ ([[BufferStore(8, 0, 2, 7)],
+            [Const(64, 9, 1)], [Add(64, 10, 2, 9)], [UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1)]] ++ (byte_nodes_of(30, 11, 12, 14, 16) ++
+            ([[BufferStore(15, 0, 10, 14)], [Const(64, 16, 2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++
+            (byte_nodes_of(30, 18, 19, 21, 8) ++ ([[BufferStore(22, 0, 17, 21)], [Const(64, 23, 3)], [Add(64, 24, 2, 23)],
+            [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes_of(30, 37, 25, 27, 0) ++ [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+}
+
+fn nodes_swaps(ns: List<Node>) → Nat {
+    match ns { Nil => 0, Cons(node, rest) => match node { ByteSwap(_, _, _) => Succ(nodes_swaps(rest)), _ => nodes_swaps(rest) } }
+}
+
+fn swaps(function: Function) → Option<Nat> { function.body.flat().map(nodes_swaps) }
+
+// The moves the compiler runs after the store's: the second swap a move of
+// the loaded word, read through by the store, and both swaps swept.
+fn st_copy_moves() → Option<Function> {
+    st_moves(st_copy()).and_then(λ (f: Function) => made(f.find_learned())).and_then(λ (f: Function) => made(f.find_copied()))
+        .and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+theorem st_copy_swaps(): swaps(st_copy()) = Some(1) { refl }
+theorem st_copy_stored(): st_moves(st_copy()).and_then(swaps) = Some(2) { refl }
+theorem st_copy_cancelled(): st_copy_moves().and_then(swaps) = Some(0) { refl }
+theorem st_copy_unstored(): st_copy_moves().and_then(byte_stores) = Some(0) { refl }
+
+// The lowering takes it: one `MOV r32, [base]` and one `MOV [base], r32`.
+theorem st_copy_lowers(): st_copy_moves().map(λ (f: Function) => f.lowers(0, [1])) = Some(True) { refl }

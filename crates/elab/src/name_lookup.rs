@@ -71,12 +71,40 @@ impl NameLookup<'_> {
         {
             return NameRes::Found(module.to_string());
         }
-        self.names
+        let res = self.names
             .resolve_kinds(scopes.last().map(Rc::as_ref), name, kinds, |m, ty, ctor| {
                 self.types
                     .inductive(&qkey(m, ty))
                     .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
-            })
+            });
+        match res {
+            NameRes::Ambiguous(modules) => self.same_generated(name, &modules).map_or(NameRes::Ambiguous(modules), NameRes::Found),
+            other => other,
+        }
+    }
+
+    /// A generated theorem (`f#induct`, `f#Cons`) that two imported modules
+    /// each built for a function neither of them declares
+    /// (docs/tactics/functional-induction-design.md §6): built from the same
+    /// written function by the same generator, so the copies have one
+    /// statement, and either is the theorem. The first module's, when every
+    /// copy's interface (parameters and statement) is the same; `None`, and
+    /// the ordinary ambiguity, otherwise. Nothing here is trusted: a use is
+    /// checked against the statement it names.
+    fn same_generated(&self, name: &str, modules: &[String]) -> Option<String> {
+        if !name.contains('#') || modules.len() < 2 {
+            return None;
+        }
+        let interface = |m: &str| -> Option<Vec<u8>> {
+            // A member (`List::foldl#induct`) declares the qualified string.
+            let base = if self.names.declares(m, name) { name } else { Self::base_name(name) };
+            let info = self.names.global(&qkey(m, base))?;
+            let decl = self.names.surface_decl_in(m, base)?;
+            (decl.kind == heather_syntax::DeclKind::Theorem)
+                .then(|| crate::module_image::encode_interface_signature(&info.params, Some(decl)))
+        };
+        let first = interface(&modules[0])?;
+        modules[1..].iter().all(|m| interface(m).as_ref() == Some(&first)).then(|| modules[0].clone())
     }
 
     /// The base half of a written name — `nat::Nat::sub` and `sub` both name `sub`.

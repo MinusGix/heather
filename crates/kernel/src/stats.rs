@@ -193,27 +193,23 @@ counters! {
     /// forms a gate actually met and not the ones a source happens to
     /// contain.
     ///
-    /// The round's marker column (design §8): it is **zero by construction**
-    /// before the elaborator emits the forms, so `scripts/perf ab --marker
-    /// intro_at_nodes` can assert the after binary emits it and the before
-    /// one does not.
+    /// Zero on a run whose elaborator emits none of the forms, so
+    /// `scripts/perf ab --marker intro_at_nodes` can tell a binary that emits
+    /// them from one that does not.
     intro_at_nodes,
     /// `ITy::Sel` nodes the value machine evaluated
     /// (`docs/elaborator/intro-by-type-design.md` §3.3, §3.7). Every conversion miss
     /// and every view of a selection re-evaluates the description's chain in
     /// a fresh per-query arena — linear in the nesting, against the
-    /// rewriter's `3.5ⁿ` per query, but paid again per query. Whether that
-    /// re-evaluation dominates is the number stage 2 reads out of this
-    /// column beside `conv_misses`; the fix, if it does, is a
-    /// declaration-scoped memo, which is a design of its own and not a thing
-    /// to slip in.
+    /// rewriter's `3.5ⁿ` per query, but paid again per query. Read beside
+    /// `conv_misses`: if the re-evaluation dominates, the fix is a
+    /// declaration-scoped memo.
     sel_evals,
     /// Selections **spelled** — `Tc::materialize` calls
     /// (`docs/elaborator/intro-by-type-design.md` §3.5). This is the rewriter running
-    /// on an `@`-derived type, i.e. exactly the exponential object the round
-    /// exists to stop building, and it is a counter rather than a comment so
-    /// that a workload reaching it is seen and not guessed. The four λ
-    /// inference arms and the non-Π/Σ/sum branch of `Tc::view` are its only
-    /// callers.
+    /// on an `@`-derived type, the exponential object descriptions avoid,
+    /// so a workload reaching it is seen and not guessed. Called from
+    /// `Tc::tm_infer_syn` (the λ inference arms), `Tc::whnf` of a
+    /// description, and the refusal note.
     ity_materialized,
 }

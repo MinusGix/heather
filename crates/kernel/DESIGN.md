@@ -822,7 +822,7 @@ paper too).
   pairs whose footprint it has asked. The table is bounded and never
   evicts, so within a gate a judgment never costs more later than it did
   earlier, which the checker's own memos rely on when a debug build judges
-  a kept pair again. A debug build also judges a sampled hit of this table
+  a kept pair again. A debug build also judges a hit of this table
   again without it.
 - **δ is glued.** A `u^δ` evaluates to a neutral carrying a memoized
   `unfold` thunk, `Some` exactly when Ψ defines `u`. The δ-lazy order is

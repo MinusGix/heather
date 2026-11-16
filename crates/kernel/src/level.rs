@@ -337,8 +337,8 @@ impl Level {
         c.finish()
     }
 
-    /// `a ⊔ b`; the same as [`Level::max`]. The name the inference sites
-    /// use, from when `max` preserved a spelling and this one shrank it.
+    /// `a ⊔ b`; the same as [`Level::max`], under the name the inference
+    /// sites use (`issues/kernel-vestigial-apis.md`).
     pub fn join(a: Level, b: Level) -> Level {
         Level::max(a, b)
     }

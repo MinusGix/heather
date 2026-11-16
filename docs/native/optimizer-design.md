@@ -299,8 +299,61 @@ first and the last byte inside the span, which is what the tests of the
 byte loads said before they went: the comparison of the base and that of
 the last byte's index stay, each with its bit written after it (§5.1), and
 the comparisons of the bytes between are dropped with their sums once no
-load reads them. A store of a word is the same design with a law for
-lending a span to a store of several bytes, which is not chosen yet.
+load reads them.
+
+### 4.2 Bytes stored from a word: one store
+
+A word stored a byte at a time is the same design turned round, with
+facts of its own (`function_ir_replay.hthr`, `function_ir_rules.hthr`
+rules 40 to 43):
+
+> `Low(x, w, sh)`: the low byte of `x` is the low byte of `w` shifted
+> right by `sh`. `Split(v, x0, x1, x2, x3)`: the four bytes of the 32-bit
+> word `v`, the lowest first, are the low bytes of `x0` to `x3`.
+
+- A word narrowed to a byte and widened keeps its low byte (40), and a
+  shift right under it adds to the shift (41).
+- Bytes at shifts 24, 16, 8 and 0 of `w` are the split of the swapped low
+  half of `w` (42), and at 0, 8, 16 and 24 of the half itself (43).
+
+A store differs from a load in what lies between: the stores change the
+buffer, so the four cannot be checked one at a time against a fact about
+it. The replayer holds them back instead (`Step::Holding`): a node that
+touches no buffer computes the same before a store as after it, so the
+stores of a run of pure nodes may all be written at the run's end, and
+there they are paid as they were or, where the facts have the split and
+the indexes `i, i+1, i+2, i+3` as numbers, as one `WideStore(4, …)`
+(`Paid::Together`, `Four::stores_word`). The wide store takes the place of
+a load of four bytes at the first index that must follow the stores: the
+load's equation is what the store leaves, so the store's output is the
+load's word and nothing after it changes. The run is a flat one, a
+composition of leaves with no ports, replayed as one list of nodes and cut
+again into leaves (`Plan::Flat`), so that the wide store is last in its
+leaf with the half and its swap before it, which the lowering asks
+(`Lowered::wide_store_at`: the index tested below the length and some
+`index + 3` too, over the k-byte lending laws).
+
+The compiler's moves are those of the load (`function_ir_optimize.hthr`):
+`find_stores` puts the half, its swap and the load after the fourth store
+(`Sites::Put`); `find_paid` is the replay, its derivations those above and
+the indexes' row from each index's test against the length (rules 20, 27,
+28 and 24, as the load's join reads them); then the walks sweep the
+shifts and narrowings, drop the tests of the three indexes no access
+reads, and read through. A group at a time, as long as one is found. The
+search is a recognizer of its own, not a part of the walk that keeps
+ranges: what it needs of the indexes is the tests the walk already left
+written.
+
+A word loaded big-endian and stored big-endian is swapped twice: `BSWAP`
+after the load, widened, narrowed again and swapped before the store. Rule
+44 says the second swap is the word loaded (a 32-bit word widened and
+narrowed is itself, and a swap of a swap is the word), and the walk that
+decides tests writes it as a move (`Seen::replaced`); reading through
+gives the store the load's word, and the sweep takes both swaps. A copy
+of a word between big-endian spans is one load and one store.
+
+Four stores whose run is not flat to the end of its composition, or two
+groups whose runs overlap, are left as they are.
 
 ## 5. Requests: asking for a proof
 
@@ -606,7 +659,7 @@ by hand for speed: it is the dogfood for these steps (Minus 2026-11-14).
 | 2, the replayer | built: `function_ir_replay.hthr`, rules in `function_ir_rules.hthr`; the folding pass is not yet restated as rules |
 | 3, inline | built, and run by `compile-x86`: §9.1 |
 | 4, requests | built for ranges, with the answers In scope, Decided and Tested: §5.1, §9.1. Required, and a range of a word a loop changes, are not |
-| 5, memory rules and the word load | built for loads: a narrowing within its range is a move; loads since the last store are facts; orders between words decide the tests of a word's bytes under one test at the entry; bytes joined into a word are one load (§3.2, §4.1, §5.1, §9.1). The word store waits on a lending law for stores of several bytes; a store that passes a load, and a store after a store, are not built |
+| 5, memory rules and the word load | built for loads: a narrowing within its range is a move; loads since the last store are facts; orders between words decide the tests of a word's bytes under one test at the entry; bytes joined into a word are one load (§3.2, §4.1, §5.1, §9.1). Built for stores: four byte stores of a word's bytes at indexes in a row are one store, held back past the pure nodes between them (§4.2). A store that passes a load, and the two swaps of a word copied big-endian, are not built |
 | 6 and 7 | not built |
 
 ### 9.1 What is built, as built
@@ -755,7 +808,8 @@ checks it needs are of the program made, the run is the published one's.
   widened after it is one of two arms' values: it goes when the test does
   (the loop law, or Required), or with a rule that widens a port, which is
   not built. Before a byte store, the word narrowed is any word and the
-  store reads its low byte alone: that goes with the word store (step 5).
+  store reads its low byte alone: four of them go with the word store
+  (§4.2).
 - The planner and the emission cost a function more than in proportion to
   its size, and the largest function sets the compile's peak memory
   (issues/compile-x86-address-space-margin.md). A kept function is
@@ -798,6 +852,14 @@ sweep once more, which drops the comparisons no access reads any more. It
 keeps the result where the lowering takes it and the function before it
 where not.
 
+The word store (§4.2) runs after it, with the same keep-where-lowered
+rule. On SHA-256's compression every group of four byte stores becomes one
+store (the moves of the working variables and the words a block stores),
+which removes about three in ten of the instructions a block runs: the
+stores themselves, and the shifts, narrowings, sums and tests that fed
+them. The scanner's token records are stored the same way and gain about
+a fifth.
+
 That reaches the loader and each function it is inlined into at an index
 that is a word. Two places it did not reach, and what does (rules 34 to
 39). A word read at a constant offset: its bytes' indexes are the constant
@@ -831,7 +893,7 @@ manual does).
 | Instruction and forms | Used by | Model | Checked how |
 |---|---|---|---|
 | `MOV r32, [base]` (REX `8B /r`, every base and destination; SIB for RSP and R12, a zero displacement for RBP and R13) | a load of four bytes from a lent span (`WideLoad(4, …)`), step 5 | `DwordLoad`, `DwordLoadStep` (`x86_64_data_read.hthr`): four bytes read low first, the destination's upper half cleared, no flag changed; all four addresses below the canonical boundary | SDM Vol. 2B, MOV. Bytes of all 256 forms equal to `as`'s under `{rex}`. On the processor: edge and random operands, the destination holding other bits before, RSP-class and RBP-class bases, flags read back unchanged |
-| `MOV [base], r32` (REX `89 /r`, every plain base and source) | a store of four bytes (`WideStore(4, …)`); the lowering does not emit it until the lending law for such stores is chosen | `DwordStore`, `dword_store_step` (`x86_64_store.hthr`): the source's low four bytes written low first, nothing else | SDM Vol. 2B, MOV. Bytes of all 192 forms equal to `as`'s. On the processor: the four bytes and the twenty around them compared, flags unchanged |
+| `MOV [base], r32` (REX `89 /r`, every plain base and source) | a store of four bytes (`WideStore(4, …)`), over the k-byte lending laws; the optimizer's word store (§4.2) | `DwordStore`, `dword_store_step` (`x86_64_store.hthr`): the source's low four bytes written low first, nothing else | SDM Vol. 2B, MOV. Bytes of all 192 forms equal to `as`'s. On the processor: the four bytes and the twenty around them compared, flags unchanged |
 | `BSWAP r32` (REX `0F C8+rd`, every register) | the swap after a load of a big-endian word (`ByteSwap(32, …)`) | `Bswap32`, `bswap32_value` (`x86_64.hthr`): the low four bytes reversed, the upper half cleared, no flag changed | SDM Vol. 2A, BSWAP. Bytes of all 16 forms equal to `as`'s. On the processor: edge and random operands with the upper half set, a register past R8, flags unchanged |
 | `MOV r64, [base + index*8]` (REX.W `8B /r` with a SIB byte; no RBP or R13 base, no RSP index) | a read of a constant table placed in the code (`TableRead`), the constant-tables pull request | `IndexedWordLoad`, `IndexedWordLoadStep` (`x86_64_data_read.hthr`): eight bytes read at the base and the index shifted by three, added as words; no flag changed | SDM Vol. 2B, MOV, and Vol. 2A §2.1.5 for the SIB byte. Bytes of all 3,360 forms equal to `as`'s. On the processor: random indexes, an index with high bits set and a negative one (the sum wraps as the model's does), R12 as base with R13 as index, flags unchanged |
 | `CMP r64, imm8` (REX.W `83 /7 ib`, every register) | a branch on a comparison against a constant that fits the sign-extended byte (`CmpRight::RightImm8`, `File::cmp_right`), the compare-fusion pull request | `CmpRI8`, `execute_cmp_immediate` (`x86_64.hthr`): the flags are `sub_flags` of the register and the immediate sign-extended to 64 bits; no register changed | SDM Vol. 2A, CMP. Bytes of all 16 forms, at a positive and a negative immediate, equal to `as`'s. On the processor: six edge immediates against twelve edge operands, ten random immediates, 640,192 random operands; CF, PF, AF, ZF, SF and OF read back by PUSHFQ |

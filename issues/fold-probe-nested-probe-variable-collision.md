@@ -66,3 +66,4 @@ Found by the kernel comment audit (2026-11-15).
 
 - 2026-11-15: filed.
 - 2026-11-16: Fixed: each running probe takes the block of reserved levels at its depth (`Eval::probing`, `probe_level`), shared by `probe.rs` and `transduce.rs`; the repro is `outer_three`/`outer_three_zero` in `lib/_tests/std/num/nat_tests.hthr`.
+- 2026-11-16: Found by [[kernel-comment-audit]], which tracks the rest of the comment work.
