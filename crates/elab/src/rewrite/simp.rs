@@ -68,6 +68,14 @@ struct Rule<'x> {
     /// are unfolded as the goal is computed, and it never fires as a
     /// rewrite.
     unfold: Option<usize>,
+    /// A generated branch equation (`clamp::True`) a named definition
+    /// brought: each binder its left side leaves open is a test hypothesis.
+    branch: bool,
+    /// A measured (`decreases`) definition whose branch equations stand in
+    /// for its body: its calls are not unfolded, as its body is a
+    /// well-founded recursion's (`f#body(…, f#rec(…))`) that no law reads
+    /// and no proof should meet.
+    kept: bool,
 }
 
 /// One step taken: what `rewrite` needs to build its proof.
@@ -161,12 +169,79 @@ impl Simps<'_> {
                 span,
             });
         }
+        // A definition named to unfold brings its branch equations
+        // (`clamp::True`, `clamp::False::True`, …) as laws: a call whose
+        // test the context decides takes that branch, its side condition
+        // discharged like any law's, and a call whose test nothing decides
+        // is unfolded as before (docs/tactics/program-proof-tactics-design.md §3 D).
+        let mut branches: Vec<(Expr, String)> = Vec::new();
         let mut rules = Vec::with_capacity(args.len());
         for (i, h) in args.iter().enumerate() {
             let (proof, ty, _) = self.elab_infer(cx, h)?;
-            rules.push(self.law(cx, form, h, rule_name(h, i), proof, ty)?);
+            let mut rule = self.law(cx, form, h, rule_name(h, i), proof, ty)?;
+            if let Some(abs) = rule.unfold {
+                let (found, measured) = self.branch_equation_names(abs, h.span);
+                rule.kept = measured && !found.is_empty();
+                branches.extend(found);
+            }
+            rules.push(rule);
+        }
+        for (e, designed) in &branches {
+            let Ok((proof, ty, _)) = self.elab_infer(cx, e) else { continue };
+            rules.push(Rule { expr: e, proof, ty, name: format!("`{designed}`"), iff: false, unfold: None, branch: true, kept: false });
         }
         self.run_simp(cx, form, show, &rules, discharge, then, using, goal, lvl, span)
+    }
+
+    /// The generated branch equations of the definition at Ψ position
+    /// `abs`, each as a reference to its minted global and its designed
+    /// spelling (`f::False::True`): every path of `True`/`False` and of the
+    /// first test's constructor arms that names one, to the depth a body of
+    /// nested tests reaches. With them, whether the definition is measured
+    /// (`decreases`).
+    fn branch_equation_names(&self, abs: usize, span: Span) -> (Vec<(Expr, String)>, bool) {
+        let Some(key) = self.names.global_name_at(abs as u32).map(str::to_string) else { return (Vec::new(), false) };
+        let decl = match key.split_once("::") {
+            Some((module, name)) => self.names.surface_decl_in(module, name),
+            None => self.names.surface_decl(&key),
+        }
+        .cloned();
+        // A measured definition is registered as its lowering (a call of
+        // its `#rec`), which says nothing of its tests: it is known by its
+        // `f_unfold`, and its equations by their minted names alone.
+        let measured = self.names.global(&crate::measure::unfold_name(&key)).is_some();
+        if !measured && decl.as_ref().is_some_and(|decl| !crate::branch_equations::candidate(decl)) {
+            return (Vec::new(), false);
+        }
+        let mut first: Vec<String> = vec!["True".into(), "False".into()];
+        if let Some(decl) = &decl {
+            for name in crate::branch_equations::head_names(decl) {
+                if let Some(arm) = name.rsplit("::").next()
+                    && !first.iter().any(|a| a == arm)
+                {
+                    first.push(arm.to_string());
+                }
+            }
+        }
+        let mut found = Vec::new();
+        let mut paths: Vec<Vec<String>> = first.into_iter().map(|arm| vec![arm]).collect();
+        while let Some(path) = paths.pop() {
+            let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+            let minted = crate::branch_equations::minted_name(&key, &segments);
+            if self.names.global(&minted).is_some() {
+                found.push((
+                    Expr { kind: ExprKind::Var(minted), span },
+                    crate::branch_equations::designed_name(key.split_once("::").map_or(key.as_str(), |(_, name)| name), &segments),
+                ));
+            } else if path.len() < 6 {
+                for arm in ["True", "False"] {
+                    let mut deeper = path.clone();
+                    deeper.push(arm.to_string());
+                    paths.push(deeper);
+                }
+            }
+        }
+        (found, measured)
     }
 
     /// The host's entry (`Req::Simp`, docs/tactics/simp-design.md §7): the goal
@@ -304,7 +379,7 @@ impl Simps<'_> {
             // `mut self` function returns) has a relation's shape and is
             // no relation: its values are not related by it.
             if Relation::of_type(self.0, &below, cur, h.span).is_none_or(|rel| matches!(*rel.carrier, Type::Ty(_))) {
-                return Ok(Rule { expr: h, proof, ty, name, iff, unfold: Some(abs) });
+                return Ok(Rule { expr: h, proof, ty, name, iff, unfold: Some(abs), branch: false, kept: false });
             }
         }
         if !iff && !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
@@ -318,7 +393,7 @@ impl Simps<'_> {
                 span: h.span,
             });
         }
-        Ok(Rule { expr: h, proof, ty, name, iff, unfold: None })
+        Ok(Rule { expr: h, proof, ty, name, iff, unfold: None, branch: false, kept: false })
     }
 
     /// The run and what closes it, for laws already elaborated.
@@ -415,9 +490,27 @@ impl Simps<'_> {
         discharge: Option<&Expr>,
         closing: Option<Span>,
     ) -> R<Run<'a>> {
-        let premise = |at: &Cx, ty: &Type, level: &Level| self.discharge(at, ty, level, discharge);
+        // Each side condition is discharged once per context: a call's
+        // branch equations share their tests' prefixes (`clamp::False::True`
+        // and `clamp::False::False` both ask `¬(x < lo)`), and the laws are
+        // tried at every step, so a discharger that fails (`bv_omega`
+        // searching for a contradiction) would otherwise fail again at each.
+        // Only at the call's own context: under a binder another subterm at
+        // the same depth may bind other locals.
+        let discharged: std::cell::RefCell<Vec<(Type, Level, Option<Term>)>> = std::cell::RefCell::new(Vec::new());
+        let premise = |at: &Cx, ty: &Type, level: &Level, _dependent: bool| {
+            let top = at.gamma.len() == cx.gamma.len();
+            if top && let Some((_, _, known)) = discharged.borrow().iter().find(|(t, l, _)| t == ty && l == level) {
+                return known.clone();
+            }
+            let found = self.discharge(at, ty, level, discharge);
+            if top {
+                discharged.borrow_mut().push((ty.clone(), level.clone(), found.clone()));
+            }
+            found
+        };
         let mut run = Run { steps: Vec::new(), end: start.clone(), blocked: Vec::new(), exhausted: false, cycle: None };
-        let unfolds: Vec<usize> = rules.iter().filter_map(|rule| rule.unfold).collect();
+        let unfolds: Vec<usize> = rules.iter().filter(|rule| !rule.kept).filter_map(|rule| rule.unfold).collect();
         // An applied law's left side names its terms (`zeroed(R, 0, 64).hash`
         // names `R`, a call whose body would compute): they stay as written
         // while the goal computes, so the law can meet them. A call of a
@@ -438,6 +531,7 @@ impl Simps<'_> {
             })
             .collect();
         let mut seen = vec![start.clone()];
+        let mut unfolded_blocked: Vec<(usize, String)> = Vec::new();
         'steps: loop {
             if run.steps.len() >= BUDGET {
                 run.exhausted = true;
@@ -458,7 +552,18 @@ impl Simps<'_> {
                 // there, where the pattern children the computing names are
                 // what other laws meet.
                 for (i, rule) in rules.iter().enumerate() {
-                    if let Outcome::Fired(fired, next, sides) = self.fire(relations, cx, rule, &run.end, lvl, &premise)?
+                    let outcome = self.fire(relations, cx, rule, &run.end, lvl, &premise)?;
+                    // A branch equation blocked at the call, which the
+                    // computing then unfolds: why its branch was not taken
+                    // is what a failing report needs, and the normal form
+                    // no longer holds the call to say it.
+                    if rule.branch
+                        && let Outcome::Blocked(why) = &outcome
+                        && !unfolded_blocked.iter().any(|(j, _)| *j == i)
+                    {
+                        unfolded_blocked.push((i, format!("{why} (at the call, which was then unfolded)")));
+                    }
+                    if let Outcome::Fired(fired, next, sides) = outcome
                         && !matches!(self.fire(relations, cx, rule, &computed, lvl, &premise)?, Outcome::Fired(..))
                     {
                         run.steps.push(Step { rule: i, fired, sides });
@@ -499,6 +604,11 @@ impl Simps<'_> {
                 }
             }
             // What is blocked at the normal form is what the report is about.
+            for (i, why) in &unfolded_blocked {
+                if !blocked.iter().any(|(j, _)| j == i) {
+                    blocked.push((*i, why.clone()));
+                }
+            }
             run.blocked = blocked;
             return Ok(run);
         }
@@ -533,6 +643,15 @@ impl Simps<'_> {
         if rule.unfold.is_some() {
             return Ok(Outcome::Miss);
         }
+        // A side condition a later binder depends on is discharged only for
+        // a definition's branch equation, where every binder matching leaves
+        // open is the test the branch takes (`below: at < 64`, which the
+        // arm passes on as its index's bound). Elsewhere such a binder may
+        // be data, which no discharger should pick.
+        let branch = rule.branch;
+        let premise = &|at: &Cx, ty: &Type, level: &Level, dependent: bool| {
+            if dependent && !branch { None } else { premise(at, ty, level, dependent) }
+        };
         let direct = self.fire_at(relations, cx, rule, ty, lvl, premise)?;
         if rule.iff || matches!(direct, Outcome::Fired(..)) {
             return Ok(direct);
@@ -545,6 +664,8 @@ impl Simps<'_> {
                 name: rule.name.clone(),
                 iff: false,
                 unfold: None,
+                branch: rule.branch,
+                kept: false,
             };
             let relations = Relations(self.0);
             Ok(match self.fire_at(&relations, at, &deep, operand, level, premise)? {
@@ -789,7 +910,8 @@ impl Simps<'_> {
         }
         let by = by?;
         let mark = self.attempt.mark();
-        match self.elab_check(cx, by, ty, level) {
+        let attempt = self.elab_check(cx, by, ty, level);
+        match attempt {
             Ok(proof) if self.checks(cx, &proof, ty, level) => Some(proof),
             _ => {
                 self.attempt.restore(mark);
@@ -800,7 +922,9 @@ impl Simps<'_> {
 
     fn checks(&self, cx: &Cx, t: &Term, ty: &Type, level: &Level) -> bool {
         crate::stats::timed(crate::stats::Timer::KernelGate, || {
-            self.kernel_check_term(self.semantic_oracle().world(), Layer::Prog, &cx.gamma, t, ty, level).is_ok()
+            // The goal region's Ψ: a discharger that is a tactic (`bv_omega`)
+            // states its lemmas there.
+            self.kernel_check_term(&self.goal_psi(), Layer::Prog, &cx.gamma, t, ty, level).is_ok()
         })
     }
 

@@ -19,7 +19,7 @@ theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, c
     lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
-    code.Computes(machine, f, arguments, program_eval(functions, f, arguments))
+    code.Computes(machine, f, stack_room(functions, f), arguments, program_eval(functions, f, arguments))
 ```
 
 In words: **whenever the lowering accepts a program, the code of each of its
@@ -27,15 +27,16 @@ functions computes what the program's evaluator says that function returns,
 for every argument list of its arity, on every machine, wherever the code is
 loaded.**
 
-`code.Computes(machine, f, arguments, answer)` is `code.Returns(machine,
-origin, last, f, arguments, answer)` at every load address `origin` and every
+`code.Computes(machine, f, room, arguments, answer)` is `code.Returns(machine,
+origin, last, f, room, arguments, answer)` at every load address `origin` and every
 run of bytes `last` after the code, and `Prog::Returns` is the contract a
 System V caller relies on. Entered at function `f`'s label with
 
 - the arguments in RDI, RSI, RDX, RCX, R8, R9, and past the sixth on the
   stack just above the return address (`Stack::Passed`), and
-- `stack_room(f)` bytes of stack below the return address (136 a level, for
-  the function and every function it may call),
+- `room` bytes of stack below the return address; the theorem gives it as
+  `stack_room(functions, f)`, 136 bytes a level: one for the function's own
+  frame and one for each level of calls nested below it,
 
 the machine runs to the return address and arrives there with
 
@@ -51,7 +52,12 @@ The statement is total correctness. It says a run exists and ends at the
 return address, not only that it ends there if it ends.
 
 Two premises are about the program, and both are checked by evaluation.
-`lowered` is the lowering's own result. `evaluable` says every node is one
+`lowered` is the lowering's own result, which includes the stack's
+accounting: the lowering computes from the program how deep each
+function's calls go (`program_depths`, a function's depth one more than its
+deepest callee's) and refuses a program whose calls do not respect that
+table (`program_shallow`), so a function that calls nothing asks for 136
+bytes wherever it sits in the program. `evaluable` says every node is one
 the evaluator gives a meaning to, and every call is to an earlier function
 with the right number of arguments. The `placement` (which register holds
 which value) comes from the planner, which is not trusted: the theorem holds
@@ -86,7 +92,7 @@ theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, 
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
     agrees: program_eval(functions, f, arguments) = value):
-    code.Computes(machine, f, arguments, value)
+    code.Computes(machine, f, stack_room(functions, f), arguments, value)
 ```
 
 At `clamp` it reads: **the bytes `compile-x86` wrote, called as a C function
@@ -102,7 +108,7 @@ The certificate states its theorem through the same names. For
 
 ```heather
 theorem sha256_t2_native_returns<M>(machine: Machine<M>, a0, a1, a2: BitVec(64)):
-    sha256_t2_native_code().Computes(machine, 0, [a0, a1, a2], sha256_round::sha256_t2(a0, a1, a2)) {
+    sha256_t2_native_code().Computes(machine, 0, 136, [a0, a1, a2], sha256_round::sha256_t2(a0, a1, a2)) {
     compiled_computes<M>(sha256_t2_native_program(), sha256_t2_native_placement(), sha256_t2_native_code(),
         sha256_t2_native_lowers(), sha256_t2_native_evaluable(), machine, 0, trivial, [a0, a1, a2], trivial,
         sha256_round::sha256_t2(a0, a1, a2), sha256_t2_native_agrees(a0, a1, a2))
@@ -117,14 +123,14 @@ line:
 
 ```heather
 theorem sha256_t2_native_implements<M>(machine: Machine<M>):
-    sha256_t2_native_code().Implements(machine, 0, 3, sha256_round::sha256_t2) {
+    sha256_t2_native_code().Implements(machine, 0, 136, 3, sha256_round::sha256_t2) {
     λ a0 a1 a2 => sha256_t2_native_returns<M>(machine, a0, a1, a2)
 }
 ```
 
-`code.Implements(machine, f, n, spec)` takes the source function curried, a
+`code.Implements(machine, f, room, n, spec)` takes the source function curried, a
 value of `Words(n)` (`BitVec(64) → … → BitVec(64)`), and unfolds to
-`(a0: BitVec(64)) → … → code.Computes(machine, f, [a0, …], spec(a0, …))`.
+`(a0: BitVec(64)) → … → code.Computes(machine, f, room, [a0, …], spec(a0, …))`.
 `Prog::implements_at` and `Prog::implements_of` go between it and
 `Computes` at a list of `n` words, and `compiled_implements` is the
 compiler's theorem in this form, from an agreement at every list of `n`
@@ -167,11 +173,11 @@ a `Slice` is where a span lies and the bytes it holds, a `Borrow` is a
 slice lent `Shared` or `Mut` (Rust's `&[u8]` and `&mut [u8]`), and
 
 ```heather
-code.ComputesOn(machine, f, borrows, words, answer, leaves)
+code.ComputesOn(machine, f, room, borrows, words, answer, leaves)
 ```
 
-says that function `f`, called with each borrowed slice's address and
-length and then `words`, returns `answer` and leaves the bytes `leaves` in
+says that function `f`, called with `room` bytes of stack, each borrowed
+slice's address and length and then `words`, returns `answer` and leaves the bytes `leaves` in
 the slices, storing nowhere but its own stack room and the `Mut` slices,
 wherever the code is loaded and wherever the slices lie that the loan's
 laws hold (`Machine::Lends`). The addresses, the file, the marks and the
@@ -186,7 +192,7 @@ from: u64)`, the certificate reads:
 
 ```heather
 theorem copy_span_native_returns<M>(machine: Machine<M>, s0, s1: Slice, a4, a5: BitVec(64)):
-    copy_span_native_code().ComputesInto(machine, 0, [Mut(s0), Shared(s1)], [a4, a5],
+    copy_span_native_code().ComputesInto(machine, 0, 136, [Mut(s0), Shared(s1)], [a4, a5],
         native_tool_spans::copy_span(s0.bytes, s0.length(), s1.bytes, s1.length(), a4, a5))
 ```
 
@@ -225,8 +231,8 @@ Beyond the kernel, the theorem rests on these:
   slice is what makes them true; it is not proved.
 - **The caller's half of the contract.** The code must be resident (the
   theorem is about a machine that holds those bytes at `origin`), entered at
-  the label, with the arguments passed and `stack_room(f)` bytes below the
-  return address. Rust's generated declarations (`crates/linked/generated/exports.rs`)
+  the label, with the arguments passed and the room its theorem states
+  below the return address. Rust's generated declarations (`crates/linked/generated/exports.rs`)
   state the room as `STACK:` and declare the functions of words `safe`; that
   a Rust thread's stack has that room is assumed, not checked.
 - **Printing the bytes.** The certificate proves the code assembles to a

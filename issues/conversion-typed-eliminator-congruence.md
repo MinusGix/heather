@@ -1,10 +1,10 @@
 ---
 title: Typed neutral congruence for the eliminators: stop re-comparing annotations well-typedness forces
-status: open
+status: closed
 labels: [kernel,conversion,performance,design]
 area: kernel
 created: 2026-09-06
-updated: 2026-10-20
+updated: 2026-11-16
 ---
 
 The 2026-09-06 round made conversion's `app`/`fst`/`snd` neutral rules
@@ -60,3 +60,4 @@ relational-context certificates — is the shape that pays.
 - 2026-10-20: **Landed for `case`, `elim_W`, `elim_Wf` and `J`** (crates/kernel/src/conv.rs, `Conv::tm_ne`). Each arm compares the motive's level, the motive, the branches/step and the scrutinees, and none of what the scrutinee's type forces: `case`'s and `elim_W`'s `A`/`B`, `elim_Wf`'s shape and arity, `J`'s `A`/`a`/`u`, levels included. Motives and branches are compared in the left elimination's stored telescope (the formalization's choice), so no type is read off the scrutinee. `elim_Nat` had nothing forced. `transp` is left as is: its proof is irrelevant and never compared, so no scrutinee forces `I`/`a`/`b`. `elim_IWf` landed typed from the start with `IWf` (heather#79; its entry below). **The scrutinees stay last**: comparing them first ran `function_ir_recursive_certificates::an_immediate_add_certifies_at_its_sign_extension` out of fuel, and the original order passes it. Tests: `crates/kernel/tests/conv_elim_congruence.rs` (each eliminator at a neutral and a literal scrutinee, forced annotations spelled `El «Nat»` / `(λx. x) 0` / `0 ⊔ 0` on the right, and negative controls: a differing branch, a differing scrutinee, a motive that agrees with `Nat` on every constructor but not on the neutral). A fuel pin asserts the differently spelled pair converts in the budget of two identical ones; it fails on the old arms. `scripts/perf ab --base origin/master` on `tree_list_set_transfer`, `list_setoid`, `algebra_rel` (3 samples, load average 3.3 on 4 CPUs, so the seconds are weak): **counters**: `eval_drives` −24.3 % / −17.4 % / −17.7 %, `eval_steps` −10 of ~10⁵, conversion query and miss counts identical. **Seconds**: kernel gate −10.7 % / −12.0 % / −14.2 %, separate on two of the three files, wall inside the spread. DESIGN.md's Algorithms bullet now covers the eliminators.
 - 2026-10-20: The kernel's `elim_IWf` neutral arm (`conv.rs`, landed with `IWf`, [[iwf-former]]) takes the 2026-10-20 entry at its word. It compares the scrutinees as neutrals, the motive's level, the motive and the step, and not the ih types, the signature or the index.
 - 2026-11-05: gardener: cites a file it shares with [[conv-query-identity-env-per-gamma]] (`crates/kernel/src/conv.rs`); [[emission-walker-residual-sites]] (`docs/elaborator/record-projection-reference-design.md`); [[indexed-families]] (`crates/kernel/src/conv.rs`); [[kernel-psi-bound-cache]] (`crates/kernel/src/reduce.rs`); [[reducer-step-frame-size]] (`crates/kernel/src/reduce.rs`).
+- 2026-11-16: closed in the kernel comment audit's citation sweep. Every acceptance item has landed (2026-10-20 entries): case, elim_W, elim_Wf and J compare only the motive's level, the motive, the branches and the scrutinees; elim_IWf landed typed and skips the IH types; DESIGN.md's Algorithms bullet covers the eliminators. The typing-side App twin (2026-09-16 entry) is a typing-rule change, not this issue's scope.

@@ -8,16 +8,16 @@
 //! copying a branch, which is what changes the exponent of
 //! `issues/whnf-sharing-term-growth.md`.
 //!
-//! It is **not wired into `conv.rs`**: stage 1 of the round lands the domain
-//! and the machine, differentially tested against the rewriter
-//! (`tests/eval_differential.rs`); stage 2b switches conversion over.
+//! Conversion runs on it (`conv/dom/values.rs`). `reduce.rs` stays the
+//! specification, and `tests/eval_differential.rs` holds the two to the same
+//! answers.
 //!
 //! What it shares rather than transcribes:
 //!
-//! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the ~1300-line code
-//!   recursor β. The evaluator hands the box's payload to the *existing*
-//!   function, receives the fired branch as **syntax**, and evaluates it. The
-//!   65 branch telescopes are not written down a sixth time.
+//! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the code recursor
+//!   β. The evaluator hands the box's payload to the *existing* function,
+//!   receives the fired branch as **syntax**, and evaluates it, so the 65
+//!   branch telescopes are not written down again.
 //! - [`crate::term::nth`] and the `elim_W`/`elim_Wf` ih λs, which are built
 //!   from the same syntax `reduce.rs` builds — see [`Eval::fire_elim_w`].
 //! - [`crate::reduce::step_type_delta`], for the one annotation that lives in
@@ -262,7 +262,7 @@ pub struct Eval<'a, 'v> {
     /// Borrowed from the arena and handed back, emptied, when the run is
     /// dropped ([`ValueArena::lend_frames`]): conversion makes a run per
     /// evaluation it asks for, many a query, and each one's first frame
-    /// was otherwise an allocation of its own.
+    /// would otherwise be an allocation of its own.
     frames: Vec<Frame<'v>>,
     /// Native frames already standing under this machine: one per live
     /// re-entry of [`Eval::drive`], plus whatever the caller reserved with
@@ -274,10 +274,9 @@ pub struct Eval<'a, 'v> {
     /// value ([`Eval::delta_whnf`]). An eliminator stuck on a glued
     /// scrutinee then unfolds the scrutinee and retries, instead of
     /// stalling as a spine for the caller to δ-step from the outside —
-    /// each such outside step replays the whole pending spine, which made
-    /// a structural consumer over a computed producer cubic in the width
-    /// (and, once the replays' throwaway memos evicted the shared ones,
-    /// exponential). The unfoldings performed are exactly those the outside
+    /// each such outside step replays the whole pending spine, which makes
+    /// a structural consumer over a computed producer cubic in the width.
+    /// The unfoldings performed are exactly those the outside
     /// loop would perform, in the same order, each charged one δ-step; only
     /// the replays are gone. Off by default: opaque evaluation is what the
     /// δ-lazy rendezvous in conversion needs (see `step_elim`).
@@ -379,7 +378,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// *something* proportional to the data keeps `eval_steps` an
     /// interpretable measure and keeps a pathological width from being free;
     /// charging at most what the structural path charged is what keeps a
-    /// verdict fuel allows today from becoming a refusal.
+    /// verdict the structural path reaches from becoming a refusal.
     fn spend_n(&mut self, n: u64) -> Res<()> {
         if self.fuel < n {
             self.fuel = 0;
@@ -392,8 +391,9 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// A Γ of the right *shape* for the shared β helpers, which read only its
     /// length and base (`reduce.rs` module doc). The entry types are never
-    /// inspected, so a filler suffices — and building one is confined to the
-    /// code-recursor path, which is not the hot one.
+    /// inspected, so a filler suffices (`issues/kernel-filler-contexts.md`);
+    /// building one is confined to the code-recursor path, which is not the
+    /// hot one.
     fn scope(&self, env: &Env<'v>) -> LocalCtx {
         LocalCtx {
             base: self.base,
@@ -417,8 +417,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// steps* rather than to the term's depth, and a divergent term would
     /// then abort the process instead of returning [`OutOfFuel`] — turning
     /// the fuel policy, which exists to make the checker total on ill-typed
-    /// input, into a crash. (Measured, 2026-07-31: Ω under a 500-step budget
-    /// overflowed an 8 MiB stack.)
+    /// input, into a crash (Ω under a small budget overflows the stack).
     ///
     /// So the tail positions are *returned* as [`Work`] and spent here, and
     /// the two places a result has to flow back into something — a thunk
@@ -653,12 +652,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `meet_on_the_way`) forces the glued unfoldings the transparent run
     /// that follows will read, and forced opaquely they hold eliminators
     /// stuck on glued scrutinees that the run must replay. That costs work,
-    /// not correctness, and enough of it to run `rt_lower_tests`'s
-    /// `spread_agrees` out of fuel. #459 found the step refusing a
-    /// convertible pair instead: the cause was a withheld call judged open
-    /// at a lazily forced argument and memoized unglued, fixed where the
-    /// verdict is made ([`Eval::closed`],
-    /// `docs/kernel/kernel-implicit-state-review.md` §1).
+    /// not correctness, and enough of it to run a library test out of fuel.
     pub fn delta_step_transparent(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = self.delta_step(v);
@@ -694,9 +688,6 @@ impl<'a, 'v> Eval<'a, 'v> {
         out
     }
 
-    /// [`Eval::delta_step`] for types: advance exactly one definition in the
-    /// term at which an `El`, `Vec`, `Fin` or `DVec` is δ-stuck, then perform the
-    /// newly enabled non-δ type computation.
     /// Unfold a type value's definitions until its head is a former, or it
     /// is stuck on something δ cannot move.
     ///
@@ -704,9 +695,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// for exactly one customer: the checked spellings
     /// (`docs/elaborator/intro-by-type-design.md`), whose single annotation is the
     /// *un-reduced* type the elaborator had. Evaluating one means exposing
-    /// that type's head former and reading the component closures off it —
-    /// which is where the sharing this round is about comes from, because the
-    /// components are closures over an environment and are never copied.
+    /// that type's head former and reading the component closures off it,
+    /// which share rather than copy: the components are closures over an
+    /// environment.
     pub fn ty_to_former(&mut self, mut v: &'v VTy<'v>) -> Res<&'v VTy<'v>> {
         while matches!(&*v, VTy::Neutral(_)) {
             let d = self.delta_step_ty(v)?;
@@ -718,6 +709,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         Ok(v)
     }
 
+    /// [`Eval::delta_step`] for types: advance exactly one definition in the
+    /// term at which an `El`, `Vec`, `Fin` or `DVec` is δ-stuck, then perform the
+    /// newly enabled non-δ type computation.
     pub fn delta_step_ty(&mut self, v: &'v VTy<'v>) -> Res<&'v VTy<'v>> {
         enum Next<'v> {
             Done,
@@ -1254,8 +1248,8 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// [`Eval::eval_tm`] on a node the caller does not own — the **root** of a
     /// conversion, which is syntax lent to the checker. Wrapping it in an
-    /// `Rc` just to start the machine cost 1.3× on `nat/check-numeral`, whose
-    /// every conversion is one `Nat ≈ Nat`.
+    /// `Rc` just to start the machine is a visible cost when every conversion
+    /// is as small as `Nat ≈ Nat`.
     pub fn eval_tm_ref(&mut self, t: &Term, env: &Env<'v>) -> Res<&'v Val<'v>> {
         // The first step may leave its elimination waiting on the frame
         // stack ([`Eval::await_bound`]), so the drive's floor is taken
@@ -1280,8 +1274,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// This is the shape of a tier-2 function child, whose tree and proof
     /// are `λy. fst(k y)` and `λy. snd(k y)` over one `k`
     /// (docs/inductives/inductive-tier2-w-lowering.md §6): without the sharing, every
-    /// read of a child evaluated `k y` twice, and a `bind` nested `d` deep to
-    /// the left evaluated its innermost tree `2^d` times
+    /// read of a child evaluates `k y` twice, and a `bind` nested `d` deep to
+    /// the left evaluates its innermost tree `2^d` times
     /// (issues/tier2-left-nested-bind-cost.md). Sound because evaluation is
     /// pure: the same closures applied give the same value, and only a
     /// success is remembered. Only a `k` that is a λ is shared: its
@@ -1394,8 +1388,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the previous alias's `c y` (docs/inductives/inductive-tier2-w-lowering.md §7),
     /// one link per request a tactic answers under a `bind`
     /// (issues/grind-unrelated-lemma-fuel.md). Forced natively, every link
-    /// re-entered `drive` and the chain was capped at `NATIVE_DEPTH_LIMIT`
-    /// links; waiting on the heap, its depth is the frame stack's. A head
+    /// would re-enter `drive` and the chain would be capped at
+    /// `NATIVE_DEPTH_LIMIT` links; waiting on the heap, its depth is the frame stack's. A head
     /// that is any other term still recurses natively, where its depth is
     /// the syntax's.
     fn await_bound(&mut self, head: &Rc<Term>, t: &Term, env: &Env<'v>) -> Option<Work<'v>> {
@@ -1578,9 +1572,8 @@ impl<'a, 'v> Eval<'a, 'v> {
             // (`eval/bits.rs`, `eval/transduce.rs`, `eval/runs.rs`) never
             // learn the spelling exists; `pair@(T;a;b)` and
             // `pair(x:S.U;a;b)` are the same value, so they convert with no
-            // new arm; and the components are the Σ value's own closures, so
-            // the object the elaborator used to *write out* is now shared
-            // rather than copied.
+            // new arm; and the components are the Σ value's own closures,
+            // shared rather than copied.
             //
             // An annotation whose head is not the expected former is
             // ill-typed. `eval` has one failure and it is `OutOfFuel` — "no
@@ -1588,9 +1581,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             // rejection belongs to the typing rule, which does its own whnf
             // and reports `HeadMismatch`.
             // The **unannotated** spelling is the one the elaborator writes
-            // at every inner layer, and it is the whole of the round's win:
-            // there is no type to evaluate, no Σ to force, and the value is
-            // the two field closures and nothing else.
+            // at every inner layer, and the cheap one: there is no type to
+            // evaluate, no Σ to force, and the value is the two field closures
+            // and nothing else.
             Term::PairAt { ty: None, fst, snd } => {
                 Val::Pair { ann: None, fst: tclo(env, fst), snd: tclo(env, snd) }
             }
@@ -2006,6 +1999,13 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
     }
 
+    /// `u^δ` alone, glued to its body when it has one: what evaluating
+    /// `Term::GlobalTm` produces, for a reader that holds the head of a
+    /// neutral and wants to apply it to arguments of its own.
+    pub fn global(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
+        self.global_tm(var, subst)
+    }
+
     /// `u^δ` as a glued neutral: `unfold` is `Some` exactly when `Defs` says
     /// `u` is a definition here, and it evaluates the (already rescoped) body
     /// under δ's **value** environment.
@@ -2014,13 +2014,6 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// abstract prefix of Δ to the abstract prefix of Γ identically, and
     /// `·_{g?}` targets an empty Δ, so past the payloads the lookup falls
     /// through to the same [`Head::BaseVar`] numbering either way.
-    /// `u^δ` alone, glued to its body when it has one: what evaluating
-    /// `Term::GlobalTm` produces, for a reader that holds the head of a
-    /// neutral and wants to apply it to arguments of its own.
-    pub fn global(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
-        self.global_tm(var, subst)
-    }
-
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
         // An occurrence whose δ does not fit the definition's context is
         // ill-typed and stays an unglued neutral (`Defs::fits`).
@@ -2043,9 +2036,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// (`Elim::unseals`): the same neutral, now glued to the proof applied to
     /// `a⃗`, so that the elimination about to be pushed extends a pending
     /// unfolding exactly as it would a definition's
-    /// (`issues/theorem-witness-unfolding.md`, option D). Until this moment
-    /// the neutral carried no unfolding at all, so no comparison could open
-    /// the proof of a bare `u a⃗`; and the proof counts as opened only once
+    /// (`issues/theorem-witness-unfolding.md`, option D). Before this the
+    /// neutral carries no unfolding at all, so no comparison can open the
+    /// proof of a bare `u a⃗`; and the proof counts as opened only once
     /// the glue is forced ([`ValueArena::mark_sealed`]). `None` when `n` is
     /// not such a neutral.
     #[inline(never)]
@@ -2150,16 +2143,14 @@ impl<'a, 'v> Eval<'a, 'v> {
         // than stalling as a spine for conversion to δ-step from the
         // outside one definition at a time (each such step replays the
         // whole pending spine, so a chain of `p + p` doublings under a
-        // literal consumer was cubic in the chain). Only these folds do
+        // literal consumer is cubic in the chain). Only these folds do
         // so: their scrutinee is closed arithmetic whenever the fold
         // can fire at all, and an open one stops at its variable. A
         // general match or recursor must NOT: the x86 decoder's
         // open-argument unfolding theorems meet at a *folded* scrutinee
         // (`match decode_opcode_direct(…)` on both sides), and unfolding
         // it eagerly exhausts fuel on the dispatch it hides.
-        // Only the `Nat` classes ask this: their scrutinee is closed
-        // arithmetic whenever the fold can fire at all. A width fold's
-        // scrutinee is the *width*, which reaches the eliminator as a
+        // A width fold's scrutinee is the *width*, which reaches the eliminator as a
         // literal; probing every glued-scrutinee fold for a transducer
         // costs a motive walk per occurrence and buys nothing.
         if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
@@ -2405,9 +2396,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// through a recursion is `next`, then `Succ(next)`: a chain of thunks,
     /// each forced to `Val::Succ` of the one before. A counter advanced by
     /// an addition is `next + k`: a run of `k` whose tail is the thunk of
-    /// the number before, itself such a run. A fold over either took a step
-    /// (or a round of the run machinery) per piece however its step
-    /// classified, where the same number written as a literal is one run
+    /// the number before, itself such a run. A fold over either would take a
+    /// step per piece however its step classified, where the same number written as a literal is one run
     /// (`issues/succ-chain-numbers-fold-unary.md`). Nothing here forces:
     /// the pieces are read as far as they have been forced already, so a
     /// fold that would not have looked below a predecessor still does not.
@@ -2627,7 +2617,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn push_elim(&mut self, n: &'v VNeutral<'v>, e: Elim<'v>) -> &'v Val<'v> {
         // The unfolding's elimination is the spine node's own: one cell,
-        // where the glue used to copy the elimination into a second.
+        // not a copy.
         let spine = self.arena.elim(n.spine, e);
         let unfold = match (n.unfold, spine.last()) {
             (Some(u), Some(e)) => Some(self.arena.tm(TmClo::elim(u, e))),
@@ -2639,7 +2629,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `elim_W (sup(…; a; f)) ⇝ s[a/a, f/f, (λ y. elim_W …(f y))/ih]`,
     /// with the ih held as [`Val::WIh`] rather than built as that λ's
     /// syntax. The syntax guards are [`w_ih_lam`](Eval::w_ih_lam)'s, kept
-    /// here so the β fires exactly when it did while the λ was eager.
+    /// here so the β fires exactly when building the λ would.
     #[inline(never)]
     fn fire_elim_w(
         &mut self,
@@ -2800,8 +2790,8 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λ i. elim_Wf(…; nth … cs i)]`,
     /// with the ih held as [`Val::WfIh`] rather than built as that λ's
-    /// syntax. The syntax guards are the ones the λ's construction had, kept
-    /// here so the β fires exactly when it did while the λ was eager.
+    /// syntax. The syntax guards are the ones the λ's construction has, kept
+    /// here so the β fires exactly when building the λ would.
     #[inline(never)]
     fn fire_elim_wf(
         &mut self,
@@ -2831,7 +2821,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// index (docs/kernel/iwf-former-design.md §4), with the ih held as
     /// [`Val::IWfIh`] rather than built as that λ's syntax. The syntax
     /// guards are [`iwf_ih_lam`](Eval::iwf_ih_lam)'s, kept here so the β
-    /// fires exactly when it did while the λ was eager.
+    /// fires exactly when building the λ would.
     #[inline(never)]
     fn fire_elim_iwf(
         &mut self,
@@ -3032,7 +3022,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the eliminator fires on that child, the λ's body without its syntax.
     /// Anything else — a neutral index, a stuck or glued tuple — applies the
     /// λ itself, so what `nth` does there (project a neutral tuple, stall on
-    /// a neutral index) is exactly what it did. One unit of fuel per
+    /// a neutral index) is unchanged. One unit of fuel per
     /// projection, never more than the `nth` reduction charged.
     #[inline(never)]
     fn wf_ih_apply(
@@ -3079,13 +3069,13 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// The child `ih i` recurses on when the tuple or the index is not
     /// canonical: `nth(Wf; n[a/x]; cs; i)`, to be evaluated and then
-    /// eliminated by `elim` itself. The λ this fallback used to build had
-    /// exactly this body, but around a copy of the eliminator's syntax
-    /// shifted under its three binders; applying that copy gave the
-    /// recursive call a fresh step, so two calls on the same neutral child —
-    /// one through the hypothesis, one through the definition the step came
-    /// from — no longer shared a closure and conversion compared the whole
-    /// case tree (issues/wide-inductive-lemma-quadratic-gate.md). Only the
+    /// eliminated by `elim` itself. Not the λ: its body is this, but around a
+    /// copy of the eliminator's syntax shifted under its three binders, and
+    /// applying that copy gives the recursive call a fresh step, so two calls
+    /// on the same neutral child — one through the hypothesis, one through the
+    /// definition the step came from — share no closure and conversion
+    /// compares the whole case tree
+    /// (issues/wide-inductive-lemma-quadratic-gate.md). Only the
     /// `nth` (the shape and the arity, both small) is spelled here; the
     /// guards are the λ's, so the call is stuck exactly where it was.
     fn wf_ih_child(
@@ -3612,7 +3602,7 @@ mod tests {
 
     /// A number advanced by additions is a run whose tail is the number
     /// before, itself such a run: a fold reads the forced tails as the one
-    /// run they spell, where it took a round of the run machinery a piece.
+    /// run they spell, not one pass of the run machinery a piece.
     #[test]
     fn a_run_over_forced_runs_folds_as_one_run() {
         let arena = ValueArena::new();

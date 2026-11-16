@@ -76,19 +76,19 @@
 //! 2. **Every claimed no-op is verified in debug builds.** `shared_ty`/
 //!    `shared_tm` `debug_assert!` full structural equality, so a hook that
 //!    forgets to `note()` — the one dangerous mistake here — fails the test
-//!    suite (which runs in the dev profile, including the 300-seed
-//!    substitution laws) instead of silently producing a wrong term in
+//!    suite (which runs in the dev profile, including the substitution laws
+//!    over generated terms) instead of silently producing a wrong term in
 //!    release. Over-reporting is merely slow, so hooks may be conservative;
 //!    under-reporting is caught.
 //!
 //! ## Skipping closed subtrees
 //!
-//! Sharing alone still *visited* every node, building a temporary from
-//! `Rc`-cloned children only to compare the counter and drop it — ~70% of
-//! what a substitution did was walking material that could not change
-//! (issues/subst-visits-closed-subtrees.md). The **local** operations now
+//! Sharing alone still *visits* every node, building a temporary from
+//! `Rc`-cloned children only to compare the counter and drop it — most of a
+//! substitution's work is walking material that cannot change
+//! (issues/subst-visits-closed-subtrees.md). So the **local** operations
 //! skip that walk: before descending, [`sub_ty`]/[`sub_tm`] ask the mapper
-//! ([`Mapper::skip_ty`]/[`skip_tm`]) whether the subtree is provably
+//! ([`Mapper::skip_ty`]/[`Mapper::skip_tm`]) whether the subtree is provably
 //! untouchable, and `ShiftLocal`/`SubstLocal` answer from per-node
 //! free-variable bounds (`bounds.rs`: 1 + the largest free local index,
 //! plus a "contains a substitution tail" flag — tails are rewritten even
@@ -100,15 +100,15 @@
 //! traversal is a no-op on that subtree, and **debug builds verify the
 //! claim** by running the real traversal and asserting nothing changed. A
 //! binder count in `bounds.rs` that drifts from this file's dep table fails
-//! the test suite (300-seed substitution laws included) instead of silently
-//! producing a wrong term in release.
+//! the test suite instead of silently producing a wrong term in release —
+//! for the skips the suite takes (`issues/kernel-binder-count-tables.md`).
 //!
 //! The **global** operations skip on the same terms
 //! (`issues/psi-references-by-level.md`). `ShiftGlobal` and `SubstGlobal`
 //! act on free global *variables* and nothing else, a constant being named
 //! from the start of Ψ, so a subtree with no free variable at or past the
-//! operation's depth is its own image. That bound is memoized like the local
-//! one, in a table of its own, but it is not a second copy of the dep table:
+//! operation's depth is its own image. That bound is kept like the local
+//! one, in the node's head, but it is not a second copy of the dep table:
 //! it is computed by this file's generic walk under a mapper that only looks
 //! ([`GlobalBound`]). What it prunes is nearly everything those two
 //! operations are applied to outside meta-level code, since a committed
@@ -118,9 +118,9 @@
 //!
 //! A subterm reachable along two paths (a `let` alias's value used twice,
 //! `elab`'s `fan` shape in `issues/proof-let-substitution-cost.md`) is one
-//! allocation, and the traversal used to rebuild it once per path: a shared
-//! DAG of `k` links came back from a shift as a tree of `2^k` nodes, and so
-//! did everything downstream of it — the typing memo of
+//! allocation, and a traversal that rebuilds it once per path turns a
+//! shared DAG of `k` links into a tree of `2^k` nodes, and everything
+//! downstream pays for it: the typing memo of
 //! `issues/kernel-typing-memo-on-node-identity.md` cannot share what the
 //! shift has already copied apart (`issues/subst-shared-node-memo.md`).
 //!
@@ -232,10 +232,9 @@ impl GlobalSubst {
 /// thousands. So the tables are made at the first node recorded (a mapper
 /// is built and dropped by every call, and a call that records nothing
 /// should pay for no table), and each is a [`FewMap`]: a call that stays
-/// small allocates nothing more and is dropped by dropping its entries.
-/// (The tables were hash tables kept in a per-thread pool; emptying one
-/// cost its capacity, which was the largest call's, on every call that
-/// recorded anything: `issues/per-call-memos-pay-table-capacity.md`.)
+/// small allocates nothing more and is dropped by dropping its entries,
+/// where a pooled hash table would cost its largest call's capacity on every
+/// call (`issues/per-call-memos-pay-table-capacity.md`).
 #[derive(Default)]
 struct NodeMemo {
     tables: Option<Box<NodeTables>>,
@@ -390,7 +389,7 @@ trait Mapper {
 /// The `debug_assert!` is the load-bearing part of the design: it verifies
 /// every claimed no-op by full structural equality, in the profile the tests
 /// run in. So an under-reported change — the one dangerous mistake a mapper
-/// hook can make — fails the suite (300-seed substitution laws included)
+/// hook can make — fails the suite (the substitution laws included)
 /// rather than silently producing a wrong term in release.
 fn shared_ty<M: Mapper>(orig: &Rc<Type>, mapped: Type) -> Rc<Type> {
     debug_assert!(
@@ -755,8 +754,8 @@ fn map_spine_node<M: Mapper>(t: &Term, m: &mut M, at: Depths, child: Rc<Term>) -
 }
 
 /// The motive/branch bundles of the code recursors, shared on the same rule.
-/// Worth their own functions rather than being inlined: `Branches` is 45
-/// terms under 45 telescopes, so sharing it unchanged is the single largest
+/// Worth their own functions rather than being inlined: `Branches` is 65
+/// terms under 65 telescopes, so sharing it unchanged is the single largest
 /// saving in the traversal.
 fn sub_motives<M: Mapper>(mo: &Rc<Motives>, m: &mut M, at: Depths) -> Rc<Motives> {
     let before = *m.changes();
@@ -2057,8 +2056,8 @@ impl Mapper for AbstractLocal<'_> {
         self.memo.as_mut()
     }
 
-    // The walk makes room for `z` as it goes ([`ShiftLocal`] by one), where
-    // it used to walk a weakened copy of the goal: one traversal and one
+    // The walk makes room for `z` as it goes ([`ShiftLocal`] by one) rather
+    // than walking a weakened copy of the goal: one traversal and one
     // result, and nothing built for the parts it can skip.
     fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
         (v.0 >= at.local).then(|| Term::var_rc(v.0 + 1))
@@ -2627,8 +2626,8 @@ impl LocalSubst {
 /// read, by construction.
 ///
 /// It walks one node: a child that is a term or a type is asked for through
-/// the memo ([`bounds::global_bound_term`]), which answers from its table or
-/// by running this on the child, and the child's bound is read from outside
+/// the memo ([`bounds::global_bound_term`]), which answers from the child's
+/// head or by running this on the child, and the child's bound is read from outside
 /// the global binders between it and the node.
 struct GlobalBound {
     bound: u32,
@@ -2783,9 +2782,9 @@ mod tests {
     /// A substituted variable is a node the substitution already had, never
     /// a copy of one: the payload itself under no binder and wherever
     /// lifting does not change it, and one lifted node per depth otherwise.
-    /// Stated on pointers, since a copy is equal. (Each occurrence used to
-    /// get a copy of the payload's root, which lost the payload's identity,
-    /// and with it its bounds and every memo entry keyed by its address.)
+    /// Stated on pointers, since a copy is equal: a copy of the payload's
+    /// root would lose its identity, and with it its bounds and every memo
+    /// entry keyed by its address.
     #[test]
     fn a_substituted_variable_is_the_payloads_own_node() {
         crate::checks::set_skip_verification(crate::checks::SkipVerification::Full);

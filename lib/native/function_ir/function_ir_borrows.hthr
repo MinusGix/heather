@@ -97,7 +97,7 @@ fn Machine::Lends<M>(self machine: Machine<M>, top: Nat, borrows: List<Borrow>) 
 // Function `f` of `code`, loaded at `origin` with the bytes `last` after
 // it, called over `borrows` with `words`. Entered at its label below `top`
 // with each slice's address and length and then `words` passed as a System
-// V caller passes them (`Stack::Passed`), `stack_room(f)` bytes of stack
+// V caller passes them (`Stack::Passed`), `room` bytes of stack
 // below the return address, and every slice's bytes in memory where it
 // lies (`Stack::InMemory`), the machine runs to the return address and
 // arrives with
@@ -109,10 +109,10 @@ fn Machine::Lends<M>(self machine: Machine<M>, top: Nat, borrows: List<Borrow>) 
 //     (`Stack::WroteIn`),
 //   - slice for slice the bytes `leaves` where the slices lie,
 //   - the code still where it was.
-fn Prog::ReturnsOn<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat, f: Nat,
+fn Prog::ReturnsOn<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat, f, room: Nat,
     borrows: List<Borrow>, words: List<BitVec(64)>, answer: BitVec(64), leaves: Buffers()) → Type {
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ stack_room(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
             ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
         machine.stack.AnsweredOver(Borrow::lending(borrows), answer, leaves))
 }
@@ -122,10 +122,10 @@ fn Prog::ReturnsOn<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), 
 // of a function of spans. Read as the function's signature: the borrows
 // are its spans, `words` its other arguments, `answer` what it returns and
 // `leaves` what its spans hold afterwards.
-fn Prog::ComputesOn<M>(self code: Prog, machine: Machine<M>, f: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
+fn Prog::ComputesOn<M>(self code: Prog, machine: Machine<M>, f, room: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
     answer: BitVec(64), leaves: Buffers()) → Type {
     (top: Nat) → machine.Lends(top, borrows) → (origin: BitVec(64)) → (last: List<BitVec(8)>) →
-        code.ReturnsOn(machine, origin, last, top, f, borrows, words, answer, leaves)
+        code.ReturnsOn(machine, origin, last, top, f, room, borrows, words, answer, leaves)
 }
 
 // What the borrows hold after a function that writes the first of them
@@ -138,9 +138,9 @@ fn Borrow::left(borrows: List<Borrow>, after: List<BitVec(8)>) → Buffers() {
 // returning `Mutated` does: it returns `result.value` and leaves
 // `result.after` in the first slice, the rest as they were. With the
 // source function's call for `result`, this is the function's signature.
-fn Prog::ComputesInto<M>(self code: Prog, machine: Machine<M>, f: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
+fn Prog::ComputesInto<M>(self code: Prog, machine: Machine<M>, f, room: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
     result: Mutated<List<BitVec(8)>, BitVec(64)>) → Type {
-    code.ComputesOn(machine, f, borrows, words, result.value, Borrow::left(borrows, result.after))
+    code.ComputesOn(machine, f, room, borrows, words, result.value, Borrow::left(borrows, result.after))
 }
 
 // ---------------------------------------------------------------------------
@@ -183,15 +183,15 @@ theorem borrows_args_lent(borrows: List<Borrow>): (words: List<BitVec(64)>) →
 // borrows (`fewer`): the marks themselves for a function that stores
 // (`Lending::writing`), nothing for one that only reads
 // (`Lending::reading`).
-theorem Prog::computes_on<M>(self code: Prog, machine: Machine<M>, f: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
+theorem Prog::computes_on<M>(self code: Prog, machine: Machine<M>, f, room: Nat, borrows: List<Borrow>, words: List<BitVec(64)>,
     counts: List<Nat>, written: Nat → Bool, taken: lent_count(counts, f) = borrows.len(),
     fewer: (b: Nat) → written(b) = True → marked(Borrow::marks(borrows), b) = True, answer: Ending,
     over: (top: Nat) →
         Loan<M>(machine.fetch, machine.data, machine.stack, top,
             Lending(counts, Borrow::addresses(borrows), Borrow::bytes(borrows), written).spans()) →
-        code.ComputesOver(machine, top, Lending(counts, Borrow::addresses(borrows), Borrow::bytes(borrows), written), f,
+        code.ComputesOver(machine, top, Lending(counts, Borrow::addresses(borrows), Borrow::bytes(borrows), written), f, room,
             Borrow::words(borrows) ++ words, Borrow::bytes(borrows), answer)):
-    code.ComputesOn(machine, f, borrows, words, answer.word, answer.buffers) {
+    code.ComputesOn(machine, f, room, borrows, words, answer.word, answer.buffers) {
     λ top loan origin last => {
         let lending = Lending(counts, Borrow::addresses(borrows), Borrow::bytes(borrows), written);
         let at = λ (b: Nat) => address_of(Borrow::addresses(borrows), b);
@@ -203,14 +203,14 @@ theorem Prog::computes_on<M>(self code: Prog, machine: Machine<M>, f: Nat, borro
             j(sym(taken), λ n _ => ArgsLent(n, 0, Borrow::words(borrows) ++ words, Borrow::addresses(borrows), Borrow::bytes(borrows)),
                 borrows_args_lent(borrows, words));
         let entered = site.returns_weaken(machine.stack, asm_labels(code, Succ(f)),
-            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ stack_room(f) <= i) ∧
+            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 machine.stack.LentOver(lending, top, f, Borrow::words(borrows) ++ words, Borrow::bytes(borrows))(i, s),
-            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ stack_room(f) <= i) ∧
+            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
             machine.stack.AnsweredOver(lending, answer.word, answer.buffers), ran,
             λ i s held => ⟨held.left, ⟨lent, held.right⟩⟩);
         site.returns_implies(machine.stack, asm_labels(code, Succ(f)),
-            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ stack_room(f) <= i) ∧
+            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
             machine.stack.AnsweredOver(lending, answer.word, answer.buffers),
             machine.stack.AnsweredOver(Borrow::lending(borrows), answer.word, answer.buffers), entered,
@@ -234,10 +234,10 @@ theorem compiler_correct_on<M>(functions: List<Function>, placement: List<Place>
     machine: Machine<M>, f: Nat, defined: f < functions.len(), borrows: List<Borrow>, taken: lent_count(counts, f) = borrows.len(),
     within: program_stores_within(functions, Borrow::marks(borrows)).IsTrue(), words: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), (Borrow::words(borrows) ++ words).len()).IsTrue()):
-    code.ComputesOn(machine, f, borrows, words,
+    code.ComputesOn(machine, f, stack_room(functions, f), borrows, words,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words).word,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words).buffers) {
-    code.computes_on(machine, f, borrows, words, counts, λ (b: Nat) => marked(Borrow::marks(borrows), b), taken, λ b held => held,
+    code.computes_on(machine, f, stack_room(functions, f), borrows, words, counts, λ (b: Nat) => marked(Borrow::marks(borrows), b), taken, λ b held => held,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words),
         λ top loan origin last => compiler_correct_over<M>(functions, placement, counts, Borrow::marks(borrows), code, lowered, evaluable, within,
             machine, top, Borrow::addresses(borrows), Borrow::bytes(borrows), loan, f, defined, Borrow::words(borrows) ++ words, arity, origin,

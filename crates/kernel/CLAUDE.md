@@ -9,6 +9,7 @@
   still report seeds only (the `law!` macro in
   `crates/kernel/tests/subst_laws.rs`).
 - `scripts/test --long` (own target dir) runs every slow kernel self-check
-  every time (`crates/kernel/src/checks.rs`; the default samples one in
-  sixteen) — a sweep for rounds touching the kernel's traversals or bounds
+  every time (`crates/kernel/src/checks.rs`; they are off by default, and
+  `HEATHER_KERNEL_SELF_CHECKS=sampled` or `full` turns them on for one
+  `heather` run) — a sweep for rounds touching the kernel's traversals or bounds
   memo, not a gate.

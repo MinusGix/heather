@@ -7,16 +7,15 @@
 //! "reduction provenance" of
 //! `docs/kernel/conversion-query-traversal-design.md` §10.3 written down as a datum
 //! instead of computed: `fst@(T; p)` infers *the first component of whatever
-//! `T` reduces to* without ever spelling it, which is the exponential object
-//! this round exists to stop constructing.
+//! `T` reduces to* without ever spelling it: spelled, that object is
+//! exponential in the nesting.
 //!
 //! Three properties are load-bearing and are why this is not a `Type`
 //! variant and not a value:
 //!
 //! - **Arena-free.** A closure lives in a [`crate::value::ValueArena`], and
-//!   an arena that outlives a conversion query costs +9.3 GB on
-//!   `probes/str/p10.hthr@ef3961a` (the stage-1b measurement on the owning issue).
-//!   An [`ITy`] is plain `Rc` and is freed when the rule that formed it
+//!   an arena that outlives a conversion query keeps every value it ever
+//!   forced. An [`ITy`] is plain `Rc` and is freed when the rule that formed it
 //!   returns.
 //! - **Linear.** A `Sel` chain of length k over a `Syn` is k nodes,
 //!   regardless of what the described type reduces to.
@@ -27,15 +26,15 @@
 //!   `Tc::materialize` (§3.5), which is the current checker's answer and is
 //!   counted.
 //!
-//! **Where a `Sel` arises, and only there** (§3.2, verified by construction
-//! on this tree): the six `@` rules of `Tc::tm_infer_at`, and the Π view
-//! a *checking* λ takes of a `Sel` expected type. `app@` forms one only when
-//! its head's type is not already a syntactic Π
-//! (`docs/elaborator/app-by-head-type-design.md` §3.1). No other rule constructs
-//! one — `app`'s result is `cod[arg/x]` from its own annotations, `fst`'s is
-//! its annotation, the four λ inference arms materialize. So on a
-//! declaration with no `@` form the checker's behaviour is byte-identical to
-//! the one before this module existed, which is the stage-1b gate.
+//! **Where a `Sel` arises** (§3.2): `Tc::view` of a described type (the
+//! components of a Π, Σ or `Id` it exposes), the `@` projections
+//! (`Tc::projection_at_spine`; `app@` only when its head's type is not
+//! already a syntactic Π, `docs/elaborator/app-by-head-type-design.md` §3.1),
+//! the fields of an unannotated intro checked against one
+//! (`Tc::injection_at_spine`), and a `Snd` instantiated below. Each starts
+//! from an `@` annotation or a description already formed, so a declaration
+//! with no `@` form never forms one: `app`'s result is `cod[arg/x]` from its
+//! own annotations and `fst`'s is its annotation.
 
 use crate::rc::Rc;
 
@@ -83,9 +82,8 @@ impl Sel {
 ///
 /// Syntax comes in two shapes and the distinction is a **measured** one, not
 /// a tidiness: `Tc::tm_infer` produces one of these per term node, and
-/// boxing each in an `Rc` cost **4.1× on `nat/check-numeral`** — a benchmark
-/// whose entire body is inference over a `Succ` chain, so one `malloc` per
-/// node against almost no other work is the whole time. [`ITy::Owned`] is
+/// boxing each in an `Rc` is one `malloc` per node, which on inference over
+/// a `Succ` chain is nearly the whole time. [`ITy::Owned`] is
 /// the value the rule already had on its stack, moved; [`ITy::Syn`] is for
 /// syntax that is genuinely shared (an `@` annotation, a component the
 /// rewriter handed back behind an `Rc`). Nothing else distinguishes them —
@@ -172,7 +170,7 @@ impl Eq for ITy {}
 /// three formers whose components a rule descends into, with those
 /// components as descriptions, and one catch-all.
 ///
-/// Deliberately *not* a copy of [`crate::conv::dom::TyView`]: conversion
+/// Deliberately *not* a copy of `conv::dom::TyView`: conversion
 /// views every former because it compares them, while the checker only ever
 /// asks "is this a Π / Σ / sum, and what are its parts". Everything else a
 /// rule needs to match on comes back through `Tc::whnf` as ordinary syntax.
@@ -212,18 +210,13 @@ impl SndOf {
 /// A **borrowed** expected type: what the *checking* direction passes.
 ///
 /// `Tc::tm_check` never stores its expected type — it views it, whnfs it, or
-/// hands it to `Tc::conv_ty` — so it does not need to own one, and stage 1b
-/// made it pay for one anyway: each of the ~86 call sites of the two
-/// `tm_check` wrappers constructed a 72-byte [`ITy`] temporary in the
-/// *caller's* frame (they are `inline(always)`), and the `Rc<Type>` sites
-/// paid an atomic refcount pair per term node on top. That is the whole of
-/// the measured per-node constant
-/// (`issues/ity-widens-the-checker-per-node-constant.md`): it moved
-/// `tm_check_inner`'s frame from 296 to 712 bytes, which is the stack row,
-/// and put an `Arc` increment and decrement on the hot path of every rule
-/// that checks a subterm, which is the routine corpus's.
+/// hands it to `Tc::conv_ty` — so it does not need to own one. An owned
+/// [`ITy`] here would be a large temporary in every caller's frame (the
+/// wrappers are `inline(always)`) and a refcount pair per term node on the
+/// hot path of every rule that checks a subterm
+/// (`issues/ity-widens-the-checker-per-node-constant.md`).
 ///
-/// Two words, `Copy`, constructed by a tag write: the checking direction now
+/// Two words, `Copy`, constructed by a tag write: the checking direction
 /// builds nothing at all in the common case. [`ITyRef::Syn`] is a spelling
 /// the caller already holds — by far the common case, and never a selection;
 /// [`ITyRef::Ity`] is a description the caller already holds, which may be

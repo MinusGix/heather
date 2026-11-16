@@ -62,11 +62,11 @@ theorem mut_is_written(out, text: Slice): Borrow::lending([Mut(out), Shared(text
 theorem writer_on<M>(code: Prog, machine: Machine<M>, out, text: Slice, i: BitVec(64), result: Mutated<List<BitVec(8)>, BitVec(64)>,
     over: (top: Nat) →
         Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing([2], [out.at, text.at], [out.bytes, text.bytes], [True, False]).spans()) →
-        code.ComputesOver(machine, top, Lending::writing([2], [out.at, text.at], [out.bytes, text.bytes], [True, False]), 0,
+        code.ComputesOver(machine, top, Lending::writing([2], [out.at, text.at], [out.bytes, text.bytes], [True, False]), 0, 136,
             [out.at, out.length(), text.at, text.length(), i], [out.bytes, text.bytes],
             Ending(word := result.value, buffers := [result.after, text.bytes]))):
-    code.ComputesInto(machine, 0, [Mut(out), Shared(text)], [i], result) {
-    code.computes_on(machine, 0, [Mut(out), Shared(text)], [i], [2], λ (b: Nat) => marked([True, False], b), refl, λ b held => held,
+    code.ComputesInto(machine, 0, 136, [Mut(out), Shared(text)], [i], result) {
+    code.computes_on(machine, 0, 136, [Mut(out), Shared(text)], [i], [2], λ (b: Nat) => marked([True, False], b), refl, λ b held => held,
         Ending(word := result.value, buffers := [result.after, text.bytes]), over)
 }
 
@@ -75,10 +75,10 @@ theorem writer_on<M>(code: Prog, machine: Machine<M>, out, text: Slice, i: BitVe
 // than borrows with no `Mut` do.
 theorem reader_on<M>(code: Prog, machine: Machine<M>, text: Slice, i, value: BitVec(64),
     over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::reading([1], [text.at], [text.bytes]).spans()) →
-        code.ComputesOver(machine, top, Lending::reading([1], [text.at], [text.bytes]), 0, [text.at, text.length(), i], [text.bytes],
+        code.ComputesOver(machine, top, Lending::reading([1], [text.at], [text.bytes]), 0, 136, [text.at, text.length(), i], [text.bytes],
             Ending(word := value, buffers := [text.bytes]))):
-    code.ComputesOn(machine, 0, [Shared(text)], [i], value, [text.bytes]) {
-    code.computes_on(machine, 0, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+    code.ComputesOn(machine, 0, 136, [Shared(text)], [i], value, [text.bytes]) {
+    code.computes_on(machine, 0, 136, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
         Ending(word := value, buffers := [text.bytes]), over)
 }
 
@@ -87,10 +87,10 @@ theorem reader_on<M>(code: Prog, machine: Machine<M>, text: Slice, i, value: Bit
 // expect-error: `lent_count([1], 0)` and `len([Shared(out), Shared(text)])` are not
 theorem count_is_checked<M>(code: Prog, machine: Machine<M>, out, text: Slice, value: BitVec(64),
     over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::reading([1], [out.at, text.at], [out.bytes, text.bytes]).spans()) →
-        code.ComputesOver(machine, top, Lending::reading([1], [out.at, text.at], [out.bytes, text.bytes]), 0,
+        code.ComputesOver(machine, top, Lending::reading([1], [out.at, text.at], [out.bytes, text.bytes]), 0, 136,
             [out.at, out.length(), text.at, text.length()], [out.bytes, text.bytes], Ending(word := value, buffers := [out.bytes, text.bytes]))):
-    code.ComputesOn(machine, 0, [Shared(out), Shared(text)], [], value, [out.bytes, text.bytes]) {
-    code.computes_on(machine, 0, [Shared(out), Shared(text)], [], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+    code.ComputesOn(machine, 0, 136, [Shared(out), Shared(text)], [], value, [out.bytes, text.bytes]) {
+    code.computes_on(machine, 0, 136, [Shared(out), Shared(text)], [], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
         Ending(word := value, buffers := [out.bytes, text.bytes]), over)
 }
 
@@ -99,10 +99,10 @@ theorem count_is_checked<M>(code: Prog, machine: Machine<M>, out, text: Slice, v
 // expect-error: `marked(marks([Shared(text)]), b) = True` is expected here
 theorem marks_are_checked<M>(code: Prog, machine: Machine<M>, text: Slice, value: BitVec(64),
     over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing([1], [text.at], [text.bytes], [True]).spans()) →
-        code.ComputesOver(machine, top, Lending::writing([1], [text.at], [text.bytes], [True]), 0, [text.at, text.length()], [text.bytes],
+        code.ComputesOver(machine, top, Lending::writing([1], [text.at], [text.bytes], [True]), 0, 136, [text.at, text.length()], [text.bytes],
             Ending(word := value, buffers := [text.bytes]))):
-    code.ComputesOn(machine, 0, [Shared(text)], [], value, [text.bytes]) {
-    code.computes_on(machine, 0, [Shared(text)], [], [1], λ (b: Nat) => marked([True], b), refl, λ b held => held,
+    code.ComputesOn(machine, 0, 136, [Shared(text)], [], value, [text.bytes]) {
+    code.computes_on(machine, 0, 136, [Shared(text)], [], [1], λ (b: Nat) => marked([True], b), refl, λ b held => held,
         Ending(word := value, buffers := [text.bytes]), over)
 }
 
@@ -117,8 +117,8 @@ runtime fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { s
 // literal; here it is any.
 theorem peek_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_lent(peek::program, placement, [1]) = Some(code),
     machine: Machine<M>, text: Slice, i: BitVec(64)):
-    code.ComputesOn(machine, 0, [Shared(text)], [i], peek(text.bytes, text.length(), i), [text.bytes]) {
-    code.computes_on(machine, 0, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+    code.ComputesOn(machine, 0, 136, [Shared(text)], [i], peek(text.bytes, text.length(), i), [text.bytes]) {
+    code.computes_on(machine, 0, 136, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
         Ending(word := peek(text.bytes, text.length(), i), buffers := [text.bytes]),
         λ top loan origin last => compiled_returns_lent<M>(peek::program, placement, Lending::reading([1], [text.at], [text.bytes]), code, lowered,
             trivial, trivial, machine.fetch, machine.data, last, origin, machine.stack, top, loan, 0, trivial,

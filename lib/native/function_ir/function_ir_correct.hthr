@@ -54,15 +54,17 @@ record Machine<M> {
 // What a compiled function does
 
 // The stack room function `f` of a program asks for below its return
-// address: 136 bytes a level, for itself and every function it may call
-// (a function calls only functions before it).
-fn stack_room(f: Nat) → Nat { 136 * Succ(f) }
+// address is `stack_room(functions, f)` (function_ir_lower_calls): 136
+// bytes a level, for itself and each level of calls below it, by the depth
+// table the lowering computes from the program and checks
+// (`program_depth`, `program_shallow`). A function that calls nothing asks
+// for 136 bytes wherever it is in the program.
 
 // Function `f` of `code`, loaded at `origin` with the bytes `last` after it,
 // returns `answer` when called with `arguments`. Entered at its label with
 // the arguments in RDI, RSI, RDX, RCX, R8, R9 and past the sixth on the
-// stack just above the return address (`Stack::Passed`), with
-// `stack_room(f)` bytes of stack below that address, the machine runs to
+// stack just above the return address (`Stack::Passed`), with `room`
+// bytes of stack below that address, the machine runs to
 // the return address and arrives with
 //   - `answer` in RAX,
 //   - RBX, RBP and R12 to R15 as they were, and RSP just above the
@@ -73,17 +75,17 @@ fn stack_room(f: Nat) → Nat { 136 * Succ(f) }
 //   - the code still where it was.
 // It is total correctness: the run defined and ends there, it does not
 // merely end there if it ends.
-fn Prog::Returns<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat,
+fn Prog::Returns<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f, room: Nat,
     arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i,
+        λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ room <= i,
         machine.stack.CalleePost(answer))
 }
 
 // The same wherever the code is loaded and whatever follows it: the
 // statement a position-independent function is held to.
-fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
-    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.Returns(machine, origin, last, f, arguments, answer)
+fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.Returns(machine, origin, last, f, room, arguments, answer)
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +96,8 @@ fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: Li
 // node one the evaluator gives a meaning, every call to an earlier
 // function of the right arity), the code of each function computes what
 // the program's evaluator says that function returns, at every list of
-// arguments of its arity, on every machine, wherever the code is loaded.
+// arguments of its arity, on every machine, wherever the code is loaded,
+// given the stack its calls need (`stack_room`).
 //
 // The placement (which register holds which value) is the planner's, and
 // the planner is not trusted: the theorem holds for any placement the
@@ -103,7 +106,7 @@ theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, c
     lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
-    code.Computes(machine, f, arguments, program_eval(functions, f, arguments)) {
+    code.Computes(machine, f, stack_room(functions, f), arguments, program_eval(functions, f, arguments)) {
     λ origin last => compiled_returns<M>(functions, placement, code, lowered, evaluable, machine.fetch, machine.data, last, origin,
         machine.stack, f, defined, arguments, arity, program_eval(functions, f, arguments), refl)
 }
@@ -117,8 +120,8 @@ theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, 
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
     agrees: program_eval(functions, f, arguments) = value):
-    code.Computes(machine, f, arguments, value) {
-    j(agrees, λ x _ => code.Computes(machine, f, arguments, x),
+    code.Computes(machine, f, stack_room(functions, f), arguments, value) {
+    j(agrees, λ x _ => code.Computes(machine, f, stack_room(functions, f), arguments, x),
         compiler_correct<M>(functions, placement, code, lowered, evaluable, machine, f, defined, arguments, arity))
 }
 
@@ -156,23 +159,23 @@ theorem spread_intro(n: Nat): (P: List<BitVec(64)> → Type) → ((words: List<B
 
 // Function `f` of `code` implements `spec`, a function of `n` words: at
 // every `n` words, it computes what `spec` gives them. Unfolded it is
-// `(a0: BitVec(64)) → … → code.Computes(machine, f, [a0, …], spec(a0, …))`.
-fn Prog::Implements<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n)) → Type {
-    Spread(n, λ (words: List<BitVec(64)>) => code.Computes(machine, f, words, apply_words(n, spec, words)))
+// `(a0: BitVec(64)) → … → code.Computes(machine, f, room, [a0, …], spec(a0, …))`.
+fn Prog::Implements<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, n: Nat, spec: Words(n)) → Type {
+    Spread(n, λ (words: List<BitVec(64)>) => code.Computes(machine, f, room, words, apply_words(n, spec, words)))
 }
 
 // What implementing gives at a list of words.
-theorem Prog::implements_at<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n),
-    implements: code.Implements(machine, f, n, spec), words: List<BitVec(64)>, length: words.len() = n):
-    code.Computes(machine, f, words, apply_words(n, spec, words)) {
-    spread(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, ws, apply_words(n, spec, ws)), implements, words, length)
+theorem Prog::implements_at<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, n: Nat, spec: Words(n),
+    implements: code.Implements(machine, f, room, n, spec), words: List<BitVec(64)>, length: words.len() = n):
+    code.Computes(machine, f, room, words, apply_words(n, spec, words)) {
+    spread(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, room, ws, apply_words(n, spec, ws)), implements, words, length)
 }
 
 // And what gives it: computing `spec` at every list of `n` words.
-theorem Prog::implements_of<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n),
-    computes: (words: List<BitVec(64)>) → words.len() = n → code.Computes(machine, f, words, apply_words(n, spec, words))):
-    code.Implements(machine, f, n, spec) {
-    spread_intro(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, ws, apply_words(n, spec, ws)), computes)
+theorem Prog::implements_of<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, n: Nat, spec: Words(n),
+    computes: (words: List<BitVec(64)>) → words.len() = n → code.Computes(machine, f, room, words, apply_words(n, spec, words))):
+    code.Implements(machine, f, room, n, spec) {
+    spread_intro(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, room, ws, apply_words(n, spec, ws)), computes)
 }
 
 // The compiler's theorem a function at a time: a program whose function
@@ -182,8 +185,8 @@ theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>
     lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), n: Nat, arity: arity_fits(program_arity(functions, f), n).IsTrue(),
     spec: Words(n), agrees: (words: List<BitVec(64)>) → words.len() = n → program_eval(functions, f, words) = apply_words(n, spec, words)):
-    code.Implements(machine, f, n, spec) {
-    code.implements_of(machine, f, n, spec, λ words length =>
+    code.Implements(machine, f, stack_room(functions, f), n, spec) {
+    code.implements_of(machine, f, stack_room(functions, f), n, spec, λ words length =>
         compiled_computes<M>(functions, placement, code, lowered, evaluable, machine, f, defined, words,
             j(sym(length), λ k _ => arity_fits(program_arity(functions, f), k).IsTrue(), arity),
             apply_words(n, spec, words), agrees(words, length)))
@@ -202,18 +205,18 @@ theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>
 // and stores nowhere but its own room and the bytes of the spans it may
 // write (`Stack::AnsweredOver`).
 fn Prog::ReturnsOver<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat,
-    lending: Lending, f: Nat, arguments: List<BitVec(64)>, before: Buffers(), answer: Ending) → Type {
+    lending: Lending, f, room: Nat, arguments: List<BitVec(64)>, before: Buffers(), answer: Ending) → Type {
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
         machine.stack.AnsweredOver(lending, answer.word, answer.buffers))
 }
 
 // The same wherever the code is loaded and whatever follows it: what a
 // certificate states of a function of spans.
-fn Prog::ComputesOver<M>(self code: Prog, machine: Machine<M>, top: Nat, lending: Lending, f: Nat, arguments: List<BitVec(64)>,
+fn Prog::ComputesOver<M>(self code: Prog, machine: Machine<M>, top: Nat, lending: Lending, f, room: Nat, arguments: List<BitVec(64)>,
     before: Buffers(), answer: Ending) → Type {
-    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.ReturnsOver(machine, origin, last, top, lending, f, arguments, before, answer)
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) → code.ReturnsOver(machine, origin, last, top, lending, f, room, arguments, before, answer)
 }
 
 // The compiler is correct over spans. Whenever `lower_program_lent` turns
@@ -229,7 +232,7 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing(counts, addresses, before, marks).spans()),
     f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
     arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), origin: BitVec(64), last: List<BitVec(8)>):
-    code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, arguments, before,
+    code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, stack_room(functions, f), arguments, before,
         program_run(functions, before, f, arguments)) {
     compiled_returns_written<M>(functions, placement, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
         machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
@@ -242,9 +245,9 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
 // A function of words computes over no file: `Prog::Computes` is
 // `Prog::ComputesOver` at `Lending::none()` and the empty file, entered
 // anywhere on the stack. The two contracts are one.
-theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
-    computes: code.Computes(machine, f, arguments, answer), top: Nat):
-    code.ComputesOver(machine, top, Lending::none(), f, arguments, [], Ending(word := answer, buffers := [])) {
+theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    computes: code.Computes(machine, f, room, arguments, answer), top: Nat):
+    code.ComputesOver(machine, top, Lending::none(), f, room, arguments, [], Ending(word := answer, buffers := [])) {
     λ origin last s at resident i rsp room held ret saved => {
         let ran = computes(origin, last, s, at, resident, i, rsp, room, held.left, ret, saved);
         let post = ran.proof.right.right.right.right;
@@ -256,9 +259,9 @@ theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat
 }
 
 // And back, entered below the stack's top.
-theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
-    over: code.ComputesOver(machine, machine.stack.size, Lending::none(), f, arguments, [], Ending(word := answer, buffers := []))):
-    code.Computes(machine, f, arguments, answer) {
+theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    over: code.ComputesOver(machine, machine.stack.size, Lending::none(), f, room, arguments, [], Ending(word := answer, buffers := []))):
+    code.Computes(machine, f, room, arguments, answer) {
     λ origin last s at resident i rsp room held ret saved => {
         let ran = over(origin, last, s, at, resident, i, rsp, room, ⟨held, ⟨trivial, ⟨room, machine.stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
         let post = ran.proof.right.right.right.right;

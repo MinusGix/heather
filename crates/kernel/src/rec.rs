@@ -1,7 +1,7 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
 //! Judgments): the two motive scopes `G_M` and the 65 branch telescopes
-//! `G_Typ G_Trm` (13 from ch. 04 plus the Id/Σ/Unit/Empty/Sum/W extension
-//! branches of kernel-v1-extensions), each with its expected
+//! `G_Typ G_Trm` (13 from ch. 04, the rest the extension formers' —
+//! `docs/kernel/delam-extensions.md`), each with its expected
 //! (motive-instantiated) type.
 //!
 //! This is the single most error-prone part of the theory, so the tables
@@ -9,8 +9,9 @@
 //! ([`crate::conv`], comparing branches pairwise at these types) and the
 //! type checker ([`crate::typing`], checking branches against these types).
 //! They must also stay in sync with `subst.rs`'s `map_branches` depths and
-//! `reduce.rs`'s β-instantiations (checked against docs/delam/04 by review,
-//! and exercised end-to-end by the identity-recursor typing test).
+//! `reduce.rs`'s β-instantiations, which nothing checks but the
+//! identity-recursor typing test end to end
+//! (`issues/kernel-binder-count-tables.md`).
 //!
 //! Scoping convention for a telescope `(ℓ⃗; B⃗; x⃗)`: `univs` universe binders
 //! are pushed first, then the global bindings (each scoped over `L, ℓ⃗` and
@@ -613,11 +614,7 @@ fn iwf_sig_globals(coded: bool, l: &Level, li: &Level) -> Vec<GlobalBinding> {
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
 /// motive instantiations. The 13 ch. 04 branches come first in each group;
-/// `ty_id`/`ty_sigma`/`ty_unit`/`ty_empty` and `tm_id`/`tm_refl`/`tm_j`/
-/// `tm_sigma`/`tm_pair`/`tm_fst`/`tm_snd`/`tm_unit`/`tm_empty`/`tm_triv`/
-/// `tm_elim_empty` plus the sum branches `ty_sum`/`tm_sum`/`tm_inl`/`tm_inr`/
-/// `tm_case` and the W branches `ty_w`/`tm_w`/`tm_sup`/`tm_elim_w` are
-/// extensions (kernel-v1-extensions).
+/// the rest are the extension formers' (`docs/kernel/delam-extensions.md`).
 pub(crate) fn branch_specs(
     motives: &Motives,
     l1: &Level,
@@ -1194,7 +1191,7 @@ pub(crate) fn branch_specs(
         // *type* — `Nat @ 0` — not at the motive's ℓ. Ch. 04 writes `ℓ/ℓ`
         // here, which contradicts its own `t_ze`/`t_succ` (both `0/ℓ` for the
         // same `Nat/U_T` slot) and the β rule; see
-        // docs/kernel/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
+        // docs/kernel/delam-extensions.md §16.1 (issues/recursor-elim-call-level-mismatch.md).
         let x_t = inst_tm_motive(
             m_tm,
             (1, 5, 3),
@@ -5413,7 +5410,7 @@ mod tests {
     /// on arrival: nothing well-formed can be checked against it, so no
     /// branch can use its own recursive call and nothing complains. That is
     /// exactly how a mis-levelled `□(g ⊢ Empty^{ℓ'} @ ℓ)` survived two
-    /// level-indexing rounds ([[recursor-elim-call-level-mismatch]]).
+    /// level-indexing rounds (issues/recursor-elim-call-level-mismatch.md).
     ///
     /// Under the **identity** motives the term-motive entries carry both
     /// slots that can disagree: `M_Trm[l/ℓ, …, U/U_T, …]` instantiates to
@@ -5467,7 +5464,7 @@ mod tests {
     /// for *any* in-scope `l` and any well-formed `Δ` — so
     /// [`every_branch_telescope_entry_is_a_well_formed_type`] checks the
     /// level's **scope** and never its **value**
-    /// ([[branch-telescope-type-motive-level-slots]]). The slots are pinned
+    /// (issues/branch-telescope-type-motive-level-slots.md). The slots are pinned
     /// here instead, by the one thing in the same table that already knows
     /// the answer.
     ///

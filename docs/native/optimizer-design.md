@@ -344,11 +344,16 @@ search is a recognizer of its own, not a part of the walk that keeps
 ranges: what it needs of the indexes is the tests the walk already left
 written.
 
-Two things it does not do yet. A word loaded big-endian and stored
-big-endian is swapped twice (`BSWAP` after the load, again before the
-store); the two cancel, which a rule over `ByteSwap` of `ByteSwap` would
-say. And four stores whose run is not flat to the end of its composition,
-or two groups whose runs overlap, are left as they are.
+A word loaded big-endian and stored big-endian is swapped twice: `BSWAP`
+after the load, widened, narrowed again and swapped before the store. Rule
+44 says the second swap is the word loaded (a 32-bit word widened and
+narrowed is itself, and a swap of a swap is the word), and the walk that
+decides tests writes it as a move (`Seen::replaced`); reading through
+gives the store the load's word, and the sweep takes both swaps. A copy
+of a word between big-endian spans is one load and one store.
+
+Four stores whose run is not flat to the end of its composition, or two
+groups whose runs overlap, are left as they are.
 
 ## 5. Requests: asking for a proof
 

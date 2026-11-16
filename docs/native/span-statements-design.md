@@ -18,17 +18,17 @@ proved anew: the form below follows from `Prog::ComputesOver` by one lemma.
 record Slice { at: BitVec(64), bytes: List<BitVec(8)> }
 inductive Borrow { Shared(slice: Slice), Mut(slice: Slice) }
 
-code.ComputesOn(machine, f, borrows, words, answer, leaves)
+code.ComputesOn(machine, f, room, borrows, words, answer, leaves)
 ```
 
-`borrows: List<Borrow>` is the function's spans in the order it takes
-them, `words` its arguments after them, `answer` the word in RAX and
+`room` is the stack the function asks for below its return address,
+`borrows: List<Borrow>` the function's spans in the order it takes them, `words` its arguments after them, `answer` the word in RAX and
 `leaves` the bytes each span holds afterwards. A certificate for
 `copy_span(out: span mut, text: span, count, from)` reads
 
 ```heather
 theorem copy_span_native_returns<M>(machine: Machine<M>, s0, s1: Slice, a4, a5: BitVec(64)):
-    copy_span_native_code().ComputesInto(machine, 0, [Mut(s0), Shared(s1)], [a4, a5],
+    copy_span_native_code().ComputesInto(machine, 0, 136, [Mut(s0), Shared(s1)], [a4, a5],
         native_tool_spans::copy_span(s0.bytes, s0.length(), s1.bytes, s1.length(), a4, a5))
 ```
 

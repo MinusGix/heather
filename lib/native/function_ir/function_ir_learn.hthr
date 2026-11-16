@@ -639,7 +639,8 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
             })),
         },
         Resize(from, to, o, s) => match to.same(64) && from.leb(63) {
-            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])))),
+            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], shared(seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])), λ learned =>
+                match from.same(32) { True => learned.making(o, node), False => learned }))),
             False => Passed([], match from.same(64) { True => seen.making(o, node), False => seen }),
         },
         BufferLoad(o, _, _) => Passed([], seen.known(o, Range(0, 255))),
@@ -662,6 +663,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
                 })),
             },
         },
+        ByteSwap(w, o, _) => match w.same(32) { True => Passed([], seen.making(o, node)), False => Passed([], seen) },
         BitAnd(w, o, l, r) => match w.same(64) {
             False => Passed([], seen),
             True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match a.high.leb(b.high) {
@@ -691,6 +693,29 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
                 None => None,
                 Some(bit) => match v.same(match bit { True => 1, False => 0 }) { True => Some(Passed([Drop], seen)), False => None },
             },
+        },
+        // A word swapped, widened, narrowed and swapped again is the word
+        // (rule 44): the second swap is a move of it, and the store that
+        // read it reads the word once the walk that reads through has
+        // been.
+        ByteSwap(w, v, h) => match w.same(32) {
+            False => None,
+            True => nat_map_get(seen.made, h).and_then(λ narrowing => match narrowing {
+                Resize(wide, narrow, _, x) => match wide.same(64) && narrow.same(32) {
+                    False => None,
+                    True => nat_map_get(seen.made, x).and_then(λ widening => match widening {
+                        Resize(half, full, _, s) => match half.same(32) && full.same(64) {
+                            False => None,
+                            True => nat_map_get(seen.made, s).and_then(λ first => match first {
+                                ByteSwap(width, _, word) => width.same(32).then(Some(Passed([Drop, Derive(44, [v, h, x, s, word]), Emit(Move(32, v, word))], seen))),
+                                _ => None,
+                            }),
+                        },
+                        _ => None,
+                    }),
+                },
+                _ => None,
+            }),
         },
         Resize(from, to, b, a) => match to.same(64) && from.leb(63) {
             False => None,
