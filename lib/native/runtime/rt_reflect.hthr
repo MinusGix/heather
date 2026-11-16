@@ -896,34 +896,32 @@ fn rt_field_named(k: Known, r: Handle, name: String) → Tac<Option<Handle>> {
 
 // A record that is a field of a local whose fields name terms (a loop's
 // state, `z.value`, rt_io_reflect_loop): the term, which is the record
-// written out, so a read of its field is the field's term. A record nested
-// in it (`z.value.value`, a state of three locals) is its field of that
-// term written out.
-fn rt_settle_named_in(fuel: Nat, k: Known, r: Handle) → Tac<Handle> {
-    match fuel {
-        Zero => pure(r),
-        Succ(f) => rt_field_read(r).bind(λ read => match read {
-            None => pure(r),
-            Some(p) => view(p.fst).bind(λ bv => match bv {
-                HLocal(x, xs) => match xs {
-                    Nil => pure(Known::named_at(k.named, x.id, rt_base_name(p.snd)).unwrap_or(r)),
-                    Cons(_, _) => pure(r),
-                },
-                _ => rt_settle_named_in(f, k, p.fst).bind(λ inner => match inner.id.same(p.fst.id) {
-                    True => pure(r),
-                    False => rt_field_of_value(k, inner, p.snd).bind(λ v => pure(v.unwrap_or(r))),
+// written out, so a read of its field is the field's term. A field of such
+// a record is settled the same way, a level at a time (`z.value.value`, a
+// loop threading three locals or more).
+fn rt_settle_named_within(fuel: Nat, k: Known, r: Handle) → Tac<Handle> {
+    match k.named {
+        Nil => pure(r),
+        Cons(_, _) => match fuel {
+            Zero => pure(r),
+            Succ(f) => rt_field_read(r).bind(λ read => match read {
+                None => pure(r),
+                Some(p) => view(p.fst).bind(λ bv => match bv {
+                    HLocal(x, xs) => match xs {
+                        Nil => pure(Known::named_at(k.named, x.id, rt_base_name(p.snd)).unwrap_or(r)),
+                        Cons(_, _) => pure(r),
+                    },
+                    _ => rt_settle_named_within(f, k, p.fst).bind(λ of => match of.id.same(p.fst.id) {
+                        True => pure(r),
+                        False => rt_field_of_value(k, of, p.snd).bind(λ value => pure(value.unwrap_or(r))),
+                    }),
                 }),
             }),
-        }),
+        },
     }
 }
 
-fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> {
-    match k.named {
-        Nil => pure(r),
-        Cons(_, _) => rt_settle_named_in(16, k, r),
-    }
-}
+fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> { rt_settle_named_within(64, k, r) }
 
 fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>

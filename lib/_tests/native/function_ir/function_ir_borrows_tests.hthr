@@ -115,12 +115,12 @@ runtime fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { s
 // borrowed slice it returns `peek` of the slice's bytes and its length,
 // and leaves the slice as it was. A certificate has the lowering as a
 // literal; here it is any.
-theorem peek_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_lent(peek::program, placement, [1]) = Some(code),
+theorem peek_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_roomed(peek::program, placement, [1], λ (_: Nat) => 0) = Some(code),
     machine: Machine<M>, text: Slice, i: BitVec(64)):
-    code.ComputesOn(machine, 0, 136, [Shared(text)], [i], peek(text.bytes, text.length(), i), [text.bytes]) {
-    code.computes_on(machine, 0, 136, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+    code.ComputesOn(machine, 0, 0, [Shared(text)], [i], peek(text.bytes, text.length(), i), [text.bytes]) {
+    code.computes_on(machine, 0, 0, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
         Ending(word := peek(text.bytes, text.length(), i), buffers := [text.bytes]),
-        λ top loan origin last => compiled_returns_lent<M>(peek::program, placement, Lending::reading([1], [text.at], [text.bytes]), code, lowered,
+        λ top loan origin last => compiled_returns_lent<M>(peek::program, placement, λ (_: Nat) => 0, Lending::reading([1], [text.at], [text.bytes]), code, lowered,
             trivial, trivial, machine.fetch, machine.data, last, origin, machine.stack, top, loan, 0, trivial,
             [text.at, text.length(), i], trivial, [text.bytes], peek(text.bytes, text.length(), i),
             peek::agrees_over([text.bytes], text.at, text.length(), i)))

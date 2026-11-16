@@ -36,8 +36,8 @@ import rt_file_returns;
 
 // At a function that leaves `after` and answers `value`, the code's word is
 // `value` and the file's first buffer `after`.
-theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
-    marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
+    marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
@@ -45,9 +45,9 @@ theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), after: List<BitVec(8)>, value: BitVec(64),
     runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, Mutated(after, value))):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), value, Cons(after, rest))) {
-    Ending::returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
+    Ending::returns_written<M>(functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
         stack, top, before, loan, f, below, arguments, fits, rest, Mutated(after, value), runs)
 }

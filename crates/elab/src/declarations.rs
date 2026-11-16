@@ -966,7 +966,7 @@ impl DeclarationsMut<'_> {
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
         if lifted && companions {
-            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto) {
+            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
                 }

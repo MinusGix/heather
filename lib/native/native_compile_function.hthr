@@ -372,7 +372,7 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
         ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(t.functions), f), b).IsTrue() → written(b) = True) →
         Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, top,
             Lending(program_counts(t.functions), addresses, buffers, written).spans()) →
-        t.site().CallsOver(t.stack, program_effects(t.functions), λ (g: Nat) => g, t.functions.len(),
+        t.site().CallsOver(t.stack, program_effects(t.functions), index_rooms(), t.functions.len(),
             Lending(program_counts(t.functions), addresses, buffers, written), top)): t.Answered(program_writers(t.functions)) {
     λ held f below words fits s0 at0 resident i0 rsp room called0 ret saved => {
         let sized = called0.right.right.right;
@@ -421,14 +421,14 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
             let fs = Cons(last, earlier);
             (match program_linkable(fs) as λ b => (match b as λ _ => Option<Prog> {
                     False => None,
-                    True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
+                    True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) { None => None, Some(out) => Some(out.prog) },
                 }) = Some(program) → base.Within(program) {
                 False => λ none => absurd(none),
-                True => (match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) as λ o => Grows(base, o) →
+                True => (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) as λ o => Grows(base, o) →
                         (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) → base.Within(program) {
                     None => λ _ none => absurd(none),
                     Some(out) => λ grown same => j(Option::some_inj(out.prog, program, same), λ x _ => base.Within(x), grown),
-                })(emit_functions_after_lent_grows(base, places, names, program_counts(fs), fs)),
+                })(emit_functions_after_lent_grows(base, places, names, program_counts(fs), index_rooms(), fs)),
             })
         },
     }
@@ -447,7 +447,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(functions), f), b).IsTrue() → written(b) = True) →
             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(functions), addresses, buffers, written).spans()) →
-            site.CallsOver(stack, program_effects(functions), λ (g: Nat) => g, functions.len(),
+            site.CallsOver(stack, program_effects(functions), index_rooms(), functions.len(),
                 Lending(program_counts(functions), addresses, buffers, written), top)) {
     match functions {
         Nil => λ _ => ⟨trivial,
@@ -458,28 +458,28 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                     program_linkable(fs) = b →
                     (match b as λ _ => Option<Prog> {
                         False => None,
-                        True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) { None => None, Some(out) => Some(out.prog) },
+                        True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) { None => None, Some(out) => Some(out.prog) },
                     }) = Some(program) →
                     program_linkable(fs).IsTrue() ∧
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                            site.CallsOver(stack, program_effects(fs), λ (g: Nat) => g, Succ(earlier.len()),
+                            site.CallsOver(stack, program_effects(fs), index_rooms(), Succ(earlier.len()),
                                 Lending(program_counts(fs), addresses, buffers, written), top)) {
                 False => λ _ none => absurd(none),
                 True => λ checked => {
                     let both: program_linkable(fs).IsTrue() = j(sym(checked), λ b _ => b.IsTrue(), trivial);
-                    (match emit_functions_after_lent(base, fs, places, names, program_counts(fs)) as λ o =>
+                    (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) as λ o =>
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                            MayCallOver<M>(site, stack, top, λ (g: Nat) => g, Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
+                            MayCallOver<M>(site, stack, top, index_rooms(), Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
                         (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) →
                         program_linkable(fs).IsTrue() ∧
                             ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                                 ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                                 Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                                site.CallsOver(stack, program_effects(fs), λ (g: Nat) => g, Succ(earlier.len()),
+                                site.CallsOver(stack, program_effects(fs), index_rooms(), Succ(earlier.len()),
                                     Lending(program_counts(fs), addresses, buffers, written), top)) {
                         None => λ _ none => absurd(none),
                         Some(out) => λ may same => ⟨both,
@@ -489,7 +489,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                         Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
                         λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(fs), f), b),
                         program_rowed_needs(fs, Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_rowed(fs), both).right),
-                        λ (g: Nat) => g, program_shallow_index(fs), allowed))
+                        index_rooms(), allowed))
                 },
             })(refl)
         },

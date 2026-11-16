@@ -31,7 +31,7 @@ use crate::loader::{self, LoadError, Module};
 /// is keyed apart from the one the library gate built
 /// (`issues/native-process-fixed-cost.md`); the gate's
 /// `write_elf_loads_only_world_modules` holds it so.
-pub const WRITE_ELF_IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_build", "native_build_parts", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf", "function_ir", "function_ir_lower", "function_ir_lower_calls", "function_ir_pass",
+pub const WRITE_ELF_IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_build", "native_build_parts", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf", "function_ir", "function_ir_eval", "function_ir_lower", "function_ir_lower_calls", "function_ir_pass", "function_ir_placeless", "function_ir_rows",
     "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
     "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];

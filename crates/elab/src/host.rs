@@ -2726,7 +2726,7 @@ impl Host<'_> {
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
-        let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
+        let inline = self.unspell_here(&template)?;
         let mut sols = vec![Sol::Unsolved; m as usize];
         AppUnify(self).unify_root(cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
         let solved = crate::unification::zonked(&inline, m, &sols)?;
@@ -2751,7 +2751,13 @@ impl Host<'_> {
     fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
-        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let mut t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        // A β-redex is its contractum, as `View` shows it: a body whose
+        // `on` clauses bind obligations is the match under their `λ`s,
+        // applied (a `runtime fn` with `on ?dec := …`).
+        while let Some(r) = crate::spelling::beta_head(&t) {
+            t = r;
+        }
         // The projections, the outermost first; a field `i` is `fst` after
         // `i + 1` `snd`s (`DisplayCx::field_read_record`).
         let mut projs = Vec::new();
@@ -2773,6 +2779,16 @@ impl Host<'_> {
         }
         if snds != 0 {
             return Err(Fault::Ill("a projection of a `match` that is not a field read".into()));
+        }
+        // The record read may itself be a β-redex (a `match` under `on`
+        // clauses' `λ`s, its field read).
+        let reduced;
+        if let Some(mut r) = crate::spelling::beta_head(head) {
+            while let Some(r2) = crate::spelling::beta_head(&r) {
+                r = r2;
+            }
+            reduced = r;
+            head = &reduced;
         }
         let mut spine = Vec::new();
         while let Term::AppAt { fun, arg } = head {
@@ -3398,7 +3414,7 @@ impl Host<'_> {
         let sols = match applied {
             Some(args) => args.into_iter().map(Sol::Solved).collect::<Vec<_>>(),
             None => {
-                let inline = GeneratedDefs(self).unspell_here_in(&template, m)?;
+                let inline = self.unspell_here(&template)?;
                 let mut sols = vec![Sol::Unsolved; m as usize];
                 AppUnify(self).unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
                 if sols.iter().any(|s| s.solved().is_none()) {
@@ -3691,7 +3707,7 @@ impl Host<'_> {
             // The candidates are lowered inline, and a lemma's parameter is
             // usually the reference `El (app(C#tycode_fn^δ; ā))`: read it
             // inline too, so the two unify field by field.
-            let inline = GeneratedDefs(self).unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
+            let inline = self.unspell_here(&pat).unwrap_or_else(|| pat.clone());
             let mut fitting = 0;
             let mut found = false;
             for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {
