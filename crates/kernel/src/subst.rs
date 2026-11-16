@@ -158,10 +158,11 @@
 use crate::rc::Rc;
 
 use crate::bounds;
+use crate::rec;
 use crate::few_map::FewMap;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, CtxShape, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -1357,73 +1358,11 @@ fn map_motives<M: Mapper>(mo: &Motives, m: &mut M, at: Depths) -> Motives {
 /// Branch telescopes (ch. 04); the `dep(univ, global, local)` increments
 /// must match the telescopes documented on [`Branches`].
 fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
-    Branches {
-        ty_nat: sub_tm(&b.ty_nat, m, at + dep(0, 1, 0)),
-        ty_pi: sub_tm(&b.ty_pi, m, at + dep(2, 3, 2)),
-        ty_ty: sub_tm(&b.ty_ty, m, at + dep(1, 1, 0)),
-        ty_el: sub_tm(&b.ty_el, m, at + dep(1, 2, 1)),
-        ty_id: sub_tm(&b.ty_id, m, at + dep(1, 4, 3)),
-        ty_sigma: sub_tm(&b.ty_sigma, m, at + dep(2, 3, 2)),
-        ty_unit: sub_tm(&b.ty_unit, m, at + dep(1, 1, 0)),
-        ty_empty: sub_tm(&b.ty_empty, m, at + dep(1, 1, 0)),
-        tm_var: sub_tm(&b.tm_var, m, at + dep(1, 3, 0)),
-        tm_nat: sub_tm(&b.tm_nat, m, at + dep(0, 1, 0)),
-        tm_pi: sub_tm(&b.tm_pi, m, at + dep(2, 3, 2)),
-        tm_ty: sub_tm(&b.tm_ty, m, at + dep(1, 1, 0)),
-        tm_zero: sub_tm(&b.tm_zero, m, at + dep(0, 1, 0)),
-        tm_succ: sub_tm(&b.tm_succ, m, at + dep(0, 2, 1)),
-        tm_elim_nat: sub_tm(&b.tm_elim_nat, m, at + dep(1, 5, 4)),
-        tm_lam: sub_tm(&b.tm_lam, m, at + dep(2, 4, 2)),
-        tm_app: sub_tm(&b.tm_app, m, at + dep(2, 5, 4)),
-        tm_id: sub_tm(&b.tm_id, m, at + dep(1, 4, 3)),
-        tm_refl: sub_tm(&b.tm_refl, m, at + dep(1, 3, 2)),
-        tm_j: sub_tm(&b.tm_j, m, at + dep(2, 7, 6)),
-        tm_sigma: sub_tm(&b.tm_sigma, m, at + dep(2, 3, 2)),
-        tm_pair: sub_tm(&b.tm_pair, m, at + dep(2, 5, 4)),
-        tm_fst: sub_tm(&b.tm_fst, m, at + dep(2, 4, 3)),
-        tm_snd: sub_tm(&b.tm_snd, m, at + dep(2, 4, 3)),
-        tm_unit: sub_tm(&b.tm_unit, m, at + dep(1, 1, 0)),
-        tm_empty: sub_tm(&b.tm_empty, m, at + dep(1, 1, 0)),
-        tm_triv: sub_tm(&b.tm_triv, m, at + dep(1, 1, 0)),
-        tm_elim_empty: sub_tm(&b.tm_elim_empty, m, at + dep(2, 3, 2)),
-        ty_sum: sub_tm(&b.ty_sum, m, at + dep(2, 3, 2)),
-        tm_sum: sub_tm(&b.tm_sum, m, at + dep(2, 3, 2)),
-        tm_inl: sub_tm(&b.tm_inl, m, at + dep(2, 4, 3)),
-        tm_inr: sub_tm(&b.tm_inr, m, at + dep(2, 4, 3)),
-        tm_case: sub_tm(&b.tm_case, m, at + dep(3, 7, 6)),
-        ty_w: sub_tm(&b.ty_w, m, at + dep(2, 3, 2)),
-        tm_w: sub_tm(&b.tm_w, m, at + dep(2, 3, 2)),
-        tm_sup: sub_tm(&b.tm_sup, m, at + dep(2, 5, 4)),
-        tm_elim_w: sub_tm(&b.tm_elim_w, m, at + dep(3, 6, 5)),
-        ty_vec: sub_tm(&b.ty_vec, m, at + dep(1, 3, 2)),
-        tm_vec: sub_tm(&b.tm_vec, m, at + dep(1, 3, 2)),
-        ty_fin: sub_tm(&b.ty_fin, m, at + dep(0, 2, 1)),
-        tm_fin: sub_tm(&b.tm_fin, m, at + dep(0, 2, 1)),
-        ty_wf: sub_tm(&b.ty_wf, m, at + dep(1, 3, 2)),
-        tm_wf: sub_tm(&b.tm_wf, m, at + dep(1, 3, 2)),
-        tm_supf: sub_tm(&b.tm_supf, m, at + dep(1, 5, 4)),
-        tm_elim_wf: sub_tm(&b.tm_elim_wf, m, at + dep(2, 6, 5)),
-        ty_seq: sub_tm(&b.ty_seq, m, at + dep(1, 4, 3)),
-        tm_seq: sub_tm(&b.tm_seq, m, at + dep(1, 4, 3)),
-        ty_sempty: sub_tm(&b.ty_sempty, m, at + dep(1, 1, 0)),
-        tm_sempty: sub_tm(&b.tm_sempty, m, at + dep(1, 1, 0)),
-        tm_srefl: sub_tm(&b.tm_srefl, m, at + dep(1, 3, 2)),
-        tm_elim_sempty: sub_tm(&b.tm_elim_sempty, m, at + dep(2, 3, 2)),
-        ty_squash: sub_tm(&b.ty_squash, m, at + dep(1, 2, 1)),
-        tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
-        tm_squash_in: sub_tm(&b.tm_squash_in, m, at + dep(1, 3, 2)),
-        tm_elim_squash: sub_tm(&b.tm_elim_squash, m, at + dep(2, 5, 4)),
-        ty_m: sub_tm(&b.ty_m, m, at + dep(3, 6, 5)),
-        tm_m: sub_tm(&b.tm_m, m, at + dep(3, 6, 5)),
-        tm_corec: sub_tm(&b.tm_corec, m, at + dep(4, 9, 8)),
-        tm_out: sub_tm(&b.tm_out, m, at + dep(3, 7, 6)),
-        ty_dvec: sub_tm(&b.ty_dvec, m, at + dep(1, 3, 2)),
-        tm_dvec: sub_tm(&b.tm_dvec, m, at + dep(1, 3, 2)),
-        ty_iwf: sub_tm(&b.ty_iwf, m, at + dep(2, 7, 6)),
-        tm_iwf: sub_tm(&b.tm_iwf, m, at + dep(2, 7, 6)),
-        tm_sup_i: sub_tm(&b.tm_sup_i, m, at + dep(2, 8, 7)),
-        tm_elim_iwf: sub_tm(&b.tm_elim_iwf, m, at + dep(3, 10, 9)),
-    }
+    let terms = rec::branch_terms(b);
+    rec::branches_from(std::array::from_fn(|i| {
+        let (univ, global, local) = rec::BRANCH_DEPTHS[i];
+        sub_tm(terms[i], m, at + dep(univ, global, local))
+    }))
 }
 
 fn map_ctx<M: Mapper>(c: &LocalCtx, m: &mut M, at: Depths) -> LocalCtx {
@@ -2565,10 +2504,11 @@ impl LocalCtx {
 }
 
 impl LocalSubst {
-    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded.
-    pub fn id(ctx: &LocalCtx) -> LocalSubst {
-        let m = ctx.entries.len() as u32;
-        let tail = match ctx.base {
+    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded. It reads
+    /// only Γ's [`CtxShape`].
+    pub fn id(ctx: impl Into<CtxShape>) -> LocalSubst {
+    let CtxShape { base, len: m } = ctx.into();
+    let tail = match base {
             CtxBase::Nil => SubstTail::Empty,
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };

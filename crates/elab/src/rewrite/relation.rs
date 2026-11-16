@@ -1145,7 +1145,7 @@ impl<'a> RelationRewrite<'a> {
         // The level of `p`'s type: `R(t, t')`, or for a λ body the `Π` the
         // pointwise relation unfolds to.
         let base = rel.as_ref().map_or_else(|| self.holds.clone(), |r| r.holds.clone());
-        let holds = over.iter().rev().fold(base, |l, (_, dl)| Level::join(dl.clone(), l));
+        let holds = over.iter().rev().fold(base, |l, (_, dl)| Level::max(dl.clone(), l));
         Ok(Node::Changed {
             term: Rc::new(Term::Lam {
                 dom_level: dom_level.clone(),
@@ -1548,7 +1548,7 @@ impl<'a> RelationRewrite<'a> {
                 dom: Rc::new(dom.shift_local(j as u32)),
                 cod: Rc::new(ty),
             };
-            (ty, Level::join(dl.clone(), level))
+            (ty, Level::max(dl.clone(), level))
         })
     }
 
@@ -2071,7 +2071,7 @@ impl<'a> RelationRewrite<'a> {
                 dom: Rc::clone(&b.dom),
                 cod: Rc::new(cod),
             };
-            (pi, Level::join(b.level.clone(), cod_level))
+            (pi, Level::max(b.level.clone(), cod_level))
         });
         let goal = self.obligation(closed, closed_level, label)?;
         let d = self.depth();

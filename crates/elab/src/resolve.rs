@@ -1516,7 +1516,7 @@ impl Resolution<'_> {
                 body: Rc::new(tm),
             };
             ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(ty) };
-            level = Level::join(dom_level, level);
+            level = Level::max(dom_level, level);
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
         if pending.iter().any(|(t, _, h, open)| open.is_some() && h.as_deref() == Some(head.as_str()) && *t == ty) {

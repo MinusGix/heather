@@ -106,7 +106,7 @@ impl Relation {
         };
         let head = Term::Lam {
             dom_level: fst_level.clone(),
-            cod_level: Level::join(fst_level.clone(), Level::succ(holds)),
+            cod_level: Level::max(fst_level.clone(), Level::succ(holds)),
             dom: Rc::clone(fst_ty),
             body: Rc::new(inner),
         };
@@ -478,7 +478,7 @@ impl Builder<'_> {
                     dom: dom.clone(),
                     cod: Rc::new(cod),
                 };
-                (pi, Level::join(dom_level.clone(), cod_level))
+                (pi, Level::max(dom_level.clone(), cod_level))
             });
             let goal = RelationalProof(self.e).relation_obligation(self.original, tactic, label, self.goals - 1, closed, closed_level, self.span)?;
             let k = self.binders.len() as u32;
@@ -683,7 +683,7 @@ impl Builder<'_> {
         self.binders.pop();
         self.cx = saved;
         let (body, holds) = inner?;
-        let level = Level::join(dom_level.clone(), holds.clone());
+        let level = Level::max(dom_level.clone(), holds.clone());
         Ok((
             Term::Lam {
                 dom_level: dom_level.clone(),

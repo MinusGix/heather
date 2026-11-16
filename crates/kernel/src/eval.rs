@@ -54,7 +54,7 @@ use crate::reduce::{
 };
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, m_out_corec, nth, Branches, IWfSig, MSig, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
+    iwf_ih, m_out_corec, nth, Branches, IWfSig, MSig, CtxBase, CtxShape, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     Motives, Term, Type,
 };
 use crate::value::{
@@ -389,19 +389,10 @@ impl<'a, 'v> Eval<'a, 'v> {
         Ok(())
     }
 
-    /// A Γ of the right *shape* for the shared β helpers, which read only its
-    /// length and base (`reduce.rs` module doc). The entry types are never
-    /// inspected, so a filler suffices (`issues/kernel-filler-contexts.md`);
-    /// building one is confined to the code-recursor path, which is not the
-    /// hot one.
-    fn scope(&self, env: &Env<'v>) -> LocalCtx {
-        LocalCtx {
-            base: self.base,
-            entries: CtxEntries::repeat(
-                CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero },
-                env.len() as usize,
-            ),
-        }
+    /// Γ's shape, which is all the shared β helpers read of it (`reduce.rs`
+    /// module doc).
+    fn scope(&self, env: &Env<'v>) -> CtxShape {
+        CtxShape { base: self.base, len: env.len() }
     }
 
     // -- the trampoline -----------------------------------------------------
