@@ -202,22 +202,37 @@ record Known {
     // a span holds, for its accessor's read, `rt_held_reflect`): a read of
     // the field is the term, reflected where it is first read.
     named: List<FieldTerm>,
+    // The byte strings a program writes (`b"…"`, docs/native/io-programs-design.md
+    // §5 D3), each by its bytes and the level of the parameter it is read
+    // as: a constant is a buffer of the program's `Source` holding its bytes
+    // from the start, so in the reading it is one more parameter, and the
+    // generator states the program at it.
+    consts: List<Pair<List<Nat>, Nat>> := [],
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named, k.consts)
 }
 
 fn Known::lending(self k: Known, lent: Nat) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named, k.consts)
+}
+
+fn Known::with_consts(self k: Known, consts: List<Pair<List<Nat>, Nat>>) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, consts)
+}
+
+// The level of the constant whose bytes are `bs`, if the program has one.
+fn Known::const_level(xs: List<Pair<List<Nat>, Nat>>, bs: List<Nat>) → Option<Nat> {
+    match xs { Nil => None, Cons(p, rest) => match Tm::nats_same(p.fst)(bs) { True => Some(p.snd), False => Known::const_level(rest, bs) } }
 }
 
 fn Known::naming(self k: Known, named: List<FieldTerm>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named, k.consts)
 }
 
 // The span a parameter level is the bytes of, if it is one.
@@ -610,6 +625,55 @@ fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<
     match hs {
         Nil => pure(Pair(st, [])),
         Cons(h, rest) => step(st, h).bind(λ r => RSt::operands(step, r.fst, rest).bind(λ s => pure(Pair(s.fst, Cons(RSt::level(r.snd), s.snd))))),
+    }
+}
+
+// A byte literal `BitVec::ofNat(n)` at `Word(8)`: its value, read as
+// `rt_go`'s `POfNat` reads it.
+fn rt_const_byte(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Option<Nat>> {
+    view(h).bind(λ v => match v {
+        HGlobal(g, _, args) => match Known::prim(k.prims, g.id) {
+            Some(p) => match p {
+                POfNat => match args {
+                    Cons(n, _) => k.ty_of(h).bind(λ t => match t {
+                        Word(w) => match w.same(8) { True => rt_literal(n).bind(λ value => pure(Some(value))), False => pure(None) },
+                        _ => pure(None),
+                    }),
+                    Nil => pure(None),
+                },
+                _ => pure(None),
+            },
+            None => pure(None),
+        },
+        _ => pure(None),
+    })
+}
+
+// A closed list of bytes, each a literal (`b"…"`'s list,
+// docs/native/io-programs-design.md §5 D3): its bytes, or `None` when an
+// element is no byte literal or the spine is not a list's.
+fn rt_const_bytes(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Option<List<Nat>>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(f) => view(h).bind(λ v => match v {
+            HCtor(ty, i, _, fields) => match ty.id.same(k.list) {
+                False => pure(None),
+                True => match i {
+                    Zero => pure(Some([])),
+                    Succ(_) => match fields.rev() {
+                        Cons(tl, more) => match more {
+                            Cons(hd, _) => rt_const_byte(f, k, st, hd).bind(λ b => match b {
+                                Some(n) => rt_const_bytes(f, k, st, tl).bind(λ rest => pure(rest.map(λ bs => Cons(n, bs)))),
+                                None => pure(None),
+                            }),
+                            Nil => pure(None),
+                        },
+                        Nil => pure(None),
+                    },
+                },
+            },
+            _ => pure(None),
+        }),
     }
 }
 
@@ -1892,7 +1956,12 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                     },
                                     Nil => rt_refuse("`Cons` without its tail"),
                                 },
-                                _ => rt_refuse("`Cons` onto a byte buffer: a buffer is written in place (`with_byte`), not consed onto"),
+                                // A byte string the program writes: the parameter
+                                // it is read as (`Known::consts`).
+                                _ => rt_const_bytes(f, k, st, h).bind(λ found => match found.and_then(λ bs => Known::const_level(k.consts, bs)) {
+                                    Some(l) => pure(st.finish(h, operand, Var(l))),
+                                    None => rt_refuse("`Cons` onto a byte buffer: a buffer is written in place (`with_byte`), not consed onto; a constant list of bytes (`b\"…\"`) is read only in a program over `Io`"),
+                                }),
                             },
                         }),
                         False => match Known::rec(k.recs, ty.id, 0) {

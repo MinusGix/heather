@@ -110,3 +110,48 @@ runtime fn ascii_check(mut io: Io, buf: ByteBuffer(4096)) → Partial(Mutated<Io
 }
 
 fn ascii_whole() → Io::Reads<BitVec(64)>(ascii_check::source.tree_co([]), λ io => ascii_check(io, List::replicate(zero_byte(), 4096))) { ascii_check::reads }
+
+// ---------------------------------------------------------------------------
+// Byte strings a program writes (`b"…"`, docs/native/io-programs-design.md
+// §5 D3): each is read as one more buffer parameter after the function's
+// own, and the `Source` holds it in a buffer of its own that starts as its
+// bytes. `ascii_say` is `ascii_check` that also says its verdict, one of
+// two strings by an `if`; `crates/cli/tests/native_tools.rs` builds it and
+// holds its output and status to a reference.
+
+runtime fn ascii_say(mut io: Io, buf: ByteBuffer(4096)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut buf = buf;
+    let mut filled: BitVec(64) = BitVec::ofNat(0);
+    let mut going: BitVec(64) = BitVec::ofNat(1);
+    let mut failed: BitVec(64) = BitVec::ofNat(0);
+    while BitVec::ofNat(0).unsigned_lt_bit(going) {
+        let room = BitVec::ofNat(4096).sub(filled);
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room.unsigned_lt_bit(r.result);
+        buf := r.buf;
+        failed := if bad { BitVec::ofNat(1) } else { BitVec::ofNat(0) };
+        going := if bad { BitVec::ofNat(0) } else if r.result = BitVec::ofNat(0) { BitVec::ofNat(0) } else { BitVec::ofNat(1) };
+        filled := if bad { filled } else { filled.add(r.result) };
+    }
+    let m = ascii_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    let mut wrote: BitVec(64) = BitVec::ofNat(0);
+    if m.value = BitVec::ofNat(0) {
+        let w = io.write_from(Io::stdout(), b"ascii\n", BitVec::ofNat(0), BitVec::ofNat(6));
+        wrote := w;
+    } else {
+        let w = io.write_from(Io::stdout(), b"not ascii\n", BitVec::ofNat(0), BitVec::ofNat(10));
+        wrote := w;
+    }
+    Pointed::ret(Mutated(io, m.value))
+}
+
+// What the generator states: the program from a zeroed buffer, with no
+// argument for the strings, which are the `Source`'s.
+fn ascii_say_whole() → Io::Reads<BitVec(64)>(ascii_say::source.tree_co([]), λ io => ascii_say(io, List::replicate(zero_byte(), 4096))) { ascii_say::reads }
+
+// The strings are buffers after the parameter's, in the order the
+// reflector's walk meets them (an `if`'s `False` arm is its `match`'s
+// first), each its own length and starting as its bytes; the parameter's
+// starts empty, its capacity zeroed.
+theorem ascii_say_buffers(): ascii_say::source.buffers.map(λ b => b.capacity) = [4096, 10, 6] { refl }
+theorem ascii_say_said(): ascii_say::source.buffers.map(λ b => b.initial) = [[], b"not ascii\n", b"ascii\n"] { refl }

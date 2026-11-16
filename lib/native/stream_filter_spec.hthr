@@ -99,7 +99,7 @@ fn written_bytes(bytes: List<BitVec(8)>, w: WriteResult) → List<BitVec(8)> {
 
 theorem read_received<Size>(fd: BitVec(64), size: Size, r: ReadResult):
     ReadCmd(fd, size).received(fd, r) = read_bytes(r) {
-    (match fd.eq_dec(fd) {
+    (match descriptor(fd).eq_dec(descriptor(fd)) {
         Inl(_) => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
         Inr(other) => false_elim(other(refl)),
     })
@@ -107,7 +107,7 @@ theorem read_received<Size>(fd: BitVec(64), size: Size, r: ReadResult):
 
 theorem write_sent<Size>(fd: BitVec(64), bytes: List<BitVec(8)>, w: WriteResult):
     @LinuxCmd::sent<Size>(WriteCmd(fd, bytes), fd, w) = written_bytes(bytes, w) {
-    (match fd.eq_dec(fd) {
+    (match descriptor(fd).eq_dec(descriptor(fd)) {
         Inl(_) => match w { Wrote(_) => refl, WriteFailed(_) => refl },
         Inr(other) => false_elim(other(refl)),
     })

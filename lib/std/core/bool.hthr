@@ -351,6 +351,29 @@ theorem Bool::or_true_parts(self a, b: Bool): (a || b) = True → a = True ∨ b
     match a { True => λ _ => Inl(refl), False => λ right => Inr(right) }
 }
 
+theorem Bool::or_false_parts(self a, b: Bool): (a || b) = False → a = False ∧ b = False {
+    match a { False => λ h => ⟨refl, h⟩, True => λ h => absurd(h) }
+}
+
+theorem Bool::or_false_of(self a, b: Bool): a = False → b = False → (a || b) = False {
+    match a { False => λ ha hb => hb, True => λ ha hb => absurd(ha) }
+}
+
+// What `a` is, from the verdict of `a.xor(b)`.
+theorem Bool::xor_true_value(self a, b: Bool): a.xor(b) = True → a = !b {
+    match a {
+        False => match b { False => λ t => absurd(sym(t)), True => λ t => refl },
+        True => match b { False => λ t => refl, True => λ t => absurd(sym(t)) },
+    }
+}
+
+theorem Bool::xor_false_value(self a, b: Bool): a.xor(b) = False → a = b {
+    match a {
+        False => match b { False => λ t => refl, True => λ t => absurd(t) },
+        True => match b { False => λ t => absurd(t), True => λ t => refl },
+    }
+}
+
 theorem is_true_dec_yes(b: Bool, p: b.IsTrue()): b.is_true_dec() = Inl(p) {
     match b as λ x => (u: x.IsTrue()) → x.is_true_dec() = Inl(u) {
         False => λ u => false_elim(u),

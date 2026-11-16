@@ -328,6 +328,7 @@ impl<'a> Walk<'a> {
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
+            | ExprKind::ByteStr(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl

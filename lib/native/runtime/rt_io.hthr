@@ -95,6 +95,12 @@ fn Io::close_fd(mut self io: Io, fd: BitVec(64)) → BitVec(64) {
     Io::close_word(r)
 }
 
+// A byte string a program writes (`b"…"`, docs/native/io-programs-design.md
+// §5 D3), from its bytes: what the generator states the program at, for
+// the parameter the reflector reads the string as. It computes to the
+// list the string elaborates to, so the two convert.
+fn rt_bytes(ns: List<Nat>) → List<BitVec(8)> { ns.map(λ n => BitVec::ofNat(n)) }
+
 // ---------------------------------------------------------------------------
 // Effects: the calls `rt` knows, with their operand and result codes
 

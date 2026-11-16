@@ -594,7 +594,7 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// each, a group a round.
 const STORES_MOST: usize = 8;
 
-fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize], explain: bool) -> Result<Optimized, String> {
     let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
     fork.define(&source, definitions);
@@ -782,6 +782,26 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             }
         }
         placements.push(placement);
+        // What the replays kept did, in the rules' words
+        // (`function_ir_explain`): a read of each plan, a line for each
+        // rule it used; a fact two replays derive is said once.
+        if explain {
+            let mut lines: Vec<String> = Vec::new();
+            for (at, staged) in made.iter().enumerate().filter(|(_, staged)| staged.stage == Stage::Replay) {
+                let item = format!("said_{k}_{at}");
+                let module = format!("{probe}_opt_{item}");
+                let text = format!("{imports}import function_ir_explain;\n{}
+fn {prefix}_opt_{item}() → List<Nat> {{ plan_explained({}) }}
+", uses(&modules), staged.plan);
+                fork.define(&module, &text);
+                let said = spelled_text(&read(&mut fork, &module, &item)?).ok_or_else(|| format!("function {k}'s explanation did not read back"))?;
+                for line in said.lines() {
+                    if !lines.iter().any(|known| known == line) { lines.push(line.to_string()); }
+                }
+            }
+            println!("function {k}: {}", match lines.len() { 0 => "no rule used".to_string(), 1 => "1 rule used".to_string(), n => format!("{n} rules used") });
+            for line in &lines { println!("{line}"); }
+        }
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
         let moves: Vec<&Staged> = made.iter().filter(|staged| staged.stage != Stage::Guard).collect();
@@ -918,7 +938,7 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
     Ok(Optimized { definitions: stated, statements, placements })
 }
 
-pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: bool) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
@@ -932,7 +952,7 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let stem = lowered_stem(prefix, program.optimize);
     let (definitions, rewriting, placed) = if program.optimize {
         let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
-        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots)?;
+        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots, explain)?;
         (format!("{definitions}{}", made.definitions), made.statements, made.placements)
     } else { (definitions, String::new(), vec![None; m]) };
     // A function's emission after `prog`: under the program's counts of
