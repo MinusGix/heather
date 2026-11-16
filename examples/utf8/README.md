@@ -1,8 +1,10 @@
 # A proved UTF-8 validator
 
 `utf8_check.hthr` is a UTF-8 validator written in Heather, compiled to x86-64,
-and proved to answer exactly what a strict UTF-8 decoder answers. `main.c`
-wraps it in a command-line tool that reads standard input.
+and proved to answer exactly what a strict UTF-8 decoder answers. It comes as
+a command-line tool two ways: `utf8check.hthr` is a whole program in Heather,
+with no C, that exits with the verdict; `main.c` wraps the compiled function
+in a C tool that also prints where the first bad byte is.
 
 ## Build it and run it
 
@@ -21,6 +23,50 @@ printf 'ab\xed\xa0\x80cd' | target/utf8/utf8check                           # in
 `compile-x86` checks every proof in the file before it emits anything, and
 the assembly comes with a certificate (`utf8.certificate.hthr`) that the
 kernel checks too: the machine code computes the Heather function.
+
+### With no C
+
+```sh
+target/release/heather write-elf examples/utf8/utf8check.hthr -o target/utf8/utf8valid
+printf 'h\xc3\xa9llo \xe2\x82\xac' | target/utf8/utf8valid; echo $?   # 0
+printf 'ab\xed\xa0\x80cd' | target/utf8/utf8valid; echo $?           # 1
+```
+
+`utf8check.hthr`'s `main` is the whole program:
+
+```text
+runtime fn main(mut io: Io, buf: ByteBuffer(65536)) → Partial(Mutated<Io, u64>) {
+    let mut buf = buf;
+    let mut filled: u64 = 0;
+    let mut going: u64 = 1;
+    let mut failed: u64 = 0;
+    while 0 < going {
+        let room = 65536 - filled;
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room < r.result;
+        buf := r.buf;
+        failed := if bad { 1 } else { 0 };
+        going := if bad { 0 } else if r.result = 0 { 0 } else { 1 };
+        filled := if bad { filled } else { filled + r.result };
+    }
+    let m = utf8_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    Pointed::ret(Mutated(io, m.value))
+}
+```
+
+It reads standard input into its buffer until a read brings nothing, then
+lends the buffer to `utf8_status`, which runs the validator over the bytes
+read, and exits with its answer: 0 for UTF-8, 1 for not, 2 when the read
+failed or the input filled the buffer. `write-elf` builds a Linux executable
+of about 3.7 KB with nothing linked in, and the kernel checks a certificate
+that the executable is the compile of `main::source`, the program the
+generator made of `main`. Two theorems say what that program does:
+
+- `main::reads`: the source's behaviour, read against any world (any input,
+  any outcome of each read), is `main` itself, started from a zeroed buffer;
+- `utf8_status_answers`: after a read that did not fail and left room,
+  `utf8_status` answers 0 exactly when the bytes read are UTF-8
+  (`utf8::is_utf8(span.take(filled))`).
 
 ## The program
 
@@ -126,7 +172,16 @@ examples/utf8/utf8_check.hthr`.
 ## What the proof does not cover
 
 - **The C driver** reads the input and prints the answer. It is outside the
-  proof.
+  proof. `utf8check.hthr` has none, but it does not print yet: a program
+  whose branches make different calls on Linux is the next step
+  (docs/native/io-programs-design.md §4.2).
+- **The ELF and `main::reads` meet at the source.** The certificate says the
+  executable is the compile of `main::source`, and `main::reads` says what
+  `main::source` does; one theorem from the executable's bytes to `main` is
+  the compiler theorem's (docs/native/compiler-theorem.md).
+- **`main`'s whole run.** That the loop reads the whole input before the
+  verdict is what the program says, not a theorem about it yet; the test
+  checks it.
 - **The offset of a bad byte.** The theorem is about the `valid` answer.
   That the offset printed for invalid input is the start of the first bad
   sequence (Rust's `Utf8Error::valid_up_to`) is not stated yet; the test
