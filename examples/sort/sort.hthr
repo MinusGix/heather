@@ -133,8 +133,8 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
         let one: (b.zero_extend(56).toNat() = b.toNat()) = BitVec::toNat_zero_extend(8, 56, b);
         let two: (a.zero_extend(56).toNat() = a.toNat()) = BitVec::toNat_zero_extend(8, 56, a);
         if larger: b.zero_extend(56) < a.zero_extend(56) {
-                let ba: BitVec::unsigned_le(b, a) = omega;
-                let moved: (List::put_within(s, n, j, a).after = init ++ Cons(a, Cons(a, rest))) =
+                let ba: BitVec::unsigned_le(b, a) = bv_omega;
+                let moved: (s.with_byte_within(n, j, a) = init ++ Cons(a, Cons(a, rest))) =
                     trans(write_split(ys, z, rest, n, j, a, sized, at),
                         trans(cong_fn(λ (l: List<u8>) => l ++ Cons(a, rest), cut), init.append_assoc([a], Cons(a, rest))));
                 let l1 = init.len_append(Cons(a, Cons(a, rest)));
@@ -143,9 +143,9 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
                 let sorted1: init.Sorted(BitVec::unsigned_le) = init.sorted_append_left(BitVec::unsigned_le, [a], rewrite(sym(cut), sorted));
                 let ih = insert_at_inserts(init, a, Cons(a, rest), n, j - 1, b, sized1, init_len, sorted1);
                 calc {
-                    s.insert_at(n, j, b) = (init ++ Cons(a, Cons(a, rest))).insert_at(n, j - 1, b)
-                        := trans(cong_fn(λ m => fill(m, n, b), List::sift::True::True(s, n, j, b.zero_extend(56), h, rewrite(read, larger))),
-                            rewrite(read, moved, refl)),
+                    s.insert_at(n, j, b) = s.with_byte_within(n, j, a).insert_at(n, j - 1, b)
+                        := simp_only(List::insert_at, fill, List::sift, read, discharge := bv_omega),
+                    = (init ++ Cons(a, Cons(a, rest))).insert_at(n, j - 1, b) := cong_fn(λ (l: List<u8>) => l.insert_at(n, j - 1, b), moved),
                     = init.insert_ordered(BitVec::unsigned_le, b) ++ Cons(a, rest) := ih,
                     = (init.insert_ordered(BitVec::unsigned_le, b) ++ [a]) ++ rest := sym(init.insert_ordered(BitVec::unsigned_le, b).append_assoc([a], rest)),
                     = (init ++ [a]).insert_ordered(BitVec::unsigned_le, b) ++ rest
@@ -153,14 +153,14 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
                     = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest := cong_fn(λ (l: List<u8>) => l.insert_ordered(BitVec::unsigned_le, b) ++ rest, sym(cut)),
                 }
         } else {
-                let ab: BitVec::unsigned_le(a, b) = omega;
+                let ab: BitVec::unsigned_le(a, b) = bv_omega;
                 let ends: (ys ++ [b] = init ++ [a, b]) = trans(cong_fn(λ (l: List<u8>) => l ++ [b], cut), init.append_assoc([a], [b]));
                 let sorted_out: (ys ++ [b]).Sorted(BitVec::unsigned_le) =
                     rewrite(ends, init.sorted_snoc(BitVec::unsigned_le, a, b, rewrite(sym(cut), sorted), ab));
                 let moved: Perm(Cons(b, ys), ys ++ [b]) = j(ys.append_nil(), λ l _ => Perm(Cons(b, l), ys ++ [b]), ys.perm_middle(b, Nil));
                 calc {
                     s.insert_at(n, j, b) = s.with_byte_within(n, j, b)
-                        := cong_fn(λ m => fill(m, n, b), List::sift::True::False(s, n, j, b.zero_extend(56), h, rewrite(read, larger))),
+                        := simp_only(List::insert_at, fill, List::sift, read, discharge := bv_omega),
                     = ys ++ Cons(b, rest) := write_split(ys, z, rest, n, j, b, sized, at),
                     = (ys ++ [b]) ++ rest := sym(ys.append_assoc([b], rest)),
                     = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
@@ -172,7 +172,7 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
         let empty: (ys.len() = 0) = omega;
         calc {
             s.insert_at(n, j, b) = s.with_byte_within(n, j, b)
-                := cong_fn(λ m => fill(m, n, b), List::sift::False(s, n, j, b.zero_extend(56), h)),
+                := simp_only(List::insert_at, fill, List::sift, discharge := bv_omega),
             = ys ++ Cons(b, rest) := write_split(ys, z, rest, n, j, b, sized, at),
             = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest := (match ys as λ u => u.len() = 0 → u ++ Cons(b, rest) = u.insert_ordered(BitVec::unsigned_le, b) ++ rest {
                 Nil => λ _ => refl,
@@ -214,7 +214,11 @@ theorem sort_from_step(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorte
     let ih = later(s1, sized1, sorted1);
     let taken_out: (s.insert_at(n, i, s.byte_within(n, i)) = s1) = rewrite(read, inserted);
     let after: (List::sort_from(s, n, i).after = List::sort_from(s1, n, i + 1).after) =
-        trans(cong_fn(λ m => m.after, List::sort_from::True(s, n, i, h)), cong_fn(λ (l: List<u8>) => List::sort_from(l, n, i + 1).after, taken_out));
+        calc {
+            List::sort_from(s, n, i).after = List::sort_from(s.insert_at(n, i, s.byte_within(n, i)), n, i + 1).after
+                := simp_only(List::sort_from, List::insert_at, fill, discharge := bv_omega),
+            = List::sort_from(s1, n, i + 1).after := cong_fn(λ (l: List<u8>) => List::sort_from(l, n, i + 1).after, taken_out),
+        };
     let moved: Perm(s, s1) = j(sym(cut), λ l _ => Perm(l, s1), (ys ++ Cons(z, more)).perm_trans(Cons(z, ys ++ more), s1,
         Cons(z, ys ++ more).perm_sym(ys ++ Cons(z, more), ys.perm_middle(z, more)),
         Cons(z, ys).perm_append_l(ys1, more, List::perm_of_picks(z, ys1, ys, picks))));
@@ -229,7 +233,7 @@ theorem sort_from_done(s: List<u8>, n, i: u64, sized: s.len() = n.toNat(), sorte
 {
     let past: ¬(i.toNat() < n.toNat()) = h;
     let all: (s.take(i.toNat()) = s) = s.take_all(i.toNat(), omega);
-    let stays: (List::sort_from(s, n, i).after = s) = rewrite(List::sort_from::False(s, n, i, h), refl);
+    let stays: (List::sort_from(s, n, i).after = s) = simp_only(List::sort_from, discharge := bv_omega);
     let ordered: List::sort_from(s, n, i).after.Sorted(BitVec::unsigned_le) = rewrite(stays, rewrite(sym(all), sorted));
     let same: Perm(s, List::sort_from(s, n, i).after) = rewrite(stays, s.perm_refl());
     And(ordered, same)
