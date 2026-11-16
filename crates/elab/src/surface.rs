@@ -716,6 +716,14 @@ mod count_holes_impl {
                 // pre-count is the one thing the goal mechanism cannot survive
                 // under-counting.
                 named.iter().for_each(|a| expr(&a.expr, n));
+                // `simp_only`'s discharger runs once per side condition its
+                // laws ask, not once: a branch equation asks each test on
+                // its path (issues/simp-only-deep-branch-equations.md).
+                if let ExprKind::Var(h) = &head.kind
+                    && matches!(h.as_str(), "simp_only" | "simp_show")
+                {
+                    named.iter().filter(|a| a.name == "discharge").for_each(|a| n.n += (n.score)(&a.expr) * (DISCHARGE_RUNS - 1));
+                }
             }
             // A type argument can contain a hole (`f<a = ?p>(…)`), and the
             // pre-count is the one thing the goal mechanism cannot survive
@@ -862,6 +870,10 @@ const OMEGA_ATOM_SLOTS: u32 = 2;
 /// `omega` calls in the proof it writes (side conditions that share a
 /// context and atoms share a slot).
 const BV_OMEGA_ATOM_SLOTS: u32 = 4;
+
+/// Runs of a `discharge :=` search a `simp_only` reserves slots for: an
+/// over-count costs unused slots, an under-count restarts the declaration.
+const DISCHARGE_RUNS: u32 = 8;
 
 fn tactic_slot_score(e: &Expr) -> u32 {
     match &e.kind {

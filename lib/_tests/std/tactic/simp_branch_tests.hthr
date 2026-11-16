@@ -88,3 +88,31 @@ theorem last_of_zero<A>(xs: List<A>, d: A): last_of(xs, 0, d) = d {
 // The call left as it is, and why each branch was not taken.
 // expect-error: `count_down::True::True`: its side condition `ofNat(0) < left` is not a hypothesis here, and nothing discharged it
 theorem count_down_unknown(i, left: u64): count_down(i, left) = i { simp_only(count_down, discharge := bv_omega) }
+
+// ---- Branches many tests deep ----
+
+// Every branch equation is a law, however deep its branch: the equations are
+// looked up along the body's own tests, not to a fixed depth
+// (issues/simp-only-deep-branch-equations.md). Eight tests in a chain.
+fn rank(x: u64) → u64 {
+    if x < 1 { 0 } else if x < 2 { 1 } else if x < 4 { 2 } else if x < 8 { 3 }
+    else if x < 16 { 4 } else if x < 32 { 5 } else if x < 64 { 6 } else if x < 128 { 7 } else { 8 }
+}
+theorem rank_seven(x: u64, a: 64 <= x, b: x < 128): rank(x) = 7 { simp_only(rank, discharge := bv_omega) }
+theorem rank_eight(x: u64, a: 128 <= x): rank(x) = 8 { simp_only(rank, discharge := bv_omega) }
+// The tests as hypotheses, in the law's own spelling: no discharger.
+theorem rank_seven_hyps(x: u64, t1: ¬(x < 1), t2: ¬(x < 2), t3: ¬(x < 4), t4: ¬(x < 8), t5: ¬(x < 16), t6: ¬(x < 32), t7: ¬(x < 64), t8: x < 128): rank(x) = 7 {
+    simp_only(rank)
+}
+// The same depth under a measured recursion, whose equations start from its
+// `_unfold`: a call seven tests deep takes its branch.
+fn climb(x, left: u64) → u64 decreases left.toNat() {
+    if h: 0 < left {
+        if x < 1 { climb(x + 1, left - 1) } else if x < 2 { 1 } else if x < 4 { 2 } else if x < 8 { 3 }
+        else if x < 16 { 4 } else if x < 32 { 5 } else if x < 64 { 6 } else { x }
+    } else {
+        x
+    }
+}
+theorem climb_deep(x, left: u64, a: 0 < left, b: 64 <= x): climb(x, left) = x { simp_only(climb, discharge := bv_omega) }
+theorem climb_six(x, left: u64, a: 0 < left, b: 32 <= x, c: x < 64): climb(x, left) = 6 { simp_only(climb, discharge := bv_omega) }

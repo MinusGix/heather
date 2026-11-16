@@ -443,11 +443,15 @@ impl GoalArena {
         }
         let mut goals = self.entries.borrow_mut();
         let mut spans = self.spans.borrow_mut();
-        let key = (span.start, span.end, Some("#proved".to_string()));
-        let k = match spans.get(&key) {
-            Some(&k) if matches!(goals[k].state, GoalState::Proved(_)) && goals[k].cx.gamma == cx.gamma && goals[k].ty == ty => k,
-            Some(_) => return None,
+        // One site can prove several statements (a `simp_only` discharger,
+        // once per side condition): each its own slot, keyed by the slot.
+        let same = goals.iter().position(|goal| {
+            goal.span == span && matches!(goal.state, GoalState::Proved(_)) && goal.cx.gamma == cx.gamma && goal.ty == ty
+        });
+        let k = match same {
+            Some(k) => k,
             None => {
+                let key = (span.start, span.end, Some(format!("#proved{}", goals.len())));
                 let k = goals.len();
                 if k as u32 >= self.base {
                     return None;
