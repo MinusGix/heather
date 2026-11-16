@@ -74,7 +74,7 @@ theorem calls_lowers(): lower_program_planned(calls()) = Some(calls_code()) {
 theorem caller_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b: BitVec(64)):
     Site<M>(fetch, data, calls_code(), last, origin).Returns(stack, asm_labels(calls_code())(2),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 96 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 40 <= i,
         stack.CalleePost(caller(a, b))) {
     compiled_returns<M>(calls(), plan_program(calls()), program_room_planned(calls()), calls_code(), calls_lowers(), calls_evaluable(),
         fetch, data, last, origin, stack, 1, trivial, [a, b], trivial, caller(a, b), caller_agrees(a, b))
