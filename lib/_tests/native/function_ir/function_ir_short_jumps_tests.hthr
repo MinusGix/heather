@@ -1,0 +1,209 @@
+// Probes of short jumps in the function lowering
+// (function_ir_lower_calls; issues/function-ir-verified-short-jumps.md): a
+// placement's `Short` places name the labels whose JCC and JMP items take
+// the two-byte form, and the layout check (`Prog::jumps_land`) is what makes
+// that choice sound, so a hint it cannot honour is refused rather than
+// trusted. Each program is lowered by evaluation. The controls: a jump
+// hinted short past a signed byte, and a short JCC that would land behind.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+
+// How many items of a program are short jumps.
+fn Prog::short_items(self p: Prog) → Nat {
+    match p {
+        Start => 0,
+        At(before, _, item) => match item {
+            JccShort(_, _) => Succ(before.short_items()),
+            JmpShort(_) => Succ(before.short_items()),
+            _ => before.short_items(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The head
+
+theorem short_head_read(): placement_short([Saving(1), CallSlots(3), Short(2), Short(5), Into(Rax)]) = [2, 5] { refl }
+theorem short_head_alone(): placement_short([Short(4), Into(Rax)]) = [4] { refl }
+theorem no_short_head(): placement_short([Saving(1), Into(Rax)]) = [] { refl }
+theorem short_head_is_not_a_place(): placement_body([Saving(1), CallSlots(3), Short(2), Into(Rax)]) = [Into(Rax)] { refl }
+
+// ---------------------------------------------------------------------------
+// A branch, both jumps short
+
+// byte_at(buffer, i): the byte at `i`, or 256 past the end, as in
+// function_ir_lower_reads_tests: one JCC over the load, one JMP over the
+// other arm.
+fn byte_at() → Function {
+    Function(parameters := [0, 1, 2], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [UnsignedLessThan(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(0), word(1), word(2), bit(3)])),
+            Conditional(Ports([word(0), word(1), word(2), bit(3)]), 3, Ports([word(0), word(2)]), Ports([word(4)]),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [BufferLoad(output := 4, buffer := 0, index := 2)],
+                    outputs := Ports([word(4)]))),
+                Dataflow(Region(inputs := Ports([word(0), word(2)]), nodes := [Const(width := 64, output := 4, value := 256)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+fn byte_at_short() → List<Place> { [Short(2), Short(3), Folded, Into(Rax), Into(Rax)] }
+
+// The near program with its two jumps in the two-byte form: seven bytes
+// shorter.
+fn byte_at_program() → Prog {
+    Start
+        .label(1).put(Block([]))
+        .put(Block([]))
+        .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
+        .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
+        .label(3)
+        .put(Block([])).put(Block([])).put(Ret)
+}
+fn byte_at_short_program() → Prog {
+    Start
+        .label(1).put(Block([]))
+        .put(Block([]))
+        .put(Block([CmpRR(Rdx, Rsi)])).put(JccShort(AE, 2))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(LoadByte(ByteLoad(Rax, Rax))).put(JmpShort(3))
+        .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
+        .label(3)
+        .put(Block([])).put(Block([])).put(Ret)
+}
+
+theorem byte_at_near_lowers(): lower_program_lent([byte_at()], [Folded, Into(Rax), Into(Rax)], [1]) = Some(byte_at_program()) { refl }
+theorem byte_at_short_lowers(): lower_program_lent([byte_at()], byte_at_short(), [1]) = Some(byte_at_short_program()) { refl }
+theorem byte_at_shorter(): prog_len(byte_at_short_program()) + 7 = prog_len(byte_at_program()) { refl }
+// Hinting one label leaves the other jump near.
+theorem byte_at_one_short(): lower_program_lent([byte_at()], [Short(3), Folded, Into(Rax), Into(Rax)], [1]).map(λ p => p.short_items()) = Some(1) { refl }
+
+// The one theorem, over the short program as over any other.
+theorem byte_at_short_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, byte_at_short_program(), last, origin).CallsOver(stack, program_effects([byte_at()]), program_room([byte_at()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([byte_at()], byte_at_short(), Lending::reading([1], addresses, buffers), byte_at_short_program(),
+        byte_at_short_lowers(), fetch, data, last, origin, stack, top, loan, trivial,
+        λ b stores => false_elim(program_quiet_stores([byte_at()], b, trivial, stores)))
+}
+
+// ---------------------------------------------------------------------------
+// A loop: the jump back is a short JMP behind
+
+// sum(buffer): its bytes added, as in function_ir_lower_reads_tests.
+fn sum() → Function {
+    Function(parameters := [0, 1], lent := 1,
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]),
+                nodes := [Const(width := 64, output := 2, value := 0), Const(width := 64, output := 3, value := 0)],
+                outputs := Ports([word(0), word(1), word(2), word(3)])),
+            Loop(inputs := [0, 1, 2, 3], bound := 1, parameters := [10, 11, 12, 13], count := 14,
+                body := Sequence(
+                    Region(inputs := Ports([word(10), word(11), word(12), word(13), word(14)]),
+                        nodes := [UnsignedLessThan(width := 64, output := 20, left := 14, right := 14),
+                            UnsignedLessThan(width := 64, output := 15, left := 12, right := 11)],
+                        outputs := Ports([word(10), word(11), word(12), word(13), bit(20), bit(15)])),
+                    Conditional(Ports([word(10), word(11), word(12), word(13), bit(20), bit(15)]), 15, Ports([word(12), word(13)]),
+                        Ports([word(16), word(17)]),
+                        Sequence(
+                            Region(inputs := Ports([word(12), word(13)]), nodes := [BufferLoad(output := 18, buffer := 0, index := 12)],
+                                outputs := Ports([word(12), word(13), word(18)])),
+                            Dataflow(Region(inputs := Ports([word(12), word(13), word(18)]),
+                                nodes := [Add(width := 64, output := 16, left := 13, right := 18),
+                                    Const(width := 64, output := 19, value := 1),
+                                    Add(width := 64, output := 17, left := 12, right := 19)],
+                                outputs := Ports([word(16), word(17)])))),
+                        Dataflow(Region(inputs := Ports([word(12), word(13)]),
+                            nodes := [Move(width := 64, output := 16, source := 13), Move(width := 64, output := 17, source := 12)],
+                            outputs := Ports([word(16), word(17)]))))),
+                exit := 20, next := [10, 11, 17, 16], outputs := [4, 5, 6, 7], exhausted := 8)),
+        result := 7)
+}
+
+// Every label the function names, hinted short.
+fn sum_short() → List<Place> { [Short(2), Short(3), Short(4), Short(5), Short(6), Short(7), Short(8)] ++ plan_program([sum()]) }
+
+theorem sum_short_present(): lower_program_lent([sum()], sum_short(), [1]).is_some().IsTrue() { trivial }
+fn sum_short_program() → Prog { lower_program_lent([sum()], sum_short(), [1]).get(sum_short_present()) }
+theorem sum_short_lowers(): lower_program_lent([sum()], sum_short(), [1]) = Some(sum_short_program()) {
+    Option::some_get(lower_program_lent([sum()], sum_short(), [1]), sum_short_present())
+}
+theorem sum_short_items(): sum_short_program().short_items() = 6 { refl }
+
+theorem sum_short_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, buffers: Buffers(), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::reading([1], addresses, buffers).spans())):
+    Site<M>(fetch, data, sum_short_program(), last, origin).CallsOver(stack, program_effects([sum()]), program_room([sum()]), 1,
+        Lending::reading([1], addresses, buffers), top) {
+    lower_program_lent_correct<M>([sum()], sum_short(), Lending::reading([1], addresses, buffers), sum_short_program(), sum_short_lowers(),
+        fetch, data, last, origin, stack, top, loan, trivial, λ b stores => false_elim(program_quiet_stores([sum()], b, trivial, stores)))
+}
+
+// ---------------------------------------------------------------------------
+// Controls: what the layout check refuses
+
+// far(a, b): if a < b, a doubled forty-eight times, else a. The arm the JCC
+// skips is longer than a signed byte reaches.
+fn doublings(from, k: Nat) → List<Node> {
+    match k { Zero => [], Succ(k) => Cons(Add(width := 64, output := from + 1, left := from, right := from), doublings(from + 1, k)) }
+}
+fn far() → Function {
+    Function(parameters := [0, 1],
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]),
+                nodes := [UnsignedLessThan(width := 64, output := 2, left := 0, right := 1)],
+                outputs := Ports([word(0), bit(2)])),
+            Conditional(Ports([word(0), bit(2)]), 2, Ports([word(0)]), Ports([word(60)]),
+                Dataflow(Region(inputs := Ports([word(0)]),
+                    nodes := doublings(0, 48) ++ [Move(width := 64, output := 60, source := 48)],
+                    outputs := Ports([word(60)]))),
+                Dataflow(Region(inputs := Ports([word(0)]), nodes := [Move(width := 64, output := 60, source := 0)],
+                    outputs := Ports([word(60)]))))),
+        result := 60)
+}
+
+theorem far_near_lowers(): lower_program([far()], plan_program([far()])).is_some() = True { refl }
+// The JMP over the short arm may be short; the JCC over the long one may not.
+theorem far_jmp_short_lowers(): lower_program([far()], Cons(Short(3), plan_program([far()]))).map(λ p => p.short_items()) = Some(1) { refl }
+theorem far_jcc_short_refused(): lower_program([far()], Cons(Short(2), plan_program([far()]))) = None { refl }
+
+// A short JCC lands only ahead: one behind is refused by the check the
+// lowering ends with, though a short JMP to the same label lands.
+fn jcc_behind() → Prog { Start.label(1).put(Block([CmpRR(Rdx, Rsi)])).put(JccShort(AE, 1)).put(Ret) }
+fn jmp_behind() → Prog { Start.label(1).put(Block([CmpRR(Rdx, Rsi)])).put(JmpShort(1)).put(Ret) }
+theorem jcc_behind_refused(): jcc_behind().jumps_land() = False { refl }
+theorem jmp_behind_lands(): jmp_behind().jumps_land() = True { refl }

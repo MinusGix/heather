@@ -958,6 +958,10 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
 }}
+// And their lengths.
+fn {prefix}_top_lens(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
+    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, _, item) => {prefix}_top_lens(before, j, Cons(asm_len(item), after)) }} }}
+}}
 "));
     let mut fork = Reading::new(elab, answers);
     let first = format!("{definitions}{plans}");
@@ -965,6 +969,8 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
+    // Where each function's placement starts in it.
+    let mut starts_at = Vec::with_capacity(m);
     // What each function's placement asks it to save (`placement_saves`)
     // and how many call slots it asks for (`placement_slots`, eight with no
     // head), which its frame is sized by.
@@ -972,6 +978,7 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
         let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
+        starts_at.push(placement.len());
         // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
         let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
         saves.push(saving.unwrap_or(0));
@@ -979,8 +986,10 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
         for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // What a call saves, a mask, a function's count of call
-                // slots and its count of saves (`Place::number`).
+                // A label whose jumps are short, what a call saves (a
+                // mask), a function's count of call slots and its count of
+                // saves (`Place::number`).
+                n if n >= 289 => format!("Short({})", n - 289),
                 n if n >= 33 => format!("Spilling({})", n - 33),
                 n if n >= 24 => format!("CallSlots({})", n - 24),
                 n if n >= 17 => format!("Saving({})", n - 17),
@@ -988,7 +997,7 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
             });
         }
     }
-    let rest = |left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
+    let rest = |placement: &[String], left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
     // The room table the code is lowered under: each function's frame as
     // its placement sizes it, and its callees' rooms below
     // (`program_rooms_by`). The lowering checks it a function at a time
@@ -1009,7 +1018,7 @@ fn {prefix}_rooms() → Nat → Nat {{ λ (f: Nat) => rooms_at([{}], f) }}
 ", numbers(&table_rooms));
     // Function `k`'s code and what the placement has left after it, as the
     // certificate states them and as the next function's read starts from.
-    let stated = |k: usize, items: &[(u64, String)], left: usize| {
+    let stated = |placement: &[String], k: usize, items: &[(u64, String)], left: usize| {
         let mut code = if k == 0 { "Start".to_string() } else { format!("{prefix}_code_{}()", k - 1) };
         for (name, item) in items { code = format!("At({code},\n    {name}, {item})"); }
         format!("
@@ -1018,7 +1027,7 @@ fn {prefix}_code_{k}() → Prog {{
 }}
 
 fn {prefix}_rest_{k}() → List<Place> {{ {} }}
-", rest(left))
+", rest(placement, left))
     };
     let mut items: Vec<(u64, String)> = Vec::new();
     // (items so far, places left, next label) after each function.
@@ -1030,9 +1039,9 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
     for k in 0..m {
         let (taken, left, names) = after.last().copied().unwrap_or((0, placement.len(), m as u64));
         let before = if k == 0 {
-            format!("fn {prefix}_placement() → List<Place> {{ {} }}\n", rest(placement.len()))
+            format!("fn {prefix}_placement() → List<Place> {{ {} }}\n", rest(&placement, placement.len()))
         } else {
-            stated(k - 1, &items[after.get(k.wrapping_sub(2)).map_or(0, |step| step.0)..taken], left)
+            stated(&placement, k - 1, &items[after.get(k.wrapping_sub(2)).map_or(0, |step| step.0)..taken], left)
         };
         let (prog, places) = if k == 0 { ("Start".to_string(), format!("{prefix}_placement()")) } else { (format!("{prefix}_code_{}()", k - 1), format!("{prefix}_rest_{}()", k - 1)) };
         let step = format!("{probe}_{k}");
@@ -1040,7 +1049,8 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
 fn {prefix}_read_{k}() → List<Nat> {{
     match {emitted} {{
         None => [],
-        Some(e) => Cons(prog_depth(e.prog), Cons(e.placement.len(), Cons(e.names, {prefix}_top(e.prog, prog_depth(e.prog) - {taken}, [])))),
+        Some(e) => Cons(prog_depth(e.prog), Cons(e.placement.len(), Cons(e.names,
+            {prefix}_top_lens(e.prog, prog_depth(e.prog) - {taken}, {prefix}_top(e.prog, prog_depth(e.prog) - {taken}, []))))),
     }}
 }}
 ", uses(&modules), emitted = emit(&prog, k, &places, names));
@@ -1066,8 +1076,29 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
                     at.map_or(String::new(), |at| format!(", at {at}")),
                     nodes.map_or(String::new(), |nodes| format!("\n  the function's nodes, values by their ids: {nodes}"))));
             },
-            [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
-                let read = read_items(&numbers[3..])?;
+            [count, places, names, ..] if count as usize >= taken && places as usize <= left && numbers.len() >= 3 + count as usize - taken => {
+                let new = count as usize - taken;
+                let lens = &numbers[3..3 + new];
+                let mut read = read_items(&numbers[3 + new..])?;
+                if read.len() != new { return Err(format!("function {k}'s emission did not read back")); }
+                // Its jumps in the two-byte form where they reach: the
+                // placement asks for them (`Short` after its head), and the
+                // code is stated with them, which the certificate's
+                // emission of that placement checks.
+                let short = super::labels::relax(&read, lens);
+                if !short.is_empty() {
+                    for (_, item) in read.iter_mut() {
+                        let near = item.starts_with("Jcc(") || item.starts_with("Jmp(");
+                        if near && super::labels::jump(item).is_some_and(|(to, _)| short.contains(&to)) { *item = super::labels::shortened(item); }
+                    }
+                    let start = starts_at[k];
+                    let head = placement[start..].iter().take(2).take_while(|place| place.starts_with("Saving(") || place.starts_with("CallSlots(")).count();
+                    let at = start + head;
+                    for (i, to) in short.iter().enumerate() { placement.insert(at + i, format!("Short({to})")); }
+                    for later in starts_at.iter_mut().skip(k + 1) { *later += short.len(); }
+                    // The places left after each earlier function grew by them.
+                    for step in after.iter_mut() { step.1 += short.len(); }
+                }
                 // The contract's ground for needing no stack alignment and
                 // touching no state the model lacks: a function's code
                 // calls only compiled code (docs/native/native-library-exports-design.md
@@ -1094,7 +1125,7 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
     let closing = format!("{probe}_code");
     let text = format!("{imports}{}{}
 fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
-", uses(&modules), stated(last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
+", uses(&modules), stated(&placement, last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
     fork.define(&closing, &text);
     modules.push(closing.clone());
     let lens = read(&mut fork, &closing, "lens")?;
@@ -1148,7 +1179,7 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     text.push_str(&format!("
 // The placement the heuristic chose; the theorem holds for any.
 fn {prefix}_placement() → List<Place> {{ {} }}
-{rooms_definition}", rest(placement.len())));
+{rooms_definition}", rest(&placement, placement.len())));
     // The literal: `{prefix}_at_{c}` its first `c` items at each cut, and
     // each function's code the cut it ends at.
     text.push_str(&super::emission::code(prefix, &items, &cuts));
@@ -1158,7 +1189,7 @@ fn {prefix}_placement() → List<Place> {{ {} }}
 fn {prefix}_code_{k}() → Prog {{ {prefix}_at_{count}() }}
 
 fn {prefix}_rest_{k}() → List<Place> {{ {} }}
-", rest(left)));
+", rest(&placement, left)));
         let earlier = if k == 0 { "Nil".to_string() } else { format!("{stem}_first_{}()", k - 1) };
         let (started, functions, next) = if lent {
             (if k == 0 { format!("emit_functions_lent_start({prefix}_placement(), {m}, {prefix}_counts(), {prefix}_rooms())") } else { format!("{prefix}_emitted_{}()", k - 1) },

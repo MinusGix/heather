@@ -48,6 +48,45 @@ pub(super) fn jump(item: &str) -> Option<(u64, bool)> {
     }
 }
 
+/// Which labels' jumps can take the two-byte form, over one function's
+/// items as emitted near (`JccShort`, `JmpShort`; issues/function-ir-verified-short-jumps.md):
+/// every JCC and JMP to a label of these items starts short, and a label
+/// any of whose jumps does not reach it within a signed byte goes back to
+/// near, until nothing changes. Lengthening a jump only moves labels
+/// further apart, so the set only shrinks and the loop ends. Untrusted: the
+/// placement's `Short` heads say it, and the lowering's landing check is
+/// what holds a short jump to its target.
+pub(super) fn relax(items: &[(u64, String)], lens: &[u64]) -> BTreeSet<u64> {
+    let named: BTreeSet<u64> = items.iter().filter(|(name, _)| *name != 0).map(|(name, _)| *name).collect();
+    let jumps: Vec<(usize, u64, bool)> = items.iter().enumerate()
+        .filter(|(_, (_, item))| item.starts_with("Jcc(") || item.starts_with("Jmp("))
+        .filter_map(|(i, (_, item))| jump(item).map(|(to, conditional)| (i, to, conditional)))
+        .filter(|(_, to, _)| named.contains(to)).collect();
+    let mut short: BTreeSet<u64> = jumps.iter().map(|&(_, to, _)| to).collect();
+    loop {
+        let sized: Vec<u64> = items.iter().zip(lens).enumerate().map(|(i, (_, &len))| match jumps.iter().find(|&&(j, _, _)| j == i) {
+            Some(&(_, to, _)) if short.contains(&to) => 2,
+            _ => len,
+        }).collect();
+        let at = offsets(&sized);
+        let offset: std::collections::BTreeMap<u64, u64> = items.iter().enumerate().filter(|(_, (name, _))| *name != 0).map(|(i, (name, _))| (*name, at[i])).collect();
+        let far: Vec<u64> = jumps.iter().filter(|&&(_, to, _)| short.contains(&to)).filter(|&&(i, to, conditional)| {
+            let distance = offset[&to] as i64 - at[i + 1] as i64;
+            // A JCC lands ahead only (`ShortForward`), a JMP either way.
+            !(if conditional { (0..=127).contains(&distance) } else { (-128..=127).contains(&distance) })
+        }).map(|&(_, to, _)| to).collect();
+        if far.is_empty() { return short; }
+        for to in far { short.remove(&to); }
+    }
+}
+
+/// An item with its jump in the two-byte form.
+pub(super) fn shortened(item: &str) -> String {
+    if let Some(rest) = item.strip_prefix("Jcc(") { format!("JccShort({rest}") }
+    else if let Some(rest) = item.strip_prefix("Jmp(") { format!("JmpShort({rest}") }
+    else { item.to_string() }
+}
+
 /// The bytes linked: each jump's displacement, its item's last four bytes,
 /// written as `near_rel` has it (x86_64_layout), from the item's end to its
 /// label's offset around 2^32. The reads give every item's bytes before the
