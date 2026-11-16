@@ -1,0 +1,73 @@
+// Probes for docs/native/optimizer-rules-design.md: a rule of the optimizer
+// stated as a theorem about words, with no node, id or valuation in it, and
+// the clause's soundness (function_ir_rules) got from it by the same three
+// moves each time: read the words at the valuation, rewrite the conclusion
+// by the equation of each node premise, hand the fact premises to the
+// theorem. What a `rule` generator would write is the second theorem of
+// each pair.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_state;
+import bitvec;
+import bitvec_bytes;
+import bitvec_nat;
+import bitvec_resize;
+import bitvec_ring;
+import bitvec_shift_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+
+// x + 0 = x.
+theorem add_zero_words(w: Nat, x: BitVec(w)): x.add(BitVec::ofNat(0)) = x { BitVec::add_zero(w, x) }
+
+theorem add_zero_glue(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() {
+    λ values _ held => trans(held.right.left,
+        trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), add_zero_words(w, values(w, x))))
+}
+
+// l in a..=b, r in c..=d, b + d a word: l + r in a + c ..= b + d.
+theorem within_add_words(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), right: Range(c, d).Holds(r), fits: b + d <= word_top()):
+    Range(a + c, b + d).Holds(l.add(r)) {
+    let high: (l.toNat() + r.toNat() <= b + d) = Nat::add_le_mono(l.toNat(), b, r.toNat(), d, left.right, right.right);
+    let sum: (l.add(r).toNat() = l.toNat() + r.toNat()) = trans(BitVec::toNat_add_mod(64, l, r),
+        (l.toNat() + r.toNat()).mod_of_lt(Nat::pow(2, 64), Nat::le_trans(l.toNat() + r.toNat(), b + d, word_top(), high, fits)));
+    j(sym(sum), λ n _ => (a + c <= n) ∧ (n <= b + d), ⟨Nat::add_le_mono(a, l.toNat(), c, r.toNat(), left.left, right.left), high⟩)
+}
+
+theorem within_add_glue(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() {
+    λ values _ held => j(sym(held.left), λ w _ => Range(a + c, b + d).Holds(w),
+        within_add_words(values(64, l), values(64, r), a, b, c, d, held.right.left, held.right.right.left, leb_below(b + d, word_top(), fits)))
+}
+
+// Swapping a word's bytes, widening, narrowing and swapping again is the word.
+theorem swap_twice_words(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes() = w {
+    let back: (w.swap_bytes().resize(64).resize(32) = w.swap_bytes()) = BitVec::resize_round_trip(32, 64, Nat::leb_sound(32, 64, trivial), w.swap_bytes());
+    trans(cong_fn(λ (z: u32) => z.swap_bytes(), trans(back, BitVec::swap_bytes_32(w))),
+        trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
+}
+
+theorem swap_twice_glue(v, h, x, s, w: Nat): swap_twice(v, h, x, s, w).Sound() {
+    λ values _ held => {
+        let first: (values(64, x) = values(32, w).swap_bytes().resize(64)) = trans(held.right.left, cong_fn(λ (z: u32) => z.resize(64), held.left));
+        let second: (values(32, h) = values(32, w).swap_bytes().resize(64).resize(32)) =
+            trans(held.right.right.left, cong_fn(λ (z: u64) => z.resize(32), first));
+        trans(held.right.right.right.left, trans(cong_fn(λ (z: u32) => z.swap_bytes(), second), swap_twice_words(values(32, w))))
+    }
+}
+
+// A word that is bytes of a buffer joined and shifted, shifted further.
+theorem join_shift_words(joined: u64, sh, c: Nat): joined.shift_left(sh).shift_left(c) = joined.shift_left(sh + c) {
+    sym(joined.shift_left_add(sh, c))
+}
+
+theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() {
+    λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: u64) => z.shift_left(c), held.left),
+        join_shift_words(buffer_join(buffers, f, values(64, i).toNat(), n), sh, c)))
+}

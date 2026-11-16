@@ -1,0 +1,337 @@
+# Optimizer rules as theorems about words
+
+A proposal for how the optimizer's rules and its `learn` search are written,
+shared and read. It extends `optimizer-design.md` §4 ("an optimization is a
+theorem"), which sketched a `rule` prefix before the rules existed, and
+replaces that section's spelling with one that covers what the rules became.
+Nothing here is built except the probe in §5; §11 lists what Minus decides.
+The work is tracked in `issues/optimizer-rules-as-theorems.md`.
+
+## 1. What writing a rule costs today
+
+A rule (`lib/native/function_ir/function_ir_rules.hthr`) is three pieces
+written by hand, and the same rule is then spelled a fourth time in the
+search:
+
+```heather
+// 1. The clause, over node constructors and ids.
+fn within_add(o, l, r, a, b, c, d: Nat) → Clause {
+    Clause([Is(Add(64, o, l, r)), Within(l, a, b), Within(r, c, d)], Within(o, a + c, b + d))
+}
+// 2. Its soundness, over a valuation and a tuple of premises (`held.right.left.right`).
+theorem within_add_sound(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add(o, l, r, a, b, c, d).Sound() { … }
+// 3. Its line of `rules()`, unpacking the numbers three times.
+Rule::when(λ n => (num(n, 4) + num(n, 6)).leb(word_top()),
+    λ n => within_add(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
+    λ n ok => within_add_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), ok)),
+// 4. In function_ir_learn, the recogniser: by the rule's place in the table, numbers in the clause's order.
+True => Passed([], seen.learn(o, Range(a.low + b.low, a.high + b.high), [l, r], Derive(4, [o, l, r, a.low, a.high, b.low, b.high]))),
+```
+
+What is wrong with that, in the order it hurts:
+
+- **It does not read as what it says.** The rule is "a sum that cannot wrap
+  lies within the sums of its parts' bounds". The clause says it in ids:
+  `o`, `l`, `r` are numbers naming words, the reader has to hold which
+  argument of `Add` is the output, and `Is`, `Within`, `AtMost` are the
+  replayer's bookkeeping showing through.
+- **The proof is mostly plumbing.** Each soundness proof introduces a
+  valuation, walks a right-nested conjunction, rewrites by each node's
+  equation, and only then proves something about words.
+- **A side condition is a Boolean function of a list of numbers**, with the
+  proposition it decides recovered by hand (`leb_below`).
+- **A rule is named by its place in a list.** `Derive(44, …)` in a plan, in
+  `learn` and in the probes. A user's module cannot add one.
+- **`learn` restates every rule.** A mistake in the order of a `Derive`'s
+  numbers is found as a replay refusal.
+
+## 2. The proposal in one picture
+
+**A rule is an ordinary theorem about words. The author never writes a
+node, an id, a valuation, a clause or a guard.** The `rule` prefix reads the
+theorem's statement and produces all four pieces of §1 from it.
+
+The rules above and their neighbours, as they would be written (spelling of
+the fact forms is §4's; operators are `u64`'s own):
+
+```heather
+rule theorem add_zero({w: Nat}, x: BitVec(w)): x + 0 = x
+
+rule theorem within_add(l, r: u64, {a, b, c, d: Nat},
+    left: l.within(a, b), right: r.within(c, d), fits: b + d ≤ u64::top()):
+    (l + r).within(a + c, b + d)
+
+rule theorem narrow_back(s: u64, {n, high: Nat}, small: s.within(0, high), fits: high < 2 ^ n):
+    s.resize(n).resize(64) = s
+
+rule theorem below_yes(l, r: u64, {a, b: Nat}, left: l.within(0, a), right: r.within(b, u64::top()), apart: a < b):
+    l.below(r) = 1
+
+rule theorem order_set(l, r: u64, below: l.below(r) = 1): l.nat() + 1 ≤ r.nat()
+
+rule theorem join_shift(f: Buffer, i, a: u64, {n, sh, c: Nat}, joined: a = f.join(i, n) << sh):
+    a << c = f.join(i, n) << (sh + c)
+
+rule theorem join_word(f: Buffer, i: u64):
+    f.join(i, 4) = f.word(i).swap_bytes().resize(64)
+```
+
+Each of these is a statement a reader of the library would write anyway, and
+several already exist there. Rule 44 (two byte swaps cancel across a widen
+and a narrow) stops being a rule of its own:
+
+```heather
+rule theorem BitVec::byte_swap_byte_swap(…): w.byte_swap(k).byte_swap(k) = w     // already in bitvec_bytes
+rule theorem BitVec::resize_round_trip(…, fits: n ≤ m, …): a.resize(m).resize(n) = a   // already in bitvec_resize
+```
+
+The search applies the second, then the first. That is §4's "a library's
+theorems are its clients' optimizations" from `optimizer-design.md`, and it
+is why the statement form matters more than the sugar: the person who knows
+a type's algebra tags its theorems in the type's own file.
+
+## 3. How a statement is read
+
+The prefix is a declaration-prefix generator written in Heather
+(`docs/metaprogramming/value-definitions-design.md`), reading the theorem's
+type as code (`fn-signature-reflection-design.md`). It classifies each
+binder by its type and each hypothesis by what it mentions.
+
+| In the statement | Becomes |
+|---|---|
+| A binder of a word type (`BitVec(w)`, `u64`, `u32`) | An id of the clause, at that width |
+| A binder `f: Buffer` | A buffer's number |
+| A binder of `Nat` | A literal: a number of the instance |
+| A term built from the IR's operators over those (`l + r`, `x.resize(n)`, `f.word(i)`) | A node premise for each operator, with a fresh id for what it writes |
+| A hypothesis that mentions only literals (`b + d ≤ u64::top()`) | A guard, decided by evaluation where the rule is applied |
+| A hypothesis that mentions a word or a buffer | A fact premise: it has to be one of the fact forms of §4 |
+| The conclusion `term = variable`, `= literal`, `= one operator` | `Move`, `Const`, or that node writing the left side's id |
+| The conclusion `term = deeper term` | The inner operators are nodes the plan puts first (as the word load does), the outermost the conclusion |
+| The conclusion a fact form of a term | That fact about the term's id |
+
+The operators it knows are a table from a library function to a node
+constructor (`BitVec::add` to `Add`, `BitVec::resize` to `Resize`, …), a
+registered value like any other, so a target that adds a node adds a row.
+
+A statement the generator cannot read is refused where it is declared, in
+the statement's words: "the hypothesis `small` mentions the word `s` and is
+not a fact the optimizer keeps (it keeps: a range, an order between two
+words, …)", or "`x.popcount()` is not an operator of the IR". A theorem can
+always be proved without being a rule, so nothing is lost by a refusal.
+
+Some of today's rules have nothing left to say in this form, which is a
+sign the form is right. `move_move` is `x = x`. `load_again` is "two reads
+of `f.byte(i)` are one word", which is one term written twice. Both are
+what the replayer's `Again` step (the same computation over the same
+operands) is for, and the generator can say so.
+
+## 4. Conditions, with no `when`
+
+`optimizer-design.md` §4 named three kinds of condition by who answers
+them. A separate `when` clause would cover only the first and would grow a
+second language for conditions. Reading the hypotheses by what they mention
+covers all of them with the one language there already is:
+
+- **On the instance's literals.** A hypothesis over `Nat` binders alone.
+  The generator asks for its `Decide` instance (`lib/std/core/bool.hthr`),
+  uses the instance's bit as the guard and `decide_true` to hand the proof
+  to the theorem. Anything decidable is a condition: a comparison, a
+  conjunction, `n.divides(64)`, a membership in a table.
+- **A certificate.** A literal that appears in no premise is supplied by
+  the search. `order_join`'s `u` and `v` are that today. So "something more
+  complex" than a comparison is a hypothesis `check(witness, …) = True`
+  for any function, with the witness a literal the search finds and the
+  kernel only checks. A linear-arithmetic step with its multipliers, or a
+  path through a graph of orders, is one rule this way (§9.3).
+- **On values.** A hypothesis about a word: a fact premise, found among the
+  facts, and where it is not there, asked for (`optimizer-design.md` §5,
+  facts on demand).
+- **On the buffers.** A term `f.byte(i)`, `f.word(i)`, `f.join(i, n)`: a
+  memory fact, which the replayer keeps until something may store.
+
+**Fact forms.** The facts the replayer keeps (`Fact` in
+`function_ir_replay.hthr`) get a spelling each, as a method on the word
+they are about, so that a hypothesis is recognised by its head:
+
+| Fact | Written | Meaning |
+|---|---|---|
+| `Within(x, a, b)` | `x.within(a, b)` | `a ≤ x.nat() ∧ x.nat() ≤ b` |
+| `AtMost(x, m, y, n)` | `x.nat() + m ≤ y.nat() + n` | as written |
+| `Low(x, y, sh)` | `x.low_byte() = (y >> sh).low_byte()` | as written |
+| `Loaded(BufferLoad(x, f, i))` | `x = f.byte(i)` | the byte now at `i` |
+| `Joined(x, f, i, n, sh)` | `x = f.join(i, n) << sh` | `n` bytes from `i`, joined |
+| `Split(w, a, b, c, d)` | `w.bytes() = [a.low_byte(), …]` | a word's bytes are four low bytes |
+
+`f: Buffer` stands for the bytes of buffer `f` as they are when the rule is
+applied, which is what `Buffers()` at a number is in a clause's soundness.
+
+## 5. Soundness is generated, and it is still required
+
+A `Rule` carries its proof, so an unproved rule cannot enter a table. That
+stays. What changes is who writes the part of the proof that is not about
+words. From the theorem the generator writes the clause's `Sound` proof,
+and it is the same three moves every time: read the words at the valuation,
+rewrite the conclusion by each node premise's equation, hand the fact
+premises (and the guard through `decide_true`) to the theorem.
+
+`lib/_tests/native/function_ir/function_ir_rule_words_tests.hthr` checks
+that this works for four of today's rules of different kinds (an equation,
+a range with a guard, a chain of four nodes, a memory fact): each is stated
+as a theorem about words with no node in it, and today's clause is proved
+sound from it by exactly those moves, in two or three lines. The word
+theorems came out shorter than the proofs they replace, because the
+plumbing left.
+
+For the author's own proof, the statement being about words means the
+ordinary tactics apply: `simp` with `BitVec`'s default set, `omega` once
+ranges are naturals. Most range and order rules should close by one call,
+and the algebraic ones by naming a lemma.
+
+One loosening worth having later: a **candidate** rule, stated and not
+proved, which the search may use to report what it would gain and which no
+certificate accepts. It tells you whether a rule is worth proving.
+
+## 6. Tables: registered, named, in sets
+
+- **`rule theorem` registers** the rule (`register def`, `registered(Rule)`,
+  `docs/metaprogramming/registered-values-design.md`). The table a
+  compilation uses is the registered rules of the program's import closure,
+  so a user's module adds rules by declaring them.
+- **A plan names a rule by its key** (`name_of(within_add)`), and the
+  replayer looks it up in the table it is given. `replay_sound` already
+  holds for any table of sound rules, so nothing proved changes. Whether
+  the certificate carries keys or places in the closure's key order is a
+  cost question for the build.
+- **Sets**, as `simp` has (`SimpSet`): a target's set (what its
+  instructions do cheaply), a default set, and a constant-time set that
+  leaves out every rule whose result depends on data. A compilation names
+  the sets it uses.
+- **`rule_check`**, as `simp_check`: two rules that undo each other at
+  equal cost, a rule no test function fires, a rule another subsumes.
+
+## 7. Learn
+
+`learn` is untrusted, so the question is only effort and reach. It is two
+things today, and they want different treatment.
+
+**Finding instances of rules.** Most of `Seen::pass` is: a node arrives,
+look up what made its operands and what is known of them, check a guard,
+propose `Derive(k, numbers)`. The generator has the premises as patterns,
+so one matcher does this for every rule: it starts from the premise that
+writes the id just passed, follows operand ids through `seen.made` (the
+index it needs is already there), finds fact premises in the walk's
+ranges, orders and loads, evaluates the guard, and proposes the instance
+with its numbers in the clause's order by construction. A user's rule
+fires without the user reading `learn`.
+
+What the matcher needs beyond the statement is small and optional:
+
+- **A direction.** An equation is applied left to right where the right
+  side is cheaper by the cost the search already uses, so most rules need
+  nothing. A rule can say `rule(always)` or `rule(never_alone)`.
+- **A bound** for facts that chain (a range gives a range), which the walk
+  has by being one pass.
+
+**Strategies.** The word store (grouping four stores, `Paid`, `Four`), the
+word load, guards from tests and `Again` are not one rule's instance. They
+become registered **learners**: a record with a pass over the walk's state
+and a node, run in a stated order, beside the matcher. A user can add one,
+and it is outside what is trusted like the rest of the search.
+
+## 8. Reading what the optimizer did
+
+The same statements serve as the report. A plan step and a refusal print
+in the rule's own words, with the instance's words named as the source
+names them where there is a name:
+
+```
+i + 4 within 4 ..= 60          by within_add   (i within 0 ..= 56, 4 within 4 ..= 4)
+(i + 4) below len = 1          by ordered_below (i + 4 + 1 ≤ len)
+join(block, i, 4)              = word(block, i).swap_bytes().resize(64)   by join_word
+not applied: narrow_back at t9: needs `s within 0 ..= 255`, known `s within 0 ..= 4095`
+```
+
+`compile-x86 --explain-optimizer` printing that per function is the
+optimizer's `simp_show`. A page listing every registered rule with its
+statement is generated from the same data.
+
+## 9. Bolder options
+
+These go further than the syntax. Each stands alone, and each is a choice.
+
+### 9.1 An analysis is one registered thing, not a family of rules
+
+Rules 2 to 6, 16 to 18 and 39 are one abstract interpretation: a range for
+each operator from its operands' ranges. Written as theorems they are
+still nine statements and nine firings to schedule. The alternative is a
+**domain**: a transfer function from a node and its operands' facts to a
+fact, with one theorem that it is sound, registered. One rule serves it
+("the fact the domain computes for this node holds"), the matcher fires it
+at every node, and `learn`'s range half is the transfer function itself,
+no longer a second copy. Known bits, alignment and "nonzero" are further
+domains of the same shape, and a user's DSL can bring its own.
+
+### 9.2 Open fact forms
+
+`Fact` is a closed inductive with seven constructors and `Facts` a record
+with a field for each. A user's domain cannot add a kind. Making a fact a
+registered form (its meaning over a valuation and the buffers, its
+equality, whether a store forgets it) with the facts keyed by form opens
+that. It touches the replayer's proved core and what a lookup costs the
+kernel, so it comes after the surface, and only if 9.1 shows the demand.
+
+### 9.3 Orders are a graph, and one rule with a certificate
+
+`AtMost(x, m, y, n)` is a difference constraint, the facts are a weighted
+graph, and every order rule but the ones that create an edge (20, 21, 25
+to 28, 34, 35) is composing edges. `order_join` already is that. The
+search is a shortest path, and the proof is one rule whose certificate is
+the path (§4's certificate kind). That retires the hand-written order
+search in `learn` and lets an order be found through any number of words.
+The same shape with multipliers is linear arithmetic by a Farkas
+certificate (`cutsat`'s certificate is the precedent in the library).
+
+### 9.4 Saturation for the equations
+
+With rules as equations and the matcher generic, the search for the
+equational rules can be equality saturation: put the function's terms in an
+e-graph, apply every rule in both directions until nothing new appears or a
+budget ends, extract the cheapest term, and emit the chain of rewrites that
+reaches it as the plan. It removes the phase-ordering problem (a rule that
+only pays after another fires) and the per-rule direction. The kernel sees
+only the chosen chain, so the e-graph is untrusted. Worth doing when the
+equation rules number in the dozens; before that the matcher is enough.
+
+### 9.5 Rules found by machine
+
+`optimizer-design.md` §4 already leaves this door open. With statements as
+theorems about words and a `bv`-style decision for small ones, a tool can
+enumerate small terms, keep pairs that agree on test inputs as candidate
+rules (§5), measure what each gains on the library's own functions, and
+prove the ones that pay.
+
+## 10. Build order
+
+Each step lands alone and leaves the optimizer producing the same code.
+
+1. **Fact forms and operator table** as library definitions (§3, §4), and
+   the generated soundness as a tactic (`rule_sound`), used by hand on
+   today's clauses. No language change.
+2. **`rule theorem`**: the generator, registering by name; port rules 0 to
+   44; plans name rules by key; `rules()` goes. `load_again` and
+   `move_move` go to `Again`.
+3. **The matcher** in `learn`, with the single-rule recognisers ported onto
+   it and the strategies as registered learners.
+4. **The report** (§8) and `rule_check`.
+5. Then by demand: domains (9.1), the order graph (9.3), tagged library
+   theorems replacing composite rules, saturation (9.4), open facts (9.2).
+
+## 11. For Minus to decide
+
+- **The surface**: a rule is a plain theorem about words under a `rule`
+  prefix, with hypotheses classified by what they mention and no `when`.
+- **Fact spellings** of §4 (`x.within(a, b)`, `x.nat() + m ≤ y.nat() + n`,
+  `f.join(i, n)`): these are names a reader meets, so they are yours.
+- **Strict soundness**, with candidates (§5) as a later, search-only
+  loosening.
+- **Which of §9** to plan for now. My order is 9.1, 9.3, then 9.4.
