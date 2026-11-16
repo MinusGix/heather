@@ -76,6 +76,7 @@ import rt_reflect;
 import rt_io_reflect;
 import rt_io_reflect_loop;
 import rt_io_bridge;
+import rt_io_program;
 
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
@@ -121,7 +122,7 @@ fn tr_raise(own: List<BitVec(8)>, words: List<BitVec(64)>) → Mutated<List<BitV
     }
 }
 
-fn tr_lents() → List<Lent> { [Lent(2, λ own words => tr_raise(own, words))] }
+fn tr_lents() → List<Lent> { [Lent(2, raise_span_entry(), λ own words => tr_raise(own, words))] }
 
 // The loop's condition, `0 <u n`, over the state `[n, buf]`.
 fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
@@ -229,7 +230,7 @@ theorem tr_agrees(held: Buffers()): Tm::CallsAgree(tr_world(), Writers::words(tr
 
 // The table's function is the program's function 1, lent the caller's
 // first buffer: two words, and `raise_span_called` is what it answers.
-theorem tr_lents_agree(): ETm::LentsAgree(1, tr_lents(), tr_calls()) {
+theorem tr_lents_agree(): ETm::LentsAgree(tr_lents(), tr_calls()) {
     λ f => match f {
         Zero => λ _ own rest words => match words as λ ws => ws.len() = 2 →
                 tr_calls()(Cons(own, rest), 1, ws) = Ending(tr_raise(own, ws).value, Cons(tr_raise(own, ws).after, rest)) {
@@ -265,9 +266,9 @@ fn tr_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
 // The program `write-elf` compiles
 
 // `raise_span`'s program, one buffer of 256 bytes, the lowered statements
-// as `main`.
+// then an exit with the word the value is in as `main`.
 fn tr_lend_source() → Source {
-    Source(functions := raise_span_program(), buffers := [Buffer(tr_capacity())], words := tr_words(), main := tr_stmt())
+    Source(functions := raise_span_program(), buffers := [Buffer(tr_capacity())], words := tr_words(), main := Then(tr_stmt(), Exit(tr_result())))
 }
 
 // It starts where the theorem does: the buffer all zeroes.
@@ -369,4 +370,13 @@ fn tr_surface_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
         tr_reads(buf, perform),
         λ io => Eutt::sym(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io),
             tr_bridged()(io, buf)))
+}
+
+// The whole `Source` `write-elf` compiles, read against any world, is the
+// surface method from an all-zero buffer, its value the exit status: the
+// exit after the statements (`Stmt::exit_reads`) joined to the above.
+fn tr_source_reads() → Io::Reads<BitVec(64)>(tr_lend_source().tree_co([]), λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity()))) {
+    Stmt::exit_reads(tr_stmt(), tr_result(), tr_calls(), tr_lend_source().performs_co(tr_calls(), 0), tr_lend_source().start([]), RecInfo::none,
+        λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity())),
+        tr_surface_reads(List::replicate(zero_byte(), tr_capacity()), tr_lend_source().performs_co(tr_calls(), 0)))
 }

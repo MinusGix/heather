@@ -1,0 +1,99 @@
+// A program over `Io`, whole: the lowered statements followed by an `Exit`
+// of the word the value is left in, and its tree read against any world
+// (docs/native/io-programs-design.md §3).
+//
+// `ELoop::lower_reads` reads the statements' tree with the value taken back
+// from its word; a `Source`'s tree (`Source::tree_co`) is the exit status
+// its `main` reports. With `main := Then(stmt, Exit(result))` the two are
+// the same tree up to silent steps (`Stmt::exit_eutt`), so the lowering's
+// theorem is a theorem about the `Source` `write-elf` compiles
+// (`Stmt::exit_reads`). Proved once, for every program.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import native_source;
+import native_source_co;
+import rt;
+import rt_io;
+import rt_io_lower;
+
+// After the statements: the word the value is in, as the status, or the
+// status they left with.
+fn Stmt::exit_rest(call: Writers(), perform: PerformsCo(), result: Nat, flow: Flow) → CoTree<Flow>(Events::linux()) {
+    match flow {
+        Onward(next) => Exit(result).denote_co(call, perform)(next),
+        Exited(status) => CRet(Exited(status)),
+    }
+}
+
+// A flow's status as a leaf.
+fn Stmt::status_leaf() → Flow → CoTree<BitVec(64)>(Events::linux()) { λ x => CRet(x.status()) }
+
+// Each flow's status after the `Exit` is the word read back from it.
+fn Stmt::exit_leaf(call: Writers(), perform: PerformsCo(), result: Nat, tys: Nat → RecInfo) → (flow: Flow) →
+    Eutt<BitVec(64)>(Events::linux(), CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, flow), λ x => CRet(x.status())),
+        CRet(flow.read_back(Word(64), tys, result)))
+{
+    λ flow => match flow as λ fl => Eutt<BitVec(64)>(Events::linux(),
+            CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, fl), λ x => CRet(x.status())),
+            CRet(fl.read_back(Word(64), tys, result))) {
+        Onward(next) => Eutt::bind_ret_l(Events::linux(), Exited(next.word(result)), λ x => CRet(x.status())),
+        Exited(status) => Eutt::trans(Events::linux(),
+            CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, Exited(status)), Stmt::status_leaf()), CRet(status), CRet(BitVec::ofNat(status.toNat())),
+            Eutt::bind_ret_l(Events::linux(), Exited(status), Stmt::status_leaf()),
+            j(sym(BitVec::ofNat_toNat(64, status)), λ y _ => Eutt<BitVec(64)>(Events::linux(), CRet(status), CRet(y)),
+                Eutt::refl(Events::linux(), CRet(status)))),
+    }
+}
+
+// The statements then an `Exit` of the result word, as statuses, are the
+// statements' tree with the value read back from that word.
+fn Stmt::exit_eutt(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo) →
+    Eutt<BitVec(64)>(Events::linux(),
+        CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
+        CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)))
+{
+    let t = s.denote_co(call, perform)(env);
+    let k = λ (flow: Flow) => Stmt::exit_rest(call, perform, result, flow);
+    let g = Stmt::status_leaf();
+    Eutt::trans(Events::linux(), CoTree::bind(Events::linux(), CoTree::bind(Events::linux(), t, k), g),
+        CoTree::bind(Events::linux(), t, λ x => CoTree::bind(Events::linux(), k(x), g)),
+        CoTree::bind(Events::linux(), t, λ flow => CRet(flow.read_back(Word(64), tys, result))),
+        Eutt::bind_assoc(Events::linux(), t, k, g),
+        Eutt::bind_cong_r(Events::linux(), t, λ x => CoTree::bind(Events::linux(), k(x), g), λ flow => CRet(flow.read_back(Word(64), tys, result)),
+            Stmt::exit_leaf(call, perform, result, tys)))
+}
+
+// So whatever the statements' tree reads as, with the value read back, the
+// statements then the `Exit` read as too: the lowering's theorem
+// (`ELoop::lower_reads`) is a theorem about a `Source` whose `main` is
+// `Then(stmt, Exit(result))`.
+fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo,
+    f: Io → Partial(Mutated<Io, BitVec(64)>),
+    r: Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)), f)) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()), f)
+{
+    λ io => Eutt::trans(Events::none(),
+        Io::against_co(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()), io),
+        Io::against_co(CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)), io),
+        f(io),
+        Io::against_co_cong(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
+            CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)),
+            Stmt::exit_eutt(s, result, call, perform, env, tys), io),
+        r(io))
+}
