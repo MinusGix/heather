@@ -532,8 +532,8 @@ fn apparent_level(t: &Type) -> Option<Level> {
         Type::El { level, .. } => Some(level.clone()),
         Type::Nat => Some(Level::Zero),
         Type::Ty(l) => Some(l.plus(1)),
-        Type::Pi { dom_level, cod_level, .. } => Some(Level::join(dom_level.clone(), cod_level.clone())),
-        Type::Sigma { fst_level, snd_level, .. } => Some(Level::join(fst_level.clone(), snd_level.clone())),
+        Type::Pi { dom_level, cod_level, .. } => Some(Level::max(dom_level.clone(), cod_level.clone())),
+        Type::Sigma { fst_level, snd_level, .. } => Some(Level::max(fst_level.clone(), snd_level.clone())),
         _ => None,
     }
 }

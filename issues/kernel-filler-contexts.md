@@ -1,6 +1,6 @@
 ---
 title: Pass the β helpers a scope shape instead of a filler Γ
-status: open
+status: closed
 labels: [kernel,code-health]
 area: kernel
 created: 2026-11-16
@@ -32,3 +32,7 @@ cannot be mistaken for a real one, with a debug assertion where entries are read
 but the shape type is the real fix.
 
 Found by the kernel comment audit ([[kernel-comment-audit]]).
+
+## Log
+
+- 2026-11-16: fixed. term::CtxShape (base and length) is what the β helpers, the code-recursor telescopes (rec::branch_specs, inst_*_motive), wf_step_telescope and LocalSubst::id read; the reducer takes it internally and its public entry points accept a LocalCtx or a shape (impl Into<CtxShape>). Eval::scope returns a shape, conv's Env carries |Γ| beside a syntactic prefix of Γ (Env::shape, Env::syntax_entry), and the value domain pushes no syntax for its binders. FILLER, CtxEntries::repeat and the comments justifying them are gone. A side effect: rec::branch_specs no longer shift_univ/shift_global's every entry of Γ for each of 65 branches.

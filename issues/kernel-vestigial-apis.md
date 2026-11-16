@@ -1,6 +1,6 @@
 ---
 title: Remove Level::join's alias and the test-only bit_run_cons
-status: open
+status: closed
 labels: [kernel,code-health]
 area: kernel
 created: 2026-11-16
@@ -20,3 +20,7 @@ removing them:
   or make it `#[cfg(test)]`.
 
 Found by [[kernel-comment-audit]].
+
+## Log
+
+- 2026-11-16: fixed. The 103 Level::join call sites (25 files) now call Level::max, and the alias is gone; Val::bit_run_cons is #[cfg(test)] pub(crate), next to the bits tests that use it.

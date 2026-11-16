@@ -1,6 +1,6 @@
 ---
 title: Check the three hand-written branch binder-count tables against each other
-status: open
+status: closed
 labels: [kernel,code-health]
 area: kernel
 created: 2026-11-16
@@ -35,3 +35,7 @@ exercising them end to end.
 
 Related: [[rec-ga-runtime-telescope-check-decision]] (runtime trust in the
 tables; this is the build-time half). Found by [[kernel-comment-audit]].
+
+## Log
+
+- 2026-11-16: fixed. rec::BRANCH_DEPTHS holds each branch's (univs, globals, locals) in BRANCH_NAMES order; subst.rs's map_branches and bounds.rs's branches_use read it instead of restating it, and rec's branch_depths_match_the_telescopes asserts it equals branch_specs' telescope sizes, branch by branch (a one-off edit of tm_corec's local count fails it). The three tables agreed before the change. bounds.rs still restates the non-branch binder counts of map_type/map_term; those stay covered by the debug re-verification at every skip.

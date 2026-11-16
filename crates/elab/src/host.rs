@@ -2605,7 +2605,7 @@ impl Host<'_> {
         let cod = ty.apply_local(&sigma);
         let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
         let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
-        Ok(run.issue(at, Held::Term(lam, pi, Level::join(dom_level, level))))
+        Ok(run.issue(at, Held::Term(lam, pi, Level::max(dom_level, level))))
     }
 
     /// `Revert(h, x)`: the type `(y: X) → h[y/x]` for `x` a local of the
@@ -2640,7 +2640,7 @@ impl Host<'_> {
             let dom = Rc::new(run.committed_ty(&run.partial_ty(&r.ty)).ok_or_else(unsolved)?);
             let cod = ty.abstract_local(&pat).unwrap_or_else(|| ty.shift_local(1));
             let pi = Type::Pi { dom_level: r.level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
-            return Ok(run.issue(at, Held::Type(pi, Level::join(r.level, level))));
+            return Ok(run.issue(at, Held::Type(pi, Level::max(r.level, level))));
         }
         let p = self.root_local_position(run, x)?;
         let gamma = run.cx(at)?.gamma;
@@ -2650,7 +2650,7 @@ impl Host<'_> {
         let dom = Rc::new(entry.ty.shift_local((n - p) as u32));
         let cod = ty.apply_local(&crate::generalize::rename(&gamma, &[p], 1));
         let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
-        Ok(run.issue(at, Held::Type(pi, Level::join(dom_level, level))))
+        Ok(run.issue(at, Held::Type(pi, Level::max(dom_level, level))))
     }
 
     /// The position in the goal's context of the local `x` names: a
@@ -3774,7 +3774,7 @@ impl Host<'_> {
                 Ok(Reified {
                     term: Term::Lam { dom_level: dom_level.clone(), cod_level: b.level.clone(), dom: Rc::clone(&dom), body: Rc::new(b.term) },
                     ty: Type::Pi { dom_level: dom_level.clone(), cod_level: b.level.clone(), dom, cod: Rc::new(b.ty) },
-                    level: Level::join(dom_level, b.level),
+                    level: Level::max(dom_level, b.level),
                 })
             }
         }
@@ -3899,7 +3899,7 @@ impl Host<'_> {
                 let entry = run.scopes[s].cx.gamma.entries.get(i).expect("an opened local");
                 let dom = Rc::new(entry.ty.shift_global((run.world() - run.scopes[s].world) as u32));
                 let dom_level = entry.level.clone();
-                let level = Level::join(dom_level.clone(), cod_level.clone());
+                let level = Level::max(dom_level.clone(), cod_level.clone());
                 return Ok((Type::Pi { dom_level, cod_level, dom, cod: Rc::new(cod) }, level));
             }
             RExpr::Equation(l, r) => {
@@ -4077,7 +4077,7 @@ impl Host<'_> {
             let dom = Rc::new(t.shift_local(j as u32));
             term = Term::Lam { dom_level: l.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(term) };
             fty = Type::Pi { dom_level: l.clone(), cod_level: level.clone(), dom, cod: Rc::new(fty) };
-            level = Level::join(l.clone(), level);
+            level = Level::max(l.clone(), level);
         }
         Ok(run.issue(s, Held::Term(term, fty, level)))
     }

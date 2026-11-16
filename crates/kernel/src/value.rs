@@ -362,9 +362,8 @@ pub struct ValueArena<'v> {
     /// nothing but what the step's body reads and the definitions, which are
     /// fixed for one arena. Not the closure's address: every unfolding of a
     /// definition whose body holds the fold allocates a fresh step closure
-    /// over that call's arguments, and a step that reads none of them was
-    /// re-probed once per call (on a native certificate piece, most of what
-    /// it spent on probes; issues/native-certificate-pieces-remaining-cost.md).
+    /// over that call's arguments, and a step that reads none of them would be
+    /// re-probed once per call (issues/native-certificate-pieces-remaining-cost.md).
     /// The key's addresses are kept alive by the arena's closures, as for
     /// `transducers`'.
     fold_classes: RefCell<PtrMap<CloId, Rc<algebra::FoldClass>>>,
@@ -418,7 +417,7 @@ pub struct ValueArena<'v> {
     /// `a`/`f` slots — by the identity of the eliminator's four bodies.
     /// Building it shifts the whole step (a `match`'s every arm), and an
     /// eliminator fires once per node it walks, so without this a run over a
-    /// tier-2 tree paid a copy of its matches at every step. The entry holds
+    /// tier-2 tree would pay a copy of its matches at every step. The entry holds
     /// the bodies it is keyed on, so no address is freed and reused under it.
     w_ih: RefCell<PtrMap<[usize; 4], Rc<WIhSyntax>>>,
     /// The value of an application `k y` that a projection eliminates, by
@@ -487,8 +486,8 @@ impl<T> Region<T> {
 /// Aggregate, observational counters for value-machine regions.
 ///
 /// A caller explicitly lends this collector to every region it wants to
-/// measure.  The ordinary [`ValueArena::new`] path has no collector, so
-/// measure. The `value-metrics` feature compiles the counters in; ordinary
+/// measure. The ordinary [`ValueArena::new`] path has no collector, so it
+/// measures nothing. The `value-metrics` feature compiles the counters in; ordinary
 /// builds contain neither the collector pointer nor counted-event branches.
 /// There is no global or thread-local instrumentation state.
 #[derive(Clone, Default)]
@@ -629,16 +628,16 @@ impl ValueMetrics {
         share.1 = share.1.saturating_add(ns);
     }
 
-    /// Name the declaration whose misses are recorded from now on (`None`
-    /// between items). A no-op without the `value-metrics` feature, so the
-    /// elaborator's item bracket can call it unconditionally when a
-    /// collector is enabled.
     /// The item named by [`ValueMetrics::set_current_item`], if any.
     #[cfg(feature = "value-metrics")]
     pub fn current_item(&self) -> Option<Arc<str>> {
         self.inner.current_item.borrow().clone()
     }
 
+    /// Name the declaration whose misses are recorded from now on (`None`
+    /// between items). A no-op without the `value-metrics` feature, so the
+    /// elaborator's item bracket can call it unconditionally when a
+    /// collector is enabled.
     pub fn set_current_item(&self, item: Option<Arc<str>>) {
         #[cfg(feature = "value-metrics")]
         {
@@ -1117,8 +1116,7 @@ impl<'v> ValueArena<'v> {
         ElimSpine(Some(self.elims.alloc(ElimNode { elim, prev: prev.0 })))
     }
 
-    /// The cached value for `clo`, if it is currently retained by this
-    /// query's bounded cache.
+    /// The probed class of `step`, if it has been probed (`fold_classes`).
     pub fn fold_class(&self, step: &'v TmClo<'v>) -> Option<Rc<algebra::FoldClass>> {
         self.fold_classes.borrow().get(&step.ident_under(2)).cloned()
     }
@@ -1224,8 +1222,8 @@ impl<'v> ValueArena<'v> {
     /// with its type (`pair@(T; a; b)`, `inl@(T; a)`) evaluates `T` to the
     /// Σ or sum it names, to build the value the annotated spelling builds;
     /// a declaration's `T` is a call of its type code, closed wherever the
-    /// declaration has no parameters, and it was unfolded and decoded again
-    /// at every constructor a computation built. The same argument as
+    /// declaration has no parameters, and would be unfolded and decoded again
+    /// at every constructor a computation builds. The same argument as
     /// [`ValueArena::memo_closed`]: a closed type denotes one former
     /// wherever it is read.
     pub(crate) fn memo_former(&self, ty: &Rc<Type>, env: &Env<'v>) -> Option<&'v VTy<'v>> {
@@ -1282,14 +1280,9 @@ impl<'v> ValueArena<'v> {
     /// below the query's live set, on the other hand, is not a constant
     /// factor of anything: whatever it evicts and the query reads again is
     /// forced again, and so are the evicted cells the re-force reads, back
-    /// through the computation's history.
-    ///
-    /// Why not a bounded cache: evicting a forced cell makes every later read
-    /// recompute it and the cells it read, so a long evaluation by `refl`
-    /// (an effectful program run at width 64) spends its fuel re-forcing
-    /// word cells instead of growing linearly in its passes
-    /// (issues/kernel-value-cache-evaluation-thrash.md). Values point into
-    /// the arena, so keeping them costs what the query already allocated.
+    /// through the computation's history — a long evaluation by `refl` then
+    /// spends its fuel re-forcing instead of growing linearly in its passes
+    /// (issues/kernel-value-cache-evaluation-thrash.md).
     ///
     /// Policy changes the fuel a query spends, never its value: the memo is
     /// a function of the closure alone, and only successes are remembered.
@@ -1342,8 +1335,6 @@ impl<'v> ValueArena<'v> {
 // ---------------------------------------------------------------------------
 
 /// A term sub-structure of a value: an environment plus unevaluated syntax.
-/// Its weak head result is held, when useful, by [`ValueArena`]'s query
-/// cache.
 ///
 /// With `k > 0` pending binders it is a **closure** (applied by
 /// [`crate::eval::Eval::apply`]); with none it is a **lazy value** (forced by
@@ -1454,8 +1445,8 @@ pub type CloId = (usize, usize, u32, u32);
 ///
 /// [`TyClo::Syn`] is the ordinary case — an environment plus unevaluated
 /// syntax. The other two exist because *conversion* builds
-/// types the evaluator never does (docs/kernel/nbe-conversion-design.md §13, stage
-/// 2b): the comparison rules synthesize `Π`, `Vec`, `El` … whose children are
+/// types the evaluator never does (docs/kernel/nbe-conversion-design.md §13):
+/// the comparison rules synthesize `Π`, `Vec`, `El` … whose children are
 /// **domain objects** rather than syntax, and there is no environment in
 /// which a domain object could be written down.
 ///
@@ -1467,9 +1458,7 @@ pub type CloId = (usize, usize, u32, u32);
 ///   a value with no syntax. Forcing it is `Eval::vec_ty`.
 ///
 /// A level is one word (`level.rs`), so the uncommon synthesized forms hold
-/// theirs inline and both closure enums stay at four words and a memo. (It
-/// was two words with a rare largest variant, and these forms kept it in a
-/// region of the query arena so that no syntactic closure paid for it.)
+/// theirs inline and both closure enums stay at four words and a memo.
 pub enum TyClo<'v> {
     Syn {
         env: Env<'v>,
@@ -1511,9 +1500,6 @@ impl<'v> TyClo<'v> {
         TyClo::El { level, tm, memo: Cell::new(None) }
     }
 
-    /// The environment and syntax, when this is a syntactic closure. See
-    /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
-    /// falls back to a stuck value rather than panicking.
     /// See [`TmClo::ident`].
     pub fn ident(&self) -> CloId {
         match self {
@@ -1537,6 +1523,9 @@ impl<'v> TyClo<'v> {
         self.ident()
     }
 
+    /// The environment and syntax, when this is a syntactic closure. See
+    /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
+    /// falls back to a stuck value rather than panicking.
     pub fn as_syn(&self) -> Option<(&Env<'v>, &Rc<Type>)> {
         match self {
             TyClo::Syn { env, body, .. } => Some((env, body)),
@@ -2009,9 +1998,9 @@ pub enum Val<'v> {
     /// the children it was fired on instead of as that λ's syntax
     /// (`Eval::fire_elim_wf`). Building the syntax shifts the eliminator's
     /// whole motive and step under three binders, and the next β shifts that
-    /// copy again, so every node of a structural recursion paid for a fresh
-    /// copy of the recursor and no memo keyed on syntax identity ever hit
-    /// twice. Applied to a canonical index over a canonical tuple it selects
+    /// copy again, so every node of a structural recursion would pay for a fresh
+    /// copy of the recursor and no memo keyed on syntax identity would ever
+    /// hit twice. Applied to a canonical index over a canonical tuple it selects
     /// the child and fires `elim` on it directly, which is what the λ's body
     /// reduces to; applied to anything else it evaluates that body's child
     /// and eliminates it with the same `elim`, so the recursive call keeps
@@ -2028,9 +2017,8 @@ pub enum Val<'v> {
     /// (`Eval::fire_elim_w`), for [`Val::WfIh`]'s reason: the syntax is the
     /// eliminator's whole motive and step shifted under three binders, and
     /// each level of a recursion fires on the previous level's copy, so
-    /// every recursive call deeper than any before it paid for a fresh copy
-    /// of the recursor. A Heather tactic's handlers (`focus`, `bind`) recurse
-    /// once per request answered, so that copy was most of a request's cost
+    /// every recursive call deeper than any before it would pay for a fresh
+    /// copy of the recursor, most of a tactic request's cost
     /// (issues/tactic-strategy-step-cost.md). Applied, it fires `elim` on
     /// `f y` directly when `f` is a λ, which is what the λ's body reduces
     /// to; applied over any other `f`, and wherever it is inspected rather
@@ -2091,8 +2079,7 @@ pub enum Val<'v> {
 impl<'v> Val<'v> {
     /// Whether two values are one region object. Values are born in the
     /// query arena and never freed while it lives, so an address names one
-    /// value for the whole query (the `Rc::ptr_eq` this replaced could not
-    /// say as much once an `Rc` was dropped).
+    /// value for the whole query.
     pub fn ptr_eq(a: &Val<'v>, b: &Val<'v>) -> bool {
         std::ptr::eq(a, b)
     }
@@ -2167,9 +2154,9 @@ impl<'v> Val<'v> {
     /// (design §3.2, route 1): a `Pair` whose `fst` is a bit value and whose
     /// `snd` already is a run is one bit wider, up to [`BIT_RUN_WIDTH_CAP`],
     /// above which the outer pair stays structural over a run tail.
-    /// Called only by the tests, against [`Val::bit_run_unpack`]
-    /// (`issues/kernel-vestigial-apis.md`).
-    pub fn bit_run_cons(
+    /// The tests' builder, checked against [`Val::bit_run_unpack`].
+    #[cfg(test)]
+    pub(crate) fn bit_run_cons(
         level: &Level,
         ty: &'v BitTy<'v>,
         bit: bool,
@@ -2222,10 +2209,9 @@ impl<'v> Val<'v> {
 
 /// A persistent neutral-elimination spine, newest elimination first.
 ///
-/// Extending a neutral and recovering its immediate head are both O(1). The
-/// previous `Vec<Elim>` representation cloned the full spine for either
-/// operation, making ordinary nested applications implicitly quadratic in
-/// the evaluator and conversion checker.
+/// Extending a neutral and recovering its immediate head are both O(1); a
+/// `Vec<Elim>` would clone the full spine for either, making nested
+/// applications quadratic in the evaluator and conversion checker.
 #[derive(Clone, Copy, Default)]
 pub struct ElimSpine<'v>(Option<&'v ElimNode<'v>>);
 
@@ -2280,8 +2266,8 @@ impl<'v> Iterator for ElimSpineIter<'v> {
 ///
 /// It is one field rather than four so that "there is no annotation" is one
 /// state and not a convention about which of four are `None`, and so that
-/// `Option<SigAnn>` rides in the reference's niche — `Val` is the same 88
-/// bytes it was before the checked spellings existed.
+/// `Option<SigAnn>` rides in the reference's niche and costs `Val` no
+/// size.
 #[derive(Clone)]
 pub struct SigAnn<'v> {
     pub fst_level: Level,

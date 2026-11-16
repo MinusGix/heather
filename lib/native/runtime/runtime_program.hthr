@@ -1,0 +1,376 @@
+// `runtime fn` for a program that does its own I/O
+// (docs/native/io-programs-design.md §3, §5 D1): a function whose first
+// parameter is the world, `mut io: Io`, whose other parameters are byte
+// buffers (`ByteBuffer(n)`, a list of bytes the process starts holding
+// `n` zeroes of), and whose result is `Partial(Mutated<Io, u64>)`, the word
+// its exit status. The generator reads it (`rt_io_read_loop_fun`), states
+// that it is its reading's meaning (the bridge, `rt_io_bridge`), lowers the
+// reading, and publishes the `Source` `write-elf` compiles with the
+// theorem that the `Source`'s tree, read against any world, is the
+// function itself from all-zero buffers:
+//
+//     f::eloop   the reflection, an `ELoop` at the plain world
+//     f::lents   the functions it lends a buffer to, as a table
+//     f::bridge  (io) → (b₁ …) → Eutt(f(io, b₁, …), f::eloop's meaning)
+//     f::source  its `Source`: the lent functions' program, a zero-filled
+//                buffer per parameter, the lowered statements then an exit
+//                with the value's word
+//     f::reads   Io::Reads(f::source.tree_co([]), λ io => f(io, zeros…))
+//
+// Nothing in `f::reads` is written for `f`: the lowering's theorem
+// (`ELoop::lower_reads`), the exit (`Stmt::exit_reads`), the bridge and a
+// lent function's agreement from its own theorem (`Lent::agrees_span`).
+//
+// This module's `runtime` is `runtime`'s with the program mode in front: a
+// module that writes programs imports this one in its place (imports do
+// not carry over, so the two names never meet).
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import linux_world_while;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
+import rt_io_bridge;
+import rt_io_program;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// The library the generator states programs with
+
+// A program's buffer parameter: bytes, of which the process holds
+// `capacity`, all zero, when it starts. In the meaning it is a list like any
+// other; the capacity is what the `Source` reserves.
+fn ByteBuffer(capacity: Nat) → Type { List<BitVec(8)> }
+
+// Where a program's `n` buffer parameters live, the last first: the first
+// parameter in the file's first buffer.
+fn Program::locs(n: Nat) → List<Loc> { match n { Zero => Nil, Succ(m) => Cons(InBuffer(m), Program::locs(m)) } }
+
+theorem Program::below(n: Nat): LocsBelow(Program::locs(n), 1) {
+    match n as λ m => LocsBelow(Program::locs(m), 1) { Zero => trivial, Succ(m) => ⟨trivial, Program::below(m)⟩ }
+}
+
+fn Program::buffers(caps: List<Nat>) → List<Buffer> { caps.map(λ c => Buffer(c)) }
+
+// The reading lowered at the plain world, its parameters where
+// `Program::locs` puts them.
+fn Program::lowered(p: ELoop, ls: List<Lent>, g: List<Ty>) → ELowered {
+    p.lower(ETm::plain_world(), ls, g, Program::locs(g.len()), 1).unwrap_or(ELowered(Exit(0), 0, 0, []))
+}
+
+fn Program::stmt(p: ELoop, ls: List<Lent>, g: List<Ty>) → Stmt { Program::lowered(p, ls, g).stmt }
+fn Program::result(p: ELoop, ls: List<Lent>, g: List<Ty>) → Nat { Program::lowered(p, ls, g).result }
+
+// What `write-elf` compiles: the lent functions' program, a buffer per
+// parameter, the lowered statements, then an exit with the word the value
+// is in.
+fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>) → Source {
+    Source(functions := functions, buffers := Program::buffers(caps), words := Program::lowered(p, ls, g).stmt.word_bound(),
+        main := Then(Program::lowered(p, ls, g).stmt, Exit(Program::lowered(p, ls, g).result)))
+}
+
+// Each buffer parameter holds its bytes in its buffer, link by link.
+theorem Program::held_nil(tys: Nat → RecInfo, env: native_source::Env): LocsHold(tys, env, Nil, Nil, trivial) { trivial }
+
+theorem Program::held_cons(tys: Nat → RecInfo, env: native_source::Env, g: List<Ty>, i: Nat, v: List<BitVec(8)>, locs: List<Loc>, vals: rt::Env(tys, g),
+    e: env.buffers.nth(i) = Some(v), h: LocsHold(tys, env, g, locs, vals)): LocsHold(tys, env, Cons(Bytes(0), g), Cons(InBuffer(i), locs), Pair(v, vals)) {
+    ⟨e, h⟩
+}
+
+// The lists the generator names (it spells no constructor of its own).
+fn Program::no_args() → List<List<BitVec(8)>> { [] }
+fn Program::no_functions() → List<Function> { [] }
+fn Program::no_lents() → List<Lent> { [] }
+fn Program::one_lent(l: Lent) → List<Lent> { [l] }
+
+// The lowering's theorem at the program's `Source`, joined to a bridge: the
+// statements' tree, the value read back from its word, reads as `f`.
+fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>,
+    lowered: p.lower(ETm::plain_world(), ls, g, Program::locs(g.len()), 1) = Some(Program::lowered(p, ls, g)),
+    lents: ETm::LentsAgree(ls, program_writers(functions)), vals: rt::Env(ETm::plain_world().tys, g),
+    held: LocsHold(ETm::plain_world().tys, Program::source(p, ls, g, functions, caps).start([]), g, Program::locs(g.len()), vals),
+    f: Io → Partial(Mutated<Io, p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>),
+    bridge: (io: Io) → Eutt<Mutated<Io, p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>>(Events::none(), f(io),
+        p.sem(ETm::plain_world(), ls, g, vals, io))) →
+    Io::Reads<p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>(CoTree::map(Events::linux(),
+            Program::lowered(p, ls, g).stmt.denote_co(program_writers(functions),
+                Program::source(p, ls, g, functions, caps).performs_co(program_writers(functions), 0))(Program::source(p, ls, g, functions, caps).start([])),
+            λ flow => flow.read_back(p.ty(ETm::plain_world(), g), ETm::plain_world().tys, Program::lowered(p, ls, g).result)),
+        f)
+{
+    let w = ETm::plain_world();
+    let call = program_writers(functions);
+    let src = Program::source(p, ls, g, functions, caps);
+    Io::reads_back(CoTree::map(Events::linux(), Program::lowered(p, ls, g).stmt.denote_co(call, src.performs_co(call, 0))(src.start([])),
+            λ flow => flow.read_back(p.ty(w, g), w.tys, Program::lowered(p, ls, g).result)),
+        λ io => p.sem(w, ls, g, vals, io), f,
+        p.lower_reads(w, ls, g, Program::locs(g.len()), 1, Program::lowered(p, ls, g), lowered, call,
+            λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)),
+            lents, src.performs_co(call, 0), src.start([]), vals, held, Program::below(g.len()), trivial),
+        bridge)
+}
+
+// ---------------------------------------------------------------------------
+// The generator
+
+// A name the generator states programs with, where the `runtime fn` is,
+// or by its module's key: a module of programs need not import every
+// module the statement names.
+fn program_ref(module: String, name: String) → Tac<GlobalRef> {
+    lookup(name).bind(λ c => match c {
+        Accepted(g) => pure(g),
+        Refused(_) => lookup(module ++ "::" ++ name).or_fail("runtime: `" ++ name ++ "` (`" ++ module ++ "`) is not in scope: "),
+    })
+}
+
+fn program_global(module: String, name: String) → Tac<Expr> { program_ref(module, name).bind(λ g => pure(Global(g))) }
+fn program_id(module: String, name: String) → Tac<Nat> { program_ref(module, name).bind(λ g => pure(g.id)) }
+
+fn program_refused<A>(name: String, why: String) → Tac<A> {
+    fail("`" ++ name ++ "` cannot be a runtime fn program: " ++ why, [])
+}
+
+// Whether a function takes the world first.
+fn program_takes_io(f: GlobalRef) → Tac<Bool> {
+    let io <- program_id("linux_world", "Io");
+    infer(Global(f)).bind(λ c => match c {
+        Refused(_) => pure(False),
+        Accepted(t) => view(t).bind(λ v => match v {
+            HPi(dom) => view(dom).bind(λ dv => match dv {
+                HGlobal(g, _, args) => pure(g.id.same(io).and(args.len().same(0))),
+                _ => pure(False),
+            }),
+            _ => pure(False),
+        }),
+    })
+}
+
+record LendFound { g: GlobalRef, name: String }
+
+fn program_seen(seen: List<LendFound>, id: Nat) → Bool { match seen { Nil => False, Cons(x, rest) => x.g.id.same(id).or(program_seen(rest, id)) } }
+
+// The functions a term mentions that a program lends a buffer to: those
+// with a generated `runs_over` (a `runtime fn` over a span), in the order
+// they are first met.
+fn program_lends_in(fuel: Nat, hs: List<Handle>, seen: List<LendFound>) → Tac<List<LendFound>> {
+    match fuel {
+        Zero => pure(seen),
+        Succ(fl) => match hs {
+            Nil => pure(seen),
+            Cons(h, rest) => {
+                let v <- view(h);
+                let here: Pair<List<Handle>, List<LendFound>> <- match v {
+                    HGlobal(g, name, args) => match program_seen(seen, g.id) {
+                        True => pure(Pair(args, seen)),
+                        False => lookup(name ++ "::runs_over").bind(λ c => match c {
+                            Accepted(_) => pure(Pair(args, seen ++ [LendFound(g, name)])),
+                            Refused(_) => pure(Pair(args, seen)),
+                        }),
+                    },
+                    HLam(_) => open(h, "x").bind(λ c => match c { Accepted(o) => pure(Pair([o.body], seen)), Refused(_) => pure(Pair([], seen)) }),
+                    HPi(_) => open(h, "x").bind(λ c => match c { Accepted(o) => pure(Pair([o.body], seen)), Refused(_) => pure(Pair([], seen)) }),
+                    HMatch(s) => arms(h).bind(λ c => match c {
+                        Accepted(m) => pure(Pair(Cons(m.scrut, m.args ++ m.arms.map(λ a => a.body)), seen)),
+                        Refused(_) => pure(Pair([s], seen)),
+                    }),
+                    HLocal(_, args) => pure(Pair(args, seen)),
+                    HField(of, _, args) => pure(Pair(Cons(of, args), seen)),
+                    HCtor(_, _, _, fields) => pure(Pair(fields, seen)),
+                    HEq(a, b) => pure(Pair([a, b], seen)),
+                    _ => pure(Pair([], seen)),
+                };
+                program_lends_in(fl, here.fst ++ rest, here.snd)
+            },
+        },
+    }
+}
+
+// How many parameters a type of functions takes.
+fn program_arity(fuel: Nat, t: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => pure(0),
+        Succ(fl) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "x").bind(λ c => match c {
+                Accepted(o) => program_arity(fl, o.body).bind(λ n => pure(Succ(n))),
+                Refused(_) => pure(0),
+            }),
+            _ => pure(0),
+        }),
+    }
+}
+
+// The capacities of the buffer parameters after the world, read off the
+// function's type: each a `ByteBuffer(n)`.
+fn program_caps(name: String, buffer: Nat, fuel: Nat, t: Handle) → Tac<List<Nat>> {
+    match fuel {
+        Zero => pure([]),
+        Succ(fl) => view(t).bind(λ v => match v {
+            HPi(dom) => {
+                let dv <- view(dom);
+                let capped: Tac<Nat> = match dv {
+                    HGlobal(bg, _, args) => match bg.id.same(buffer) {
+                        True => match args {
+                            Cons(n, _) => numeral(Hd(n)).or_fail("`" ++ name ++ "`: a buffer's capacity: "),
+                            Nil => program_refused(name, "`ByteBuffer` without its capacity"),
+                        },
+                        False => program_refused(name, "a parameter after the world is a buffer, `ByteBuffer(n)` with `n` its capacity"),
+                    },
+                    _ => program_refused(name, "a parameter after the world is a buffer, `ByteBuffer(n)` with `n` its capacity"),
+                };
+                let cap <- capped;
+                let o <- open(t, "x").or_fail("`" ++ name ++ "`: a parameter: ");
+                let more <- program_caps(name, buffer, fl, o.body);
+                pure(Cons(cap, more))
+            },
+            _ => pure([]),
+        }),
+    }
+}
+
+// The table entry for a function lent the first buffer, and the proof
+// its program agrees with it.
+record ProgramLent { functions: Expr, lents: Expr, agrees: Expr }
+
+fn program_lent(name: String, lends: List<LendFound>) → Tac<ProgramLent> {
+    match lends {
+        Nil => {
+            let none <- program_global("rt_io_lower", "ETm::lents_agree_none");
+            let writers <- program_global("function_ir_placeless", "program_writers");
+            let no_functions <- program_global("runtime_program", "Program::no_functions");
+            let no_lents <- program_global("runtime_program", "Program::no_lents");
+            pure(ProgramLent(no_functions, no_lents, ap(none, [ap(writers, [no_functions])])))
+        },
+        Cons(l, more) => match more {
+            Cons(_, _) => program_refused(name, "it lends buffers to more than one function, whose programs are not linked into one yet"),
+            Nil => {
+                let prog <- runtime_global(l.name ++ "::program");
+                let runs <- runtime_global(l.name ++ "::runs_over");
+                let len <- program_global("list", "List::len");
+                let count <- numeral(ap(len, [Blank, prog])).or_fail("`" ++ name ++ "`: the program of `" ++ l.name ++ "`: ");
+                let lt <- infer(Global(l.g)).or_fail("`" ++ name ++ "`: `" ++ l.name ++ "`'s type: ");
+                let arity <- program_arity(64, lt);
+                let of_span <- program_global("rt_io_program", "Lent::of_span");
+                let one <- program_global("runtime_program", "Program::one_lent");
+                let agrees <- program_global("rt_io_program", "Lent::agrees_span");
+                let rfl <- runtime_global("tactic::rfl");
+                let k = NatLit(arity - 2);
+                let entry = NatLit(count - 1);
+                pure(ProgramLent(prog, ap(one, [ap(of_span, [k, entry, Global(l.g)])]),
+                    ap(agrees, [prog, k, entry, Global(l.g), ap(rfl, [Blank, NatLit(1)]), runs])))
+            },
+        },
+    }
+}
+
+fn runtime_held_type(module: String, name: String) → Tac<Handle> { as_type(<- program_global(module, name)).or_fail("runtime: `" ++ name ++ "`: ") }
+
+// `runtime fn f` where `f` takes the world first.
+fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
+    let k <- rt_known([], []);
+    let names <- rt_loop_names();
+    let b <- body(f).or_fail("`" ++ name ++ "`: its body: ");
+    let lends <- program_lends_in(1048576, [b], []);
+    let r <- rt_io_read_loop_fun(4096, k, names, lends.map(λ l => l.g.id), f.id);
+    let word: Bool = match r.read.result { Word(w) => w.same(64), _ => False };
+    let _ <- match word { True => pure(0), False => program_refused(name, "its value is a 64-bit word, its exit status") };
+    let ft <- infer(Global(f)).or_fail("`" ++ name ++ "`: its type: ");
+    let opened <- open(ft, "io").or_fail("`" ++ name ++ "`: its world: ");
+    let buffer <- program_id("runtime_program", "ByteBuffer");
+    let caps <- program_caps(name, buffer, 64, opened.body);
+    let _ <- match caps.len().same(r.read.params.len()) { True => pure(0), False => program_refused(name, "a parameter after the world is a buffer") };
+    let q <- io_quoting();
+    let nm <- bridge_names();
+    let pl <- program_lent(name, lends);
+    let world <- program_global("rt_io", "ETm::plain_world");
+    let lents <- runtime_held(pl.lents, "`" ++ name ++ "`'s table of lent functions");
+    let eloop <- runtime_held(r.read.prog.quote(q), "`" ++ name ++ "`'s reading");
+    let gE <- runtime_held(Ty::quotes(r.read.params.rev(), q.rt), "`" ++ name ++ "`'s parameters' codes");
+    let capsE = q.rt.nat_list(caps);
+    let bridge_e <- io_loop_bridge_of(r, world, lents);
+    let bridge <- runtime_held(bridge_e, "`" ++ name ++ "` as its reading's meaning");
+    let bridge_t <- infer(bridge).or_fail("`" ++ name ++ "`'s bridge: ");
+    let source_of <- program_global("runtime_program", "Program::source");
+    let source <- runtime_held(ap(source_of, [eloop, lents, gE, pl.functions, capsE]), "`" ++ name ++ "`'s Source");
+    // The all-zero buffers, the first parameter's first.
+    let replicate <- program_global("list", "List::replicate");
+    let zero <- program_global("native_source", "zero_byte");
+    let zeros = caps.map(λ c => ap(replicate, [Blank, zero, NatLit(c)]));
+    let vals = bridge_pairs(nm, zeros.rev());
+    // The statement: the Source's tree reads as `f` from those buffers.
+    let io_s <- assume(Hd(<- runtime_held_type("linux_world", "Io")), "io", None).or_fail("`" ++ name ++ "`: a world: ");
+    let surface = Lam(io_s.ref, ap(Global(f), Cons(Local(io_s.ref), zeros)));
+    let tree_co <- program_global("native_source_co", "Source::tree_co");
+    let reads_t <- program_global("linux_world_co", "Io::Reads");
+    let no_args <- program_global("runtime_program", "Program::no_args");
+    let statement = ap(reads_t, [Blank, ap(tree_co, [source, no_args]), surface]);
+    // The proof: the lowering's theorem at the Source with the bridge at
+    // those buffers, then the exit.
+    let io_b <- assume(Hd(<- runtime_held_type("linux_world", "Io")), "io", None).or_fail("`" ++ name ++ "`: a world: ");
+    let bridged = Lam(io_b.ref, ap(bridge, Cons(Local(io_b.ref), zeros)));
+    let rfl <- runtime_global("tactic::rfl");
+    let held_nil <- program_global("runtime_program", "Program::held_nil");
+    let held_cons <- program_global("runtime_program", "Program::held_cons");
+    let tys_e <- program_global("rt", "RecInfo::none");
+    let start_e <- program_global("native_source", "Source::start");
+    let env_e = ap(start_e, [source, no_args]);
+    // The innermost link is the first parameter, in buffer 0.
+    let held = List::range(caps.len()).foldl(λ acc i => ap(held_cons, [tys_e, env_e, Blank, NatLit(i), runtime_at(zeros, i), Blank, Blank,
+        ap(rfl, [Blank, Blank]), acc]), ap(held_nil, [tys_e, env_e]));
+    let program_reads <- program_global("runtime_program", "Program::reads");
+    let inner = ap(program_reads, [eloop, lents, gE, pl.functions, capsE, ap(rfl, [Blank, Blank]), pl.agrees, vals, held, surface, bridged]);
+    let stmt <- program_global("runtime_program", "Program::stmt");
+    let result <- program_global("runtime_program", "Program::result");
+    let writers <- program_global("function_ir_placeless", "program_writers");
+    let performs <- program_global("native_source_co", "Source::performs_co");
+    let start <- program_global("native_source", "Source::start");
+    let exit_reads <- program_global("rt_io_program", "Stmt::exit_reads");
+    let none_tys <- program_global("rt", "RecInfo::none");
+    let call = ap(writers, [pl.functions]);
+    let proof = ap(exit_reads, [ap(stmt, [eloop, lents, gE]), ap(result, [eloop, lents, gE]), call, ap(performs, [source, call, NatLit(0)]),
+        ap(start, [source, no_args]), none_tys, surface, inner]);
+    let st <- as_type(statement).or_fail("`" ++ name ++ "`'s theorem: ");
+    let eloop_t <- infer(eloop).or_fail("`" ++ name ++ "`: ");
+    let lents_t <- infer(lents).or_fail("`" ++ name ++ "`: ");
+    let source_t <- infer(source).or_fail("`" ++ name ++ "`: ");
+    pure([
+        Decl(AsValue, name ++ "::eloop", [], Hd(eloop_t), eloop),
+        Decl(AsValue, name ++ "::lents", [], Hd(lents_t), lents),
+        Decl(AsTheorem, name ++ "::bridge", [], Hd(bridge_t), bridge),
+        Decl(AsValue, name ++ "::source", [], Hd(source_t), source),
+        Decl(AsTheorem, name ++ "::reads", [], Hd(st), proof)])
+}
+
+// `runtime fn f`: a program when `f` takes the world first, otherwise as
+// `runtime` reads it.
+fn runtime(name: String) → Tac<List<Decl>> {
+    let f <- runtime_ref(name);
+    let io <- program_takes_io(f);
+    match io { True => runtime_program(name, f), False => runtime::runtime(name) }
+}

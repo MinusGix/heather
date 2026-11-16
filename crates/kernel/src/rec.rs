@@ -8,10 +8,10 @@
 //! live here **once** and are consumed by both the convertibility checker
 //! ([`crate::conv`], comparing branches pairwise at these types) and the
 //! type checker ([`crate::typing`], checking branches against these types).
-//! They must also stay in sync with `subst.rs`'s `map_branches` depths and
-//! `reduce.rs`'s β-instantiations, which nothing checks but the
-//! identity-recursor typing test end to end
-//! (`issues/kernel-binder-count-tables.md`).
+//! The traversals that walk branches without building telescopes read the
+//! binder counts from [`BRANCH_DEPTHS`], which a unit test holds to these
+//! telescopes. `reduce.rs`'s β-instantiations are checked only by the
+//! identity-recursor typing test, end to end.
 //!
 //! Scoping convention for a telescope `(ℓ⃗; B⃗; x⃗)`: `univs` universe binders
 //! are pushed first, then the global bindings (each scoped over `L, ℓ⃗` and
@@ -26,7 +26,7 @@ use crate::level::{Level, UnivVar};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty,
-    wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
+    wf_step_telescope, Branches, CtxEntry, CtxShape, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
     LocalSubst, LocalVar, Motives, SealedProof, Term, Type,
 };
 
@@ -114,7 +114,7 @@ pub(crate) fn inst_ty_motive(
     lp: Level,
     gp: LocalCtx,
     xp: Term,
-    gamma_tele: &LocalCtx,
+    gamma_tele: impl Into<CtxShape>,
 ) -> Type {
     m.shift_univ_above(tu, 1)
         .shift_global_above(tg, 1)
@@ -133,7 +133,7 @@ pub(crate) fn inst_tm_motive(
     gp: LocalCtx,
     up: Type,
     xp: Term,
-    gamma_tele: &LocalCtx,
+    gamma_tele: impl Into<CtxShape>,
 ) -> Type {
     m.shift_univ_above(tu, 1)
         .shift_global_above(tg, 2)
@@ -287,6 +287,81 @@ pub const BRANCH_NAMES: [&str; 65] = [
     "tm_elim_iwf",
 ];
 
+/// How many (universe, global, local) binders each branch sits under, in
+/// [`BRANCH_NAMES`] order: its telescope's `univs`, `globals.len()` and
+/// `locals.len()`. The traversals that walk a [`Branches`] without building
+/// the telescopes (`subst.rs`'s `map_branches`, `bounds.rs`'s
+/// `branches_use`) read their binder depths here, and
+/// `branch_depths_match_the_telescopes` holds the table to
+/// [`branch_specs`].
+pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 65] = [
+    (0, 1, 0), // ty_nat
+    (2, 3, 2), // ty_pi
+    (1, 1, 0), // ty_ty
+    (1, 2, 1), // ty_el
+    (1, 4, 3), // ty_id
+    (2, 3, 2), // ty_sigma
+    (1, 1, 0), // ty_unit
+    (1, 1, 0), // ty_empty
+    (1, 3, 0), // tm_var
+    (0, 1, 0), // tm_nat
+    (2, 3, 2), // tm_pi
+    (1, 1, 0), // tm_ty
+    (0, 1, 0), // tm_zero
+    (0, 2, 1), // tm_succ
+    (1, 5, 4), // tm_elim_nat
+    (2, 4, 2), // tm_lam
+    (2, 5, 4), // tm_app
+    (1, 4, 3), // tm_id
+    (1, 3, 2), // tm_refl
+    (2, 7, 6), // tm_j
+    (2, 3, 2), // tm_sigma
+    (2, 5, 4), // tm_pair
+    (2, 4, 3), // tm_fst
+    (2, 4, 3), // tm_snd
+    (1, 1, 0), // tm_unit
+    (1, 1, 0), // tm_empty
+    (1, 1, 0), // tm_triv
+    (2, 3, 2), // tm_elim_empty
+    (2, 3, 2), // ty_sum
+    (2, 3, 2), // tm_sum
+    (2, 4, 3), // tm_inl
+    (2, 4, 3), // tm_inr
+    (3, 7, 6), // tm_case
+    (2, 3, 2), // ty_w
+    (2, 3, 2), // tm_w
+    (2, 5, 4), // tm_sup
+    (3, 6, 5), // tm_elim_w
+    (1, 3, 2), // ty_vec
+    (1, 3, 2), // tm_vec
+    (0, 2, 1), // ty_fin
+    (0, 2, 1), // tm_fin
+    (1, 3, 2), // ty_wf
+    (1, 3, 2), // tm_wf
+    (1, 5, 4), // tm_supf
+    (2, 6, 5), // tm_elim_wf
+    (1, 4, 3), // ty_seq
+    (1, 4, 3), // tm_seq
+    (1, 1, 0), // ty_sempty
+    (1, 1, 0), // tm_sempty
+    (1, 3, 2), // tm_srefl
+    (2, 3, 2), // tm_elim_sempty
+    (1, 2, 1), // ty_squash
+    (1, 2, 1), // tm_squash
+    (1, 3, 2), // tm_squash_in
+    (2, 5, 4), // tm_elim_squash
+    (3, 6, 5), // ty_m
+    (3, 6, 5), // tm_m
+    (4, 9, 8), // tm_corec
+    (3, 7, 6), // tm_out
+    (1, 3, 2), // ty_dvec
+    (1, 3, 2), // tm_dvec
+    (2, 7, 6), // ty_iwf
+    (2, 7, 6), // tm_iwf
+    (2, 8, 7), // tm_sup_i
+    (3, 10, 9), // tm_elim_iwf
+];
+
 /// The 65 branches, in [`branch_specs`] order (= `Branches` field order).
 pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 65] {
     [
@@ -391,7 +466,7 @@ pub fn branch_shapes(
     motives: &Motives,
     l1: &Level,
     l2: &Level,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
 ) -> Vec<BranchShape> {
     branch_specs(motives, l1, l2, gamma)
         .into_iter()
@@ -619,11 +694,13 @@ pub(crate) fn branch_specs(
     motives: &Motives,
     l1: &Level,
     l2: &Level,
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
 ) -> [BranchSpec; 65] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
-    let gt = |tu: u32, tg: u32| gamma.shift_univ(tu).shift_global(tg);
+    let gamma: CtxShape = gamma.into();
+    // Universe binders move no part of a shape.
+    let gt = |_tu: u32, tg: u32| gamma.shift_global(tg);
 
     // -- G_Typ --------------------------------------------------------------
 
@@ -1191,7 +1268,7 @@ pub(crate) fn branch_specs(
         // *type* — `Nat @ 0` — not at the motive's ℓ. Ch. 04 writes `ℓ/ℓ`
         // here, which contradicts its own `t_ze`/`t_succ` (both `0/ℓ` for the
         // same `Nat/U_T` slot) and the β rule; see
-        // docs/kernel/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
+        // docs/kernel/delam-extensions.md §16.1 (issues/recursor-elim-call-level-mismatch.md).
         let x_t = inst_tm_motive(
             m_tm,
             (1, 5, 3),
@@ -4618,7 +4695,7 @@ pub(crate) fn branch_specs(
     // five globals `g, I, S, P, o` ([`m_sig_globals`]); `x_I … x_o` are its
     // recursive results, each at the motive over the context its piece lives
     // in.
-    let m_sig_locals = |coded: bool, univs: u32, tg: u32, v: &MView, gt: &LocalCtx| {
+    let m_sig_locals = |coded: bool, univs: u32, tg: u32, v: &MView, gt: &CtxShape| {
         let sig = &v.sig;
         let (l, lp, li) = (&sig.level, &sig.pos_level, &sig.idx_level);
         let k = tg - 5;
@@ -4758,7 +4835,7 @@ pub(crate) fn branch_specs(
     let tm_corec = {
         let (l, lp, li, k) = (lvar(3), lvar(2), lvar(1), lvar(0));
         let gt = gt(4, 9);
-        let step_level = |sig: &crate::term::MSig| Level::join(sig.level.clone(), Level::join(k.clone(), sig.family_level()));
+        let step_level = |sig: &crate::term::MSig| Level::max(sig.level.clone(), Level::max(k.clone(), sig.family_level()));
         let mut globals = m_sig_globals(false, &l, &lp, &li);
         // U_X, prefix (g, I, S, P, o): o = 0.
         let v0 = m_view(false, 0, &l, &lp, &li);
@@ -4901,7 +4978,7 @@ pub(crate) fn branch_specs(
             ty: Rc::new(inst_tm_motive(
                 m_tm,
                 (3, 7, 6),
-                Level::join(l.clone(), family),
+                Level::max(l.clone(), family),
                 v.g.clone(),
                 m_out_ty(&v.sig, &j),
                 Term::BoxTm(Rc::new(code)),
@@ -4919,7 +4996,7 @@ pub(crate) fn branch_specs(
     // the signature's six globals `g, I, S, n, o, c` ([`iwf_sig_globals`]),
     // and `x_I … x_c` are its recursive results, each at the motive over the
     // context its piece lives in.
-    let iwf_sig_locals = |coded: bool, univs: u32, tg: u32, v: &IWfView, gt: &LocalCtx| {
+    let iwf_sig_locals = |coded: bool, univs: u32, tg: u32, v: &IWfView, gt: &CtxShape| {
         let sig = &v.sig;
         let (l, li) = (&sig.level, &sig.idx_level);
         let k = tg - 6;
@@ -5410,7 +5487,7 @@ mod tests {
     /// on arrival: nothing well-formed can be checked against it, so no
     /// branch can use its own recursive call and nothing complains. That is
     /// exactly how a mis-levelled `□(g ⊢ Empty^{ℓ'} @ ℓ)` survived two
-    /// level-indexing rounds ([[recursor-elim-call-level-mismatch]]).
+    /// level-indexing rounds (issues/recursor-elim-call-level-mismatch.md).
     ///
     /// Under the **identity** motives the term-motive entries carry both
     /// slots that can disagree: `M_Trm[l/ℓ, …, U/U_T, …]` instantiates to
@@ -5457,6 +5534,27 @@ mod tests {
         }
     }
 
+    /// [`BRANCH_DEPTHS`] is each telescope's binder counts, branch by
+    /// branch: the traversals that read it (`map_branches`, `branches_use`)
+    /// then put every branch under exactly the binders it is typed under. A
+    /// drift would shift a branch's free variables by the difference, a
+    /// silently wrong substitution (issues/kernel-binder-count-tables.md).
+    /// The counts do not depend on Γ; two are tried all the same.
+    #[test]
+    fn branch_depths_match_the_telescopes() {
+        let motives = identity_motives();
+        let (l1, l2) = (Level::Zero, Level::Zero);
+        let one = LocalCtx::nil().extended(Rc::new(Type::Nat), Level::Zero);
+        for gamma in [LocalCtx::nil(), one] {
+            let specs = branch_specs(&motives, &l1, &l2, &gamma);
+            for ((spec, name), depths) in specs.iter().zip(BRANCH_NAMES).zip(BRANCH_DEPTHS) {
+                let tele = &spec.tele;
+                let counted = (tele.univs, tele.globals.len() as u32, tele.locals.len() as u32);
+                assert_eq!(counted, depths, "{name}: telescope (univs, globals, locals) against BRANCH_DEPTHS");
+            }
+        }
+    }
+
     /// The `(ctx, level)` slots of the *type-motive* recursive calls
     /// (`x_S`, `x_T`, `x_M`, …), which no well-formedness check can see.
     ///
@@ -5464,7 +5562,7 @@ mod tests {
     /// for *any* in-scope `l` and any well-formed `Δ` — so
     /// [`every_branch_telescope_entry_is_a_well_formed_type`] checks the
     /// level's **scope** and never its **value**
-    /// ([[branch-telescope-type-motive-level-slots]]). The slots are pinned
+    /// (issues/branch-telescope-type-motive-level-slots.md). The slots are pinned
     /// here instead, by the one thing in the same table that already knows
     /// the answer.
     ///

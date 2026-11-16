@@ -66,6 +66,11 @@
 //! can be held against each other. Nothing above depends on the choice — the
 //! rules, the fuel accounting, the left-biased inference and the layer
 //! discipline are the same either way.
+//!
+//! The `tm_nf_*` / `tm_ne_*` / `ty_*` helpers named "[`Conv::tm_nf`] at
+//! `X`" and the like are single arms moved out of line, so that only that
+//! arm's locals stand under its recursion
+//! (docs/kernel/native-depth-budget-design.md §8).
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -77,7 +82,7 @@ use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
 use crate::reduce::{Defs, GlobalCache, NATIVE_DEPTH_LIMIT};
 use crate::term::{
-    Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
+    Branches, CtxEntries, CtxEntry, CtxShape, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
 use crate::typing::ity::ITy;
@@ -775,8 +780,9 @@ pub(crate) fn injection_heads_cached(
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should: the entry points above are conversion.
 /// It exists because "ch. 06 verbatim" is the *specification*
-/// (`reduce.rs`), not the algorithm (`docs/kernel/nbe-conversion-design.md`). These functions are the same comparison arms instantiated
-/// at [`dom::Syn`], so a test can run the two engines over one corpus and
+/// (`reduce.rs`), not the algorithm (`docs/kernel/nbe-conversion-design.md`).
+/// These functions are the same comparison arms instantiated at
+/// [`dom::Syn`], so a test can run the two engines over one corpus and
 /// require verdict-for-verdict agreement (`tests/conv_differential.rs`,
 /// `tests/eval_differential.rs`). That standing evidence is one of the three
 /// compensating controls the design doc §11.3 names; deleting it would
@@ -838,25 +844,26 @@ pub mod oracle {
 
 /// The ambient scope of a comparison: Ψ, Γ, and the layer index. The
 /// universe context L participates only by shifting (its length is never
-/// consulted), so it is not tracked. Extending any namespace clones — the
-/// judgments extend scopes freely and correctness beats performance here.
+/// consulted), so it is not tracked. Extending a namespace clones this
+/// handle; the parts that grow are shared, so a clone is cheap.
 ///
-/// Γ is carried **twice**. The syntactic [`LocalCtx`] survives because three
-/// consumers read only its *length and base* (`rec::branch_specs`, the shared
-/// `wf_step_telescope`, the identity substitutions inside the syntax domain's
-/// [`Dom::inst_ty`]); at the value domain its entry types are fillers
-/// (`issues/kernel-filler-contexts.md`). The scope a *value* needs — the
-/// environment ρ of neutral variables, and each entry's type as a domain
-/// object for [`Dom::var_type`] — is [`Env<'v>::rho`] and [`Env<'v>::vtys`], which
-/// the syntax domain never reads.
+/// Γ is carried as its length, the syntax of a prefix of it, and the
+/// domain objects of the rest. `gamma` holds an entry's syntax only when
+/// the entry has some: every entry at the syntax domain, and at the value
+/// domain only the Γ the conversion started in (and what [`Under`] pushes
+/// before any value binder), since a binder conversion pushes there has a
+/// value for its type and no syntax. The helpers that build identity
+/// substitutions read Γ's [`CtxShape`] ([`Env::shape`]) and no entry. The
+/// scope a *value* needs — the environment ρ of neutral variables, and each
+/// entry's type as a domain object for [`Dom::var_type`] — is
+/// [`Env<'v>::rho`] and [`Env<'v>::vtys`].
 #[derive(Clone)]
 struct Env<'v> {
     /// Query-local storage for value closures and persistent environments.
     /// Kept here rather than in every compact value-domain `Env` handle.
     arena: &'v ValueArena<'v>,
     /// Shared, not cloned: a binder push clones the whole scope, and Ψ's
-    /// bindings each carry a local context of their own — copying them per
-    /// push was ~3% of a routine `lib/certgen/ir_v1.hthr` check. Only `push_tele`
+    /// bindings each carry a local context of their own. Only `push_tele`
     /// changes Ψ, and it is a layer-m path.
     psi: Rc<GlobalCtx>,
     /// Rescoped definition bodies and binding signatures for **this** Ψ
@@ -865,10 +872,12 @@ struct Env<'v> {
     cache: Rc<GlobalCache>,
     /// Shared, not copied: a binder push clones the whole scope, and
     /// [`crate::term::CtxEntries`] is a spine, so extending Γ costs one cell
-    /// and cloning this field costs a refcount bump. It was a `Vec`, and
-    /// copying it per push was the #1 self line of a release
-    /// `lib/certgen/ir_v1.hthr` check (issues/context-representation-clones.md).
+    /// and cloning this field costs a refcount bump
+    /// (issues/context-representation-clones.md). A prefix of Γ: the
+    /// entries whose type is known as syntax ([`Env::syntax_entry`]).
     gamma: LocalCtx,
+    /// `|Γ|`, counting the entries past `gamma`.
+    len: u32,
     layer: Layer,
     /// The entry types of the binders **conversion itself pushed**, as domain
     /// objects, innermost first: those are the ones with no syntax in
@@ -955,6 +964,7 @@ impl<'v> Env<'v> {
             psi: Rc::new(psi.clone()),
             cache,
             gamma: gamma.clone(),
+            len: gamma.entries.len() as u32,
             layer,
             vtys: TyEnv::empty(),
             vbase: gamma.entries.len() as u32,
@@ -968,7 +978,22 @@ impl<'v> Env<'v> {
     /// carry it: pushing a binder is pushing Γ, and no outer shift moves a
     /// variable.
     fn rho(&self) -> value::Env<'v> {
-        value::Env::identity(self.gamma.entries.len() as u32)
+        value::Env::identity(self.len)
+    }
+
+    /// Γ's [`CtxShape`]: all the identity substitutions of the shared
+    /// helpers read of it.
+    fn shape(&self) -> CtxShape {
+        CtxShape { base: self.gamma.base, len: self.len }
+    }
+
+    /// The syntax of the entry `x` names, when Γ holds it as syntax: always
+    /// at the syntax domain, and at the value domain for the Γ a conversion
+    /// started in.
+    fn syntax_entry(&self, x: LocalVar) -> Option<&CtxEntry> {
+        let i = self.len.checked_sub(1 + x.0)?;
+        let have = self.gamma.entries.len() as u32;
+        self.gamma.entries.nth_inner(have.checked_sub(1 + i)?)
     }
 
     fn with_layer(&self, layer: Layer) -> Env<'v> {
@@ -981,25 +1006,29 @@ impl<'v> Env<'v> {
     /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env<'v> {
         let vbase = gamma.entries.len() as u32;
-        Env { gamma, layer, vtys: TyEnv::empty(), vbase, tele: (0, 0, 0), ..self.clone() }
+        Env { gamma, len: vbase, layer, vtys: TyEnv::empty(), vbase, tele: (0, 0, 0), ..self.clone() }
     }
 
     /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
     /// at the value domain pushing a binder also extends ρ with the binder's
     /// fresh neutral, and records the entry's type as a domain object.
     ///
-    /// The syntactic entry is a **filler** unless the caller has real syntax
-    /// (only [`Env<'v>::in_ctx`] and [`Env<'v>::new`] do): nothing reads it but the
-    /// length and the base.
+    /// An entry with syntax extends `gamma` while `gamma` is the whole of Γ;
+    /// past a binder with no syntax it is a domain object only.
     fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env<'v> {
         let vty = self.arena.ty(TyClo::new(self.rho(), Rc::clone(&ty)));
-        self.push_entry(ty, vty, level)
+        self.push_entry(Some(ty), vty, level)
     }
 
-    fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
+    fn push_entry(&self, ty: Option<Rc<Type>>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
         e.vtys = e.vtys.push(vty, level.clone());
-        e.gamma.entries.push(CtxEntry { ty, level });
+        if let Some(ty) = ty
+            && e.gamma.entries.len() as u32 == e.len
+        {
+            e.gamma.entries.push(CtxEntry { ty, level });
+        }
+        e.len += 1;
         e
     }
 
@@ -1023,6 +1052,7 @@ impl<'v> Env<'v> {
             psi,
             cache,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
+            len: self.len,
             layer: self.layer,
             vtys,
             vbase: self.vbase,
@@ -1129,8 +1159,8 @@ struct Conv<'v, D: Dom<'v>> {
     /// conversion, so the verdict for a pair is a fact about the pair:
     /// convertible, or definitely not. Exhaustion is not a verdict and is
     /// never stored. It carries the repeated sub-comparisons a δ-lazy
-    /// comparison makes of the same closures; it cannot carry a lockstep unfolding, whose
-    /// closures are fresh on every round — see the same-head arm of
+    /// comparison makes of the same closures; it cannot carry a lockstep
+    /// unfolding, whose closures are fresh on every step — see the same-head arm of
     /// [`Conv::tm_w`] for that case.
     memo: VerdictMemo<D::MemoKey>,
     /// Does Ψ contain any definition at all? Decided once, because when it
@@ -1502,7 +1532,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// What it saves is the shape: through the encodings the element type
     /// is compared once per `Σ` level, so a nested-pair literal of `n`
     /// elements — every level of which is annotated `Vec(T; k)` against the
-    /// expected `Vec(T; k)` — cost `n²/2` element comparisons
+    /// expected `Vec(T; k)` — costs `n²/2` element comparisons
     /// (`issues/elf-mutation-test-shape.md`); here it costs `n`.
     fn vec_ty(
         &mut self,
@@ -1523,21 +1553,11 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.ty(env, e1, e2, l1)
     }
 
-    /// Unfold a δ-stuck **neutral** type until its head is a former or a
-    /// spine no definition can advance — the type a comparison is *directed
-    /// by* (the η arms, the neutral-application rule's Π) must expose its
-    /// former, and one unfolding is not always enough: an alias of an alias,
-    /// or an `El` of a code that a definition computes, stays neutral after
-    /// one `delta_ty`. A former view (`Vec`, `Fin`, …) is left alone even
-    /// when a *component* is δ-stuck: the view is already decisive there and
-    /// forcing a length nobody reads would only spend fuel.
-    /// Unfold a term's defined heads until none remains
-    /// ([`Dom::delta_whnf_tm`]).
     /// Advance a copy of `w` one defined head at a time, at most
     /// [`MEET_STEPS`], until its head is one the other side was advanced
     /// past (`passed`), and meet the two spines there. `w_is_b` says which
     /// side of the comparison `w` is. On no meet the caller unfolds `w`
-    /// itself, in one transparent run as before: the copy's single steps
+    /// itself, in one transparent run: the copy's single steps
     /// are a look-ahead, never the result.
     fn meet_on_the_way(&mut self, env: &Env<'v>, w: &D::Tm, passed: &mut Passed<D::Tm>, w_is_b: bool) -> R<bool> {
         let mut w = w.clone();
@@ -1561,6 +1581,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok(false)
     }
 
+    /// Unfold a term's defined heads until none remains
+    /// ([`Dom::delta_whnf_tm`]).
     fn delta_to_head_tm(&mut self, env: &Env<'v>, w: D::Tm) -> R<D::Tm> {
         if D::delta_head(self, env, &w).is_none() {
             return Ok(w);
@@ -1568,6 +1590,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         D::delta_whnf_tm(self, env, w)
     }
 
+    /// Unfold a δ-stuck **neutral** type until its head is a former or a
+    /// spine no definition can advance — the type a comparison is *directed
+    /// by* (the η arms, the neutral-application rule's Π) must expose its
+    /// former, and one unfolding is not always enough: an alias of an alias,
+    /// or an `El` of a code that a definition computes, stays neutral after
+    /// one `delta_ty`. A former view (`Vec`, `Fin`, …) is left alone even
+    /// when a *component* is δ-stuck: the view is already decisive there and
+    /// forcing a length nobody reads would only spend fuel.
     fn delta_to_head_ty(&mut self, env: &Env<'v>, mut w: D::Ty) -> R<D::Ty> {
         if self.has_defs {
             while D::view_ty(self, env, &w).is_neutral()
@@ -1588,7 +1618,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// annotations are trivially `equiv`, and the typing seam's
     /// expected-vs-inferred query overwhelmingly hands this function two
     /// separately built copies of one type — on large canonical values the
-    /// structural walk paid seconds where `==` pays microseconds
+    /// structural walk costs orders of magnitude more than `==`
     /// (issues/conversion-cost-at-large-values.md). A failed `==` stops at
     /// the first difference, so its cost is bounded by a prefix of the walk
     /// the comparison performs anyway. Same fuel policy as every
@@ -1633,8 +1663,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // as one transparent run (`Dom::delta_whnf_ty`), the
                     // way the term side's one-sided arms do. A closed
                     // verdict's type against its former (`b.IsTrue()`
-                    // against `Unit`) is this arm, and a step at a time it
-                    // replayed the pending spine of `b` at every unfolding
+                    // against `Unit`) is this arm; a step at a time would
+                    // replay the pending spine of `b` at every unfolding
                     // (`issues/type-conversion-one-sided-delta-steps.md`).
                     (Some(_), None) => *wa = D::delta_whnf_ty(self, env, wa)?,
                     (None, Some(_)) => *wb = D::delta_whnf_ty(self, env, wb)?,
@@ -2134,8 +2164,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // single step and re-comparing would re-evaluate the
                     // body it exposes on every round — with every closure
                     // beneath it fresh each time, so nothing below is ever
-                    // shared or memoized — and two `ofNat(8, k)` at
-                    // different `k` exhausted 2^20 units that way. Nothing
+                    // shared or memoized, so two `ofNat(8, k)` at
+                    // different `k` would exhaust the fuel. Nothing
                     // is lost by unfolding both sides to their δ-heads
                     // instead: a meet at a sub-term is still found by the
                     // ordinary lazy comparison of the canonical forms'
@@ -2176,10 +2206,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // A δ-stuck **type** unfolds before the comparison is directed by it
         // — the mirror of [`Conv::ty_w`]'s δ stage. Without it, `tm` whnfs
         // its type opaquely, so two canonical
-        // values at `El (u^δ)` for a *defined* `u` fell into the
-        // neutral-type arm and compared as neutrals — `NotConvertible` for
-        // any literal, even two identical ones. Unreachable while defined
-        // codes never stood in annotation slots; `El (D#tycode^δ)` in an
+        // values at `El (u^δ)` for a *defined* `u` would fall into the
+        // neutral-type arm and compare as neutrals — `NotConvertible` for
+        // any literal, even two identical ones. `El (D#tycode^δ)` in an
         // `Id`'s type component (family-code design §10, the component
         // respell) is checked by exactly this comparison. The same-head
         // fast path above is unaffected: it compares spines at the stuck
@@ -2304,8 +2333,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     /// Consume Nat-prefix continuations without one native frame per
     /// predecessor. Each iteration is the ordinary `tm` entry (fuel,
-    /// identity, memo, WHNF), followed by the same δ-lazy/type-directed
-    /// comparison as before. The loop holds one depth slot, including when
+    /// identity, memo, WHNF), followed by the ordinary δ-lazy/type-directed
+    /// comparison. The loop holds one depth slot, including when
     /// entered from `tm_root`, which holds none of its own.
     ///
     /// Every cancelled prefix has exactly its residual comparison's verdict.
@@ -2465,8 +2494,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // the carrier in (Γ, i : I), the step in (Γ, i, x : X) at the
             // left one's step type, and the seed at `X[j]` — in that order,
             // since the step's type depends on the carrier. The signature
-            // and the index are forced by the type (ELIM_CONGRUENCE.md), so
-            // the type's own are used and the corecs' are not compared. A
+            // and the index are forced by the type (heather-coq
+            // `ELIM_CONGRUENCE.md`), so the type's own are used and the
+            // corecs' are not compared. A
             // `corec` against anything else is not convertible, as `sup`
             // against a neutral is at W: no rule unfolds a `corec` outside
             // an `out`, so two descriptions of one tree stay distinct.
@@ -2484,8 +2514,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         result.map(|()| TmProgress::Done)
     }
 
-    /// [`Conv::tm_nf`] at `Pi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Pi`.
     #[inline(never)]
     fn tm_nf_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Pi { dom_level, cod_level, dom, cod } = vw else {
@@ -2497,8 +2526,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.tm(&e, &x, &y, cod, cod_level)
     }
 
-    /// [`Conv::tm_nf`] at `UPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `UPi`.
     #[inline(never)]
     fn tm_nf_u_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::UPi { num_vars, level, body } = vw else {
@@ -2513,8 +2541,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.tm(&e, &x, &y, &t, level)
     }
 
-    /// [`Conv::tm_nf`] at `CtxPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `CtxPi`.
     #[inline(never)]
     fn tm_nf_ctx_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CtxPi { level, body } = vw else {
@@ -2529,8 +2556,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.tm(&e, &x, &y, &t, level)
     }
 
-    /// [`Conv::tm_nf`] at `TyPi`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `TyPi`.
     #[inline(never)]
     fn tm_nf_ty_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::TyPi { ctx, arg_level, body_level, body } = vw else {
@@ -2549,8 +2575,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.tm(&e, &x, &y, &t, body_level)
     }
 
-    /// [`Conv::tm_nf`] at `CodeTy`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `CodeTy`.
     #[inline(never)]
     fn tm_nf_code_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CodeTy { .. } = vw else {
@@ -2565,8 +2590,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `CodeTm`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `CodeTm`.
     #[inline(never)]
     fn tm_nf_code_tm(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::CodeTm { .. } = vw else {
@@ -2581,8 +2605,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `Nat`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Nat`.
     #[inline(never)]
     fn tm_nf_nat(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
         let TyView::Nat = vw else {
@@ -2604,8 +2627,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         result.map(|()| TmProgress::Done)
     }
 
-    /// [`Conv::tm_nf`] at `Ty`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Ty`.
     #[inline(never)]
     fn tm_nf_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Ty(_) = vw else {
@@ -2778,8 +2800,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `Id`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Id`.
     #[inline(never)]
     fn tm_nf_id(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Id { level, ty, .. } = vw else {
@@ -2795,8 +2816,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `Sigma`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Sigma`.
     #[inline(never)]
     fn tm_nf_sigma(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
         let TyView::Sigma { fst_level, snd_level, fst, snd } = vw else {
@@ -2809,8 +2829,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // further: a `Vec` is a right-nested Σ, and when its element
             // type has exactly two canonical inhabitants the whole chain
             // is a machine word. Comparing two *canonical* 64-bit
-            // vectors component by component costs ~59 evaluator steps
-            // per bit before any operation has been performed at all
+            // vectors component by component costs a run of evaluator
+            // steps per bit before any operation has been performed at all
             // (the design's §2 A3 floor); packing performs the same
             // projections η would have performed and then compares in
             // one instruction. Anything that does not pack falls through
@@ -2845,8 +2865,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         result.map(|()| TmProgress::Done)
     }
 
-    /// [`Conv::tm_nf`] at `Sum`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Sum`.
     #[inline(never)]
     fn tm_nf_sum(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Sum { lhs_level, rhs_level, lhs, rhs } = vw else {
@@ -2865,8 +2884,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `W`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `W`.
     #[inline(never)]
     fn tm_nf_w(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::W { shape_level, pos_level, shape, pos } = vw else {
@@ -2891,8 +2909,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `Wf`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `Wf`.
     #[inline(never)]
     fn tm_nf_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::Wf { level, shape, arity } = vw else {
@@ -2915,8 +2932,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `IWf`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `IWf`.
     #[inline(never)]
     fn tm_nf_i_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::IWf { level, idx_level, shape, .. } = vw else {
@@ -2929,7 +2945,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             ) => {
                 self.tm(env, a1, a2, shape, level)?;
                 let cs_ty = D::iwf_children(self, env, w, a1)?;
-                let fl = Level::join((*level).clone(), (*idx_level).clone());
+                let fl = Level::max((*level).clone(), (*idx_level).clone());
                 self.tm(env, c1, c2, &cs_ty, &fl)
             }
             (TmView::Supi { .. }, _) | (_, TmView::Supi { .. }) => Err(NC),
@@ -2937,8 +2953,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_nf`] at `M`; out of line so that only this arm's
-    /// locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_nf`] at `M`.
     #[inline(never)]
     fn tm_nf_m(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
         let TyView::M { sig, index } = vw else {
@@ -2953,9 +2968,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_i = D::push_entry(env, &sig.idx, sig.idx_level);
                 self.ty(&e_i, c1, c2, k1)?;
                 let step_ty = D::m_step_ty(self, env, g1, k1, c1)?;
-                let step_level = Level::join(
+                let step_level = Level::max(
                     (*g1.level).clone(),
-                    Level::join((*k1).clone(), g1.family_level()),
+                    Level::max((*k1).clone(), g1.family_level()),
                 );
                 let e_ix = D::push_entry(&e_i, c1, k1);
                 self.tm(&e_ix, t1, t2, &step_ty, &step_level)?;
@@ -3020,9 +3035,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // M[inr y/z]) and then the scrutinees via tm_nee; result
             // inferred as M[scrut/z]. Fires only on a neutral scrutinee
             // (canonical inl/inr β-fired in reduce). The scrutinees stay
-            // *last*: compared first, they ran a function_ir certificate out
-            // of fuel that this order checks. The theorem that showed it is
-            // gone, so nothing pins the order now.
+            // *last*: compared first, they once ran a function_ir certificate
+            // out of fuel; no test pins the order now.
             //
             // `A`, `B` and their levels are *not* compared: the scrutinees'
             // type `A + B` forces them (convertible neutrals infer
@@ -3050,8 +3064,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // inductions over the *same* open term convertible. The shape,
             // the arity and their level are forced by the scrutinees' Wf
             // type and not compared (Case's argument) — on a Wf-lowered
-            // inductive the shape is the sum-of-Σs, so that comparison was
-            // the size of the declaration at every meeting of two matches.
+            // inductive the shape is the sum-of-Σs, so that comparison would
+            // be the size of the declaration at every meeting of two matches.
             (TmView::ElimWf { .. }, TmView::ElimWf { .. },) => self.tm_ne_elim_wf(env, &va, &vb),
             // elim_IWf neutral congruence (extension), **typed** from the
             // start (heather-coq ELIM_CONGRUENCE.md, `actmne_elimIWf`): the
@@ -3067,8 +3081,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // `IWf_ihty_eq`). The motive's level stays: it is the one premise
             // the algorithm's soundness argument needs.
             (TmView::ElimIWf { .. }, TmView::ElimIWf { .. },) => self.tm_ne_elim_i_wf(env, &va, &vb),
-            // out neutral congruence (extension; docs/kernel-coinduction-
-            // design.md §2.1): the scrutinees as neutrals and nothing else —
+            // out neutral congruence (extension;
+            // docs/kernel/kernel-coinduction-design.md §2.1): the scrutinees as neutrals and nothing else —
             // the signature and the index are forced by their inferred type
             // `M(…)(j)`. The result type is built from the left `out`'s
             // annotations; its Σ is where η then projects the two sides.
@@ -3097,8 +3111,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// [`Conv::tm_ne`] at two `GlobalTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `GlobalTm` neutrals.
     #[inline(never)]
     fn tm_ne_global_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3131,8 +3144,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::apply_subst_ty(self, env, d1, n, ty)?, level))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimNat` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimNat` neutrals.
     #[inline(never)]
     fn tm_ne_elim_nat(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3156,8 +3168,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimEmpty` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimEmpty` neutrals.
     #[inline(never)]
     fn tm_ne_elim_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3174,8 +3185,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimSEmpty` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimSEmpty` neutrals.
     #[inline(never)]
     fn tm_ne_elim_s_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3192,8 +3202,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimSquash` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimSquash` neutrals.
     #[inline(never)]
     fn tm_ne_elim_squash(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3224,8 +3233,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::squash(env, d1, &inner), (*d1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `Case` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `Case` neutrals.
     #[inline(never)]
     fn tm_ne_case(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3277,8 +3285,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimW` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimW` neutrals.
     #[inline(never)]
     fn tm_ne_elim_w(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3348,8 +3355,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimWf` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimWf` neutrals.
     #[inline(never)]
     fn tm_ne_elim_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3380,8 +3386,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimIWf` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimIWf` neutrals.
     #[inline(never)]
     fn tm_ne_elim_i_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3414,7 +3419,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             child: c1,
         };
         let (mot, cs_ty, ih_ty, step_ty) = D::iwf_telescope(self, env, &sig, ml1, m1)?;
-        let fl = Level::join((*l1).clone(), (*li1).clone());
+        let fl = Level::max((*l1).clone(), (*li1).clone());
         // M in (Γ, j : I, z : IWf(…)(j)).
         let e_j = D::push_entry(env, x1, li1);
         let e_jz = D::push_entry(&e_j, &mot, &fl);
@@ -3428,8 +3433,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `Out` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `Out` neutrals.
     #[inline(never)]
     fn tm_ne_out(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3440,11 +3444,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         };
         self.tm_nee_c(env, n1, n2)?; // inferred M: forced, not read
         let ty = D::m_out_ty(self, env, g1, i1)?;
-        Ok((ty, Level::join((*g1.level).clone(), g1.family_level())))
+        Ok((ty, Level::max((*g1.level).clone(), g1.family_level())))
     }
 
-    /// [`Conv::tm_ne`] at two `J` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `J` neutrals.
     #[inline(never)]
     fn tm_ne_j(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3482,8 +3485,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `App` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `App` neutrals.
     #[inline(never)]
     fn tm_ne_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3513,9 +3515,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // whole per-node price of a spine: at every application node
         // the codomain annotation is the entire remaining Π, whose
         // domains are themselves neutral applications with their own
-        // annotations, so one n-ary spine compared n annotation
-        // suffixes and recursed into each — the `ty_nf`/`ty_w` stacks
-        // and the tens of millions of type closures of
+        // annotations, so one n-ary spine would compare n annotation
+        // suffixes and recurse into each — the `ty_nf`/`ty_w` stacks
+        // and type-closure blowup of
         // issues/application-annotation-sharing-cost.md.
         //
         // So: compare the heads, read the Π they infer, compare the
@@ -3525,7 +3527,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // viewed as it comes, it refuses the dependent fold/tabulate
         // instances (issues/generated-term-oracle-controls-not-convertible.md).
         // The stored annotations are ignored here exactly as the
-        // inferred type was before; the typing seam still checks
+        // paper ignores the inferred type; the typing seam still checks
         // every annotation against its head's type once, at the
         // term's own check.
         let (w, _) = self.tm_nee_c(env, f1, f2)?;
@@ -3539,8 +3541,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, &cod, std::slice::from_ref(a1))?, cod_level))
     }
 
-    /// [`Conv::tm_ne`] at two `Fst` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `Fst` neutrals.
     #[inline(never)]
     fn tm_ne_fst(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3572,8 +3573,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((fst, fst_level.clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `Snd` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `Snd` neutrals.
     #[inline(never)]
     fn tm_ne_snd(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3598,8 +3598,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, &snd, std::slice::from_ref(&fst_p))?, snd_level))
     }
 
-    /// [`Conv::tm_ne`] at two `UApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `UApp` neutrals.
     #[inline(never)]
     fn tm_ne_u_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3627,8 +3626,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_univ_ty(self, env, &body, &phi)?, l))
     }
 
-    /// [`Conv::tm_ne`] at two `CtxApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `CtxApp` neutrals.
     #[inline(never)]
     fn tm_ne_ctx_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3647,8 +3645,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ctx_ty(self, env, &body, c1)?, level))
     }
 
-    /// [`Conv::tm_ne`] at two `TyApp` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `TyApp` neutrals.
     #[inline(never)]
     fn tm_ne_ty_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3671,8 +3668,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_tyarg_ty(self, env, &body, t1)?, body_level))
     }
 
-    /// [`Conv::tm_ne`] at two `LetBoxTy` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `LetBoxTy` neutrals.
     #[inline(never)]
     fn tm_ne_let_box_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3719,8 +3715,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `LetBoxTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `LetBoxTm` neutrals.
     #[inline(never)]
     fn tm_ne_let_box_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3774,8 +3769,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimCodeTy` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimCodeTy` neutrals.
     #[inline(never)]
     fn tm_ne_elim_code_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3841,8 +3835,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok((t, (*al1).clone()))
     }
 
-    /// [`Conv::tm_ne`] at two `ElimCodeTm` neutrals; out of line so that only this
-    /// arm's locals stand under its recursion (docs/kernel/native-depth-budget-design.md §8).
+    /// [`Conv::tm_ne`] at two `ElimCodeTm` neutrals.
     #[inline(never)]
     fn tm_ne_elim_code_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
         let (
@@ -3959,7 +3952,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
         // G_Typ G_Trm: the 65 branches, each at its instantiated motive
         // type under its telescope.
-        for (spec, x, y) in branch_table(a, b, &env.gamma) {
+        for (spec, x, y) in branch_table(a, b, env.shape()) {
             let e = D::push_spec(env, &spec.tele);
             let x = D::embed_tm_at(&a.rec, &e, x);
             let y = D::embed_tm_at(&b.rec, &e, y);
@@ -3972,15 +3965,15 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
 /// [`Conv::rec_ca`]'s 65 branch rows — the spec from the left side, and both
 /// sides' branch terms — on the heap. The tables are arrays of 65, and built
-/// in `rec_ca`'s own frame they made it the fattest frame in conversion,
-/// standing under every branch comparison's recursion; built here, the
+/// in `rec_ca`'s own frame they would make it the fattest frame in
+/// conversion, standing under every branch comparison's recursion; built here, the
 /// frame that holds them returns before the first comparison
 /// (docs/kernel/native-depth-budget-design.md §8).
 #[inline(never)]
 fn branch_table<'v, D: Dom<'v>>(
     a: &RecSide<'_, 'v, D>,
     b: &RecSide<'_, 'v, D>,
-    gamma: &LocalCtx,
+    gamma: CtxShape,
 ) -> Vec<(rec::BranchSpec, Rc<Term>, Rc<Term>)> {
     let specs = rec::branch_specs(&a.motives, a.l1, a.l2, gamma);
     let ba = rec::branch_terms(&a.branches);
@@ -4007,7 +4000,7 @@ impl<'v> Conv<'v, Values> {
         {
             return Ok(());
         }
-        let d = env.gamma.entries.len() as u32;
+        let d = env.len;
         let mut wa = dom::values::eval_ity(self, env, a, d, false)?;
         let mut wb = dom::values::eval_ity(self, env, b, d, false)?;
         self.ty_w(env, &mut wa, &mut wb, l)

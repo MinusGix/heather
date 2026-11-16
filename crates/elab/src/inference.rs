@@ -1850,7 +1850,7 @@ impl Inference<'_> {
     ) -> R<Term> {
         let m2 = IndexedFamilies(self).generalize_index(cx, &motive, &fam.idx);
         let (ilvl, flvl) = (fam.ilvl.clone(), fam.flvl.clone());
-        let slvl = Level::join(ilvl.clone(), flvl.clone());
+        let slvl = Level::max(ilvl.clone(), flvl.clone());
         // `Σ(j: I). F(j)` and `⟨i, z⟩`, scoped `k` binders past Γ.
         let sigma = |k: u32| Type::Sigma {
             fst_level: ilvl.clone(),
@@ -1880,7 +1880,7 @@ impl Inference<'_> {
             dom: Rc::new(equation),
             cod: Rc::new(m2.shift_local(1)),
         };
-        let clvl = Level::join(slvl.clone(), mlvl.clone());
+        let clvl = Level::max(slvl.clone(), mlvl.clone());
         let at_scrut = Type::Id {
             level: slvl.clone(),
             ty: Rc::new(sigma(0)),

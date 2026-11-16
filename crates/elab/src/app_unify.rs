@@ -881,7 +881,7 @@ impl AppUnify<'_> {
                                 dom: Rc::clone(&dom),
                                 body: Rc::new(body.clone()),
                             };
-                            let fl = Level::join(dom_level.clone(), cod_level.clone());
+                            let fl = Level::max(dom_level.clone(), cod_level.clone());
                             typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.policy.fuel)
                                 .is_ok()
                         };

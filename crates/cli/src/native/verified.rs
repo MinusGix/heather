@@ -52,7 +52,7 @@ const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower
 
 /// What a program that is lent buffers needs besides: that it stores into
 /// none, and the laws its buffers are lent under.
-const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state"];
+const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state", "function_ir_borrows"];
 
 /// And what one that stores into them needs: the run of a program over a
 /// file, and the ending the generator states it with.
@@ -79,6 +79,11 @@ pub(super) struct Shape {
     /// `{prefix}_evaluable` and `{prefix}_agrees`.
     pub agreement: String,
     pub answer: String,
+    /// For a program that is lent spans, the same over the slices
+    /// `s0, s1, …` the certificate's `_returns` is stated at
+    /// (`Prog::ComputesOn`, function_ir_borrows): each span its slice's
+    /// bytes and its length word the slice's length.
+    pub on: String,
     /// For a program that is lent spans (a `runtime fn` reading
     /// `List<BitVec(8)>` parameters): how many buffers each function takes,
     /// by function. The code's arguments are then each span's address and
@@ -144,6 +149,7 @@ impl Shape {
             definitions,
             agreement: agreement_text(prefix, program),
             answer: root.answer(&arguments(root.arity)),
+            on: String::new(),
             lent: None,
             marks: None,
             tables: None,
@@ -178,7 +184,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
     {source}::agrees({list})
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -195,6 +201,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]
         let at_file: Vec<String> = parameters.iter().enumerate()
             .map(|(i, a)| if i < 2 * spans && i % 2 == 0 { format!("now.span({})", i / 2) } else { a.clone() }).collect();
         let answer = format!("{source}({})", at_file.join(", "));
+        let on = format!("{source}({})", on_slices(&parameters, spans, 0).join(", "));
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
         for name in LENT_IMPORTS { definitions.push_str(&format!("import {name};\n")); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
@@ -228,7 +235,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -258,6 +265,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
             .collect::<Vec<_>>().join(", ");
         let comma = if own.is_empty() { "" } else { ", " };
         let answer = format!("{over}(span{comma}{own})");
+        let on = format!("{over}({})", on_slices(&parameters, spans, 0).join(", "));
         let mut definitions = format!("import {owner};\nimport runtime;\nimport rt;\n");
         for name in LENT_IMPORTS.iter().chain(WRITTEN_IMPORTS) { definitions.push_str(&format!("import {name};\n")); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
@@ -304,7 +312,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
     }
 }
 
@@ -1206,6 +1214,14 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
         ("_through", format!("{prefix}_program(), {stem}_program()"), format!("{prefix}_quiet(), {stem}_quiet()"))
     } else { ("", format!("{prefix}_program()"), format!("{prefix}_quiet()")) };
     let keeps = |function: usize| if program.optimize { format!(" {prefix}_cut_keeps({function}, refl),") } else { String::new() };
+    // A function of spans is stated over its slices: `s{k}` for span `k`,
+    // lent `Mut` where the program stores into it, and its words after.
+    let slices: Vec<String> = (0..program.lent.as_ref().map_or(0, |counts| counts[f] as usize)).map(|k| format!("s{k}")).collect();
+    let borrows = slices.iter().enumerate()
+        .map(|(k, s)| if program.marks.as_ref().is_some_and(|marks| marks[k]) { format!("Mut({s})") } else { format!("Shared({s})") })
+        .collect::<Vec<_>>().join(", ");
+    let words: Vec<String> = parameters.iter().skip(2 * slices.len()).cloned().collect();
+    let typed_words = if words.is_empty() { String::new() } else { format!("{}: BitVec(64)", words.join(", ")) };
     if program.marks.is_some() {
         // A writer: the file is any whose first span is `span`, and the
         // lending lets the marked buffers be written, so `loan` asks of
@@ -1229,13 +1245,33 @@ fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{
     Lending::writing({prefix}_counts(), addresses, now, {prefix}_marks())
 }}
 
-theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
+theorem {prefix}_returns_over<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
     {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, Cons(span, rest)), {f}, {room}, {list}, Cons(span, rest),
         Ending(word := {call}.value, buffers := Cons({call}.after, rest))) {{
     λ origin last => {returns}
 }}
-", room = room(f), returns = if program.tables.is_some() {
+
+// The same read as the function's signature (`Prog::ComputesInto`,
+// function_ir_borrows; docs/native/span-statements-design.md): over the
+// slices {slices}, the first lent to be written and the rest to be read,
+// each passed as its address and its length, the code returns the source
+// function's word and leaves the function's span in the first slice and
+// the others as they were, wherever the slices lie that the lending's laws
+// hold (`Machine::Lends`).
+theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{typed_words}):
+    {prefix}_code().ComputesInto(machine, {f}, {room}, [{borrows}], [{words}], {on}) {{
+    {prefix}_code().computes_on(machine, {f}, {room}, [{borrows}], [{words}], {prefix}_counts(), λ (b: Nat) => marked({prefix}_marks(), b), refl,
+        λ b held => held, Ending(word := {on}.value, buffers := [{left}]),
+        λ top loan => {prefix}_returns_over<M>(machine, top, [{ats}], s0.bytes, [{others}], loan, {passed}))
+}}
+", slices = slices.join(", "), borrows = borrows, words = words.join(", "),
+            comma_words = if words.is_empty() { "" } else { ", " }, on = program.on,
+            left = std::iter::once(format!("{}.after", program.on)).chain(slices[1..].iter().map(|s| format!("{s}.bytes"))).collect::<Vec<_>>().join(", "),
+            ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
+            others = slices[1..].iter().map(|s| format!("{s}.bytes")).collect::<Vec<_>>().join(", "),
+            passed = on_slices(&parameters, slices.len(), 1).join(", "),
+            room = room(f), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
             format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
@@ -1264,7 +1300,7 @@ theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVe
 // not reach.
 fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{ Lending::reading({prefix}_counts(), addresses, now) }}
 
-theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
+theorem {prefix}_returns_over<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
     {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, now), {f}, {room}, {list}, now,
         Ending(word := {call}, buffers := now)) {{
@@ -1272,7 +1308,25 @@ theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVe
         {prefix}_lowers(), {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, top, loan, {f}, trivial,{keeps}
         {list}, trivial, now, {call}, {prefix}_agrees(now{comma}{arguments}))
 }}
-", room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
+
+// The same read as the function's signature (`Prog::ComputesOn`,
+// function_ir_borrows; docs/native/span-statements-design.md): over the
+// slices {slices}, lent to be read and each passed as its address and its
+// length, the code returns the source function's value at their bytes and
+// leaves them as they were, wherever they lie that the lending's laws hold
+// (`Machine::Lends`).
+theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{typed_words}):
+    {prefix}_code().ComputesOn(machine, {f}, {room}, [{borrows}], [{words}], {on}, [{left}]) {{
+    {prefix}_code().computes_on(machine, {f}, {room}, [{borrows}], [{words}], {prefix}_counts(), λ (_: Nat) => False, refl,
+        λ b held => absurd(held), Ending(word := {on}, buffers := [{left}]),
+        λ top loan => {prefix}_returns_over<M>(machine, top, [{ats}], [{left}], loan, {passed}))
+}}
+", slices = slices.join(", "), borrows = borrows, words = words.join(", "),
+            comma_words = if words.is_empty() { "" } else { ", " }, on = program.on,
+            left = slices.iter().map(|s| format!("{s}.bytes")).collect::<Vec<_>>().join(", "),
+            ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
+            passed = on_slices(&parameters, slices.len(), 1).join(", "),
+            room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
     } else {
         text.push_str(&format!("
 // The code computes the source function (`Prog::Computes`,
@@ -1553,6 +1607,19 @@ theorem {name}_agrees({typed}): {name}().eval({sources}, {list}) = {answer} {{
 }
 
 /// A function's arguments as the certificate names them.
+/// The code's words as a statement over slices spells them: span `k`'s
+/// address `s{k}.at` (or, where the source function takes the span, its
+/// bytes) and its length `s{k}.length()`, then the words as they are.
+/// `form` 0 is the source function's arguments, 1 the code's.
+fn on_slices(parameters: &[String], spans: usize, form: usize) -> Vec<String> {
+    parameters.iter().enumerate().map(|(i, a)| match (i < 2 * spans, i % 2, form) {
+        (true, 0, 0) => format!("s{}.bytes", i / 2),
+        (true, 0, _) => format!("s{}.at", i / 2),
+        (true, _, _) => format!("s{}.length()", i / 2),
+        _ => a.clone(),
+    }).collect()
+}
+
 fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).collect() }
 
 fn typed(arguments: &[String]) -> String {

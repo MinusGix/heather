@@ -371,12 +371,32 @@ met the rail on #358, #359 and #366
 (`issues/library-gate-native-tests-fresh-box-rail.md`).
 
 `heather check --build-jobs N` runs the planner over the load before
-checking and starts a `heather check` of the module's file (with the
-parent's `--expectations` and image policy) for each ready module, up to N
-at a time, in order of the longest chain of source bytes above it,
-refreshing the plan as each finishes. `--build-only`
+checking and builds each ready module (with the parent's `--expectations`
+and image policy), up to N at a time, in order of the longest chain of
+source bytes above it, refreshing the plan as each finishes. `--build-only`
 stops there. A module that fails is reported with the tail of its output; its
 dependents stay unbuilt, and the ordinary check that follows reports it.
+
+The builds run in N worker processes (`heather check --build-worker`,
+started by the scheduler and never from a command line). A worker reads a
+module's file from standard input, checks it over its closure in the one
+session it keeps, and answers on standard output with the verdict, the CPU
+it has used and the memory it holds. Its session holds every module it has
+loaded, so the next module's closure is loaded only where it is new, and
+the scheduler gives a module to the idle worker that holds most of its
+closure. The images are the ones a `heather check` of each module alone
+writes, byte for byte (`a_build_worker_writes_the_images_a_check_of_each_module_writes`
+in `crates/cli/tests/world.rs`, and the whole library compared the same
+way when this was built).
+
+A process per module, which this replaced on 2026-11-16, gave each module
+a CPU rail and an address space of its own. A worker spends both on every
+module it builds, so the scheduler retires it, by closing its input, once
+it has used a third of the CPU rail it runs under or holds a quarter of the
+address-space rail (a quarter of 6 GiB where there is none): a module
+always starts with most of a rail ahead of it. A module whose worker dies
+under it after building others is given once more to a worker of its own
+before it is reported failed.
 
 `--build-first <dir>` (repeatable) starts the modules below the named
 directories, and their closures, before any other ready module. The gate
@@ -401,12 +421,18 @@ and CPU did not change (`issues/native-closure-builds-first.md`). So
 splitting a long module does not shorten this step: the step has no chain
 to shorten, and each new module adds a closure replay.
 
-The price is replay: each build process replays its module's closure, so the
-build step replays every closure once (§2's sum, about eighteen times the
-module count over the library) where folder children replayed about three
-times it. Replay is dominated by the Merkle walk that lets the verdict store
-vouch for a replayed binding, and it is what makes the build step's CPU
-higher than the racing children's.
+The price of a process per module was replay: each build process replayed
+its module's closure, so the build step replayed every closure once (§2's
+sum, about eighteen times the module count over the library) where folder
+children replayed about three times it. With the verdicts warm that was two
+fifths of the step's CPU: the same modules elaborated in one process took
+under three fifths of what a process each took. A hit is not cheap to
+record: the session replays it over its own canonical world, which it
+first builds by moving in every import off that world's spine (§6), so a
+closure costs more than one load per module. Workers pay it once per
+worker instead of once per importer, and the step's CPU is within about a
+tenth of the one-process figure. What is left of it is the same cost in the
+folder children and in every other process that loads a closure.
 
 ## 13. Vouching for a whole replay
 

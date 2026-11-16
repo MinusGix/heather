@@ -218,3 +218,14 @@ fn Io::reads_then<R>(t: CoTree<R>(Events::linux()), f, g: Io → Partial(Mutated
 {
     λ io => Eutt::trans(Events::none(), Io::against_co(t, io), f(io), g(io), r(io), e(io))
 }
+
+// The same, the agreement given surface first, as a bridge states it.
+fn Io::reads_back<R>(t: CoTree<R>(Events::linux()), f, g: Io → Partial(Mutated<Io, R>), r: Io::Reads(t, f),
+    e: (io: Io) → Eutt<Mutated<Io, R>>(Events::none(), g(io), f(io))) → Io::Reads(t, g)
+{
+    Io::reads_then(t, f, g, r, λ io => Eutt::sym(Events::none(), g(io), f(io), e(io)))
+}
+
+// A statement at every world and every `b`, at one `b`: what instantiates
+// a bridge's parameters while keeping its world first.
+fn Io::at_each<B>(P: Io → B → Type, e: (io: Io) → (b: B) → P(io, b), b: B) → (io: Io) → P(io, b) { λ io => e(io, b) }

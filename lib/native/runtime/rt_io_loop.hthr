@@ -520,7 +520,7 @@ fn ELoop::LowerHolds(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, l
     match r {
         None => True,
         Some(l) => (call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) →
-            ETm::LentsAgree(w.sigs.len(), ls, call) → (perform: PerformsCo()) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
+            ETm::LentsAgree(ls, call) → (perform: PerformsCo()) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             Eutt<Mutated<Io, p.ty(w, g).sem(w.tys)>>(Events::none(),
                 CoTree::map(Events::none(), l.stmt.run(call, perform)(env, io), λ m => ELoop::back(p.ty(w, g), w.tys, l.result, m)),
@@ -532,7 +532,7 @@ fn ELoop::LowerHolds(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, l
 // promise, where the flow goes on holding the rest's variables.
 fn ELoop::rest_holds(rest: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, lr: ELowered,
     rh: ELoop::LowerHolds(rest, w, ls, g, locs, next, Some(lr)), call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
-    lents: ETm::LentsAgree(w.sigs.len(), ls, call), perform: PerformsCo(),
+    lents: ETm::LentsAgree(ls, call), perform: PerformsCo(),
     below: LocsBelow(locs, next), pos: 0 < next, vals: rt::Env(w.tys, g)) → (flow: Flow) → (io: Io) → flow.KeepsAll(w.tys, g, locs, vals) →
     Eutt<Mutated<Io, rest.ty(w, g).sem(w.tys)>>(Events::none(),
         CoTree::map(Events::none(), Stmt::then_run(λ io2 env2 => lr.stmt.run(call, perform)(env2, io2), Mutated(io, flow)),
@@ -634,7 +634,7 @@ theorem ELoop::body_step(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, 
 theorem ELoop::pass_rel(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, cond: Tm, c: Lowered,
     vh: ETm::ValueHolds(cond, w, g, locs, next, Some(c)), eb: Tm::ty(cond, w, g) = Bit,
     call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
-    lents: ETm::LentsAgree(w.sigs.len(), ls, call), below: LocsBelow(locs, next), pos: 0 < next,
+    lents: ETm::LentsAgree(ls, call), below: LocsBelow(locs, next), pos: 0 < next,
     body: ETm, lb: ELowered, bh: ETm::LowerHolds(body, w, ls, g, locs, next, Some(lb)), rebind: List<Nat>, srcs: List<Loc>, mv: Stmt,
     sh: ELoop::SourcesHold(w.tys, body.ctx_end(w, g), lb.locs, g, rebind, Some(srcs)), mh: ELoop::MovesHold(w.tys, g, locs, srcs, Some(mv))):
     (env: Env) → (vals: rt::Env(w.tys, g)) → ELoop::Held(w.tys, g, locs)(env, vals) → (io: Io) →
@@ -873,7 +873,7 @@ theorem ELoop::lower_sound(self p: ELoop, w: rt::World, ls: List<Lent>): (g: Lis
 // steps, loops and all, from an environment that holds the variables.
 fn ELoop::lower_reads(self p: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next: Nat, l: ELowered, lowered: p.lower(w, ls, g, locs, next) = Some(l),
     call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
-    lents: ETm::LentsAgree(w.sigs.len(), ls, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
+    lents: ETm::LentsAgree(ls, call), perform: PerformsCo(), env: Env, vals: rt::Env(w.tys, g),
     held: LocsHold(w.tys, env, g, locs, vals), below: LocsBelow(locs, next), pos: 0 < next) →
     Io::Reads<p.ty(w, g).sem(w.tys)>(CoTree::map(Events::linux(), l.stmt.denote_co(call, perform)(env), λ flow => flow.read_back(p.ty(w, g), w.tys, l.result)),
         λ io => p.sem(w, ls, g, vals, io))
