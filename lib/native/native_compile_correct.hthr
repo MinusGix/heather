@@ -70,7 +70,10 @@ import omega;
 // Where each piece starts, inside what it builds
 
 theorem Prog::within_exits(self p: Prog, layout: Layout, known: List<Fact>, status: Nat): p.Within(p.exits(layout, known, status)) {
-    p.within_trans(p.known_to(layout, known, status, Rdi), p.exits(layout, known, status), p.within_known_to(layout, known, status, Rdi), Exists(2, refl))
+    calc {
+        p <= p.known_to(layout, known, status, Rdi) := p.within_known_to(layout, known, status, Rdi),
+        <= p.exits(layout, known, status) := Exists(2, refl),
+    }
 }
 
 // The calls' code from its start: fixed runs of items between the words'
@@ -88,12 +91,15 @@ theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out:
     let asked = then(r4, Syscall);
     let done = Succ(Succ(Succ(Succ(names))));
     let copied = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, done)).copy_in(layout, buf, Succ(Succ(Succ(names))), done).label(done);
-    p.within_trans(r0, whole, p.within_known_to(layout, known, at, R8),
-        r0.within_trans(r1, whole, Exists(6, refl),
-            r1.within_trans(r2, whole, r1.within_known_to(layout, known, len, Rdx),
-                r2.within_trans(r3, whole, Exists(5, refl),
-                    r3.within_trans(r4, whole, r3.within_known_to(layout, known, fd, Rdi),
-                        r4.within_trans(copied, whole, Exists(12, refl), copied.within_word_from(layout, out, result, Rax)))))))
+    calc {
+        p <= r0 := p.within_known_to(layout, known, at, R8),
+        <= r1 := Exists(6, refl),
+        <= r2 := r1.within_known_to(layout, known, len, Rdx),
+        <= r3 := Exists(5, refl),
+        <= r4 := r3.within_known_to(layout, known, fd, Rdi),
+        <= copied := Exists(12, refl),
+        <= whole := copied.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result, capacity, names: Nat):
@@ -107,12 +113,15 @@ theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out
     let w3 = then(room, Block([MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))]));
     let w4 = w3.known_to(layout, known, fd, Rdi);
     let asked = then(w4, Syscall);
-    p.within_trans(w0, whole, p.within_known_to(layout, known, from, R8),
-        w0.within_trans(w1, whole, Exists(6, refl),
-            w1.within_trans(w2, whole, w1.within_known_to(layout, known, len, Rdx),
-                w2.within_trans(w3, whole, Exists(5, refl),
-                    w3.within_trans(w4, whole, w3.within_known_to(layout, known, fd, Rdi),
-                        w4.within_trans(asked, whole, w4.within_then(0, Syscall), asked.within_word_from(layout, out, result, Rax)))))))
+    calc {
+        p <= w0 := p.within_known_to(layout, known, from, R8),
+        <= w1 := Exists(6, refl),
+        <= w2 := w1.within_known_to(layout, known, len, Rdx),
+        <= w3 := Exists(5, refl),
+        <= w4 := w3.within_known_to(layout, known, fd, Rdi),
+        <= asked := w4.within_then(0, Syscall),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, capacity, names: Nat):
@@ -126,9 +135,12 @@ theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, b
     let copied = then(then(counted, Block([CmpRR(Rcx, R9)])), Jcc(AE, past)).arg_pointer(layout, buf, capacity, head).arg_copy(head, Succ(Succ(head)), Succ(head));
     let found = then(then(copied.label(Succ(Succ(head))), Block([MovRR(Rax, R8)])), Jmp(after));
     let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(after);
-    p.within_trans(loaded, whole, Exists(3, refl),
-        loaded.within_trans(counted, whole, loaded.within_word_to(layout, index, Rcx),
-            counted.within_trans(missing, whole, Exists(21, refl), missing.within_word_from(layout, out, len, Rax))))
+    calc {
+        p <= loaded := Exists(3, refl),
+        <= counted := loaded.within_word_to(layout, index, Rcx),
+        <= missing := Exists(21, refl),
+        <= whole := missing.within_word_from(layout, out, len, Rax),
+    }
 }
 
 theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result, capacity, names: Nat):
@@ -140,8 +152,11 @@ theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out:
     let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
     let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
     let asked = then(then(ended, Block(asking)), Syscall);
-    p.within_trans(r0, whole, p.within_known_to(layout, known, len, Rcx),
-        r0.within_trans(asked, whole, Exists(20, refl), asked.within_word_from(layout, out, result, Rax)))
+    calc {
+        p <= r0 := p.within_known_to(layout, known, len, Rcx),
+        <= asked := Exists(20, refl),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat): p.Within(p.closes(layout, known, out, fd, result)) {
@@ -149,9 +164,12 @@ theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out
     let c0 = then(p, Block([MovRI(Rax, BitVec::ofNat(3))]));
     let c1 = c0.known_to(layout, known, fd, Rdi);
     let asked = then(c1, Syscall);
-    p.within_trans(c0, whole, p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
-        c0.within_trans(c1, whole, c0.within_known_to(layout, known, fd, Rdi),
-            c1.within_trans(asked, whole, c1.within_then(0, Syscall), asked.within_word_from(layout, out, result, Rax))))
+    calc {
+        p <= c0 := p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
+        <= c1 := c0.within_known_to(layout, known, fd, Rdi),
+        <= asked := c1.within_then(0, Syscall),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 // What a statement compiles to starts where it was given its start.
@@ -230,11 +248,13 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
                             None => λ none => absurd(none),
                             Some(n) => λ same => j(Option::some_inj(Compiled(n.prog.join_label(Succ(Succ(names))), n.names), c, same),
                                 λ x _ => p.Within(x.prog),
-                                p.within_trans(tested, n.prog.join_label(Succ(Succ(names))), p.within_tests(layout, condition, Succ(names)),
-                                    tested.within_trans(y.prog, n.prog.join_label(Succ(Succ(names))), yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
-                                        y.prog.within_trans(other, n.prog.join_label(Succ(Succ(names))), Exists(2, refl),
-                                            other.within_trans(n.prog, n.prog.join_label(Succ(Succ(names))), no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
-                                                n.prog.within_label(Succ(Succ(names)))))))),
+                                calc {
+                                    p <= tested := p.within_tests(layout, condition, Succ(names)),
+                                    <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
+                                    <= other := Exists(2, refl),
+                                    <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
+                                    <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
+                                }),
                         })
                     },
                 }),
@@ -250,10 +270,12 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
                     Some(b) => λ same => {
                         let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
                         j(Option::some_inj(Compiled(closed, b.names), c, same), λ x _ => p.Within(x.prog),
-                            p.within_trans(head, closed, p.within_label(Succ(names)),
-                                head.within_trans(b.prog, closed, body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
-                                    b.prog.within_trans(b.prog.tests(layout, again, Succ(Succ(names))), closed, b.prog.within_tests(layout, again, Succ(Succ(names))),
-                                        Exists(2, refl)))))
+                            calc {
+                                p <= head := p.within_label(Succ(names)),
+                                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
+                                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
+                                <= closed := Exists(2, refl),
+                            })
                     },
                 }),
             }
@@ -1566,18 +1588,20 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
                     let counted = labelled.count_down(layout);
                     let saved = counted.saves(layout.kept());
                     let framed = then(saved, Block(frame_down(layout.words)));
-                    let w_framed: p.Within(framed) = p.within_trans(counted, framed, p.within_trans(labelled, counted, Exists(1, refl), Exists(6, refl)),
-                        counted.within_trans(saved, framed, Prog::within_saves(layout.kept(), counted), Exists(1, refl)));
-                    let w_entry: p.Within(entry) = p.within_trans(framed, entry, w_framed,
-                        Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed));
-                    let w_body: p.Within(b.prog) = p.within_trans(entry, b.prog, w_entry, proc.body.emit_extends(layout, entry, proc.results, names, b, emitted));
                     let moved = b.prog.words_to(layout, proc.results, result_registers());
-                    let w_moved: b.prog.Within(moved) = Prog::within_words_to(layout, proc.results, result_registers(), b.prog);
                     let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
-                    let w_exit: moved.Within(proc.exit_code(b.prog, layout)) = moved.within_trans(lowered, proc.exit_code(b.prog, layout), Exists(5, refl),
-                        lowered.within_trans(lowered.restores(layout.kept()), proc.exit_code(b.prog, layout), Prog::within_restores(layout.kept(), lowered), Exists(1, refl)));
-                    ⟨Exists(p, Exists(names, Exists(b, ⟨fits, ⟨emitted, w⟩⟩))),
-                        p.within_trans(b.prog, proc.exit_code(b.prog, layout), w_body, b.prog.within_trans(moved, proc.exit_code(b.prog, layout), w_moved, w_exit))⟩
+                    ⟨Exists(p, Exists(names, Exists(b, ⟨fits, ⟨emitted, w⟩⟩))), calc {
+                        p <= labelled := Exists(1, refl),
+                        <= counted := Exists(6, refl),
+                        <= saved := Prog::within_saves(layout.kept(), counted),
+                        <= framed := Exists(1, refl),
+                        <= entry := Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed),
+                        <= b.prog := proc.body.emit_extends(layout, entry, proc.results, names, b, emitted),
+                        <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
+                        <= lowered := Exists(5, refl),
+                        <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
+                        <= proc.exit_code(b.prog, layout) := Exists(1, refl),
+                    }⟩
                 }),
         })(refl, same0),
     })(refl, code)
@@ -1595,15 +1619,23 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
     let framed = then(saved, Block(frame_down(layout.words)));
     let moved = b.prog.words_to(layout, proc.results, result_registers());
     let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
-    let w_moved: moved.Within(whole) = moved.within_trans(lowered, whole, Exists(5, refl),
-        lowered.within_trans(lowered.restores(layout.kept()), whole, Prog::within_restores(layout.kept(), lowered),
-            lowered.restores(layout.kept()).within_trans(proc.exit_code(b.prog, layout), whole, Exists(1, refl), w_exit)));
-    let w_b: b.prog.Within(whole) = b.prog.within_trans(moved, whole, Prog::within_words_to(layout, proc.results, result_registers(), b.prog), w_moved);
-    let w_entry: entry.Within(whole) = entry.within_trans(b.prog, whole, proc.body.emit_extends(layout, entry, proc.results, names, b, emitted), w_b);
-    let w_counted: counted.Within(whole) = counted.within_trans(framed, whole,
-        counted.within_trans(saved, framed, Prog::within_saves(layout.kept(), counted), Exists(1, refl)),
-        framed.within_trans(entry, whole,
-            Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed), w_entry));
+    let w_b: b.prog.Within(whole) = calc {
+        b.prog <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
+        <= lowered := Exists(5, refl),
+        <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
+        <= proc.exit_code(b.prog, layout) := Exists(1, refl),
+        <= whole := w_exit,
+    };
+    let w_entry: entry.Within(whole) = calc {
+        entry <= b.prog := proc.body.emit_extends(layout, entry, proc.results, names, b, emitted),
+        <= whole := w_b,
+    };
+    let w_counted: counted.Within(whole) = calc {
+        counted <= saved := Prog::within_saves(layout.kept(), counted),
+        <= framed := Exists(1, refl),
+        <= entry := Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed),
+        <= whole := w_entry,
+    };
     ⟨w_counted, ⟨w_entry, w_b⟩⟩
 }
 

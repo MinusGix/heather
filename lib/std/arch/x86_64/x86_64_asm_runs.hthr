@@ -18,6 +18,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_asm;
+import relation_props;
 import bitvec;
 import bool;
 import list;
@@ -53,6 +54,10 @@ theorem Prog::within_trans(self a: Prog, b, c: Prog, first: a.Within(b), second:
         trans(sym(asm_back_back(second.witness, c, first.witness)),
             trans(cong_fn<Prog, Prog>(λ x => asm_back(x, first.witness), second.proof), first.proof)))
 }
+
+// `q <= p` reads "`q` is within `p`", so a chain of extensions is a `calc`.
+designation <= at Prog := Prog::Within
+instance Transitive<Prog>(Prog::Within) { rel_trans := λ a b c first second => a.within_trans(b, c, first, second) }
 
 theorem Prog::within_step(self a: Prog, p: Prog, name: Nat, item: Asm, within: a.Within(p)): a.Within(At(p, name, item)) {
     a.within_trans(p, At(p, name, item), within, p.within_then(name, item))
