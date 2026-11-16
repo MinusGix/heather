@@ -392,8 +392,9 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// A Γ of the right *shape* for the shared β helpers, which read only its
     /// length and base (`reduce.rs` module doc). The entry types are never
-    /// inspected, so a filler suffices — and building one is confined to the
-    /// code-recursor path, which is not the hot one.
+    /// inspected, so a filler suffices (`issues/kernel-filler-contexts.md`);
+    /// building one is confined to the code-recursor path, which is not the
+    /// hot one.
     fn scope(&self, env: &Env<'v>) -> LocalCtx {
         LocalCtx {
             base: self.base,

@@ -574,7 +574,7 @@ fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &VNeutral<'v>) -> &'v Val<'v> {
 thread_local! {
     /// The filler Γ entry: at the value domain nothing reads an entry's
     /// syntax (`Env<'v>::vtys` carries the domain object), only the length and
-    /// the base.
+    /// the base (`issues/kernel-filler-contexts.md`).
     static FILLER: Rc<Type> = Rc::new(Type::Nat);
 }
 
