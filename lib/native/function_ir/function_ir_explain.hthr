@@ -1,0 +1,246 @@
+// What a plan did, said in the rules' own words: a line for each rule a
+// replay used, the conclusion at the instance, the rule's name and the
+// premises it stood on (docs/native/optimizer-rules-design.md §8). It is what
+// `compile-x86 --explain-optimizer` prints. Nothing here is part of a
+// theorem: a line is read off the clause the rule makes at the plan's
+// numbers, which is the clause the replayer checked.
+//
+// A word is named `t` and its id. Where a premise is the node that
+// computes a word, the word is said as that computation (`t3 + 0`), so a
+// line reads as the rule's statement does; a premise so read is not
+// listed again.
+//
+// A line is a spelling (function_ir_spelled): numbers written in front of
+// what follows them.
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import function_ir_spelled;
+import bool;
+import list;
+import nat;
+import nat_map;
+import option;
+import string;
+
+fn say_word(id: Nat) → List<Nat> → List<Nat> { λ after => spell_text("t", spell_number(id, after)) }
+
+fn say_span(buffer: Nat) → List<Nat> → List<Nat> { λ after => spell_text("span", spell_number(buffer, after)) }
+
+// `left op right`, in brackets where it is part of another expression.
+fn say_infix(nested: Bool, left: List<Nat> → List<Nat>, op: String, right: List<Nat> → List<Nat>) → List<Nat> → List<Nat> {
+    match nested {
+        True => λ after => spell_text("(", left(spell_text(op, right(spell_text(")", after))))),
+        False => λ after => left(spell_text(op, right(after))),
+    }
+}
+
+// `on.name(fields)`.
+fn say_method(on: List<Nat> → List<Nat>, name: String, fields: List<List<Nat> → List<Nat>>) → List<Nat> → List<Nat> {
+    λ after => on(spell_text(".", spell_text(name, spell_text("(", spell_items(fields, spell_text(")", after))))))
+}
+
+// What a node computes, its operands said by `word`.
+fn Node::computes(self node: Node, nested: Bool, word: Nat → List<Nat> → List<Nat>) → List<Nat> → List<Nat> {
+    match node {
+        Const(_, _, v) => spell_number(v),
+        Move(_, _, a) => word(a),
+        Add(_, _, a, b) => say_infix(nested, word(a), " + ", word(b)),
+        Sub(_, _, a, b) => say_infix(nested, word(a), " - ", word(b)),
+        BitAnd(_, _, a, b) => say_infix(nested, word(a), " & ", word(b)),
+        BitOr(_, _, a, b) => say_infix(nested, word(a), " | ", word(b)),
+        BitXor(_, _, a, b) => say_infix(nested, word(a), " ^ ", word(b)),
+        ShiftLeft(_, _, a, n) => say_infix(nested, word(a), " << ", spell_number(n)),
+        LogicalShiftRight(_, _, a, n) => say_infix(nested, word(a), " >> ", spell_number(n)),
+        RotateRight(_, _, a, n) => say_method(word(a), "rotr", [spell_number(n)]),
+        ArithmeticShiftRight(_, _, a, n) => say_method(word(a), "arithmetic_shift_right", [spell_number(n)]),
+        UnsignedLessThan(_, _, a, b) => say_infix(nested, word(a), " < ", word(b)),
+        SignedLessThan(_, _, a, b) => say_method(word(a), "signed_less", [word(b)]),
+        Equal(_, _, a, b) => say_infix(nested, word(a), " == ", word(b)),
+        BufferLoad(_, b, i) => say_method(say_span(b), "byte", [word(i)]),
+        BufferStore(_, b, i, v) => say_method(say_span(b), "store_byte", [word(i), word(v)]),
+        Resize(_, t, _, a) => say_method(word(a), "resize", [spell_number(t)]),
+        SignResize(_, t, _, a) => say_method(word(a), "sresize", [spell_number(t)]),
+        TableRead(_, _, _, i, _) => λ after => spell_text("table[", word(i, spell_text("]", after))),
+        WideLoad(n, _, b, i) => say_method(say_span(b), "word", match n.same(4) { True => [word(i)], False => [word(i), spell_number(n)] }),
+        WideStore(n, _, b, i, v) => say_method(say_span(b), "store_word", [word(i), spell_number(n), word(v)]),
+        ByteSwap(_, _, a) => say_method(word(a), "swap_bytes", []),
+    }
+}
+
+// The node among the facts that computes the word `id`: a copy is no
+// computation, and is said as the fact it is.
+fn facts_computing(facts: List<Fact>, id: Nat) → Option<Node> {
+    match facts {
+        Nil => None,
+        Cons(fact, rest) => match fact {
+            Is(node) => match node {
+                Move(_, _, _) => facts_computing(rest, id),
+                _ => match node_output(node).id.same(id) { True => Some(node), False => facts_computing(rest, id) },
+            },
+            _ => facts_computing(rest, id),
+        },
+    }
+}
+
+// A word as the facts compute it, as deep as `fuel`; its name where none
+// does.
+fn say_through(fuel: Nat, facts: List<Fact>, nested: Bool, id: Nat) → List<Nat> → List<Nat> {
+    match fuel {
+        Zero => say_word(id),
+        Succ(f) => match facts_computing(facts, id) {
+            None => say_word(id),
+            Some(node) => node.computes(nested, λ (x: Nat) => say_through(f, facts, True, x)),
+        },
+    }
+}
+
+// A word by its name, and after it what computes it where a fact does.
+fn say_named(facts: List<Fact>, id: Nat) → List<Nat> → List<Nat> {
+    match facts_computing(facts, id) {
+        None => say_word(id),
+        Some(_) => λ after => say_word(id, spell_text(" = ", say_through(facts.len(), facts, False, id, after))),
+    }
+}
+
+// `word + n`, and the word alone where `n` is zero.
+fn say_sum(facts: List<Fact>, id: Nat, n: Nat) → List<Nat> → List<Nat> {
+    match n {
+        Zero => say_through(facts.len(), facts, False, id),
+        Succ(_) => say_infix(False, say_through(facts.len(), facts, True, id), " + ", spell_number(n)),
+    }
+}
+
+// A range's upper end: the largest word is said by name, since a range
+// that only bounds a word from below has it there.
+fn say_high(high: Nat) → List<Nat> → List<Nat> {
+    match high.same(18446744073709551615) { True => spell_text("u64::MAX"), False => spell_number(high) }
+}
+
+// A fact as a statement, its words read through `facts`. `named` is for
+// the fact a line is about: its word is named first, and after it what
+// computes it. A premise that is a computation names its word alone.
+fn Fact::stated(self fact: Fact, facts: List<Fact>, named: Bool) → List<Nat> → List<Nat> {
+    match fact {
+        Is(node) => λ after => (match named { True => say_named(facts, node_output(node).id), False => say_word(node_output(node).id) })(
+            spell_text(" = ", node.computes(False, λ (id: Nat) => say_through(facts.len(), facts, True, id), after))),
+        Within(id, low, high) => λ after => (match named { True => say_named(facts, id), False => say_through(facts.len(), facts, False, id) })(
+            spell_text(" within ", spell_number(low, spell_text(" ..= ", say_high(high, after))))),
+        AtMost(low, add, high, more) => λ after => say_sum(facts, low, add, spell_text(" <= ", say_sum(facts, high, more, after))),
+        Low(id, of, shift) => say_method(λ after => say_through(facts.len(), facts, True, id, after), "low_of",
+            [say_through(facts.len(), facts, False, of), spell_number(shift)]),
+        Split(word, first, second, third, fourth) => say_method(λ after => say_through(facts.len(), facts, True, word, after), "quarters",
+            [first, second, third, fourth].map(λ (id: Nat) => say_through(facts.len(), facts, False, id))),
+        Loaded(node) => λ after => say_word(node_output(node).id,
+            spell_text(" = ", node.computes(False, λ (id: Nat) => say_through(facts.len(), facts, True, id), spell_text(" here", after)))),
+        Joined(id, buffer, index, count, shift) => λ after => say_word(id,
+            spell_text(" = ", say_method(say_span(buffer), "join", [say_through(facts.len(), facts, False, index), spell_number(count)],
+                match shift { Zero => after, Succ(_) => spell_text(" << ", spell_number(shift, after)) }))),
+    }
+}
+
+fn ids_have(ids: List<Nat>, id: Nat) → Bool { match ids { Nil => False, Cons(known, rest) => known.same(id) || ids_have(rest, id) } }
+
+// The words a fact says something with. A premise that is a computation
+// reads its operands; the fact a line is about (`whole`) also has the word
+// it is of.
+fn Fact::mentions(self fact: Fact, whole: Bool) → List<Nat> {
+    match fact {
+        Is(node) => match whole { True => Cons(node_output(node).id, node.reads()), False => node.reads() },
+        Within(id, _, _) => [id],
+        AtMost(low, _, high, _) => [low, high],
+        Low(id, of, _) => [id, of],
+        Split(word, first, second, third, fourth) => [word, first, second, third, fourth],
+        Loaded(node) => node.reads(),
+        Joined(_, _, index, _, _) => [index],
+    }
+}
+
+fn facts_mention(facts: List<Fact>, id: Nat) → Bool {
+    match facts { Nil => False, Cons(fact, rest) => ids_have(fact.mentions(False), id) || facts_mention(rest, id) }
+}
+
+// Whether a line's words already say the premise `fact`: it is the
+// computation of a word the line reads, so that word is said as it.
+fn Fact::read_through(self fact: Fact, clause: Clause) → Bool {
+    match fact {
+        Is(node) => match facts_computing(clause.premises, node_output(node).id) {
+            None => False,
+            Some(first) => first.same(node) && (ids_have(clause.conclusion.mentions(True), node_output(node).id) || facts_mention(clause.premises, node_output(node).id)),
+        },
+        _ => False,
+    }
+}
+
+// The premises a line lists: each the line's words do not already say.
+fn facts_listed(clause: Clause, facts: List<Fact>) → List<Fact> {
+    match facts {
+        Nil => [],
+        Cons(fact, rest) => match fact.read_through(clause) { True => facts_listed(clause, rest), False => Cons(fact, facts_listed(clause, rest)) },
+    }
+}
+
+// `  conclusion   by name   (premises)`, and a line's end.
+fn Clause::line(self clause: Clause, name: List<Nat>) → List<Nat> → List<Nat> {
+    λ after => spell_text("  ", clause.conclusion.stated(clause.premises, True, spell_text("   by ", name ++ match facts_listed(clause, clause.premises) {
+        Nil => spell_text("\n", after),
+        Cons(first, rest) => spell_text("   (", spell_items(Cons(first, rest).map(λ (fact: Fact) => fact.stated(clause.premises, False)), spell_text(")\n", after))),
+    })))
+}
+
+// The rule at the place `k` of the table at the numbers `numbers`: its
+// clause as a line, or what is missing where a plan names what the table
+// does not make (a plan the replayer refuses).
+fn rule_said(table: List<RuleEntry>, k: Nat, numbers: List<Nat>) → List<Nat> → List<Nat> {
+    match table.nth(k) {
+        None => λ after => spell_text("  no rule at place ", spell_number(k, spell_text("\n", after))),
+        Some(entry) => match entry.rule.make(numbers) {
+            None => λ after => spell_text("  ", entry.name ++ spell_text(" makes no clause at ", spell_numbers(numbers, spell_text("\n", after)))),
+            Some(clause) => clause.line(entry.name),
+        },
+    }
+}
+
+fn lates_said(table: List<RuleEntry>, steps: List<Late>, after: List<Nat>) → List<Nat> {
+    match steps {
+        Nil => after,
+        Cons(step, rest) => match step { Know(k, numbers) => rule_said(table, k, numbers, lates_said(table, rest, after)), _ => lates_said(table, rest, after) },
+    }
+}
+
+fn steps_said(table: List<RuleEntry>, steps: List<Step>, after: List<Nat>) → List<Nat> {
+    match steps {
+        Nil => after,
+        Cons(step, rest) => match step {
+            Derive(k, numbers) => rule_said(table, k, numbers, steps_said(table, rest, after)),
+            Holding(lates, _) => lates_said(table, lates, steps_said(table, rest, after)),
+            _ => steps_said(table, rest, after),
+        },
+    }
+}
+
+// Every rule a plan uses, in the order the replay meets them.
+fn Plan::lines(self plan: Plan, table: List<RuleEntry>, after: List<Nat>) → List<Nat> {
+    match plan {
+        Same => after,
+        Nodes(steps) => steps_said(table, steps, after),
+        Then(steps, rest) => steps_said(table, steps, rest.lines(table, after)),
+        Both(first, second) => first.lines(table, second.lines(table, after)),
+        Arms(when_true, when_false) => when_true.lines(table, when_false.lines(table, after)),
+        Arm(_, arm) => arm.lines(table, after),
+        Body(body) => body.lines(table, after),
+        Derived(steps, body) => steps_said(table, steps, body.lines(table, after)),
+        Args(_) => after,
+        Inputs(_, body) => body.lines(table, after),
+        Flat(steps, _) => steps_said(table, steps, after),
+    }
+}
+
+// What a replay's plan did, a line for each rule it used, with the rules
+// the caller's world has registered in the table as the optimizer has
+// them (`Tables::of`).
+fn plan_explained(plan: Plan, entries: List<RuleEntry> := registered(RuleEntry)) → List<Nat> {
+    shared(entries_placed(entries), λ table => plan.lines(table, []))
+}

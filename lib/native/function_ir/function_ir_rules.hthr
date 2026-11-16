@@ -7,7 +7,7 @@
 // between two words (`low + add ≤ high + more`, read as naturals), a load
 // made since the last store, that a word is bytes of a buffer joined, or
 // that a word's bytes are other words' low bytes. The replayer
-// (function_ir_replay) applies a rule by its place in `rules()` where its
+// (function_ir_replay) applies a rule by its place in `library()` where its
 // premises are among the facts, so adding one is a theorem and a line of
 // the table, and no change to anything proved about the replayer.
 //
@@ -472,74 +472,80 @@ rule theorem swap_twice(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes
         trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
 }
 
-// The table a plan's `Derive` steps index. A rule keeps its place: new
-// ones are added at the end.
-fn rules() → List<Rule> {
+// The library's rules, each in its place: a plan's `Derive` steps index
+// the table by place, so a rule keeps its own and new ones are added at
+// the end.
+fn library() → List<RuleEntry> {
     [
-        add_zero_entry.rule,
-        move_move_entry.rule,
+        add_zero_entry,
+        move_move_entry,
         // 2
-        within_const_entry.rule,
-        within_move_entry.rule,
-        within_add_entry.rule,
-        within_shift_entry.rule,
-        within_narrow_entry.rule,
+        within_const_entry,
+        within_move_entry,
+        within_add_entry,
+        within_shift_entry,
+        within_narrow_entry,
         // 7
-        below_yes_entry.rule,
-        below_no_entry.rule,
+        below_yes_entry,
+        below_no_entry,
         // 9
-        below_left_entry.rule,
-        below_right_entry.rule,
-        above_left_entry.rule,
-        above_right_entry.rule,
+        below_left_entry,
+        below_right_entry,
+        above_left_entry,
+        above_right_entry,
         // 13
-        or_clear_left_entry.rule,
-        or_clear_right_entry.rule,
+        or_clear_left_entry,
+        or_clear_right_entry,
         // 15
-        narrow_back_entry.rule,
-        within_or_entry.rule,
-        within_and_entry.rule,
-        within_and_right_entry.rule,
+        narrow_back_entry,
+        within_or_entry,
+        within_and_entry,
+        within_and_right_entry,
         // 19
-        load_again_entry.rule,
+        load_again_entry,
         // 20
-        order_set_entry.rule,
-        order_clear_entry.rule,
-        ordered_below_entry.rule,
-        ordered_not_below_entry.rule,
+        order_set_entry,
+        order_clear_entry,
+        ordered_below_entry,
+        ordered_not_below_entry,
         // 24
-        order_join_entry.rule,
+        order_join_entry,
         // 25
-        sum_tested_low_entry.rule,
-        sum_tested_high_entry.rule,
-        sum_roomed_low_entry.rule,
-        sum_roomed_high_entry.rule,
+        sum_tested_low_entry,
+        sum_tested_high_entry,
+        sum_roomed_low_entry,
+        sum_roomed_high_entry,
         // 29
-        join_byte_entry.rule,
-        join_shift_entry.rule,
-        join_or_entry.rule,
-        join_or_right_entry.rule,
+        join_byte_entry,
+        join_shift_entry,
+        join_or_entry,
+        join_or_right_entry,
         // 33
-        join_word_entry.rule,
+        join_word_entry,
         // 34
-        sum_within_low_entry.rule,
-        sum_within_high_entry.rule,
+        sum_within_low_entry,
+        sum_within_high_entry,
         // 36
-        or_of_clear_entry.rule,
-        or_of_set_entry.rule,
-        or_of_set_right_entry.rule,
+        or_of_clear_entry,
+        or_of_set_entry,
+        or_of_set_right_entry,
         // 39
-        within_sub_entry.rule,
+        within_sub_entry,
         // 40
-        low_narrowed_entry.rule,
-        low_shifted_entry.rule,
+        low_narrowed_entry,
+        low_shifted_entry,
         // 42
-        split_swapped_entry.rule,
-        split_plain_entry.rule,
+        split_swapped_entry,
+        split_plain_entry,
         // 44
-        swap_twice_entry.rule,
+        swap_twice_entry,
     ]
 }
+
+fn entries_rules(entries: List<RuleEntry>) → List<Rule> { match entries { Nil => [], Cons(entry, rest) => Cons(entry.rule, entries_rules(rest)) } }
+
+// The table a plan's `Derive` steps index.
+fn rules() → List<Rule> { entries_rules(library()) }
 
 // The rules the search applies wherever their statement fits
 // (function_ir_match): each rewrites a node as the one its conclusion
@@ -581,8 +587,6 @@ fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     }
 }
 
-fn entries_rules(entries: List<RuleEntry>) → List<Rule> { match entries { Nil => [], Cons(entry, rest) => Cons(entry.rule, entries_rules(rest)) } }
-
 fn entries_rewriting(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     match entries {
         Nil => [],
@@ -602,6 +606,9 @@ fn entries_ranging(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
         },
     }
 }
+
+// Every rule of a compilation in its place, for what is said of a plan.
+fn entries_placed(entries: List<RuleEntry>) → List<RuleEntry> { library() ++ entries_added(entries) }
 
 // The rules a plan's steps index where `entries` are registered.
 fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rules(entries_added(entries)) }

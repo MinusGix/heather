@@ -559,12 +559,12 @@ the matcher, for the rules whose conclusion is a node.
   one the matcher cannot find.
 
 - **A rule registers itself.** `rule theorem name` publishes one value,
-  `name_entry: RuleEntry` (the rule, its clause's shape, and whether it is
-  one of the library's own), with the declaration form `AsRegistered`, so
+  `name_entry: RuleEntry` (the rule, its clause's shape, its name, and
+  whether it is one of the library's own), with the declaration form `AsRegistered`, so
   `registered(RuleEntry)` lists it wherever its module is imported.
 - **A compilation's tables are the library's rules and the program's.**
   `Tables::of(entries)` (`function_ir_rules.hthr`) keeps the library's
-  rules in their places in `rules()` and adds every other registered rule
+  rules in their places in `library()` and adds every other registered rule
   after them: to the replayer's table, and to the search by its shape (a
   rule that concludes a node rewrites, one that concludes a range gives
   ranges). The stages and the searches take the entries as a parameter
@@ -575,10 +575,31 @@ the matcher, for the rules whose conclusion is a node.
   `or_zero` and is compiled with it: the `or` is gone from its code, and
   stays without the rule (`crates/cli/tests/native_own_rule.rs`).
 
+- **`compile-x86 --explain-optimizer`** prints, for each function, a line
+  for each rule the replays it kept used (§8): the conclusion at the
+  instance, the rule's name, and the premises it stood on.
+
+  ```
+  function 0: 6 rules used
+    t5 = t4 < t1 = 1   by below_yes   (t4 within 0 ..= 0, t1 within 1 ..= u64::MAX)
+    t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
+    t10 = t8 | 0 = t8   by or_zero
+  ```
+
+  A line is read off the clause the rule makes at the plan's numbers, the
+  one the replayer checked (`function_ir_explain.hthr`: `Clause::line`,
+  `plan_explained`). A word is `t` and its id; a word a premise computes is
+  said as that computation, so the line reads as the statement does, and
+  only the premises the line's words do not already say are listed. The
+  name is the theorem's, which a `RuleEntry` carries as character codes.
+  Not built: a word by its source name, the "not applied" lines (they need
+  the matcher to say what it tried), and the page of every registered
+  rule.
+
 What is left of step 3: the rules that decide a bit or give an order, and
 the ones a branch's test gives in an arm, are still proposed by hand; the
 strategies are not registered learners yet, and "Accepted" is not proved.
-The library's own rules keep their hand-written places (`rules()`,
+The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules
 by place; a user's rule needs no list.
 
