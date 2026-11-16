@@ -360,3 +360,37 @@ theorem widened_step(c: u8, t: c.toNat() < 0x80): c.zero_extend(56).toNat() < 20
 // Control: a byte reaches 255, so a bound one below it is refused.
 // expect-error: `omega` got stuck
 theorem widened_not_below_top(c: u8): c.zero_extend(56) < 255 { bv_omega }
+
+// ---- `omega` reads a word's comparison bit as the comparison ----
+// (issues/omega-if-bit-word-comparison.md). An `if x < y` branch that does
+// not name its test keeps the bit's equation; `omega` reads it as the
+// comparison of the `toNat`s, as it reads the proposition, not as an atom.
+
+// Each bit, both ways, over two neutral words of an open width.
+theorem omega_lt_bit_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = True): a.toNat() + 1 <= b.toNat() { omega }
+theorem omega_lt_bit_false(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = False): b.toNat() <= a.toNat() { omega }
+theorem omega_le_bit_true(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = True): a.toNat() <= b.toNat() { omega }
+theorem omega_le_bit_false(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = False): b.toNat() < a.toNat() { omega }
+theorem omega_eq_bit_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = True): a.toNat() = b.toNat() { omega }
+theorem omega_eq_bit_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = False, k: a.toNat() <= b.toNat()): a.toNat() < b.toNat() { omega }
+// Either orientation, and the `IsTrue` form.
+theorem omega_lt_bit_flipped(n: Nat, a, b: BitVec(n), h: True = a.unsigned_lt_bit(b)): a.toNat() < b.toNat() { omega }
+theorem omega_lt_bit_is_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b).IsTrue()): a.toNat() < b.toNat() { omega }
+// The proposition at a word as the goal, from the bit.
+theorem omega_le_prop_goal(a, b: u8, h: a.unsigned_lt_bit(b) = False): BitVec::unsigned_le(b, a) { omega }
+// A branch that names neither side: the sort example's shape, the facts
+// relating the widened words to the bytes beside the test.
+theorem omega_unnamed_branch(a, b: u8): BitVec::unsigned_le(a, b) ∨ BitVec::unsigned_le(b, a) {
+    let one: (b.zero_extend(56).toNat() = b.toNat()) = BitVec::toNat_zero_extend(8, 56, b);
+    let two: (a.zero_extend(56).toNat() = a.toNat()) = BitVec::toNat_zero_extend(8, 56, a);
+    if larger: b.zero_extend(56) < a.zero_extend(56) {
+        let ba: BitVec::unsigned_le(b, a) = omega;
+        Inr(ba)
+    } else {
+        let ab: BitVec::unsigned_le(a, b) = omega;
+        Inl(ab)
+    }
+}
+// Control: the bit says `a < b`, not `b < a`.
+// expect-error: `omega` got stuck
+theorem omega_lt_bit_wrong_way(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = True): b.toNat() < a.toNat() { omega }
