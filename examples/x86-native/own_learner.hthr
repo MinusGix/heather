@@ -1,0 +1,72 @@
+// A program that brings its own optimizer rule and its own learner.
+//
+// `mask_low` says a mask of the low `k` bits does nothing to a word below
+// `2^k`. The search cannot use it from its statement alone: the mask is
+// the constant `2^k - 1`, and nothing in the code is `k`. So the program
+// also registers a learner (docs/native/optimizer-rules-design.md §7), a
+// function the search asks at every node no rule's statement rewrote. It
+// reads the mask's constant, finds `k`, and proposes the rule at its
+// numbers. The proposal is checked like any instance: against what the
+// search knows, then by the certificate's replay, which uses the rule's
+// soundness and nothing of the learner.
+//
+//     heather compile-x86 examples/x86-native/own_learner.hthr first_masked -o own_learner.s
+//
+// With the learner the compiled function has no `and`; without it, one.
+import logic;
+import bool;
+import nat;
+import nat_map;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import bitvec_shift_nat;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_match;
+import function_ir_replay;
+import function_ir_rule;
+import runtime;
+
+rule theorem mask_low(x: u64, k, high: Nat, small: x.within(0, high), fits: Succ(high) <= Nat::pow(2, k)): x & BitVec::ofNat(Nat::pow(2, k) - 1) = x {
+    let below: (x.toNat() < Nat::pow(2, k)) = Nat::le_trans(Succ(x.toNat()), Succ(high), Nat::pow(2, k), small.right, fits);
+    BitVec::toNat_inj(64, trans(cong_fn(λ (m: u64) => x.band(m).toNat(), sym(BitVec::low_mask_eq_ofNat(64, k))),
+        trans(BitVec::toNat_band_low_mask(64, k, x), x.toNat().mod_of_lt(Nat::pow(2, k), below))))
+}
+
+// The `k` with `2^k - 1 = mask`, looked for from `k` up through `more`.
+fn mask_bits(mask, k, more: Nat) → Option<Nat> {
+    match (Nat::pow(2, k) - 1).same(mask) {
+        True => Some(k),
+        False => match more { Zero => None, Succ(less) => mask_bits(mask, Succ(k), less) },
+    }
+}
+
+// At an `and` of a word with a constant that is a low mask: `mask_low` at
+// the word, the mask's bits, the most the word is known to be, the `and`'s
+// word and the constant's.
+register def mask_learner: Learner = Learner(λ had at => match at {
+    BitAnd(_, o, x, c) => nat_map_get(had.made, c).and_then(λ made => match made {
+        Const(_, _, mask) => mask_bits(mask, 0, 64).and_then(λ k => Some(Proposed(mask_low_entry, [x, k, range_known(had.range, x).high, o, c]))),
+        _ => None,
+    }),
+    _ => None,
+});
+
+// The first byte of a span, or zero of an empty one, masked to a byte.
+runtime fn first_masked(s: List<u8>, n: u64) → u64 {
+    if h: 0 < n {
+        s.byte_within(n, 0).zero_extend(56) & 255
+    } else {
+        0
+    }
+}

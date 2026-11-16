@@ -653,9 +653,32 @@ the matcher, for the rules whose conclusion is a node.
 - **Premises are read until every number is found**, which is one round
   for most rules.
 
+- **A program registers a learner.** `Learner` (`function_ir_match.hthr`)
+  is a function from what the walk has (`Walked`) and a node to a proposal,
+  `Proposed(rule, numbers)`: a rule's entry and its numbers there.
+  `register def name: Learner = …` enters one, and the searches take the
+  learners as a parameter whose default is `registered(Learner)`, read
+  where the call is as the rules are, so `compile-x86` asks a program's
+  learners with nothing naming them. The walk asks them at a node no
+  rule's statement rewrote (`Seen::instance`, `proposed_among`). A
+  proposal is made an instance exactly as the matcher's are: the rule's
+  place is found by its name in the table, the rule's clause at the
+  numbers must write another node for the one read, and its premises must
+  be what the walk has (`Proposed::instance`); the walk then derives the
+  ranges it needs and the replayer checks the step. So a learner says only
+  where to look, and one that proposes too much is not believed.
+  `examples/x86-native/own_learner.hthr` is a program whose rule `mask_low`
+  has a number (`k`, of the mask `2^k - 1`) no node gives, with the learner
+  that finds it (`crates/cli/tests/native_own_rule.rs`). This is the
+  learner for a rule's instance; a learner of §7's other kind, a strategy
+  over a whole function (the word load, the word store, the guard), is
+  not registered yet: those are searches `compile-x86` names in its own
+  order (`verified.rs`, `optimize`).
+
 What is left of step 3: the rules that decide a bit from an order or give
-an order are still proposed by hand; the
-strategies are not registered learners yet, and "Accepted" is not proved.
+an order are still proposed by hand, and go with the order graph of §9.3;
+the library's strategies are not registered learners yet, a learner
+proposes rewrites only (no bit, no range), and "Accepted" is not proved.
 The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules
 by place; a user's rule needs no list.

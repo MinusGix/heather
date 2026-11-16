@@ -210,6 +210,33 @@ nothing about the rule is trusted beyond the theorem the kernel checked.
 `or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
 `docs/native/optimizer-rules-design.md`).
 
+`own_learner.hthr` goes one step further. Its rule says a mask of the low
+`k` bits does nothing to a word below `2^k`:
+
+```heather
+rule theorem mask_low(x: u64, k, high: Nat, small: x.within(0, high), fits: Succ(high) <= Nat::pow(2, k)):
+    x & BitVec::ofNat(Nat::pow(2, k) - 1) = x { … }
+```
+
+The search finds a rule's instance by reading its statement against the
+code, and here nothing in the code is `k`: the mask is one constant. So the
+program also registers a *learner*, a function the search asks at every
+node no statement rewrote, which reads the constant, finds `k` and names
+the rule and its numbers:
+
+```heather
+register def mask_learner: Learner = Learner(λ had at => match at {
+    BitAnd(_, o, x, c) => … Some(Proposed(mask_low_entry, [x, k, range_known(had.range, x).high, o, c])) …
+});
+```
+
+A learner is as untrusted as the rest of the search. What it proposes is
+the rule's own clause at those numbers, checked against what the search
+knows and then by the certificate's replay, which uses the rule's
+soundness and nothing of the learner. `first_masked` compiles to 39 bytes
+with the learner and 48 without; without it `--explain-optimizer=all`
+says `not applied at t10 = t6 & t9: mask_low   (known: t6 within 0 ..= 255)`.
+
 `--explain-optimizer` prints what the optimizer did with the rules, a line
 for each one used, in the rule's own words and by its name:
 

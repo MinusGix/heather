@@ -638,6 +638,15 @@ fn Seen::tracked(self seen: Seen, node: Node) → Passed {
 // A node passed: its range by the rules, then the rest.
 fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).tracked(node) }
 
+// A rule's instance at a node that writes another node for it: one a
+// rule's statement gives, else one a registered learner proposes.
+fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
+    match matched_among(seen.tables.rewriting, node, seen.walked()) {
+        Some(found) => Some(found),
+        None => proposed_among(seen.tables.learners, seen.tables.placed, node, seen.walked()),
+    }
+}
+
 // A node a rule's statement fits (function_ir_match), written as the node
 // the rule's conclusion gives: the old one is dropped once the facts have
 // its equation, the rule gives the new one, and that is written. Where the
@@ -646,7 +655,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).trac
 // move of the word it was (rule 15), and a word swapped, widened, narrowed
 // and swapped again a move of the word (rule 44).
 fn Seen::matched(self seen: Seen, node: Node) → Option<Passed> {
-    matched_among(seen.tables.rewriting, node, seen.walked()).and_then(λ found => match found.needs {
+    seen.instance(node).and_then(λ found => match found.needs {
         Nil => shared(seen.pass(found.node), λ written =>
             Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen))),
         Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
@@ -1016,9 +1025,10 @@ fn Function::seen(self function: Function, tables: Tables) → Seen {
 }
 
 // The rules the search matches are the library's and those registered
-// where the search is asked for: `entries` is read where the call is.
-fn Function::learn_plan(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Plan {
-    shared(function.body.learn(function.seen(Tables::of(entries))), λ learned => learned.plan)
+// where the search is asked for, and the learners it asks those
+// registered there: `entries` and `learners` are read where the call is.
+fn Function::learn_plan(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Plan {
+    shared(function.body.learn(function.seen(Tables::of(entries, learners))), λ learned => learned.plan)
 }
 
 // The conditionals a plan replaces by an arm.
@@ -1150,8 +1160,8 @@ fn tests_of(parameters: List<Nat>, wants: NatMap<Nat>, so_far: Tests) → Tests 
 
 // The test of every bound the function's undecided comparisons wait on, if
 // there is one, at ids from `top`.
-fn Function::guard_over(self function: Function, top: Nat, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Guard> {
-    shared(function.body.learn(function.seen(Tables::of(entries))), λ learned =>
+fn Function::guard_over(self function: Function, top: Nat, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Guard> {
+    shared(function.body.learn(function.seen(Tables::of(entries, learners))), λ learned =>
         shared(span_tests(learned.seen.wants.spans, tests_of(function.parameters, learned.seen.wants.least, Tests([], None, top))), λ tests =>
             match tests.bit { None => None, Some(bit) => Some(Guard(top, tests.nodes, bit)) }))
 }
