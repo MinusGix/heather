@@ -200,9 +200,9 @@ theorem or_drop_false_head(x, y, z: Bool, hx: x = False): (x || y) || z = True �
     j(sym(hx), λ w _ => (w || y) || z = True → y || z = True, λ t => t)
 }
 theorem or_rotate(x, y: Bool): (x || y) || False = True → y || x = True {
-    match x as λ p => (p || y) || False = True → y || p = True {
-        False => match y as λ q => (False || q) || False = True → q || False = True { False => λ t => absurd(t), True => λ _ => refl },
-        True => match y as λ q => (True || q) || False = True → q || True = True { False => λ _ => refl, True => λ _ => refl },
+    match x {
+        False => match y { False => λ t => absurd(t), True => λ _ => refl },
+        True => match y { False => λ _ => refl, True => λ _ => refl },
     }
 }
 

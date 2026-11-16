@@ -361,16 +361,16 @@ theorem Bool::or_false_of(self a, b: Bool): a = False → b = False → (a || b)
 
 // What `a` is, from the verdict of `a.xor(b)`.
 theorem Bool::xor_true_value(self a, b: Bool): a.xor(b) = True → a = !b {
-    match a as λ y => y.xor(b) = True → y = !b {
-        False => match b as λ m => False.xor(m) = True → False = !m { False => λ t => absurd(sym(t)), True => λ t => refl },
-        True => match b as λ m => True.xor(m) = True → True = !m { False => λ t => refl, True => λ t => absurd(sym(t)) },
+    match a {
+        False => match b { False => λ t => absurd(sym(t)), True => λ t => refl },
+        True => match b { False => λ t => refl, True => λ t => absurd(sym(t)) },
     }
 }
 
 theorem Bool::xor_false_value(self a, b: Bool): a.xor(b) = False → a = b {
-    match a as λ y => y.xor(b) = False → y = b {
-        False => match b as λ m => False.xor(m) = False → False = m { False => λ t => refl, True => λ t => absurd(t) },
-        True => match b as λ m => True.xor(m) = False → True = m { False => λ t => absurd(t), True => λ t => refl },
+    match a {
+        False => match b { False => λ t => refl, True => λ t => absurd(t) },
+        True => match b { False => λ t => absurd(t), True => λ t => refl },
     }
 }
 
