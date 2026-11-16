@@ -101,9 +101,9 @@ fn a_library_module_keeps_its_profile_under_any_root() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// `--build-jobs` elaborates every module without an image, one process
-/// each, before the check, which then replays all of them; with every image
-/// present it builds nothing (`docs/infrastructure/module-dag-design.md` §12).
+/// `--build-jobs` elaborates every module without an image before the
+/// check, which then replays all of them; with every image present it
+/// builds nothing (`docs/infrastructure/module-dag-design.md` §12).
 #[test]
 fn build_jobs_build_every_missing_module_ahead() {
     let root = library("build", LIB);
@@ -126,6 +126,44 @@ fn build_jobs_build_every_missing_module_ahead() {
     let out = run(&["--build-jobs", "2", "lib/c"]);
     assert_eq!(built(&out).as_deref(), Some("build: 0 modules built ahead, 0 failed"));
     assert_eq!(replayed(&String::from_utf8_lossy(&out.stdout)), 3);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A build worker builds one module after another in one session, and the
+/// images it writes are the ones a `heather check` of each module alone
+/// writes, byte for byte: with one job, one worker builds all five, the
+/// later ones over closures it already holds.
+#[test]
+fn a_build_worker_writes_the_images_a_check_of_each_module_writes() {
+    let root = library("build-worker", LIB);
+    let run = |store: &str, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_heather"))
+            .current_dir(&root)
+            .arg("check")
+            .arg("--cache-dir")
+            .arg(root.join(store))
+            .args(args)
+            .output()
+            .expect("run heather");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let err = run("pooled", &["--build-jobs", "1", "--build-only", "lib"]);
+    assert!(err.contains("build: 5 modules built ahead, 0 failed"), "{err}");
+    for (module, _) in LIB {
+        run("alone", &[module]);
+    }
+    let images = |store: &str| -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(root.join(store).join("modules-v1"))
+            .expect("the store's images")
+            .map(|e| e.expect("entry").path())
+            .filter(|p| p.extension().is_some_and(|x| x == "hmi"))
+            .map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap()))
+            .collect()
+    };
+    let (pooled, alone) = (images("pooled"), images("alone"));
+    assert_eq!(pooled.len(), 5);
+    assert!(pooled == alone, "{:?} against {:?}", pooled.keys(), alone.keys());
     let _ = std::fs::remove_dir_all(&root);
 }
 
