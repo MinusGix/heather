@@ -5568,6 +5568,39 @@ theorem frame_words_few(slots, saves: Nat, few: slots <= 8): slots + function_sa
 fn frame_allocate(size: Nat) → Instruction { AddRI8(Rsp, BitVec::ofNat(256 - size)) }
 fn frame_free(size: Nat) → Instruction { AddRI8(Rsp, BitVec::ofNat(size)) }
 
+// The instructions that open and close a frame of `size` bytes: none for
+// an empty frame, a leaf that saves nothing.
+fn frame_opening(size: Nat) → List<Instruction> { match size { Zero => [], Succ(_) => [frame_allocate(size)] } }
+fn frame_closing(size: Nat) → List<Instruction> { match size { Zero => [], Succ(_) => [frame_free(size)] } }
+
+// The registers after the stack pointer is moved to `word` by a frame of
+// `size` bytes: as they were, where the frame is empty and nothing moves it.
+fn moved_rsp(size: Nat, word: BitVec(64), gprs: Gprs) → Gprs { match size { Zero => gprs, Succ(_) => write_gpr(Rsp, word, gprs) } }
+
+// The stack pointer is at `word` after the move, where it was at `from`
+// and an empty frame does not move it.
+theorem moved_rsp_reads(size: Nat, word, from: BitVec(64), gprs: Gprs, rsp: read_gpr(Rsp, gprs) = from, still: size = 0 → from = word):
+    read_gpr(Rsp, moved_rsp(size, word, gprs)) = word {
+    (match size as λ z => (z = 0 → from = word) → read_gpr(Rsp, moved_rsp(z, word, gprs)) = word {
+        Zero => λ same => trans(rsp, same(refl)),
+        Succ(_) => λ _ => read_gpr_after_write(Rsp, word, gprs),
+    })(still)
+}
+
+theorem moved_rsp_kept(size: Nat, word: BitVec(64), gprs: Gprs): Kept(callee_kept(), gprs, moved_rsp(size, word, gprs)) {
+    match size { Zero => kept_refl(callee_kept(), gprs), Succ(_) => kept_past_rsp(gprs, word) }
+}
+
+theorem moved_rsp_spares(size: Nat, query: Gpr, word: BitVec(64), gprs: Gprs, differ: (!Rsp.same(query)).IsTrue()):
+    read_gpr(query, moved_rsp(size, word, gprs)) = read_gpr(query, gprs) {
+    match size { Zero => refl, Succ(_) => write_spares(Rsp, query, word, gprs, differ) }
+}
+
+theorem moved_rsp_args(size: Nat, words: List<BitVec(64)>, registers: List<Gpr>, word: BitVec(64), gprs: Gprs,
+    misses: Rsp.misses(registers).IsTrue(), held: ArgsIn(words, registers, gprs)): ArgsIn(words, registers, moved_rsp(size, word, gprs)) {
+    match size { Zero => held, Succ(_) => args_after_write(words, registers, gprs, Rsp, word, misses, held) }
+}
+
 // The stack pointer moved down by `size` bytes, one to 128, as the
 // immediate `c` reads sign-extended.
 theorem frame_down(c: BitVec(8), size: Nat, small: size <= 128, reading: c.sign_extend(56).toNat() = Nat::pow(2, 64) - size,
@@ -5694,33 +5727,57 @@ theorem frame_freed(words: Nat, small: words <= 14, low: BitVec(64), i: Nat):
 
 // The registers once the frame is allocated below the return address at
 // `d + frame_size(slots, saves)`, everything else as the function was entered.
-fn Stack::opened<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+fn Stack::opened<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, size: Nat,
     s0: MachineState<M>) → MachineState<M> {
-    MachineState(write_gpr(Rsp, stack.at(d), s0.gprs), s0.flags, s0.rip, s0.memory)
+    MachineState(moved_rsp(size, stack.at(d), s0.gprs), s0.flags, s0.rip, s0.memory)
 }
 
-// The frame allocated.
-theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    slots, saves: Nat, few: slots <= 8, prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block([frame_allocate(frame_size(slots, saves))])),
-    s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves))):
-    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate(frame_size(slots, saves))]),
+// The frame allocated, by its count of words.
+theorem prologue_moves_words<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    words: Nat, small: words <= 14, prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(frame_opening(8 * words))),
+    s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + 8 * words)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_opening(8 * words)),
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
-        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, s0).gprs) ∧ (x.memory = s0.memory)) {
-    let c = BitVec::ofNat(256 - frame_size(slots, saves), n := 8).sign_extend(56);
-    let opened: (write_gpr(Rsp, read_gpr(Rsp, s0.gprs).add(c), s0.gprs) = write_gpr(Rsp, stack.at(d), s0.gprs)) =
-        cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, s0.gprs),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_allocated(slots + function_saves(saves).len(), frame_words_few(slots, saves, few), stack.low, d)));
-    let pre = λ (g: Gprs) (m: M) => (g = s0.gprs) ∧ (m = s0.memory);
-    let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d), s0.gprs)) ∧ (m = s0.memory);
-    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate(frame_size(slots, saves))]), pre, post,
-        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_allocate(frame_size(slots, saves))], at,
-            site.program.block_reads_at(laid, k, prog, 0, [frame_allocate(frame_size(slots, saves))], at),
-            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
-            λ x held => {
-                let ran: (execute_block_normal([frame_allocate(frame_size(slots, saves))], x).gprs = write_gpr(Rsp, stack.at(d), s0.gprs)) =
-                    j(sym(held.left), λ g _ => write_gpr(Rsp, read_gpr(Rsp, g).add(c), g) = write_gpr(Rsp, stack.at(d), s0.gprs), opened);
-                ⟨ran, held.right⟩
-            }))
+        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, 8 * words, s0).gprs) ∧ (x.memory = s0.memory)) {
+    (match words as λ w => w <= 14 → asm_back(site.program, k) = At(prog, 0, Block(frame_opening(8 * w))) →
+        read_gpr(Rsp, s0.gprs) = stack.at(d + 8 * w) →
+        site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_opening(8 * w)),
+            λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+            λ (x: MachineState<M>) => (x.gprs = stack.opened(d, 8 * w, s0).gprs) ∧ (x.memory = s0.memory)) {
+        Zero => λ _ at rsp => {
+            let pre = λ (g: Gprs) (m: M) => (g = s0.gprs) ∧ (m = s0.memory);
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([]), pre, pre,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [], at,
+                    site.program.block_reads_at(laid, k, prog, 0, [], at),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => pre(g, memory), λ x held => held))
+        },
+        Succ(v) => λ few at rsp => {
+            let c = BitVec::ofNat(256 - 8 * Succ(v), n := 8).sign_extend(56);
+            let opened: (write_gpr(Rsp, read_gpr(Rsp, s0.gprs).add(c), s0.gprs) = write_gpr(Rsp, stack.at(d), s0.gprs)) =
+                cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, s0.gprs),
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_allocated(Succ(v), few, stack.low, d)));
+            let pre = λ (g: Gprs) (m: M) => (g = s0.gprs) ∧ (m = s0.memory);
+            let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d), s0.gprs)) ∧ (m = s0.memory);
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate(8 * Succ(v))]), pre, post,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_allocate(8 * Succ(v))], at,
+                    site.program.block_reads_at(laid, k, prog, 0, [frame_allocate(8 * Succ(v))], at),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+                    λ x held => {
+                        let ran: (execute_block_normal([frame_allocate(8 * Succ(v))], x).gprs = write_gpr(Rsp, stack.at(d), s0.gprs)) =
+                            j(sym(held.left), λ g _ => write_gpr(Rsp, read_gpr(Rsp, g).add(c), g) = write_gpr(Rsp, stack.at(d), s0.gprs), opened);
+                        ⟨ran, held.right⟩
+                    }))
+        },
+    })(small, at, rsp)
+}
+
+theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    slots, saves: Nat, few: slots <= 8, prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(frame_opening(frame_size(slots, saves)))),
+    s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_opening(frame_size(slots, saves))),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (x.memory = s0.memory)) {
+    prologue_moves_words<M>(site, laid, stack, slots + function_saves(saves).len(), frame_words_few(slots, saves, few), prog, k, at, s0, d, rsp)
 }
 
 // The result moved into RAX, memory as it was (`keep` is what the body
@@ -5747,28 +5804,52 @@ theorem result_moves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out()
             }))
 }
 
-// The frame freed: the stack pointer back at the return address.
+// The frame freed, by its count of words: the stack pointer back at the
+// return address.
+theorem epilogue_moves_words<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    words: Nat, small: words <= 14, d: Nat, keep: M → Type, gprs: Gprs, rsp: read_gpr(Rsp, gprs) = stack.at(d),
+    prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(frame_closing(8 * words)))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_closing(8 * words)),
+        λ (s: MachineState<M>) => (s.gprs = gprs) ∧ keep(s.memory),
+        λ (t: MachineState<M>) => (t.gprs = moved_rsp(8 * words, stack.at(d + 8 * words), gprs)) ∧ keep(t.memory)) {
+    (match words as λ w => w <= 14 → asm_back(site.program, k) = At(prog, 0, Block(frame_closing(8 * w))) →
+        site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_closing(8 * w)),
+            λ (s: MachineState<M>) => (s.gprs = gprs) ∧ keep(s.memory),
+            λ (t: MachineState<M>) => (t.gprs = moved_rsp(8 * w, stack.at(d + 8 * w), gprs)) ∧ keep(t.memory)) {
+        Zero => λ _ at => {
+            let pre = λ (g: Gprs) (m: M) => (g = gprs) ∧ keep(m);
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([]), pre, pre,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [], at,
+                    site.program.block_reads_at(laid, k, prog, 0, [], at),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => pre(g, memory), λ x held => held))
+        },
+        Succ(v) => λ few at => {
+            let c = BitVec::ofNat(8 * Succ(v), n := 8).sign_extend(56);
+            let freed: (write_gpr(Rsp, read_gpr(Rsp, gprs).add(c), gprs) = write_gpr(Rsp, stack.at(d + 8 * Succ(v)), gprs)) =
+                cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, gprs),
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_freed(Succ(v), few, stack.low, d)));
+            let pre = λ (g: Gprs) (m: M) => (g = gprs) ∧ keep(m);
+            let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d + 8 * Succ(v)), gprs)) ∧ keep(m);
+            site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free(8 * Succ(v))]), pre, post,
+                λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_free(8 * Succ(v))], at,
+                    site.program.block_reads_at(laid, k, prog, 0, [frame_free(8 * Succ(v))], at),
+                    λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+                    λ x held => {
+                        let ran: (execute_block_normal([frame_free(8 * Succ(v))], x).gprs = write_gpr(Rsp, stack.at(d + 8 * Succ(v)), gprs)) =
+                            j(sym(held.left), λ g _ => write_gpr(Rsp, read_gpr(Rsp, g).add(c), g) = write_gpr(Rsp, stack.at(d + 8 * Succ(v)), gprs), freed);
+                        ⟨ran, held.right⟩
+                    }))
+        },
+    })(small, at)
+}
+
 theorem epilogue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     slots, saves: Nat, few: slots <= 8, d: Nat, keep: M → Type, gprs: Gprs, rsp: read_gpr(Rsp, gprs) = stack.at(d),
-    prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block([frame_free(frame_size(slots, saves))]))):
-    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free(frame_size(slots, saves))]),
+    prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(frame_closing(frame_size(slots, saves))))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(frame_closing(frame_size(slots, saves))),
         λ (s: MachineState<M>) => (s.gprs = gprs) ∧ keep(s.memory),
-        λ (t: MachineState<M>) => (t.gprs = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), gprs)) ∧ keep(t.memory)) {
-    let c = BitVec::ofNat(frame_size(slots, saves), n := 8).sign_extend(56);
-    let freed: (write_gpr(Rsp, read_gpr(Rsp, gprs).add(c), gprs) = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), gprs)) =
-        cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, gprs),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_freed(slots + function_saves(saves).len(), frame_words_few(slots, saves, few), stack.low, d)));
-    let pre = λ (g: Gprs) (m: M) => (g = gprs) ∧ keep(m);
-    let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), gprs)) ∧ keep(m);
-    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free(frame_size(slots, saves))]), pre, post,
-        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_free(frame_size(slots, saves))], at,
-            site.program.block_reads_at(laid, k, prog, 0, [frame_free(frame_size(slots, saves))], at),
-            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
-            λ x held => {
-                let ran: (execute_block_normal([frame_free(frame_size(slots, saves))], x).gprs = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), gprs)) =
-                    j(sym(held.left), λ g _ => write_gpr(Rsp, read_gpr(Rsp, g).add(c), g) = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), gprs), freed);
-                ⟨ran, held.right⟩
-            }))
+        λ (t: MachineState<M>) => (t.gprs = moved_rsp(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), gprs)) ∧ keep(t.memory)) {
+    epilogue_moves_words<M>(site, laid, stack, slots + function_saves(saves).len(), frame_words_few(slots, saves, few), d, keep, gprs, rsp, prog, k, at)
 }
 
 // What the saves are, whatever their count: none is the stack pointer,
@@ -5879,16 +5960,16 @@ theorem Function::loads_few(self function: Function, fits: word_ports(function.p
 // the result into RAX, the saves loaded back, the frame freed, RET.
 fn function_loaded(prog: Prog, k, loads: Nat) → Prog { stack_registers().loads(loads, At(prog, Succ(k), Block([])), 1) }
 fn function_opened(prog: Prog, k, loads, slots, saves: Nat) → Prog {
-    function_saves(saves).spills(At(function_loaded(prog, k, loads), 0, Block([frame_allocate(frame_size(slots, saves))])), slots)
+    function_saves(saves).spills(At(function_loaded(prog, k, loads), 0, Block(frame_opening(frame_size(slots, saves)))), slots)
 }
 fn function_closed(body: Prog, moves: List<Instruction>, slots, saves: Nat) → Prog {
-    At(function_saves(saves).reloads(At(body, 0, Block(moves)), slots), 0, Block([frame_free(frame_size(slots, saves))]))
+    At(function_saves(saves).reloads(At(body, 0, Block(moves)), slots), 0, Block(frame_closing(frame_size(slots, saves))))
 }
 
 theorem loaded_opened(prog: Prog, k, loads, slots, saves: Nat): function_loaded(prog, k, loads).Within(function_opened(prog, k, loads, slots, saves)) {
     let loaded = function_loaded(prog, k, loads);
-    let framed = At(loaded, 0, Block([frame_allocate(frame_size(slots, saves))]));
-    loaded.within_trans(framed, function_saves(saves).spills(framed, slots), loaded.within_then(0, Block([frame_allocate(frame_size(slots, saves))])),
+    let framed = At(loaded, 0, Block(frame_opening(frame_size(slots, saves))));
+    loaded.within_trans(framed, function_saves(saves).spills(framed, slots), loaded.within_then(0, Block(frame_opening(frame_size(slots, saves)))),
         Prog::within_spills(function_saves(saves), framed, slots))
 }
 theorem label_opened(prog: Prog, k, loads, slots, saves: Nat): At(prog, Succ(k), Block([])).Within(function_opened(prog, k, loads, slots, saves)) {
@@ -5916,13 +5997,13 @@ theorem function_enters<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
     top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), label: Prog,
     s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)), fits: d + frame_size(slots, saves) <= stack.size, under: d + frame_size(slots, saves) <= top,
     now: Buffers(), in_memory: stack.InMemory(lending, now, s0.memory),
-    within: function_saves(saves).spills(At(label, 0, Block([frame_allocate(frame_size(slots, saves))])), slots).Within(site.program)):
-    site.Moves(stack.writes, prog_len(label), prog_len(function_saves(saves).spills(At(label, 0, Block([frame_allocate(frame_size(slots, saves))])), slots)),
+    within: function_saves(saves).spills(At(label, 0, Block(frame_opening(frame_size(slots, saves)))), slots).Within(site.program)):
+    site.Moves(stack.writes, prog_len(label), prog_len(function_saves(saves).spills(At(label, 0, Block(frame_opening(frame_size(slots, saves)))), slots)),
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
-        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, now, x.memory) ∧
-            stack.Saved(d, function_saves(saves), slots, stack.opened(d, s0).gprs, x.memory))) {
-    let g1 = stack.opened(d, s0).gprs;
-    let framed = At(label, 0, Block([frame_allocate(frame_size(slots, saves))]));
+        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, now, x.memory) ∧
+            stack.Saved(d, function_saves(saves), slots, stack.opened(d, frame_size(slots, saves), s0).gprs, x.memory))) {
+    let g1 = stack.opened(d, frame_size(slots, saves), s0).gprs;
+    let framed = At(label, 0, Block(frame_opening(frame_size(slots, saves))));
     let sizes = saves_fit(slots, saves, d, stack.size, few, fits);
     let framed_in = framed.within_trans(function_saves(saves).spills(framed, slots), site.program,
         Prog::within_spills(function_saves(saves), framed, slots), within);
@@ -5940,7 +6021,8 @@ theorem function_enters<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
             prologue_moves<M>(site, laid, stack, slots, saves, few, label, framed_in.witness, framed_in.proof, s0, d, rsp),
             λ x held => held,
             λ x held => ⟨held.left, j(sym(held.right), λ m _ => stack.Entered(lending, d + frame_size(slots, saves), s0.memory, now, m), start)⟩),
-        site.moves_spills(stack, site.program.laid_out_fits(laid), d, g1, read_gpr_after_write(Rsp, stack.at(d), s0.gprs),
+        site.moves_spills(stack, site.program.laid_out_fits(laid), d, g1,
+            moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), s0.gprs, rsp, λ (z: frame_size(slots, saves) = 0) => { let e: (d + frame_size(slots, saves) = d) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) }),
             function_saves(saves), framed, slots, sizes.left, sizes.right, frame,
             λ memory i low high word held => stack.entered_store(top, lending, loan, d + frame_size(slots, saves), under, s0.memory, now, memory, held, i,
                 save_slot_inside(slots, saves, d, i, high), word),
@@ -5972,15 +6054,16 @@ fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
 // eight a call spills into) and frees the frame.
 theorem function_closes<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), inner: Prog, code: List<Instruction>,
-    within: function_closed(inner, code, slots, saves).Within(site.program), s0: MachineState<M>, d: Nat, fits: d + frame_size(slots, saves) <= stack.size,
+    within: function_closed(inner, code, slots, saves).Within(site.program), s0: MachineState<M>, d: Nat,
+    rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)), fits: d + frame_size(slots, saves) <= stack.size,
     under: (d + frame_size(slots, saves)) + 8 <= top, before, after: Buffers(), answer: BitVec(64), x1, x2: MachineState<M>,
-    at1: (x1.gprs = stack.opened(d, s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
-        stack.Saved(d, function_saves(saves), slots, stack.opened(d, s0).gprs, x1.memory)),
+    at1: (x1.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
+        stack.Saved(d, function_saves(saves), slots, stack.opened(d, frame_size(slots, saves), s0).gprs, x1.memory)),
     here: x2.rip = next_rip(site.origin, prog_len(At(inner, 0, Block(code)))), resident: site.Resident(x2.memory),
     at2: (read_gpr(Rax, x2.gprs) = answer) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, x2)):
     site.Arrives(stack.writes, x2, prog_len(function_closed(inner, code, slots, saves)),
         λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t)) {
-    let g1 = stack.opened(d, s0).gprs;
+    let g1 = stack.opened(d, frame_size(slots, saves), s0).gprs;
     let spans = lending.spans();
     let returned = At(inner, 0, Block(code));
     let restored = function_saves(saves).reloads(returned, slots);
@@ -5989,10 +6072,11 @@ theorem function_closes<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
     let under_frame: (d + frame_size(slots, saves) <= top) = { omega };
     let sizes = saves_fit(slots, saves, d, stack.size, few, fits);
     let sizes_top = saves_fit(slots, saves, d, top, few, under_frame);
-    let restored_in = restored.within_before(0, Block([frame_free(frame_size(slots, saves))]), site.program, within);
+    let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
     let done = λ (m: M) => stack.Entered(lending, d + frame_size(slots, saves), s0.memory, after, m);
     let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) =
-        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), read_gpr_after_write(Rsp, stack.at(d), s0.gprs));
+        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d),
+            moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), s0.gprs, rsp, λ (z: frame_size(slots, saves) = 0) => { let e: (d + frame_size(slots, saves) = d) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) }));
     let rsp_x2: (read_gpr(Rsp, x2.gprs) = stack.at(d)) = trans(at2.right.left.left, rsp_x1);
     let saved2: stack.Saved(d, function_saves(saves), slots, g1, x2.memory) =
         stack.wrote_in_frame(d + 8 * slots, spans, loan.stable_saved(d + 8 * slots, d, g1, function_saves(saves), slots, { omega }, sizes_top.right),
@@ -6005,23 +6089,25 @@ theorem function_closes<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
     let third = site.moves_trans(stack.writes, prog_len(returned), prog_len(restored), prog_len(closed),
         λ (x: MachineState<M>) => (x.gprs = x2.gprs) ∧ (done(x.memory) ∧ stack.Saved(d, function_saves(saves), slots, g1, x.memory)),
         λ (x: MachineState<M>) => (x.gprs = back) ∧ done(x.memory),
-        λ (t: MachineState<M>) => (t.gprs = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), back)) ∧ done(t.memory),
+        λ (t: MachineState<M>) => (t.gprs = moved_rsp(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), back)) ∧ done(t.memory),
         site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g1, function_saves(saves), returned, slots, x2.gprs, sizes.left,
             sizes.right, saves_spare(saves), rsp_x2, done, restored_in),
         epilogue_moves<M>(site, laid, stack, slots, saves, few, d, done, back, trans(loaded.left, rsp_x2), restored, within.witness, within.proof))(
         x2, here, resident, ⟨refl, ⟨memory2, saved2⟩⟩);
     let t = third.witness;
     let at3 = third.proof.right.right.right;
-    let last = write_gpr(Rsp, stack.at(d + frame_size(slots, saves)), back);
+    let last = moved_rsp(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), back);
     let kept_body: Kept(kept_order().drop(saves), g1, x2.gprs) =
         j(at1.left, λ g _ => Kept(kept_order().drop(saves), g, x2.gprs), at2.right.left.right);
-    let kept: Kept(callee_kept(), s0.gprs, last) = kept_trans(callee_kept(), s0.gprs, g1, last, kept_past_rsp(s0.gprs, stack.at(d)),
-        kept_trans(callee_kept(), g1, back, last, loaded.right.right(kept_body), kept_past_rsp(back, stack.at(d + frame_size(slots, saves)))));
-    let rax: (read_gpr(Rax, last) = answer) = trans(write_spares(Rsp, Rax, stack.at(d + frame_size(slots, saves)), back, trivial), trans(loaded.right.left, at2.left));
+    let kept: Kept(callee_kept(), s0.gprs, last) = kept_trans(callee_kept(), s0.gprs, g1, last, moved_rsp_kept(frame_size(slots, saves), stack.at(d), s0.gprs),
+        kept_trans(callee_kept(), g1, back, last, loaded.right.right(kept_body), moved_rsp_kept(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), back)));
+    let rax: (read_gpr(Rax, last) = answer) = trans(moved_rsp_spares(frame_size(slots, saves), Rax, stack.at(d + frame_size(slots, saves)), back, trivial), trans(loaded.right.left, at2.left));
     let closed_at: stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t) =
         ⟨j(sym(at3.left), λ g _ => read_gpr(Rax, g) = answer, rax),
          ⟨j(sym(at3.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept),
-          ⟨j(sym(at3.left), λ g _ => read_gpr(Rsp, g) = stack.at(d + frame_size(slots, saves)), read_gpr_after_write(Rsp, stack.at(d + frame_size(slots, saves)), back)), at3.right⟩⟩⟩;
+          ⟨j(sym(at3.left), λ g _ => read_gpr(Rsp, g) = stack.at(d + frame_size(slots, saves)),
+              moved_rsp_reads(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), stack.at(d), back, trans(loaded.left, rsp_x2),
+                  λ (z: frame_size(slots, saves) = 0) => { let e: (d = d + frame_size(slots, saves)) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) })), at3.right⟩⟩⟩;
     Exists(t, ⟨third.proof.left, ⟨third.proof.right.left, ⟨third.proof.right.right.left, closed_at⟩⟩⟩)
 }
 
@@ -6036,13 +6122,14 @@ theorem function_runs_saved<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     within: function_closed(body.prog, moves.code, slots, saves).Within(site.program),
-    values: Valuation(), s0: MachineState<M>, d: Nat, room: avail <= d, deep: function.body.calls().IsTrue() → 24 <= d, fits: d + frame_size(slots, saves) <= stack.size, under: (d + frame_size(slots, saves)) + 8 <= top,
-    before, after: Buffers(), ready: file.Represents(values, stack.opened(d, s0).gprs),
+    values: Valuation(), s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    room: avail <= d, deep: function.body.calls().IsTrue() → 24 <= d, fits: d + frame_size(slots, saves) <= stack.size, under: (d + frame_size(slots, saves)) + 8 <= top,
+    before, after: Buffers(), ready: file.Represents(values, stack.opened(d, frame_size(slots, saves), s0).gprs),
     holds: StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
         HomesHold(function.homes(), values, lending.addresses, lending.buffers),
     x1: MachineState<M>, here: x1.rip = next_rip(site.origin, prog_len(function_opened(prog, k, function.loads(), slots, saves))), resident: site.Resident(x1.memory),
-    at1: (x1.gprs = stack.opened(d, s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
-        stack.Saved(d, function_saves(saves), slots, stack.opened(d, s0).gprs, x1.memory))):
+    at1: (x1.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
+        stack.Saved(d, function_saves(saves), slots, stack.opened(d, frame_size(slots, saves), s0).gprs, x1.memory))):
     site.Arrives(stack.writes, x1, prog_len(function_closed(body.prog, moves.code, slots, saves)),
         λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, values(64, function.result), t)) {
     let spans = lending.spans();
@@ -6055,11 +6142,12 @@ theorem function_runs_saved<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>
         HomesHold(function.homes(), values, lending.addresses, lending.buffers);
     let unfold: (frame_size(slots, saves) = 8 * (slots + function_saves(saves).len())) = refl;
     let under_body: (d + 8 * slots <= top) = { omega };
-    let restored_in = restored.within_before(0, Block([frame_free(frame_size(slots, saves))]), site.program, within);
+    let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
     let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
     let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) =
-        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), read_gpr_after_write(Rsp, stack.at(d), s0.gprs));
+        j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d),
+            moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), s0.gprs, rsp, λ (z: frame_size(slots, saves) = 0) => { let e: (d + frame_size(slots, saves) = d) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) }));
     let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
         λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d + 8 * slots, x1, opened, file, facts, before, after, e),
         body, emitted,
@@ -6081,7 +6169,7 @@ theorem function_runs_saved<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>
         ⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩);
     site.arrives_after(stack.writes, x1, second.witness, prog_len(closed),
         λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t), second.proof.left,
-        function_closes<M>(slots, saves, few, site, laid, stack, top, lending, loan, body.prog, moves.code, within, s0, d, fits, under, before, after, answer,
+        function_closes<M>(slots, saves, few, site, laid, stack, top, lending, loan, body.prog, moves.code, within, s0, d, rsp, fits, under, before, after, answer,
             x1, second.witness, at1, second.proof.right.left, second.proof.right.right.left, second.proof.right.right.right))
 }
 
@@ -6116,7 +6204,7 @@ theorem function_runs<M>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, 
     let loaded = function_loaded(prog, k, function.loads());
     let g_loaded = load_words(stack_registers(), ws.drop(6), s0.gprs);
     let s1 = MachineState(gprs := g_loaded, flags := s0.flags, rip := s0.rip, memory := s0.memory);
-    let g1 = stack.opened(d, s1).gprs;
+    let g1 = stack.opened(d, frame_size(slots, saves), s1).gprs;
     let opened = function_opened(prog, k, function.loads(), slots, saves);
     let returned = At(body.prog, 0, Block(moves.code));
     let restored = function_saves(saves).reloads(returned, slots);
@@ -6127,19 +6215,20 @@ theorem function_runs<M>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, 
     let unfold: (frame_size(slots, saves) = 8 * (slots + function_saves(saves).len())) = refl;
     let under_body: (d + 8 * slots <= top) = { omega };
     let under_frame: (d + frame_size(slots, saves) <= top) = { omega };
-    let restored_in = restored.within_before(0, Block([frame_free(frame_size(slots, saves))]), site.program, within);
+    let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
     let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
-    let rsp_g1: (read_gpr(Rsp, g1) = stack.at(d)) = read_gpr_after_write(Rsp, stack.at(d), g_loaded);
     let rsp_s1: (read_gpr(Rsp, g_loaded) = stack.at(d + frame_size(slots, saves))) =
         trans(load_words_misses(Rsp, stack_registers(), ws.drop(6), s0.gprs, trivial), rsp);
+    let rsp_g1: (read_gpr(Rsp, g1) = stack.at(d)) =
+        moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), g_loaded, rsp_s1, λ (z: frame_size(slots, saves) = 0) => { let e: (d + frame_size(slots, saves) = d) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) });
     // The entry lies in the program because the body does, which the
     // body's emission says at any state: at the opened one here.
     let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
-        λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d + 8 * slots, stack.opened(d, s1), opened, file, facts, before, after, e),
+        λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d + 8 * slots, stack.opened(d, frame_size(slots, saves), s1), opened, file, facts, before, after, e),
         body, emitted,
         function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, k, avail, lending, loan, needs, calls, values, d, d + 8 * slots,
-            stack.opened(d, s1), under_body, λ c => {
+            stack.opened(d, frame_size(slots, saves), s1), under_body, λ c => {
                 let eight: (slots = 8) = called(c);
                 ⟨rsp_g1, ⟨room, ⟨deep(c), ⟨{ omega }, ⟨{ omega }, { omega }⟩⟩⟩⟩⟩
             }, allowed, asks, shallow, function.homes(), opened, file, placement, names, before, after));
@@ -6155,7 +6244,7 @@ theorem function_runs<M>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, 
     let in_regs: ArgsIn(ws, parameter_registers(), g_loaded) =
         stack.passes_loaded(stack_registers(), trivial, ws, argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory, trivial, few_words, passed);
     let ready: file.Represents(values, g1) = entered(values, g1, args_ports(values, function.parameters, parameter_registers(), g1,
-        args_after_write(ws, parameter_registers(), g_loaded, Rsp, stack.at(d), trivial, in_regs)));
+        moved_rsp_args(frame_size(slots, saves), ws, parameter_registers(), stack.at(d), g_loaded, trivial, in_regs)));
     let stacked: stack.Passes(ws.drop(6), Nil, (d + frame_size(slots, saves)) + 8 * 1, s0.gprs, s0.memory) =
         j(inside, λ n _ => stack.Passes(ws.drop(6), Nil, n, s0.gprs, s0.memory),
             stack.passes_stacked(ws, argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.gprs, s0.memory, passed));
@@ -6175,7 +6264,7 @@ theorem function_runs<M>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, 
             let entering = function_enters<M>(slots, saves, slotted, site, laid, stack, top, lending, loan, loaded, s1, d, rsp_s1, fits, under_frame, before,
                 in_memory, opened_in)(s, here, resident, held);
             let ran = function_runs_saved<M>(slots, saves, slotted, site, laid, stack, top, effects, rooms, k, lending, loan, needs, calls, function, prog, file, placement,
-                names, body, allowed, asks, called, avail, shallow, emitted, moves, keeps, placed, leaves, within, values, s1, d, room, deep, fits, under, before, after, ready,
+                names, body, allowed, asks, called, avail, shallow, emitted, moves, keeps, placed, leaves, within, values, s1, d, rsp_s1, room, deep, fits, under, before, after, ready,
                 holds, entering.witness, entering.proof.right.left, entering.proof.right.right.left, entering.proof.right.right.right);
             let t = ran.witness;
             let done: stack.Closed(lending, d + frame_size(slots, saves), s1, after, answer, t) = ran.proof.right.right.right;
@@ -6402,7 +6491,7 @@ theorem closed_within(body: Prog, moves: List<Instruction>, slots, saves: Nat): 
     let returned = At(body, 0, Block(moves));
     let restored = function_saves(saves).reloads(returned, slots);
     body.within_step(function_closed(body, moves, slots, saves), 0, Ret,
-        body.within_step(restored, 0, Block([frame_free(frame_size(slots, saves))]),
+        body.within_step(restored, 0, Block(frame_closing(frame_size(slots, saves))),
             body.within_trans(returned, restored, body.within_then(0, Block(moves)), Prog::within_reloads(function_saves(saves), returned, slots))))
 }
 
@@ -6561,6 +6650,19 @@ fn program_rooms_by(functions: List<Function>, saves: Nat → Nat) → List<Nat>
 fn program_rooms(functions: List<Function>) → List<Nat> { program_rooms_by(functions, λ (_: Nat) => 6) }
 
 fn program_room(functions: List<Function>) → Nat → Nat { λ (f: Nat) => rooms_at(program_rooms(functions), f) }
+
+// The largest room of a table: every row is at most it.
+fn rooms_top(rooms: List<Nat>) → Nat { match rooms { Nil => 0, Cons(room, rest) => room.max(rooms_top(rest)) } }
+
+theorem rooms_at_top(rooms: List<Nat>): (f: Nat) → rooms_at(rooms, f) <= rooms_top(rooms) {
+    match rooms {
+        Nil => λ f => trivial,
+        Cons(room, rest) => λ f => match f {
+            Zero => room.le_max_l(rooms_top(rest)),
+            Succ(g) => Nat::le_trans(rooms_at(rest, g), rooms_top(rest), room.max(rooms_top(rest)), rooms_at_top(rest)(g), room.le_max_r(rooms_top(rest))),
+        },
+    }
+}
 
 // The stack function `f` of a program asks for below its return address,
 // under the table `lower_program_lent` is stated by.

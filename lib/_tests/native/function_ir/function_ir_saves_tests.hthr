@@ -187,9 +187,9 @@ fn pair_places() → List<Place> { [Into(Rax), Saving(1), Into(R12), Into(Rax)] 
 // what the caller's R12 after the call rests on.
 fn pair_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(72)])).keeping(8, [R12])
         .put(Block([MovRR(R12, Rsi)]))
         .saving().put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring()

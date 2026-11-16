@@ -89,9 +89,9 @@ fn one_saved() → List<Place> { [Into(Rax), Spilling(4), Into(Rax)] }
 
 fn one_saved_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(64)]))
         .saving([Rsi]).put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring([Rsi])
         .put(Block([AddRR(Rax, Rsi)]))
@@ -109,9 +109,9 @@ theorem one_saved_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last:
 // With no head the call saves all eight, as it did before there was one.
 fn all_saved_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(64)]))
         .saving(saved_registers()).put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring(saved_registers())
         .put(Block([AddRR(Rax, Rsi)]))

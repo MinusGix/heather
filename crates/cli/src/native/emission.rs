@@ -714,7 +714,7 @@ fn deep_text(p: &str, src: &str, homes: &str, layout: &str, end: &str, last: u64
     format!("{evaluable}
 theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
 theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}
-theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), index_rooms()).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
+theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), program_room({functions})).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
 theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{
     {exit}.links_of({functions}, {homes}.places, {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
 }}

@@ -1465,7 +1465,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
@@ -1492,7 +1492,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let index = stack.size - 8 * src.words;
                                 let top_i: (stack.size = index + 8 * src.words) = omega(deep);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-                                let roomy: ((src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 <= index) = omega(top_i, deep);
+                                let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
                                 let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
                                     src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
                                 let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());
@@ -1950,11 +1950,11 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         // it is about to push, the return address and what was above it.
         let more = λ (d2: Nat) (eq: t.room = Succ(d2)) => {
             let d_eq: (d2 = d) = omega(eq, room);
-            let was0: ((Succ(d2) * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index) =
-                j(eq, λ r _ => (r * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index, t.roomy);
-            let was1: (((8 * (t.words + 7)) * Succ(d2) + 144 * t.functions.len()) + 8 <= t.index) =
-                j(Nat::mul_comm(Succ(d2), 8 * (t.words + 7)), λ v _ => (v + 144 * t.functions.len()) + 8 <= t.index, was0);
-            let was: ((((8 * (t.words + 7)) * d2 + 8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= t.index) = was1;
+            let was0: ((Succ(d2) * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index) =
+                j(eq, λ r _ => (r * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index, t.roomy);
+            let was1: (((8 * (t.words + 7)) * Succ(d2) + program_calls_room(t.functions)) + 8 <= t.index) =
+                j(Nat::mul_comm(Succ(d2), 8 * (t.words + 7)), λ v _ => (v + program_calls_room(t.functions)) + 8 <= t.index, was0);
+            let was: ((((8 * (t.words + 7)) * d2 + 8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= t.index) = was1;
             let comm: (d2 * (8 * (t.words + 7)) = (8 * (t.words + 7)) * d2) = Nat::mul_comm(d2, 8 * (t.words + 7));
             // Where the callee's frame is: below the return address and
             // the registers it pushes. `i2` is where the return address is.
@@ -1962,7 +1962,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             let i2 = (ic + 8 * t.words) + 8 * kept.len();
             let at_i: (i2 = t.index - 8) = omega(was, few);
             let back_i: (i2 + 8 = t.index) = omega(was, few);
-            let roomy_c: ((d2 * (8 * (t.words + 7)) + 144 * t.functions.len()) + 8 <= ic) = omega(was, few, comm);
+            let roomy_c: ((d2 * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= ic) = omega(was, few, comm);
             let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
             let framed_c: (ic + 8 * (t.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
             let c = t.activation(ic, g0.saved(kept, top), d2, framed_c, roomy_c);
@@ -2068,7 +2068,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
@@ -2084,7 +2084,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let index = stack.size - 8 * src.words;
     let top_i: (stack.size = index + 8 * src.words) = omega(deep);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-    let roomy: ((src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 <= index) = omega(top_i, deep);
+    let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
     let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right.left, args,
         src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
     let hosts: t.Hosts() = ⟨built.proof.right.right.left, built.proof.right.right.right.left⟩;
@@ -2132,7 +2132,7 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + 144 * src.functions.len()) + 8 * (src.words + 1) <= stack.size,
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes), src.layout(r.low, homes), [], 0) { None => None, Some(c) => c.prog.finish() };
