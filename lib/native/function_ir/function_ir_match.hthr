@@ -103,16 +103,35 @@ fn slots_bind(slots: List<PatternSlot>, values: List<Nat>, found: NatMap<Nat>) �
     }
 }
 
+// What the walk has where a rule is read: the node that made each word,
+// each word's range, and each bit it decided.
+record Walked { made: NatMap<Node>, range: NatMap<Range>, bits: NatMap<Bool> }
+
 // The node that writes `id`: the one the walk is at, or one it passed.
-fn node_writing(at: Node, made: NatMap<Node>, id: Nat) → Option<Node> {
-    match node_output(at).id.same(id) { True => Some(at), False => nat_map_get(made, id) }
+fn Walked::writing(self had: Walked, at: Node, id: Nat) → Option<Node> {
+    match node_output(at).id.same(id) { True => Some(at), False => nat_map_get(had.made, id) }
+}
+
+// A bit the walk decided, as the constant the replayer's facts have it
+// equal to: what a premise `a = 1` of a rule about bits reads.
+fn Walked::bit(self had: Walked, id: Nat) → Option<Node> {
+    match nat_map_get(had.bits, id) { None => None, Some(bit) => Some(Const(1, id, match bit { True => 1, False => 0 })) }
+}
+
+// The node of the kind `kind` the facts have for the word `id`: the one
+// that made it, or for a constant the bit decided.
+fn Walked::of_kind(self had: Walked, at: Node, id: Nat, kind: Nat) → Option<Node> {
+    match had.writing(at, id).and_then(λ node => node.kind().same(kind).then(Some(node))) {
+        Some(node) => Some(node),
+        None => match kind { Zero => had.bit(id), Succ(_) => None },
+    }
 }
 
 fn range_known(range: NatMap<Range>, id: Nat) → Range { match nat_map_get(range, id) { None => Range::any(), Some(r) => r } }
 
 // One premise read where the word it is about is found: a premise about a
 // word not found yet is left for a later round.
-fn PatternFact::bind(self premise: PatternFact, at: Node, made: NatMap<Node>, range: NatMap<Range>, found: NatMap<Nat>) → Option<NatMap<Nat>> {
+fn PatternFact::bind(self premise: PatternFact, at: Node, had: Walked, found: NatMap<Nat>) → Option<NatMap<Nat>> {
     match premise {
         Unread => None,
         Makes(kind, output, slots) => match slots.nth(output) {
@@ -121,7 +140,7 @@ fn PatternFact::bind(self premise: PatternFact, at: Node, made: NatMap<Node>, ra
                 Computed => None,
                 Numbered(k) => match nat_map_get(found, k) {
                     None => Some(found),
-                    Some(id) => node_writing(at, made, id).and_then(λ node => node.kind().same(kind).then(slots_bind(slots, node.numbers(), found))),
+                    Some(id) => had.of_kind(at, id, kind).and_then(λ node => slots_bind(slots, node.numbers(), found)),
                 },
             },
         },
@@ -129,26 +148,26 @@ fn PatternFact::bind(self premise: PatternFact, at: Node, made: NatMap<Node>, ra
             Computed => None,
             Numbered(k) => match nat_map_get(found, k) {
                 None => Some(found),
-                Some(id) => shared(range_known(range, id), λ r => low.bind(r.low, found).and_then(λ more => high.bind(r.high, more))),
+                Some(id) => shared(range_known(had.range, id), λ r => low.bind(r.low, found).and_then(λ more => high.bind(r.high, more))),
             },
         },
     }
 }
 
-fn premises_bind(premises: List<PatternFact>, at: Node, made: NatMap<Node>, range: NatMap<Range>, found: NatMap<Nat>) → Option<NatMap<Nat>> {
+fn premises_bind(premises: List<PatternFact>, at: Node, had: Walked, found: NatMap<Nat>) → Option<NatMap<Nat>> {
     match premises {
         Nil => Some(found),
-        Cons(premise, rest) => premise.bind(at, made, range, found).and_then(λ more => premises_bind(rest, at, made, range, more)),
+        Cons(premise, rest) => premise.bind(at, had, found).and_then(λ more => premises_bind(rest, at, had, more)),
     }
 }
 
 // As many rounds as there are premises: each round finds the words of one
 // more at least, where there is one to find.
-fn premises_rounds(rounds: List<PatternFact>, premises: List<PatternFact>, at: Node, made: NatMap<Node>, range: NatMap<Range>, found: NatMap<Nat>) →
+fn premises_rounds(rounds: List<PatternFact>, premises: List<PatternFact>, at: Node, had: Walked, found: NatMap<Nat>) →
     Option<NatMap<Nat>> {
     match rounds {
         Nil => Some(found),
-        Cons(_, later) => premises_bind(premises, at, made, range, found).and_then(λ more => premises_rounds(later, premises, at, made, range, more)),
+        Cons(_, later) => premises_bind(premises, at, had, found).and_then(λ more => premises_rounds(later, premises, at, had, more)),
     }
 }
 
@@ -172,9 +191,9 @@ fn PatternFact::about(self fact: PatternFact) → Option<Nat> {
 
 // The rule's numbers where its premises are read from the node `at`, which
 // writes the word the conclusion is about.
-fn RulePattern::numbers(self pattern: RulePattern, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<List<Nat>> {
+fn RulePattern::numbers(self pattern: RulePattern, at: Node, had: Walked) → Option<List<Nat>> {
     pattern.conclusion.about().and_then(λ k =>
-        premises_rounds(pattern.premises, pattern.premises, at, made, range, nat_map_set(NatMap::empty(), k, node_output(at).id))
+        premises_rounds(pattern.premises, pattern.premises, at, had, nat_map_set(NatMap::empty(), k, node_output(at).id))
             .and_then(λ found => numbers_found(found, 0, pattern.arity)))
 }
 
@@ -183,16 +202,16 @@ fn RulePattern::numbers(self pattern: RulePattern, at: Node, made: NatMap<Node>,
 
 // A premise the replayer's facts have where the walk's do: a node passed,
 // or a range that holds what is known of the word.
-fn Fact::passed(self fact: Fact, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Bool {
+fn Fact::passed(self fact: Fact, at: Node, had: Walked) → Bool {
     match fact {
-        Is(node) => match node_writing(at, made, node_output(node).id) { None => False, Some(had) => node.same(had) },
-        Within(id, low, high) => range_known(range, id).inside(Range(low, high)),
+        Is(node) => match had.of_kind(at, node_output(node).id, node.kind()) { None => False, Some(known) => node.same(known) },
+        Within(id, low, high) => range_known(had.range, id).inside(Range(low, high)),
         _ => False,
     }
 }
 
-fn facts_passed(facts: List<Fact>, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Bool {
-    match facts { Nil => True, Cons(fact, rest) => fact.passed(at, made, range) && facts_passed(rest, at, made, range) }
+fn facts_passed(facts: List<Fact>, at: Node, had: Walked) → Bool {
+    match facts { Nil => True, Cons(fact, rest) => fact.passed(at, had) && facts_passed(rest, at, had) }
 }
 
 // The words whose ranges the premises read.
@@ -203,27 +222,74 @@ fn facts_ranged(facts: List<Fact>) → List<Nat> {
     }
 }
 
-// A rule the matcher reads: its place in the table, and its shape.
-record Matchable { place: Nat, rule: Rule, pattern: RulePattern }
+// The kind of the premise that writes the word `k`, where one does.
+fn premises_writing(premises: List<PatternFact>, k: Nat) → Option<Nat> {
+    match premises {
+        Nil => None,
+        Cons(premise, rest) => match premise {
+            Makes(kind, _, _) => match premise.about() {
+                None => premises_writing(rest, k),
+                Some(about) => match about.same(k) { True => Some(kind), False => premises_writing(rest, k) },
+            },
+            _ => premises_writing(rest, k),
+        },
+    }
+}
 
-fn RuleEntry::at(self entry: RuleEntry, place: Nat) → Matchable { Matchable(place, entry.rule, entry.pattern) }
+// The kind of node a rule is read at: the premise that writes the word
+// the conclusion is about. A node of another kind is not tried, which is
+// most nodes for most rules.
+fn RulePattern::head(self pattern: RulePattern) → Option<Nat> {
+    pattern.conclusion.about().and_then(λ k => premises_writing(pattern.premises, k))
+}
+
+// A rule the matcher reads: its place in the table, its shape, and the
+// kind of node it is read at.
+record Matchable { place: Nat, rule: Rule, pattern: RulePattern, head: Option<Nat> }
+
+fn RuleEntry::at(self entry: RuleEntry, place: Nat) → Matchable { Matchable(place, entry.rule, entry.pattern, entry.pattern.head()) }
+
+fn Matchable::fits(self m: Matchable, at: Node) → Bool { match m.head { None => True, Some(kind) => at.kind().same(kind) } }
 
 // A rule's instance at a node: its numbers, the node its conclusion gives
 // for the one read, and the words whose ranges it needs derived first.
 record Matched { place: Nat, numbers: List<Nat>, node: Node, needs: List<Nat> }
 
-fn Matchable::found_at(self m: Matchable, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<Matched> {
-    m.pattern.numbers(at, made, range).and_then(λ numbers => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
-        Is(node) => (node_output(node).id.same(node_output(at).id) && facts_passed(clause.premises, at, made, range)).then(
+fn Matchable::found_at(self m: Matchable, at: Node, had: Walked) → Option<Matched> {
+    m.fits(at).then(m.pattern.numbers(at, had)).and_then(λ numbers => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
+        Is(node) => (node_output(node).id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
             Some(Matched(m.place, numbers, node, facts_ranged(clause.premises)))),
         _ => None,
     }))
 }
 
-fn matched_among(table: List<Matchable>, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<Matched> {
+// The bit a rule's instance decides: its conclusion is that the word the
+// node writes, a bit, is a constant.
+fn Matched::bit(self found: Matched) → Option<Bool> {
+    match found.node { Const(w, _, v) => w.same(1).then(Some(!v.same(0))), _ => None }
+}
+
+// The first rule of the table that writes another node for the one read.
+// An instance that decides a bit is not one: the node stays, and the walk
+// keeps the bit (`decided_among`).
+fn matched_among(table: List<Matchable>, at: Node, had: Walked) → Option<Matched> {
     match table {
         Nil => None,
-        Cons(m, rest) => match m.found_at(at, made, range) { Some(found) => Some(found), None => matched_among(rest, at, made, range) },
+        Cons(m, rest) => match m.found_at(at, had) {
+            Some(found) => match found.bit() { None => Some(found), Some(_) => matched_among(rest, at, had) },
+            None => matched_among(rest, at, had),
+        },
+    }
+}
+
+// The first rule of the table that decides the bit a node writes.
+fn decided_among(table: List<Matchable>, at: Node, had: Walked) → Option<Matched> {
+    match table {
+        Nil => None,
+        Cons(m, rest) => match m.found_at(at, had) {
+            Some(found) => match found.bit() { Some(_) => Some(found), None => decided_among(rest, at, had) },
+            None => decided_among(rest, at, had),
+        },
     }
 }
 
@@ -233,9 +299,9 @@ fn matched_among(table: List<Matchable>, at: Node, made: NatMap<Node>, range: Na
 // A rule's instance that gives the range of the word a node writes.
 record Ranged { place: Nat, numbers: List<Nat>, range: Range, needs: List<Nat> }
 
-fn Matchable::ranged_at(self m: Matchable, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<Ranged> {
-    m.pattern.numbers(at, made, range).and_then(λ numbers => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
-        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(clause.premises, at, made, range)).then(
+fn Matchable::ranged_at(self m: Matchable, at: Node, had: Walked) → Option<Ranged> {
+    m.fits(at).then(m.pattern.numbers(at, had)).and_then(λ numbers => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
+        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
             Some(Ranged(m.place, numbers, Range(low, high), facts_ranged(clause.premises)))),
         _ => None,
     }))
@@ -245,14 +311,14 @@ fn Range::narrower(self a: Range, b: Range) → Bool { a.inside(b) && !b.inside(
 
 // The narrowest range a rule of the table gives, the first of equals, and
 // none where no rule says more than that the word is a word.
-fn ranged_among(table: List<Matchable>, at: Node, made: NatMap<Node>, range: NatMap<Range>, best: Option<Ranged>) → Option<Ranged> {
+fn ranged_among(table: List<Matchable>, at: Node, had: Walked, best: Option<Ranged>) → Option<Ranged> {
     match table {
         Nil => best,
-        Cons(m, rest) => match m.ranged_at(at, made, range) {
-            None => ranged_among(rest, at, made, range, best),
-            Some(found) => match found.range.narrower(match best { None => Range::any(), Some(had) => had.range }) {
-                True => ranged_among(rest, at, made, range, Some(found)),
-                False => ranged_among(rest, at, made, range, best),
+        Cons(m, rest) => match m.ranged_at(at, had) {
+            None => ranged_among(rest, at, had, best),
+            Some(found) => match found.range.narrower(match best { None => Range::any(), Some(known) => known.range }) {
+                True => ranged_among(rest, at, had, Some(found)),
+                False => ranged_among(rest, at, had, best),
             },
         },
     }
