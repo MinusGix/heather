@@ -567,7 +567,7 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
     within: c.prog.Within(t.program), checked: (first.checks(t.homes, rest.live_in(t.homes, out)) && rest.checks(t.homes, out)).IsTrue()):
     t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
     let layout = t.layout();
-    let ok = Bool::is_true_and(first.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
+    let ok = Bool::both(checked);
     (match first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
             t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
@@ -598,7 +598,7 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), p
         ((after: Env) → t.At(prog_len(c.prog), out, k(Onward(after)), after)) →
         t.At(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
     let layout = t.layout();
-    let ok = Bool::is_true_and(first.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
+    let ok = Bool::both(checked);
     (match first.emits(p, layout, rest.live_in(t.homes, out), known, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), known, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
             (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(known) → t.Exiting(k) →
@@ -635,9 +635,8 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
     let before = rest.live_head(t.homes, Cons(f, fs), out);
     let leaf = Compute(Dataflow(body));
     let pair = body.paired(rest, t.homes, out, f, fs, carried);
-    let guard = Bool::is_true_and(t.homes.nodes_apart(nodes, before) && t.homes.all_apart(nodes_writes(nodes), before),
-        nodes_live_in(nodes, before).within(nodes_live_in(nodes, rest.live_in(t.homes, out))), pair.right);
-    let ok = Bool::is_true_and(leaf.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
+    let guard = Bool::both(pair.right);
+    let ok = Bool::both(checked);
     (match p.computes_best(layout, before, nodes, names) as λ o => p.computes_best(layout, before, nodes, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Cons(f, fs), c1.names) }) = Some(c) →
             t.Runs(Then(Compute(Dataflow(body)), rest), call, perform, out, p, c.prog) {
@@ -679,11 +678,10 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                 }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, at, len, result)), known, call, perform, out, p, c.prog) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(at) && (layout.word_fits(len) && (layout.word_fits(result) && True)),
-                        j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(at), layout.word_fits(len) && (layout.word_fits(result) && True), ok.right);
-                    let ok3 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok2.right);
-                    let ok4 = Bool::is_true_and(layout.word_fits(result), True, ok3.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
+                    let ok3 = Bool::both(ok2.right);
+                    let ok4 = Bool::both(ok3.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(capacity) => λ same => subst(Option::some_inj(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names), c, same),
@@ -701,11 +699,10 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                 }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Writes(fd, buf, from, len, result)), known, call, perform, out, p, c.prog) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(from) && (layout.word_fits(len) && (layout.word_fits(result) && True)),
-                        j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(from), layout.word_fits(len) && (layout.word_fits(result) && True), ok.right);
-                    let ok3 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok2.right);
-                    let ok4 = Bool::is_true_and(layout.word_fits(result), True, ok3.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
+                    let ok3 = Bool::both(ok2.right);
+                    let ok4 = Bool::both(ok3.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(capacity) => λ same => subst(Option::some_inj(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names), c, same),
@@ -723,8 +720,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                 }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Opens(path, len, result)), known, call, perform, out, p, c.prog) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(result), True, ok.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
                     (match found: t.caps.nth(path) {
                         None => λ none => absurd(none),
                         Some(capacity) => λ same => subst(Option::some_inj(p.opens(layout, known, out, path, len, result, capacity, names), c, same),
@@ -741,8 +738,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                 }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Closes(fd, result)), known, call, perform, out, p, c.prog) {
                 False => λ _ none => absurd(none),
                 True => λ fit same => {
-                    let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(result) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(result), True, ok.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
                     subst(Option::some_inj(Compiled(p.closes(layout, known, out, fd, result), names), c, same),
                         λ within apart n env k knows exits next => t.goes_closes(out, env, p, known, knows, fd, result, layout.word_inside(fd, ok.left), layout.word_inside(result, ok2.left),
                             apart, within,
@@ -813,7 +810,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                             None => λ none => absurd(none),
                             Some(nc) => λ same => subst(Option::some_inj(Compiled(nc.prog.join_label(Succ(Succ(names))), nc.names), c, same),
                                 λ within checked => {
-                                    let ok = Bool::is_true_and(yes.checks(t.homes, out), no.checks(t.homes, out), checked);
+                                    let ok = Bool::both(checked);
                                     let jumped = then(y.prog, Jmp(Succ(Succ(names))));
                                     let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
                                     let w_other = Prog::within_trans(no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
@@ -864,7 +861,7 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                         subst(Option::some_inj(Compiled(closed, cb.names), c, same),
                             λ within checked => {
                                 let set = Repeat(body, again).live_in(t.homes, out);
-                                let ok = Bool::is_true_and(body.live_in(t.homes, loop_after(again, set, out)).within(set), body.checks(t.homes, loop_after(again, set, out)), checked);
+                                let ok = Bool::both(checked);
                                 let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
                                 let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
                                 let w_body = Prog::within_trans(cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
@@ -892,8 +889,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
             }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(len, out).IsTrue() → t.RunsK(Arg(index, buf, len), known, call, perform, out, p, c.prog) {
             False => λ _ none => absurd(none),
             True => λ fit => {
-                let ok = Bool::is_true_and(layout.word_fits(index), layout.word_fits(len) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                let ok2 = Bool::is_true_and(layout.word_fits(len), True, ok.right);
+                let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                let ok2 = Bool::both(ok.right);
                 (match found: t.caps.nth(buf) {
                     None => λ none => absurd(none),
                     Some(capacity) => λ same => subst(Option::some_inj(p.args(layout, out, index, buf, len, capacity, names), c, same),
@@ -1656,7 +1653,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
 // The call's checks, read off
 
 theorem Nat::same_as_eq(self n: Nat, m: Nat, same: n.same_as(m).IsTrue()): n = m {
-    let both = Bool::is_true_and(n.leb(m), m.leb(n), same);
+    let both = Bool::both(same);
     let a: (n <= m) = Nat::leb_sound(n, m, both.left);
     let b: (m <= n) = Nat::leb_sound(m, n, both.right);
     let e: (n = m) = omega(a, b);
@@ -1679,16 +1676,11 @@ theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat,
         }) → Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
         None => λ _ no => false_elim(no),
         Some(proc) => λ found f => {
-            let b1 = Bool::is_true_and(args.len().same_as(proc.params.len()), results.len().same_as(proc.results.len()) &&
-                (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results)))), f);
-            let b2 = Bool::is_true_and(results.len().same_as(proc.results.len()), args.len().leb(6) && (results.len().leb(6) &&
-                (layout.words_fit(args ++ (results ++ out.minus(results))) && layout.homes.moves_apart(out, results))), b1.right);
-            let b3 = Bool::is_true_and(args.len().leb(6), results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results)), b2.right);
-            let b4 = Bool::is_true_and(results.len().leb(6), layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results), b3.right);
-            let b5 = Bool::is_true_and(layout.words_fit(args ++ (results ++ out.minus(results))), layout.homes.moves_apart(out, results), b4.right);
+            let b1 = Bool::both(f);
+            let b2 = Bool::both(b1.right);
+            let b3 = Bool::both(b2.right);
+            let b4 = Bool::both(b3.right);
+            let b5 = Bool::both(b4.right);
             Exists(proc, ⟨found, ⟨args.len().same_as_eq(proc.params.len(), b1.left), ⟨results.len().same_as_eq(proc.results.len(), b2.left),
                 ⟨Nat::leb_sound(args.len(), 6, b3.left), ⟨Nat::leb_sound(results.len(), 6, b4.left), ⟨b5.left, b5.right⟩⟩⟩⟩⟩⟩)
         },
@@ -1715,12 +1707,10 @@ theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.f
             let f: Bool::IsTrue(entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
                 (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))))) =
                 j(sym(same), λ v _ => v.IsTrue(), trivial);
-            let b1 = Bool::is_true_and(entry.within(proc.params), layout.homes.moves_apart(entry, proc.params) &&
-                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))), f);
-            let b2 = Bool::is_true_and(layout.homes.moves_apart(entry, proc.params),
-                layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)), b1.right);
-            let b3 = Bool::is_true_and(layout.words_fit(proc.params ++ proc.results), proc.params.len().leb(6) && proc.results.len().leb(6), b2.right);
-            let b4 = Bool::is_true_and(proc.params.len().leb(6), proc.results.len().leb(6), b3.right);
+            let b1 = Bool::both(f);
+            let b2 = Bool::both(b1.right);
+            let b3 = Bool::both(b2.right);
+            let b4 = Bool::both(b3.right);
             ⟨sound.right, ⟨b1.left, ⟨b2.left, ⟨b3.left, ⟨Nat::leb_sound(proc.params.len(), 6, b4.left), Nat::leb_sound(proc.results.len(), 6, b4.right)⟩⟩⟩⟩⟩
         },
     })(refl, fits)
@@ -2037,8 +2027,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let linked = built.proof.right.right.right.right.right;
     let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, linked.proof.proof);
-    let linking = Bool::is_true_and(program_evaluable(src.functions), program_placeless(src.functions),
-        Bool::is_true_and(program_evaluable(src.functions) && program_placeless(src.functions), program_rowed(src.functions), meets.left).left);
+    let linking = Bool::both(Bool::is_true_and(program_evaluable(src.functions) && program_placeless(src.functions), program_rowed(src.functions), meets.left).left);
     let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
     let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());

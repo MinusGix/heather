@@ -99,7 +99,7 @@ theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) →
     match ids {
         Nil => λ i _ never => false_elim(never),
         Cons(id, rest) => λ i fit m => {
-            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
+            let both = Bool::both(fit);
             match m {
                 Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
                 Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
@@ -490,7 +490,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                     })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls_needs<M>(site, laid, stack, top,
                         Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
                         λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(fs), f), b),
-                        program_rowed_needs(fs, Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_rowed(fs), both).right),
+                        program_rowed_needs(fs, Bool::both(both).right),
                         program_room(fs), allowed))
                 },
             })(refl)
@@ -1042,12 +1042,10 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         let region = Call(callee, arguments, result);
         let live = live_before(arguments, result, out);
         let k = program_lent(t.functions, callee);
-        let f1 = Bool::is_true_and(Succ(callee).leb(layout.functions.len()), arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()) &&
-            ((arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()))), fit);
-        let f2 = Bool::is_true_and(arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()),
-            (arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len())), f1.right);
-        let f3 = Bool::is_true_and((arguments.len() + 2 * k).leb(6), layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()), f2.right);
-        let f4 = Bool::is_true_and(layout.words_fit(Cons(result, arguments)), k.leb(layout.capacities.len()), f3.right);
+        let f1 = Bool::both(fit);
+        let f2 = Bool::both(f1.right);
+        let f3 = Bool::both(f2.right);
+        let f4 = Bool::both(f3.right);
         let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), f1.left);
         let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, f3.left);
         let small: (k <= 3) = omega(few);

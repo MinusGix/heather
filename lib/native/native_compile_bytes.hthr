@@ -651,8 +651,8 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
             (match fit: layout.words_fit([output, index]) {
                 False => λ none => absurd(none),
                 True => {
-                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(index), True, ok.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(cap) => λ same => j(Option::some_inj(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names)), c, same),
@@ -671,9 +671,9 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
             (match fit: layout.words_fit([output, index, value]) {
                 False => λ none => absurd(none),
                 True => {
-                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && (layout.word_fits(value) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(index), layout.word_fits(value) && True, ok.right);
-                    let ok3 = Bool::is_true_and(layout.word_fits(value), True, ok2.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
+                    let ok3 = Bool::both(ok2.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(cap) => λ same => j(Option::some_inj(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names))), c, same),

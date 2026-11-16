@@ -142,7 +142,7 @@ theorem Scope::wide_of(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) = So
         Cons(node, rest) => λ s t => (match ok: node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
             False => λ none => absurd(none),
             True => λ got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
-                Bool::is_true_and(node.wide(), s.all_defined(function_ir_eval::Node::reads(node)), j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
+                Bool::both(j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
                 Scope::wide_of(rest, s.put(node_output(node).id, s.clean(node)), t, got)),
         }),
     }
@@ -183,7 +183,7 @@ theorem Env::steps_frame(nodes: List<Node>): (env: Env) → (x: Nat) → absent(
     match nodes {
         Nil => λ env x _ => refl,
         Cons(node, rest) => λ env x h => {
-            let parts = Bool::is_true_and(x.differs(node_output(node).id), absent(x, nodes_writes(rest)), h);
+            let parts = Bool::both(h);
             let r = node.run(env.valuation(), env.buffers);
             trans(Env::steps_frame(rest, env.computes([node]), x, parts.right),
                 Env::number_put_other(env.words, r.buffers, env.args, node_output(node).id, r.values(node_output(node).width, node_output(node).id).toNat(), x,
@@ -238,8 +238,8 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ env x h => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             let after = r.run(call, env.valuation(), env.buffers);
-            let p1 = Bool::is_true_and(x.differs(count), absent(x, Cons(exhausted, parameters ++ (outputs ++ body.touches()))), h);
-            let p2 = Bool::is_true_and(x.differs(exhausted), absent(x, parameters ++ (outputs ++ body.touches())), p1.right);
+            let p1 = Bool::both(h);
+            let p2 = Bool::both(p1.right);
             let p3 = absent_append(x, parameters, outputs ++ body.touches(), p2.right);
             let p4 = absent_append(x, outputs, body.touches(), p3.right);
             let fresh: absent(x, port_ids(word_ports(outputs) ++ [Port(exhausted, 1)])).IsTrue() =
@@ -337,7 +337,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
                 False => λ none => absurd(none),
                 True => λ scoped => {
-                    let parts = Bool::is_true_and(s.defined(bound) && s.all_defined(inputs), r.loop_shape(), j(sym(ok), λ b _ => b.IsTrue(), trivial));
+                    let parts = Bool::both(j(sym(ok), λ b _ => b.IsTrue(), trivial));
                     let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
                     let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
                             False => None,
@@ -543,8 +543,8 @@ theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to,
         Cons(t, ts) => λ from => match from {
             Nil => λ _ _ (bad: 0 = Succ(ts.len())) => false_elim(ts.len().zero_ne_succ(bad)),
             Cons(f, fs) => λ ordered apart (same: Succ(fs.len()) = Succ(ts.len())) env => {
-                let o = Bool::is_true_and(absent(t, fs), moves_ordered(ts, fs), ordered);
-                let a = Bool::is_true_and(absent(t, ts), distinct(ts), apart);
+                let o = Bool::both(ordered);
+                let a = Bool::both(apart);
                 let len = Nat::succ_inj(fs.len(), ts.len(), same);
                 let node = Move(64, t, f);
                 let e1 = env.computes([node]);
@@ -557,7 +557,7 @@ theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to,
                 let rest = Valuation::bind(env.valuation(), ts, words_of(env.valuation(), fs));
                 let word = word_value(env.valuation()(64, f));
                 ⟨λ x h => {
-                    let parts = Bool::is_true_and(x.differs(t), absent(x, ts), h);
+                    let parts = Bool::both(h);
                     trans(ih.left(x, parts.right), env.plain_other(node, trivial, x, x.differs_ne(t, parts.left)))
                 },
                 ⟨λ x m => match x.eq_dec(t) {
@@ -727,7 +727,7 @@ theorem loop_keeps_mem(out: List<Nat>, outputs: List<Nat>, exhausted: Nat, clobb
     match out {
         Nil => λ _ i never => false_elim(never),
         Cons(o, rest) => λ keeps i m => {
-            let parts = Bool::is_true_and((o.matches(exhausted) || outputs.holds(o)) || absent(o, clobbered), loop_keeps(rest, outputs, exhausted, clobbered), keeps);
+            let parts = Bool::both(keeps);
             match m {
                 Inl(e) => j(sym(e), λ y _ => ((y.matches(exhausted) || outputs.holds(y)) || absent(y, clobbered)).IsTrue(), parts.left),
                 Inr(later) => loop_keeps_mem(rest, outputs, exhausted, clobbered, parts.right, i, later),
@@ -921,9 +921,9 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let w_zt: zt.Within(t.program) = zt.within_before(0, Jmp(leave), t.program, w_zjump);
     let w_z: k.z.prog.Within(t.program) = Prog::within_trans(k.z.prog.within_tests(layout, exhausted, enter), w_zt);
     let w_hp: hp.Within(t.program) = Prog::within_trans(hp.within_computes(layout, zero_out, loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
-    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
-    let f1 = Bool::is_true_and(layout.word_fits(exhausted), layout.word_fits(exit) && True, fit.left);
-    let f2 = Bool::is_true_and(layout.word_fits(exit), True, f1.right);
+    let fit = Bool::both(k.fits);
+    let f1 = Bool::both(fit.left);
+    let f2 = Bool::both(f1.right);
     let inside_exhausted = layout.word_inside(exhausted, f1.left);
     let inside_exit = layout.word_inside(exit, f2.left);
     let count_exhausted: (count ≠ exhausted) = count.differs_ne(exhausted, shape.count_exhausted);
@@ -982,8 +982,8 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
             let run_b: (branch(run_s.values(1, exit).head_bit()) = final) = run_z;
             let em = mb.steps(moves(parameters, next));
             let moved = Env::steps_moves(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb);
-            let bp = Bool::is_true_and(bs.bit(exit), bs.all_defined(next), bits);
-            let bx = Bool::is_true_and(bs.defined(exit), !bs.loose(exit), bp.left);
+            let bp = Bool::both(bits);
+            let bx = Bool::both(bp.left);
             let agrees_after = fa.right.right;
             let exit_bit: (run_s.values(1, exit).head_bit() = em.bit(exit)) = trans(agrees_after(exit, bx.left).right(bx.right),
                 sym(cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), moved.left(exit, shape.exit_parameters))));
@@ -1101,7 +1101,7 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let w_z: k.z.prog.Within(t.program) = Prog::within_trans(k.z.prog.within_tests(layout, exhausted, enter), w_zt);
     let w_hp: hp.Within(t.program) = Prog::within_trans(hp.within_computes(layout, Cons(exhausted, t.homes.region_live(body, after).union(done)), loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
     let w_e: k.e.prog.Within(t.program) = k.e.prog.within_before(head, Block([]), t.program, w_hp);
-    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
+    let fit = Bool::both(k.fits);
     let keeps = loop_keeps_mem(out, outputs, exhausted, Cons(count, parameters ++ body.touches()), fit.right);
     let outputs_len: (outputs.len() = parameters.len()) = Nat::matches_eq(outputs.len(), parameters.len(), shape.outputs_len);
     let inputs_len: (inputs.len() = parameters.len()) = Nat::matches_eq(inputs.len(), parameters.len(), shape.inputs_len);
@@ -1129,7 +1129,7 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
                 r
             };
             let at_other = λ (i: Nat) (ne: i ≠ exhausted) (fresh: absent(i, outputs).IsTrue()) (cl: absent(i, Cons(count, parameters ++ body.touches())).IsTrue()) => {
-                let parts = Bool::is_true_and(i.differs(count), absent(i, parameters ++ body.touches()), cl);
+                let parts = Bool::both(cl);
                 let wide: absent(i, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue() =
                     Bool::is_true_and_intro(i.differs(count), i.differs(exhausted) && absent(i, parameters ++ body.touches()), parts.left,
                         Bool::is_true_and_intro(i.differs(exhausted), absent(i, parameters ++ body.touches()), i.differs_of_ne(exhausted, ne), parts.right));

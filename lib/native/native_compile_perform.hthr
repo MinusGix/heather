@@ -148,7 +148,7 @@ theorem count_up(x: BitVec(64), d: Nat, value: x.toNat() = d, small: Succ(d) < N
 // A register no word lives in, and not RSP, written.
 theorem Target::held_scratch(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     register: Gpr, value: BitVec(64), outside: register.absent_from(Cons(Rsp, home_pool())).IsTrue()): t.Held(live, env, write_gpr(register, value, g), m) {
-    let parts = Bool::is_true_and(!register.same(Rsp), register.absent_from(home_pool()), outside);
+    let parts = Bool::both(outside);
     t.held_unused(live, env, g, m, held, register, value, t.homes.unused(register, parts.right), Bool::false_of_not(register.same(Rsp), parts.left))
 }
 
@@ -264,7 +264,7 @@ theorem gprs_outside_mem(registers, pool: List<Gpr>): gprs_outside(registers, po
     match registers {
         Nil => λ _ r never => false_elim(never),
         Cons(x, rest) => λ h r m => {
-            let parts = Bool::is_true_and(x.absent_from(pool), gprs_outside(rest, pool), h);
+            let parts = Bool::both(h);
             match m {
                 Inl(e) => j(sym(e), λ y _ => y.absent_from(pool).IsTrue(), parts.left),
                 Inr(later) => gprs_outside_mem(rest, pool, parts.right, r, later),
@@ -300,9 +300,9 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
             Cons(register, more) => λ p ok scratch distinct within next => {
                 let loaded = p.word_to(layout, id, register);
                 let w_loaded = Prog::within_trans(Prog::within_words_to(layout, rest, more, loaded), within);
-                let outside = Bool::is_true_and(register.absent_from(Cons(Rsp, home_pool())), gprs_outside(more, Cons(Rsp, home_pool())), scratch);
-                let apart = Bool::is_true_and(Rbx.absent_from(Cons(register, more)), gprs_distinct(Cons(register, more)), distinct);
-                let own = Bool::is_true_and(register.absent_from(more), gprs_distinct(more), apart.right);
+                let outside = Bool::both(scratch);
+                let apart = Bool::both(distinct);
+                let own = Bool::both(apart.right);
                 let rbx_rest: Rbx.absent_from(more).IsTrue() = Rbx.absent_rest(register, more, apart.left);
                 let distinct2: gprs_distinct(Cons(Rbx, more)).IsTrue() = Bool::is_true_and_intro(Rbx.absent_from(more), gprs_distinct(more), rbx_rest, own.right);
                 let later = t.goes_words_to(live, env, tree, q, rest, more, loaded, λ i m => ok(i, Inr(m)), outside.right, distinct2, within, next);
@@ -323,7 +323,7 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
                             j(sym(not_rbx), λ b _ => (!b).IsTrue(), trivial), own.left);
                         let mine: (read_gpr(register, g2) = w) = trans(keeps(register, away), read_gpr_after_write(register, w, g0));
                         held.right(g2, held2, ⟨mine, passed⟩, λ x absent => {
-                            let parts = Bool::is_true_and(!x.same(Rbx), x.absent_from(Cons(register, more)), absent);
+                            let parts = Bool::both(absent);
                             let x_rest: x.absent_from(more).IsTrue() = x.absent_rest(register, more, parts.right);
                             trans(keeps(x, Bool::is_true_and_intro(!x.same(Rbx), x.absent_from(more), parts.left, x_rest)),
                                 trans(read_gpr_other(register, x, w, g0, x.absent_head(register, more, parts.right)),
@@ -438,7 +438,7 @@ theorem Target::holding_spares(self t: Target, g, g2: Gprs, spares: t.Spares(g, 
         Cons(value, rest) => λ registers => match registers {
             Nil => λ _ _ _ => trivial,
             Cons(register, more) => λ outside rbx holding => {
-                let out = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
+                let out = Bool::both(outside);
                 ⟨trans(spares(register, t.homes.unused(register, out.left), trans(Rbx.same_comm(register), Rbx.absent_head(register, more, rbx))), holding.left),
                     t.holding_spares(g, g2, spares, rest, more, out.right, Rbx.absent_rest(register, more, rbx), holding.right)⟩
             },
@@ -471,8 +471,8 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
                     let out1 = out.minus(rest);
                     let stepped = p.word_from(layout, out1, id, register);
                     let w_step = Prog::within_trans(Prog::within_words_from(layout, out, rest, more, stepped), within);
-                    let aparts = Bool::is_true_and(t.homes.apart(id, out1), t.homes.moves_apart(out, rest), apart);
-                    let outs = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
+                    let aparts = Bool::both(apart);
+                    let outs = Bool::both(outside);
                     let env1 = env.set_word(id, value);
                     let later = t.goes_words_from(out, tree, q, rest, more, vs, stepped, out1, env1, λ i m => m, λ i m => inside(i, Inr(m)), aparts.right,
                         outs.right, Rbx.absent_rest(register, more, rbx), omega(short), omega(long), within, next);
@@ -513,7 +513,7 @@ theorem Env::set_words_outside(self env: Env, ids: List<Nat>): (words: List<BitV
         Cons(id, rest) => λ words => match words {
             Nil => λ i _ => refl,
             Cons(w, ws) => λ i none => {
-                let parts = Bool::is_true_and(i.differs(id), absent(i, rest), none);
+                let parts = Bool::both(none);
                 trans(env.set_word(id, w).set_words_outside(rest, ws, i, parts.right), env.number_set_other(id, w, i, i.differs_ne(id, parts.left)))
             },
         },
@@ -1085,7 +1085,7 @@ theorem Gprs::holding_outside(self g: Gprs, g2: Gprs, others: List<Gpr>, same: g
         Cons(v, vs) => λ registers => match registers {
             Nil => λ _ _ => trivial,
             Cons(r, more) => λ outside holding => {
-                let parts = Bool::is_true_and(r.absent_from(others), gprs_outside(more, others), outside);
+                let parts = Bool::both(outside);
                 ⟨trans(same(r, parts.left), holding.left), g.holding_outside(g2, others, same, vs, more, parts.right, holding.right)⟩
             },
         },
@@ -1103,7 +1103,7 @@ theorem Homes::kept_few(self homes: Homes): homes.kept().len() <= 6 {
 
 theorem Homes::kept_outside(self homes: Homes, others: List<Gpr>, clear: gprs_outside(Cons(Rbx, kept_pool()), others).IsTrue()):
     gprs_outside(homes.kept(), others).IsTrue() {
-    let parts = Bool::is_true_and(Rbx.absent_from(others), gprs_outside(kept_pool(), others), clear);
+    let parts = Bool::both(clear);
     gprs_outside_of(homes.kept(), others, λ r mem => match mem {
         Inl(e) => j(sym(e), λ y _ => y.absent_from(others).IsTrue(), parts.left),
         Inr(later) => gprs_outside_mem(kept_pool(), others, parts.right, r,
@@ -1199,7 +1199,7 @@ theorem Target::goes_saves(self t: Target, env: Env, room: Nat, tree: ITree<BitV
             let pushed = then(down, Spill(spill));
             let w_pushed = Prog::within_trans(Prog::within_saves(rest, pushed), within);
             let w_down = down.within_before(0, Spill(spill), t.program, w_pushed);
-            let parts = Bool::is_true_and(r.absent_from([Rax, R11, Rsp]), gprs_outside(rest, [Rax, R11, Rsp]), outside);
+            let parts = Bool::both(outside);
             let j2 = i + 8 * rest.len();
             let back: (i + 8 * Succ(rest.len()) = j2 + 8) = omega();
             let fits: (j2 + 8 <= t.stack.size) = omega(top);
@@ -1262,7 +1262,7 @@ theorem Target::goes_restores(self t: Target, env: Env, room: Nat, tree: ITree<B
             let loaded = then(before, Reload(load));
             let w_loaded = loaded.within_before(0, Block([rsp_up()]), t.program, within);
             let w_before = before.within_before(0, Reload(load), t.program, w_loaded);
-            let parts = Bool::is_true_and(r.absent_from([Rsp]), gprs_outside(rest, [Rsp]), outside);
+            let parts = Bool::both(outside);
             let not_rsp: (Rsp.same(r) = False) = r.absent_head(Rsp, Nil, parts.left);
             let word = read_gpr(r, g0);
             let j1 = i + 8 * rest.len();

@@ -411,8 +411,8 @@ theorem Target::inputs_at(self t: Target, env: Env, values: Valuation(), written
                 None => λ none => absurd(none),
                 Some(r) => λ more absents rbx distinct g => {
                     let kinds = p.port_to_kind(t.layout(), port, register, r, one).left;
-                    let absent_parts = Bool::is_true_and(absent(port.id, written), ports_absent(rest, written), absents);
-                    let distinct_parts = Bool::is_true_and(register.absent_from(later), gprs_distinct(later), distinct);
+                    let absent_parts = Bool::both(absents);
+                    let distinct_parts = Bool::both(distinct);
                     let loaded = t.port_gprs(env, port, register, g);
                     let kept: (read_gpr(register, t.ports_gprs(env, rest, later, loaded)) = read_gpr(register, loaded)) =
                         t.ports_gprs_frame(env, rest, later, loaded, register, distinct_parts.left,
@@ -502,7 +502,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         let stored = p.word_from(layout, out, word, register);
                         let settled = Env(env.words.put(word, values(port.width, port.id).toNat(), 0), env.buffers, env.args);
                         let w_stored = Prog::within_trans(Prog::ports_from_within(layout, out, rest, others, later, stored, q, more), within);
-                        let aparts = Bool::is_true_and(t.homes.apart(word, out), t.homes.all_apart(others, out), apart);
+                        let aparts = Bool::both(apart);
                         let live = out.minus(Cons(word, others));
                         let after = out.minus(others);
                         let narrow = λ (i: Nat) (m: Mem(i, after)) => out.mem_filter(i, λ (id: Nat) => absent(id, others), m);
@@ -558,11 +558,10 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
         False => λ _ none => absurd(none),
         True => λ checked => {
             let ok = j(sym(checked), λ b _ => b.IsTrue(), trivial);
-            let parts = Bool::is_true_and(nodes_evaluable(nodes), ports_absent(inputs, nodes_writes(nodes)) &&
-                (gprs_distinct(Cons(Rbx, ins)) && Rbx.absent_from(outs)), ok);
-            let parts2 = Bool::is_true_and(ports_absent(inputs, nodes_writes(nodes)), gprs_distinct(Cons(Rbx, ins)) && Rbx.absent_from(outs), parts.right);
-            let parts3 = Bool::is_true_and(gprs_distinct(Cons(Rbx, ins)), Rbx.absent_from(outs), parts2.right);
-            let distinct = Bool::is_true_and(Rbx.absent_from(ins), gprs_distinct(ins), parts3.left);
+            let parts = Bool::both(ok);
+            let parts2 = Bool::both(parts.right);
+            let parts3 = Bool::both(parts2.right);
+            let distinct = Bool::both(parts3.left);
             (match loaded_is: p.ports_to(layout, inputs, ins) {
                 None => λ none => absurd(none),
                 Some(loaded) => (match lowered: region.lower(ins, outs, place_into(outs)) {
@@ -668,7 +667,7 @@ theorem nodes_reads_live(nodes: List<Node>, out: List<Nat>): (port: Port) → Me
     match nodes {
         Nil => λ port never => false_elim(never),
         Cons(node, rest) => λ port m unwritten => {
-            let parts = Bool::is_true_and(port.id.differs(node_output(node).id), absent(port.id, nodes_writes(rest)), unwritten);
+            let parts = Bool::both(unwritten);
             match node.read_ports().mem_append(nodes_read_ports(rest), port, m) {
                 Inl(here) => live_before_reads(function_ir_eval::Node::reads(node), node_output(node).id, nodes_live_in(rest, out), port.id,
                     node.read_port_id(port, here)),
@@ -690,7 +689,7 @@ theorem nodes_keeps_live(nodes: List<Node>, out: List<Nat>): (i: Nat) → Mem(i,
     match nodes {
         Nil => λ i m _ => m,
         Cons(node, rest) => λ i m unwritten => {
-            let parts = Bool::is_true_and(i.differs(node_output(node).id), absent(i, nodes_writes(rest)), j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
+            let parts = Bool::both(j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
             live_before_keeps(function_ir_eval::Node::reads(node), node_output(node).id, nodes_live_in(rest, out), i,
                 nodes_keeps_live(rest, out, i, m, eq_true_of_is_true(absent(i, nodes_writes(rest)), parts.right)),
                 i.differs_ne(node_output(node).id, parts.left))

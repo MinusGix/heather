@@ -237,7 +237,7 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
 // What a compile's check of its homes gives the proof.
 theorem Source::allocation_sound(self src: Source, homes: Homes, ok: src.allocation_ok(homes).IsTrue()):
     homes.fits().IsTrue() ∧ (homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue()) {
-    let parts = Bool::is_true_and(homes.fits(), match src.main.checked(homes, []) { None => False, Some(live) => homes.slotted(live) }, ok);
+    let parts = Bool::both(ok);
     ⟨parts.left, (match src.main.checked(homes, []) as λ o => src.main.checked(homes, []) = o →
             Bool::IsTrue(match o { None => False, Some(live) => homes.slotted(live) }) →
             homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue() {
@@ -257,7 +257,7 @@ theorem List::home_in_pool(self of: List<Home>, loops: List<List<Nat>>): of.home
     match of {
         Nil => λ _ id k at => absurd(at),
         Cons(home, rest) => λ fit id => {
-            let parts = Bool::is_true_and(home.in_pool(), rest.homes_fit(), fit);
+            let parts = Bool::both(fit);
             match id {
                 Zero => λ k at => Nat::leb_sound(Succ(k), 6, j(at, λ h _ => h.in_pool().IsTrue(), parts.left)),
                 Succ(i) => λ k at => rest.home_in_pool(loops, parts.right, i, k, at),
@@ -636,7 +636,7 @@ theorem Homes::misses_apart(self homes: Homes, id, k: Nat, out: List<Nat>): home
     match out {
         Nil => λ _ i never => false_elim(never),
         Cons(other, rest) => λ miss i m ne r at => {
-            let parts = Bool::is_true_and(other.same(id) || !homes.home(other).is_register(k), homes.misses(id, k, rest), miss);
+            let parts = Bool::both(miss);
             match m {
                 Inl(e) => λ same => {
                     let at_other: (homes.home(other) = InReg(r)) = j(e, λ x _ => homes.home(x) = InReg(r), at);
