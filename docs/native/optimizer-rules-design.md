@@ -4,7 +4,8 @@ A proposal for how the optimizer's rules and its `learn` search are written,
 shared and read. It extends `optimizer-design.md` §4 ("an optimization is a
 theorem"), which sketched a `rule` prefix before the rules existed, and
 replaces that section's spelling with one that covers what the rules became.
-Nothing here is built except the probe in §5; §11 lists what Minus decides.
+Nothing here is built yet except the probe in §5. Minus agreed the surface,
+the report and the direction on 2026-11-16 (§11).
 The work is tracked in `issues/optimizer-rules-as-theorems.md`.
 
 ## 1. What writing a rule costs today
@@ -238,6 +239,29 @@ become registered **learners**: a record with a pass over the walk's state
 and a node, run in a stated order, beside the matcher. A user can add one,
 and it is outside what is trusted like the rest of the search.
 
+### 7.1 What a learner can promise
+
+A learner needs no proof to be safe: the replayer refuses a wrong plan. A
+proof is still worth having where it says something a user would otherwise
+find out by a refusal or a slow compile. None is required; a learner that
+has one registers it beside itself, and the report (§8) and `rule_check`
+show which it has.
+
+| Property | Statement | What it buys |
+|---|---|---|
+| **Accepted** | Every plan it proposes replays: `replay(facts, learner(seen, node))` is never `None` | A refusal can no longer come from this learner. For the matcher this is one theorem for every rule: it proposes an instance only where the premises are among the facts and the guard is true. The first to prove |
+| **No dearer** | The nodes out cost no more than the nodes in, by the search's cost | The optimizer never makes this function worse through this learner |
+| **Bounded** | The plan is at most a stated multiple of the nodes it read | What the kernel pays to replay is linear in the function, whatever the function |
+| **Settled** | Run on its own output it proposes nothing | No reason to run the pipeline twice. Checkable on the library's functions where a proof is awkward |
+| **Finds it** | On a stated shape it fires: "four byte stores in a row into one buffer, of the four low bytes of one word's shifts, become a word store" | The optimization is part of the library's contract, and a change that loses it fails a theorem and not a benchmark |
+| **Monotone** | With more facts it proposes no less | Adding a rule or a domain cannot lose an optimization |
+
+"Accepted" and "Bounded" are about the learner and the replayer and are
+provable now. "Finds it" is the one a reader cares about, and today it is
+stated only at examples, as the probes that evaluate a search on one
+function. The general statement needs the shape as a predicate on a list of
+nodes, which the rule's own premises (§3) already are for a single rule.
+
 ## 8. Reading what the optimizer did
 
 The same statements serve as the report. A plan step and a refusal print
@@ -259,17 +283,83 @@ statement is generated from the same data.
 
 These go further than the syntax. Each stands alone, and each is a choice.
 
-### 9.1 An analysis is one registered thing, not a family of rules
+### 9.1 Domains: an analysis is one registered thing
 
 Rules 2 to 6, 16 to 18 and 39 are one abstract interpretation: a range for
-each operator from its operands' ranges. Written as theorems they are
-still nine statements and nine firings to schedule. The alternative is a
-**domain**: a transfer function from a node and its operands' facts to a
-fact, with one theorem that it is sound, registered. One rule serves it
-("the fact the domain computes for this node holds"), the matcher fires it
-at every node, and `learn`'s range half is the transfer function itself,
-no longer a second copy. Known bits, alignment and "nonzero" are further
-domains of the same shape, and a user's DSL can bring its own.
+each operator from its operands' ranges. As rules they have three limits
+that no spelling removes:
+
+- **A rule cannot say what holds where two paths meet.** After a
+  conditional the range of a word is the hull of its range on each arm.
+  That is a property of ranges, not of any node.
+- **A rule cannot say what holds around a loop.** "The counter stays below
+  the length" is a fact that holds at the head because it held on entry and
+  the body keeps it. This is the loop law with the counter's range, which
+  the word load and the word store both stop at today.
+- **The search repeats the rules.** `learn` computes `a.low + b.low` to
+  know what to propose, and the rule computes it again to be checked.
+
+A **domain** is what is known of one word, with the operations those three
+need, and one theorem for each:
+
+```heather
+record Domain<A> {
+    Holds: A → u64 → Type,                    // what an element says of a word
+    top: A,                                   // nothing known
+    meet: A → A → A,                          // both of two things known
+    join: A → A → A,                          // what holds on either of two paths
+    below: A → A → Bool,                      // `a` says at least what `b` does
+    of: Node → (Nat → A) → A,                 // of the word a node writes, from its operands'
+    from_test: Node → Bool → (Nat → A) → List<Learned<A>>,   // of a test's operands, from its bit
+}
+
+class Domain::Sound<A>(d: Domain<A>) {
+    top_holds: (x: u64) → d.Holds(d.top, x),
+    meet_holds, join_holds, below_holds: …,
+    of_holds: (node: Node, known: Nat → A, values: Valuation()) →
+        NodeHolds(values, node) → ((id: Nat) → d.Holds(known(id), values(64, id))) →
+        d.Holds(d.of(node, known), values(64, node.writes())),
+    from_test_holds: …,
+}
+
+register def ranges: Domain<Range> = …;       // today's `Range`, `Range::meet`, and rules 2–18, 39 as `of`
+```
+
+The author does not write `of` by cases over node constructors. The cases
+are the `rule theorem`s whose conclusion is the domain's fact and whose
+conclusion's numbers are computed from the premises' (`within_add` is one:
+`a + c` and `b + d` come from the premises). The generator groups those by
+the operator they are about and writes `of`, with `of_holds` from their
+proofs. So a domain is declared by naming its lattice, and filled by rules
+written as in §2.
+
+What the replayer does with a registered domain:
+
+- **At a node**: one step, "know what the domains say", which evaluates
+  `of` once and adds the fact. It replaces a `Derive` per node and the
+  search's copy of the arithmetic.
+- **After a conditional**: the facts are the `join` of the arms', where
+  today they are forgotten.
+- **At a loop**: the plan names an element for each word the loop writes
+  (the search's guess). The replayer runs the body's nodes once from those
+  elements and checks the result is `below` them. `join_holds` and
+  `below_holds` make that an induction proved once, for every domain.
+- **A request** (`optimizer-design.md` §5: "is this index below that
+  length?") is answered by asking each domain.
+
+Other domains of the same shape, each a page: **known bits** (a mask of
+bits known zero and one known set, which decides `x & m = x` and alignment),
+**nonzero**, **a multiple of** (strides), **the low byte of** (today's
+`Low`). A DSL or a backend registers its own: "a valid index into this
+table", "a normalised float". Two domains inform each other through rules
+between their facts, which are ordinary `rule theorem`s (`sum_within_low`
+is one from a range to an order).
+
+What a domain of this shape cannot hold is a fact about two words (an
+order, §9.3) or about two runs (that a value does not depend on a secret).
+The first is a relational domain with the same operations over a different
+carrier. The second is not a property of a valuation and is out of scope
+here.
 
 ### 9.2 Open fact forms
 
@@ -282,25 +372,88 @@ kernel, so it comes after the surface, and only if 9.1 shows the demand.
 
 ### 9.3 Orders are a graph, and one rule with a certificate
 
-`AtMost(x, m, y, n)` is a difference constraint, the facts are a weighted
-graph, and every order rule but the ones that create an edge (20, 21, 25
-to 28, 34, 35) is composing edges. `order_join` already is that. The
-search is a shortest path, and the proof is one rule whose certificate is
-the path (§4's certificate kind). That retires the hand-written order
-search in `learn` and lets an order be found through any number of words.
-The same shape with multipliers is linear arithmetic by a Farkas
-certificate (`cutsat`'s certificate is the precedent in the library).
+An order fact is `x + m ≤ y + n` with `x` and `y` words read as naturals
+and `m`, `n` literals. Subtract and it says `x − y ≤ n − m`: one word is at
+most another plus a constant. Draw each as an edge from `x` to `y` with
+that constant as its weight. A range joins the same picture through one
+extra vertex for zero: `x.within(a, b)` is an edge each way between `x` and
+zero.
+
+```
+        ≤ −1            ≤ −4             ≤ 0
+   i ─────────▶ end   i+4 ◀──────── i    end ─────────▶ len
+   (i < end)          (i+4 is i plus 4,   (end ≤ len)
+                       no wrap)
+```
+
+Then:
+
+- **Two edges that meet compose**, weights added: `i − end ≤ −1` and
+  `end − len ≤ 0` give `i − len ≤ −1`. That is `order_join` (rule 24).
+- **"Is `i + 4 ≤ len` known?" is a shortest path**: is there a path from
+  `i` to `len` whose weights sum to at most `−4`.
+- **A cycle of negative weight is a contradiction**, so the code reached
+  under those facts is dead. Nothing finds that today.
+
+What `learn` does now is keep a list of orders and, when a new one
+arrives, join it with every one it knows that it meets
+(`Seen::knowing`, `known_joined`), each join a `Derive(24, …)` in the plan,
+under a cap on how many it keeps. So it pays for every pair whether or not
+anything asks, it loses chains past the cap, and the plan carries a step
+for each pair.
+
+As a graph: the walk records only the edges that are created (a test's
+bit, a sum that cannot wrap, a range). When something asks (a comparison
+to decide, a bound for a load), it finds a shortest path, and the plan
+gets **one** step whose numbers are the path. The rule behind it is one
+theorem, by induction on the path:
+
+```heather
+rule theorem order_path(path: Path, wanted: Order, enough: path.weight() ≤ wanted.weight()):
+    path.Holds() → wanted.Holds()
+```
+
+Here the path is §4's certificate: literals the search supplies and the
+kernel checks by adding weights. Of today's order rules, the ones that
+create an edge stay as written (20, 21, 25 to 28), and the ones that
+compose or convert (24, 34, 35 and the range-to-order pair) are this one.
+
+Abstract interpretation calls this the zone domain. It is the relational
+domain §9.1 points to, with `join` the edgewise maximum. The same shape
+with a multiplier on each edge is linear arithmetic by a Farkas
+certificate, for `2 * i + 1 ≤ n` (`cutsat`'s certificate is the precedent
+in the library).
 
 ### 9.4 Saturation for the equations
 
 With rules as equations and the matcher generic, the search for the
-equational rules can be equality saturation: put the function's terms in an
-e-graph, apply every rule in both directions until nothing new appears or a
-budget ends, extract the cheapest term, and emit the chain of rewrites that
-reaches it as the plan. It removes the phase-ordering problem (a rule that
-only pays after another fires) and the per-rule direction. The kernel sees
-only the chosen chain, so the e-graph is untrusted. Worth doing when the
-equation rules number in the dozens; before that the matcher is enough.
+equational rules is equality saturation: put the function's terms in an
+e-graph, apply every rule in both directions until nothing new appears or
+a budget ends, extract the cheapest term for each word the function still
+needs, and emit the rewrites that reach it as the plan. It removes the
+phase-ordering problem (a rule that only pays after another fires) and
+the per-rule direction of §7.
+
+The library has the graph (`lib/std/data/egraph.hthr`, built for `grind`):
+classes closed under congruence, `union` with a justification of any
+type, `ematch` for a pattern's instances up to the classes, and `explain`,
+which folds the one path between two members of a class through a
+client's algebra. Here the operator is a node constructor at a width, the
+justification is a rule's instance, and the algebra `explain` folds into is
+plan steps: a given edge is a `Derive`, a congruence is `Again`. So the
+plan comes out of the module as it stands. What is to write:
+
+- **Extraction**: the cheapest member of each class by the search's cost,
+  bottom up, with sharing counted once.
+- **A schedule and a budget**: which rules to match each round, and when
+  to stop, since some rules (commutativity, associativity) grow the graph
+  without end.
+- **Conditions**: a rule with a fact premise reads it from the class. A
+  class carries what each domain knows of it (§9.1), joined when classes
+  meet, which is the e-class analysis of the egg design.
+
+The kernel replays only the chosen chain, so the graph is untrusted and
+its own soundness theorems are not needed here.
 
 ### 9.5 Rules found by machine
 
@@ -320,18 +473,29 @@ Each step lands alone and leaves the optimizer producing the same code.
 2. **`rule theorem`**: the generator, registering by name; port rules 0 to
    44; plans name rules by key; `rules()` goes. `load_again` and
    `move_move` go to `Again`.
-3. **The matcher** in `learn`, with the single-rule recognisers ported onto
-   it and the strategies as registered learners.
+3. **The matcher** in `learn`, with "Accepted" (§7.1) proved for it, the
+   single-rule recognisers ported onto it and the strategies as registered
+   learners.
 4. **The report** (§8) and `rule_check`.
-5. Then by demand: domains (9.1), the order graph (9.3), tagged library
-   theorems replacing composite rules, saturation (9.4), open facts (9.2).
+5. **Saturation** (§9.4) for the equation rules, on the library's e-graph.
+6. **Domains** (§9.1), ranges first, then facts where paths meet and the
+   loop check.
+7. **Open fact forms** (§9.2), then the order graph (§9.3) as the first
+   relational one, tagged library theorems replacing composite rules, and
+   rules found by machine (§9.5).
 
-## 11. For Minus to decide
+## 11. Decided
 
-- **The surface**: a rule is a plain theorem about words under a `rule`
-  prefix, with hypotheses classified by what they mention and no `when`.
-- **Fact spellings** of §4 (`x.within(a, b)`, `x.nat() + m ≤ y.nat() + n`,
-  `f.join(i, n)`): these are names a reader meets, so they are yours.
-- **Strict soundness**, with candidates (§5) as a later, search-only
-  loosening.
-- **Which of §9** to plan for now. My order is 9.1, 9.3, then 9.4.
+Minus, 2026-11-16:
+
+- **The surface** of §2 to §4: a plain theorem about words under a `rule`
+  prefix, hypotheses read by what they mention, no `when`. The fact
+  spellings of §4 stand ("decent enough if a bit odd").
+- **The report** of §8 is wanted.
+- **Learners are encouraged to carry correctness properties**, none
+  required (§7.1 is the list offered in answer).
+- **Saturation: yes**, on the e-graph work the library has, since the
+  rules will be many.
+- **Open fact forms are valuable**, for stranger backends and properties.
+- Domains and the order graph: sketched further at his request (§9.1,
+  §9.3), not yet ruled on. Rules found by machine: liked, later.
