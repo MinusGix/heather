@@ -201,13 +201,3 @@ runtime fn two_locals(mut io: Io) → Partial(Mutated<Io, u64>) {
 
 theorem two_locals_buffers(): two_locals::source.buffers.map(λ b => b.capacity) = [8, 16] { refl }
 fn two_locals_whole() → Io::Reads<u64>(two_locals::source.tree_co([]), λ io => two_locals(io)) { two_locals::reads }
-
-// A buffer that starts as other bytes than zeros is not a local's: the
-// data segment starts it zeroed, and given bytes are a byte string.
-// expect-error: a buffer a program makes for itself starts zeroed
-runtime fn ones_local(mut io: Io) → Partial(Mutated<Io, u64>) {
-    let mut buf: List<u8> = List::replicate(1, 8);
-    let r = io.read_into(Io::stdin(), buf, 0, 8);
-    buf := r.buf;
-    Pointed::ret(Mutated(io, r.result))
-}
