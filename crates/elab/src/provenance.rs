@@ -4,8 +4,10 @@
 //! both a theorem and an axiom as an opaque global; the surface distinction
 //! and the dependency graph are recorded before theorem proofs are discarded.
 
-use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::collections::{BTreeMap, HashMap};
 use heather_kernel::rc::Rc;
+use heather_kernel::term::Term;
 
 use crate::layered::{Layer, Layered, index_hash};
 
@@ -66,6 +68,22 @@ impl Layer for ProvenanceLayer {
 #[derive(Clone, Default)]
 pub(crate) struct Provenance {
     tables: Layered<ProvenanceLayer>,
+    /// What the body of a global with no record of its own reaches, by its
+    /// Ψ position ([`Self::reached_through`]). A cache: each entry holds the
+    /// body it was read from, and answers only for that body.
+    through: Through,
+}
+
+/// [`Provenance::reached_through`]'s cache. A clone starts empty: an entry
+/// is recomputed from the body it describes, so nothing is lost but the
+/// reading, and a sealed image shared between threads carries no table.
+#[derive(Default)]
+struct Through(Mutex<HashMap<u32, (Rc<Term>, Rc<Vec<String>>)>>);
+
+impl Clone for Through {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl Provenance {
@@ -131,6 +149,33 @@ impl Provenance {
                 axioms,
             }),
         );
+    }
+
+    /// Whether `key` has a record: only a recorded name is an edge a later
+    /// declaration's assumptions flow through.
+    pub(crate) fn is_recorded(&self, key: &str) -> bool {
+        self.entry(key).is_some()
+    }
+
+    /// The recorded names the unrecorded global at Ψ position `abs` reaches
+    /// through `body`, computed by `read` the first time this body is asked
+    /// about.
+    pub(crate) fn reached_through(
+        &self,
+        abs: u32,
+        body: &Rc<Term>,
+        read: impl FnOnce() -> Vec<String>,
+    ) -> Rc<Vec<String>> {
+        let cached = |table: &HashMap<u32, (Rc<Term>, Rc<Vec<String>>)>| {
+            table.get(&abs).filter(|(of, _)| Rc::ptr_eq(of, body)).map(|(_, names)| Rc::clone(names))
+        };
+        // Not held across `read`, which asks about the globals below this one.
+        if let Some(names) = cached(&self.through.0.lock().unwrap_or_else(|e| e.into_inner())) {
+            return names;
+        }
+        let names = Rc::new(read());
+        self.through.0.lock().unwrap_or_else(|e| e.into_inner()).insert(abs, (Rc::clone(body), Rc::clone(&names)));
+        names
     }
 
     pub(crate) fn is_axiom(&self, key: &str) -> bool {

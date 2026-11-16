@@ -7,7 +7,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
 use heather_kernel::subst::GlobalSubst;
-use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, InstanceDecl, MatchForm, Span, Ty, TyKind};
 
@@ -1908,6 +1908,76 @@ impl DeclarationsMut<'_> {
         })
     }
 
+    /// Record every recorded declaration the term the gate is about to be
+    /// handed reaches, as a dependency of the declaration being checked.
+    ///
+    /// The edges recorded where a written name resolves are the ones the
+    /// source spells. A tactic builds its references from name strings, a
+    /// reduction can leave a callee's references in the term, and neither
+    /// passes a resolution site: `--deny-axioms` accepted a theorem whose
+    /// `simp` set named an axiom
+    /// (`issues/axiom-provenance-misses-tactic-references.md`). So the
+    /// edges are read off the term itself, which is exactly what the verdict
+    /// is about. Called for a declaration and for each proof it lifts, whose
+    /// own references reach the declaration this way.
+    ///
+    /// `scope` is the length of the Ψ the term is scoped in; a reference past
+    /// the committed bindings is one of this declaration's own lifted proofs,
+    /// which this has already read.
+    fn record_reached(&self, scope: usize, body: &Term) {
+        let mut reached = Vec::new();
+        for abs in global_positions(body, scope) {
+            self.reached_from(abs, &mut reached);
+        }
+        let mut direct = self.attempt.direct_dependencies.borrow_mut();
+        for key in reached {
+            direct.insert(key);
+        }
+    }
+
+    /// The recorded declarations a reference to Ψ position `abs` stands for:
+    /// itself when it has a provenance record, and otherwise what it was
+    /// made from.
+    ///
+    /// A global with no record and a body (a generated definition, a
+    /// transparent lifted value) reaches what its body reaches. One with
+    /// neither is a proof lifted out of a declaration, committed just before
+    /// it (`commit_decl`): it stands for that declaration, the next recorded
+    /// one, whose record holds everything the lifted proof reached.
+    fn reached_from(&self, abs: usize, out: &mut Vec<String>) {
+        let Ok(at) = u32::try_from(abs) else { return };
+        if let Some(key) = self.names.global_name_at(at)
+            && self.provenance.is_recorded(key)
+        {
+            out.push(key.to_string());
+            return;
+        }
+        match self.psi.bindings.get(abs) {
+            Some(GlobalBinding::Tm { body: Some(body), .. }) => {
+                let through = self.provenance.reached_through(at, body, || {
+                    let mut inner = Vec::new();
+                    // A binding is scoped in its own prefix of Ψ.
+                    for below in global_positions(body, abs) {
+                        self.reached_from(below, &mut inner);
+                    }
+                    inner.sort();
+                    inner.dedup();
+                    inner
+                });
+                out.extend(through.iter().cloned());
+            }
+            Some(GlobalBinding::Tm { body: None, .. }) => {
+                let owner = (at + 1..self.psi.bindings.len() as u32)
+                    .filter_map(|later| self.names.global_name_at(later))
+                    .find(|key| self.provenance.is_recorded(key));
+                if let Some(key) = owner {
+                    out.push(key.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The kernel gate for one bodied global in `psi`: the cache oracle, then
     /// the statement here, then the body here or on the pool. Shared by a
     /// declaration and the tactic proofs it lifts, which extend Ψ before it
@@ -1929,6 +1999,7 @@ impl DeclarationsMut<'_> {
         // (docs/language/interface-definitions-design.md §3): the gate's conversion is
         // where a proof's unfolding actually happens. Withholding only takes
         // δ-steps away, so the gate never accepts more than it would without.
+        self.record_reached(psi.bindings.len(), body);
         let gated;
         let psi = match self.delta_psi.withheld.clone() {
             Some(withheld) => {
@@ -2130,4 +2201,19 @@ impl Declarations<'_> {
         out.gamma = LocalCtx::from_vec(cx.gamma.base, entries);
         out
     }
+}
+
+/// The Ψ positions of the free global references in `t`, a term scoped in a
+/// Ψ of length `scope`, each once and in order.
+fn global_positions(t: &Term, scope: usize) -> Vec<usize> {
+    let mut found = std::collections::BTreeSet::new();
+    let _ = t.reindex_global(&mut |r| {
+        let position = match r {
+            GlobalRef::Var(i) => scope.checked_sub(1 + i as usize),
+            GlobalRef::Const(p) => Some(p as usize),
+        };
+        found.extend(position);
+        Some(r)
+    });
+    found.into_iter().collect()
 }
