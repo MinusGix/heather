@@ -20,6 +20,7 @@ import itree;
 import coitree;
 import coitree_eutt;
 import linux_world;
+import linux_trees;
 import linux_world_co;
 
 // ---------------------------------------------------------------------------
@@ -208,3 +209,12 @@ fn Io::world_of<A>(m: Mutated<Io, A>) → Io { m.after }
 // A state's two parts, as functions a generated term names.
 fn Io::state_first<A, B>(m: Mutated<A, B>) → A { m.after }
 fn Io::state_rest<A, B>(m: Mutated<A, B>) → B { m.value }
+
+// A tree that reads as `f` reads as anything `f` agrees with up to silent
+// steps: how a lowering's theorem, stated of the program's meaning, is
+// carried to the surface method the bridge relates it to.
+fn Io::reads_then<R>(t: CoTree<R>(Events::linux()), f, g: Io → Partial(Mutated<Io, R>), r: Io::Reads(t, f),
+    e: (io: Io) → Eutt<Mutated<Io, R>>(Events::none(), f(io), g(io))) → Io::Reads(t, g)
+{
+    λ io => Eutt::trans(Events::none(), Io::against_co(t, io), f(io), g(io), r(io), e(io))
+}

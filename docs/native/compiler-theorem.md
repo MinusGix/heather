@@ -97,10 +97,20 @@ end to end at any lowering of `clamp`'s program: `clamp_computes`, and
 `clamp_code_within`, where the code returns a word between the bounds
 because `clamp_within` proved it of the source.
 
-Today's certificates spell `Prog::Returns` out (their `_returns` theorems are
-`compiled_returns` at the program, which is `Prog::Returns` with no step
-between: `returns_is_compiled_returns`). Stating them through the names is
-a change to `crates/cli/src/native/verified.rs` that has not been made.
+The certificate states its theorem through the same names. For
+`sha256_t2` (`lib/native/crypto/sha256_round.hthr`) it reads:
+
+```heather
+theorem sha256_t2_native_returns<M>(machine: Machine<M>, a0, a1, a2: BitVec(64)):
+    sha256_t2_native_code().Computes(machine, 0, [a0, a1, a2], sha256_round::sha256_t2(a0, a1, a2)) {
+    compiled_computes<M>(sha256_t2_native_program(), sha256_t2_native_placement(), sha256_t2_native_code(),
+        sha256_t2_native_lowers(), sha256_t2_native_evaluable(), machine, 0, trivial, [a0, a1, a2], trivial,
+        sha256_round::sha256_t2(a0, a1, a2), sha256_t2_native_agrees(a0, a1, a2))
+}
+```
+
+`Prog::Returns` is what `compiled_returns` concludes, with no step between
+(`returns_is_compiled_returns`), so the names add nothing to check.
 
 ## Functions of spans
 
@@ -126,7 +136,10 @@ ends in, and leaves the spans as the run leaves them. It stores nowhere but
 its own stack room and the bytes of the spans `marks` lets it write
 (`Stack::AnsweredOver`); every store the program makes is into one of those,
 checked by evaluation (`within`). This is what the SHA-256 functions linked
-into Rust are stated with. `compiled_returns_marked` is its form for a
+into Rust are stated with: a certificate's `_returns` for a function of
+spans is `code.ComputesOver(machine, top, lending, f, arguments, file,
+Ending(word := …, buffers := …))`, `Prog::ReturnsOver` at every load
+address. `compiled_returns_marked` is its form for a
 program whose functions lend views of a span to each other.
 
 ## What is assumed
@@ -146,8 +159,12 @@ Beyond the kernel, the theorem rests on these:
   of words below a canonical address that can be stored to and read back,
   storing one word leaves the others, code is never on the stack, every
   word of it reads as some word, and code below the canonical boundary reads
-  as data where it was fetched from. Nothing proves these of Linux; they are
-  what a process gives its program.
+  as data where it was fetched from. They are proved of the byte memory
+  model: any data region of it is a `Stack` (`DataRegion::stack`,
+  `x86_64_byte_memory.hthr`), and the Linux image model places one where
+  the loader puts the process stack (`DataRegion::process_stack`,
+  `linux_x86_64_image.hthr`). What is assumed is that those models are
+  faithful to the processor's memory and to Linux's loader.
 - **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
   spans: the spans lie below the canonical boundary, a store into the stack
   below `top` misses them, and a store into a span the function may write
