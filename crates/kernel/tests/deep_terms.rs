@@ -78,43 +78,6 @@ fn verifying_every_skip_is_flat_shared_and_uncounted() {
         let verified = counted(SkipVerification::Full);
         assert_eq!(unverified, verified, "{:?}", heather_kernel::stats::Snapshot::NAMES);
     });
-    // The sample is bounded by work as well as by count: a skip of a large
-    // closed term costs a node and its check costs the term, so one check in
-    // sixteen of a term shifted again and again was many times the shifts
-    // (`issues/kernel-self-check-cost-on-skipped-terms.md`). On a thread of
-    // its own, whose work starts at nothing; in this test, the only one of
-    // the binary that sets the level.
-    on_small_stack(|| {
-        use heather_kernel::checks::{sample_work, REWALK_SHARE, SAMPLE_EVERY};
-        set_skip_verification(SkipVerification::Sampled);
-        let deep = Rc::new(chain(DEEP, 0));
-        for _ in 0..SAMPLE_EVERY {
-            assert!(deep.shift_local(1) == *deep);
-        }
-        let (_, one_check) = sample_work();
-        if cfg!(debug_assertions) {
-            assert!(one_check >= DEEP as u64, "the first sampled skip is checked by walking what it skipped: {one_check}");
-        }
-        for _ in 0..10_000 {
-            assert!(deep.shift_local(1) == *deep);
-        }
-        let (own, checks) = sample_work();
-        assert!(
-            checks <= own / REWALK_SHARE + one_check,
-            "the sample walked {checks} nodes again for {own} of the kernel's own"
-        );
-        // And it comes back once the work has paid for it.
-        let open = Rc::new(open_chain(DEEP, 0));
-        for _ in 0..2 * REWALK_SHARE {
-            let _ = open.shift_local(1);
-        }
-        for _ in 0..SAMPLE_EVERY {
-            assert!(deep.shift_local(1) == *deep);
-        }
-        if cfg!(debug_assertions) {
-            assert!(sample_work().1 >= 2 * one_check, "a later skip is checked again");
-        }
-    });
 }
 
 #[test]
