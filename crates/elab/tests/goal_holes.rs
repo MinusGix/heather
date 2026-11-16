@@ -255,6 +255,29 @@ fn an_undischarged_goal_is_listed() {
 }
 
 #[test]
+fn a_shadowed_local_is_listed_once() {
+    // `subst` binds `n` and `h` again (as aliases of `0` and `refl`), and a
+    // `let` re-binds `m`: each name is listed once, at what it means at the
+    // goal (issues/induct-case-goal-report.md, item 2).
+    let r = reject(
+        r#"
+        theorem shadow(n: Nat, m: Nat, h: n = 0): add(m, n) = m {
+            subst(h, { let m = m; ?inner })
+        }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    let ctx: Vec<&str> = goals[0].context.iter().map(|(n, _)| n.as_str()).collect();
+    for name in ["n", "m", "h"] {
+        assert_eq!(ctx.iter().filter(|c| **c == name).count(), 1, "context: {ctx:?}");
+    }
+    let h = &goals[0].context.iter().find(|(n, _)| n == "h").unwrap().1;
+    assert!(h.contains("0 = 0"), "h is listed at its re-bound type: {h}");
+}
+
+#[test]
 fn every_undischarged_goal_is_listed_at_once() {
     let r = reject(
         r#"
