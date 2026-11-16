@@ -67,6 +67,10 @@ COLUMNS = {
     "at":        (["intro_at_nodes"], 1),
     "sels":      (["sel_evals"], 1),
     "spelled":   (["ity_materialized"], 1),
+    # The substitution reducer: its steps, and the frames they stood on
+    # (steps times mean redex depth, the reducer's quadratic term).
+    "rsteps":    (["reduce_steps"], 1),
+    "rframes":   (["reduce_frames"], 1),
     # Copy-on-write writes that copied, and what they cost
     # (docs/infrastructure/instrumentation-design.md, "Elaborator state"): the column that
     # moves when a clone or checkpoint makes every declaration copy a

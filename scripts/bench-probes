@@ -90,7 +90,10 @@ FASTER = 0.8
 # Columns read from the case's row. Seconds are self time (`*_ns` columns sum
 # to total_ns); `image` is decode + recheck + relocate + publish.
 IMAGE_COLS = ["image_decode_ns", "image_recheck_ns", "image_relocate_ns", "image_publish_ns", "cache_hash_ns"]
-COUNTERS = ["eval_steps", "queries", "conv_misses", "local_subst_nodes", "shift_global_nodes", "check_terms"]
+# New counters go at the end: a row saved before one existed is shorter, and
+# `--check` skips a counter the saved row does not have.
+COUNTERS = ["eval_steps", "queries", "conv_misses", "local_subst_nodes", "shift_global_nodes", "check_terms",
+            "reduce_steps", "reduce_frames"]
 # Exact for one tree, except these two: the substitution and rescoping memos
 # are keyed by node address, so what they answer (and so the nodes visited)
 # moves by a little from run to run. They are compared within this fraction.
@@ -204,11 +207,15 @@ def build():
 
 
 def warm(binary, store, cases):
-    folders = sorted({f for c in cases for f in [gate_folder(c["file"])] if f}, key=gate_order)
-    # A fixture's closure is in the native world; lib/native's gate builds it.
-    if any(gate_folder(c["file"]) is None for c in cases) and "lib/native" not in folders:
-        folders.append("lib/native")
-        folders.sort(key=gate_order)
+    folders = {f for c in cases for f in [gate_folder(c["file"])] if f}
+    # A fixture's closure is in the native world, and lib/native's gate builds
+    # it, unless the fixture names the folder whose gate does:
+    # `// bench-warm: lib/std/tactic`.
+    for c in cases:
+        if gate_folder(c["file"]) is None:
+            named = re.search(r"^// bench-warm: (\S+)$", (ROOT / c["file"]).read_text(), re.M)
+            folders.add(named.group(1) if named else "lib/native")
+    folders = sorted(folders, key=gate_order)
     for folder in folders:
         start = time.time()
         code, cpu, _ = run([str(binary), "check", "--cache", "--cache-dir", str(store), "--expectations", "--world", "lib", folder],
@@ -383,7 +390,7 @@ def write_results(env, rows):
     lines += [f"env\t{k}\t{v}" for k, v in env.items()]
     for name in sorted(rows):
         r = rows[name]
-        lines.append("case\t" + "\t".join([name] + [str(r[k]) for k in SECONDS + ["spread"] + COUNTERS]))
+        lines.append("case\t" + "\t".join([name] + [str(r.get(k, "")) for k in SECONDS + ["spread"] + COUNTERS]).rstrip("\t"))
     RESULTS.write_text("\n".join(lines) + "\n")
 
 
@@ -444,7 +451,7 @@ def main():
         print(line, flush=True)
         if args.check and case["name"] in old:
             o = old[case["name"]]
-            moved = [c for c in COUNTERS if (abs(m[c] - int(o[c])) > int(o[c]) * APPROX_TOLERANCE if c in APPROX else str(m[c]) != o[c])]
+            moved = [c for c in COUNTERS if o.get(c) and (abs(m[c] - int(o[c])) > int(o[c]) * APPROX_TOLERANCE if c in APPROX else str(m[c]) != o[c])]
             if moved:
                 print(f"{'':34} counters moved: " + ", ".join(f"{c} {o[c]} → {m[c]}" for c in moved))
             if comparable:
