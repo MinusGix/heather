@@ -3024,7 +3024,7 @@ impl GeneratedDefs<'_> {
             len: cx.gamma.entries.len(),
             d,
             g,
-            scope: self.lowering_scope(),
+            scope: self.psi.bindings.len() as u32,
         };
         if let Some((_, known)) = self.attempt.instance_matches.borrow().get(&key).and_then(|seen| seen.iter().find(|(t, _)| t == ty)) {
             return known.clone();
@@ -4276,11 +4276,10 @@ impl GeneratedDefs<'_> {
 }
 
 impl Elaborator {
-    /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
-    /// out, mirroring `resolve`'s `meta_off` (`lib.rs`). Zero everywhere else.
-    /// The Ψ length a term built here counts its globals from, padding and
-    /// a `meta fn`'s pushed binders included: what a guard copy records as
-    /// its scope.
+    /// The Ψ length a term built here counts its global variables from: the
+    /// signature, the goal padding and a `meta fn`'s pushed binders (as
+    /// `resolve`'s `meta_off` in `lib.rs` counts them). What a variable's
+    /// position is read against; a constant needs none of it.
     pub(crate) fn lowering_scope(&self) -> u32 {
         self.psi.bindings.len() as u32 + self.global_padding() + GeneratedDefs(self).meta_offset()
     }

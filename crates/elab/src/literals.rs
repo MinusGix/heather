@@ -403,7 +403,7 @@ impl Literals<'_> {
                     CtxBase::Var(v) => Some(v.key()),
                 },
                 cx.gamma.entries.len(),
-                self.lowering_scope(),
+                self.psi.bindings.len() as u32,
             );
             if let Some((.., term)) = self.attempt.char_literals.borrow().iter().find(|(k, a, ty, _)| *k == c && *a == at && ty == expected) {
                 return Ok(term.clone());
