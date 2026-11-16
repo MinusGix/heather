@@ -651,8 +651,8 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
             (match fit: layout.words_fit([output, index]) {
                 False => λ none => absurd(none),
                 True => {
-                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(index), True, ok.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(cap) => λ same => j(Option::some_inj(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names)), c, same),
@@ -671,9 +671,9 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
             (match fit: layout.words_fit([output, index, value]) {
                 False => λ none => absurd(none),
                 True => {
-                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && (layout.word_fits(value) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(layout.word_fits(index), layout.word_fits(value) && True, ok.right);
-                    let ok3 = Bool::is_true_and(layout.word_fits(value), True, ok2.right);
+                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::both(ok.right);
+                    let ok3 = Bool::both(ok2.right);
                     (match found: t.caps.nth(buf) {
                         None => λ none => absurd(none),
                         Some(cap) => λ same => j(Option::some_inj(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names))), c, same),
@@ -707,8 +707,7 @@ theorem Prog::within_bytes_init(layout: Layout, buf: Nat, bytes: List<BitVec(8)>
         Nil => λ room i p => p.within_self(),
         Cons(c, rest) => λ room => match room {
             Zero => λ i p => p.within_self(),
-            Succ(r) => λ i p => p.within_trans(p.byte_init(layout, buf, i, c), p.byte_init(layout, buf, i, c).bytes_init(layout, rest, r, buf, Succ(i)),
-                p.within_byte_init(layout, buf, i, c), Prog::within_bytes_init(layout, buf, rest, r, Succ(i), p.byte_init(layout, buf, i, c))),
+            Succ(r) => λ i p => Prog::within_trans(p.within_byte_init(layout, buf, i, c), Prog::within_bytes_init(layout, buf, rest, r, Succ(i), p.byte_init(layout, buf, i, c))),
         },
     }
 }
@@ -718,7 +717,7 @@ theorem Prog::within_inits(layout: Layout, buffers: List<Buffer>): (buf: Nat) �
         Nil => λ buf p => p.within_self(),
         Cons(b, rest) => λ buf p => {
             let filled = p.bytes_init(layout, b.initial, b.capacity, buf, 0);
-            p.within_trans(filled, filled.inits(layout, rest, Succ(buf)), Prog::within_bytes_init(layout, buf, b.initial, b.capacity, 0, p),
+            Prog::within_trans(Prog::within_bytes_init(layout, buf, b.initial, b.capacity, 0, p),
                 Prog::within_inits(layout, rest, Succ(buf), filled))
         },
     }
@@ -781,15 +780,12 @@ theorem Target::goes_bytes_init(self t: Target, live: List<Nat>, buf, cap: Nat, 
         Cons(c, rest) => λ room => match room {
             Zero => λ i p env sum within next => {
                 let stored = Cons(c, rest);
-                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) =>
-                        t.Held(live, Env(env.words, stored.stored(buf, i, env.buffers), env.args), u.gprs, u.memory),
-                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory), next,
+                t.goes_weaken(next,
                     λ u held => t.held_stored_past(live, buf, cap, found, stored, i, env, u.gprs, u.memory, omega(sum), held))
             },
             Succ(r) => λ i p env sum within next => {
                 let one = p.byte_init(layout, buf, i, c);
-                let w_one = one.within_trans(one.bytes_init(layout, rest, r, buf, Succ(i)), t.program,
-                    Prog::within_bytes_init(layout, buf, rest, r, Succ(i), one), within);
+                let w_one = Prog::within_trans(Prog::within_bytes_init(layout, buf, rest, r, Succ(i), one), within);
                 let rest_goes = t.goes_bytes_init(live, buf, cap, found, tree, rest, r, Succ(i), one, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), omega(sum), within, next);
                 t.goes_byte_init(live, env, p, buf, cap, found, i, omega(sum), c, w_one, tree, rest_goes)
             },
@@ -809,7 +805,7 @@ theorem Target::goes_inits(self t: Target, live: List<Nat>, tree: ITree<BitVec(6
         Nil => λ buf p env _ within next => next,
         Cons(b, rest) => λ buf p env caps within next => {
             let filled = p.bytes_init(layout, b.initial, b.capacity, buf, 0);
-            let w_filled = filled.within_trans(filled.inits(layout, rest, Succ(buf)), t.program, Prog::within_inits(layout, rest, Succ(buf), filled), within);
+            let w_filled = Prog::within_trans(Prog::within_inits(layout, rest, Succ(buf), filled), within);
             let caps_rest = λ (k: Nat) => {
                 let shifted: (buf + Succ(k) = Succ(buf) + k) = omega();
                 trans(cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), sym(shifted)), caps(Succ(k)))

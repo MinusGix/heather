@@ -99,7 +99,7 @@ theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) →
     match ids {
         Nil => λ i _ never => false_elim(never),
         Cons(id, rest) => λ i fit m => {
-            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
+            let both = Bool::both(fit);
             match m {
                 Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
                 Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
@@ -490,7 +490,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                     })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls_needs<M>(site, laid, stack, top,
                         Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
                         λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(fs), f), b),
-                        program_rowed_needs(fs, Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_rowed(fs), both).right),
+                        program_rowed_needs(fs, Bool::both(both).right),
                         program_room(fs), allowed))
                 },
             })(refl)
@@ -954,9 +954,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
     // The homes into their registers and R10 into RBX.
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ env.InRegisters(g, arguments, regs);
     let carry = t.goes_block(passes_to, 0, block, w_carried, tree, pre4, did);
-    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(prog_len(passes_to), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => pre4(execute_block_normal(block, s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), carry, λ s h => {
+    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(carry, λ s h => {
             let u = execute_block_normal(block, s);
             let c = t.homes_carried(s, words, lent, small, h.right);
             let held_u: t.Held(live, env, u.gprs, u.memory) = j(sym(c.left), λ m _ => t.Held(live, env, u.gprs, m),
@@ -1044,12 +1042,10 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         let region = Call(callee, arguments, result);
         let live = live_before(arguments, result, out);
         let k = program_lent(t.functions, callee);
-        let f1 = Bool::is_true_and(Succ(callee).leb(layout.functions.len()), arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()) &&
-            ((arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()))), fit);
-        let f2 = Bool::is_true_and(arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()),
-            (arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len())), f1.right);
-        let f3 = Bool::is_true_and((arguments.len() + 2 * k).leb(6), layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()), f2.right);
-        let f4 = Bool::is_true_and(layout.words_fit(Cons(result, arguments)), k.leb(layout.capacities.len()), f3.right);
+        let f1 = Bool::both(fit);
+        let f2 = Bool::both(f1.right);
+        let f3 = Bool::both(f2.right);
+        let f4 = Bool::both(f3.right);
         let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), f1.left);
         let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, f3.left);
         let small: (k <= 3) = omega(few);
@@ -1063,8 +1059,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
             j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
         let mean_eq: (region.meaning(call, env) = left.set_word(result, answer.word)) = env.call_meaning(call, callee, arguments, result);
         let back = p.calls(layout, Succ(callee), k, arguments);
-        let w_back: back.Within(t.program) = back.within_trans(back.word_from(layout, out, result, Rax), t.program,
-            back.within_word_from(layout, out, result, Rax), within);
+        let w_back: back.Within(t.program) = Prog::within_trans(back.within_word_from(layout, out, result, Rax), within);
         // RAX to the result's home.
         let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
@@ -1072,10 +1067,6 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
             t.function_performs(call, answers, callee, below), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
-            λ _ => t.goes_weaken(prog_len(back), tree,
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧
-                    (left.set_word(result, read_gpr(Rax, s.gprs)) = region.meaning(call, env)),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧ s.gprs.Holding(result_registers(), [answer.word]),
-                taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
+            λ _ => t.goes_weaken(taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
     }
 }

@@ -145,7 +145,7 @@ theorem run_nodes_frame(nodes: List<Node>): (values: Valuation()) → (buffers: 
     match nodes {
         Nil => λ values buffers w id _ => refl,
         Cons(node, rest) => λ values buffers w id h => {
-            let parts = Bool::is_true_and(id.differs(node_output(node).id), absent(id, nodes_writes(rest)), h);
+            let parts = Bool::both(h);
             let s = node.run(values, buffers);
             trans(run_nodes_frame(rest, s.values, s.buffers, w, id, parts.right),
                 node.run_other(values, buffers, w, id, id.differs_ne(node_output(node).id, parts.left)))
@@ -283,7 +283,7 @@ theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (va
     match nodes {
         Nil => λ _ values env _ => refl,
         Cons(node, rest) => λ wide values env agree => {
-            let parts = Bool::is_true_and(node.wide(), nodes_wide(rest), wide);
+            let parts = Bool::both(wide);
             let out = node_output(node);
             let s = node.run(values, env.buffers);
             let after = run_nodes(rest, s.values, s.buffers);
@@ -429,7 +429,7 @@ theorem Target::goes_node_alone(self t: Target, out: List<Nat>, env: Env, p, q: 
         }
     };
     let keeps = λ (i: Nat) (m: Mem(i, out)) (unwritten: absent(i, [o.id]) = True) => {
-        let parts = Bool::is_true_and(i.differs(o.id), True, j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
+        let parts = Bool::both(j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
         live_before_keeps(function_ir_eval::Node::reads(node), o.id, out, i, m, i.differs_ne(o.id, parts.left))
     };
     t.goes_leaf_into(live, out, env, p, q, [renamed], [o.id], emitted, within, tree, reads, keeps,
@@ -483,7 +483,7 @@ theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>
         Nil => λ p names c some => j(Option::some_inj(Compiled(p, names), c, some), λ x _ => p.Within(x.prog), p.within_self()),
         Cons(node, rest) => λ p names c => (match one: p.one_node(layout, nodes_live_in(rest, out), node, names) {
             None => λ none => absurd(none),
-            Some(d) => λ more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
+            Some(d) => λ more => Prog::within_trans(p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
                 Prog::within_each_node(layout, out, rest, d.prog, d.names, c, more)),
         }),
     }
@@ -501,8 +501,8 @@ theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::l
             (match one: p.one_node(t.layout(), after, node, names) {
                 None => λ none => absurd(none),
                 Some(d) => λ more within apart next => {
-                    let parts = Bool::is_true_and(t.homes.apart(node_output(node).id, after), t.homes.nodes_apart(rest, out), apart);
-                    let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
+                    let parts = Bool::both(apart);
+                    let w_d = Prog::within_trans(Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
                     t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
                         t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
                 },
@@ -546,7 +546,7 @@ theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog,
     checked: (t.homes.nodes_apart(nodes, out) && t.homes.all_apart(nodes_writes(nodes), out)).IsTrue(),
     next: t.At(prog_len(c.prog), out, tree, env.computes(nodes))): t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
     let layout = t.layout();
-    let aparts = Bool::is_true_and(t.homes.nodes_apart(nodes, out), t.homes.all_apart(nodes_writes(nodes), out), checked);
+    let aparts = Bool::both(checked);
     (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
             Some(q) => Some(Compiled(q, names)),
             None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },

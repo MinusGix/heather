@@ -18,6 +18,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_asm;
+import relation_props;
 import bitvec;
 import bool;
 import list;
@@ -48,18 +49,22 @@ theorem Prog::within_self(self p: Prog): p.Within(p) { Exists(Zero, refl) }
 
 theorem Prog::within_then(self p: Prog, name: Nat, item: Asm): p.Within(At(p, name, item)) { Exists(Succ(Zero), refl) }
 
-theorem Prog::within_trans(self a: Prog, b, c: Prog, first: a.Within(b), second: b.Within(c)): a.Within(c) {
+theorem Prog::within_trans({a, b, c: Prog}, first: a.Within(b), second: b.Within(c)): a.Within(c) {
     Exists(first.witness + second.witness,
         trans(sym(asm_back_back(second.witness, c, first.witness)),
             trans(cong_fn<Prog, Prog>(λ x => asm_back(x, first.witness), second.proof), first.proof)))
 }
 
+// `q <= p` reads "`q` is within `p`", so a chain of extensions is a `calc`.
+designation <= at Prog := Prog::Within
+instance Transitive<Prog>(Prog::Within) { rel_trans := λ a b c first second => Prog::within_trans(first, second) }
+
 theorem Prog::within_step(self a: Prog, p: Prog, name: Nat, item: Asm, within: a.Within(p)): a.Within(At(p, name, item)) {
-    a.within_trans(p, At(p, name, item), within, p.within_then(name, item))
+    Prog::within_trans(within, p.within_then(name, item))
 }
 
 theorem Prog::within_before(self q: Prog, name: Nat, item: Asm, p: Prog, within: At(q, name, item).Within(p)): q.Within(p) {
-    q.within_trans(At(q, name, item), p, q.within_then(name, item), within)
+    Prog::within_trans(q.within_then(name, item), within)
 }
 
 // ---------------------------------------------------------------------------

@@ -60,11 +60,10 @@ import set_tactic;
 // Moving between environments
 
 // Code that needs fewer words live runs where more are.
-theorem Target::at_sub(self t: Target, at: Nat, live, wider: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), env: Env,
-    sub: (i: Nat) → Mem(i, live) → Mem(i, wider), goes: t.At(at, live, tree, env)): t.At(at, wider, tree, env) {
-    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(wider, env, s.gprs, s.memory), goes,
-        λ s held => t.held_sub(live, wider, env, s.gprs, s.memory, held, sub))
+theorem Target::at_sub(self t: Target, {at: Nat}, {live, wider: List<Nat>}, {tree: ITree<BitVec(64)>(Events::linux())}, {env: Env},
+    goes: t.At(at, live, tree, env), sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.At(at, wider, tree, env) {
+    t.goes_weaken(goes,
+        λ s held => t.held_sub(held, sub))
 }
 
 // A JMP to a label ahead or behind, the live words held.
@@ -109,8 +108,7 @@ theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),
     goes: t.At(at, live, tree, a)): t.At(at, live, tree, b) {
-    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, a, s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, b, s.gprs, s.memory), goes,
+    t.goes_weaken(goes,
         λ s held => t.held_like(live, b, a, s.gprs, s.memory, held, like))
 }
 
@@ -144,7 +142,7 @@ theorem Scope::wide_of(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) = So
         Cons(node, rest) => λ s t => (match ok: node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
             False => λ none => absurd(none),
             True => λ got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
-                Bool::is_true_and(node.wide(), s.all_defined(function_ir_eval::Node::reads(node)), j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
+                Bool::both(j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
                 Scope::wide_of(rest, s.put(node_output(node).id, s.clean(node)), t, got)),
         }),
     }
@@ -185,7 +183,7 @@ theorem Env::steps_frame(nodes: List<Node>): (env: Env) → (x: Nat) → absent(
     match nodes {
         Nil => λ env x _ => refl,
         Cons(node, rest) => λ env x h => {
-            let parts = Bool::is_true_and(x.differs(node_output(node).id), absent(x, nodes_writes(rest)), h);
+            let parts = Bool::both(h);
             let r = node.run(env.valuation(), env.buffers);
             trans(Env::steps_frame(rest, env.computes([node]), x, parts.right),
                 Env::number_put_other(env.words, r.buffers, env.args, node_output(node).id, r.values(node_output(node).width, node_output(node).id).toNat(), x,
@@ -240,8 +238,8 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ env x h => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             let after = r.run(call, env.valuation(), env.buffers);
-            let p1 = Bool::is_true_and(x.differs(count), absent(x, Cons(exhausted, parameters ++ (outputs ++ body.touches()))), h);
-            let p2 = Bool::is_true_and(x.differs(exhausted), absent(x, parameters ++ (outputs ++ body.touches())), p1.right);
+            let p1 = Bool::both(h);
+            let p2 = Bool::both(p1.right);
             let p3 = absent_append(x, parameters, outputs ++ body.touches(), p2.right);
             let p4 = absent_append(x, outputs, body.touches(), p3.right);
             let fresh: absent(x, port_ids(word_ports(outputs) ++ [Port(exhausted, 1)])).IsTrue() =
@@ -339,7 +337,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
                 False => λ none => absurd(none),
                 True => λ scoped => {
-                    let parts = Bool::is_true_and(s.defined(bound) && s.all_defined(inputs), r.loop_shape(), j(sym(ok), λ b _ => b.IsTrue(), trivial));
+                    let parts = Bool::both(j(sym(ok), λ b _ => b.IsTrue(), trivial));
                     let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
                     let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
                             False => None,
@@ -426,7 +424,7 @@ theorem StructuredRegion::loop_code(inputs: List<Nat>, bound: Nat, parameters: L
 theorem Prog::within_label(self p: Prog, name: Nat): p.Within(p.label(name)) { Exists(1, refl) }
 
 theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: Nat): p.Within(p.tests(layout, condition, else_name)) {
-    p.within_trans(p.bit_to(layout, condition, Rax), p.tests(layout, condition, else_name), p.within_bit_to(layout, condition, Rax), Exists(2, refl))
+    calc { p <= p.bit_to(layout, condition, Rax) := p.within_bit_to(layout, condition, Rax), <= p.tests(layout, condition, else_name) := Exists(2, refl), }
 }
 
 // A function's call from its start (`Prog::function_call`).
@@ -437,8 +435,8 @@ theorem Prog::within_function_call(self p: Prog, layout: Layout, out: List<Nat>,
     let passed = p.words_to(layout, arguments, regs);
     let back = then(then(then(passed, Block(layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)])), CallTo(Succ(callee))),
         Block([MovRR(R10, Rbx)]));
-    p.within_trans(passed, back.word_from(layout, out, result, Rax), Prog::within_words_to(layout, arguments, regs, p),
-        passed.within_trans(back, back.word_from(layout, out, result, Rax), Exists(3, refl), back.within_word_from(layout, out, result, Rax)))
+    Prog::within_trans(Prog::within_words_to(layout, arguments, regs, p),
+        calc { passed <= back := Exists(3, refl), <= back.word_from(layout, out, result, Rax) := back.within_word_from(layout, out, result, Rax), })
 }
 
 theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Layout): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
@@ -448,15 +446,13 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
         Sequence(prefix, continuation) => λ p out names c emitted => {
             let chain: (p.computes(layout, layout.homes.region_live(continuation, out), prefix.nodes, names).and_then(λ a =>
                 continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
-            Option::and_then_with(chain, λ a first rest => p.within_trans(a.prog, c.prog,
-                p.within_computes(layout, layout.homes.region_live(continuation, out), prefix.nodes, names, a, first),
+            Option::and_then_with(chain, λ a first rest => Prog::within_trans(p.within_computes(layout, layout.homes.region_live(continuation, out), prefix.nodes, names, a, first),
                 continuation.within_code(layout, a.prog, out, a.names, c, rest)))
         },
         Compose(prefix, continuation) => λ p out names c emitted => {
             let chain: (prefix.code(p, layout, layout.homes.region_live(continuation, out), names).and_then(λ a =>
                 continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
-            Option::and_then_with(chain, λ a first rest => p.within_trans(a.prog, c.prog,
-                prefix.within_code(layout, p, layout.homes.region_live(continuation, out), names, a, first),
+            Option::and_then_with(chain, λ a first rest => Prog::within_trans(prefix.within_code(layout, p, layout.homes.region_live(continuation, out), names, a, first),
                 continuation.within_code(layout, a.prog, out, a.names, c, rest)))
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ p out names c emitted => {
@@ -468,11 +464,10 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
                 let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
                 let joined = n.prog.join_label(Succ(Succ(names)));
                 j(Option::some_inj(Compiled(joined, n.names), c, same), λ x _ => p.Within(x.prog),
-                    p.within_trans(tested, joined, p.within_tests(layout, condition, Succ(names)),
-                        tested.within_trans(y.prog, joined, when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is),
-                            y.prog.within_trans(other, joined, Exists(2, refl),
-                                other.within_trans(n.prog, joined, when_false.within_code(layout, other, out, y.names, n, n_is),
-                                    n.prog.within_label(Succ(Succ(names))))))))
+                    Prog::within_trans(p.within_tests(layout, condition, Succ(names)),
+                        Prog::within_trans(when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is),
+                            calc { y.prog <= other := Exists(2, refl), <= joined := Prog::within_trans(when_false.within_code(layout, other, out, y.names, n, n_is),
+                                    n.prog.within_label(Succ(Succ(names)))), })))
             })))
         },
         Lend(_, _, _, _) => λ p out names c none => absurd(none),
@@ -499,20 +494,17 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
             let stop = nodes_live_in(loop_stop(exhausted), done);
             let down = nodes_live_in(loop_down(count, exhausted), set);
             let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
-            p.within_trans(k.e.prog, c.prog, p.within_computes(layout, set, loop_entry(bound, count, inputs, parameters), leave, k.e, k.e_is),
-            k.e.prog.within_trans(hp, c.prog, k.e.prog.within_label(head),
-            hp.within_trans(k.z.prog, c.prog, hp.within_computes(layout, Cons(exhausted, layout.homes.region_live(body, after).union(done)), loop_zero(count, exhausted),
+            Prog::within_trans(p.within_computes(layout, set, loop_entry(bound, count, inputs, parameters), leave, k.e, k.e_is),
+            Prog::within_trans(k.e.prog.within_label(head),
+            Prog::within_trans(hp.within_computes(layout, Cons(exhausted, layout.homes.region_live(body, after).union(done)), loop_zero(count, exhausted),
                 k.e.names, k.z, k.z_is),
-            k.z.prog.within_trans(zt, c.prog, k.z.prog.within_tests(layout, exhausted, enter),
-            zt.within_trans(zl, c.prog, Exists(2, refl),
-            zl.within_trans(k.b.prog, c.prog, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is),
-            k.b.prog.within_trans(k.m.prog, c.prog, k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is),
-            k.m.prog.within_trans(mt, c.prog, k.m.prog.within_tests(layout, exit, again),
-            mt.within_trans(k.x.prog, c.prog, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is),
-            k.x.prog.within_trans(xl, c.prog, Exists(2, refl),
-            xl.within_trans(k.d.prog, c.prog, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
-            k.d.prog.within_trans(dj, c.prog, Exists(2, refl),
-                dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is)))))))))))))
+            Prog::within_trans(k.z.prog.within_tests(layout, exhausted, enter),
+            calc { zt <= zl := Exists(2, refl), <= c.prog := Prog::within_trans(body.within_code(layout, zl, after, k.z.names, k.b, k.b_is),
+            Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is),
+            Prog::within_trans(k.m.prog.within_tests(layout, exit, again),
+            Prog::within_trans(mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is),
+            calc { k.x.prog <= xl := Exists(2, refl), <= c.prog := Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
+            calc { k.d.prog <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), }), })))), }))))
         },
     }
 }
@@ -551,8 +543,8 @@ theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to,
         Cons(t, ts) => λ from => match from {
             Nil => λ _ _ (bad: 0 = Succ(ts.len())) => false_elim(ts.len().zero_ne_succ(bad)),
             Cons(f, fs) => λ ordered apart (same: Succ(fs.len()) = Succ(ts.len())) env => {
-                let o = Bool::is_true_and(absent(t, fs), moves_ordered(ts, fs), ordered);
-                let a = Bool::is_true_and(absent(t, ts), distinct(ts), apart);
+                let o = Bool::both(ordered);
+                let a = Bool::both(apart);
                 let len = Nat::succ_inj(fs.len(), ts.len(), same);
                 let node = Move(64, t, f);
                 let e1 = env.computes([node]);
@@ -565,7 +557,7 @@ theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to,
                 let rest = Valuation::bind(env.valuation(), ts, words_of(env.valuation(), fs));
                 let word = word_value(env.valuation()(64, f));
                 ⟨λ x h => {
-                    let parts = Bool::is_true_and(x.differs(t), absent(x, ts), h);
+                    let parts = Bool::both(h);
                     trans(ih.left(x, parts.right), env.plain_other(node, trivial, x, x.differs_ne(t, parts.left)))
                 },
                 ⟨λ x m => match x.eq_dec(t) {
@@ -735,7 +727,7 @@ theorem loop_keeps_mem(out: List<Nat>, outputs: List<Nat>, exhausted: Nat, clobb
     match out {
         Nil => λ _ i never => false_elim(never),
         Cons(o, rest) => λ keeps i m => {
-            let parts = Bool::is_true_and((o.matches(exhausted) || outputs.holds(o)) || absent(o, clobbered), loop_keeps(rest, outputs, exhausted, clobbered), keeps);
+            let parts = Bool::both(keeps);
             match m {
                 Inl(e) => j(sym(e), λ y _ => ((y.matches(exhausted) || outputs.holds(y)) || absent(y, clobbered)).IsTrue(), parts.left),
                 Inr(later) => loop_keeps_mem(rest, outputs, exhausted, clobbered, parts.right, i, later),
@@ -915,24 +907,23 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let dj = djump.label(leave);
     let zero_out = Cons(exhausted, t.homes.region_live(body, after).union(done));
     let exit_out = Cons(exit, stop.union(down));
-    let w_dj: dj.Within(t.program) = dj.within_trans(c.prog, t.program, dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
     let w_djump: djump.Within(t.program) = djump.within_before(leave, Block([]), t.program, w_dj);
     let w_d: k.d.prog.Within(t.program) = k.d.prog.within_before(0, Jmp(head), t.program, w_djump);
-    let w_xl: xl.Within(t.program) = xl.within_trans(k.d.prog, t.program, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
+    let w_xl: xl.Within(t.program) = Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
     let w_xjump: xjump.Within(t.program) = xjump.within_before(again, Block([]), t.program, w_xl);
     let w_x: k.x.prog.Within(t.program) = k.x.prog.within_before(0, Jmp(leave), t.program, w_xjump);
-    let w_mt: mt.Within(t.program) = mt.within_trans(k.x.prog, t.program, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
-    let w_m: k.m.prog.Within(t.program) = k.m.prog.within_trans(mt, t.program, k.m.prog.within_tests(layout, exit, again), w_mt);
-    let w_b: k.b.prog.Within(t.program) = k.b.prog.within_trans(k.m.prog, t.program,
-        k.b.prog.within_computes(layout, exit_out, moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
-    let w_zl: zl.Within(t.program) = zl.within_trans(k.b.prog, t.program, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
+    let w_mt: mt.Within(t.program) = Prog::within_trans(mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, exit_out, moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_zl: zl.Within(t.program) = Prog::within_trans(body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
     let w_zjump: zjump.Within(t.program) = zjump.within_before(enter, Block([]), t.program, w_zl);
     let w_zt: zt.Within(t.program) = zt.within_before(0, Jmp(leave), t.program, w_zjump);
-    let w_z: k.z.prog.Within(t.program) = k.z.prog.within_trans(zt, t.program, k.z.prog.within_tests(layout, exhausted, enter), w_zt);
-    let w_hp: hp.Within(t.program) = hp.within_trans(k.z.prog, t.program, hp.within_computes(layout, zero_out, loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
-    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
-    let f1 = Bool::is_true_and(layout.word_fits(exhausted), layout.word_fits(exit) && True, fit.left);
-    let f2 = Bool::is_true_and(layout.word_fits(exit), True, f1.right);
+    let w_z: k.z.prog.Within(t.program) = Prog::within_trans(k.z.prog.within_tests(layout, exhausted, enter), w_zt);
+    let w_hp: hp.Within(t.program) = Prog::within_trans(hp.within_computes(layout, zero_out, loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
+    let fit = Bool::both(k.fits);
+    let f1 = Bool::both(fit.left);
+    let f2 = Bool::both(f1.right);
     let inside_exhausted = layout.word_inside(exhausted, f1.left);
     let inside_exit = layout.word_inside(exit, f2.left);
     let count_exhausted: (count ≠ exhausted) = count.differs_ne(exhausted, shape.count_exhausted);
@@ -942,8 +933,8 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
     let closed_sub = λ (i: Nat) (mi: Mem(i, h.head)) => h.head.within_mem(set, h.closed, i, mi);
     let zero_leaf = λ (now: Env) (goes: t.At(prog_len(k.z.prog), zero_out, tree, now.steps(loop_zero(count, exhausted)))) =>
-        t.at_sub(prog_len(hp), h.head, set, tree, now, closed_sub,
-            t.leaf_goes(zero_out, loop_zero(count, exhausted), hp, k.e.names, k.z, k.z_is, w_z, h.head, h.head_ok, trivial, now, tree, goes));
+        t.at_sub(t.leaf_goes(zero_out, loop_zero(count, exhausted), hp, k.e.names, k.z, k.z_is, w_z, h.head, h.head_ok, trivial, now, tree, goes),
+            closed_sub);
     match m {
         Zero => λ now state fits counted held args kept run => {
             let ez = now.steps(loop_zero(count, exhausted));
@@ -961,7 +952,7 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                     λ x cl => trans(za.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), kept(x, cl))⟩⟩⟩⟩;
             zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
                 λ _ => t.at_jmp(zt, again, w_zjump, djump, Block([]), w_dj, tree, zero_out, ez,
-                    t.at_sub(prog_len(djump), done, zero_out, tree, ez, λ i mi => Inr(t.homes.region_live(body, after).union_right(done, i, mi)), ends(ez, ended))),
+                    t.at_sub(ends(ez, ended), λ i mi => Inr(t.homes.region_live(body, after).union_right(done, i, mi)))),
                 λ (clear: ez.bit(exhausted) = False) => absurd(trans(sym(set_bit), clear))))
         },
         Succ(k2) => λ now state fits counted held args kept run => {
@@ -991,8 +982,8 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
             let run_b: (branch(run_s.values(1, exit).head_bit()) = final) = run_z;
             let em = mb.steps(moves(parameters, next));
             let moved = Env::steps_moves(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb);
-            let bp = Bool::is_true_and(bs.bit(exit), bs.all_defined(next), bits);
-            let bx = Bool::is_true_and(bs.defined(exit), !bs.loose(exit), bp.left);
+            let bp = Bool::both(bits);
+            let bx = Bool::both(bp.left);
             let agrees_after = fa.right.right;
             let exit_bit: (run_s.values(1, exit).head_bit() = em.bit(exit)) = trans(agrees_after(exit, bx.left).right(bx.right),
                 sym(cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), moved.left(exit, shape.exit_parameters))));
@@ -1023,9 +1014,11 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                         cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run_t)),
                     ⟨trans(sa.left, cong_fn<LoopState, Nat>(λ s => bit_value(s.end.exhausted, 1).toNat(), run_t)),
                         λ x cl => trans(sa.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), m_kept(x, cl))⟩⟩⟩⟩;
-                t.at_sub(prog_len(mt), stop, exit_out, tree, em, λ i mi => Inr(stop.union_left(down, i, mi)),
-                    t.leaf_goes(done, loop_stop(exhausted), mt, k.m.names, k.x, k.x_is, w_x, stop, h.stop_ok, trivial, em, tree,
-                        t.at_jmp(k.x.prog, again, w_xjump, djump, Block([]), w_dj, tree, done, ex, ends(ex, ended))))
+                let widened: t.At(prog_len(mt), exit_out, tree, em) =
+                    t.at_sub(t.leaf_goes(done, loop_stop(exhausted), mt, k.m.names, k.x, k.x_is, w_x, stop, h.stop_ok, trivial, em, tree,
+                            t.at_jmp(k.x.prog, again, w_xjump, djump, Block([]), w_dj, tree, done, ex, ends(ex, ended))),
+                        λ i mi => Inr(stop.union_left(down, i, mi)));
+                widened
             };
             let d_leg = λ (clear_exit: em.bit(exit) = False) => {
                 let ed = em.steps(loop_down(count, exhausted));
@@ -1048,17 +1041,18 @@ theorem Target::loop_head(self t: Target, call: Writers(), inputs: List<Nat>, bo
                     k, h, within, shape, bs, body_scoped, bits, body_runs, env, tree, final, ends,
                     k2, ed, after_next, Nat::lt_trans(k2, Succ(k2), Nat::pow(2, 64), k2.lt_succ_self(), fits), d_count, d_held,
                     trans(da.right.right.right, m_args), d_kept, run_f);
-                t.at_sub(prog_len(xl), down, exit_out, tree, em, λ i mi => Inr(stop.union_right(down, i, mi)),
-                    t.leaf_goes(set, loop_down(count, exhausted), xl, k.x.names, k.d, k.d_is, w_d, down, h.down_ok, trivial, em, tree,
-                        t.at_jmp(k.d.prog, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, ed, rest)))
+                let widened: t.At(prog_len(xl), exit_out, tree, em) =
+                    t.at_sub(t.leaf_goes(set, loop_down(count, exhausted), xl, k.x.names, k.d, k.d_is, w_d, down, h.down_ok, trivial, em, tree,
+                            t.at_jmp(k.d.prog, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, ed, rest)),
+                        λ i mi => Inr(stop.union_right(down, i, mi)));
+                widened
             };
             let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, enter, inside_exit, Inl(refl), w_mt, w_xl.witness, xjump, Block([]), w_xl.proof, tree, x_leg, d_leg);
             let body_leg = body_runs(ez, tree, t.leaf_goes(exit_out, moves(parameters, next), k.b.prog, k.b.names, k.m, k.m_is, w_m, after, h.after_ok,
                 moves_wide(parameters, next), mb, tree, m_leg));
             zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
                 λ (set_bit: ez.bit(exhausted) = True) => absurd(trans(sym(set_bit), clear_bit)),
-                λ _ => t.at_sub(prog_len(zl), t.homes.region_live(body, after), zero_out, tree, ez,
-                    λ i mi => Inr(t.homes.region_live(body, after).union_left(done, i, mi)), body_leg)))
+                λ _ => t.at_sub(body_leg, λ i mi => Inr(t.homes.region_live(body, after).union_left(done, i, mi)))))
         },
     }
 }
@@ -1095,21 +1089,19 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
     let xl = k.x.prog.else_label(again, leave);
     let djump = then(k.d.prog, Jmp(head));
     let dj = djump.label(leave);
-    let w_dj: dj.Within(t.program) = dj.within_trans(c.prog, t.program, dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
     let w_d: k.d.prog.Within(t.program) = k.d.prog.within_before(0, Jmp(head), t.program, djump.within_before(leave, Block([]), t.program, w_dj));
-    let w_xl: xl.Within(t.program) = xl.within_trans(k.d.prog, t.program, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
+    let w_xl: xl.Within(t.program) = Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
     let w_x: k.x.prog.Within(t.program) = k.x.prog.within_before(0, Jmp(leave), t.program, then(k.x.prog, Jmp(leave)).within_before(again, Block([]), t.program, w_xl));
-    let w_mt: mt.Within(t.program) = mt.within_trans(k.x.prog, t.program, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
-    let w_m: k.m.prog.Within(t.program) = k.m.prog.within_trans(mt, t.program, k.m.prog.within_tests(layout, exit, again), w_mt);
-    let w_b: k.b.prog.Within(t.program) = k.b.prog.within_trans(k.m.prog, t.program,
-        k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
-    let w_zl: zl.Within(t.program) = zl.within_trans(k.b.prog, t.program, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
+    let w_mt: mt.Within(t.program) = Prog::within_trans(mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_zl: zl.Within(t.program) = Prog::within_trans(body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
     let w_zt: zt.Within(t.program) = zt.within_before(0, Jmp(leave), t.program, then(zt, Jmp(leave)).within_before(enter, Block([]), t.program, w_zl));
-    let w_z: k.z.prog.Within(t.program) = k.z.prog.within_trans(zt, t.program, k.z.prog.within_tests(layout, exhausted, enter), w_zt);
-    let w_hp: hp.Within(t.program) = hp.within_trans(k.z.prog, t.program,
-        hp.within_computes(layout, Cons(exhausted, t.homes.region_live(body, after).union(done)), loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
+    let w_z: k.z.prog.Within(t.program) = Prog::within_trans(k.z.prog.within_tests(layout, exhausted, enter), w_zt);
+    let w_hp: hp.Within(t.program) = Prog::within_trans(hp.within_computes(layout, Cons(exhausted, t.homes.region_live(body, after).union(done)), loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
     let w_e: k.e.prog.Within(t.program) = k.e.prog.within_before(head, Block([]), t.program, w_hp);
-    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
+    let fit = Bool::both(k.fits);
     let keeps = loop_keeps_mem(out, outputs, exhausted, Cons(count, parameters ++ body.touches()), fit.right);
     let outputs_len: (outputs.len() = parameters.len()) = Nat::matches_eq(outputs.len(), parameters.len(), shape.outputs_len);
     let inputs_len: (inputs.len() = parameters.len()) = Nat::matches_eq(inputs.len(), parameters.len(), shape.inputs_len);
@@ -1137,7 +1129,7 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
                 r
             };
             let at_other = λ (i: Nat) (ne: i ≠ exhausted) (fresh: absent(i, outputs).IsTrue()) (cl: absent(i, Cons(count, parameters ++ body.touches())).IsTrue()) => {
-                let parts = Bool::is_true_and(i.differs(count), absent(i, parameters ++ body.touches()), cl);
+                let parts = Bool::both(cl);
                 let wide: absent(i, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue() =
                     Bool::is_true_and_intro(i.differs(count), i.differs(exhausted) && absent(i, parameters ++ body.touches()), parts.left,
                         Bool::is_true_and_intro(i.differs(exhausted), absent(i, parameters ++ body.touches()), i.differs_of_ne(exhausted, ne), parts.right));
@@ -1209,7 +1201,7 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
             let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
             Option::and_then_with(chain, λ a first rest => {
                 let runs = continuation.code_runs(t, call, fns, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
-                let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
+                let w_a = Prog::within_trans(continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
                 let r: t.Computes(Sequence(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
                     t.leaf_goes(mid, prefix.nodes, p, names, a, first, w_a, live, cc.right, ok.left, env, tree, runs(env.steps(prefix.nodes), tree, next));
                 r
@@ -1222,7 +1214,7 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
             let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
             Option::and_then_with(chain, λ a first rest => {
                 let runs = continuation.code_runs(t, call, fns, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
-                let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
+                let w_a = Prog::within_trans(continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
                 let pre = prefix.code_runs(t, call, fns, ok.left, p, mid, names, a, first, w_a, live, cc.right);
                 let r: t.Computes(Compose(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
                     pre(env, tree, runs(prefix.meaning(call, env), tree, next));
@@ -1248,21 +1240,21 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                 j(Option::some_inj(Compiled(joined, nc.names), c, same), λ x _ => x.prog.Within(t.program) → t.Computes(region, call, arms, out, p, x.prog),
                     λ (w_joined: joined.Within(t.program)) => {
                         let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, w_joined);
-                        let w_other = other.within_trans(nc.prog, t.program, when_false.within_code(layout, other, out, y.names, nc, n_is), w_no);
+                        let w_other = Prog::within_trans(when_false.within_code(layout, other, out, y.names, nc, n_is), w_no);
                         let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
                         let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
-                        let w_tested = tested.within_trans(y.prog, t.program, when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is), w_yes);
+                        let w_tested = Prog::within_trans(when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is), w_yes);
                         let run_yes = when_true.code_runs(t, call, fns, ok.left, tested, out, Succ(Succ(names)), y, y_is, w_yes, yl, yl_is);
                         let run_no = when_false.code_runs(t, call, fns, ok.right, other, out, y.names, nc, n_is, w_no, nl, nl_is);
                         let r: t.Computes(region, call, arms, out, p, joined) = λ env tree next => t.goes_tests(arms, env, p, condition, names, inside, Inl(refl),
                             w_tested, w_other.witness, jumped, Block([]), w_other.proof, tree,
-                            λ (set: env.bit(condition) = True) => t.at_sub(prog_len(tested), yl, arms, tree, env, λ i m => Inr(yl.union_left(nl, i, m)),
-                                run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
+                            λ (set: env.bit(condition) = True) => t.at_sub(run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
                                     j(set, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)))),
-                            λ (clear: env.bit(condition) = False) => t.at_sub(prog_len(jumped), nl, arms, tree, env, λ i m => Inr(yl.union_right(nl, i, m)),
-                                run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))));
+                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))),
+                                λ i m => Inr(yl.union_left(nl, i, m))),
+                            λ (clear: env.bit(condition) = False) => t.at_sub(run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
+                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)),
+                                λ i m => Inr(yl.union_right(nl, i, m))));
                         r
                     })(within))
             })))))

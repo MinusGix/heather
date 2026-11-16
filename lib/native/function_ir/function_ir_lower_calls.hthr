@@ -422,7 +422,7 @@ theorem Prog::within_loads(registers: List<Gpr>): (count: Nat) → (prog: Prog) 
             Zero => prog.within_self(),
             Succ(c) => {
                 let item = At(prog, 0, Reload(StackLoad(register, slot_offset(k))));
-                prog.within_trans(item, rest.loads(c, item, Succ(k)), prog.within_then(0, Reload(StackLoad(register, slot_offset(k)))),
+                Prog::within_trans(prog.within_then(0, Reload(StackLoad(register, slot_offset(k)))),
                     Prog::within_loads(rest, c, item, Succ(k)))
             },
         },
@@ -523,8 +523,7 @@ theorem Site::moves_loads<M>(self site: Site<M>, stack: Stack<M>(site.fetch, sit
                 let slot_small: (k < 16) = { omega };
                 let next = write_gpr(register, word, gprs);
                 let spares = Bool::is_true_and(!register.same(Rsp), rest.spare(Rsp), spare);
-                let item_in = item.within_trans(rest.loads(more.len(), item, Succ(k)), site.program,
-                    Prog::within_loads(rest, more.len(), item, Succ(k)), within);
+                let item_in = Prog::within_trans(Prog::within_loads(rest, more.len(), item, Succ(k)), within);
                 let first = site.moves_reload(stack, fits, item_in.witness, prog, 0, load, item_in.proof,
                     λ (s: MachineState<M>) => (s.gprs = gprs) ∧ (s.memory = memory),
                     λ (s: MachineState<M>) => (s.gprs = next) ∧ (s.memory = memory),
@@ -1017,8 +1016,8 @@ fn call_prog(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, moves: List<Instr
 theorem staged_within(saved: List<Gpr>, prog: Prog, sources: List<Gpr>): prog.Within(call_staged(saved, prog, sources)) {
     let spilled = saved.spills(prog, 0);
     let lowered = At(spilled, 0, Block(stack_lower(sources.len())));
-    prog.within_trans(spilled, call_staged(saved, prog, sources), Prog::within_spills(saved, prog, 0),
-        spilled.within_trans(lowered, call_staged(saved, prog, sources), spilled.within_then(0, Block(stack_lower(sources.len()))),
+    Prog::within_trans(Prog::within_spills(saved, prog, 0),
+        Prog::within_trans(spilled.within_then(0, Block(stack_lower(sources.len()))),
             Prog::within_spills(sources, lowered, 0)))
 }
 
@@ -1028,10 +1027,10 @@ theorem call_within(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, code: List
     let called = At(moved, 0, CallTo(Succ(callee)));
     let raised = At(called, 0, Block(stack_raise(sources.len())));
     let out_prog = saved.reloads(raised, 0);
-    prog.within_trans(staged, out_prog, staged_within(saved, prog, sources),
-        staged.within_trans(moved, out_prog, staged.within_then(0, Block(code)),
-            moved.within_trans(called, out_prog, moved.within_then(0, CallTo(Succ(callee))),
-                called.within_trans(raised, out_prog, called.within_then(0, Block(stack_raise(sources.len()))),
+    Prog::within_trans(staged_within(saved, prog, sources),
+        Prog::within_trans(staged.within_then(0, Block(code)),
+            Prog::within_trans(moved.within_then(0, CallTo(Succ(callee))),
+                Prog::within_trans(called.within_then(0, Block(stack_raise(sources.len()))),
                     Prog::within_reloads(saved, raised, 0)))))
 }
 
@@ -1715,7 +1714,7 @@ theorem grows_trans(prog: Prog, first: Emitted, within: prog.Within(first.prog),
     Grows(first.prog, second) → Grows(prog, second) {
     match second {
         None => λ _ => trivial,
-        Some(out) => λ grown => prog.within_trans(first.prog, out.prog, within, grown),
+        Some(out) => λ grown => Prog::within_trans(within, grown),
     }
 }
 
@@ -2058,8 +2057,8 @@ theorem loop_close_grows(saves: Nat, prog: Prog, entry: LoopEntry, names: Nat, s
         None => trivial,
         Some(out) => {
             let closed: pass.prog.Within(loop_done(pass.prog, entry.registers, out, names, short)) = Exists(12, refl);
-            prog.within_trans(tested, loop_done(pass.prog, entry.registers, out, names, short), opened,
-                tested.within_trans(pass.prog, loop_done(pass.prog, entry.registers, out, names, short), grown, closed))
+            Prog::within_trans(opened,
+                Prog::within_trans(grown, closed))
         },
     }
 }
@@ -2150,8 +2149,8 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, saves:
                                     let to_branch = prog.within_step(prog.tested(test), 0, jcc_item(shorts(short, Succ(names)), test.cc(), Succ(names)),
                                         prog.within_then(0, Block([test.instruction()])));
                                     let to_second = prog.within_step(At(yes.prog, 0, jmp_item(shorts(short, Succ(Succ(names))), Succ(Succ(names)))), Succ(names), Block([]),
-                                        prog.within_step(yes.prog, 0, jmp_item(shorts(short, Succ(Succ(names))), Succ(Succ(names))), prog.within_trans(branched, yes.prog, to_branch, yes_grown)));
-                                    prog.within_step(no.prog, Succ(Succ(names)), Block([]), prog.within_trans(second, no.prog, to_second, no_grown))
+                                        prog.within_step(yes.prog, 0, jmp_item(shorts(short, Succ(Succ(names))), Succ(Succ(names))), Prog::within_trans(to_branch, yes_grown)));
+                                    prog.within_step(no.prog, Succ(Succ(names)), Block([]), Prog::within_trans(to_second, no_grown))
                                 },
                             })(when_false.emit_calls_grows(saves, slots, short, bound, counts, homes, second, file.know(Falsity(condition)), yes.placement, yes.names))
                         },
@@ -2394,7 +2393,7 @@ theorem emits_in_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, s
     first_emits: EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, First, first),
     second_emits: EmitsIn<M>(saves, site, stack, values, d, s0, first.prog, first.file, Second, out)):
     EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, First ∧ Second, out) {
-    ⟨prog.within_trans(first.prog, out.prog, first_emits.left, second_emits.left),
+    ⟨Prog::within_trans(first_emits.left, second_emits.left),
      λ within => site.moves_trans(stack.writes, prog_len(prog), prog_len(first.prog), prog_len(out.prog),
         λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ (First ∧ Second)) ∧ stack.Framed(saves, d, s0, s),
         λ (x: MachineState<M>) => (first.file.Represents(values, x.gprs) ∧ Second) ∧ stack.Framed(saves, d, s0, x),
@@ -2407,7 +2406,7 @@ theorem emits_in_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, s
             site.moves_carry(stack.writes, prog_len(prog), prog_len(first.prog),
                 λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ First) ∧ stack.Framed(saves, d, s0, x),
                 λ (t: MachineState<M>) => first.file.Represents(values, t.gprs) ∧ stack.Framed(saves, d, s0, t), Second,
-                first_emits.right(first.prog.within_trans(out.prog, site.program, second_emits.left, within))),
+                first_emits.right(Prog::within_trans(second_emits.left, within))),
             λ s h => ⟨⟨⟨h.left.left, h.left.right.left⟩, h.right⟩, h.left.right.right⟩,
             λ t h => ⟨⟨h.left.left, h.right⟩, h.left.right⟩),
         second_emits.right(within))⟩
@@ -2944,7 +2943,7 @@ theorem emits_over_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch,
     first_emits: (mid: Buffers()) → EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, First(mid), before, mid, first),
     second_emits: (mid: Buffers()) → EmitsOver<M>(saves, site, stack, lending, values, d, s0, first.prog, first.file, Second(mid), mid, after, out)):
     EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Exists<Buffers()>(λ mid => First(mid) ∧ Second(mid)), before, after, out) {
-    ⟨prog.within_trans(first.prog, out.prog, first_emits(before).left, second_emits(before).left),
+    ⟨Prog::within_trans(first_emits(before).left, second_emits(before).left),
      λ within s here resident held => {
         let mid = held.left.right.witness;
         let both = held.left.right.proof;
@@ -2960,7 +2959,7 @@ theorem emits_over_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch,
                 site.moves_carry(stack.writes, prog_len(prog), prog_len(first.prog),
                     λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ First(mid)) ∧ stack.Trailed(saves, lending, d, s0, before, x),
                     λ (t: MachineState<M>) => first.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, mid, t), Second(mid),
-                    first_emits(mid).right(first.prog.within_trans(out.prog, site.program, second_emits(mid).left, within))),
+                    first_emits(mid).right(Prog::within_trans(second_emits(mid).left, within))),
                 λ x h => h,
                 λ t h => ⟨⟨h.left.left, h.right⟩, h.left.right⟩),
             second_emits(mid).right(within),
@@ -3698,7 +3697,7 @@ theorem branch_emits_over<M>(saves: Nat, site: Site<M>, laid: site.program.laid_
     let to_branch = prog.within_step(prog.tested(test), 0, jcc_item(short_jcc, test.cc(), else_name),
         prog.within_then(0, Block([test.instruction()])));
     let to_second = prog.within_step(jumped, else_name, Block([]),
-        prog.within_step(yes.prog, 0, jmp_item(short_jmp, join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
+        prog.within_step(yes.prog, 0, jmp_item(short_jmp, join_name), Prog::within_trans(to_branch, yes_emits.left)));
     let holds = StructuredRegionRunsOver(effects, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false), before, after) ∧
         scope;
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧
@@ -3706,17 +3705,17 @@ theorem branch_emits_over<M>(saves: Nat, site: Site<M>, laid: site.program.laid_
     let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file, file.known).Represents(values, g) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Trail(lending, d, s0.memory, after, m));
     let known = KnownHold(values, file.known);
-    ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
+    ⟨prog.within_step(no.prog, join_name, Block([]), Prog::within_trans(to_second, no_emits.left)),
      λ within => {
         let program = site.program;
         let labels = asm_labels(program);
         let unique = program.laid_out_unique(laid);
         let lands = program.laid_out_lands(laid);
         let no_in = no.prog.within_before(join_name, Block([]), program, within);
-        let second_in = second.within_trans(no.prog, program, no_emits.left, no_in);
+        let second_in = Prog::within_trans(no_emits.left, no_in);
         let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
         let yes_in = yes.prog.within_before(0, jmp_item(short_jmp, join_name), program, jumped_in);
-        let branched_in = branched.within_trans(yes.prog, program, yes_emits.left, yes_in);
+        let branched_in = Prog::within_trans(yes_emits.left, yes_in);
         let tested_in = prog.tested(test).within_before(0, jcc_item(short_jcc, test.cc(), else_name), program, branched_in);
         let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
             λ to _ => JccLands(labels, prog_len(prog.tested(test)), short_jcc, test.cc(), else_name, to),
@@ -4115,7 +4114,7 @@ theorem call_stages<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, sl
     let g1 = stack_lowered(count, g0);
     let low = d - 8 * count;
     let frame = λ (m: M) => stack.Trail(lending, d + 8 * slots, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m);
-    let lowered_in = lowered.within_trans(call_staged(saved, prog, sources), site.program, Prog::within_spills(sources, lowered, 0), within);
+    let lowered_in = Prog::within_trans(Prog::within_spills(sources, lowered, 0), within);
     let first = site.moves_of_pure(stack.writes, prog_len(spilled), prog_len(spilled) + block_length(stack_lower(count)),
         λ (g: Gprs) (m: M) => (g = g0) ∧ frame(m), λ (g: Gprs) (m: M) => (g = g1) ∧ frame(m),
         λ memory => site.runs_block(site.program.laid_out_fits(laid), lowered_in.witness, spilled, 0, stack_lower(count), lowered_in.proof,
@@ -4269,8 +4268,7 @@ theorem call_returns<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, s
     let moved_in = moved.within_before(0, CallTo(Succ(callee)), site.program, called_in);
     let staged_in = staged.within_before(0, Block(moves.code), site.program, moved_in);
     let lowered = At(spilled, 0, Block(stack_lower(count)));
-    let spilled_in = spilled.within_trans(staged, site.program,
-        spilled.within_trans(lowered, staged, spilled.within_then(0, Block(stack_lower(count))), Prog::within_spills(sources, lowered, 0)),
+    let spilled_in = Prog::within_trans(Prog::within_trans(spilled.within_then(0, Block(stack_lower(count))), Prog::within_spills(sources, lowered, 0)),
         staged_in);
     site.moves_trans(stack.writes, prog_len(prog), prog_len(spilled), prog_len(raised),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d + 8 * slots, s0.memory, before, x.memory),
@@ -4379,7 +4377,7 @@ theorem call_emits<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slo
             call_returns<M>(saved, slots, eight, slotted, site, laid, stack, top, lending, loan, values, d, s0, fits, under, deep, prog, file, callee,
                 arguments, result, sources, few, same, sourced, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, before, after,
                 step(holds.left.right, s.gprs, holds.left.left, rsp_s),
-                raised.within_trans(out_prog, site.program, Prog::within_reloads(saved, raised, 0), within)),
+                Prog::within_trans(Prog::within_reloads(saved, raised, 0), within)),
             call_finishes<M>(saved, slots, eight, slotted, named, saves, site, laid, stack, lending, values, d, s0, after, rsp0, fits, file, result, raised, s.gprs, holds.left.left, rsp_s,
                 trailed.left, within),
             s, here, resident, ⟨refl, trailed.right⟩)
@@ -5185,7 +5183,7 @@ theorem loop_rounds<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let jumped_in = jumped.within_before(c_name, Block([]), program, cont_in);
     let left = pass.branched_by(out.test, c_name, short_c);
     let into_jumped: left.Within(jumped) = Exists(3, refl);
-    let left_in = left.within_trans(jumped, program, into_jumped, jumped_in);
+    let left_in = Prog::within_trans(into_jumped, jumped_in);
     let tested = pass.tested(out.test);
     let test_in = tested.within_before(0, jcc_item(short_c, out.test.cc(), c_name), program, left_in);
     let else_lands = j(c_lands, λ target _ => JccLands(asm_labels(program), prog_len(tested), short_c, out.test.cc(), c_name, target),
@@ -5266,24 +5264,24 @@ theorem loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     let holds = LoopRunsOver(Pass, parameters, count, exit, next, values(64, limit).toNat(), words_of(values, inputs),
         words_of(values, outputs), values(1, exhausted).head_bit(), before, after);
     let keep = λ (now: Buffers()) => λ (m: M) => stack.Trail(lending, d, s0.memory, now, m);
-    ⟨prog.within_trans(tested, done, opened, tested.within_trans(pass.prog, done, grown, closed)),
+    ⟨Prog::within_trans(opened, Prog::within_trans(grown, closed)),
      λ within => {
         let program = site.program;
         let unique = program.laid_out_unique(laid);
-        let pass_in = pass.prog.within_trans(done, program, closed, within);
-        let tested_in = tested.within_trans(pass.prog, program, grown, pass_in);
+        let pass_in = Prog::within_trans(closed, within);
+        let tested_in = Prog::within_trans(grown, pass_in);
         let head_back: head.Within(tested) = Exists(2, refl);
-        let head_in = head.within_trans(tested, program, head_back, tested_in);
+        let head_in = Prog::within_trans(head_back, tested_in);
         let entered_back: entered.Within(tested) = Exists(3, refl);
-        let entered_in = entered.within_trans(tested, program, entered_back, tested_in);
+        let entered_in = Prog::within_trans(entered_back, tested_in);
         let jumped_back: jumped.Within(done) = Exists(7, refl);
-        let jumped_in = jumped.within_trans(done, program, jumped_back, within);
+        let jumped_in = Prog::within_trans(jumped_back, within);
         let cont_back: At(jumped, Succ(Succ(names)), Block([])).Within(done) = Exists(6, refl);
-        let cont_in = At(jumped, Succ(Succ(names)), Block([])).within_trans(done, program, cont_back, within);
+        let cont_in = Prog::within_trans(cont_back, within);
         let again_back: again.Within(done) = Exists(3, refl);
-        let again_in = again.within_trans(done, program, again_back, within);
+        let again_in = Prog::within_trans(again_back, within);
         let x_back: At(again, x_name, Block([])).Within(done) = Exists(2, refl);
-        let x_in = At(again, x_name, Block([])).within_trans(done, program, x_back, within);
+        let x_in = Prog::within_trans(x_back, within);
         let set_in = set.within_before(Succ(x_name), Block([]), program, within);
         let h_lands = label_target(head_in.witness, program, entered, names, Block([]), unique, head_in.proof);
         let c_lands = label_target(cont_in.witness, program, jumped, Succ(names), Block([]), unique, cont_in.proof);
@@ -6005,13 +6003,12 @@ fn function_closed(body: Prog, moves: List<Instruction>, slots, saves: Nat) → 
 theorem loaded_opened(prog: Prog, k, loads, slots, saves: Nat): function_loaded(prog, k, loads).Within(function_opened(prog, k, loads, slots, saves)) {
     let loaded = function_loaded(prog, k, loads);
     let framed = At(loaded, 0, Block(frame_opening(frame_size(slots, saves))));
-    loaded.within_trans(framed, function_saves(saves).spills(framed, slots), loaded.within_then(0, Block(frame_opening(frame_size(slots, saves)))),
+    Prog::within_trans(loaded.within_then(0, Block(frame_opening(frame_size(slots, saves)))),
         Prog::within_spills(function_saves(saves), framed, slots))
 }
 theorem label_opened(prog: Prog, k, loads, slots, saves: Nat): At(prog, Succ(k), Block([])).Within(function_opened(prog, k, loads, slots, saves)) {
     let label = At(prog, Succ(k), Block([]));
-    label.within_trans(function_loaded(prog, k, loads), function_opened(prog, k, loads, slots, saves),
-        Prog::within_loads(stack_registers(), loads, label, 1), loaded_opened(prog, k, loads, slots, saves))
+    Prog::within_trans(Prog::within_loads(stack_registers(), loads, label, 1), loaded_opened(prog, k, loads, slots, saves))
 }
 
 // The entry's loads leave the registers a callee keeps.
@@ -6041,8 +6038,7 @@ theorem function_enters<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
     let g1 = stack.opened(d, frame_size(slots, saves), s0).gprs;
     let framed = At(label, 0, Block(frame_opening(frame_size(slots, saves))));
     let sizes = saves_fit(slots, saves, d, stack.size, few, fits);
-    let framed_in = framed.within_trans(function_saves(saves).spills(framed, slots), site.program,
-        Prog::within_spills(function_saves(saves), framed, slots), within);
+    let framed_in = Prog::within_trans(Prog::within_spills(function_saves(saves), framed, slots), within);
     let frame = λ (m: M) => stack.Entered(lending, d + frame_size(slots, saves), s0.memory, now, m);
     let start: stack.Entered(lending, d + frame_size(slots, saves), s0.memory, now, s0.memory) = ⟨stack.wrote_in_refl(d + frame_size(slots, saves), lending.spans(), s0.memory), in_memory⟩;
     site.moves_trans(stack.writes, prog_len(label), prog_len(framed), prog_len(function_saves(saves).spills(framed, slots)),
@@ -6179,7 +6175,7 @@ theorem function_runs_saved<M>(slots, saves: Nat, short: List<Nat>, few: slots <
     let unfold: (frame_size(slots, saves) = 8 * (slots + function_saves(saves).len())) = refl;
     let under_body: (d + 8 * slots <= top) = { omega };
     let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
-    let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
+    let returned_in = Prog::within_trans(Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
     let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) =
         j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d),
@@ -6249,7 +6245,7 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
     let under_body: (d + 8 * slots <= top) = { omega };
     let under_frame: (d + frame_size(slots, saves) <= top) = { omega };
     let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
-    let returned_in = returned.within_trans(restored, site.program, Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
+    let returned_in = Prog::within_trans(Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
     let rsp_s1: (read_gpr(Rsp, g_loaded) = stack.at(d + frame_size(slots, saves))) =
         trans(load_words_misses(Rsp, stack_registers(), ws.drop(6), s0.gprs, trivial), rsp);
@@ -6262,8 +6258,8 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
         body, emitted,
         function.body.emit_calls_runs<M>(saves, slots, short, site, laid, stack, top, effects, rooms, k, avail, lending, loan, needs, calls, values, d, d + 8 * slots,
             stack.opened(d, frame_size(slots, saves), s1), under_body, λ c => ⟨rsp_g1, ⟨room, ⟨deep(c), ⟨refl, ⟨{ omega }, { omega }⟩⟩⟩⟩⟩, allowed, asks, shallow, function.homes(), opened, file, placement, names, before, after));
-    let opened_in = opened.within_trans(body.prog, site.program, body_emits.left, body_in);
-    let loaded_in = loaded.within_trans(opened, site.program, loaded_opened(prog, k, function.loads(), slots, saves), opened_in);
+    let opened_in = Prog::within_trans(body_emits.left, body_in);
+    let loaded_in = Prog::within_trans(loaded_opened(prog, k, function.loads(), slots, saves), opened_in);
     // The parameters: six in their registers, the rest loaded.
     let counted: (ws.drop(6).len() = function.loads()) =
         trans(cong_fn<List<BitVec(64)>, Nat>(λ w => w.len(), words_of_drop(values, function.parameters, 6)),
@@ -6563,7 +6559,7 @@ theorem closed_within(body: Prog, moves: List<Instruction>, slots, saves: Nat): 
     let restored = function_saves(saves).reloads(returned, slots);
     body.within_step(function_closed(body, moves, slots, saves), 0, Ret,
         body.within_step(restored, 0, Block(frame_closing(frame_size(slots, saves))),
-            body.within_trans(returned, restored, body.within_then(0, Block(moves)), Prog::within_reloads(function_saves(saves), returned, slots))))
+            Prog::within_trans(body.within_then(0, Block(moves)), Prog::within_reloads(function_saves(saves), returned, slots))))
 }
 
 theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
@@ -6598,7 +6594,7 @@ theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat,
                 False => λ _ => trivial,
                 True => λ parts => {
                     let checked = parts(trivial);
-                    ⟨At(prog, Succ(k), Block([])).within_trans(body.prog, At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), grown,
+                    ⟨Prog::within_trans(grown,
                         closed_within(body.prog, moves.code, function.slots(asked), saves)),
                      λ within calls words result before after => function_returns<M>(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan,
                         needs, calls, function, prog, file, placement, names, body, allowed, asks, roomy, emitted, moves, keeps, checked.left,
@@ -6626,7 +6622,7 @@ theorem Function::emit_body_returns<M>(self function: Function, asked, saves: Na
         MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
         None => λ _ _ => trivial,
         Some(body) => λ emitted grown => function.closing_returns(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan, needs, prog, file, placement,
-            names, body, allowed, asks, roomy, emitted, count, label.within_trans(opened, body.prog, label_opened(prog, k, function.loads(), function.slots(asked), saves), grown), entered,
+            names, body, allowed, asks, roomy, emitted, count, Prog::within_trans(label_opened(prog, k, function.loads(), function.slots(asked), saves), grown), entered,
             few),
     })(refl, function.body.emit_calls_grows(saves, function.slots(asked), short, k, lending.counts, function.homes(), opened, file, placement, names))
 }
@@ -6993,7 +6989,7 @@ theorem Function::closing_grows(self function: Function, asked, saves: Nat, prog
                 True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
             }) {
             False => trivial,
-            True => prog.within_trans(body.prog, At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), grown, closed_within(body.prog, moves.code, function.slots(asked), saves)),
+            True => Prog::within_trans(grown, closed_within(body.prog, moves.code, function.slots(asked), saves)),
         },
     }
 }
@@ -7018,7 +7014,7 @@ theorem Function::emit_lent_labels(self function: Function, prog: Prog, k: Nat, 
                     Grows(label, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
                     None => λ _ => trivial,
                     Some(body) => λ grown => function.closing_grows(asked, saves, label, body,
-                        label.within_trans(opened, body.prog, label_opened(prog, k, function.loads(), function.slots(asked), saves), grown)),
+                        Prog::within_trans(label_opened(prog, k, function.loads(), function.slots(asked), saves), grown)),
                 })(function.body.emit_calls_grows(saves, function.slots(asked), short, k, counts, function.homes(), opened, file, placement_body(placement), names)),
         } },
     }
@@ -7054,7 +7050,7 @@ theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
         None => λ _ _ => trivial,
         Some(emitted) => λ labelled returns within lending same loan f below covers => {
             let n = earlier.len();
-            let label_in = At(before.prog, Succ(n), Block([])).within_trans(emitted.prog, site.program, labelled, within);
+            let label_in = Prog::within_trans(labelled, within);
             let lent = earlier_calls(before.prog.within_before(Succ(n), Block([]), site.program, label_in));
             site.meets_extend(stack, top, rooms, lending, last, earlier, prog_len(before.prog),
                 label_target(label_in.witness, site.program, before.prog, n, Block([]),
@@ -7143,7 +7139,7 @@ theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, p
     let asked = placement_slots(placement);
     let short = placement_short(placement);
     let opened = function_opened(prog, k, function.loads(), function.slots(asked), saves);
-    let before: prog.Within(opened) = prog.within_trans(At(prog, Succ(k), Block([])), opened, prog.within_then(Succ(k), Block([])),
+    let before: prog.Within(opened) = Prog::within_trans(prog.within_then(Succ(k), Block([])),
         label_opened(prog, k, function.loads(), function.slots(asked), saves));
     match function.lent.same(lent_count(counts, k)) {
         False => trivial,
@@ -7156,7 +7152,7 @@ theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, p
                 (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, counts, function.homes()) as λ e => Grows(opened, e) →
                     Grows(prog, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
                     None => λ _ => trivial,
-                    Some(body) => λ grown => function.closing_grows(asked, saves, prog, body, prog.within_trans(opened, body.prog, before, grown)),
+                    Some(body) => λ grown => function.closing_grows(asked, saves, prog, body, Prog::within_trans(before, grown)),
                 })(function.body.emit_calls_grows(saves, function.slots(asked), short, k, counts, function.homes(), opened, file, placement_body(placement), names)),
         } },
     }
