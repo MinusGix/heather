@@ -234,6 +234,18 @@ fn bridge_env(nm: BridgeNames, params: List<LocalRef>) → Expr { bridge_pairs(n
 
 fn bridge_lams(xs: List<LocalRef>, e: Expr) → Expr { match xs { Nil => e, Cons(x, rest) => Lam(x, bridge_lams(rest, e)) } }
 
+// The bridge for a function already read (`rt_io_read_loop_fun`), at the
+// world `wE` and the table `lsE` given as terms: what the program
+// generator states (`runtime_program`).
+fn io_loop_bridge_of(r: LoopOpened, wE: Expr, lsE: Expr) → Tac<Expr> {
+    let nm <- bridge_names();
+    let q <- io_quoting();
+    let gE = Ty::quotes(r.read.params.rev(), q.rt);
+    let under = match r.params { Cons(x, _) => x, Nil => r.io };
+    let proof <- bridge_term(4096, nm, q, wE, lsE, gE, bridge_env(nm, r.params), Local(r.io), r.read.prog, r.proof, r.surface, under);
+    pure(Lam(r.io, bridge_lams(r.params.rev(), proof)))
+}
+
 // `io_loop_bridge(f, funs, recs, lends, world, lents)`: a proof of
 //
 //     (io: Io) → (p₁ …) → Eutt(Events::none(), f(io, p₁, …),
@@ -251,12 +263,7 @@ fn io_loop_bridge(fname: String, funs: List<String>, recs: List<String>, lends: 
     let g <- rt_global(fname);
     let ls <- rt_globals(lends);
     let r <- rt_io_read_loop_fun(4096, k, names, ls, g);
-    let nm <- bridge_names();
-    let q <- io_quoting();
     let wE <- runtime_global(world);
     let lsE <- runtime_global(lents);
-    let gE = Ty::quotes(r.read.params.rev(), q.rt);
-    let under = match r.params { Cons(x, _) => x, Nil => r.io };
-    let proof <- bridge_term(4096, nm, q, wE, lsE, gE, bridge_env(nm, r.params), Local(r.io), r.read.prog, r.proof, r.surface, under);
-    pure(Lam(r.io, bridge_lams(r.params.rev(), proof)))
+    io_loop_bridge_of(r, wE, lsE)
 }

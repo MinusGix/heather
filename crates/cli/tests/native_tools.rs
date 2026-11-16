@@ -185,18 +185,21 @@ fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The same tr as one computation over `Io` (`tr_lend_source`,
-/// lib/_tests/native/runtime/rt_io_lend_tests.hthr): a loop that reads,
-/// lends the buffer to `raise_span` (`ETm::Lend`), and writes what the
-/// function left, lowered by the proved `rt_io` lowering. A computation
-/// over `Io` has no exit, so a failed write does not end it with 1 as GNU's
-/// does; that case is not asked of it (issues/rt-io-exit-on-failed-write.md).
+/// The same tr as a `runtime fn` over `Io` (`tr_upper`,
+/// lib/_tests/native/runtime/runtime_program_tests.hthr), compiled by its
+/// path, `tr_upper::source`: a loop that reads, lends the buffer to
+/// `raise_span`, and writes what the function left, read by the reflector,
+/// lowered by the proved `rt_io` lowering, with `tr_upper::reads` stating
+/// that the `Source`'s tree reads as the function at every world. A
+/// computation over `Io` has no exit, so a failed write does not end it
+/// with 1 as GNU's does; that case is not asked of it
+/// (issues/rt-io-exit-on-failed-write.md).
 #[test]
-fn compiled_tr_lowered_from_one_io_computation_runs_as_gnu_tr() {
-    let dir = scratch("tr-lend");
+fn compiled_tr_program_over_io_runs_as_gnu_tr() {
+    let dir = scratch("tr-program");
     let binary = dir.join("tr");
-    write_program("lib/_tests/native/runtime/rt_io_lend_tests.hthr", "tr_lend_source", &binary, false);
-    let mut random = Bytes::seeded("tr-lend");
+    write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "tr_upper::source", &binary, false);
+    let mut random = Bytes::seeded("tr-program");
     let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
     let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
     let bytes = random.take(70000, |r| r as u8);

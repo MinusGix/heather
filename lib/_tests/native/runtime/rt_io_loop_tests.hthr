@@ -136,7 +136,7 @@ fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
         λ io => echo_all_prog().sem(ETm::plain_world(), [], echo_g(), Pair(buf, trivial), io))
 {
     echo_all_prog().lower_reads(ETm::plain_world(), [], echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(0, call), perform, start(buf), Pair(buf, trivial),
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(call), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
