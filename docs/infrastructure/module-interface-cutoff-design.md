@@ -95,8 +95,10 @@ global indices and refuses when the map does; the module's own positions
 shift by the difference of bases. A payload's scope is the one thing that must
 be right; the inventory is the exhaustive match in `Mover::event`, so a new
 event kind does not compile until it is classified. The guard copies of a
-lowering (`GenTyCode`, `GenTyCodeFn`, `GenSpineCodes`, `GenWfSlots`) record the
-Ψ length they were cut at (`at`), because no other position says it.
+lowering (`GenTyCode`, `GenTyCodeFn`, `GenSpineCodes`, `GenWfSlots`) and a
+derived instance's goal name committed definitions only, as constants, so
+they have no scope: each constant moves to its counterpart, and a free global
+variable is refused.
 
 The moved delta then goes through `replay_module_delta` like any decoded
 image, so the kernel (or the verdict store, by content key) judges every
