@@ -14,6 +14,8 @@
 // what follows them.
 import function_ir;
 import function_ir_eval;
+import function_ir_learn;
+import function_ir_match;
 import function_ir_replay;
 import function_ir_rule;
 import function_ir_rules;
@@ -243,4 +245,164 @@ fn Plan::lines(self plan: Plan, table: List<RuleEntry>, after: List<Nat>) → Li
 // them (`Tables::of`).
 fn plan_explained(plan: Plan, entries: List<RuleEntry> := registered(RuleEntry)) → List<Nat> {
     shared(entries_placed(entries), λ table => plan.lines(table, []))
+}
+
+// ---------------------------------------------------------------------------
+// The rules not applied
+
+// A rule whose nodes are the ones at a node and that made no instance
+// there, and the words whose ranges it reads: a range or its condition
+// kept it.
+record Missed { name: List<Nat>, words: List<Nat> }
+
+// What is known of `ids`, each once, where that is more than that the word
+// is a word.
+fn ranges_said(range: NatMap<Range>, ids: List<Nat>, said: List<Nat>) → List<Fact> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match ids_have(said, id) {
+            True => ranges_said(range, rest, said),
+            False => match nat_map_get(range, id) {
+                None => ranges_said(range, rest, Cons(id, said)),
+                Some(known) => match Range::any().inside(known) {
+                    True => ranges_said(range, rest, Cons(id, said)),
+                    False => Cons(Within(id, known.low, known.high), ranges_said(range, rest, Cons(id, said))),
+                },
+            },
+        },
+    }
+}
+
+// Whether a rule makes an instance at a node: a range of its word where
+// the table is of those, else another node for it or its bit.
+fn Matchable::applies(self m: Matchable, at: Node, had: Walked, ranging: Bool) → Bool {
+    match ranging {
+        True => match m.ranged_at(at, had) { Some(_) => True, None => False },
+        False => match m.found_at(at, had) { Some(_) => True, None => False },
+    }
+}
+
+// Whether something is known of each of `ids`.
+fn ranges_every(range: NatMap<Range>, ids: List<Nat>) → Bool {
+    match ids {
+        Nil => True,
+        Cons(id, rest) => match nat_map_get(range, id) { None => False, Some(known) => !Range::any().inside(known) && ranges_every(range, rest) },
+    }
+}
+
+// The rules of a table so kept at the node `at`. One that reads ranges is
+// listed where something is known of a word it reads, and one that gives
+// a range where something is known of every word it reads: a rule about
+// ranges at a node nothing is known of says nothing by not applying, and
+// a sum of a word nothing is known of has no range to give.
+fn missed_among(names: List<RuleEntry>, table: List<Matchable>, at: Node, had: Walked, ranging: Bool) → List<Missed> {
+    match table {
+        Nil => [],
+        Cons(m, rest) => shared(missed_among(names, rest, at, had, ranging), λ later => match m.shaped(at, had) {
+            None => later,
+            Some(words) => match m.applies(at, had, ranging) {
+                True => later,
+                False => shared(Cons(Missed(match names.nth(m.place) { None => spell_text("a rule", []), Some(entry) => entry.name }, words), later), λ listed =>
+                    match words {
+                        Nil => listed,
+                        Cons(_, _) => match ranging {
+                            True => match ranges_every(had.range, words) { True => listed, False => later },
+                            False => match ranges_said(had.range, words, []) { Nil => later, Cons(_, _) => listed },
+                        },
+                    }),
+            },
+        }),
+    }
+}
+
+fn missed_words(missed: List<Missed>) → List<Nat> { match missed { Nil => [], Cons(m, rest) => m.words ++ missed_words(rest) } }
+
+// Those of `ids` a constant made, as the facts that say so: the line says
+// such a word as its constant, and not again as a range.
+fn constants_made(made: NatMap<Node>, ids: List<Nat>) → List<Fact> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match nat_map_get(made, id) {
+            None => constants_made(made, rest),
+            Some(node) => match node { Const(_, _, _) => Cons(Is(node), constants_made(made, rest)), _ => constants_made(made, rest) },
+        },
+    }
+}
+
+fn words_but(ids: List<Nat>, constants: List<Fact>) → List<Nat> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match facts_computing(constants, id) { Some(_) => words_but(rest, constants), None => Cons(id, words_but(rest, constants)) },
+    }
+}
+
+// Of the rules that rewrite or decide where none decided the node's bit,
+// and of those that give ranges where none gave its word one.
+fn tables_missed(names: List<RuleEntry>, tables: Tables, at: Node, had: Walked) → List<Missed> {
+    let rewriting: List<Missed> = match decided_among(tables.rewriting, at, had) { Some(_) => [], None => missed_among(names, tables.rewriting, at, had, False) };
+    let ranging: List<Missed> = match ranged_among(tables.ranging, at, had, None) { Some(_) => [], None => missed_among(names, tables.ranging, at, had, True) };
+    rewriting ++ ranging
+}
+
+// `  not applied at t9 = t7.resize(64): narrow_back   (known: t5 within 0 ..= 4095)`,
+// a word a constant made said as the constant:
+// the rules whose nodes fit `at` and that neither rewrote it, decided its
+// bit nor gave its range, and what the walk knew of the words they read.
+// Nothing where a rule of the table did.
+fn node_missed(names: List<RuleEntry>, tables: Tables, at: Node, had: Walked) → List<Nat> → List<Nat> {
+    shared(tables_missed(names, tables, at, had), λ missed =>
+        match missed {
+            Nil => λ after => after,
+            Cons(_, _) => shared(constants_made(had.made, missed_words(missed)), λ constants => λ after =>
+                spell_text("  not applied at ", Is(at).stated(constants, True, spell_text(": ",
+                    spell_items(missed.map(λ (m: Missed) => λ (rest: List<Nat>) => m.name ++ rest), match ranges_said(had.range, words_but(missed_words(missed), constants), []) {
+                        Nil => spell_text("\n", after),
+                        Cons(first, more) => spell_text("   (known: ", spell_items(Cons(first, more).map(λ (fact: Fact) => fact.stated([], False)), spell_text(")\n", after))),
+                    }))))),
+        })
+}
+
+// The lines of a walk, and what it saw.
+record Missing { said: List<Nat> → List<Nat>, seen: Seen }
+
+// The walk the search makes (`learn_nodes`), asked at each node it keeps
+// what was not applied there.
+fn nodes_missing(names: List<RuleEntry>, seen: Seen, nodes: List<Node>) → Missing {
+    match nodes {
+        Nil => Missing(λ after => after, seen),
+        Cons(node, rest) => match seen.replaced(node) {
+            Some(here) => nodes_missing(names, here.seen, rest),
+            None => shared(nodes_missing(names, seen.pass(node).seen.noted(node).joining(node).seen, rest), λ later =>
+                Missing(λ after => node_missed(names, seen.tables, node, seen.walked(), later.said(after)), later.seen)),
+        },
+    }
+}
+
+// The same over a region, what is seen passed on as the search passes it
+// (`StructuredRegion::learn`).
+fn StructuredRegion::missing(self region: StructuredRegion, names: List<RuleEntry>, seen: Seen) → Missing {
+    match region {
+        Dataflow(body) => nodes_missing(names, seen, body.nodes),
+        Sequence(prefix, continuation) => shared(nodes_missing(names, seen, prefix.nodes), λ s =>
+            shared(continuation.missing(names, s.seen), λ c => Missing(λ after => s.said(c.said(after)), c.seen))),
+        Compose(prefix, continuation) => shared(prefix.missing(names, seen), λ a =>
+            shared(continuation.missing(names, a.seen), λ c => Missing(λ after => a.said(c.said(after)), c.seen))),
+        Conditional(_, condition, _, _, when_true, when_false) => match nat_map_get(seen.bits, condition) {
+            Some(bit) => match bit { True => when_true.missing(names, seen), False => when_false.missing(names, seen) },
+            None => shared(when_true.missing(names, seen.taking(condition, True)), λ yes =>
+                shared(when_false.missing(names, seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
+                    Missing(λ after => yes.said(no.said(after)), seen.wanting(no.seen.wants).forgetting()))),
+        },
+        Call(_, _, _) => Missing(λ after => after, seen.forgetting()),
+        Loop(inputs, _, parameters, _, body, _, next, outputs, _) =>
+            shared(body.missing(names, seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes, seen.joins.ends, seen.tables).wanting(seen.wants))), λ inner =>
+                Missing(inner.said, seen.carried(inputs, parameters, next, outputs, seen.wanting(inner.seen.wants)).forgetting())),
+        Lend(_, _, _, _) => Missing(λ after => after, seen.forgetting()),
+    }
+}
+
+// The rules not applied in a function, a line for each node one fits: what
+// to read where a rule was expected and the code shows it was not used.
+fn Function::not_applied(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → List<Nat> {
+    function.body.missing(entries_placed(entries), function.seen(Tables::of(entries))).said([])
 }

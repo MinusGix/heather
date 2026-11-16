@@ -594,7 +594,12 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// each, a group a round.
 const STORES_MOST: usize = 8;
 
-fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize], explain: bool) -> Result<Optimized, String> {
+/// What `--explain-optimizer` asks for: nothing, the rules used, or also
+/// the rules not applied where their nodes fit (`=all`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Explain { No, Used, All }
+
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize], explain: Explain) -> Result<Optimized, String> {
     let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
     fork.define(&source, definitions);
@@ -785,7 +790,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         // What the replays kept did, in the rules' words
         // (`function_ir_explain`): a read of each plan, a line for each
         // rule it used; a fact two replays derive is said once.
-        if explain {
+        if explain != Explain::No {
             let mut lines: Vec<String> = Vec::new();
             for (at, staged) in made.iter().enumerate().filter(|(_, staged)| staged.stage == Stage::Replay) {
                 let item = format!("said_{k}_{at}");
@@ -801,6 +806,19 @@ fn {prefix}_opt_{item}() → List<Nat> {{ plan_explained({}) }}
             }
             println!("function {k}: {}", match lines.len() { 0 => "no rule used".to_string(), 1 => "1 rule used".to_string(), n => format!("{n} rules used") });
             for line in &lines { println!("{line}"); }
+            // And what was not: the rules whose nodes fit a node of the
+            // function kept and that a range or their condition kept from
+            // it (`Function::not_applied`), a read of its own.
+            if explain == Explain::All {
+                let item = format!("missed_{k}");
+                let module = format!("{probe}_opt_{item}");
+                let text = format!("{imports}import function_ir_explain;\n{}
+fn {prefix}_opt_{item}() → List<Nat> {{ {}.not_applied() }}
+", uses(&modules), named(&made));
+                fork.define(&module, &text);
+                let missed = spelled_text(&read(&mut fork, &module, &item)?).ok_or_else(|| format!("function {k}'s rules not applied did not read back"))?;
+                for line in missed.lines() { println!("{line}"); }
+            }
         }
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
@@ -938,7 +956,7 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
     Ok(Optimized { definitions: stated, statements, placements })
 }
 
-pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: bool) -> Result<Compiled, String> {
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: Explain) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
