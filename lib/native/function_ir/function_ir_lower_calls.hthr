@@ -151,9 +151,8 @@ theorem restore_spare(registers: List<Gpr>, saved: Gprs, query: Gpr): (gprs: Gpr
     match registers {
         Nil => λ gprs _ => refl,
         Cons(register, rest) => λ gprs spare => match s: register.same(query) {
-            True => absurd(j(s, λ b _ => (!b && rest.spare(query)) = True, spare)),
-            False => trans(restore_spare(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs),
-                    j(s, λ b _ => (!b && rest.spare(query)) = True, spare)),
+            True => absurd(spare),
+            False => trans(restore_spare(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs), spare),
                 cong_fn<Bool, BitVec(64)>(λ b => match b { False => gprs.at(query), True => read_gpr(register, saved) }, s)),
         },
     }
@@ -166,7 +165,7 @@ theorem restore_named(registers: List<Gpr>, saved: Gprs, query: Gpr): (gprs: Gpr
         Cons(register, rest) => λ gprs named => match later: rest.spare(query) {
             False => restore_named(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs), later),
             True => match s: register.same(query) {
-                False => absurd(j(later, λ c _ => (!False && c) = False, j(s, λ b _ => (!b && rest.spare(query)) = False, named))),
+                False => absurd(j(later, λ c _ => (!False && c) = False, named)),
                 True => trans(restore_spare(rest, saved, query, write_gpr(register, read_gpr(register, saved), gprs), later),
                     j(register.same_sound(query, s), λ y _ => read_gpr(y, write_gpr(register, read_gpr(register, saved), gprs)) = read_gpr(y, saved),
                         read_gpr_after_write(register, read_gpr(register, saved), gprs))),

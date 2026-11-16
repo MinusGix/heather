@@ -82,9 +82,9 @@ theorem CoTree::after_step<R>(E: Events, d: Nat, t: CoTree<R>(E), o: Obs<R>(E), 
     match d {
         Zero => Inl(ht),
         Succ(d2) => match h: CoTree::obs(E, t) {
-            ORet(r) => Inl(trans(sym(CoTree::after_settled(E, Succ(d2), t, ORet(r), h, trivial)), ht)),
-            OTau(u) => Inr(Exists(d2, Exists(u, ⟨refl, trans(sym(CoTree::after_succ(E, d2, t, u, h)), ht)⟩))),
-            OVis(c, k) => Inl(trans(sym(CoTree::after_settled(E, Succ(d2), t, OVis(c, k), h, trivial)), ht)),
+            ORet(r) => Inl(ht),
+            OTau(u) => Inr(Exists(d2, Exists(u, ⟨refl, ht⟩))),
+            OVis(c, k) => Inl(ht),
         },
     }
 }
