@@ -82,8 +82,11 @@ pub(crate) enum PathTest {
     /// A match on a `Bool`: `scrut` (stated outside the `let`s), and where
     /// the test decides a proposition `P`, `P` itself, whose evidence is
     /// `decide_true<P>(e)`/`decide_false<P>(e)` at the equation `e`; where it
-    /// does not, the equation `scrut = True` is the hypothesis.
-    Bool { scrut: Expr, prop: Option<Ty> },
+    /// does not, the equation `scrut = True` is the hypothesis. `written`
+    /// is the hypothesis's name in the body (`if h: P`'s `h`) where the
+    /// equation had to number it apart (`h2`), so a proof that follows the
+    /// body binds it under the name the body's `on` clauses use.
+    Bool { scrut: Expr, prop: Option<Ty>, written: Option<String> },
     /// A `match` on the parameter `param`, at the arm `ctor`.
     Ctor { param: String, ctor: String },
 }
@@ -322,7 +325,7 @@ impl Walk<'_> {
                 let b = inline_expr(lets, cond.expr.as_ref()?)?;
                 let name = self.fresh("h");
                 let ty = eq_ty(b.clone(), var(if truth { "True" } else { "False" }, span), span);
-                let test = PathTest::Bool { scrut: b, prop: None };
+                let test = PathTest::Bool { scrut: b, prop: None, written: None };
                 return Some((name.clone(), ty, var(&name, span), cond.expr.clone()?, test));
             }
             // `if P`/`if h: P` (and `if h: b`, read as `b.IsTrue()`).
@@ -333,18 +336,22 @@ impl Walk<'_> {
                 cond.ty.clone()
             };
             let stated = inline_ty(lets, &prop)?;
+            // The name `if less:` gives, read off whichever branch binds it:
+            // a branch that never uses it binds none.
+            let written = evidence_name(arm).or_else(|| evidence_name(if truth { t.no } else { t.yes })).map(str::to_string);
             let name = self.fresh(evidence_name(arm).unwrap_or("h"));
             let ty = if truth { stated.clone() } else { not_ty(stated.clone()) };
             let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
             let bit_eq = ty_app_call(lemma, stated.clone(), vec![var(&name, span)], span);
-            let test = PathTest::Bool { scrut: (*t.scrut).clone(), prop: Some(stated) };
+            let written = written.filter(|w| *w != name);
+            let test = PathTest::Bool { scrut: (*t.scrut).clone(), prop: Some(stated), written };
             return Some((name, ty, bit_eq, (*t.scrut).clone(), test));
         }
         // A `match` on a `Bool`.
         let b = inline_expr(lets, t.scrut)?;
         let name = self.fresh(t.convoy.map(String::as_str).unwrap_or("h"));
         let ty = eq_ty(b.clone(), var(if truth { "True" } else { "False" }, span), span);
-        Some((name.clone(), ty, var(&name, span), (*t.scrut).clone(), PathTest::Bool { scrut: b, prop: None }))
+        Some((name.clone(), ty, var(&name, span), (*t.scrut).clone(), PathTest::Bool { scrut: b, prop: None, written: None }))
     }
 
     fn walk(&mut self, e: &Expr, mut lets: Vec<Stmt>, path: Vec<Step>) {

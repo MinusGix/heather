@@ -121,6 +121,7 @@ classifies `t` by its head:
 | `BitVec::take_low(n, m, x)` / `drop_low(n, m, x)` | half-word leaves, their ranges, and `x.toNat() = lo.toNat() + 2^n * hi.toNat()` |
 | a definition | its reduct's, under a step budget |
 | `BitVec::band(x, y)` | a leaf, beside its range `toNat(x & y) <= m` when `y` is `ofNat(m)` with `m` a literal, else `<= toNat(y)` with `y` walked (`toNat_band_ofNat_le`, `toNat_band_le_right`; `issues/bv-omega-masked-word-bound.md`) |
+| `BitVec::shift_right(x, k)`, `k` a numeral | a leaf, beside `q * 2^k <= toNat(x) < q * 2^k + 2^k` for its value `q`, with `x` walked (`toNat_shift_right_le`, `toNat_shift_right_lt`, where `bitvec_shift_nat` is loaded): the midpoint `lo + ((hi - lo) >> 1)` |
 | anything else | a leaf |
 
 A definition (`double`, `times256`, `line_state_start`) is stepped through the
@@ -191,7 +192,13 @@ equating the operand's value with the Nat it was built from.
   `unsigned_lt_of_nat`, …). Each bridge is an ordinary lemma application
   over a checking-position `bv_omega` subgoal.
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
-  and definitions that step to them. Byte extraction and comparison bridges
+  and definitions that step to them; `x & y`, `zero_extend` and `x >> k` at
+  a numeral `k` as leaves with facts beside them (§3's table).
+- Facts in scope: a comparison whose operands have no spelling in the
+  context (a binder another one shadows, as in an `induct` case) is left
+  out, not a failure of the whole call.
+- As `omega`'s fallback (the `decreases` closer and `known`): when the goal
+  mentions a word's `toNat` or is a word's own comparison. Byte extraction and comparison bridges
   are recorded in `issues/bv-omega-bytes-and-comparisons.md`. `split_all` also
   splits matches stuck on unsigned word comparisons and supplies their branch
   equations to the leaf (`docs/tactics/goal-combinators.md`,

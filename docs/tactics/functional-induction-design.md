@@ -68,6 +68,13 @@ theorem f::induct(fixed…, motive: (varying…) → Type,
   branch equation and to the principle at the call's arguments. The kernel
   checks it like any declaration, so nothing generated is trusted; a
   principle it refuses is skipped and the refusal recorded.
+- **The decrease, the function's own.** A `decreases` function's `on ?decN`
+  clauses are copied onto the principle, so each recursive call's decrease
+  is the proof the function was given and not one `omega` would have to find
+  again (`halves` in the probes: `omega` cannot read `half`). The clauses
+  name the tests' hypotheses as the function wrote them (`h`), so a case
+  binds a hypothesis under its written name too, and, where the branch
+  equations had to number it apart (`h2`), restates it under that name.
 
 The principle is a theorem like any other, applied by hand where that reads
 better (`up_by_principle` in `lib/_tests/std/tactic/induct_tests.hthr`).
@@ -117,7 +124,19 @@ at a goal `G`, in a block's result position.
    the arm says what to do with them.
 
 Arms are named by the case's path: `True`, `False`, `Cons`, and `Cons::True`
-for a constructor test followed by a `Bool` one.
+for a constructor test followed by a `Bool` one. In an arm the tests on the
+way are in scope under the names the function gave them (`if less: …` binds
+`less`), so an arm reads like the branch it is about.
+
+**An arm left out** is the default leaf: `known` (a hypothesis, a side of a
+conjunction, then `omega` and `bv_omega`, `docs/language/when-design.md` §5)
+proves the IHs' premises where it can, as `all_goals` does, and then the
+goal. So arms are written only for the cases that need thought, and
+`induct f(ā) {}` is the whole proof of a bound the IH carries. A case it
+cannot close is refused naming the case and what `known` tried. This is the
+cheap form of a claim about code from outside it: no `requires`/`ensures`
+on the function, a theorem whose cases are the function's branches and whose
+trivial cases write themselves.
 
 The step is an elaboration of surface terms built around the user's block,
 so a mistake in it is a kernel refusal of the result, never an accepted
