@@ -6,6 +6,8 @@ fn escaped_characters() -> List<Char> { ['\n', '\t', '\r', '\\', '\'', '\"', '\0
 fn strings() -> List<String> { ["", "// still a string", "a\n\t\r\\\'\"\0\u{1F600}😀"] }
 fn parenthesized_string() -> String { ("text") }
 fn string_argument() -> String { g("text") }
+fn byte_strings() -> List<u8> { b"valid\n\t\\\"\0\u{7f}" }
+fn byte_string_argument() -> Nat { g(b"", b"x", b) }
 fn literal_scrutinee() -> Nat { match 'a' { x => 0 } }
 fn string_scrutinee() -> Nat { match "text" { x => 0 } }
 theorem literal_type(): 'a' = 'a' { refl }

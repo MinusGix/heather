@@ -369,7 +369,7 @@ module.exports = grammar({
       // A head position is where a match scrutinee lives, so the contextual
       // words have to be ordinary names here too — `match code { … }` is an
       // ordinary match on a variable named `code`.
-      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.hole, $.argument_slot,
+      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.byte_string, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
@@ -426,6 +426,7 @@ module.exports = grammar({
       $.number,
       $.character,
       $.string,
+      $.byte_string,
       $.hole,
       $.universe,
       $.vector_type,
@@ -528,6 +529,7 @@ module.exports = grammar({
       $.number,
       $.character,
       $.string,
+      $.byte_string,
       $.hole,
       $.argument_slot,
       $.universe,
@@ -771,6 +773,10 @@ module.exports = grammar({
     // the compiler. Tokens keep spaces and comment markers inside literals.
     character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
     string: _ => token(seq('"', repeat(choice(/[^"\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
+    // `b"…"`: a byte string (docs/native/io-programs-design.md §5 D3). The
+    // compiler reads it as the name `b` with a string right after it, and
+    // refuses a character that is not ASCII there.
+    byte_string: _ => token(seq('b"', repeat(choice(/[\x00-\x09\x0b\x0c\x0e-\x21\x23-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),
     argument_slot: _ => token(/·[₀₁₂₃₄₅₆₇₈₉]*/),
     comment: _ => token(seq('//', /[^\n]*/)),

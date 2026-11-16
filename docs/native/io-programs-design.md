@@ -403,6 +403,21 @@ initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
 
+**The surface (built, 2026-11-16).** `b"valid\n"` is the name `b` with a
+string literal right after it, no space between (`Parser::byte_string`; `b`
+alone or `b "x"` is what it was). Its bytes are the string's characters,
+each ASCII, since a non-ASCII character is refused rather than read as its
+UTF-8 encoding; the escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`,
+`\"`, `\0`, `\u{…}` up to `7F`), and a byte above `0x7F` has no spelling
+yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_string_*`)
+to the collection literal of its numerals at `[u8; n]`, or at
+`List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
+exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
+`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it. **The native half**
+(a literal reaching a write as a constant buffer of the `Source`) is
+`issues/byte-string-constant-buffers.md`: today the reflector refuses it as a
+`Cons` onto a buffer.
+
 ## 5. Decisions (Minus, 2026-11-15)
 
 **D1. What a program is.** Any `runtime fn` whose first parameter is the

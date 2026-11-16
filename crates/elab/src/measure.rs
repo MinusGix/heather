@@ -2845,6 +2845,7 @@ impl<'a> Rewrite<'a> {
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
+            | ExprKind::ByteStr(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::TyLit(_)
             | ExprKind::Refl
