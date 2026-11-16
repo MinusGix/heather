@@ -762,6 +762,10 @@ is a hypothesis, is not given to the discharger, whose failures cost several
 times its successes. A failed discharge hands on the declaration's request
 for more goal slots (an `omega` atom list it could not name), so the
 declaration restarts instead of reporting a condition nothing discharged;
-and `discharge := e` reserves `e`'s slots for several runs.
+and `discharge := e` reserves `e`'s slots for several runs. A closing call
+stops as soon as its sides meet, before computing, and sides that differ only
+by a β-redex meet: a branch equation's leaf keeps the `let`s before its tests,
+and without this every law was tried again, each asking its conditions, at a
+goal that was already closed.
 
 Probes: `lib/_tests/std/tactic/simp_branch_tests.hthr`.

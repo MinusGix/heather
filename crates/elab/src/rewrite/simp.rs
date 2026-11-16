@@ -582,6 +582,15 @@ impl Simps<'_> {
                 run.exhausted = true;
                 return Ok(run);
             }
+            // Sides that already meet need nothing computed: a law fired
+            // there before computing would only move both
+            // (issues/simp-only-deep-branch-equations.md, where each
+            // branch's side conditions were asked again at the met goal).
+            if let Some(span) = closing
+                && self.met(cx, &run.end, span)
+            {
+                return Ok(run);
+            }
             // Calls at constructors compute (`simp(Seq(a, b))` is
             // `seq(simp(a), simp(b))`), as a split's goal does: a law's left
             // side is matched against what is written, and the definition's
@@ -663,7 +672,11 @@ impl Simps<'_> {
     /// written?
     fn met(&self, cx: &Cx, ty: &Type, span: Span) -> bool {
         match ty {
-            Type::Id { lhs, rhs, .. } => lhs == rhs,
+            // A branch equation's leaf keeps the `let`s before its tests,
+            // so the side it rewrote can be the other side under a β-redex.
+            Type::Id { lhs, rhs, .. } => {
+                lhs == rhs || crate::goal_combinators::beta_below(lhs) == crate::goal_combinators::beta_below(rhs)
+            }
             _ => {
                 Relation::of_type(self.0, cx, ty, span).is_some_and(|rel| rel.left == rel.right)
                     || Statements(self.0).iff_sides(cx, ty).is_some_and(|[(l, _), (r, _)]| l == r)
