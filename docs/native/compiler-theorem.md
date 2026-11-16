@@ -112,6 +112,29 @@ theorem sha256_t2_native_returns<M>(machine: Machine<M>, a0, a1, a2: BitVec(64))
 `Prog::Returns` is what `compiled_returns` concludes, with no step between
 (`returns_is_compiled_returns`), so the names add nothing to check.
 
+Beside it the certificate states the same at every argument list, as one
+line:
+
+```heather
+theorem sha256_t2_native_implements<M>(machine: Machine<M>):
+    sha256_t2_native_code().Implements(machine, 0, 3, sha256_round::sha256_t2) {
+    λ a0 a1 a2 => sha256_t2_native_returns<M>(machine, a0, a1, a2)
+}
+```
+
+`code.Implements(machine, f, n, spec)` takes the source function curried, a
+value of `Words(n)` (`BitVec(64) → … → BitVec(64)`), and unfolds to
+`(a0: BitVec(64)) → … → code.Computes(machine, f, [a0, …], spec(a0, …))`.
+`Prog::implements_at` and `Prog::implements_of` go between it and
+`Computes` at a list of `n` words, and `compiled_implements` is the
+compiler's theorem in this form, from an agreement at every list of `n`
+words.
+
+A function of words is also the case of a function of spans lent nothing:
+`Prog::computes_over_none` and `Prog::computes_of_over_none` turn
+`Computes` into `ComputesOver` at `Lending::none()` and the empty file, and
+back. So there is one contract, of which the plain one is an instance.
+
 ## Functions of spans
 
 A function its caller lends byte spans to (as Rust does with `&[u8]` and
@@ -256,6 +279,7 @@ is kept as it is (`HEATHER_OPTIMIZE=off` turns the optimizer off).
 | Functions of spans stated by their spans | `lib/native/function_ir/function_ir_borrows.hthr`, `docs/native/span-statements-design.md` |
 | The compiler's theorem as certificates cite it | `lib/native/function_ir/function_ir_compile.hthr` (`compiled_returns`, `compiled_returns_written`, `compiled_returns_marked`, `compiled_returns_unlent`) |
 | The lowering and its proof | `lib/native/function_ir/function_ir_lower*.hthr` |
+| What a caller keeps across a call (the frame rule) | `Stack::wrote_frame` in `lib/std/arch/x86_64/x86_64_stack.hthr`, `Stack::wrote_in_frame` in `x86_64_lending.hthr`; over the contract, `lib/native/function_ir/function_ir_frame.hthr` |
 | The contract's controls | `lib/_tests/native/function_ir/function_ir_compile_tests.hthr` |
 | The certificate's generator | `crates/cli/src/native/verified.rs` |
 | The machine model | `lib/std/arch/x86_64/`, `docs/native/x86-64-execution-boundary.md` |

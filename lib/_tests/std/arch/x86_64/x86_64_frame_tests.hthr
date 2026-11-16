@@ -1,0 +1,100 @@
+// Probes of the frame rule (x86_64_stack, x86_64_lending, x86_64_frame;
+// issues/compiled-call-frame-rule.md):
+// what a caller keeps across a call's stores, each in one step from the
+// rule and a stable predicate, over any stack and any lending. Then the
+// control: a word of the call's own room is not stable, so the rule
+// promises nothing of it. Tests, not library: nothing imports this module.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_frame;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// A call that writes no span
+
+// A word of the caller's frame reads what it did.
+theorem word_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i, k: Nat, above: i <= k,
+    fits: k + 8 <= stack.size, w: BitVec(64), before, after: M, wrote: stack.Wrote(i, before, after),
+    held: read_word(data, before, stack.at(k)) = Some(w)): read_word(data, after, stack.at(k)) = Some(w) {
+    stack.wrote_frame(i, stack.stable_word(i, k, above, fits, Some(w)), before, after, wrote, held)
+}
+
+// The word and the code at once.
+theorem word_and_code_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i, k: Nat, above: i <= k,
+    fits: k + 8 <= stack.size, w: BitVec(64), bytes: List<BitVec(8)>, at: BitVec(64), before, after: M,
+    wrote: stack.Wrote(i, before, after), held: read_word(data, before, stack.at(k)) = Some(w),
+    resident: CodeResident(fetch, before, bytes, at)):
+    (read_word(data, after, stack.at(k)) = Some(w)) ∧ CodeResident(fetch, after, bytes, at) {
+    stack.wrote_frame(i, stack.stable_and(i, stack.stable_word(i, k, above, fits, Some(w)),
+        stack.stable_resident(i, omega(above, fits), bytes, at)), before, after, wrote, ⟨held, resident⟩)
+}
+
+// The rule gives back the lemma it replaces: every word at and above `i`.
+theorem unchanged_by_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i: Nat, before, after: M,
+    wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
+    λ k above fits => stack.wrote_frame(i, stack.stable_word(i, k, above, fits, read_word(data, before, stack.at(k))),
+        before, after, wrote, refl)
+}
+
+// A span whose bytes are stable is lent in the sense a load asks for
+// (`Stack::Lends`): it reads them through the call.
+theorem lent_by_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, stable: stack.Stable(i, λ (m: M) => Readable(data, m, a, xs)), memory: M, reads: Readable(data, memory, a, xs)):
+    stack.Lends(i, a, xs, memory) {
+    stack.stable_through(i, stable, memory, reads)
+}
+
+// ---------------------------------------------------------------------------
+// A call lent spans
+
+// A word of the caller's frame below `top` and a span the call may not
+// write, at once.
+theorem word_and_span_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans), i, k: Nat, above: i <= k, fits: k + 8 <= top, w: BitVec(64), c: Nat,
+    only_read: spans.written(c) = False, ys: List<BitVec(8)>, short: ys.len() <= spans.size(c), before, after: M,
+    wrote: stack.WroteIn(i, spans, before, after), held: read_word(data, before, stack.at(k)) = Some(w),
+    reads: Readable(data, before, spans.at(c), ys)):
+    (read_word(data, after, stack.at(k)) = Some(w)) ∧ Readable(data, after, spans.at(c), ys) {
+    stack.wrote_in_frame(i, spans, stack.stable_in_and(i, spans, loan.stable_word(i, k, above, fits, Some(w)),
+        loan.stable_reads(i, omega(above, fits), c, only_read, ys, short)), before, after, wrote, ⟨held, reads⟩)
+}
+
+// A call lent nothing to write keeps what a call that writes no span keeps.
+theorem word_kept_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), spans: Spans,
+    none: (b: Nat) → spans.written(b) = False, i, k: Nat, above: i <= k, fits: k + 8 <= stack.size, w: BitVec(64), before, after: M,
+    wrote: stack.WroteIn(i, spans, before, after), held: read_word(data, before, stack.at(k)) = Some(w)):
+    read_word(data, after, stack.at(k)) = Some(w) {
+    stack.wrote_in_frame(i, spans, stack.stable_in_none(i, spans, none, stack.stable_word(i, k, above, fits, Some(w))),
+        before, after, wrote, held)
+}
+
+// ---------------------------------------------------------------------------
+// Control: the call's own room is not framed
+
+// "The word at `k` reads zero" is not stable when `k` lies in the call's
+// room: the call may store a one there.
+theorem own_word_not_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i, k: Nat,
+    below: k + 8 <= i, room: i <= stack.size, memory: M):
+    ¬stack.Stable(i, λ (m: M) => read_word(data, m, stack.at(k)) = Some(BitVec::zero())) {
+    λ stable => {
+        let fits: (k + 8 <= stack.size) = omega(below, room);
+        let one: BitVec(64) = BitVec::ofNat(1);
+        let zeroed = stack.writes.store(memory, stack.at(k), word_bytes(BitVec::zero()));
+        let still = stable(zeroed, k, below, one, stack.stored(memory, k, fits, BitVec::zero()));
+        let same: (one = BitVec::zero()) =
+            Option::some_inj(one, BitVec::zero(), trans(sym(stack.stored(zeroed, k, fits, one)), still));
+        BitVec::ne_of_eq_bit(64, one, BitVec::zero(), refl)(same)
+    }
+}

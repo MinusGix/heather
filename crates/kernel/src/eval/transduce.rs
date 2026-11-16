@@ -55,14 +55,8 @@ use crate::value::{
 };
 
 use super::bits::UNIT_NEST_LIMIT;
+use super::probe::slot;
 use super::{Eval, Res, Work};
-
-/// The reserved probe levels this module adds to `probe.rs`'s three. Γ is
-/// never this deep, and the gaps keep a misread impossible.
-const PROBE_IH: u32 = u32::MAX - 8;
-const PROBE_K: u32 = u32::MAX - 16;
-const PROBE_TAIL: u32 = u32::MAX - 64;
-const PROBE_CARRIED: u32 = u32::MAX - 128;
 
 /// How deep a record wrapper, or an enumerable type's nest, may be. Both are
 /// `O(log id_D)` in practice; the bound exists so that neither walk can
@@ -131,13 +125,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let Some(found) = self.arena.transducer(step, motive) {
             return Ok(found);
         }
-        let decided = self.probe_transducer(step, motive)?.map(Rc::new);
+        let decided = self.probing(None, |e| e.probe_transducer(step, motive))?.map(Rc::new);
         self.arena.cache_transducer(step, motive, decided.clone());
         Ok(decided)
-    }
-
-    fn transduce_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     fn probe_transducer(
@@ -154,11 +144,11 @@ impl<'a, 'v> Eval<'a, 'v> {
         // through an elimination spine, which the finite-output probe reads.
         let value = self.transduce_apply(step, &[])?;
         if let Val::Neutral(n) = &*value {
-            if !matches!(n.head, Head::Var(PROBE_IH)) {
+            if !self.is_probe_head(&n.head, slot::IH) {
                 return Ok(None);
             }
         }
-        let k = self.transduce_var(PROBE_K);
+        let k = self.probe_var(slot::K);
         let succ_k = self.vclo(self.arena.val(Val::Succ(k)));
         // One walk with a representative choice says how many combinations
         // there are; the table's walks repeat it at each of them.
@@ -233,7 +223,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if self.bit_ty(at.elem)?.is_none() {
             return Ok(None);
         }
-        let x = PROBE_CARRIED;
+        let x = self.probe_level(slot::CARRIED);
         let slot = at.slot.clone();
         let value = self.transduce_apply(step, &shape.args)?;
         let Some(inner) = self.slot_of(&slot, value)? else { return Ok(None) };
@@ -249,7 +239,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         let rest = self.force(snd)?;
         let rest = self.delta_whnf(rest)?;
         let Val::Neutral(n) = &*rest else { return Ok(None) };
-        if !matches!(n.head, Head::Var(PROBE_IH)) {
+        if !self.is_probe_head(&n.head, slot::IH) {
             return Ok(None);
         }
         let mut spine: Vec<&Elim<'v>> = n.spine.iter_rev().collect();
@@ -470,7 +460,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // followed by the eliminations the step performs on its result.
             let probed = self.transduce_apply(step, &walk.args)?;
             let uses_ih = matches!(&*probed,
-                Val::Neutral(n) if matches!(n.head, Head::Var(PROBE_IH)));
+                Val::Neutral(n) if self.is_probe_head(&n.head, slot::IH));
             let past_call = if uses_ih {
                 let Some(rest) = self.call_arguments(&probed, shape)? else {
                     return Ok(None);
@@ -544,7 +534,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let value = self.transduce_apply(step, &walk.args)?;
             let (outer, tail) = self.strip_run(value)?;
             let Val::Neutral(n) = &*tail else { return Ok(None) };
-            if !matches!(n.head, Head::Var(PROBE_IH)) {
+            if !self.is_probe_head(&n.head, slot::IH) {
                 return Ok(None);
             }
             let Some(rest) = self.call_arguments(&tail, shape)? else { return Ok(None) };
@@ -600,7 +590,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         slot: &[Proj],
     ) -> Res<Option<u32>> {
         let Val::Neutral(n) = &*v else { return Ok(None) };
-        if !matches!(n.head, Head::Var(PROBE_IH)) {
+        if !self.is_probe_head(&n.head, slot::IH) {
             return Ok(None);
         }
         let mut spine: Vec<&Elim<'v>> = n.spine.iter_rev().collect();
@@ -657,12 +647,12 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let Some(inner) = self.slot_of(&slot, v)? else {
                         return Ok(None);
                     };
-                    if !is_var(&inner, PROBE_TAIL - *i) {
+                    if !is_var(&inner, self.probe_level(slot::TAIL + *i)) {
                         return Ok(None);
                     }
                 }
                 ArgMode::Carried => {
-                    if !is_var(&v, PROBE_CARRIED - j as u32) {
+                    if !is_var(&v, self.probe_level(slot::CARRIED + j as u32)) {
                         return Ok(None);
                     }
                 }
@@ -713,7 +703,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let i = peeled.len() as u32;
                     let Some(bt) = self.bit_ty(at.elem)? else { return Ok(None) };
                     let bit = (bits >> i) & 1 == 1;
-                    let tail = self.transduce_var(PROBE_TAIL - i);
+                    if slot::TAIL + i >= slot::CARRIED {
+                        return Ok(None);
+                    }
+                    let tail = self.probe_var(slot::TAIL + i);
                     let Some(value) = self.peeled_probe(&at, bt, bit, tail)? else {
                         return Ok(None);
                     };
@@ -732,8 +725,11 @@ impl<'a, 'v> Eval<'a, 'v> {
                     value
                 }
                 Mode::Carried => {
+                    if index as u32 >= slot::BLOCK - slot::CARRIED {
+                        return Ok(None);
+                    }
                     modes.push(ArgMode::Carried);
-                    self.transduce_var(PROBE_CARRIED - index as u32)
+                    self.probe_var(slot::CARRIED + index as u32)
                 }
             };
             cur = self.apply_ty(cod, &[arg])?;
@@ -805,8 +801,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     // -----------------------------------------------------------------
 
     fn transduce_apply(&mut self, step: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<&'v Val<'v>> {
-        let ih = self.transduce_var(PROBE_IH);
-        let k = self.transduce_var(PROBE_K);
+        let ih = self.probe_var(slot::IH);
+        let k = self.probe_var(slot::K);
         let mut v = self.drive(Work::Apply(step, vec![k, ih]))?;
         for arg in args {
             let app = self.dummy_app(arg);

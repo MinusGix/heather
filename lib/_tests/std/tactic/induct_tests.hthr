@@ -140,9 +140,9 @@ theorem induct_leaf_fails(i, n, acc: Nat): up(i, n, acc) = acc {
     induct up(i, n, acc); all_goals { omega }
 }
 
-// A structural function's principle is built in its own module, on demand:
-// one declared elsewhere has none here (`foldl` is `list`'s).
-// expect-error: is declared in `list`
-theorem induct_imported_structural(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
+// A structural function declared in another module: its principle is built
+// here, from the declaration `list`'s image keeps, the first time it is
+// asked for.
+theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
     induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
 }

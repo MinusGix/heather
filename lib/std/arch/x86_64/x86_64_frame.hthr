@@ -1,0 +1,80 @@
+// The frame rule on a function's contract, and a body's saved registers
+// under a loan (issues/compiled-call-frame-rule.md).
+//
+// The rule itself is beside what it speaks of. A call entered at stack
+// offset `i` promises its stores: words of its own room (`Stack::Wrote`)
+// and, lent spans to write, bytes into those (`Stack::WroteIn`). What a
+// caller keeps is whatever one such store keeps:
+//
+// - x86_64_stack: `Stack::Stable(i, P)`, the rule `Stack::wrote_frame`,
+//   the stable predicates `stable_word` and `stable_resident`, and
+//   `stable_and`, `stable_given`, `stable_deeper`; `Stack::Through`, what
+//   holds through a call, of which a lent span (`Stack::Lends`) is one.
+// - x86_64_lending: `Stack::StableIn(i, spans, P)`, the rule
+//   `Stack::wrote_in_frame`, and under a `Loan` the stable predicates
+//   `Loan::stable_word`, `Loan::stable_resident`, `Loan::stable_reads`.
+// - x86_64_stack_runs: `Stack::stable_saved`, a body's saved registers.
+//
+// Here, what needs both a contract (`Site::Returns`, x86_64_stack_runs)
+// and a lending: `Site::returns_frame`, a stable predicate joining what a
+// function is called under and what it promises; and `Loan::stable_saved`.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import relation;
+import transition;
+
+// ---------------------------------------------------------------------------
+// On a contract
+
+// The rule on a contract. A function whose postcondition gives its stores
+// (`wrote`) keeps any predicate stable under them: `frame`, which may
+// speak of the offset the function was entered at, joins what it is
+// called under and what it promises.
+theorem Site::returns_frame<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.Returns(stack, entry, pre, post), spans: Spans,
+    wrote: (i: Nat) → (s, t: MachineState<M>) → post(i, s, t) → stack.WroteIn(i, spans, s.memory, t.memory),
+    {frame: Nat → M → Type}, stable: (i: Nat) → i + 8 <= stack.size → stack.StableIn(i, spans, frame(i))):
+    site.Returns(stack, entry, λ (i: Nat) (s: MachineState<M>) => pre(i, s) ∧ frame(i, s.memory),
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => post(i, s, t) ∧ frame(i, t.memory)) {
+    λ s here resident i rsp room held ret saved => {
+        let ran = returns(s, here, resident, i, rsp, room, held.left, ret, saved);
+        let done = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨done, stack.wrote_in_frame(i, spans, stable(i, room), s.memory, ran.witness.memory,
+                wrote(i, s, ran.witness, done), held.right)⟩⟩⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Saved registers under a loan
+
+// A body's saved slots from `from` up to `top` are stable under the stores
+// of a call entered at `from` and lent `spans`.
+theorem Loan::stable_saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), from, d: Nat, gprs: Gprs, registers: List<Gpr>):
+    (k: Nat) → from <= d + 8 * k → d + 8 * (k + registers.len()) <= top →
+    stack.StableIn(from, spans, λ (m: M) => stack.Saved(d, registers, k, gprs, m)) {
+    match registers {
+        Nil => λ k _ _ => ⟨λ memory own below word held => trivial, λ memory b at written inside bytes fits held => trivial⟩,
+        Cons(register, rest) => λ k above room =>
+            stack.stable_in_and(from, spans, loan.stable_word(from, d + 8 * k, above, { omega }, Some(read_gpr(register, gprs))),
+                loan.stable_saved(from, d, gprs, rest, Succ(k), { omega }, { omega })),
+    }
+}
