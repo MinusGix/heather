@@ -750,6 +750,17 @@ theorem near_if_taken_rip<M>(cc: ConditionCode, displacement: BitVec(32), state:
         near_branch_target(state.rip, 6, displacement), refl)
 }
 
+theorem short_if_not_taken_rip<M>(cc: ConditionCode, displacement: BitVec(8), state: MachineState<M>,
+    selected: condition_holds(cc, state.flags) = False):
+    execute_short_control(JumpIf(cc, displacement), state).rip = next_rip(state.rip, 2) {
+    j(sym(selected), λ holds _ => jump_zero_rip(holds, state.rip, displacement) = next_rip(state.rip, 2), refl)
+}
+theorem short_if_taken_rip<M>(cc: ConditionCode, displacement: BitVec(8), state: MachineState<M>,
+    selected: condition_holds(cc, state.flags) = True):
+    execute_short_control(JumpIf(cc, displacement), state).rip = short_branch_target(state.rip, displacement) {
+    j(sym(selected), λ holds _ => jump_zero_rip(holds, state.rip, displacement) = short_branch_target(state.rip, displacement), refl)
+}
+
 // The flags a condition reads, all defined.
 fn condition_defined(cc: ConditionCode, d: DefinedFlags) → Bool {
     match cc {
@@ -870,6 +881,17 @@ theorem near_branch_forward(start: BitVec(64), length, skip: Nat, displacement: 
     trans(sym(BitVec::iter_add_eq_add(64, next_rip(start, length), displacement.sign_extend(32))),
         trans(BitVec::cong_iterate_increment_count(64, next_rip(start, length), reads),
             BitVec::iterate_increment_compose(64, start, length, skip)))
+}
+
+// A short jump's target, its rel8 read as a distance: the same as a near
+// one's, the displacement sign-extended to the word.
+theorem short_branch_forward(start: BitVec(64), skip: Nat, displacement: BitVec(8),
+    reads: displacement.sign_extend(56).toNat() = skip):
+    short_branch_target(start, displacement) = next_rip(start, 2 + skip)
+{
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(start, 2), displacement.sign_extend(56))),
+        trans(BitVec::cong_iterate_increment_count(64, next_rip(start, 2), reads),
+            BitVec::iterate_increment_compose(64, start, 2, skip)))
 }
 
 // A backward edge returns to `start` when the distance to the jump's end and

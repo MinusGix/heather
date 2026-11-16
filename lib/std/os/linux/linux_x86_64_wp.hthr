@@ -612,6 +612,8 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
         Piece(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Refer(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Hole(_, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        JccShort(_, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        JmpShort(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
     }
 }
 

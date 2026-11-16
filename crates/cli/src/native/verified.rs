@@ -1741,6 +1741,8 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
             10 => format!("LoadByte(ByteLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
             11 => format!("StoreByte(ByteStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
             12 => "Syscall".to_string(),
+            14 => format!("JccShort({}, {})", CONDITIONS.get(take()? as usize).ok_or_else(bad)?, take()?),
+            15 => format!("JmpShort({})", take()?),
             // A piece: its length and its bytes, stated as they are. Its
             // measure is a verdict (x86_64_asm), `True` at a literal's
             // bytes, so the literal is the lowering's piece whichever

@@ -41,7 +41,7 @@ pub(super) fn offsets(lens: &[u64]) -> Vec<u64> {
 pub(super) fn jump(item: &str) -> Option<(u64, bool)> {
     let target = |prefix: &str| item.strip_prefix(prefix)
         .and_then(|rest| rest.trim_end_matches(')').rsplit(", ").next()?.parse::<u64>().ok());
-    match (target("Jcc("), target("Jmp(").or_else(|| target("CallTo("))) {
+    match (target("Jcc(").or_else(|| target("JccShort(")), target("Jmp(").or_else(|| target("JmpShort(")).or_else(|| target("CallTo("))) {
         (Some(to), _) => Some((to, true)),
         (_, Some(to)) => Some((to, false)),
         _ => None,
@@ -59,10 +59,14 @@ pub(super) fn link(items: &[(u64, String)], offsets: &[u64], bytes: &mut [u8]) -
     for (i, (_, item)) in items.iter().enumerate() {
         let Some((to, _)) = jump(item) else { continue };
         let (end, to) = (offsets[i + 1], *named.get(&to).ok_or_else(|| format!("a jump to label {to}, which no item names"))?);
+        // A short jump's displacement is its last byte (`short_rel`), a
+        // near one's its last four (`near_rel`).
+        let short = item.starts_with("JccShort(") || item.starts_with("JmpShort(");
         let displacement = (to.wrapping_sub(end) as u32).to_le_bytes();
+        let width = if short { 1 } else { 4 };
         let end = end as usize;
-        if end < 4 || end > bytes.len() || offsets[i + 1] - offsets[i] < 5 { return Err("a jump's bytes did not read back".into()); }
-        bytes[end - 4..end].copy_from_slice(&displacement);
+        if end < width || end > bytes.len() || offsets[i + 1] - offsets[i] < width as u64 + 1 { return Err("a jump's bytes did not read back".into()); }
+        bytes[end - width..end].copy_from_slice(&displacement[..width]);
     }
     Ok(())
 }
