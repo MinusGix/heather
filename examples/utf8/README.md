@@ -102,12 +102,17 @@ layers.
    through `bv_omega`), and turns the word comparisons into the decoder's
    (`at_least_word`, `below_word`).
 3. **The loop.** `valid_from_decides` goes by induction on `left`, one case
-   per branch of the loop. Each case cites the loop's equation for that
-   branch: Heather generates one per branch of a function, measured loops
-   included, named by the arms taken (`utf8_valid_from::True::False::True`
-   is "bytes left, not ASCII, a continuation byte": the answer is `i`). The
-   decoder side of the case is one of `valid_one`, `valid_two`, …, which say
-   what the decoder does on a lead byte of each class.
+   per branch of the loop. Each case takes one step of the loop: Heather
+   generates an equation per branch of a function, measured loops included,
+   and `simp_only(utf8_valid_from, discharge := bv_omega)` picks the one
+   the facts in scope decide (bytes left, not ASCII, a continuation byte:
+   the answer is `i`). The five deepest branches (a three- or four-byte
+   sequence checked, a four-byte one cut off) still cite their equation by
+   name, `utf8_valid_from::True::False::False::False::True::True::True` and
+   so on: `simp_only` does not reach a branch seven tests deep yet
+   (`issues/simp-only-deep-branch-equations.md`). The decoder side of the case is one of `valid_one`,
+   `valid_two`, …, which say what the decoder does on a lead byte of each
+   class.
 
 The theorems are checked with the rest of the file: `heather check
 examples/utf8/utf8_check.hthr`.

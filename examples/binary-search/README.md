@@ -117,9 +117,11 @@ program, one case per branch:
   `mid`.
 - When the range is empty, `lo = hi`, and the two sides meet.
 
-Each case cites the loop's equation for its branch. Heather generates one per
-branch of a function: `lower_bound_in::True::True` is "the range is not empty
-and the byte is below the key", whose answer is the call at `mid + 1`.
+Each case takes one step of the loop with
+`simp_only(lower_bound_in, discharge := bv_omega)`. Heather generates an
+equation per branch of a function, and `simp_only` picks the one the facts
+in scope decide: with the range not empty and the byte below the key, the
+call is the call at `mid + 1`.
 
 The theorems are checked with the rest of the file:
 `heather check examples/binary-search/search.hthr`.

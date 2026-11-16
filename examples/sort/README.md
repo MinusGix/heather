@@ -110,7 +110,10 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
 
 The loop that shuffles bytes up a buffer, followed by the store into the hole,
 is the functional `insert_ordered` on the prefix. It goes by induction on `j`, one case per branch, each a `calc`
-chain:
+chain whose first step is one step of the loop,
+`simp_only(List::insert_at, fill, List::sift, read, discharge := bv_omega)`:
+Heather generates an equation per branch of `sift`, and `simp_only` takes
+the one the facts in scope decide.
 
 - When the byte below `j` is larger, it moves up, and the induction
   hypothesis inserts `b` into what is left. Inserting below the last element
@@ -149,7 +152,6 @@ The theorems are checked with the rest of the file:
 
 ## Rough edges
 
-- The proofs cite the generated branch equations by name
-  (`List::sift::True::True` and so on). A tactic that unfolds a measured
-  function at the hypotheses in scope (`simp_only(List::sift, discharge :=
-  bv_omega)`) is being built, and would remove them.
+- With the `if larger:` test unnamed in a branch, `omega` cannot read it
+  there, so the two byte comparisons beside it are `bv_omega`
+  (`issues/omega-if-bit-word-comparison.md`).
