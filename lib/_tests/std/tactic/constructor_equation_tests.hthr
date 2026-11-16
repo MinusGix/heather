@@ -113,3 +113,28 @@ theorem induct_refused(r: Run, p: List<Nat>, names: Nat, c: Out, e: r.emits(p, n
         Again => ih(c, e),
     }
 }
+
+// ---- What a case shows (issues/induct-case-goal-report.md) ----
+
+fn Run::twice(self r: Run, p: List<Nat>, names: Nat) → Option<Out> {
+    match r {
+        Step(w) => leaf(w, p, names),
+        Again(body) => match body.twice(p, names) {
+            None => None,
+            Some(c) => leaf(1, c.code, c.names),
+        },
+    }
+}
+
+// A hole under `all_goals` is one goal per case, each at its case's
+// context; a stuck match on a call's result reads as the match.
+// expect-error: ?g2 :
+// expect-error: e : leaf(w, p, names) = Some(c)
+// expect-error: match twice(body, p, names) { None => None, Some(v) => leaf(1, v.code, v.names) } = Some(c)
+theorem twice_holes(r: Run, p: List<Nat>, names: Nat, c: Out, e: r.twice(p, names) = Some(c)): Within(p, c.code) {
+    induct Run::twice(r, p, names); all_goals { ? }
+}
+
+// A named hole in each case is that name, then the name numbered.
+// expect-error: ?inner.1 :
+theorem split_holes(b: Bool, n: Nat): b.and(True) = b { split_all; all_goals { ?inner } }

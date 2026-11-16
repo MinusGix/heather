@@ -150,6 +150,12 @@ pub(super) struct GoalArena {
     undo: RefCell<Vec<(usize, GoalState, Option<String>)>>,
     /// How many checkpoints are open; nothing is logged at zero.
     checkpoints: Cell<u32>,
+    /// The copies of one block being elaborated, outermost first: a
+    /// `split_all` leaf's case, an `induct` case's name. A written hole there
+    /// is keyed by them as well as by its span, so one `?` under
+    /// `all_goals` is one goal per case, each in its own context
+    /// (issues/induct-case-goal-report.md).
+    leaves: RefCell<Vec<String>>,
 }
 
 /// [`GoalArena::checkpoint`]'s answer: how many goals there were, how long
@@ -189,6 +195,15 @@ impl GoalAllocator<'_> {
 }
 
 impl GoalArena {
+    /// Elaborate `f` as the copy of a block for one case, `key`: the written
+    /// holes it meets are that case's goals ([`Self::leaves`]).
+    pub(crate) fn in_leaf<T>(&self, key: String, f: impl FnOnce() -> T) -> T {
+        self.leaves.borrow_mut().push(key);
+        let out = f();
+        self.leaves.borrow_mut().pop();
+        out
+    }
+
     pub(crate) fn allocator(&self) -> GoalAllocator<'_> {
         GoalAllocator { arena: self }
     }
@@ -350,9 +365,15 @@ impl GoalArena {
                 span,
             );
         }
+        let leaf = self.leaves.borrow().join("/");
+        let key = match key {
+            None if !leaf.is_empty() => Some(format!("leaf:{leaf}")),
+            key => key.map(str::to_string),
+        };
+        let in_leaf = !leaf.is_empty();
         let mut goals = self.entries.borrow_mut();
         let mut spans = self.spans.borrow_mut();
-        let span_key = (span.start, span.end, key.map(str::to_string));
+        let span_key = (span.start, span.end, key);
         let k = match spans.get(&span_key) {
             Some(&k) => {
                 if goals[k].cx.gamma.entries.len() != cx.gamma.entries.len() {
@@ -366,6 +387,13 @@ impl GoalArena {
             None => {
                 let k = goals.len();
                 if k as u32 >= self.base {
+                    // A hole in a block copied to several cases is counted
+                    // once; each further case asks for a slot by restarting
+                    // the declaration, as a promoted parameter does.
+                    if in_leaf && self.restart_enabled.get() {
+                        self.request_base(k as u32 + 1);
+                        return err("internal: restarting declaration to reserve a goal for each case of a copied block", span);
+                    }
                     return err("internal: more goals than the pre-count reserved", span);
                 }
                 debug_assert!(
@@ -374,7 +402,15 @@ impl GoalArena {
                 );
                 let name = match name {
                     Some(name) => {
-                        if goals.iter().any(|goal| goal.name == name) {
+                        if in_leaf && goals.iter().any(|goal| goal.name == name) {
+                            // The same named hole in another case: `?step`,
+                            // `?step.1`, … in case order.
+                            let mut ordinal = 1;
+                            while goals.iter().any(|goal| goal.name == format!("{name}.{ordinal}")) {
+                                ordinal += 1;
+                            }
+                            format!("{name}.{ordinal}")
+                        } else if goals.iter().any(|goal| goal.name == name) {
                             return err(
                                 format!(
                                     "hole `?{name}` is already used in this block; \
@@ -382,8 +418,9 @@ impl GoalArena {
                                 ),
                                 span,
                             );
+                        } else {
+                            name.to_string()
                         }
-                        name.to_string()
                     }
                     None => {
                         let base = hint
