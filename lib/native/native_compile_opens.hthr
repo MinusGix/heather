@@ -386,7 +386,7 @@ theorem Target::goes_path_body(self t: Target, env: Env, buf, cap: Nat, found: t
     let set0 = then(x, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())]));
     let w_stepped = stepped.within_before(0, Jmp(Succ(h)), t.program, within);
     let w_moved = moved.within_before(0, Block(adds), t.program, w_stepped);
-    let w_head = x.path_head(layout, buf, Succ(h)).within_trans(x.path_copy(layout, buf, Succ(h), Succ(d)), t.program, Exists(8, refl), within);
+    let w_head = calc { x.path_head(layout, buf, Succ(h)) <= x.path_copy(layout, buf, Succ(h), Succ(d)) := Exists(8, refl), <= t.program := within, };
     let below: (i < path.before_nul().len()) = path.before_nul().nth_some_below(i, byte, got);
     let back = t.program.lands_jmp(t.laid, within.witness, stepped, 0, h, within.proof, w_head.witness, set0, Block([]), w_head.proof);
     let jumped = t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, stepped, 0, Succ(h), within.proof, prog_len(set0), back, tree,
@@ -442,7 +442,7 @@ theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t
     let flagged = then(loaded, Block([TestRR(Rdx, Rdx)]));
     let tested = x.path_tested(layout, buf, h, d);
     let copied = x.path_copy(layout, buf, Succ(h), Succ(d));
-    let w_tested = tested.within_trans(copied, t.program, Exists(3, refl), within);
+    let w_tested = calc { tested <= copied := Exists(3, refl), <= t.program := within, };
     let w_flagged = flagged.within_before(0, Jcc(E, Succ(d)), t.program, w_tested);
     let w_loaded = loaded.within_before(0, Block([TestRR(Rdx, Rdx)]), t.program, w_flagged);
     let w_counted = counted.within_before(0, LoadByte(ByteLoad(Rdx, Rsi)), t.program, w_loaded);
@@ -633,7 +633,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
     let w_zeroed = zeroed.within_before(0, StoreByte(ByteStore(Rdi, Rdx)), t.program, w_ended);
     let w_copied = copied.within_before(0, Block([MovRI(Rdx, BitVec::ofNat(0))]), t.program, w_zeroed);
     let w_copy = copy.within_before(Succ(d), Block([]), t.program, w_copied);
-    let w_head = head.within_trans(copy, t.program, Exists(8, refl), w_copy);
+    let w_head = calc { head <= copy := Exists(8, refl), <= t.program := w_copy, };
     let w_set0 = set0.within_before(Succ(h), Block([]), t.program, w_head);
     let w_clamped = clamped.within_before(0, Block(sets), t.program, w_set0);
     let w_r1 = r1.clamp_within(Rcx, R9, Succ(names), t.program, w_clamped);

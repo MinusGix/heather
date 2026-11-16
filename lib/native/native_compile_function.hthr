@@ -1063,8 +1063,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
             j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
         let mean_eq: (region.meaning(call, env) = left.set_word(result, answer.word)) = env.call_meaning(call, callee, arguments, result);
         let back = p.calls(layout, Succ(callee), k, arguments);
-        let w_back: back.Within(t.program) = back.within_trans(back.word_from(layout, out, result, Rax), t.program,
-            back.within_word_from(layout, out, result, Rax), within);
+        let w_back: back.Within(t.program) = Prog::within_trans(back.within_word_from(layout, out, result, Rax), within);
         // RAX to the result's home.
         let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);

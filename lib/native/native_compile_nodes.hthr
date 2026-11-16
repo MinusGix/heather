@@ -483,7 +483,7 @@ theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>
         Nil => λ p names c some => j(Option::some_inj(Compiled(p, names), c, some), λ x _ => p.Within(x.prog), p.within_self()),
         Cons(node, rest) => λ p names c => (match one: p.one_node(layout, nodes_live_in(rest, out), node, names) {
             None => λ none => absurd(none),
-            Some(d) => λ more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
+            Some(d) => λ more => Prog::within_trans(p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
                 Prog::within_each_node(layout, out, rest, d.prog, d.names, c, more)),
         }),
     }
@@ -502,7 +502,7 @@ theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::l
                 None => λ none => absurd(none),
                 Some(d) => λ more within apart next => {
                     let parts = Bool::is_true_and(t.homes.apart(node_output(node).id, after), t.homes.nodes_apart(rest, out), apart);
-                    let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
+                    let w_d = Prog::within_trans(Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
                     t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
                         t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
                 },

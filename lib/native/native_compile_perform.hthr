@@ -163,7 +163,7 @@ theorem Prog::within_words_from(layout: Layout, out: List<Nat>, ids: List<Nat>):
             Nil => λ p => p.within_self(),
             Cons(register, more) => λ p => {
                 let one = p.word_from(layout, out.minus(rest), id, register);
-                p.within_trans(one, one.words_from(layout, out, rest, more), p.within_word_from(layout, out.minus(rest), id, register),
+                Prog::within_trans(p.within_word_from(layout, out.minus(rest), id, register),
                     Prog::within_words_from(layout, out, rest, more, one))
             },
         },
@@ -172,13 +172,13 @@ theorem Prog::within_words_from(layout: Layout, out: List<Nat>, ids: List<Nat>):
 
 theorem Prog::within_calls(self p: Prog, layout: Layout, label, lent: Nat, arguments: List<Nat>): p.Within(p.calls(layout, label, lent, arguments)) {
     let passed = p.words_to(layout, arguments, call_registers().drop(2 * lent));
-    p.within_trans(passed, p.calls(layout, label, lent, arguments), Prog::within_words_to(layout, arguments, call_registers().drop(2 * lent), p), Exists(3, refl))
+    calc { p <= passed := Prog::within_words_to(layout, arguments, call_registers().drop(2 * lent), p), <= p.calls(layout, label, lent, arguments) := Exists(3, refl), }
 }
 
 theorem Prog::within_performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>):
     p.Within(p.performs(layout, out, index, args, results)) {
     let called = p.calls(layout, layout.procedure_label(index), 0, args);
-    p.within_trans(called, p.performs(layout, out, index, args, results), p.within_calls(layout, layout.procedure_label(index), 0, args),
+    Prog::within_trans(p.within_calls(layout, layout.procedure_label(index), 0, args),
         Prog::within_words_from(layout, out, results, result_registers(), called))
 }
 
@@ -305,7 +305,7 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
                 next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
             Cons(register, more) => λ p ok scratch distinct within next => {
                 let loaded = p.word_to(layout, id, register);
-                let w_loaded = loaded.within_trans(loaded.words_to(layout, rest, more), t.program, Prog::within_words_to(layout, rest, more, loaded), within);
+                let w_loaded = Prog::within_trans(Prog::within_words_to(layout, rest, more, loaded), within);
                 let outside = Bool::is_true_and(register.absent_from(Cons(Rsp, home_pool())), gprs_outside(more, Cons(Rsp, home_pool())), scratch);
                 let apart = Bool::is_true_and(Rbx.absent_from(Cons(register, more)), gprs_distinct(Cons(register, more)), distinct);
                 let own = Bool::is_true_and(register.absent_from(more), gprs_distinct(more), apart.right);
@@ -484,7 +484,7 @@ theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitV
                 Cons(value, vs) => λ p live env sub inside apart outside rbx short long within next => {
                     let out1 = out.minus(rest);
                     let stepped = p.word_from(layout, out1, id, register);
-                    let w_step = stepped.within_trans(stepped.words_from(layout, out, rest, more), t.program, Prog::within_words_from(layout, out, rest, more, stepped), within);
+                    let w_step = Prog::within_trans(Prog::within_words_from(layout, out, rest, more, stepped), within);
                     let aparts = Bool::is_true_and(t.homes.apart(id, out1), t.homes.moves_apart(out, rest), apart);
                     let outs = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
                     let env1 = env.set_word(id, value);
@@ -1171,7 +1171,7 @@ theorem Prog::within_saves(registers: List<Gpr>): (p: Prog) → p.Within(p.saves
         Nil => λ p => p.within_self(),
         Cons(register, rest) => λ p => {
             let pushed = then(then(p, Block(rsp_down())), Spill(StackStore(register, BitVec::ofNat(0))));
-            p.within_trans(pushed, pushed.saves(rest), Exists(2, refl), Prog::within_saves(rest, pushed))
+            calc { p <= pushed := Exists(2, refl), <= pushed.saves(rest) := Prog::within_saves(rest, pushed), }
         },
     }
 }
@@ -1179,7 +1179,7 @@ theorem Prog::within_saves(registers: List<Gpr>): (p: Prog) → p.Within(p.saves
 theorem Prog::within_restores(registers: List<Gpr>): (p: Prog) → p.Within(p.restores(registers)) {
     match registers {
         Nil => λ p => p.within_self(),
-        Cons(register, rest) => λ p => p.within_trans(p.restores(rest), p.restores(Cons(register, rest)), Prog::within_restores(rest, p), Exists(2, refl)),
+        Cons(register, rest) => λ p => calc { p <= p.restores(rest) := Prog::within_restores(rest, p), <= p.restores(Cons(register, rest)) := Exists(2, refl), },
     }
 }
 
@@ -1215,7 +1215,7 @@ theorem Target::goes_saves(self t: Target, env: Env, room: Nat, tree: ITree<BitV
             let spill = StackStore(r, BitVec::ofNat(0));
             let down = then(p, Block(rsp_down()));
             let pushed = then(down, Spill(spill));
-            let w_pushed = pushed.within_trans(pushed.saves(rest), t.program, Prog::within_saves(rest, pushed), within);
+            let w_pushed = Prog::within_trans(Prog::within_saves(rest, pushed), within);
             let w_down = down.within_before(0, Spill(spill), t.program, w_pushed);
             let parts = Bool::is_true_and(r.absent_from([Rax, R11, Rsp]), gprs_outside(rest, [Rax, R11, Rsp]), outside);
             let j2 = i + 8 * rest.len();
@@ -1362,8 +1362,7 @@ theorem Target::goes_callee_entry(self t: Target, env: Env, pre: Prog, proc: Pro
     let lab = pre.label(layout.procedure_label(index)).count_down(layout);
     let sv = lab.saves(kept);
     let fd = then(sv, Block(frame_down(t.words)));
-    let w_fd = fd.within_trans(fd.words_from(layout, entry, proc.params, regs), t.program,
-        Prog::within_words_from(layout, entry, proc.params, regs, fd), within);
+    let w_fd = Prog::within_trans(Prog::within_words_from(layout, entry, proc.params, regs, fd), within);
     let w_sv = sv.within_before(0, Block(frame_down(t.words)), t.program, w_fd);
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(entry, env.set_words(proc.params, values), g, m);
     let six: (regs.len() = 6) = refl;
@@ -1425,9 +1424,9 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
     let fu = then(cu, Block(frame_up(t.words)));
     let rs = fu.restores(kept);
     let w_rs = rs.within_before(0, Ret, t.program, within);
-    let w_fu = fu.within_trans(rs, t.program, Prog::within_restores(kept, fu), w_rs);
+    let w_fu = Prog::within_trans(Prog::within_restores(kept, fu), w_rs);
     let w_cu = cu.within_before(0, Block(frame_up(t.words)), t.program, w_fu);
-    let w_p1 = p1.within_trans(cu, t.program, Exists(4, refl), w_cu);
+    let w_p1 = calc { p1 <= cu := Exists(4, refl), <= t.program := w_cu, };
     let i0 = t.index + 8 * t.words;
     let i1 = i0 + 8 * kept.len();
     let clear = t.homes.kept_outside([Rsp], trivial);
@@ -1620,8 +1619,7 @@ theorem Prog::within_zeroes(layout: Layout, ids: List<Nat>): (p: Prog) → p.Wit
         Nil => λ p => p.within_self(),
         Cons(id, rest) => λ p => (match layout.word_fits(id) as λ b => p.Within((match b { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest)) {
             False => Prog::within_zeroes(layout, rest, p),
-            True => p.within_trans(p.word_store(layout, id, Rax), p.word_store(layout, id, Rax).zeroes(layout, rest), Exists(2, refl),
-                Prog::within_zeroes(layout, rest, p.word_store(layout, id, Rax))),
+            True => calc { p <= p.word_store(layout, id, Rax) := Exists(2, refl), <= p.word_store(layout, id, Rax).zeroes(layout, rest) := Prog::within_zeroes(layout, rest, p.word_store(layout, id, Rax)), },
         }),
     }
 }
@@ -1658,7 +1656,7 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
                 let inside: (id < t.words) = Nat::leb_sound(Succ(id), layout.words, j(sym(fit), λ b _ => b.IsTrue(), trivial));
                 let stored = p.word_store(layout, id, Rax);
                 let later = t.goes_zeroes(env, tree, rest, stored, Cons(id, live), λ i m => ok(i, Inr(m)), λ i m unfit => Inr(beyond(i, Inr(m), unfit)), within, next);
-                let w_stored = stored.within_trans(stored.zeroes(layout, rest), t.program, Prog::within_zeroes(layout, rest, stored), within);
+                let w_stored = Prog::within_trans(Prog::within_zeroes(layout, rest, stored), within);
                 let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(Cons(id, live), env, g, m) ∧ (read_gpr(Rax, g) = BitVec::ofNat(0));
                 let store = t.goes_word_store(p, id, Rax, inside, w_stored, tree, q, later);
                 t.goes_weaken(prog_len(p), tree,
@@ -1728,7 +1726,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let fm = then(sv, Block(open));
     let fits_not = λ (i: Nat) => !layout.word_fits(i);
     let unfit = live.filter(fits_not);
-    let w_fm = fm.within_trans(fm.zeroes(layout, live), t.program, Prog::within_zeroes(layout, live, fm), within);
+    let w_fm = Prog::within_trans(Prog::within_zeroes(layout, live, fm), within);
     let w_sv = sv.within_before(0, Block(open), t.program, w_fm);
     let w_mov3 = mov3.within_before(0, Store(store3), t.program, w_sv);
     let w_saved = saved.within_before(0, Block(set3), t.program, w_mov3);

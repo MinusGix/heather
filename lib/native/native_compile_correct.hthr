@@ -228,7 +228,7 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             let before = rest.live_with(layout.homes, carried, out);
             (match one: first.emits(p, layout, before, first.first_known(known), names) {
                 None => λ none => absurd(none),
-                Some(c1) => λ two => p.within_trans(c1.prog, c.prog, first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
+                Some(c1) => λ two => Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
                     rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, two)),
             })
         },
@@ -552,7 +552,7 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
             t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
             let run_first = t.runs_of(first, call, perform, rest.live_in(t.homes, out), p, c1.prog,
                 ih_first(p, rest.live_in(t.homes, out), Nil, names, c1, one, w_first, ok.left));
             let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
@@ -592,7 +592,7 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), p
             t.At(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
             let run_first = ih_first(p, rest.live_in(t.homes, out), known, names, c1, one, w_first, ok.left);
             let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
             λ n env k knows exits next => {
@@ -637,7 +637,7 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
             t.Runs(Then(Compute(Dataflow(body)), rest), call, perform, out, p, c.prog) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
             let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, two, within, ok.right);
             λ n env k exits next => {
                 let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
@@ -819,10 +819,10 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                                     let ok = Bool::is_true_and(yes.checks(t.homes, out), no.checks(t.homes, out), checked);
                                     let jumped = then(y.prog, Jmp(Succ(Succ(names))));
                                     let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
-                                    let w_other = other.within_trans(nc.prog, t.program, no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
+                                    let w_other = Prog::within_trans(no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
                                     let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
                                     let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
-                                    let w_tested = tested.within_trans(y.prog, t.program, yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
+                                    let w_tested = Prog::within_trans(yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
                                     let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, ok.left));
                                     let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, ok.right));
                                     let inside = layout.word_inside(condition, j(sym(fit), λ v _ => v.IsTrue(), trivial));
@@ -872,8 +872,8 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                                 let ok = Bool::is_true_and(body.live_in(t.homes, loop_after(again, set, out)).within(set), body.checks(t.homes, loop_after(again, set, out)), checked);
                                 let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
                                 let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
-                                let w_body = cb.prog.within_trans(tested, t.program, cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
-                                let w_head = head.within_trans(cb.prog, t.program, body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
+                                let w_body = Prog::within_trans(cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
+                                let w_head = Prog::within_trans(body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
                                 let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, ok.right));
                                 let inside = layout.word_inside(again, j(sym(fit), λ v _ => v.IsTrue(), trivial));
                                 λ n env k _ exits next => t.goes_repeat(body, again, call, perform, n, p, names, cb.prog, out, set, inside, within, w_head,
@@ -1452,8 +1452,8 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
                                     t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
-                                let w_entry = entry.within_trans(c.prog, whole, src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), Exists(2, refl));
-                                let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
+                                let w_entry = calc { entry <= c.prog := src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), <= whole := Exists(2, refl), };
+                                let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
                                 let caps = λ (k: Nat) => {
                                     let shifted: (0 + k = k) = omega();
                                     cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
@@ -1582,8 +1582,8 @@ theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p
             None => λ _ none => absurd(none),
             Some(c) => λ code others whole w => {
                 let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
-                let here = first.code_hosted(p, layout, index, names, c, code, whole, c.prog.within_trans(d.prog, whole, later.left, w));
-                ⟨p.within_trans(c.prog, d.prog, here.right, later.left), λ i => match i {
+                let here = first.code_hosted(p, layout, index, names, c, code, whole, Prog::within_trans(later.left, w));
+                ⟨Prog::within_trans(here.right, later.left), λ i => match i {
                     Zero => λ proc same => subst(Option::some_inj(first, proc, same), here.left),
                     Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => proc.Hosted(layout, x, whole), later.right(k, proc, found)),
                 }⟩
@@ -1643,9 +1643,9 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                             let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
                                 subst(Option::some_inj(whole, program, same), linked);
                             let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
-                            let w_d: d.prog.Within(program) = d.prog.within_trans(base, program, Exists(3, refl), w_base);
+                            let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
                             let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
-                            let r: src.CallsBuilt(low, homes, program) = Exists(c, ⟨emitted, ⟨exit0(c.prog).within_trans(d.prog, program, hosted.left, w_d),
+                            let r: src.CallsBuilt(low, homes, program) = Exists(c, ⟨emitted, ⟨Prog::within_trans(hosted.left, w_d),
                                 ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, program), hosted.right(i, proc, found)),
                                 ⟨Exists(d.prog, w_base), ⟨laid, Exists(base, Exists(d.names, linked_p))⟩⟩⟩⟩⟩);
                             r
@@ -1809,7 +1809,7 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     let label = layout.procedure_label(index);
     let lbl = Prog::At(pre_i, label, Block([]));
     let counted = lbl.count_down(layout);
-    let w_lbl: lbl.Within(t.program) = lbl.within_trans(counted, t.program, Exists(6, refl), w_count);
+    let w_lbl: lbl.Within(t.program) = calc { lbl <= counted := Exists(6, refl), <= t.program := w_count, };
     let i1 = t.index - 8;
     let so = layout.stack_offset();
     let slots: (so + 16 <= t.r.size) = t.fits;
@@ -1856,7 +1856,7 @@ theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n:
         let dp = hosts.right.witness;
         let w_deep = hosts.right.proof;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), w_deep);
+            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := w_deep, };
         let tree: ITree<BitVec(64)>(Events::linux()) = k(Exited(call_depth_status()));
         t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, Cons(ret, above),
             λ _ => t.goes_deep(dp, w_deep, tree, λ _ => True, λ s at exited => ends(Exited(call_depth_status()))(s, at, exited)),
@@ -1899,7 +1899,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             proc.params.mem_append_r(proc.results, i, m));
         let dp = hosts.right.witness;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), hosts.right.proof);
+            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := hosts.right.proof, };
         let start = Env(Nil, env.buffers, env.args).set_words(proc.params, values);
         let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, start), k);
         let few: (kept.len() <= 6) = t.homes.kept_few();
@@ -1968,8 +1968,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
         let inside_results = λ (i: Nat) (m: Mem(i, results)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit,
             args.mem_append_r(results ++ saved, i, results.mem_append_l(saved, i, m)));
         let cb = p.calls(layout, layout.procedure_label(index), 0, args);
-        let w_cb: cb.Within(t.program) = cb.within_trans(p.performs(layout, out, index, args, results), t.program,
-            Prog::within_words_from(layout, out, results, rets, cb), within);
+        let w_cb: cb.Within(t.program) = Prog::within_trans(Prog::within_words_from(layout, out, results, rets, cb), within);
         let va = env.words_at(args);
         let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.left);
         let none: (0 <= 3) = omega();
@@ -2058,12 +2057,11 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
     let live = src.main.live_in(homes, []);
     let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
-    let w_c: c.prog.Within(program) = c.prog.within_trans(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
-        program, Exists(2, refl), w_whole);
+    let w_c: c.prog.Within(program) = calc { c.prog <= then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall) := Exists(2, refl), <= program := w_whole, };
     let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, answers, refl), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
-    let w_entry = entry.within_trans(c.prog, program, src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
-    let w_saved = saved.within_trans(entry, program, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
+    let w_entry = Prog::within_trans(src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
+    let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
     let caps = λ (k: Nat) => {
         let shifted: (0 + k = k) = omega();
         cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)

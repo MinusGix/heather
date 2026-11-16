@@ -420,7 +420,7 @@ theorem Target::goes_arg_head(self t: Target, v: Nat → BitVec(8), buf, cap: Na
     let flagged = then(loaded, Block([TestRR(Rdx, Rdx)]));
     let tested = then(flagged, Jcc(E, Succ(d)));
     let copied = head.arg_copy(Succ(h), Succ(d), Succ(sk));
-    let w_tested = tested.within_trans(copied, t.program, Exists(6, refl), within);
+    let w_tested = calc { tested <= copied := Exists(6, refl), <= t.program := within, };
     let w_flagged = flagged.within_before(0, Jcc(E, Succ(d)), t.program, w_tested);
     let w_loaded = loaded.within_before(0, Block([TestRR(Rdx, Rdx)]), t.program, w_flagged);
     let lands = t.program.lands_jcc(t.laid, w_tested.witness, flagged, 0, E, d, w_tested.proof, w_done.witness, copied, Block([]), w_done.proof);
@@ -550,7 +550,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
     let w_moved = moved.within_before(0, Jmp(joined), t.program, w_jumped);
     let w_done = done.within_before(0, Block([MovRR(Rax, R8)]), t.program, w_moved);
     let w_copied = copied.within_before(Succ(Succ(Succ(names))), Block([]), t.program, w_done);
-    let w_pointed = pointed.within_trans(copied, t.program, Exists(9, refl), w_copied);
+    let w_pointed = calc { pointed <= copied := Exists(9, refl), <= t.program := w_copied, };
     let w_x = x.within_before(Succ(names), Block([]), t.program, w_pointed);
     let w_e1 = e1.within_before(0, Block(sets), t.program, w_x);
     let w_slot = slot.within_before(0, Load(WordLoad(Rsi, Rbx)), t.program, w_e1);
@@ -660,7 +660,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
     let w_moved = moved.within_before(0, Jmp(joined), t.program, w_jumped);
     let w_done = done.within_before(0, Block([MovRR(Rax, R8)]), t.program, w_moved);
     let w_copied = copied.within_before(Succ(Succ(Succ(names))), Block([]), t.program, w_done);
-    let w_pointed = pointed.within_trans(copied, t.program, Exists(9, refl), w_copied);
+    let w_pointed = calc { pointed <= copied := Exists(9, refl), <= t.program := w_copied, };
     let w_x = x.within_before(Succ(names), Block([]), t.program, w_pointed);
     let w_e1 = e1.within_before(0, Block(sets), t.program, w_x);
     let w_slot = slot.within_before(0, Load(WordLoad(Rsi, Rbx)), t.program, w_e1);

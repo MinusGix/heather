@@ -865,7 +865,7 @@ theorem Prog::within_spills(registers: List<Gpr>): (prog: Prog) → (k: Nat) →
         Nil => λ prog k => prog.within_self(),
         Cons(register, rest) => λ prog k => {
             let item = At(prog, 0, Spill(StackStore(register, slot_offset(k))));
-            prog.within_trans(item, rest.spills(item, Succ(k)), prog.within_then(0, Spill(StackStore(register, slot_offset(k)))),
+            Prog::within_trans(prog.within_then(0, Spill(StackStore(register, slot_offset(k)))),
                 Prog::within_spills(rest, item, Succ(k)))
         },
     }
@@ -875,7 +875,7 @@ theorem Prog::within_reloads(registers: List<Gpr>): (prog: Prog) → (k: Nat) �
         Nil => λ prog k => prog.within_self(),
         Cons(register, rest) => λ prog k => {
             let item = At(prog, 0, Reload(StackLoad(register, slot_offset(k))));
-            prog.within_trans(item, rest.reloads(item, Succ(k)), prog.within_then(0, Reload(StackLoad(register, slot_offset(k)))),
+            Prog::within_trans(prog.within_then(0, Reload(StackLoad(register, slot_offset(k)))),
                 Prog::within_reloads(rest, item, Succ(k)))
         },
     }
@@ -944,7 +944,7 @@ theorem Site::moves_spills<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
             let slot_small: (k < 16) = { omega };
             let slot_room: (i + 8 <= stack.size) = { omega };
             let kept = λ (memory: M) => frame(memory) ∧ (read_word(site.data, memory, stack.at(i)) = Some(read_gpr(register, gprs)));
-            let item_in = item.within_trans(rest.spills(item, Succ(k)), site.program, Prog::within_spills(rest, item, Succ(k)), within);
+            let item_in = Prog::within_trans(Prog::within_spills(rest, item, Succ(k)), within);
             let first = site.moves_spill(stack, fits, item_in.witness, prog, 0, store, item_in.proof,
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ frame(s.memory),
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ kept(s.memory),
@@ -1004,7 +1004,7 @@ theorem Site::moves_reloads<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
             let word = read_gpr(register, saved);
             let next = write_gpr(register, word, gprs);
             let spares = Bool::is_true_and(!register.same(Rsp), rest.spare(Rsp), spare);
-            let item_in = item.within_trans(rest.reloads(item, Succ(k)), site.program, Prog::within_reloads(rest, item, Succ(k)), within);
+            let item_in = Prog::within_trans(Prog::within_reloads(rest, item, Succ(k)), within);
             let first = site.moves_reload(stack, fits, item_in.witness, prog, 0, load, item_in.proof,
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ (frame(s.memory) ∧ stack.Saved(d, Cons(register, rest), k, saved, s.memory)),
                 λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, Succ(k), saved, s.memory)),

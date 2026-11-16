@@ -594,7 +594,7 @@ theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, bu
     let set = p.copy_head(layout, buf, Succ(h));
     let cmp = then(set, Block([CmpRR(R8, Rax)]));
     let tested = then(cmp, Jcc(E, Succ(d)));
-    let w_tested = tested.within_trans(p.copy_in(layout, buf, Succ(h), Succ(d)), t.program, Exists(4, refl), within);
+    let w_tested = calc { tested <= p.copy_in(layout, buf, Succ(h), Succ(d)) := Exists(4, refl), <= t.program := within, };
     let w_cmp = cmp.within_before(0, Jcc(E, Succ(d)), t.program, w_tested);
     let lands_done = t.program.lands_jcc(t.laid, w_tested.witness, cmp, 0, E, d, w_tested.proof, done_k, done_before, done_item, done_at);
     let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, a, bytes, i, vals, g, m) ∧
@@ -629,7 +629,7 @@ theorem Target::goes_copy_body(self t: Target, v: Nat → BitVec(8), p: Prog, bu
     let w_stepped = stepped.within_before(0, Jmp(Succ(h)), t.program, within);
     let w_moved = moved.within_before(0, Block(adds), t.program, w_stepped);
     let w_loaded = loaded.within_before(0, StoreByte(ByteStore(Rdi, Rdx)), t.program, w_moved);
-    let w_set = p.copy_head(layout, buf, Succ(h)).within_trans(p.copy_in(layout, buf, Succ(h), Succ(d)), t.program, Exists(6, refl), within);
+    let w_set = calc { p.copy_head(layout, buf, Succ(h)) <= p.copy_in(layout, buf, Succ(h), Succ(d)) := Exists(6, refl), <= t.program := within, };
     let back = t.program.lands_jmp(t.laid, within.witness, stepped, 0, h, within.proof, w_set.witness, set0, Block([]), w_set.proof);
     let jumped = t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, stepped, 0, Succ(h), within.proof, prog_len(set0), back, tree,
         λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, a, bytes, Succ(i), vals, g, m), again);

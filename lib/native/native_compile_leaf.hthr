@@ -207,7 +207,7 @@ theorem Prog::ports_to_within(layout: Layout, ports: List<Port>): (registers: Li
             Nil => λ p q none => absurd(none),
             Cons(register, later) => λ p q => (match one: p.port_to(layout, port, register) {
                 None => λ none => absurd(none),
-                Some(r) => λ more => p.within_trans(r, q, p.port_to_kind(layout, port, register, r, one).right,
+                Some(r) => λ more => Prog::within_trans(p.port_to_kind(layout, port, register, r, one).right,
                     Prog::ports_to_within(layout, rest, later, r, q, more)),
             }),
         },
@@ -227,7 +227,7 @@ theorem Prog::ports_from_within(layout: Layout, out: List<Nat>, ports: List<Port
                 Nil => λ p q none => absurd(none),
                 Cons(word, others) => λ p q => (match layout.word_fits(word) {
                     False => λ none => absurd(none),
-                    True => λ more => p.within_trans(p.word_from(layout, out, word, register), q, p.within_word_from(layout, out, word, register),
+                    True => λ more => Prog::within_trans(p.within_word_from(layout, out, word, register),
                         Prog::ports_from_within(layout, out, rest, others, later, p.word_from(layout, out, word, register), q, more)),
                 }),
             },
@@ -242,7 +242,7 @@ theorem Prog::within_leaf_lowered(self loaded: Prog, layout: Layout, out: List<N
         None => λ none => absurd(none),
         Some(instructions) => (match leaves_all(instructions, Cons(Rsp, layout.taken)) {
             False => λ none => absurd(none),
-            True => λ more => loaded.within_trans(then(loaded, Block(instructions)), q, loaded.within_then(0, Block(instructions)),
+            True => λ more => Prog::within_trans(loaded.within_then(0, Block(instructions)),
                 Prog::ports_from_within(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes), then(loaded, Block(instructions)), q, more)),
         }),
     })(stored)
@@ -261,7 +261,7 @@ theorem Prog::within_leaf_into(self p: Prog, layout: Layout, out: List<Nat>, nod
         False => λ none => absurd(none),
         True => (match loaded_is: p.ports_to(layout, inputs, ins) {
             None => λ none => absurd(none),
-            Some(loaded) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+            Some(loaded) => λ stored => Prog::within_trans(Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
                 loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, stored)),
         }),
     })(emitted)
@@ -328,7 +328,7 @@ theorem Target::goes_ports_to(self t: Target, live: List<Nat>, env: Env, tree: I
             Cons(register, later) => λ unused apart p q => (match one: p.port_to(t.layout(), port, register) {
                 None => λ none => absurd(none),
                 Some(r) => λ more within post next => {
-                    let w_r = r.within_trans(q, t.program, Prog::ports_to_within(t.layout(), rest, later, r, q, more), within);
+                    let w_r = Prog::within_trans(Prog::ports_to_within(t.layout(), rest, later, r, q, more), within);
                     let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.ports_gprs(env, rest, later, g), m);
                     let head = t.goes_port_to(live, env, p, r, port, register, holds(port, Inl(refl)), one, w_r, tree, after,
                         t.goes_ports_to(live, env, tree, rest, λ x k => holds(x, Inr(k)), later, λ x k => unused(x, Inr(k)), λ x k => apart(x, Inr(k)), r, q, more, within, post, next));
@@ -509,7 +509,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         let layout = t.layout();
                         let stored = p.word_from(layout, out, word, register);
                         let settled = Env(env.words.put(word, values(port.width, port.id).toNat(), 0), env.buffers, env.args);
-                        let w_stored = stored.within_trans(q, t.program, Prog::ports_from_within(layout, out, rest, others, later, stored, q, more), within);
+                        let w_stored = Prog::within_trans(Prog::ports_from_within(layout, out, rest, others, later, stored, q, more), within);
                         let aparts = Bool::is_true_and(t.homes.apart(word, out), t.homes.all_apart(others, out), apart);
                         let live = out.minus(Cons(word, others));
                         let after = out.minus(others);
@@ -588,7 +588,7 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                         True => λ leaves_is stored => {
                             let leaves: leaves_all(code, Cons(Rsp, layout.taken)).IsTrue() = j(sym(leaves_is), λ b _ => b.IsTrue(), trivial);
                             let body = then(loaded, Block(code));
-                            let w_body = body.within_trans(q, t.program, Prog::ports_from_within(layout, out, outputs, words, outs, body, q, stored), within);
+                            let w_body = Prog::within_trans(Prog::ports_from_within(layout, out, outputs, words, outs, body, q, stored), within);
                             let w_loaded = loaded.within_before(0, Block(code), t.program, w_body);
                             let at_body = t.goes_ports_from(values, tree, out, outputs, words, outs, body, q, env, stored, within, parts3.right,
                                 λ r k => t.outputs_unused(nodes, r, k), apart, next);
