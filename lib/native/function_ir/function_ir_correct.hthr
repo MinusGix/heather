@@ -41,7 +41,9 @@ import option;
 // laws (`Stack`, x86_64_stack): a span of words below a canonical address
 // that can be stored to and read back, that holds no code, and above which
 // code reads as data. These laws are the theorem's premises about the
-// platform; no theorem here proves them of Linux.
+// platform. The byte memory model meets them (`DataRegion::stack`), and
+// the Linux image model places such a stack where the loader puts the
+// process's (`DataRegion::process_stack`).
 record Machine<M> {
     fetch: FetchAccess<M>,
     data: ByteReadAccess<M>,

@@ -159,8 +159,12 @@ Beyond the kernel, the theorem rests on these:
   of words below a canonical address that can be stored to and read back,
   storing one word leaves the others, code is never on the stack, every
   word of it reads as some word, and code below the canonical boundary reads
-  as data where it was fetched from. Nothing proves these of Linux; they are
-  what a process gives its program.
+  as data where it was fetched from. They are proved of the byte memory
+  model: any data region of it is a `Stack` (`DataRegion::stack`,
+  `x86_64_byte_memory.hthr`), and the Linux image model places one where
+  the loader puts the process stack (`DataRegion::process_stack`,
+  `linux_x86_64_image.hthr`). What is assumed is that those models are
+  faithful to the processor's memory and to Linux's loader.
 - **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
   spans: the spans lie below the canonical boundary, a store into the stack
   below `top` misses them, and a store into a span the function may write
