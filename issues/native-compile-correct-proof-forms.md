@@ -36,6 +36,23 @@ No statement changes and no proof is re-argued: each step replaces a spelling by
 
 Each step is its own PR, checked with `scripts/test --pr` (it touches `lib/`), with the line count and the heaviest declaration's time before and after in the PR, since a shorter spelling can cost the kernel more (`docs/proof-patterns.md` §2).
 
+## Progress (2026-11-16, PR #723)
+
+Steps 1 to 4 are written, the procedures part included, since stating it is the test of the forms whether or not U5 deletes it.
+
+- Step 1: `Prog::Within` is `<=` with a `Transitive` instance; every chain is a `calc`, and `Prog::within_trans` takes its three programs implicitly (216 callers).
+- Step 2: 23 `subst(Option::some_inj(x, c, same), e)`; `_` arms for the refuted constructors.
+- Step 3: `goes_weaken`, `at_sub`, `held_sub`, `held_same` and `at_similar` take their points implicitly. A caller in a `let` with no expected type then states the type it builds, which reads better than the five arguments did. `at_sub` takes its hypothesis before the inclusion so the inclusion is checked against a known set.
+- Step 4: 95 of 143 `λ (s: MachineState<X86Memory(t.r.profile)>) =>` binders left to the expected type (the 48 left are `let`s with none). The three `then_` lemmas share `Target::then_at` over `Stmt::and_then`; their inversions of `emits` stay three ([[induct-through-result-matches]]).
+- `Bool::both({a, b}, h: (a && b).IsTrue())` beside `Bool::is_true_and(a, b, h)`: all 91 splits in the `native_compile_*` files infer their tests, the four- and five-rung ladders included. The other 433 callers in `lib/` are left to their owners; nothing needed `is_true_and`'s explicit form.
+- Procedures: `Hosted`, `Hosts`, `CallsBuilt`, `CallFits` and `ProcedureFits` are records with named fields in place of nested `Exists` and `∧` read as `proof.proof.proof.right.left`.
+
+A named type for the machine state was not added: once the binders are inferred the spelling is left in 97 places, most of them signatures, where an abbreviation would have to unfold for field access and for inference.
+
+Measured over the `native_compile_*` files: 14,377 lines to 14,140, 1,013 KB to 973 KB; the main file 2,158 lines to 2,105. The forms that exist take about four percent off. What is left is what the filed gaps cover: the main file still has 78 written motives and 64 `absurd(none)` arms, all inversions of a `None`/`Some` pipeline.
+
+What the procedures part shows: its statements read well as records and `calc`, and its proofs are then mostly the positions (`Within`, `prog_len`, the `w_*` witnesses passed to each `goes_` lemma), which is [[emitted-code-claims-without-positions]].
+
 ## What this leaves, filed
 
 - The hand inversion of every `None`/`Some` pipeline, and the inversion lemmas written for the certificate reader: [[induct-through-result-matches]].
