@@ -114,6 +114,12 @@ layers.
    `valid_two`, …, which say what the decoder does on a lead byte of each
    class.
 
+The loop lemma is stated over a window (`valid_window_decides`): the
+bytes it reads may come from a longer buffer. `valid_window` and
+`valid_prefix` say what the loop answers for the first `filled` bytes of a
+buffer of `n`, which is what a program that reads into a buffer and lends it
+to the loop asks.
+
 The theorems are checked with the rest of the file: `heather check
 examples/utf8/utf8_check.hthr`.
 
