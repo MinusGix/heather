@@ -60,6 +60,7 @@ import rt_io_reflect_loop;
 import rt_io_bridge;
 import rt_io_program;
 import runtime;
+import runtime_file;
 
 // ---------------------------------------------------------------------------
 // The library the generator states programs with

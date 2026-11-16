@@ -322,10 +322,17 @@ same program over `utf8_valid_from`).
   `compile-x86`'s is, then placeless, rowed, and the emitted functions), so
   a program that links a validator's eight functions fits the kernel's
   per-declaration fuel.
-- The span functions live in a module that imports `runtime` and the
-  program in one that imports `runtime_program`: a generated `Compile`
-  instance names its class unqualified, and a module that imports both
-  generators has two `runtime`s.
+- A module of programs imports `runtime_program` and what its own text
+  spells, nothing of the generators' (since 2026-11-16): `bitvec` (`u8`,
+  `u64`), `itree` (a `while`'s `Iterate`), `coitree` (`Partial`),
+  `linux_world` (`Io`), `rt` (`byte_within`), `rt_io` (`read_into`). The
+  generators name what they state by key, `name_of(X)` where they can see
+  `X` and `"module::X"` otherwise, and a generated instance cites its class
+  by key (`runtime::Compile`, `runtime_file::CompileSpan`), so each needs
+  its module only in the program's import closure; `runtime_program`
+  imports `runtime_file`, so span functions can sit beside the program.
+  Before, a generated name resolved where the program was, and a program
+  imported the generators' whole vocabulary (about forty modules).
 
 ## 4. Three nodes a real program needs
 
@@ -517,8 +524,8 @@ it, so it can run in another thread at the same time.
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).
 6. **After the UTF-8 program (2026-11-16, Minus's order).** Generated
-   declarations resolve outside the program's own imports, so
-   `import runtime_program` is enough; then D2's local buffers. Filed for
+   declarations resolve outside the program's own imports (§3, built);
+   then D2's local buffers. Filed for
    later: printing (`issues/io-program-prints-output.md`), the sort and binary-search
    demos as programs (`issues/io-program-demo-mains.md`), and the
    whole-program theorem over the read loop and exit

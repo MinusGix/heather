@@ -180,6 +180,14 @@ as the instance `class<args…>(index…)`: the host elaborates the instance
 written in source as `{ field := name.field, … }`, so its key, coherence and
 index spelling are the ordinary checks. The type arguments are `Expr`s read
 as types; a function type is spelled as an arrow, so it is keyed as one.
+The class may be named by its qualified key (`runtime::Compile`, 2026-11-16):
+it is then cited on the caller's behalf, as an evidence rule is, so its
+module need only be in the caller's import closure, and the instance is
+spelled with the class's bare name (`host::publish_instance_member`).
+A generator's own name strings follow the same rule: `name_of(X)` where the
+generator can see `X`, otherwise `"module::X"`, so that a client resolves
+them without importing the generator's modules
+(docs/native/io-programs-design.md §3).
 
 ### 3.5 A prefix over a `record` (2026-11-12)
 

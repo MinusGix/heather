@@ -4819,7 +4819,20 @@ impl HostMut<'_> {
         span: Span,
     ) -> R<()> {
         use heather_syntax::ast::{ClassRef, ExprKind, InstanceBody, InstanceDecl, InstanceField, Ty, TyKind};
-        let Some(info) = self.key_of(class).and_then(|key| self.traits.class(&key).cloned()) else {
+        // A class named by its key (`name_of(Compile)`, `runtime::Compile`)
+        // is cited on the caller's behalf, as an evidence rule is
+        // (`DynamicScope::rule_citation`): its module need only be in the
+        // import closure, so a module of programs need not import the
+        // generator's own module to receive its instances.
+        let (cited, class) = match crate::names::split_qual(class) {
+            Some((_, base)) => (Some(class.clone()), base.to_string()),
+            None => (None, class.clone()),
+        };
+        let class = &class;
+        let info = self.scoped(|s| s.rule_citation.get_mut(), cited.clone(), |me| {
+            Ok::<_, crate::ElabError>(me.key_of(class).and_then(|key| me.traits.class(&key).cloned()))
+        })?;
+        let Some(info) = info else {
             return err(format!("`{name}` is to be an instance of `{class}`, which is not a class in scope"), span);
         };
         let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
@@ -4873,7 +4886,9 @@ impl HostMut<'_> {
             span,
         };
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi, checked: false }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| ClassesMut(me).elab_instance(&decl))
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| {
+            me.scoped(|s| s.rule_citation.get_mut(), cited, |me| ClassesMut(me).elab_instance(&decl))
+        })
     }
 }
 
