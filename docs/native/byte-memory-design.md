@@ -216,9 +216,11 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   memory of `X86Profile::process(size, top, depth)`: what `X86Profile::io(size)`
   relies on (the segment, since `issues/native-data-capacity.md`) and `depth`
   bytes below the entry RSP `top` data (`issues/io-image-process-stack.md`).
-  `StackPlaced` is where Linux puts it, with `depth` at most the 128 KiB
-  exec maps before the program runs; the on-demand growth below that is
-  never relied on. `DataRegion::process_stack` is a `DataRegion`, so
+  `StackPlaced` is where Linux puts it. That the `depth` bytes are data is
+  a premise about the system (`LinuxStart`'s `stack`): Linux maps the stack
+  as it is touched, down to RLIMIT_STACK, so it holds when the stack limit
+  leaves `depth` bytes below the entry RSP
+  (`issues/io-stack-below-rsp-not-mapped.md`). `DataRegion::process_stack` is a `DataRegion`, so
   `DataRegion::stack` is a `Stack` of the process from its entry, top at
   RSP; its stores keep the segment (`process_stack_keeps_data`). The
   loader with the stack (`X86Memory::process_load`) is `LoadedFrom` the

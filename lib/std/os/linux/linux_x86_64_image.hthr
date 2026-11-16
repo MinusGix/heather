@@ -362,26 +362,26 @@ theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), fi
 // The process's stack (issues/io-image-process-stack.md)
 
 // Linux maps a process's stack high in the user half and starts RSP in it,
-// the command line at RSP and above (`ArgvAt`). A process relies on a fixed
-// `depth` of stack below RSP, at most 128 KiB. That those bytes are data is
-// the environment's assumption, and it leans on the kernel growing the
-// stack: exec reserves 128 KiB below the argument strings (fs/exec.c,
-// `setup_arg_pages`'s `stack_expand`), then lays argc, the argv and envp
-// pointers and auxv below the strings, inside that reserve, so what is
-// mapped below the entry RSP is 128 KiB less those tables (a few hundred
-// bytes less on a small environment, almost nothing left with twenty
-// thousand variables) and the rest is mapped by the fault of its first
-// touch, up to RLIMIT_STACK (issues/io-stack-below-rsp-not-mapped.md).
-fn io_stack_limit() → Nat { 0x20000 }
+// the command line at RSP and above (`ArgvAt`). A process relies on `depth`
+// bytes of stack below RSP being data. That is the environment's
+// assumption, a premise of every theorem about a process, and what it asks
+// of the system is the stack limit: exec maps part of the stack before the
+// program runs (128 KiB below the argument strings, less the argc, argv,
+// envp and auxv tables it then lays inside that reserve), and the kernel
+// maps the rest at the fault of its first touch, down to RLIMIT_STACK
+// (`getrlimit(2)`; `mmap(2)` under MAP_GROWSDOWN). So the premise holds of a
+// process whose stack limit leaves `depth` bytes below its entry RSP, as
+// every program that does not probe its stack assumes, and fails under a
+// limit set smaller (`ulimit -s`) or on a system that does not grow the
+// stack (issues/io-stack-below-rsp-not-mapped.md).
 
-// Where the stack of `depth` bytes below `top` sits: above the segment,
-// below the canonical boundary, and within what exec maps. That the entry
-// RSP is such a `top` is the environment's assumption, beside `LoadedFrom`
-// and `ArgvAt`.
+// Where the stack of `depth` bytes below `top` sits: above the segment and
+// below the canonical boundary. That the entry RSP is such a `top`, and that
+// the bytes are data, are the environment's assumptions, beside
+// `LoadedFrom` and `ArgvAt`.
 record StackPlaced(size, top, depth: Nat) {
     above: io_data_end(size) + depth <= top,
     canonical: top <= Nat::pow(2, 47),
-    within: depth <= io_stack_limit(),
 }
 
 // The stack's lowest address.

@@ -529,6 +529,17 @@ theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, dept
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
 }}
+
+// The same from what it asks of the system that runs the file, under one
+// name (`LinuxStart`, native_compile_elf): the file loaded as its headers
+// say, the process at its entry, the program's stack room usable below RSP
+// (on Linux, a stack limit that leaves it) and the command line above.
+theorem {p}_runs(top: Nat, args: List<List<BitVec(8)>>,
+    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, {src}().stack_room()))>,
+    start: LinuxStart({p}_size(), {p}_file(), top, {src}().stack_room(), args, s)):
+    SimProgram(X86Profile::process({p}_size(), top, {src}().stack_room()).linux(), {source}.denote(args), s) {{
+    {p}_simulates(top, {src}().stack_room(), start.placed, s, start.entry, start.rsp, start.loaded, Nat::le_refl({src}().stack_room()), args, start.argv)
+}}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
     let mut file = head;
     file.extend_from_slice(&bytes);

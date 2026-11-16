@@ -256,8 +256,9 @@ covers the CALLs as it covers the jumps.
 - **`native_compile_correct`** gains the stack: a `Stack` of the profile
   above the region, its top the entry RSP, the command line above it, and
   at least `8 · depth · (words + 1)` bytes deep. The ELF theorem's
-  `StackPlaced` gives it, so a program whose depth needs more than 128 KiB
-  of stack is refused by `write-elf`.
+  `StackPlaced` gives it. How much stack the system must leave below the
+  entry RSP is a premise of the ELF theorem (`LinuxStart`,
+  `Source::stack_room`, native_compile_elf), not a cap of the compiler's.
 
 ## 6. Why the stack holds the caller's words, not the callee's words
 

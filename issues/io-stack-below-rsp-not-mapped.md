@@ -1,6 +1,6 @@
 ---
 title: The process stack below the entry RSP is not all mapped at exec
-status: open
+status: closed
 labels: [native,machine-model]
 area: heather-in-heather
 created: 2026-11-16
@@ -29,10 +29,12 @@ and environment would fault where the theorem says it runs.
 
 The comment in `lib/std/os/linux/linux_x86_64_image.hthr` now says this.
 
-## Open: what the assumption should be
+## Decided (Minus, 2026-11-16): state the premise directly
 
-- State it as it is: the `depth` bytes below RSP are usable, by mapping or
-  by growth, given RLIMIT_STACK leaves that much. Nothing changes but the
-  documents (`issues/io-image-process-stack.md`, the design note).
-- Or make it true without growth: bound `depth` by what exec leaves mapped
-  for a bounded command line and environment, which needs envp in the model.
+The assumption stays the kernel's stack, and the theorem says so:
+`LinuxStart` (native_compile_elf) carries the stack room as a field, with
+the stack limit named as what grants it, and `StackPlaced` lost its 128 KiB
+cap, which rested on the mapping exec was thought to make
+(`issues/elf-theorem-runtime-premises.md`). A target that owns its stack
+inside its own segment, and so asks nothing of the limit, is
+`issues/native-target-minimal-system-assumptions.md`.

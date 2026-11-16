@@ -249,6 +249,35 @@ Beyond the kernel, the theorem rests on these:
   `.byte` directives, and the assembler and linker copy them into the
   binary. That copy is trusted.
 
+### A whole program: what its theorem asks of the system
+
+A program `write-elf` writes has no caller: its file is loaded and run by
+Linux. Its theorem (`Source::elf_file_runs`, and each certificate's
+`<source>_elf_runs`) takes everything it asks of that system as one premise,
+`LinuxStart` (`lib/native/native_compile_elf.hthr`), whose fields are:
+
+- **`loaded`**: the file's two `PT_LOAD` headers were honoured (its bytes at
+  0x400000 readable and executable, the data segment zero-filled, readable
+  and writable). The ELF loading rule, not proved of Linux.
+- **`entry`**: the process starts at the header's entry address.
+- **`placed`, `rsp`, `stack`**: the program's stack room
+  (`Source::stack_room`) below the entry RSP is usable. On Linux the stack
+  limit grants it (`RLIMIT_STACK`, `ulimit -s`): the kernel maps the stack as
+  it is touched, down to the limit. A process started under a smaller limit
+  is outside the theorem.
+- **`argv`**: the command line is at and above RSP as the psABI lays it out.
+
+No register but RIP and RSP is assumed, and no flag. After the start, each
+system call is answered as the model allows (`LinuxCmd::Answers`: short
+reads and writes, any errno, a failed read leaving anything in its buffer),
+and resumes with RCX, R11 and every arithmetic flag unspecified, since the
+call convention promises none of them. A descriptor is the low 32 bits of
+its word, as Linux reads it. Signals are not modelled: a process killed by
+one (SIGPIPE on a closed pipe) ends its run without an exit.
+
+A target that asks for less (no kernel stack, nothing beyond the ELF loading
+rule) is `issues/native-target-minimal-system-assumptions.md`.
+
 ## What is not covered
 
 - **The platform around the code**: the loader, the linker's placement of

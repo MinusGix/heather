@@ -364,7 +364,8 @@ compiled callee that spills.
 **Status.** Stack region done, 2026-10-31 (`issues/io-image-process-stack.md`):
 the ELF theorem's process is one of `X86Profile::process(size, top, depth)`,
 which relies on the segment and on `depth` bytes below the entry RSP `top`
-(`StackPlaced`: above the segment, canonical, at most the 128 KiB exec maps).
+(`StackPlaced`: above the segment and canonical; that the bytes are usable is
+the stack limit's to grant, a premise stated in `LinuxStart`).
 `DataRegion::process_stack` is its `Stack` from the entry, top at RSP, a
 CALL's push in its top word, and stores into it keep the segment. No
 compiled code pushes yet; the compiled callee that spills is the client.

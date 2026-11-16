@@ -23,12 +23,12 @@
 // eighty bytes a function; and a word for the return address of a call
 // past the depth, which its callee refuses.
 //
-// Outside the proof, as for cat (native_cat_executable): that Linux maps
-// the file as `X86Memory::io_load` says below the segment's end
-// (`X86Memory::LoadedFrom`), maps `depth` bytes of stack below the entry
-// RSP where `StackPlaced` says, puts the command line on the stack at and
-// above RSP as the psABI lays it out (`ArgvAt`, read above `top`), and starts
-// the process at `io_entry()`.
+// Outside the proof is the system the file runs on. Everything asked of it
+// is a premise, and `LinuxStart` (below) is those premises under one name:
+// that Linux maps the file as `X86Memory::io_load` says below the segment's
+// end, starts the process at `io_entry()`, leaves the program's stack room
+// usable below the entry RSP, and puts the command line at and above RSP as
+// the psABI lays it out. `Source::elf_file_runs` is the theorem from them.
 import native_source;
 import native_compile;
 import native_compile_region;
@@ -147,4 +147,68 @@ theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= 
     let length = 232 + assemble(no_fills(), program, Nil).len();
     src.elf_simulates(size, within, program, homes, compiled, fits, omega(short), io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
         io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
+}
+
+// ---------------------------------------------------------------------------
+// What the theorem asks of the system (issues/elf-theorem-runtime-premises.md)
+
+// The stack a source's program needs below its entry RSP: `main`'s frame; a
+// frame, a return address and the registers a callee keeps for each call of
+// `src.depth`; the room its functions' table asks; and a word for the return
+// address of a call past the depth.
+fn Source::stack_room(self src: Source) → Nat {
+    (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1)
+}
+
+// A process of `file` at its first instruction, as the system must have made
+// it for a theorem about the file to be about the run. Each field is an
+// assumption about that system, none is proved, and together they are all
+// that is assumed of it at the start; what it does afterwards is the
+// simulation's own (`LinuxAnswered`, linux_x86_64_io: each call answered as
+// `LinuxCmd::Answers` allows, RCX, R11 and the flags not kept).
+//
+// - `loaded`: the file's two PT_LOAD headers were honoured: its bytes at
+//   0x400000, readable and executable, and `size` zero bytes at 0x410000,
+//   readable and writable (the ELF gABI's loading rule; a fixed-address
+//   executable, so nothing else may hold those addresses).
+// - `entry`: RIP is the header's `e_entry`.
+// - `placed`, `rsp`, `stack`: RSP is `top`, above the segment and canonical,
+//   and the `room` bytes below it are data. On Linux that is the stack
+//   limit's to grant (RLIMIT_STACK, `ulimit -s`): the kernel maps the stack
+//   as it is touched, down to the limit, so it holds when the limit leaves
+//   `room` bytes below the entry RSP and fails under a smaller one. The
+//   memory's type says the same (`X86Profile::process` relies on it); the
+//   field is here so that the statement shows it.
+// - `argv`: argc, the argument pointers, a null word and the strings are at
+//   and above RSP as the x86-64 psABI's process start lays them out.
+//
+// Not asked: any register but RIP and RSP, any flag, what lies below the
+// stack room or between the regions, envp and auxv. Not modelled: a signal
+// (a process killed by SIGPIPE ends its run without an exit).
+record LinuxStart(size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>,
+    s: MachineState<X86Memory(X86Profile::process(size, top, room))>) {
+    loaded: s.memory.LoadedFrom(size, file),
+    entry: s.rip = io_entry(),
+    placed: StackPlaced(size, top, room),
+    rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    stack: DataAt(s.memory.perms, io_stack_low(top, room), room),
+    argv: ArgvAt(X86Profile::process(size, top, room).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
+}
+
+// The stack field is what the memory's profile relies on, so a memory of
+// the profile has it: nothing is asked twice.
+theorem process_stack_data(size, top, room: Nat, m: X86Memory(X86Profile::process(size, top, room))):
+    DataAt(m.perms, io_stack_low(top, room), room) { m.relied.right }
+
+// The theorem of the file `write-elf` writes, from what it asks of the
+// system: a process the system started as `LinuxStart` says, with the
+// source's stack room, simulates the source run with its command line.
+theorem Source::elf_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + assemble(no_fills(), program, Nil).len() <= 65535,
+    top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::process(size, top, src.stack_room()))>,
+    start: LinuxStart(size, io_elf_file(assemble(no_fills(), program, Nil), size), top, src.stack_room(), args, s)):
+    SimProgram(X86Profile::process(size, top, src.stack_room()).linux(), src.denote(args), s) {
+    src.elf_file_simulates(size, within, program, homes, compiled, fits, short, top, src.stack_room(), start.placed, s, start.entry, start.rsp,
+        start.loaded, Nat::le_refl(src.stack_room()), args, start.argv)
 }

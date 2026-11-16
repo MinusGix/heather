@@ -173,7 +173,7 @@ fn every_written_program_gets_its_theorem() {
     let result = write_elf(PROBES, "head10", &binary);
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
-    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_simulates("] {
+    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_simulates(", "theorem head10_elf_runs("] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
     let every: Vec<u8> = (0..700u32).map(|i| (i * 7 % 256) as u8).collect();
