@@ -20,6 +20,12 @@ use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
 
 
+/// How many times a refused proof is written again with more words kept
+/// as atoms (§5.1). Each round keeps every word a failing side condition
+/// names, so a few rounds reach the innermost words a fact mentions.
+pub(crate) const ATOM_ROUNDS: usize = 3;
+
+#[derive(Clone)]
 pub(crate) struct Generated {
     /// The proof, as source.
     pub source: String,
@@ -45,6 +51,10 @@ pub(crate) struct Obligation {
     /// For a side condition proved given hypothesis words' facts (§2): its
     /// statement under the binders that take them, and the `λ` that does.
     pub probe: Option<(String, String)>,
+    /// The words to keep as atoms when this side condition fails (§5.1):
+    /// the innermost words under its own that a fact in scope mentions, or
+    /// its own word when none is.
+    pub atoms: Vec<String>,
 }
 
 impl Obligation {
@@ -141,6 +151,9 @@ struct Walk<'a> {
     /// Decompositions and reflected comparisons, stated before arithmetic.
     bridges: Vec<(String, String, String)>,
     splits: HashMap<String, (String, String)>,
+    /// Words kept as atoms because taking them apart left a side condition
+    /// `omega` could not prove (§5.1): leaves, whatever their head.
+    opaque: HashSet<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -261,7 +274,9 @@ impl<'a> Walk<'a> {
             return Ok(Some(node));
         }
 
-        let shape = if self.stated.contains(&spelled) { self.known(word).unwrap_or(Shape::Leaf) } else { self.shape(word) };
+        let shape = if self.opaque.contains(&spelled) {
+            Shape::Leaf
+        } else if self.stated.contains(&spelled) { self.known(word).unwrap_or(Shape::Leaf) } else { self.shape(word) };
         let split = match &shape { Shape::Split(n, m, x, low) => Some((n.clone(), m.clone(), x.clone(), *low)), _ => None };
         let kind = match shape {
             Shape::Add(a, b) => match (self.word_at(w.clone(), &a)?, self.word_at(w.clone(), &b)?) {
@@ -533,6 +548,8 @@ struct Emitter<'w, 'a> {
     /// Per `sub` node, its no-borrow side condition.
     fits: HashMap<usize, usize>,
     obligations: Vec<Obligation>,
+    /// The word each side condition came from.
+    obligation_nodes: Vec<usize>,
     /// Obligation `i`'s projection out of the bundle.
     paths: Vec<String>,
     emitted: HashSet<String>,
@@ -596,6 +613,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
             bound_from: vec![None; walk.nodes.len()],
             fits: HashMap::new(),
             obligations: Vec::new(),
+            obligation_nodes: Vec::new(),
             paths: Vec::new(),
             emitted: HashSet::new(),
             lines: Vec::new(),
@@ -703,9 +721,61 @@ impl<'w, 'a> Emitter<'w, 'a> {
         format!("nat::Nat::pow(2, {})", self.walk.nodes[n].width)
     }
 
-    fn obligation(&mut self, statement: String, shown: String, why: String, closed: bool) -> usize {
-        self.obligations.push(Obligation { statement, shown, why, closed, probe: None });
+    fn obligation(&mut self, n: usize, statement: String, shown: String, why: String, closed: bool) -> usize {
+        self.obligations.push(Obligation { statement, shown, why, closed, probe: None, atoms: Vec::new() });
+        self.obligation_nodes.push(n);
         self.obligations.len() - 1
+    }
+
+    /// The words under `n` (`n` included) taken apart: its operands, and the
+    /// words its value's Nat reads.
+    fn below(&self, n: usize, out: &mut Vec<usize>) {
+        if self.walk.nodes[n].is_leaf() && !matches!(self.walk.nodes[n].kind, Kind::Defined(..)) || out.contains(&n) {
+            return;
+        }
+        out.push(n);
+        match &self.walk.nodes[n].kind {
+            Kind::Add(a, b) | Kind::Sub(a, b) => {
+                self.below(*a, out);
+                self.below(*b, out);
+            }
+            Kind::Value(_, _, syn) | Kind::Defined(_, _, syn) => self.syn_words(syn, out),
+            Kind::Leaf => {}
+        }
+    }
+
+    fn syn_words(&self, syn: &NatSyn, out: &mut Vec<usize>) {
+        match syn {
+            NatSyn::Add(x, y, _, _) => {
+                self.syn_words(x, out);
+                self.syn_words(y, out);
+            }
+            NatSyn::Scale(_, _, x, _) => self.syn_words(x, out),
+            NatSyn::Word(w) => self.below(*w, out),
+            _ => {}
+        }
+    }
+
+    /// Each side condition's words to keep as atoms should it fail (§5.1):
+    /// the innermost words under its own that `mentioned` holds of, those
+    /// a fact in scope bounds, else its own word, whose range is then all
+    /// that is known of it.
+    fn choose_atoms(&mut self, mentioned: &dyn Fn(usize) -> bool) {
+        for i in 0..self.obligations.len() {
+            let n = self.obligation_nodes[i];
+            let mut under = Vec::new();
+            self.below(n, &mut under);
+            let kept: Vec<usize> = under.iter().copied()
+                .filter(|&m| !matches!(self.walk.nodes[m].kind, Kind::Defined(..)) && mentioned(m))
+                .filter(|&m| {
+                    let mut inner = Vec::new();
+                    self.below(m, &mut inner);
+                    !inner.iter().any(|&k| k != m && !matches!(self.walk.nodes[k].kind, Kind::Defined(..)) && mentioned(k))
+                })
+                .collect();
+            let kept = if kept.is_empty() { vec![n] } else { kept };
+            self.obligations[i].atoms = kept.iter().map(|&m| self.walk.nodes[m].word.clone()).collect();
+        }
     }
 
     /// Whether a Nat's syntax reads the word `n`.
@@ -752,7 +822,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
             let closed = p.terms.is_empty() && q.terms.is_empty();
-            BoundFrom::Obligation(self.obligation(statement, shown, why, closed))
+            BoundFrom::Obligation(self.obligation(n, statement, shown, why, closed))
         };
         self.bound_from[n] = Some(from);
         match from {
@@ -815,7 +885,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 let shown = format!("{} <= {}", self.shown(&q), self.shown(&p));
                 let why = format!("`{}` may borrow", self.walk.nodes[n].word);
                 let closed = p.terms.is_empty() && q.terms.is_empty();
-                let i = self.obligation(statement, shown, why, closed);
+                let i = self.obligation(n, statement, shown, why, closed);
                 self.fits.insert(n, i);
                 self.plan(a, seen);
                 self.plan(b, seen);
@@ -1201,7 +1271,10 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
 /// the side conditions that adds. Where the checker refuses that proof, the
 /// careful one proves the goal with `omega` and leaves alone a fact whose
 /// side conditions fail.
-pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool) -> Result<Generated, String> {
+///
+/// `opaque` are words kept as atoms: an attempt whose side conditions over
+/// them failed is retried with them as leaves (§5.1).
+pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool, opaque: &HashSet<String>) -> Result<Generated, String> {
     if let Some(source) = bridge_goal(elab, cx, expected) {
         return Ok(Generated { source, prelude: String::new(), obligations: Vec::new(), retry: false });
     }
@@ -1218,6 +1291,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
         defining: HashSet::new(),
         bridges: Vec::new(),
         splits: HashMap::new(),
+        opaque: opaque.clone(),
     };
     let facts_in_scope = local_facts(elab, cx);
     for (name, ty) in &facts_in_scope {
@@ -1244,6 +1318,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     // its side conditions may follow from that one's comparison (`1 < n - i`
     // written before `i < n`).
     let fact_names: Vec<String> = facts_in_scope.iter().map(|(name, _)| name.clone()).collect();
+    let fact_texts: Vec<String> = facts_in_scope.iter().filter_map(|(_, ty)| elab.spell_type_source(cx, ty)).collect();
     let mut pending = facts_in_scope;
     loop {
         let mut refused = Vec::new();
@@ -1352,6 +1427,10 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     }
     stages.push((hypothesis_words.clone(), from..e.obligations.len()));
     stages.retain(|(_, range)| !range.is_empty());
+    e.choose_atoms(&|n| {
+        let value = format!("bitvec::BitVec::toNat({})", walk.nodes[n].word);
+        walk.bridges.iter().any(|(_, statement, _)| statement.contains(&value)) || fact_texts.iter().any(|text| text.contains(&value))
+    });
 
     // `toNat(w)` of each of `nodes` as a Nat variable `__bv_wN`, the longest
     // spelling first so an inner word is not replaced inside an outer one.

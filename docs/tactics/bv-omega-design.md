@@ -209,6 +209,33 @@ conditions one at a time and reports the first one `omega` refuses, with the wor
 own residual. If every side condition checks, the goal step failed, and its
 error is reported with the generated proof.
 
+### 5.1 Words kept whole
+
+A word the walk can take apart is not always one it should. The binary
+search's midpoint `lo + ((hi - lo) >> 1)` is an addition, so its fact needs
+its no-overflow, and the shift is a leaf: nothing says it is at most
+`hi - lo`, so `omega` cannot prove `lo + s < 2^64`. Yet the facts in scope,
+`mid < hi`, are about the midpoint itself, and as an atom it needs nothing
+else (issues/bv-omega-let-alias-taken-apart.md).
+
+So before reporting a refusal, `bv_omega` re-checks the side conditions,
+and for each one `omega` refuses it keeps some words *whole*: leaves
+whatever their head, their `toNat` an atom bounded by its range and by the
+facts that mention it. Which words: under the failing condition's word
+(itself included), the innermost ones whose `toNat` a fact in scope or a
+comparison bridge mentions, since a fact is the only thing an atom is known
+by; with none, the word itself. For `mid + 1 <= hi`, the failing condition
+is `mid + 1`'s, and both `mid + 1` and `mid` are mentioned; `mid` is
+innermost, so `mid + 1` is still taken apart over it, and its bound follows
+from `mid < hi`.
+
+The proof is then written again, carefully, with those words kept whole,
+for at most `ATOM_ROUNDS` rounds, each keeping more. It only ever runs
+after the careful proof failed, so a goal `bv_omega` proved before is
+proved as before. If no round succeeds, the refusal is the careful proof's,
+naming its first failing condition: keeping words whole explains nothing a
+user can act on.
+
 ## 6. Lifting
 
 A proof inline in a declaration's body is checked, respelled, substituted and
