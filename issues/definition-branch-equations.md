@@ -5,7 +5,7 @@ labels: [proofs,elaboration,native]
 area: language
 milestone: [lang-proof-modularity]
 created: 2026-11-14
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 Brief §5 of the optimizer side threads (2026-11-14): to use a function in a
@@ -91,3 +91,12 @@ Probes: `lib/_tests/std/core/branch_equations_tests.hthr`.
   equations' own elaboration is a few percent of the library's CPU, and a
   whole-library sweep at three jobs is slower by a similar fraction. Lazy
   generation at a first reference is the change that would remove it.
+- 2026-11-15: a measured (`decreases`) body has them too, each proved from
+  `f_unfold` and then the same chain of `picked`/`convoy` steps; a leaf's
+  recursive call stays the call, and the body's `on` discharges are no part
+  of an equation. Built after `f::step`/`f::done`, where the companions are.
+  The UTF-8 validator's loop proof (`examples/utf8/utf8_check.hthr`) cites
+  one per branch (`utf8_valid_from::True::False::True`): a chain of
+  `rewrite`s through the loop's step could not reach a test below a decided
+  one, whose `if False { … } else { … }` the rewrite reads only one step
+  down. Probes `halve` and `hop` in `branch_equations_tests`.
