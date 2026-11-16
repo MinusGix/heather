@@ -60,7 +60,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{allocator, check_file, emission, labels, lowered, parts, symbol_ok, verified, write_new};
+use super::{allocator, check_file, emission, labels, lowered, parts, refuse_assumptions, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -556,6 +556,7 @@ theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, dept
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     checked?;
+    refuse_assumptions(&elab, &format!("{p}_certificate"), &unchecked)?;
     write_new(&certificate, text.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     write_executable(&output, &file)?;
