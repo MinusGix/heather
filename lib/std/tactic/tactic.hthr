@@ -194,7 +194,16 @@ record Projected { ty: GlobalRef, fields: List<FieldProj> }
 // registered as the instance `class<args…>(index…)`, its index arguments
 // named (an instance head spells its index by name), its fields read off the
 // value: the same instance written in source as `{ f := name.f, … }`.
-inductive DeclForm { AsTheorem, AsFunction, AsValue, AsInstance(class: String, args: List<Expr>, index: List<String>) }
+inductive DeclForm {
+    AsTheorem,
+    AsFunction,
+    AsValue,
+    AsInstance(class: String, args: List<Expr>, index: List<String>),
+    // A value also registered under its type, as `register def` does: `ty`
+    // is the type's name, a record or inductive with no parameters, and
+    // `registered(ty)` then lists the value.
+    AsRegistered(ty: String),
+}
 
 record Param { x: LocalRef, implicit: Bool }
 
@@ -1144,7 +1153,9 @@ fn decls_at(ds: List<Decl>, i: Nat) → Decl {
 fn host_decl(t: Tac<Expr>, i: Nat) → Decl { decls_at(host_decls(t), i) }
 
 // 0: a theorem. 1: a function.
-fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1, AsValue => 2, AsInstance(_, _, _) => 3 } }
+fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1, AsValue => 2, AsInstance(_, _, _) => 3, AsRegistered(_) => 4 } }
+
+fn decl_registered_type(d: Decl) → String { match d.form { AsRegistered(ty) => ty, _ => "" } }
 
 fn decl_instance_class(d: Decl) → String { match d.form { AsInstance(c, _, _) => c, _ => "" } }
 
