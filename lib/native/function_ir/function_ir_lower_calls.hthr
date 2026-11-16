@@ -582,155 +582,109 @@ theorem body_kept_of(saves: Nat, before, after: Gprs, rsp: read_gpr(Rsp, after) 
 }
 
 // ---------------------------------------------------------------------------
-// How deep a function's calls go
+// The room a function asks for
 
-// A function asks `136` bytes of stack a level: its own frame and, for
-// each call nested below it, the callee's. The room function `f` is called
-// with is `136 * Succ(depth(f))`, for a table `depth` the program's calls
-// respect (`StructuredRegion::Shallow`): a call of `callee` from a function
-// at depth `level` is of a function less deep. The lowering's table is
-// `program_depth`, computed from the program and checked by evaluation
-// (`program_shallow`). A function's index is such a table too
-// (`program_shallow_index`), since a function calls only those before it.
+// A function is called with `rooms(f)` bytes of stack below its return
+// address, for a table `rooms` the program's calls respect
+// (`StructuredRegion::Fits`): what is left of the room once the function's
+// own frame is open, `avail`, holds each callee's room and the 24 bytes a
+// call puts below the frame (the two words past the sixth and the return
+// address). The lowering's table is an input, untrusted like the
+// placement: each function is refused where its frame and its calls do not
+// fit its entry (`Function::roomy`). `program_rooms` is the table for the
+// functions as they are, and a function's index is one too
+// (`StructuredRegion::fits_index`, the statement compiler's).
 
-fn depth_at(depths: List<Nat>, f: Nat) → Nat { match depths.nth(f) { None => 0, Some(depth) => depth } }
+fn rooms_at(rooms: List<Nat>, f: Nat) → Nat { match rooms.nth(f) { None => 0, Some(room) => room } }
 
-// The deepest call of a region: one more than its callee's depth.
-fn StructuredRegion::call_depth(self region: StructuredRegion, depths: List<Nat>) → Nat {
-    match region {
-        Dataflow(_) => 0,
-        Sequence(_, continuation) => continuation.call_depth(depths),
-        Compose(prefix, continuation) => prefix.call_depth(depths).max(continuation.call_depth(depths)),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.call_depth(depths).max(when_false.call_depth(depths)),
-        Call(callee, _, _) => Succ(depth_at(depths, callee)),
-        Loop(_, _, _, _, body, _, _, _, _) => body.call_depth(depths),
-        Lend(_, callee, _, _) => Succ(depth_at(depths, callee)),
-    }
-}
-
-// The table, function `f` at entry `f`: each function's depth from those
-// before it.
-fn depths_then(depths: List<Nat>, last: Function) → List<Nat> { depths ++ [last.body.call_depth(depths)] }
-
-fn program_depths(functions: List<Function>) → List<Nat> {
-    match functions { Nil => [], Cons(last, earlier) => depths_then(program_depths(earlier), last) }
-}
-
-fn program_depth(functions: List<Function>) → Nat → Nat { λ (f: Nat) => depth_at(program_depths(functions), f) }
-
-// The stack function `f` of a program asks for below its return address:
-// `136` bytes a level, for itself and each level of calls below it.
-fn stack_room(functions: List<Function>, f: Nat) → Nat { 136 * Succ(program_depth(functions)(f)) }
-
-// Every call of the region, of a function below `bound`, is of one less
-// deep than `level`.
-fn StructuredRegion::Shallow(self region: StructuredRegion, depth: Nat → Nat, bound, level: Nat) → Type {
+// Every call of the region, of a function below `bound`, is of one whose
+// room and the call's 24 bytes fit in `avail`.
+fn StructuredRegion::Fits(self region: StructuredRegion, rooms: Nat → Nat, bound, avail: Nat) → Type {
     match region {
         Dataflow(_) => True,
-        Sequence(_, continuation) => continuation.Shallow(depth, bound, level),
-        Compose(prefix, continuation) => prefix.Shallow(depth, bound, level) ∧ continuation.Shallow(depth, bound, level),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.Shallow(depth, bound, level) ∧ when_false.Shallow(depth, bound, level),
-        Call(callee, _, _) => Succ(callee) <= bound → Succ(depth(callee)) <= level,
-        Loop(_, _, _, _, body, _, _, _, _) => body.Shallow(depth, bound, level),
-        Lend(_, callee, _, _) => Succ(callee) <= bound → Succ(depth(callee)) <= level,
+        Sequence(_, continuation) => continuation.Fits(rooms, bound, avail),
+        Compose(prefix, continuation) => prefix.Fits(rooms, bound, avail) ∧ continuation.Fits(rooms, bound, avail),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.Fits(rooms, bound, avail) ∧ when_false.Fits(rooms, bound, avail),
+        Call(callee, _, _) => Succ(callee) <= bound → rooms(callee) + 24 <= avail,
+        Loop(_, _, _, _, body, _, _, _, _) => body.Fits(rooms, bound, avail),
+        Lend(_, callee, _, _) => Succ(callee) <= bound → rooms(callee) + 24 <= avail,
     }
 }
 
 // The same by evaluation, of a table.
-fn StructuredRegion::shallow(self region: StructuredRegion, depths: List<Nat>, level: Nat) → Bool {
+fn StructuredRegion::fits(self region: StructuredRegion, rooms: List<Nat>, avail: Nat) → Bool {
     match region {
         Dataflow(_) => True,
-        Sequence(_, continuation) => continuation.shallow(depths, level),
-        Compose(prefix, continuation) => prefix.shallow(depths, level) && continuation.shallow(depths, level),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.shallow(depths, level) && when_false.shallow(depths, level),
-        Call(callee, _, _) => Succ(depth_at(depths, callee)).leb(level),
-        Loop(_, _, _, _, body, _, _, _, _) => body.shallow(depths, level),
-        Lend(_, callee, _, _) => Succ(depth_at(depths, callee)).leb(level),
+        Sequence(_, continuation) => continuation.fits(rooms, avail),
+        Compose(prefix, continuation) => prefix.fits(rooms, avail) && continuation.fits(rooms, avail),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.fits(rooms, avail) && when_false.fits(rooms, avail),
+        Call(callee, _, _) => (rooms_at(rooms, callee) + 24).leb(avail),
+        Loop(_, _, _, _, body, _, _, _, _) => body.fits(rooms, avail),
+        Lend(_, callee, _, _) => (rooms_at(rooms, callee) + 24).leb(avail),
     }
 }
 
-theorem StructuredRegion::shallow_sound(self region: StructuredRegion, depths: List<Nat>, bound, level: Nat):
-    region.shallow(depths, level).IsTrue() → region.Shallow(λ (g: Nat) => depth_at(depths, g), bound, level) {
+theorem StructuredRegion::fits_sound(self region: StructuredRegion, rooms: List<Nat>, bound, avail: Nat):
+    region.fits(rooms, avail).IsTrue() → region.Fits(λ (g: Nat) => rooms_at(rooms, g), bound, avail) {
     match region {
         Dataflow(_) => λ _ => trivial,
-        Sequence(_, continuation) => λ ok => continuation.shallow_sound(depths, bound, level, ok),
+        Sequence(_, continuation) => λ ok => continuation.fits_sound(rooms, bound, avail, ok),
         Compose(prefix, continuation) => λ ok => {
-            let parts = Bool::is_true_and(prefix.shallow(depths, level), continuation.shallow(depths, level), ok);
-            ⟨prefix.shallow_sound(depths, bound, level, parts.left), continuation.shallow_sound(depths, bound, level, parts.right)⟩
+            let parts = Bool::is_true_and(prefix.fits(rooms, avail), continuation.fits(rooms, avail), ok);
+            ⟨prefix.fits_sound(rooms, bound, avail, parts.left), continuation.fits_sound(rooms, bound, avail, parts.right)⟩
         },
         Conditional(_, _, _, _, when_true, when_false) => λ ok => {
-            let parts = Bool::is_true_and(when_true.shallow(depths, level), when_false.shallow(depths, level), ok);
-            ⟨when_true.shallow_sound(depths, bound, level, parts.left), when_false.shallow_sound(depths, bound, level, parts.right)⟩
+            let parts = Bool::is_true_and(when_true.fits(rooms, avail), when_false.fits(rooms, avail), ok);
+            ⟨when_true.fits_sound(rooms, bound, avail, parts.left), when_false.fits_sound(rooms, bound, avail, parts.right)⟩
         },
-        Call(callee, _, _) => λ ok _ => Succ(depth_at(depths, callee)).leb_sound(level, ok),
-        Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.shallow_sound(depths, bound, level, ok),
-        Lend(_, callee, _, _) => λ ok _ => Succ(depth_at(depths, callee)).leb_sound(level, ok),
+        Call(callee, _, _) => λ ok _ => (rooms_at(rooms, callee) + 24).leb_sound(avail, ok),
+        Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_sound(rooms, bound, avail, ok),
+        Lend(_, callee, _, _) => λ ok _ => (rooms_at(rooms, callee) + 24).leb_sound(avail, ok),
     }
 }
 
-// By index every region is shallow: a call below `bound` is of a function
-// below it.
-theorem StructuredRegion::shallow_index(self region: StructuredRegion, bound: Nat): region.Shallow(λ (g: Nat) => g, bound, bound) {
+// By index every region fits, where a function's room is `136` bytes for
+// it and each function before it: a call below `bound` is of a function
+// whose room is at most `136 * bound`.
+theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail: Nat, enough: 136 * bound + 24 <= avail):
+    region.Fits(λ (g: Nat) => 136 * Succ(g), bound, avail) {
     match region {
         Dataflow(_) => trivial,
-        Sequence(_, continuation) => continuation.shallow_index(bound),
-        Compose(prefix, continuation) => ⟨prefix.shallow_index(bound), continuation.shallow_index(bound)⟩,
-        Conditional(_, _, _, _, when_true, when_false) => ⟨when_true.shallow_index(bound), when_false.shallow_index(bound)⟩,
-        Call(_, _, _) => λ below => below,
-        Loop(_, _, _, _, body, _, _, _, _) => body.shallow_index(bound),
-        Lend(_, _, _, _) => λ below => below,
+        Sequence(_, continuation) => continuation.fits_index(bound, avail, enough),
+        Compose(prefix, continuation) => ⟨prefix.fits_index(bound, avail, enough), continuation.fits_index(bound, avail, enough)⟩,
+        Conditional(_, _, _, _, when_true, when_false) => ⟨when_true.fits_index(bound, avail, enough), when_false.fits_index(bound, avail, enough)⟩,
+        Call(callee, _, _) => λ below => { let fit: (136 * Succ(callee) + 24 <= avail) = { omega }; fit },
+        Loop(_, _, _, _, body, _, _, _, _) => body.fits_index(bound, avail, enough),
+        Lend(_, callee, _, _) => λ below => { let fit: (136 * Succ(callee) + 24 <= avail) = { omega }; fit },
     }
 }
 
-// Each function of a program shallow at its own depth.
-fn ProgramShallow(functions: List<Function>, depth: Nat → Nat) → Type {
-    match functions {
-        Nil => True,
-        Cons(last, earlier) => last.body.Shallow(depth, earlier.len(), depth(earlier.len())) ∧ ProgramShallow(earlier, depth),
-    }
-}
-
-fn program_shallow_in(functions: List<Function>, depths: List<Nat>) → Bool {
-    match functions {
-        Nil => True,
-        Cons(last, earlier) => last.body.shallow(depths, depth_at(depths, earlier.len())) && program_shallow_in(earlier, depths),
-    }
-}
-
-// What the lowering checks: the program's own table is respected.
-fn program_shallow(functions: List<Function>) → Bool { program_shallow_in(functions, program_depths(functions)) }
-
-theorem program_shallow_sound(depths: List<Nat>, functions: List<Function>):
-    program_shallow_in(functions, depths).IsTrue() → ProgramShallow(functions, λ (g: Nat) => depth_at(depths, g)) {
-    match functions {
-        Nil => λ _ => trivial,
-        Cons(last, earlier) => λ ok => {
-            let parts = Bool::is_true_and(last.body.shallow(depths, depth_at(depths, earlier.len())), program_shallow_in(earlier, depths), ok);
-            ⟨last.body.shallow_sound(depths, earlier.len(), depth_at(depths, earlier.len()), parts.left),
-             program_shallow_sound(depths, earlier, parts.right)⟩
-        },
-    }
-}
-
-theorem program_shallow_index(functions: List<Function>): ProgramShallow(functions, λ (g: Nat) => g) {
-    match functions {
-        Nil => trivial,
-        Cons(last, earlier) => ⟨last.body.shallow_index(earlier.len()), program_shallow_index(earlier)⟩,
+// The room a region's calls ask below a frame: the largest of its
+// callees' rooms, each with the call's 24 bytes, and none without a call.
+fn StructuredRegion::callee_room(self region: StructuredRegion, rooms: List<Nat>) → Nat {
+    match region {
+        Dataflow(_) => 0,
+        Sequence(_, continuation) => continuation.callee_room(rooms),
+        Compose(prefix, continuation) => prefix.callee_room(rooms).max(continuation.callee_room(rooms)),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.callee_room(rooms).max(when_false.callee_room(rooms)),
+        Call(callee, _, _) => rooms_at(rooms, callee) + 24,
+        Loop(_, _, _, _, body, _, _, _, _) => body.callee_room(rooms),
+        Lend(_, callee, _, _) => rooms_at(rooms, callee) + 24,
     }
 }
 
 // What function `f` promises, called on `arguments` where the program's
 // functions say it may return `result`: entered at stack offset `i` with
 // the arguments passed (`Stack::Passed`) and room below for itself and its
-// callees (`136` bytes a level, `depth(f)` levels below it: its frame, the
+// callees (`136` bytes a level, `rooms(f)` levels below it: its frame, the
 // two words past the sixth of a call it makes, and that call's return
 // address), it returns with `result` in
 // RAX, the callee-saved registers kept, and memory as it was but for
 // stores of its own below `i` (`Stack::Wrote`): its caller's words, the
 // return address among them, and whatever else such stores leave.
 fn Stack::CalleePre<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), callees: Callees(),
-    depth: Nat → Nat, f: Nat, arguments: List<BitVec(64)>, result: BitVec(64)) → Nat → MachineState<M> → Type {
-    λ i s => stack.Passed(arguments, i, s) ∧ (callees(f, arguments, result) ∧ 136 * Succ(depth(f)) <= i)
+    rooms: Nat → Nat, f: Nat, arguments: List<BitVec(64)>, result: BitVec(64)) → Nat → MachineState<M> → Type {
+    λ i s => stack.Passed(arguments, i, s) ∧ (callees(f, arguments, result) ∧ rooms(f) <= i)
 }
 fn Stack::CalleePost<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64)) →
     Nat → MachineState<M> → MachineState<M> → Type {
@@ -749,9 +703,9 @@ theorem Stack::callee_keeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
 }
 
 // Every function below `bound` meets its contract at its label.
-fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), depth: Nat → Nat, bound: Nat) → Type {
+fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), rooms: Nat → Nat, bound: Nat) → Type {
     (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalleePre(callees, depth, f, arguments, result), stack.CalleePost(result))
+        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalleePre(callees, rooms, f, arguments, result), stack.CalleePost(result))
 }
 
 // What a program's functions are lent (docs/native/native-one-compiler-design.md
@@ -850,19 +804,19 @@ theorem Stack::in_memory_wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess
 // the one in memory.
 fn Stack::Trail<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, d: Nat,
     entry: M, now: Buffers(), memory: M) → Type {
-    stack.WroteIn(d + 64, lending.spans(), entry, memory) ∧ stack.InMemory(lending, now, memory)
+    stack.WroteIn(d, lending.spans(), entry, memory) ∧ stack.InMemory(lending, now, memory)
 }
 
 // A word stored in the frame or below keeps the trail.
 theorem Stack::trail_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
-    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), d: Nat, under: d + 64 <= top, entry: M, now: Buffers(),
-    memory: M, trail: stack.Trail(lending, d, entry, now, memory), k: Nat, inside: k + 8 <= d + 64, word: BitVec(64)):
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), d: Nat, under: d <= top, entry: M, now: Buffers(),
+    memory: M, trail: stack.Trail(lending, d, entry, now, memory), k: Nat, inside: k + 8 <= d, word: BitVec(64)):
     stack.Trail(lending, d, entry, now, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
     let stored = stack.writes.store(memory, stack.at(k), word_bytes(word));
-    let own = stack.wrote_store(d + 64, memory, k, inside, word);
-    ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stored, trail.left,
-        stack.wrote_in_own(d + 64, lending.spans(), memory, stored, own)),
-     stack.in_memory_wrote(top, lending, loan, d + 64, under, now, memory, stored, own, trail.right)⟩
+    let own = stack.wrote_store(d, memory, k, inside, word);
+    ⟨stack.wrote_in_trans(d, lending.spans(), entry, memory, stored, trail.left,
+        stack.wrote_in_own(d, lending.spans(), memory, stored, own)),
+     stack.in_memory_wrote(top, lending, loan, d, under, now, memory, stored, own, trail.right)⟩
 }
 
 // A byte stored into a buffer the lending lets a call write: the file with
@@ -896,8 +850,8 @@ theorem Stack::trail_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
     trail: stack.Trail(lending, d, entry, now, memory), b, k: Nat, written: lending.written(b) = True,
     inside: k < buffer_bytes(lending.buffers, b).len(), byte: BitVec(8)):
     stack.Trail(lending, d, entry, store_byte(now, b, k, byte), stack.writes.store(memory, lending.spans().byte(b, k), [byte])) {
-    ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), [byte]), trail.left,
-        stack.wrote_in_put(d + 64, lending.spans(), memory, b, k, written, inside, byte)),
+    ⟨stack.wrote_in_trans(d, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), [byte]), trail.left,
+        stack.wrote_in_put(d, lending.spans(), memory, b, k, written, inside, byte)),
      stack.in_memory_put(top, lending, loan, now, memory, trail.right, b, k, written, inside, byte)⟩
 }
 
@@ -931,8 +885,8 @@ theorem Stack::trail_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>},
     trail: stack.Trail(lending, d, entry, now, memory), b, k: Nat, written: lending.written(b) = True,
     inside: k < buffer_bytes(lending.buffers, b).len(), bytes: List<BitVec(8)>, fits: k + bytes.len() <= buffer_bytes(lending.buffers, b).len()):
     stack.Trail(lending, d, entry, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes)) {
-    ⟨stack.wrote_in_trans(d + 64, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), bytes), trail.left,
-        stack.wrote_in_store(d + 64, lending.spans(), memory, b, k, written, inside, bytes, fits)),
+    ⟨stack.wrote_in_trans(d, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), bytes), trail.left,
+        stack.wrote_in_store(d, lending.spans(), memory, b, k, written, inside, bytes, fits)),
      stack.in_memory_span(top, lending, loan, now, memory, trail.right, b, k, written, inside, bytes, fits)⟩
 }
 
@@ -958,9 +912,9 @@ fn Stack::LentOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 // registers, what the program's functions say it may return and leave
 // (`effects`), room for its frames, and the file lent.
 fn Stack::CalledOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), effects: Effects(),
-    depth: Nat → Nat, lending: Lending, top: Nat, f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) →
+    rooms: Nat → Nat, lending: Lending, top: Nat, f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) →
     Nat → MachineState<M> → Type {
-    λ i s => (stack.Passed(arguments, i, s) ∧ (effects(before, f, arguments, result, after) ∧ 136 * Succ(depth(f)) <= i)) ∧
+    λ i s => (stack.Passed(arguments, i, s) ∧ (effects(before, f, arguments, result, after) ∧ rooms(f) <= i)) ∧
         stack.LentOver(lending, top, f, arguments, before)(i, s)
 }
 
@@ -976,10 +930,10 @@ fn Stack::AnsweredOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, se
 
 // Every function below `bound` meets that contract at its label, over
 // every file.
-fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), depth: Nat → Nat, bound: Nat, lending: Lending,
+fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat, lending: Lending,
     top: Nat) → Type {
     (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, depth, lending, top, f, arguments, result, before, after),
+        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
             stack.AnsweredOver(lending, result, after))
 }
 
@@ -990,12 +944,12 @@ fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)
 // and not its caller's (docs/native/native-library-exports-design.md §3.1). The
 // code does not depend on the lending but for its counts, so the program's
 // induction gives this as it gave the contract at one.
-fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), depth: Nat → Nat, bound: Nat, counts: List<Nat>,
+fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat, counts: List<Nat>,
     needs: Nat → Nat → Bool, top: Nat) → Type {
     (lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
         (f: Nat) → Succ(f) <= bound → ((b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True) →
         (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, depth, lending, top, f, arguments, result, before, after),
+        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
             stack.AnsweredOver(lending, result, after))
 }
 
@@ -1004,7 +958,7 @@ fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)
 // stores into its own frame and below.
 fn Stack::Framed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saves: Nat, d: Nat,
     s0, s: MachineState<M>) → Type {
-    Kept(body_kept(saves), s0.gprs, s.gprs) ∧ stack.Wrote(d + 64, s0.memory, s.memory)
+    Kept(body_kept(saves), s0.gprs, s.gprs) ∧ stack.Wrote(d, s0.memory, s.memory)
 }
 
 // What a body keeps of where it started, over the file `now`: the
@@ -2198,9 +2152,9 @@ theorem kept_block_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     placement: List<Place>, names: Nat):
     EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Block(lowered.code)), lowered.file, placement, names)) {
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m));
     let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m));
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m));
     ⟨prog.within_then(0, Block(lowered.code)),
      λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(lowered.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
@@ -2265,7 +2219,7 @@ theorem may_emit_in_weaken<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fe
 // the buffer is lent to this body, so the byte read is the buffer's
 // whatever the body has stored in its own frame.
 theorem load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
-    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, file: File,
+    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d, lending, s0.memory), prog: Prog, file: File,
     home: Lent, load: Load, destination: Gpr, placement: List<Place>, names: Nat, same: home.buffer = load.buffer,
     bounded: file.bounded(load.index, home.length).IsTrue(), address: Lowered,
     addressed: Addressed<M>(values, file, destination, home.base, load.index, address),
@@ -2283,7 +2237,7 @@ theorem load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     let sum = values(64, home.base).add(index);
     let a = address_of(lending.addresses, home.buffer);
     let xs = buffer_bytes(lending.buffers, home.buffer);
-    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
+    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ framed(g, m);
     let mid = λ (g: Gprs) (m: M) => ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = sum)) ∧
         (facts ∧ (index.toNat() < values(64, home.length).toNat()))) ∧ framed(g, m);
@@ -2310,7 +2264,7 @@ theorem load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
                         j(sym(home_holds.right), λ w _ => w.toNat() <= xs.len(), BitVec::toNat_ofNat_le(64, xs.len()));
                     let inside: (index.toNat() < xs.len()) =
                         Nat::le_trans(Succ(index.toNat()), values(64, home.length).toNat(), xs.len(), held.left.right.right, short);
-                    let reads = stack.lent_address(d + 64, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, inside);
+                    let reads = stack.lent_address(d, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, inside);
                     let at: (read_gpr(destination, s.gprs) = a.add(index)) =
                         trans(held.left.left.right, cong_fn(λ (b: BitVec(64)) => b.add(index), home_holds.left));
                     let byte = buffer_byte(lending.buffers, home.buffer, index.toNat());
@@ -2330,7 +2284,7 @@ theorem load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
 
 theorem File::load_at_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
-    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>,
+    lent: stack.LentAll(d, lending, s0.memory), prog: Prog, home: Lent, load: Load, destination: Gpr, placement: List<Place>,
     names: Nat, same: home.buffer = load.buffer):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         load.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
@@ -2363,7 +2317,7 @@ theorem File::load_at_emits<M>(self file: File, saves: Nat, site: Site<M>, laid:
 
 theorem File::load_from_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
-    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, load: Load, destination: Gpr, placement: List<Place>, names: Nat,
+    lent: stack.LentAll(d, lending, s0.memory), prog: Prog, load: Load, destination: Gpr, placement: List<Place>, names: Nat,
     homes: List<Lent>):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         load.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
@@ -2430,7 +2384,7 @@ theorem emits_in_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, s
 // lies below the canonical boundary, so the length is far below `2^64` and
 // the sum did not wrap: all four bytes are the buffer's.
 theorem wide_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
-    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, file: File,
+    values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d, lending, s0.memory), prog: Prog, file: File,
     home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat, same: home.buffer = wide.buffer,
     bounded: file.bounded(wide.index, home.length).IsTrue(), spanned: file.span_bounded(wide.index, home.length, 3).IsTrue(),
     address: Lowered, addressed: Addressed<M>(values, file, destination, home.base, wide.index, address),
@@ -2448,7 +2402,7 @@ theorem wide_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     let sum = values(64, home.base).add(index);
     let a = address_of(lending.addresses, home.buffer);
     let xs = buffer_bytes(lending.buffers, home.buffer);
-    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
+    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ framed(g, m);
     let mid = λ (g: Gprs) (m: M) => ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = sum)) ∧
         (facts ∧ (index.toNat() + 3 < values(64, home.length).toNat()))) ∧ framed(g, m);
@@ -2517,7 +2471,7 @@ theorem wide_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
                     let written: (values(32, wide.output).resize(64) = dword.zero_extend(32)) =
                         trans(cong_fn(λ (w: BitVec(32)) => w.resize(64), word), BitVec::resize_zero_extend(32, 32, dword));
                     Exists(dword, ⟨j(sym(at_sum), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47),
-                            stack.lent_four(d + 64, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, span)),
+                            stack.lent_four(d, a, xs, s0.memory, lent(home.buffer), index, s.memory, held.right.right, span)),
                         ⟨j(sym(at), λ x _ => read_dword(site.data, s.memory, x) = Some(dword), read),
                          ⟨address.file.represents_write(values, s.gprs, destination, Some(Held(wide.output, Narrow(32))), dword.zero_extend(32),
                             held.left.left.left, written),
@@ -2529,7 +2483,7 @@ theorem wide_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
 
 theorem File::wide_at_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
-    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>,
+    lent: stack.LentAll(d, lending, s0.memory), prog: Prog, home: Lent, wide: WideLeaf, destination: Gpr, placement: List<Place>,
     names: Nat, same: home.buffer = wide.buffer):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         wide.Holds(values, lending.buffers) ∧ home.Holds(values, lending.addresses, lending.buffers),
@@ -2566,7 +2520,7 @@ theorem File::wide_at_emits<M>(self file: File, saves: Nat, site: Site<M>, laid:
 
 theorem File::wide_from_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
-    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat,
+    lent: stack.LentAll(d, lending, s0.memory), prog: Prog, wide: WideLeaf, destination: Gpr, placement: List<Place>, names: Nat,
     homes: List<Lent>):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
@@ -2601,7 +2555,7 @@ theorem File::wide_from_emits<M>(self file: File, saves: Nat, site: Site<M>, lai
 
 theorem File::emit_wide_emits<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>,
-    lent: stack.LentAll(d + 64, lending, s0.memory), prog: Prog, homes: List<Lent>, nodes: List<Node>, wide: WideLeaf,
+    lent: stack.LentAll(d, lending, s0.memory), prog: Prog, homes: List<Lent>, nodes: List<Node>, wide: WideLeaf,
     placement: List<Place>, names: Nat):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         (wide.Holds(values, lending.buffers) ∧ HomesHold(homes, values, lending.addresses, lending.buffers)) ∧ NodesHold(values, nodes_rest(nodes)),
@@ -2686,7 +2640,7 @@ theorem table_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().
     let p2 = At(p1, 0, table_jump(8 * entries.len()));
     let p3 = At(p2, 0, table_piece(entries));
     let out_file = lowered.file.write(base.gpr(), Some(Held(table.output, Word)));
-    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d + 64, s0.memory, m);
+    let framed = λ (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ framed(g, m);
     let mid = λ (g: Gprs) (m: M) => (lowered.file.Represents(values, g) ∧ table.Holds(values)) ∧ framed(g, m);
     let post = λ (g: Gprs) (m: M) => out_file.Represents(values, g) ∧ framed(g, m);
@@ -2828,7 +2782,7 @@ theorem emit_blind_leaf_emits<M>(saves: Nat, site: Site<M>, laid: site.program.l
 }
 
 theorem emit_quiet_leaf_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d + 64, lending, s0.memory),
+    lending: Lending, values: Valuation(), d: Nat, s0: MachineState<M>, lent: stack.LentAll(d, lending, s0.memory),
     prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat, homes: List<Lent>):
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file,
         NodesHoldOver(lending.buffers, values, nodes) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
@@ -2901,6 +2855,23 @@ fn EmitsOver<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data
 fn MayEmitOver<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat,
     s0: MachineState<M>, prog: Prog, file: File, facts: Type, before, after: Buffers(), out: Option<Emitted>) → Type {
     out.All(λ (emitted: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, emitted))
+}
+
+// The same at an equal bound.
+theorem may_emit_over_bound<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(),
+    a, b: Nat, same: a = b, s0: MachineState<M>, prog: Prog, file: File, facts: Type, before, after: Buffers(), out: Option<Emitted>,
+    held: MayEmitOver<M>(saves, site, stack, lending, values, a, s0, prog, file, facts, before, after, out)):
+    MayEmitOver<M>(saves, site, stack, lending, values, b, s0, prog, file, facts, before, after, out) {
+    j(same, λ x _ => MayEmitOver<M>(saves, site, stack, lending, values, x, s0, prog, file, facts, before, after, out), held)
+}
+
+// Where a body that calls stands at its start (`s0`): the stack pointer at
+// offset `d`, the room below it for the calls (`avail`), the eight slots a
+// call spills into from `d` up to the bound `w` its stores keep below,
+// and room above them for the call's frame.
+fn Stack::CallFrame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top, avail, d, w: Nat,
+    s0: MachineState<M>) → Type {
+    (read_gpr(Rsp, s0.gprs) = stack.at(d)) ∧ ((avail <= d) ∧ ((24 <= d) ∧ ((d + 64 = w) ∧ ((d + 64 <= stack.size) ∧ (d + 72 <= top)))))
 }
 
 // Facts that follow from the ones a body starts with.
@@ -3002,29 +2973,29 @@ theorem may_emit_over_still<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.f
 // which leave every buffer.
 theorem may_emit_over_of_in<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), values: Valuation(), d: Nat, s0: MachineState<M>,
-    under: d + 64 <= top, prog: Prog, file: File, facts: Type, now: Buffers(), out: Option<Emitted>, grows: Grows(prog, out),
-    emits: (s: MachineState<M>) → stack.LentAll(d + 64, lending.over(now), s.memory) →
+    under: d <= top, prog: Prog, file: File, facts: Type, now: Buffers(), out: Option<Emitted>, grows: Grows(prog, out),
+    emits: (s: MachineState<M>) → stack.LentAll(d, lending.over(now), s.memory) →
         ((b: Nat) → buffer_bytes(now, b).len() = buffer_bytes(lending.buffers, b).len()) →
         MayEmitIn<M>(saves, site, stack, values, d, s, prog, file, facts, out)):
     MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, now, now, out) {
     (match out as λ o => Grows(prog, o) →
-        ((s: MachineState<M>) → stack.LentAll(d + 64, lending.over(now), s.memory) →
+        ((s: MachineState<M>) → stack.LentAll(d, lending.over(now), s.memory) →
             ((b: Nat) → buffer_bytes(now, b).len() = buffer_bytes(lending.buffers, b).len()) →
             MayEmitIn<M>(saves, site, stack, values, d, s, prog, file, facts, o)) →
         MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, now, now, o) {
         None => λ _ _ => trivial,
         Some(emitted) => λ grown proved => ⟨grown, λ within s here resident held => {
             let trail = held.right;
-            let lent = stack.in_memory_lent(top, lending, loan, d + 64, under, now, s.memory, trail.right.right);
+            let lent = stack.in_memory_lent(top, lending, loan, d, under, now, s.memory, trail.right.right);
             let ran = proved(s, lent, λ b => trail.right.right(b).left).right(within)(s, here, resident,
-                ⟨held.left, ⟨kept_refl(body_kept(saves), s.gprs), stack.wrote_refl(d + 64, s.memory)⟩⟩);
+                ⟨held.left, ⟨kept_refl(body_kept(saves), s.gprs), stack.wrote_refl(d, s.memory)⟩⟩);
             let t = ran.witness;
             let framed = ran.proof.right.right.right.right;
             Exists(t, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
                 ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, t.gprs, trail.left, framed.left),
-                 ⟨stack.wrote_in_trans(d + 64, lending.spans(), s0.memory, s.memory, t.memory, trail.right.left,
-                    stack.wrote_in_own(d + 64, lending.spans(), s.memory, t.memory, framed.right)),
-                  stack.in_memory_wrote(top, lending, loan, d + 64, under, now, s.memory, t.memory, framed.right,
+                 ⟨stack.wrote_in_trans(d, lending.spans(), s0.memory, s.memory, t.memory, trail.right.left,
+                    stack.wrote_in_own(d, lending.spans(), s.memory, t.memory, framed.right)),
+                  stack.in_memory_wrote(top, lending, loan, d, under, now, s.memory, t.memory, framed.right,
                     trail.right.right)⟩⟩⟩⟩⟩⟩)
         }⟩,
     })(grows, emits)
@@ -3552,7 +3523,7 @@ theorem File::emit_wide_store_runs<M>(self file: File, saves: Nat, site: Site<M>
 // lending lets the program write.
 theorem emit_leaf_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), values: Valuation(), d: Nat,
-    s0: MachineState<M>, under: d + 64 <= top, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat,
+    s0: MachineState<M>, under: d <= top, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat,
     homes: List<Lent>, allowed: (b: Nat) → nodes_store(nodes, b).IsTrue() → lending.written(b) = True, before, after: Buffers()):
     MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
         NodesRun(nodes, values, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers), before, after,
@@ -3898,7 +3869,7 @@ fn Stack::Staged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
     values: Valuation(), d: Nat, s0: MachineState<M>, now: Buffers(), g0: Gprs, file: File, count: Nat, arguments: List<Nat>,
     x: MachineState<M>) → Type {
     (file.Represents(values, x.gprs) ∧ (Kept(callee_kept(), g0, x.gprs) ∧ (read_gpr(Rsp, x.gprs) = stack.at(d - 8 * count)))) ∧
-        ((stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)) ∧
+        ((stack.Trail(lending, d + 64, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)) ∧
             stack.Passes(words_of(values, arguments.drop(6)), Nil, d - 8 * count, g0, x.memory))
 }
 
@@ -3910,7 +3881,7 @@ fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self 
     s0: MachineState<M>, now: Buffers(), g0: Gprs, count: Nat, words: List<BitVec(64)>, x: MachineState<M>) → Type {
     (read_gpr(Rsp, x.gprs) = stack.at(d - 8 * count)) ∧ (stack.Passes(words, argument_registers(), d - 8 * count, x.gprs, x.memory) ∧
         (Kept(callee_kept(), g0, x.gprs) ∧
-            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory))))
+            (stack.Trail(lending, d + 64, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory))))
 }
 
 // And after it: the stack pointer where the CALL left from, the answer in
@@ -3918,14 +3889,14 @@ fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self 
 fn Stack::Called<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), g0: Gprs, count: Nat, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rsp, t.gprs) = stack.at(d - 8 * count)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
-        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
+        (stack.Trail(lending, d + 64, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
 }
 
 // And with the stack pointer back at the frame.
 fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saved: List<Gpr>, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), g0: Gprs, answer: BitVec(64), t: MachineState<M>) → Type {
     (read_gpr(Rsp, t.gprs) = stack.at(d)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
-        (stack.Trail(lending, d, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
+        (stack.Trail(lending, d + 64, s0.memory, now, t.memory) ∧ stack.Saved(d, saved, 0, g0, t.memory))))
 }
 
 // The CALL, against the callee's contract: the return address is a word
@@ -3939,14 +3910,14 @@ fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 // callee's, and what the callee stored and left is stored under the
 // caller's spans and leaves the caller's file.
 theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, bound: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    effects: Effects(), rooms: Nat → Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
     inner: Lending, d: Nat, s0: MachineState<M>,
-    room: 136 * bound + 24 <= d, fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, callee: Nat, below: Succ(depth(callee)) <= bound,
+    fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, callee: Nat, room: rooms(callee) + 24 <= d,
     count: Nat, few: count <= 2,
     words: List<BitVec(64)>, answer: BitVec(64), before, after, inner_before, inner_after: Buffers(),
     answered: effects(inner_before, callee, words, answer, inner_after),
     returns: site.Returns(stack, asm_labels(site.program)(Succ(callee)),
-        stack.CalledOver(effects, depth, inner, top, callee, words, answer, inner_before, inner_after),
+        stack.CalledOver(effects, rooms, inner, top, callee, words, answer, inner_before, inner_after),
         stack.AnsweredOver(inner, answer, inner_after)),
     args_lent: ArgsLent(lent_count(inner.counts, callee), 0, words, inner.addresses, inner.buffers),
     enters: (memory: M) → stack.InMemory(lending, before, memory) → stack.InMemory(inner, inner_before, memory),
@@ -3961,14 +3932,14 @@ theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
     let c = d - 8 * count;
     let back: ((c - 8) + 8 = c) = Nat::sub_add_cancel(8, c, { omega });
     let entered: ((c - 8) + 8 <= stack.size) = { omega };
-    let deep: (136 * Succ(depth(callee)) <= c - 8) = { omega };
+    let deep: (rooms(callee) <= c - 8) = { omega };
     let below_top: ((c - 8) + 8 <= top) = { omega };
     let slots: (d + 8 * (0 + saved.len()) <= top) = { omega };
     let at_c: (stack.at((c - 8) + 8) = stack.at(c)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
     let displacement = asm_jump_of(asm_labels(site.program), prog_len(prog), CallTo(Succ(callee)));
     let pushes: (x: MachineState<M>) → stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x) →
         (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) ∧ (stack.Wrote(d, x.memory, call_near_after(stack.writes, displacement, x).memory) ∧
-            (stack.Trail(lending, d, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) ∧
+            (stack.Trail(lending, d + 64, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) ∧
              stack.Passed(words, c - 8, call_near_after(stack.writes, displacement, x)))) = λ x held => {
         let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) = trans(held.left, sym(at_c));
         let pushed: (push_address(x.gprs) = stack.at(c - 8)) =
@@ -3977,9 +3948,9 @@ theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
         let own: stack.Wrote(d, x.memory, call_near_after(stack.writes, displacement, x).memory) =
             j(sym(pushed), λ a _ => stack.Wrote(d, x.memory, stack.writes.store(x.memory, a, ret)),
                 stack.wrote_store(d, x.memory, c - 8, { omega }, next_rip(x.rip, 5)));
-        let trail: stack.Trail(lending, d, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) =
-            j(sym(pushed), λ a _ => stack.Trail(lending, d, s0.memory, before, stack.writes.store(x.memory, a, ret)),
-                stack.trail_store(top, lending, loan, d, { omega }, s0.memory, before, x.memory, held.right.right.right.left, c - 8, { omega },
+        let trail: stack.Trail(lending, d + 64, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) =
+            j(sym(pushed), λ a _ => stack.Trail(lending, d + 64, s0.memory, before, stack.writes.store(x.memory, a, ret)),
+                stack.trail_store(top, lending, loan, d + 64, { omega }, s0.memory, before, x.memory, held.right.right.right.left, c - 8, { omega },
                     next_rip(x.rip, 5)));
         let above: stack.Unchanged(c, x.memory, call_near_after(stack.writes, displacement, x).memory) =
             j(sym(pushed), λ a _ => stack.Unchanged(c, x.memory, stack.writes.store(x.memory, a, ret)),
@@ -3996,7 +3967,7 @@ theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
     site.moves_call(stack, site.program.laid_out_fits(laid), k, prog, 0, Succ(callee), at,
         asm_labels(site.program)(Succ(callee)),
         call_lands(asm_labels(site.program), k, site.program, prog, 0, Succ(callee), site.program.laid_out_lands(laid), at),
-        stack.CalledOver(effects, depth, inner, top, callee, words, answer, inner_before, inner_after),
+        stack.CalledOver(effects, rooms, inner, top, callee, words, answer, inner_before, inner_after),
         stack.AnsweredOver(inner, answer, inner_after), returns,
         λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words, x),
         λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, answer, t),
@@ -4065,16 +4036,16 @@ theorem call_spills<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>,
     fits: d + 64 <= stack.size, under: d + 64 <= top, now: Buffers(), prog: Prog,
     g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), within: saved.spills(prog, 0).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog), prog_len(saved.spills(prog, 0)),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, now, x.memory),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, now, x.memory) ∧
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d + 64, s0.memory, now, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d + 64, s0.memory, now, x.memory) ∧
             stack.Saved(d, saved, 0, g0, x.memory))) {
     let small: (0 + saved.len() <= 16) = { omega };
     let slots: (d + 8 * (0 + saved.len()) <= stack.size) = { omega };
     site.moves_spills(stack, site.program.laid_out_fits(laid), d, g0, rsp_g0, saved, prog, 0, small, slots,
-        λ (m: M) => stack.Trail(lending, d, s0.memory, now, m),
+        λ (m: M) => stack.Trail(lending, d + 64, s0.memory, now, m),
         λ memory i low high word kept => {
             let inside = slot_inside(saved, eight, d, i, stack.size, high, fits);
-            stack.trail_store(top, lending, loan, d, under, s0.memory, now, memory, kept, i, inside.right, word)
+            stack.trail_store(top, lending, loan, d + 64, under, s0.memory, now, memory, kept, i, inside.right, word)
         },
         within)
 }
@@ -4093,7 +4064,7 @@ theorem call_stages<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>,
     within: call_staged(saved, prog, sources).Within(site.program)):
     site.Moves(stack.writes, prog_len(saved.spills(prog, 0)), prog_len(call_staged(saved, prog, sources)),
         λ (x: MachineState<M>) => (x.gprs = g0) ∧
-            (stack.Trail(lending, d, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+            (stack.Trail(lending, d + 64, s0.memory, now, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
         λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, file.write(Rsp, None), sources.len(), arguments, x)) {
     let count = sources.len();
     let staged = file.write(Rsp, None);
@@ -4101,7 +4072,7 @@ theorem call_stages<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>,
     let lowered = At(spilled, 0, Block(stack_lower(count)));
     let g1 = stack_lowered(count, g0);
     let low = d - 8 * count;
-    let frame = λ (m: M) => stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m);
+    let frame = λ (m: M) => stack.Trail(lending, d + 64, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m);
     let lowered_in = lowered.within_trans(call_staged(saved, prog, sources), site.program, Prog::within_spills(sources, lowered, 0), within);
     let first = site.moves_of_pure(stack.writes, prog_len(spilled), prog_len(spilled) + block_length(stack_lower(count)),
         λ (g: Gprs) (m: M) => (g = g0) ∧ frame(m), λ (g: Gprs) (m: M) => (g = g1) ∧ frame(m),
@@ -4115,7 +4086,7 @@ theorem call_stages<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>,
     let second = site.moves_spills(stack, site.program.laid_out_fits(laid), low, g1, moved, sources, lowered, 0, small, room, frame,
         λ memory i above high word held => {
             let inside: (i + 8 <= d) = { omega };
-            ⟨stack.trail_store(top, lending, loan, d, under, s0.memory, now, memory, held.left, i, { omega }, word),
+            ⟨stack.trail_store(top, lending, loan, d + 64, under, s0.memory, now, memory, held.left, i, { omega }, word),
              stack.stable_saved(d, d, g0, saved, 0, { omega }, { omega })(memory, i, inside, word, held.right)⟩
         }, within);
     let agree = stack.lowered_agree(d, count, few, deep, g0, rsp_g0);
@@ -4160,12 +4131,12 @@ theorem call_moves<M>(saved: List<Gpr>, site: Site<M>, laid: site.program.laid_o
         λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, now, g0, staged, count, arguments, x),
         λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, now, g0, count, words_of(values, arguments), x)) {
     let low = d - 8 * count;
-    let rest = λ (m: M) => (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)) ∧
+    let rest = λ (m: M) => (stack.Trail(lending, d + 64, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)) ∧
         stack.Passes(words_of(values, arguments.drop(6)), Nil, low, g0, m);
     let pre = λ (g: Gprs) (m: M) => (staged.Represents(values, g) ∧ (Kept(callee_kept(), g0, g) ∧ (read_gpr(Rsp, g) = stack.at(low)))) ∧ rest(m);
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(low)) ∧
         (stack.Passes(words_of(values, arguments), argument_registers(), low, g, m) ∧ (Kept(callee_kept(), g0, g) ∧
-            (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m))));
+            (stack.Trail(lending, d + 64, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m))));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
             site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
@@ -4202,7 +4173,7 @@ theorem call_raises<M>(saved: List<Gpr>, site: Site<M>, laid: site.program.laid_
         λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, now, g0, count, answer, t),
         λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, now, g0, answer, t)) {
     let rest = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧ (Kept(callee_kept(), g0, g) ∧
-        (stack.Trail(lending, d, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)));
+        (stack.Trail(lending, d + 64, s0.memory, now, m) ∧ stack.Saved(d, saved, 0, g0, m)));
     let pre = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(d - 8 * count)) ∧ rest(g, m);
     let post = λ (g: Gprs) (m: M) => (read_gpr(Rsp, g) = stack.at(d)) ∧ rest(g, m);
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(stack_raise(count)), pre, post,
@@ -4241,7 +4212,7 @@ theorem call_returns<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>
         Block(stack_raise(sources.len()))).Within(site.program)):
     site.Moves(stack.writes, prog_len(prog),
         prog_len(At(At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee))), 0, Block(stack_raise(sources.len())))),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d + 64, s0.memory, before, x.memory),
         λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, values(64, result), t)) {
     let count = sources.len();
     let staged_file = file.write(Rsp, None);
@@ -4260,12 +4231,12 @@ theorem call_returns<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>
         spilled.within_trans(lowered, staged, spilled.within_then(0, Block(stack_lower(count))), Prog::within_spills(sources, lowered, 0)),
         staged_in);
     site.moves_trans(stack.writes, prog_len(prog), prog_len(spilled), prog_len(raised),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Trail(lending, d + 64, s0.memory, before, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d + 64, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
         λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
         call_spills<M>(saved, eight, site, laid, stack, top, lending, loan, d, s0, fits, { omega }, before, prog, g0, rsp_g0, spilled_in),
     site.moves_trans(stack.writes, prog_len(spilled), prog_len(staged), prog_len(raised),
-        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Trail(lending, d + 64, s0.memory, before, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
         λ (x: MachineState<M>) => stack.Staged(saved, lending, values, d, s0, before, g0, staged_file, count, arguments, x),
         λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, g0, answer, t),
         call_stages<M>(saved, eight, site, laid, stack, top, lending, loan, values, d, s0, fits, { omega }, deep, before, prog, file, arguments, sources, few,
@@ -4311,13 +4282,13 @@ theorem call_finishes<M>(saved: List<Gpr>, eight: saved.len() <= 8, named: saves
     within: saved.reloads(called, 0).Within(site.program)):
     site.Moves(stack.writes, prog_len(called), prog_len(saved.reloads(called, 0)),
         λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, now, g0, values(64, result), t),
-        λ (t: MachineState<M>) => file.called(saved, result).Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, now, t)) {
+        λ (t: MachineState<M>) => file.called(saved, result).Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d + 64, s0, now, t)) {
     let sizes = saved_fit(saved, eight, d, stack.size, fits);
     let out_file = file.called(saved, result);
     λ s3 here resident after_call => {
         let reloading = site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g0, saved, called, 0, s3.gprs, sizes.left,
             sizes.right, Bool::is_true_of_eq(saved_spare(saved, Rsp, refl, named)), after_call.left,
-            λ (m: M) => stack.Trail(lending, d, s0.memory, now, m), within);
+            λ (m: M) => stack.Trail(lending, d + 64, s0.memory, now, m), within);
         let e = reloading(s3, here, resident, ⟨refl, after_call.right.right.right⟩);
         let kept_s3: Kept(body_kept(saves), s0.gprs, s3.gprs) =
             kept_trans(body_kept(saves), s0.gprs, g0, s3.gprs, kept_g0,
@@ -4349,20 +4320,20 @@ theorem call_emits<M>(saved: List<Gpr>, eight: saved.len() <= 8, named: saves_na
             prog_len(At(call_staged(saved, prog, sources), 0, Block(moves.code))) + 5,
             λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, sources.len(), words_of(values, arguments), x),
             λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, sources.len(), values(64, result), t))):
-    EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
+    EmitsOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, Facts,
         before, after, Emitted(call_prog(saved, prog, sources, moves.code, callee), file.called(saved, result), placement, names)) {
     let called = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(Succ(callee)));
     let raised = At(called, 0, Block(stack_raise(sources.len())));
     let out_prog = saved.reloads(raised, 0);
     ⟨call_within(saved, prog, sources, moves.code, callee),
      λ within s here resident holds => {
-        let trailed: stack.Trailed(saves, lending, d, s0, before, s) = holds.right;
+        let trailed: stack.Trailed(saves, lending, d + 64, s0, before, s) = holds.right;
         let rsp_s: (read_gpr(Rsp, s.gprs) = stack.at(d)) = trans(trailed.left.left, rsp0);
         site.moves_trans(stack.writes, prog_len(prog), prog_len(raised), prog_len(out_prog),
-            λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Trail(lending, d, s0.memory, before, x.memory),
+            λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Trail(lending, d + 64, s0.memory, before, x.memory),
             λ (t: MachineState<M>) => stack.Returned(saved, lending, d, s0, after, s.gprs, values(64, result), t),
             λ (t: MachineState<M>) => file.called(saved, result).Represents(values, t.gprs) ∧
-                stack.Trailed(saves, lending, d, s0, after, t),
+                stack.Trailed(saves, lending, d + 64, s0, after, t),
             call_returns<M>(saved, eight, site, laid, stack, top, lending, loan, values, d, s0, fits, under, deep, prog, file, callee,
                 arguments, result, sources, few, same, sourced, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, before, after,
                 step(holds.left.right, s.gprs, holds.left.left, rsp_s),
@@ -4387,7 +4358,7 @@ theorem File::emit_call_staged_steps<M>(self file: File, saved: List<Gpr>, eight
         site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
             λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words_of(values, arguments), x),
             λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, values(64, result), t))):
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
+    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, Facts,
         before, after, file.emit_call_staged(saved, file.write(Rsp, None), prog, callee, arguments, result, placement, names)) {
     let staged = file.write(Rsp, None);
     let ports = word_ports(arguments.take(6));
@@ -4408,7 +4379,7 @@ theorem File::emit_call_staged_steps<M>(self file: File, saved: List<Gpr>, eight
                 let few_sources: (sources.len() <= 2) = { omega };
                 (match staged.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
                     MayKeep<M>(values, staged, True, moved) →
-                    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts, before, after, match moved {
+                    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, Facts, before, after, match moved {
                         None => None,
                         Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                             False => None,
@@ -4451,7 +4422,7 @@ theorem File::emit_call_saving_steps<M>(self file: File, saved: List<Gpr>, eight
         site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
             λ (x: MachineState<M>) => stack.ArgsReady(saved, lending, d, s0, before, g0, count, words_of(values, arguments), x),
             λ (t: MachineState<M>) => stack.Called(saved, lending, d, s0, after, g0, count, values(64, result), t))):
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
+    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, Facts,
         before, after, file.emit_call_saving(saved, prog, callee, arguments, result, placement, names, bound, counts, homes)) {
     let lends = args_lend(homes, lent_count(counts, callee), 0, arguments);
     let short = arguments.drop(6).len().leb(2);
@@ -4483,7 +4454,7 @@ theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, lai
         site.Moves(stack.writes, prog_len(moved), prog_len(moved) + 5,
             λ (x: MachineState<M>) => stack.ArgsReady(call_saves(placement), lending, d, s0, before, g0, count, words_of(values, arguments), x),
             λ (t: MachineState<M>) => stack.Called(call_saves(placement), lending, d, s0, after, g0, count, values(64, result), t))):
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, Facts,
+    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, Facts,
         before, after, file.emit_call(prog, callee, arguments, result, placement, names, bound, counts, homes)) {
     let saved = call_saves(placement);
     match ok: saves_ok(saved) {
@@ -4501,26 +4472,26 @@ theorem File::emit_call_steps<M>(self file: File, saves: Nat, site: Site<M>, lai
 // A call: the callee is entered under the caller's lending, over the
 // caller's file.
 theorem File::emit_call_runs<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, bound, level: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, bound, avail: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 136 * level + 24 <= d,
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: avail <= d, deep: 24 <= d,
     fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
     placement: List<Place>, names: Nat, homes: List<Lent>, before, after: Buffers(),
-    deeper: Succ(callee) <= bound → Succ(depth(callee)) <= level,
+    deeper: Succ(callee) <= bound → rooms(callee) + 24 <= avail,
     returns: Succ(callee) <= bound → site.Returns(stack, asm_labels(site.program)(Succ(callee)),
-        stack.CalledOver(effects, depth, lending, top, callee, words_of(values, arguments), values(64, result), before, after),
+        stack.CalledOver(effects, rooms, lending, top, callee, words_of(values, arguments), values(64, result), before, after),
         stack.AnsweredOver(lending, values(64, result), after))):
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file,
         StructuredRegionRunsOver(effects, values, Call(callee, arguments, result), before, after) ∧
             HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after, file.emit_call(prog, callee, arguments, result, placement, names, bound, lending.counts, homes)) {
-    file.emit_call_steps<M>(saves, site, laid, stack, top, bound, lending, loan, values, d, s0, rsp0, fits, under, { omega }, prog, callee,
+    file.emit_call_steps<M>(saves, site, laid, stack, top, bound, lending, loan, values, d, s0, rsp0, fits, under, deep, prog, callee,
         arguments, result, placement, names, lending.counts, homes,
         StructuredRegionRunsOver(effects, values, Call(callee, arguments, result), before, after) ∧
             HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after,
         λ eight below lend count few moved facts g0 represents rsp_g0 k at =>
-            call_step<M>(call_saves(placement), eight, site, laid, stack, top, effects, depth, level, lending, loan, lending, d, s0, room, fits, under, moved, callee, deeper(below),
+            call_step<M>(call_saves(placement), eight, site, laid, stack, top, effects, rooms, lending, loan, lending, d, s0, fits, under, moved, callee, Nat::le_trans(rooms(callee) + 24, avail, d, deeper(below), room),
                 count, few, words_of(values, arguments), values(64, result), before, after, before, after, facts.left, returns(below),
                 args_lend_lent(values, lending.addresses, lending.buffers, homes, facts.right, lent_count(lending.counts, callee), 0,
                     arguments, lend),
@@ -4537,11 +4508,11 @@ theorem File::emit_call_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
 // scope's spans (`Lendable::wrote`), and what it left of the written
 // windows is the scope's file with them put back (`Lendable::put_reads`).
 theorem lend_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, bound, level: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, depth, bound, lending.counts, needs, top),
+    effects: Effects(), rooms: Nat → Nat, bound, avail: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, rooms, bound, lending.counts, needs, top),
     values: Valuation(), d: Nat, s0: MachineState<M>,
-    room: 136 * level + 24 <= d, fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, views: List<View>, callee: Nat,
-    below: Succ(callee) <= bound, deeper: Succ(depth(callee)) <= level, count: Nat, few: count <= 2, arguments: List<Nat>, result: Nat,
+    room: avail <= d, fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, views: List<View>, callee: Nat,
+    below: Succ(callee) <= bound, deeper: rooms(callee) + 24 <= avail, count: Nat, few: count <= 2, arguments: List<Nat>, result: Nat,
     asks: (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
     lendable: Lendable(views, values, lending.addresses, lending.buffers, lending.written),
     lend: args_lend(views_lents(views), lent_count(lending.counts, callee), 0, arguments).IsTrue(), mid, left: Buffers(),
@@ -4553,7 +4524,7 @@ theorem lend_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
     let inner = lending.lend(views, values);
     let entered = (d - 8 * count) - 8;
     let low: (entered <= top) = { omega };
-    call_step<M>(saved, eight, site, laid, stack, top, effects, depth, level, lending, loan, inner, d, s0, room, fits, under, prog, callee, deeper, count, few,
+    call_step<M>(saved, eight, site, laid, stack, top, effects, rooms, lending, loan, inner, d, s0, fits, under, prog, callee, Nat::le_trans(rooms(callee) + 24, avail, d, deeper, room), count, few,
         words_of(values, arguments), values(64, result), mid, put_views(views, values, left, mid), viewed(views, values, mid), left,
         answered,
         calls(inner, refl, lendable.loan(loan), callee, below, asks, words_of(values, arguments), values(64, result),
@@ -4571,16 +4542,16 @@ theorem lend_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
 // the callee answers over the windows, and the file after is the file with
 // the written windows put back.
 theorem File::emit_lend_runs<M>(self file: File, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, bound, level: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, bound, avail: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool,
-    calls: site.CallsLent(stack, effects, depth, bound, lending.counts, needs, top),
-    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 136 * level + 24 <= d,
+    calls: site.CallsLent(stack, effects, rooms, bound, lending.counts, needs, top),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: avail <= d, deep: 24 <= d,
     fits: d + 64 <= stack.size, under: d + 72 <= top, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, result: Nat,
     placement: List<Place>, names: Nat, homes: List<Lent>,
     allowed: (b: Nat) → views_store(views, b).IsTrue() → lending.written(b) = True,
     asks: (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
-    deeper: Succ(callee) <= bound → Succ(depth(callee)) <= level, before, after: Buffers()):
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+    deeper: Succ(callee) <= bound → rooms(callee) + 24 <= avail, before, after: Buffers()):
+    MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file,
         StructuredRegionRunsOver(effects, values, Lend(views, callee, arguments, result), before, after) ∧
             HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after, file.emit_lend(saves, prog, views, callee, arguments, result, placement, names, bound, lending.counts, homes)) {
@@ -4595,8 +4566,8 @@ theorem File::emit_lend_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
     let facts = StructuredRegionRunsOver(effects, values, Lend(views, callee, arguments, result), before, after) ∧ held_homes;
     let leaf_under: (d + 64 <= top) = { omega };
     (match emit_leaf(saves, prog, file, nodes, placement, names, homes) as λ e =>
-        ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, First(mid), before, mid, e)) →
-        MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match e {
+        ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, First(mid), before, mid, e)) →
+        MayEmitOver<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, facts, before, after, match e {
             None => None,
             Some(first) => match views_lent(views, first.file, homes) {
                 False => None,
@@ -4611,7 +4582,7 @@ theorem File::emit_lend_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
                 let checks = views_lent_parts(views, first.file, homes, is_true_of_eq(views_lent(views, first.file, homes), checked));
                 let out = first.file.emit_call(first.prog, callee, args, result, first.placement, first.names, bound, lending.counts,
                     views_lents(views));
-                may_emit_over_weaken<M>(saves, site, stack, lending, values, d, s0, prog, file,
+                may_emit_over_weaken<M>(saves, site, stack, lending, values, d + 64, s0, prog, file,
                     Exists<Buffers()>(λ mid => First(mid) ∧ Second(mid)), facts,
                     λ held => {
                         let ran = held.left.proof;
@@ -4620,26 +4591,26 @@ theorem File::emit_lend_runs<M>(self file: File, saves: Nat, site: Site<M>, laid
                             Exists(ran.right.witness, ⟨⟨first_holds, ran.right.proof.left⟩, ran.right.proof.right⟩)⟩)
                     },
                     before, after, out,
-                    may_emit_over_seq<M>(saves, site, stack, lending, values, d, s0, prog, file, First, Second, before, after, first, first_emits,
+                    may_emit_over_seq<M>(saves, site, stack, lending, values, d + 64, s0, prog, file, First, Second, before, after, first, first_emits,
                         out,
-                        λ mid => may_emit_over_some<M>(saves, site, stack, lending, values, d, s0, first.prog, first.file,
+                        λ mid => may_emit_over_some<M>(saves, site, stack, lending, values, d + 64, s0, first.prog, first.file,
                             λ (left: Buffers()) => First(mid) ∧ Answered(mid, left),
                             λ (left: Buffers()) => put_views(views, values, left, mid), mid, after, out,
                             λ left => first.file.emit_call_steps<M>(saves, site, laid, stack, top, bound, lending, loan, values, d, s0, rsp0, fits,
-                                under, { omega }, first.prog, callee, args, result, first.placement, first.names, lending.counts, views_lents(views),
+                                under, deep, first.prog, callee, args, result, first.placement, first.names, lending.counts, views_lents(views),
                                 First(mid) ∧ Answered(mid, left), mid, put_views(views, values, left, mid),
                                 λ eight below lend count few moved holds g0 represents rsp_g0 k at => {
                                     let still = nodes_run_still(values, nodes, before, mid, views_nodes_quiet(views), holds.left.left);
                                     let lendable = views_lendable_sound(views, first.file, homes, values, g0, lending.addresses,
                                         lending.buffers, before, lending.written, represents, holds.left.right, checks.left, checks.right,
                                         still.right, allowed);
-                                    lend_step<M>(call_saves(first.placement), eight, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0, room,
+                                    lend_step<M>(call_saves(first.placement), eight, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, s0, room,
                                         fits, under, moved, views, callee, below, deeper(below), count, few, args, result, asks, lendable, lend, mid, left,
                                         holds.right, g0, k, at)
                                 }))))
             },
         },
-    })(λ mid => emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, leaf_under, prog, file, nodes, placement, names,
+    })(λ mid => emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, d + 64, s0, leaf_under, prog, file, nodes, placement, names,
         homes, λ b stores => false_elim(views_nodes_store(views, b, stores)), before, mid))
 }
 
@@ -5368,20 +5339,19 @@ theorem loop_close_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
 // its meaning says, its calls answered by the functions below `bound`, its
 // loads by the buffers as the file then has them.
 theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, bound, level: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, bound, avail: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool,
-    calls: site.CallsLent(stack, effects, depth, bound, lending.counts, needs, top),
-    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 136 * level + 24 <= d,
-    fits: d + 64 <= stack.size, under: d + 72 <= top): ((b: Nat) → region.stores(b).IsTrue() → lending.written(b) = True) →
-    region.Asks(needs, lending.written) → region.Shallow(depth, bound, level) → (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) →
+    calls: site.CallsLent(stack, effects, rooms, bound, lending.counts, needs, top),
+    values: Valuation(), d, w: Nat, s0: MachineState<M>, under: w <= top,
+    framing: region.calls().IsTrue() → stack.CallFrame(top, avail, d, w, s0)): ((b: Nat) → region.stores(b).IsTrue() → lending.written(b) = True) →
+    region.Asks(needs, lending.written) → region.Fits(rooms, bound, avail) → (homes: List<Lent>) → (prog: Prog) → (file: File) → (placement: List<Place>) →
     (names: Nat) → (before, after: Buffers()) →
-    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+    MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file,
         StructuredRegionRunsOver(effects, values, region, before, after) ∧ HomesHold(homes, values, lending.addresses, lending.buffers),
         before, after, region.emit_calls(saves, prog, file, placement, names, bound, lending.counts, homes)) {
-    let leaf_under: (d + 64 <= top) = { omega };
     match region {
         Dataflow(body) => λ allowed asks shallow homes prog file placement names before after =>
-            emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, leaf_under, prog, file, body.nodes, placement, names,
+            emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, w, s0, under, prog, file, body.nodes, placement, names,
                 homes, allowed, before, after),
         Sequence(prefix, continuation) => λ allowed asks shallow homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
@@ -5389,22 +5359,21 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
             let Second = λ (mid: Buffers()) => StructuredRegionRunsOver(effects, values, continuation, mid, after) ∧ held_homes;
             let facts = StructuredRegionRunsOver(effects, values, Sequence(prefix, continuation), before, after) ∧ held_homes;
             (match emit_leaf(saves, prog, file, prefix.nodes, placement, names, homes) as λ e =>
-                ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, First(mid), before, mid, e)) →
-                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match e {
+                ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, First(mid), before, mid, e)) →
+                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match e {
                     None => None,
                     Some(first) => continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
                 }) {
                 None => λ _ => trivial,
-                Some(first) => λ first_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, d, s0, prog, file,
+                Some(first) => λ first_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, w, s0, prog, file,
                     Exists<Buffers()>(λ mid => First(mid) ∧ Second(mid)), facts,
                     λ held => Exists(held.left.witness, ⟨⟨held.left.proof.left, held.right⟩, ⟨held.left.proof.right, held.right⟩⟩),
                     before, after,
                     continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
-                    may_emit_over_seq<M>(saves, site, stack, lending, values, d, s0, prog, file, First, Second, before, after, first, first_emits,
+                    may_emit_over_seq<M>(saves, site, stack, lending, values, w, s0, prog, file, First, Second, before, after, first, first_emits,
                         continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts, homes),
-                        λ mid => continuation.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0,
-                            rsp0, room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(nodes_store(prefix.nodes, b), continuation.stores(b), stores)), asks, shallow, homes, first.prog, first.file, first.placement, first.names, mid, after))),
-            })(λ mid => emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, d, s0, leaf_under, prog, file, prefix.nodes,
+                        λ mid => continuation.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, w, s0, under, framing, λ b stores => allowed(b, Bool::is_true_or_r(nodes_store(prefix.nodes, b), continuation.stores(b), stores)), asks, shallow, homes, first.prog, first.file, first.placement, first.names, mid, after))),
+            })(λ mid => emit_leaf_runs<M>(saves, site, laid, stack, top, lending, loan, values, w, s0, under, prog, file, prefix.nodes,
                 placement, names, homes,
                 λ b stores => allowed(b, Bool::is_true_or_l(nodes_store(prefix.nodes, b), continuation.stores(b), stores)), before, mid))
         },
@@ -5415,27 +5384,25 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
             let Second = λ (mid: Buffers()) => StructuredRegionRunsOver(effects, values, continuation, mid, after) ∧ lent_homes;
             let facts = StructuredRegionRunsOver(effects, values, Compose(prefix, continuation), before, after) ∧ held_homes;
             (match prefix.emit_calls(saves, prog, file, placement, names, bound, lending.counts, homes) as λ e =>
-                ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, First(mid), before, mid, e)) →
-                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match e {
+                ((mid: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, First(mid), before, mid, e)) →
+                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match e {
                     None => None,
                     Some(first) => continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts,
                         prefix.lends(homes)),
                 }) {
                 None => λ _ => trivial,
-                Some(first) => λ first_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, d, s0, prog, file,
+                Some(first) => λ first_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, w, s0, prog, file,
                     Exists<Buffers()>(λ mid => First(mid) ∧ Second(mid)), facts,
                     λ held => Exists(held.left.witness, ⟨⟨held.left.proof.left, held.right⟩, ⟨held.left.proof.right,
                         prefix.lends_hold(values, lending.addresses, lending.buffers, effects, homes, before, held.left.witness, held.right,
                             held.left.proof.left)⟩⟩),
                     before, after,
                     continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts, prefix.lends(homes)),
-                    may_emit_over_seq<M>(saves, site, stack, lending, values, d, s0, prog, file, First, Second, before, after, first, first_emits,
+                    may_emit_over_seq<M>(saves, site, stack, lending, values, w, s0, prog, file, First, Second, before, after, first, first_emits,
                         continuation.emit_calls(saves, first.prog, first.file, first.placement, first.names, bound, lending.counts,
                             prefix.lends(homes)),
-                        λ mid => continuation.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0,
-                            rsp0, room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(prefix.stores(b), continuation.stores(b), stores)), asks.right, shallow.right, prefix.lends(homes), first.prog, first.file, first.placement, first.names, mid, after))),
-            })(λ mid => prefix.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0, rsp0, room,
-                fits, under, λ b stores => allowed(b, Bool::is_true_or_l(prefix.stores(b), continuation.stores(b), stores)), asks.left, shallow.left, homes, prog, file, placement, names, before, mid))
+                        λ mid => continuation.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, w, s0, under, λ c => framing(Bool::is_true_or_r(prefix.calls(), continuation.calls(), c)), λ b stores => allowed(b, Bool::is_true_or_r(prefix.stores(b), continuation.stores(b), stores)), asks.right, shallow.right, prefix.lends(homes), first.prog, first.file, first.placement, first.names, mid, after))),
+            })(λ mid => prefix.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, w, s0, under, λ c => framing(Bool::is_true_or_l(prefix.calls(), continuation.calls(), c)), λ b stores => allowed(b, Bool::is_true_or_l(prefix.stores(b), continuation.stores(b), stores)), asks.left, shallow.left, homes, prog, file, placement, names, before, mid))
         },
         // The motive is written out: read off the goal it is past the
         // budget a stuck head is spelled within, the file's slots being a
@@ -5445,7 +5412,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
             let facts = StructuredRegionRunsOver(effects, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false),
                 before, after) ∧ held_homes;
             match file.branch_test(condition) as λ t =>
-                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match t {
+                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match t {
                         None => None,
                         Some(tested) => match when_true.emit_calls(saves, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, lending.counts, homes) {
                             None => None,
@@ -5458,9 +5425,9 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                 None => trivial,
                 Some(tested) =>
                     (match when_true.emit_calls(saves, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement, Succ(Succ(names)), bound, lending.counts, homes) as λ y =>
-                        MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)),
+                        MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)),
                             StructuredRegionRunsOver(effects, values, when_true, before, after) ∧ held_homes, before, after, y) →
-                        MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match y {
+                        MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match y {
                                 None => None,
                                 Some(yes) => match when_false.emit_calls(saves, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, lending.counts, homes) {
                                     None => None,
@@ -5470,31 +5437,45 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                         None => λ _ => trivial,
                         Some(yes) => λ yes_emits =>
                             (match when_false.emit_calls(saves, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, lending.counts, homes) as λ n =>
-                                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)),
+                                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)),
                                     StructuredRegionRunsOver(effects, values, when_false, before, after) ∧ held_homes, before, after, n) →
-                                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match n {
+                                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match n {
                                         None => None,
                                         Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                     }) {
                                 None => λ _ => trivial,
-                                Some(no) => λ no_emits => branch_emits_over<M>(saves, site, laid, stack, lending, effects, values, d, s0, prog, file,
+                                Some(no) => λ no_emits => branch_emits_over<M>(saves, site, laid, stack, lending, effects, values, w, s0, prog, file,
                                     inputs, condition, arguments, outputs, when_true, when_false, held_homes, before, after, tested, names,
                                     yes, no, yes_emits, no_emits),
-                            })(when_false.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0, rsp0,
-                                room, fits, under, λ b stores => allowed(b, Bool::is_true_or_r(when_true.stores(b), when_false.stores(b), stores)), asks.right, shallow.right, homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
+                            })(when_false.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, w, s0, under, λ c => framing(Bool::is_true_or_r(when_true.calls(), when_false.calls(), c)), λ b stores => allowed(b, Bool::is_true_or_r(when_true.stores(b), when_false.stores(b), stores)), asks.right, shallow.right, homes, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
                                 before, after)),
-                    })(when_true.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0, rsp0, room,
-                        fits, under, λ b stores => allowed(b, Bool::is_true_or_l(when_true.stores(b), when_false.stores(b), stores)), asks.left, shallow.left, homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+                    })(when_true.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, w, s0, under, λ c => framing(Bool::is_true_or_l(when_true.calls(), when_false.calls(), c)), λ b stores => allowed(b, Bool::is_true_or_l(when_true.stores(b), when_false.stores(b), stores)), asks.left, shallow.left, homes, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
                         Succ(Succ(names)), before, after)),
             }
         },
         Lend(views, callee, arguments, result) => λ allowed asks shallow homes prog file placement names before after =>
-            file.emit_lend_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, values, d, s0, rsp0, room, fits,
-                under, prog, views, callee, arguments, result, placement, names, homes, allowed, asks, shallow, before, after),
+        {
+            let frame = framing(trivial);
+            may_emit_over_bound<M>(saves, site, stack, lending, values, d + 64, w, frame.right.right.right.left, s0, prog, file,
+                StructuredRegionRunsOver(effects, values, Lend(views, callee, arguments, result), before, after) ∧
+                    HomesHold(homes, values, lending.addresses, lending.buffers),
+                before, after, file.emit_lend(saves, prog, views, callee, arguments, result, placement, names, bound, lending.counts, homes),
+                file.emit_lend_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, s0,
+                    frame.left, frame.right.left, frame.right.right.left, frame.right.right.right.right.left, frame.right.right.right.right.right,
+                    prog, views, callee, arguments, result, placement, names, homes, allowed, asks, shallow, before, after))
+        },
         Call(callee, arguments, result) => λ allowed asks shallow homes prog file placement names before after =>
-            file.emit_call_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, values, d, s0, rsp0, room, fits, under, prog,
-                callee, arguments, result, placement, names, homes, before, after, shallow,
-                λ below => calls(lending, refl, loan, callee, below, asks, words_of(values, arguments), values(64, result), before, after)),
+        {
+            let frame = framing(trivial);
+            may_emit_over_bound<M>(saves, site, stack, lending, values, d + 64, w, frame.right.right.right.left, s0, prog, file,
+                StructuredRegionRunsOver(effects, values, Call(callee, arguments, result), before, after) ∧
+                    HomesHold(homes, values, lending.addresses, lending.buffers),
+                before, after, file.emit_call(prog, callee, arguments, result, placement, names, bound, lending.counts, homes),
+                file.emit_call_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, values, d, s0,
+                    frame.left, frame.right.left, frame.right.right.left, frame.right.right.right.right.left, frame.right.right.right.right.right, prog,
+                    callee, arguments, result, placement, names, homes, before, after, shallow,
+                    λ below => calls(lending, refl, loan, callee, below, asks, words_of(values, arguments), values(64, result), before, after)))
+        },
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ allowed asks shallow homes prog file placement names before after => {
             let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
             let facts = StructuredRegionRunsOver(effects, values,
@@ -5507,7 +5488,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                 words_of(values, outputs), values(1, exhausted).head_bit(), before, after);
             (match file.loop_entry(saves, inputs, limit, parameters, count, placement) as λ e =>
                 MayLoopEntry<M>(saves, values, file, inputs, limit, parameters, count, e) →
-                MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match e {
+                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match e {
                     None => None,
                     Some(entry) => match body.emit_calls(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                         None => None,
@@ -5517,22 +5498,21 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                 None => λ _ => trivial,
                 Some(entry) => λ entry_ok =>
                     (match body.emit_calls(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) as λ b =>
-                        ((v: Valuation()) → (from, to: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, v, d, s0,
+                        ((v: Valuation()) → (from, to: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, v, w, s0,
                             loop_tested(prog, entry, names), entry.head, Pass(v, from, to), from, to, b)) →
-                        MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match b {
+                        MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match b {
                             None => None,
                             Some(pass) => pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names),
                         }) {
                         None => λ _ => trivial,
-                        Some(pass) => λ pass_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, d, s0, prog, file, holds, facts,
+                        Some(pass) => λ pass_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, w, s0, prog, file, holds, facts,
                             λ held => loop_carries(Ran, values, lending.addresses, lending.buffers, homes, held.right, inputs, parameters, count,
                                 exit, next, values(64, limit).toNat(), words_of(values, outputs), values(1, exhausted).head_bit(), before, after,
                                 held.left).left,
                             before, after, pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names),
-                            loop_close_emits<M>(saves, site, laid, stack, lending, Pass, values, d, s0, prog, file, inputs, limit, parameters, count,
+                            loop_close_emits<M>(saves, site, laid, stack, lending, Pass, values, w, s0, prog, file, inputs, limit, parameters, count,
                                 body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits, before, after)),
-                    })(λ v from to => body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, bound, level, lending, loan, needs, calls, v, d, s0, rsp0,
-                        room, fits, under, allowed, asks, shallow, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names),
+                    })(λ v from to => body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, v, d, w, s0, under, framing, allowed, asks, shallow, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names),
                         entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))), from, to)),
             })(loop_entry_sound<M>(saves, values, file, inputs, limit, parameters, count, placement))
         },
@@ -5915,17 +5895,17 @@ theorem function_closes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
 }
 
 theorem function_runs_saved<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, depth, k, lending.counts, needs, top), function: Function, prog: Prog,
+    effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top), function: Function, prog: Prog,
     file: File, placement: List<Place>, names: Nat, body: Emitted,
     allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     emitted: function.body.emit_calls(saves, function_opened(prog, k, function.loads(), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     within: function_closed(body.prog, moves.code, saves).Within(site.program),
-    values: Valuation(), s0: MachineState<M>, d: Nat, room: 136 * depth(k) + 24 <= d, fits: d + 112 <= stack.size, under: d + 120 <= top,
+    values: Valuation(), s0: MachineState<M>, d: Nat, room: 136 * rooms(k) + 24 <= d, fits: d + 112 <= stack.size, under: d + 120 <= top,
     before, after: Buffers(), ready: file.Represents(values, stack.opened(d, s0).gprs),
     holds: StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
         HomesHold(function.homes(), values, lending.addresses, lending.buffers),
@@ -5952,7 +5932,7 @@ theorem function_runs_saved<M>(saves: Nat, site: Site<M>, laid: site.program.lai
     let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
         λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, x1, opened, file, facts, before, after, e),
         body, emitted,
-        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, k, depth(k), lending, loan, needs, calls, values, d, x1, rsp_x1, room,
+        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, k, rooms(k), lending, loan, needs, calls, values, d, x1, rsp_x1, room,
             fits_body, under_body, allowed, asks, shallow, function.homes(), opened, file, placement, names, before, after));
     let start: stack.Trailed(saves, lending, d, x1, before, x1) =
         ⟨kept_refl(body_kept(saves), x1.gprs), ⟨stack.wrote_in_refl(d + 64, spans, x1.memory), at1.right.left.right⟩⟩;
@@ -5975,11 +5955,11 @@ theorem function_runs_saved<M>(saves: Nat, site: Site<M>, laid: site.program.lai
 // registers a callee keeps and memory as they were, so what the function
 // leaves is stated of the state it was entered at.
 theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, depth, k, lending.counts, needs, top), function: Function, prog: Prog,
+    effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top), function: Function, prog: Prog,
     file: File, placement: List<Place>, names: Nat, body: Emitted,
     allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     emitted: function.body.emit_calls(saves, function_opened(prog, k, function.loads(), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -5989,7 +5969,7 @@ theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
     few: function.loads() <= 2,
     within: function_closed(body.prog, moves.code, saves).Within(site.program),
     values: Valuation(), s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + 112),
-    room: 136 * depth(k) + 24 <= d, fits: d + 112 <= stack.size, under: d + 120 <= top, before, after: Buffers(),
+    room: 136 * rooms(k) + 24 <= d, fits: d + 112 <= stack.size, under: d + 120 <= top, before, after: Buffers(),
     in_memory: stack.InMemory(lending, before, s0.memory),
     passed: stack.Passes(words_of(values, function.parameters), argument_registers(), d + 120, s0.gprs, s0.memory),
     holds: StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
@@ -6024,7 +6004,7 @@ theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
     let body_emits = function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()).all_some(
         λ (e: Emitted) => EmitsOver<M>(saves, site, stack, lending, values, d, stack.opened(d, s1), opened, file, facts, before, after, e),
         body, emitted,
-        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, depth, k, depth(k), lending, loan, needs, calls, values, d, stack.opened(d, s1),
+        function.body.emit_calls_runs<M>(saves, site, laid, stack, top, effects, rooms, k, rooms(k), lending, loan, needs, calls, values, d, stack.opened(d, s1),
             rsp_g1, room, fits_body, under_body, allowed, asks, shallow, function.homes(), opened, file, placement, names, before, after));
     let opened_in = opened.within_trans(body.prog, site.program, body_emits.left, body_in);
     let loaded_in = loaded.within_trans(opened, site.program, loaded_opened(prog, k, function.loads(), saves), opened_in);
@@ -6057,7 +6037,7 @@ theorem function_runs<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
         λ s here resident held => {
             let entering = function_enters<M>(saves, site, laid, stack, top, lending, loan, loaded, s1, d, rsp_s1, fits, under_frame, before,
                 in_memory, opened_in)(s, here, resident, held);
-            let ran = function_runs_saved<M>(saves, site, laid, stack, top, effects, depth, k, lending, loan, needs, calls, function, prog, file, placement,
+            let ran = function_runs_saved<M>(saves, site, laid, stack, top, effects, rooms, k, lending, loan, needs, calls, function, prog, file, placement,
                 names, body, allowed, asks, shallow, emitted, moves, keeps, placed, leaves, within, values, s1, d, room, fits, under, before, after, ready,
                 holds, entering.witness, entering.proof.right.left, entering.proof.right.right.left, entering.proof.right.right.right);
             let t = ran.witness;
@@ -6086,9 +6066,9 @@ theorem frame_under(i, top: Nat, back: (i - 112) + 112 = i, below: i + 8 <= top)
 // registers and the rest above its return address, what it may do to the
 // file and return, room for its frames, and the file lent.
 fn Stack::EnteredOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), effects: Effects(),
-    depth: Nat → Nat, lending: Lending, top: Nat, k: Nat, function: Function, words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) →
+    rooms: Nat → Nat, lending: Lending, top: Nat, k: Nat, function: Function, words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()) →
     Nat → MachineState<M> → Type {
-    λ i s => (stack.Passed(words, i, s) ∧ (function.Runs(effects, words, result, before, after) ∧ 136 * Succ(depth(k)) <= i)) ∧
+    λ i s => (stack.Passed(words, i, s) ∧ (function.Runs(effects, words, result, before, after) ∧ 136 * Succ(rooms(k)) <= i)) ∧
         stack.LentOver(lending, top, k, words, before)(i, s)
 }
 
@@ -6096,11 +6076,11 @@ fn Stack::EnteredOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, sel
 // says. The return address is a word at the top of its room, which its
 // own stores and the buffers' bytes leave (`Loan::unchanged`).
 theorem function_body<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, depth, k, lending.counts, needs, top), function: Function, prog: Prog,
+    effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top), function: Function, prog: Prog,
     file: File, placement: List<Place>, names: Nat, body: Emitted,
     allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     emitted: function.body.emit_calls(saves, function_opened(prog, k, function.loads(), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -6112,7 +6092,7 @@ theorem function_body<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
     words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(), s0: MachineState<M>, i: Nat, ret: BitVec(64)):
     site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code, saves)),
         λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ ((i + 8 <= stack.size) ∧
-            (stack.EnteredOver(effects, depth, lending, top, k, function, words, result, before, after)(i, s0) ∧
+            (stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after)(i, s0) ∧
              read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
         λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧
             stack.AnsweredOver(lending, result, after)(i, s0, return_near_after(ret, t)))) {
@@ -6121,7 +6101,7 @@ theorem function_body<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
         let runs = pre.left.right.left;
         let values = runs.witness;
         let d = i - 112;
-        let sizes = frame_room(depth(k), i, stack.size, pre.left.right.right, held.right.right.left);
+        let sizes = frame_room(rooms(k), i, stack.size, pre.left.right.right, held.right.right.left);
         let back: (d + 112 = i) = sizes.left;
         let unders = frame_under(i, top, back, pre.right.right.left);
         let at_back: (stack.at(d + 112) = stack.at(i)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
@@ -6130,7 +6110,7 @@ theorem function_body<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
             j(sym(count), λ c _ => ArgsLent(c, 0, words_of(values, function.parameters), lending.addresses, lending.buffers),
                 j(sym(runs.proof.left), λ w _ => ArgsLent(lent_count(lending.counts, k), 0, w, lending.addresses, lending.buffers),
                     pre.right.left)));
-        let ran = function_runs<M>(saves, site, laid, stack, top, effects, depth, k, lending, loan, needs, calls, function, prog, file, placement, names, body, allowed,
+        let ran = function_runs<M>(saves, site, laid, stack, top, effects, rooms, k, lending, loan, needs, calls, function, prog, file, placement, names, body, allowed,
             asks, shallow, emitted, moves, keeps, placed, leaves, entered, few, within, values, s0, d,
             trans(held.right.left, sym(at_back)), sizes.right.left, sizes.right.right, unders.left, before, after,
             pre.right.right.right,
@@ -6160,11 +6140,11 @@ theorem function_body<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out(
 // bound to the arguments, its body running from the file to the file, it
 // returns its result over the file it leaves.
 theorem function_returns<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
-    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, depth, k, lending.counts, needs, top), function: Function, prog: Prog,
+    effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()),
+    needs: Nat → Nat → Bool, calls: site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top), function: Function, prog: Prog,
     file: File, placement: List<Place>, names: Nat, body: Emitted,
     allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     emitted: function.body.emit_calls(saves, function_opened(prog, k, function.loads(), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -6174,12 +6154,12 @@ theorem function_returns<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     few: function.loads() <= 2, count: function.lent = lent_count(lending.counts, k),
     within: At(function_closed(body.prog, moves.code, saves), 0, Ret).Within(site.program),
     words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()):
-    site.Returns(stack, prog_len(prog), stack.EnteredOver(effects, depth, lending, top, k, function, words, result, before, after),
+    site.Returns(stack, prog_len(prog), stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
         stack.AnsweredOver(lending, result, after)) {
     let closed = function_closed(body.prog, moves.code, saves);
     site.returns_by(stack, site.program.laid_out_fits(laid), prog_len(prog), within.witness, closed, 0, within.proof,
-        stack.EnteredOver(effects, depth, lending, top, k, function, words, result, before, after), stack.AnsweredOver(lending, result, after),
-        λ s0 i ret => function_body<M>(saves, site, laid, stack, top, effects, depth, k, lending, loan, needs, calls, function, prog, file, placement, names,
+        stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after), stack.AnsweredOver(lending, result, after),
+        λ s0 i ret => function_body<M>(saves, site, laid, stack, top, effects, rooms, k, lending, loan, needs, calls, function, prog, file, placement, names,
             body, allowed, asks, shallow, emitted, moves, keeps, placed, leaves, entered, few, count, closed.within_before(0, Ret, site.program, within), words, result,
             before, after, s0, i, ret))
 }
@@ -6239,12 +6219,12 @@ fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<P
 
 // What emitting a function proves: the code holds its label, and resident
 // with the functions below `k` meeting their contracts, it meets its own.
-fn MayReturnOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending,
+fn MayReturnOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     needs: Nat → Nat → Bool, function: Function, prog: Prog, out: Option<Emitted>) → Type {
     out.All(λ (emitted: Emitted) => At(prog, Succ(k), Block([])).Within(emitted.prog) ∧
-        (emitted.prog.Within(site.program) → site.CallsLent(stack, effects, depth, k, lending.counts, needs, top) →
+        (emitted.prog.Within(site.program) → site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top) →
             (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) → site.Returns(stack, prog_len(prog),
-                stack.EnteredOver(effects, depth, lending, top, k, function, words, result, before, after),
+                stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
                 stack.AnsweredOver(lending, result, after))))
 }
 
@@ -6257,20 +6237,20 @@ theorem closed_within(body: Prog, moves: List<Instruction>, saves: Nat): body.Wi
 }
 
 theorem Function::closing_returns<M>(self function: Function, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool, prog: Prog, file: File,
     placement: List<Place>, names: Nat, body: Emitted,
     allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True, asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     emitted: function.body.emit_calls(saves, function_opened(prog, k, function.loads(), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     count: function.lent = lent_count(lending.counts, k),
     grown: At(prog, Succ(k), Block([])).Within(body.prog),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g), few: function.loads() <= 2):
-    MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, function.closing(saves, body)) {
+    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.closing(saves, body)) {
     let outs: List<Port> = [Port(id := function.result, width := 64)];
     (match body.file.move_outputs(outs, [Rax]) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
-        MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, match moved {
+        MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match moved {
             None => None,
             Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) {
                 False => None,
@@ -6281,7 +6261,7 @@ theorem Function::closing_returns<M>(self function: Function, saves: Nat, site: 
         Some(moves) => λ keeps =>
             (match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) as λ c =>
                 (c.IsTrue() → moves.file.outputs_check(outs, [Rax]).IsTrue() ∧ leaves_all(moves.code, body_kept(saves)).IsTrue()) →
-                MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, match c {
+                MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match c {
                     False => None,
                     True => Some(Emitted(At(function_closed(body.prog, moves.code, saves), 0, Ret), File::empty(), body.placement, body.names)),
                 }) {
@@ -6290,7 +6270,7 @@ theorem Function::closing_returns<M>(self function: Function, saves: Nat, site: 
                     let checked = parts(trivial);
                     ⟨At(prog, Succ(k), Block([])).within_trans(body.prog, At(function_closed(body.prog, moves.code, saves), 0, Ret), grown,
                         closed_within(body.prog, moves.code, saves)),
-                     λ within calls words result before after => function_returns<M>(saves, site, laid, stack, top, effects, depth, k, lending, loan,
+                     λ within calls words result before after => function_returns<M>(saves, site, laid, stack, top, effects, rooms, k, lending, loan,
                         needs, calls, function, prog, file, placement, names, body, allowed, asks, shallow, emitted, moves, keeps, checked.left,
                         checked.right, entered, few,
                         count, within, words, result, before, after)⟩
@@ -6300,22 +6280,22 @@ theorem Function::closing_returns<M>(self function: Function, saves: Nat, site: 
 }
 
 theorem Function::emit_body_returns<M>(self function: Function, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool, prog: Prog, file: File,
     placement: List<Place>, names: Nat, allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     asks: function.body.Asks(needs, lending.written),
-    shallow: function.body.Shallow(depth, k, depth(k)),
+    shallow: function.body.Shallow(rooms, k, rooms(k)),
     count: function.lent = lent_count(lending.counts, k),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g), few: function.loads() <= 2):
-    MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, function.emit_body(saves, prog, k, file, placement, names, lending.counts)) {
+    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_body(saves, prog, k, file, placement, names, lending.counts)) {
     let opened = function_opened(prog, k, function.loads(), saves);
     let label = At(prog, Succ(k), Block([]));
     (match function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()) as λ e =>
         (function.body.emit_calls(saves, opened, file, placement, names, k, lending.counts, function.homes()) = e) → Grows(opened, e) →
-        MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, match e { None => None, Some(body) => function.closing(saves, body) }) {
+        MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match e { None => None, Some(body) => function.closing(saves, body) }) {
         None => λ _ _ => trivial,
-        Some(body) => λ emitted grown => function.closing_returns(saves, site, laid, stack, top, effects, depth, k, lending, loan, needs, prog, file, placement,
+        Some(body) => λ emitted grown => function.closing_returns(saves, site, laid, stack, top, effects, rooms, k, lending, loan, needs, prog, file, placement,
             names, body, allowed, asks, shallow, emitted, count, label.within_trans(opened, body.prog, label_opened(prog, k, function.loads(), saves), grown), entered,
             few),
     })(refl, function.body.emit_calls_grows(saves, k, lending.counts, function.homes(), opened, file, placement, names))
@@ -6325,11 +6305,11 @@ theorem Function::emit_body_returns<M>(self function: Function, saves: Nat, site
 // `emit_lent` returns meets the function's contract wherever it is
 // resident, given its callees meet theirs.
 theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), depth: Nat → Nat, k: Nat, lending: Lending,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool, prog: Prog, placement: List<Place>,
     names: Nat, allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
-    asks: function.body.Asks(needs, lending.written), shallow: function.body.Shallow(depth, k, depth(k))):
-    MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, function.emit_lent(prog, k, placement, names, lending.counts)) {
+    asks: function.body.Asks(needs, lending.written), shallow: function.body.Shallow(rooms, k, rooms(k))):
+    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_lent(prog, k, placement, names, lending.counts)) {
     let saves = placement_saves(placement);
     let ins = word_ports(function.parameters);
     match same: function.lent.same(lent_count(lending.counts, k)) {
@@ -6338,12 +6318,12 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
             ((values: Valuation()) → (g: Gprs) → PortsAt(values, ins, parameter_registers(), g) →
                 entry.All(λ (file: File) => file.Represents(values, g))) →
             entry.All(λ (_: File) => ins.len() <= parameter_registers().len()) →
-            MayReturnOver<M>(site, stack, top, effects, depth, k, lending, needs, function, prog, match entry {
+            MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match entry {
                 None => None,
                 Some(file) => function.emit_body(saves, prog, k, file, placement_body(placement), names, lending.counts),
             }) {
             None => λ _ _ => trivial,
-            Some(file) => λ entered fits => function.emit_body_returns(saves, site, laid, stack, top, effects, depth, k, lending, loan, needs, prog, file,
+            Some(file) => λ entered fits => function.emit_body_returns(saves, site, laid, stack, top, effects, rooms, k, lending, loan, needs, prog, file,
                 placement_body(placement), names, allowed, asks, shallow, function.lent.same_sound(lent_count(lending.counts, k), same), entered,
                 function.loads_few(fits)),
         })(λ values g placed => input_file_represents(values, g, ins, parameter_registers(), placed), input_file_fits(ins, parameter_registers())),
@@ -6392,7 +6372,7 @@ fn lower_program_laid(functions: List<Function>, placement: List<Place>, counts:
     }
 }
 
-// Refused unless the program's calls respect its depth table
+// Refused unless the program's calls respect its rooms table
 // (`program_shallow`), which is what each function's room is stated by.
 fn lower_program_lent(functions: List<Function>, placement: List<Place>, counts: List<Nat>) → Option<Prog> {
     match program_shallow(functions) { False => None, True => lower_program_laid(functions, placement, counts) }
@@ -6565,36 +6545,36 @@ theorem nothing_below_zero(f: Nat, below: Succ(f) <= 0): False { omega }
 
 // One more function in the program: function `f` meets its contract at its
 // label, the last function by its entry and one below it as it did.
-theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, depth: Nat → Nat, lending: Lending, last: Function,
+theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, lending: Lending, last: Function,
     earlier: List<Function>, entry: Nat, label: asm_labels(site.program)(Succ(earlier.len())) = entry, f: Nat,
     below: (f ≠ earlier.len()) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
         site.Returns(stack, asm_labels(site.program)(Succ(f)),
-            stack.CalledOver(program_effects(earlier), depth, lending, top, f, words, result, before, after),
+            stack.CalledOver(program_effects(earlier), rooms, lending, top, f, words, result, before, after),
             stack.AnsweredOver(lending, result, after)),
     returns: (f = earlier.len()) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) → site.Returns(stack, entry,
-        stack.EnteredOver(program_effects(earlier), depth, lending, top, earlier.len(), last, words, result, before, after),
+        stack.EnteredOver(program_effects(earlier), rooms, lending, top, earlier.len(), last, words, result, before, after),
         stack.AnsweredOver(lending, result, after))):
     (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
     site.Returns(stack, asm_labels(site.program)(Succ(f)),
-        stack.CalledOver(program_effects(Cons(last, earlier)), depth, lending, top, f, words, result, before, after),
+        stack.CalledOver(program_effects(Cons(last, earlier)), rooms, lending, top, f, words, result, before, after),
         stack.AnsweredOver(lending, result, after)) {
     let effects = program_effects(Cons(last, earlier));
     let below_effects = program_effects(earlier);
     let n = earlier.len();
     λ words result before after => match f.eq_dec(n) {
         Inl(same) => j(sym(same), λ m _ => site.Returns(stack, asm_labels(site.program)(Succ(m)),
-                stack.CalledOver(effects, depth, lending, top, m, words, result, before, after), stack.AnsweredOver(lending, result, after)),
-            j(sym(label), λ e _ => site.Returns(stack, e, stack.CalledOver(effects, depth, lending, top, n, words, result, before, after),
+                stack.CalledOver(effects, rooms, lending, top, m, words, result, before, after), stack.AnsweredOver(lending, result, after)),
+            j(sym(label), λ e _ => site.Returns(stack, e, stack.CalledOver(effects, rooms, lending, top, n, words, result, before, after),
                     stack.AnsweredOver(lending, result, after)),
                 site.returns_weaken(stack, entry,
-                    stack.EnteredOver(below_effects, depth, lending, top, n, last, words, result, before, after),
-                    stack.CalledOver(effects, depth, lending, top, n, words, result, before, after),
+                    stack.EnteredOver(below_effects, rooms, lending, top, n, last, words, result, before, after),
+                    stack.CalledOver(effects, rooms, lending, top, n, words, result, before, after),
                     stack.AnsweredOver(lending, result, after), returns(same, words, result, before, after),
                     λ i s held => ⟨⟨held.left.left, ⟨program_effects_last(last, earlier, words, result, before, after, held.left.right.left),
                         held.left.right.right⟩⟩, held.right⟩))),
         Inr(differs) => site.returns_weaken(stack, asm_labels(site.program)(Succ(f)),
-            stack.CalledOver(below_effects, depth, lending, top, f, words, result, before, after),
-            stack.CalledOver(effects, depth, lending, top, f, words, result, before, after),
+            stack.CalledOver(below_effects, rooms, lending, top, f, words, result, before, after),
+            stack.CalledOver(effects, rooms, lending, top, f, words, result, before, after),
             stack.AnsweredOver(lending, result, after),
             below(differs, words, result, before, after),
             λ i s held => ⟨⟨held.left.left, ⟨program_effects_earlier(last, earlier, f, differs, words, result, before, after,
@@ -6650,45 +6630,45 @@ theorem Function::emit_lent_labels(self function: Function, prog: Prog, k: Nat, 
 
 // What emitting functions proves: resident, they meet their contracts
 // over the file.
-fn MayCallOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, depth: Nat → Nat, lending: Lending, functions: List<Function>,
+fn MayCallOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, lending: Lending, functions: List<Function>,
     out: Option<Emitted>) → Type {
     out.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) →
-        site.CallsOver(stack, program_effects(functions), depth, functions.len(), lending, top))
+        site.CallsOver(stack, program_effects(functions), rooms, functions.len(), lending, top))
 }
 
 // And under every lending, a function at a time.
-fn MayCallLent<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, depth: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
+fn MayCallLent<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
     functions: List<Function>, out: Option<Emitted>) → Type {
     out.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) →
-        site.CallsLent(stack, program_effects(functions), depth, functions.len(), counts, needs, top))
+        site.CallsLent(stack, program_effects(functions), rooms, functions.len(), counts, needs, top))
 }
 
 // One more function: under each lending that lets it write what it needs
 // it meets its contract, the earlier ones meeting theirs under every
 // lending.
 theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    depth: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, last: Function, earlier: List<Function>, before: Emitted,
-    earlier_calls: before.prog.Within(site.program) → site.CallsLent(stack, program_effects(earlier), depth, earlier.len(), counts, needs, top)):
+    rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, last: Function, earlier: List<Function>, before: Emitted,
+    earlier_calls: before.prog.Within(site.program) → site.CallsLent(stack, program_effects(earlier), rooms, earlier.len(), counts, needs, top)):
     (out: Option<Emitted>) → Grows(At(before.prog, Succ(earlier.len()), Block([])), out) →
     ((lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
         ((b: Nat) → needs(earlier.len(), b).IsTrue() → lending.written(b) = True) →
-        MayReturnOver<M>(site, stack, top, program_effects(earlier), depth, earlier.len(), lending, needs, last, before.prog, out)) →
-    MayCallLent<M>(site, stack, top, depth, counts, needs, Cons(last, earlier), out) {
+        MayReturnOver<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(), lending, needs, last, before.prog, out)) →
+    MayCallLent<M>(site, stack, top, rooms, counts, needs, Cons(last, earlier), out) {
     λ out => match out {
         None => λ _ _ => trivial,
         Some(emitted) => λ labelled returns within lending same loan f below covers => {
             let n = earlier.len();
             let label_in = At(before.prog, Succ(n), Block([])).within_trans(emitted.prog, site.program, labelled, within);
             let lent = earlier_calls(before.prog.within_before(Succ(n), Block([]), site.program, label_in));
-            site.meets_extend(stack, top, depth, lending, last, earlier, prog_len(before.prog),
+            site.meets_extend(stack, top, rooms, lending, last, earlier, prog_len(before.prog),
                 label_target(label_in.witness, site.program, before.prog, n, Block([]),
                     site.program.laid_out_unique(laid), label_in.proof),
                 f, λ differs => lent(lending, same, loan, f, below_other(f, n, below, differs), covers),
                 λ at_last => {
                     let returned = returns(lending, same, loan,
                         j(at_last, λ m _ => (b: Nat) → needs(m, b).IsTrue() → lending.written(b) = True, covers));
-                    let here: site.CallsLent(stack, program_effects(earlier), depth, n, lending.counts, needs, top) =
-                        j(sym(same), λ c _ => site.CallsLent(stack, program_effects(earlier), depth, n, c, needs, top), lent);
+                    let here: site.CallsLent(stack, program_effects(earlier), rooms, n, lending.counts, needs, top) =
+                        j(sym(same), λ c _ => site.CallsLent(stack, program_effects(earlier), rooms, n, c, needs, top), lent);
                     returned.right(within, here)
                 })
         },
@@ -6699,31 +6679,31 @@ theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
 // contract under every lending of those counts that lets it write what it
 // needs.
 theorem emit_functions_calls_lent<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    top: Nat, depth: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, start: Prog, placement: List<Place>, names: Nat,
+    top: Nat, rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, start: Prog, placement: List<Place>, names: Nat,
     functions: List<Function>):
-    ProgramNeeds(functions, needs) → ProgramShallow(functions, depth) →
-    MayCallLent<M>(site, stack, top, depth, counts, needs, functions, emit_functions_after_lent(start, functions, placement, names, counts)) {
+    ProgramNeeds(functions, needs) → ProgramShallow(functions, rooms) →
+    MayCallLent<M>(site, stack, top, rooms, counts, needs, functions, emit_functions_after_lent(start, functions, placement, names, counts)) {
     match functions {
         Nil => λ _ _ _ lending same loan f below covers words result before after => false_elim(nothing_below_zero(f, below)),
         Cons(last, earlier) => λ needed shallow =>
             (match emit_functions_after_lent(start, earlier, placement, names, counts) as λ e =>
-                MayCallLent<M>(site, stack, top, depth, counts, needs, earlier, e) →
-                MayCallLent<M>(site, stack, top, depth, counts, needs, Cons(last, earlier), match e {
+                MayCallLent<M>(site, stack, top, rooms, counts, needs, earlier, e) →
+                MayCallLent<M>(site, stack, top, rooms, counts, needs, Cons(last, earlier), match e {
                     None => None,
                     Some(before) => last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts),
                 }) {
                 None => λ _ => trivial,
-                Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, top, depth, counts, needs, last, earlier, before, earlier_calls,
+                Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, top, rooms, counts, needs, last, earlier, before, earlier_calls,
                     last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts),
                     last.emit_lent_labels(before.prog, earlier.len(), before.placement, before.names, counts),
-                    λ lending same loan covers => j(same, λ c _ => MayReturnOver<M>(site, stack, top, program_effects(earlier), depth, earlier.len(),
+                    λ lending same loan covers => j(same, λ c _ => MayReturnOver<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(),
                             lending, needs, last, before.prog, last.emit_lent(before.prog, earlier.len(), before.placement, before.names, c)),
-                        last.emit_returns(site, laid, stack, top, program_effects(earlier), depth, earlier.len(), lending, loan, needs, before.prog,
+                        last.emit_returns(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), lending, loan, needs, before.prog,
                             before.placement, before.names,
                             λ b stores => covers(b, is_true_of_eq(needs(earlier.len(), b), needed.left.left(b, stores))),
                             last.body.asks_within(needs, λ (b: Nat) => needs(earlier.len(), b), lending.written, covers, needed.left.right),
                             shallow.left))),
-            })(emit_functions_calls_lent<M>(site, laid, stack, top, depth, counts, needs, start, placement, names, earlier, needed.right,
+            })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, counts, needs, start, placement, names, earlier, needed.right,
                 shallow.right)),
     }
 }
@@ -6734,17 +6714,17 @@ theorem emit_functions_calls_lent<M>(site: Site<M>, laid: site.program.laid_out(
 // given.
 theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), start: Prog, placement: List<Place>,
-    names: Nat, functions: List<Function>, lendless: program_lendless(functions).IsTrue(), depth: Nat → Nat,
-    shallow: ProgramShallow(functions, depth)):
+    names: Nat, functions: List<Function>, lendless: program_lendless(functions).IsTrue(), rooms: Nat → Nat,
+    shallow: ProgramShallow(functions, rooms)):
     ((b: Nat) → program_stores(functions, b).IsTrue() → lending.written(b) = True) →
-    MayCallOver<M>(site, stack, top, depth, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
+    MayCallOver<M>(site, stack, top, rooms, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
     λ allowed => (match emit_functions_after_lent(start, functions, placement, names, lending.counts) as λ e =>
-            MayCallLent<M>(site, stack, top, depth, lending.counts, λ (_: Nat) (b: Nat) => lending.written(b), functions, e) →
-            MayCallOver<M>(site, stack, top, depth, lending, functions, e) {
+            MayCallLent<M>(site, stack, top, rooms, lending.counts, λ (_: Nat) (b: Nat) => lending.written(b), functions, e) →
+            MayCallOver<M>(site, stack, top, rooms, lending, functions, e) {
         None => λ _ => trivial,
         Some(emitted) => λ lent within f below =>
             lent(within)(lending, refl, loan, f, below, λ b need => eq_true_of_is_true(lending.written(b), need)),
-    })(emit_functions_calls_lent<M>(site, laid, stack, top, depth, lending.counts, λ (_: Nat) (b: Nat) => lending.written(b), start, placement,
+    })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, lending.counts, λ (_: Nat) (b: Nat) => lending.written(b), start, placement,
         names, functions, program_needs_all(functions, λ (b: Nat) => lending.written(b), lendless, allowed), shallow))
 }
 
@@ -6754,15 +6734,15 @@ theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.lai
 // (`program_marked_needs`).
 theorem emit_functions_after_lent_calls_needs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     top: Nat, lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), start: Prog, placement: List<Place>,
-    names: Nat, functions: List<Function>, needs: Nat → Nat → Bool, needed: ProgramNeeds(functions, needs), depth: Nat → Nat,
-    shallow: ProgramShallow(functions, depth)):
+    names: Nat, functions: List<Function>, needs: Nat → Nat → Bool, needed: ProgramNeeds(functions, needs), rooms: Nat → Nat,
+    shallow: ProgramShallow(functions, rooms)):
     ((f: Nat) → (b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True) →
-    MayCallOver<M>(site, stack, top, depth, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
+    MayCallOver<M>(site, stack, top, rooms, lending, functions, emit_functions_after_lent(start, functions, placement, names, lending.counts)) {
     λ allowed => (match emit_functions_after_lent(start, functions, placement, names, lending.counts) as λ e =>
-            MayCallLent<M>(site, stack, top, depth, lending.counts, needs, functions, e) → MayCallOver<M>(site, stack, top, depth, lending, functions, e) {
+            MayCallLent<M>(site, stack, top, rooms, lending.counts, needs, functions, e) → MayCallOver<M>(site, stack, top, rooms, lending, functions, e) {
         None => λ _ => trivial,
         Some(emitted) => λ lent within f below => lent(within)(lending, refl, loan, f, below, allowed(f)),
-    })(emit_functions_calls_lent<M>(site, laid, stack, top, depth, lending.counts, needs, start, placement, names, functions, needed, shallow))
+    })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, lending.counts, needs, start, placement, names, functions, needed, shallow))
 }
 
 theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>):
