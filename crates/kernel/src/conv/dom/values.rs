@@ -1,5 +1,5 @@
 //! The **value instantiation** of [`Dom`]: conversion over the environment
-//! machine (docs/kernel/nbe-conversion-design.md §13, stage 2b).
+//! machine (docs/kernel/nbe-conversion-design.md §13).
 //!
 //! A weak head normal form is a [`Val`]/[`VTy`], and a sub-structure is a
 //! closure. Two numbers travel with every sub-structure, and they are what
@@ -28,7 +28,7 @@
 //!   shared function in [`crate::term`] / [`crate::rec`], and evaluate the
 //!   result in that same environment extended by the freshly pushed binders.
 //!   The schemas are one source shared with `typing.rs`; a value-domain
-//!   transcription would be a seventh copy of `nth` and a place for the two
+//!   transcription would be another copy of `nth` and a place for the two
 //!   to drift.
 //! - The layer-m arms weaken L or Ψ, and a captured environment does not
 //!   weaken itself: [`Values::under_tele_ty`] is where `value::shift` is
@@ -352,10 +352,10 @@ mod tests {
         );
     }
 
-    /// What used to be a hostile near-match — two doubling DAGs whose
-    /// leaves differ, so no node pair lines up — is decided by the lengths
-    /// the programs carry: `2^64` against `2^65` is a refutation within a
-    /// handful of inspections, not a walk that exhausts its fuel. (The
+    /// A hostile near-match — two doubling DAGs whose leaves differ, so no
+    /// node pair lines up — is decided by the lengths the programs carry:
+    /// `2^64` against `2^65` is a refutation within a handful of
+    /// inspections, not a walk that exhausts its fuel. (The
     /// bound itself is still exercised by mixed-context programs in
     /// `value::program`'s own tests.)
     #[test]
@@ -513,8 +513,7 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
 
 /// Run the machine on the checker's own budget. Fuel is a single shared
 /// account (design §6): the evaluator spends from it and hands back what is
-/// left, so a reduction step and a comparison node cost the same one unit
-/// they cost today.
+/// left, so a reduction step and a comparison node cost one unit each.
 ///
 /// The **depth** budget is shared the same way and for a more literal reason:
 /// this call stands on conversion's own native frames, so the machine is told
@@ -753,8 +752,8 @@ impl<'v> Dom<'v> for Values {
         // address names one closure throughout. Ψ is by length: within a
         // run it only ever grows (a telescope push), so the length names
         // it, where its handle's address does not — the handle is rebuilt
-        // along the way, and keying on it made the same pair miss on
-        // nearly every δ-round.
+        // along the way, and keying on it makes the same pair miss on
+        // nearly every δ-step.
         Some((
             a.clo as *const TmClo<'v> as usize,
             a.home,
@@ -1195,7 +1194,7 @@ impl<'v> Dom<'v> for Values {
 
     /// Instantiating a `ΠΠ` binder leaves the captured environment alone:
     /// `inst_univ` renumbers the outer scope back *down*, so the environment
-    /// is already in the post-instantiation scope (stage 1's log, note 4).
+    /// is already in the post-instantiation scope.
     fn inst_univ_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, body: &TyC<'v>, phi: &[Level]) -> R<TyC<'v>> {
         let Some((benv, bbody)) = body.clo.as_syn() else {
             return Err(NC);
@@ -1237,7 +1236,7 @@ impl<'v> Dom<'v> for Values {
     /// `VTail`'s coarser test: a weakening's source length is dropped,
     /// because an environment machine — having substituted nothing — never
     /// renormalizes it, and it is determined by the scope, which the two
-    /// sides of a comparison share (stage 1's log, note 2). The empty tail
+    /// sides of a comparison share. The empty tail
     /// has nothing to drop (`term.rs`, `LocalSubst`).
     fn subst_tails_agree(a: &VSubst<'v>, b: &VSubst<'v>) -> bool {
         a.tail == b.tail
@@ -1843,7 +1842,7 @@ impl<'v> Dom<'v> for Values {
     /// three types in that environment's scope plus the three binders
     /// conversion is about to push, and each is embedded with exactly those
     /// binders' neutrals. Rebuilding `nth` out of domain constructors would
-    /// need a native closure and a seventh transcription; this needs neither.
+    /// need a native closure and another transcription; this needs neither.
     fn wf_step_telescope(
         _cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
@@ -2181,9 +2180,8 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Va
         // reads them off the Σ when it builds the elim, whichever spelling
         // the syntax used.
         // A checked projection stores no annotation, so the view has no
-        // levels — exactly what the syntax domain has shown for `fst@` since
-        // stage 1a, and the arm in `conv.rs` already treats the pair as
-        // `Option`.
+        // levels, as at the syntax domain, and the arm in `conv.rs` treats
+        // the pair as `Option`.
         Elim::Fst { ann } => TmView::Fst {
             levels: ann.as_ref().map(|a| (&a.fst_level, &a.snd_level)),
             pair: head,
