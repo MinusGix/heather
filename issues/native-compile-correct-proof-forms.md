@@ -58,7 +58,7 @@ What the procedures part shows: its statements read well as records and `calc`, 
 - The hand inversion of every `None`/`Some` pipeline, and the inversion lemmas written for the certificate reader: [[induct-through-result-matches]].
 - Written motives that restate a callee's body because a hypothesis is not refined: [[case-split-refines-hypotheses-under-calls]].
 - `λ none => absurd(none)` and injection: [[constructor-equations-in-context]].
-- Guards past their first conjunct, and guard goals: [[bool-guard-facts-by-known]].
+- Guards past their first conjunct, and guard goals: `known` reads them ([[bool-guard-facts-by-known]], closed 2026-11-16); native_compile_correct has no split left.
 - The seven-arm blocks over `StructuredRegion`: [[wildcard-arm-sees-its-constructor]].
 - `ITree::bind(Events::linux(), …)` and moving a claim along `≈`: [[itree-surface-implicit-events]].
 - Positions (`Within`, `prog_len`) in every code lemma: [[emitted-code-claims-without-positions]], a design question.

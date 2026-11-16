@@ -1,0 +1,64 @@
+// Probes of `known` at a Bool guard (issues/bool-guard-facts-by-known.md):
+// a goal `b.IsTrue()` or `b = True` proved from the guards in scope taken
+// apart by structure. Neutral and literal-list arguments, an open element
+// type, checking (argument) positions, a guard under a conjunction and in a
+// case arm, and negative controls (docs/testing-generated-terms.md). None
+// imports `omega`: each is `known`'s own reading. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import bool; import nat; import list; import option;
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+fn all_fit(ws: List<Nat>) → Bool { match ws { Nil => True, Cons(w, rest) => fits(w) && all_fit(rest) } }
+fn all_of<A>(p: A → Bool, xs: List<A>) → Bool { match xs { Nil => True, Cons(x, rest) => p(x) && all_of(p, rest) } }
+
+theorem uses(w: Nat, h: fits(w).IsTrue()): fits(w).IsTrue() { h }
+
+// ---------------------------------------------------------------------------
+// A conjunct past the first, from a guard written with `&&`.
+
+theorem and_last(a, b, c: Nat, h: (fits(a) && (fits(b) && fits(c))).IsTrue()): fits(c).IsTrue() { known }
+theorem and_middle_argument(a, b, c: Nat, h: (fits(a) && (fits(b) && fits(c))).IsTrue()): fits(b).IsTrue() { uses(b, known) }
+theorem and_left_nested(a, b, c: Nat, h: ((fits(a) && fits(b)) && fits(c)).IsTrue()): fits(b).IsTrue() { known }
+
+// `e = True`, `True = e` and `e.IsTrue()` are one fact, on either side.
+theorem from_equation(a, b: Nat, h: (fits(a) && fits(b)) = True): fits(b).IsTrue() { known }
+theorem from_flipped(a, b: Nat, h: True = (fits(a) && fits(b))): fits(a).IsTrue() { known }
+theorem to_equation(a, b: Nat, h: (fits(a) && fits(b)).IsTrue()): fits(b) = True { known }
+theorem to_flipped(a, b: Nat, h: (fits(a) && fits(b)).IsTrue()): True = fits(a) { known }
+
+// Under a conjunction.
+theorem under_and(a, b: Nat, h: fits(a).IsTrue() ∧ (fits(a) && fits(b)).IsTrue()): fits(b).IsTrue() { known }
+
+// ---------------------------------------------------------------------------
+// Through a recursion over a list literal, and a definition by one step.
+
+theorem list_last(a, b, c: Nat, h: all_fit([a, b, c]).IsTrue()): fits(c).IsTrue() { known }
+theorem list_equation(a, b, c: Nat, h: all_fit([a, b, c]) = True): fits(b).IsTrue() { uses(b, known) }
+theorem list_literal_elements(h: all_fit([3, 4, 5]).IsTrue()): fits(4).IsTrue() { known }
+theorem list_open_type<A>(p: A → Bool, x, y: A, h: all_of(p, [x, y]).IsTrue()): p(y).IsTrue() { known }
+
+// A case arm's instance of its motive: a `match` on a constructor.
+theorem case_arm(a, b: Nat, h: Bool::IsTrue(match Some(a) as λ _ => Bool { None => False, Some(x) => fits(x) && fits(b) })): fits(b).IsTrue() {
+    known
+}
+
+// ---------------------------------------------------------------------------
+// A guard goal from its parts.
+
+theorem goal_from_parts(a, b, c: Nat, h: all_fit([a, b, c]).IsTrue()): (fits(c) && fits(a)).IsTrue() { known }
+theorem goal_list(a, b: Nat, ha: fits(a).IsTrue(), hb: fits(b) = True): all_fit([a, b]).IsTrue() { known }
+theorem goal_empty_list(): all_fit([]).IsTrue() { known }
+
+// ---------------------------------------------------------------------------
+// Negative controls: a disjunction gives neither side, and a guard about
+// one word says nothing of another.
+
+// expect-error: found no hypothesis
+theorem or_refused(a, b: Nat, h: (fits(a) || fits(b)).IsTrue()): fits(b).IsTrue() { known }
+
+// expect-error: found no hypothesis
+theorem other_word_refused(a, b, c: Nat, h: all_fit([a, b]).IsTrue()): fits(c).IsTrue() { known }
+
+// expect-error: found no hypothesis
+theorem goal_part_missing(a, b: Nat, ha: fits(a).IsTrue()): (fits(a) && fits(b)).IsTrue() { known }
