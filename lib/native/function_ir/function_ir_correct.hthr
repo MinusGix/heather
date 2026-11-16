@@ -245,9 +245,9 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
 // A function of words computes over no file: `Prog::Computes` is
 // `Prog::ComputesOver` at `Lending::none()` and the empty file, entered
 // anywhere on the stack. The two contracts are one.
-theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
-    computes: code.Computes(machine, f, arguments, answer), top: Nat):
-    code.ComputesOver(machine, top, Lending::none(), f, arguments, [], Ending(word := answer, buffers := [])) {
+theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    computes: code.Computes(machine, f, room, arguments, answer), top: Nat):
+    code.ComputesOver(machine, top, Lending::none(), f, room, arguments, [], Ending(word := answer, buffers := [])) {
     λ origin last s at resident i rsp room held ret saved => {
         let ran = computes(origin, last, s, at, resident, i, rsp, room, held.left, ret, saved);
         let post = ran.proof.right.right.right.right;
@@ -259,9 +259,9 @@ theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat
 }
 
 // And back, entered below the stack's top.
-theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
-    over: code.ComputesOver(machine, machine.stack.size, Lending::none(), f, arguments, [], Ending(word := answer, buffers := []))):
-    code.Computes(machine, f, arguments, answer) {
+theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    over: code.ComputesOver(machine, machine.stack.size, Lending::none(), f, room, arguments, [], Ending(word := answer, buffers := []))):
+    code.Computes(machine, f, room, arguments, answer) {
     λ origin last s at resident i rsp room held ret saved => {
         let ran = over(origin, last, s, at, resident, i, rsp, room, ⟨held, ⟨trivial, ⟨room, machine.stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
         let post = ran.proof.right.right.right.right;

@@ -149,11 +149,11 @@ theorem sum_implements<M>(placement: List<Place>, code: Prog, lowered: lower_pro
 // A function of words is a function of spans lent nothing, and back.
 theorem sum_over_none<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
     machine: Machine<M>, a, b: BitVec(64), top: Nat):
-    code.ComputesOver(machine, top, Lending::none(), 0, [a, b], [], Ending(word := a + b, buffers := [])) {
-    code.computes_over_none(machine, 0, [a, b], a + b, sum_computes<M>(placement, code, lowered, machine, a, b), top)
+    code.ComputesOver(machine, top, Lending::none(), 0, 136, [a, b], [], Ending(word := a + b, buffers := [])) {
+    code.computes_over_none(machine, 0, 136, [a, b], a + b, sum_computes<M>(placement, code, lowered, machine, a, b), top)
 }
 
 theorem sum_back<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
-    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, [a, b], a + b) {
-    code.computes_of_over_none(machine, 0, [a, b], a + b, sum_over_none<M>(placement, code, lowered, machine, a, b, machine.stack.size))
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, 136, [a, b], a + b) {
+    code.computes_of_over_none(machine, 0, 136, [a, b], a + b, sum_over_none<M>(placement, code, lowered, machine, a, b, machine.stack.size))
 }
