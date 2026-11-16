@@ -3855,6 +3855,12 @@ enum GuardShape<'a> {
     /// `n.same(m)`, read as `n = m` (`!n.same(m)` as `n ≠ m`), at `Nat` or
     /// (`true`) `Int`.
     Same(bool),
+    /// A word's comparison bit, `a.unsigned_lt_bit(b)`, `a.unsigned_le_bit(b)`
+    /// or `a.eq_bit(b)`: the `bitvec_omega::guard_*` rule that reads it as
+    /// the comparison of the values when it holds, and the one when it does
+    /// not (issues/omega-if-bit-word-comparison.md). Only where
+    /// `bitvec_omega` is loaded; elsewhere such a bit is an `Atom`.
+    Word(&'static str, &'static str),
     /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
     /// unfolds it to a connective (`unfold_guard`).
     Atom,
@@ -3881,6 +3887,15 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
             return GuardShape::Same(int);
         }
     }
+    for (test, holds, fails) in [
+        ("bitvec::BitVec::unsigned_lt_bit", "bitvec_omega::guard_lt", "bitvec_omega::guard_not_lt"),
+        ("bitvec::BitVec::unsigned_le_bit", "bitvec_omega::guard_le", "bitvec_omega::guard_not_le"),
+        ("bitvec::BitVec::eq_bit", "bitvec_omega::guard_eq", "bitvec_omega::guard_not_eq"),
+    ] {
+        if args(test).is_some_and(|args| args.len() == 3) && elab.key_of(holds).is_some() {
+            return GuardShape::Word(holds, fails);
+        }
+    }
     match app_spine(b).0 {
         Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
         _ if is_field_read(elab, b) => GuardShape::Atom,
@@ -3892,7 +3907,7 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
 fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
     match guard_shape(elab, b) {
         GuardShape::Not(x) => guard_reads_by_structure(elab, x),
-        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb(_) | GuardShape::Same(_) => true,
+        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb(_) | GuardShape::Same(_) | GuardShape::Word(..) => true,
         GuardShape::Atom | GuardShape::Other => false,
     }
 }
@@ -3921,7 +3936,7 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
             oracle.unfold(&cx.gamma, b, Unfold::Proposition).map(Rc::new).find(|reduct| {
                 matches!(
                     guard_shape(elab, reduct),
-                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb(_) | GuardShape::Same(_)
+                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb(_) | GuardShape::Same(_) | GuardShape::Word(..)
                 )
             })
         }
@@ -3932,8 +3947,10 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
 /// `(b, v)` for a fact `b = True` (`v`) or `b = False` at `Bool`: what a
 /// `match h: n.leb(m) { … }` arm binds, read as the guard `b.IsTrue()` or
 /// `(!b).IsTrue()` (issues/decreases-measure-record-field-unspelled.md).
-/// A side that is itself a literal is no guard.
-fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool)> {
+/// Either way round, `True = b` as `b = True` (`flipped`), what a test
+/// written `True = x.unsigned_lt_bit(y)` states. A side that is itself a
+/// literal is no guard.
+fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool, bool)> {
     let decoded = crate::inductive::decoded(ty);
     let Type::Id { ty, lhs, rhs, .. } = &*decoded else {
         return None;
@@ -3946,10 +3963,11 @@ fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, boo
         Some("False") => Some(false),
         _ => None,
     };
-    if literal(lhs).is_some() {
-        return None;
+    match (literal(lhs), literal(rhs)) {
+        (None, Some(value)) => Some((Rc::clone(lhs), value, false)),
+        (Some(value), None) => Some((Rc::clone(rhs), value, true)),
+        _ => None,
     }
-    Some((Rc::clone(lhs), literal(rhs)?))
 }
 
 /// A guard a round reads: `evidence` proves `term.IsTrue()` when `positive`
@@ -4061,6 +4079,11 @@ impl GuardEmitter<'_> {
                 };
                 format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
             }
+            (positive, GuardShape::Word(holds, fails)) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                format!("{}({h}, {x} ⊢ {body})", self.rule(if positive { holds } else { fails }))
+            }
             (positive, GuardShape::Atom) if unfold_guard(self.elab, self.cx, &item.term).is_none() => {
                 let x = self.name(GUARD_PART);
                 let body = self.emit(items, budget);
@@ -4084,7 +4107,9 @@ impl GuardEmitter<'_> {
 /// `¬b.IsTrue()` is taken apart by the `omega::guard_*` rules, `&&` into
 /// both sides, `||` into two branches, `!` by its operand's opposite rule,
 /// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), `n.same(m)` into
-/// `n = m` (`!n.same(m)` into `n ≠ m`), at `Nat` and at `Int`, and any
+/// `n = m` (`!n.same(m)` into `n ≠ m`), at `Nat` and at `Int`, a word's
+/// `unsigned_lt_bit`, `unsigned_le_bit` or `eq_bit` into the comparison of
+/// its operands' `toNat`s (`bitvec_omega::guard_*`), and any
 /// other Bool into the atom
 /// `bit(b)`, `1` or `0`. A guard whose head is a definition is
 /// read at its unfolding, a fact bound beside the original
@@ -4137,9 +4162,10 @@ fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
             readable |= guard_reads_by_structure(elab, b) || unfold_guard(elab, cx, b).is_some();
             items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true, equation: false });
             settles.push(fact.name);
-        } else if let Some((b, value)) = bool_equation(elab, cx, &fact.ty) {
+        } else if let Some((b, value, flipped)) = bool_equation(elab, cx, &fact.ty) {
             readable |= guard_reads_by_structure(elab, &b) || unfold_guard(elab, cx, &b).is_some();
-            items.push(GuardItem { evidence: fact.name.clone(), term: b, positive: value, negated: false, equation: true });
+            let evidence = if flipped { format!("sym({})", fact.name) } else { fact.name.clone() };
+            items.push(GuardItem { evidence, term: b, positive: value, negated: false, equation: true });
             settles.push(fact.name);
         }
     }

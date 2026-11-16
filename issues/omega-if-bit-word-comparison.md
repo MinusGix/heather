@@ -1,6 +1,6 @@
 ---
 title: omega reads an `if h:` branch's word comparison only while the branch names `h`
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 created: 2026-11-16
@@ -28,3 +28,9 @@ comparison of the `toNat`s (as it reads the proposition), so the two
 facts in the sort example go back to `omega`, or when the lowering always
 gives a written name its proposition and the hidden equation is only for
 unnamed tests.
+
+**Closed 2026-11-16.** omega's guard round reads `unsigned_lt_bit`,
+`unsigned_le_bit` and `eq_bit` (true or false, as an equation either way
+round or as `IsTrue`) as the comparison of the operands' `toNat`s, by
+`bitvec_omega::guard_*` (design `docs/tactics/omega-measure-reduction-design.md`
+§23). The sort example's `ab` and `ba` are `omega` again.
