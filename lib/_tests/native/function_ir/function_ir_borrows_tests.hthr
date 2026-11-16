@@ -1,0 +1,127 @@
+// Probes of the statement over borrows (function_ir_borrows,
+// docs/native/span-statements-design.md): what is read off a list of
+// borrows is what the statement over a lending took separately, a
+// certificate's two shapes follow from `Prog::ComputesOver` as
+// `compile-x86` derives them, and a `runtime fn` of a span is stated by its
+// signature.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_state;
+import function_ir_run;
+import function_ir_lower;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_correct;
+import function_ir_borrows;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import rt;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// What a list of borrows is, at open slices: each by conversion
+
+theorem borrows_words(out, text: Slice): Borrow::words([Mut(out), Shared(text)]) = [out.at, out.length(), text.at, text.length()] { refl }
+
+theorem borrows_marks(out, text: Slice): Borrow::marks([Mut(out), Shared(text)]) = [True, False] { refl }
+
+theorem borrows_bytes(out, text: Slice): Borrow::bytes([Mut(out), Shared(text)]) = [out.bytes, text.bytes] { refl }
+
+theorem borrows_left(out, text: Slice, after: List<BitVec(8)>): Borrow::left([Mut(out), Shared(text)], after) = [after, text.bytes] { refl }
+
+// The length word is the slice's length, not a free word.
+theorem slice_length(at: BitVec(64), bytes: List<BitVec(8)>): Slice(at, bytes).length() = BitVec::ofNat(bytes.len()) { refl }
+
+// Only a `Mut` borrow may be written: a store into the second span is one
+// the borrows' lending does not allow.
+theorem shared_is_unwritten(out, text: Slice): Borrow::lending([Mut(out), Shared(text)]).written(1) = False { refl }
+
+theorem mut_is_written(out, text: Slice): Borrow::lending([Mut(out), Shared(text)]).written(0) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The two shapes of a certificate, from the statement over a lending
+
+// A writer: `Prog::ComputesOver` at the lending that writes the marked
+// buffers, with the address and length words spelled from the slices, is
+// `Prog::ComputesInto`. The counts are the program's (`[2]`: its one
+// function takes two buffers).
+theorem writer_on<M>(code: Prog, machine: Machine<M>, out, text: Slice, i: BitVec(64), result: Mutated<List<BitVec(8)>, BitVec(64)>,
+    over: (top: Nat) →
+        Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing([2], [out.at, text.at], [out.bytes, text.bytes], [True, False]).spans()) →
+        code.ComputesOver(machine, top, Lending::writing([2], [out.at, text.at], [out.bytes, text.bytes], [True, False]), 0,
+            [out.at, out.length(), text.at, text.length(), i], [out.bytes, text.bytes],
+            Ending(word := result.value, buffers := [result.after, text.bytes]))):
+    code.ComputesInto(machine, 0, [Mut(out), Shared(text)], [i], result) {
+    code.computes_on(machine, 0, [Mut(out), Shared(text)], [i], [2], λ (b: Nat) => marked([True, False], b), refl, λ b held => held,
+        Ending(word := result.value, buffers := [result.after, text.bytes]), over)
+}
+
+// A reader: the compiler's theorem for a program that stores nowhere is at
+// a lending that writes nothing (`Lending::reading`), which allows no more
+// than borrows with no `Mut` do.
+theorem reader_on<M>(code: Prog, machine: Machine<M>, text: Slice, i, value: BitVec(64),
+    over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::reading([1], [text.at], [text.bytes]).spans()) →
+        code.ComputesOver(machine, top, Lending::reading([1], [text.at], [text.bytes]), 0, [text.at, text.length(), i], [text.bytes],
+            Ending(word := value, buffers := [text.bytes]))):
+    code.ComputesOn(machine, 0, [Shared(text)], [i], value, [text.bytes]) {
+    code.computes_on(machine, 0, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+        Ending(word := value, buffers := [text.bytes]), over)
+}
+
+// The count is checked: a program whose function takes one buffer is not
+// stated over two borrows.
+// expect-error: `lent_count([1], 0)` and `len([Shared(out), Shared(text)])` are not
+theorem count_is_checked<M>(code: Prog, machine: Machine<M>, out, text: Slice, value: BitVec(64),
+    over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::reading([1], [out.at, text.at], [out.bytes, text.bytes]).spans()) →
+        code.ComputesOver(machine, top, Lending::reading([1], [out.at, text.at], [out.bytes, text.bytes]), 0,
+            [out.at, out.length(), text.at, text.length()], [out.bytes, text.bytes], Ending(word := value, buffers := [out.bytes, text.bytes]))):
+    code.ComputesOn(machine, 0, [Shared(out), Shared(text)], [], value, [out.bytes, text.bytes]) {
+    code.computes_on(machine, 0, [Shared(out), Shared(text)], [], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+        Ending(word := value, buffers := [out.bytes, text.bytes]), over)
+}
+
+// A lending that writes a buffer the borrows lend `Shared` is refused: it
+// would let more be written than the statement says.
+// expect-error: `marked(marks([Shared(text)]), b) = True` is expected here
+theorem marks_are_checked<M>(code: Prog, machine: Machine<M>, text: Slice, value: BitVec(64),
+    over: (top: Nat) → Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing([1], [text.at], [text.bytes], [True]).spans()) →
+        code.ComputesOver(machine, top, Lending::writing([1], [text.at], [text.bytes], [True]), 0, [text.at, text.length()], [text.bytes],
+            Ending(word := value, buffers := [text.bytes]))):
+    code.ComputesOn(machine, 0, [Shared(text)], [], value, [text.bytes]) {
+    code.computes_on(machine, 0, [Shared(text)], [], [1], λ (b: Nat) => marked([True], b), refl, λ b held => held,
+        Ending(word := value, buffers := [text.bytes]), over)
+}
+
+// ---------------------------------------------------------------------------
+// A `runtime fn` of a span, as `compile-x86` takes one
+
+runtime fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte_within(length, i).zero_extend(56) }
+
+// Whatever code the lowering makes of `peek`'s program, called over a
+// borrowed slice it returns `peek` of the slice's bytes and its length,
+// and leaves the slice as it was. A certificate has the lowering as a
+// literal; here it is any.
+theorem peek_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_lent(peek::program, placement, [1]) = Some(code),
+    machine: Machine<M>, text: Slice, i: BitVec(64)):
+    code.ComputesOn(machine, 0, [Shared(text)], [i], peek(text.bytes, text.length(), i), [text.bytes]) {
+    code.computes_on(machine, 0, [Shared(text)], [i], [1], λ (_: Nat) => False, refl, λ b held => absurd(held),
+        Ending(word := peek(text.bytes, text.length(), i), buffers := [text.bytes]),
+        λ top loan origin last => compiled_returns_lent<M>(peek::program, placement, Lending::reading([1], [text.at], [text.bytes]), code, lowered,
+            trivial, trivial, machine.fetch, machine.data, last, origin, machine.stack, top, loan, 0, trivial,
+            [text.at, text.length(), i], trivial, [text.bytes], peek(text.bytes, text.length(), i),
+            peek::agrees_over([text.bytes], text.at, text.length(), i)))
+}

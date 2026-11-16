@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile function_ir_correct x86_64_asm_table function_ir_refusal function_ir_optimize
+// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -73,6 +73,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_stage", include_str!("../../../../lib/native/function_ir/function_ir_stage.hthr")),
     ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
     ("function_ir_correct", include_str!("../../../../lib/native/function_ir/function_ir_correct.hthr")),
+    ("function_ir_borrows", include_str!("../../../../lib/native/function_ir/function_ir_borrows.hthr")),
     ("x86_64_asm_table", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
     ("function_ir_spelled", include_str!("../../../../lib/native/function_ir/function_ir_spelled.hthr")),
     ("utf8", include_str!("../../../../lib/std/text/utf8.hthr")),

@@ -135,12 +135,42 @@ reach (`Loan`), the code returns the word the program's run over the spans
 ends in, and leaves the spans as the run leaves them. It stores nowhere but
 its own stack room and the bytes of the spans `marks` lets it write
 (`Stack::AnsweredOver`); every store the program makes is into one of those,
-checked by evaluation (`within`). This is what the SHA-256 functions linked
-into Rust are stated with: a certificate's `_returns` for a function of
-spans is `code.ComputesOver(machine, top, lending, f, arguments, file,
-Ending(word := …, buffers := …))`, `Prog::ReturnsOver` at every load
-address. `compiled_returns_marked` is its form for a
-program whose functions lend views of a span to each other.
+checked by evaluation (`within`). `compiled_returns_marked` is its form for a program whose functions lend
+views of a span to each other.
+
+A certificate does not state that form. It states the function by its
+spans (`function_ir_borrows.hthr`, `docs/native/span-statements-design.md`):
+a `Slice` is where a span lies and the bytes it holds, a `Borrow` is a
+slice lent `Shared` or `Mut` (Rust's `&[u8]` and `&mut [u8]`), and
+
+```heather
+code.ComputesOn(machine, f, borrows, words, answer, leaves)
+```
+
+says that function `f`, called with each borrowed slice's address and
+length and then `words`, returns `answer` and leaves the bytes `leaves` in
+the slices, storing nowhere but its own stack room and the `Mut` slices,
+wherever the code is loaded and wherever the slices lie that the loan's
+laws hold (`Machine::Lends`). The addresses, the file, the marks and the
+address and length words are read off the borrows, so the theorem has no
+free word that a hidden clause ties to a span. For a function that writes
+its first span, `ComputesInto` takes the source function's result
+(`Mutated`): its word is the answer and its span is what the first slice
+is left holding. This is what the SHA-256 functions linked into Rust are
+stated with. For `copy_span` (`lib/native/native_tool_spans.hthr`), whose
+Rust declaration is `copy_span(out: &mut [u8], text: &[u8], count: u64,
+from: u64)`, the certificate reads:
+
+```heather
+theorem copy_span_native_returns<M>(machine: Machine<M>, s0, s1: Slice, a4, a5: BitVec(64)):
+    copy_span_native_code().ComputesInto(machine, 0, [Mut(s0), Shared(s1)], [a4, a5],
+        native_tool_spans::copy_span(s0.bytes, s0.length(), s1.bytes, s1.length(), a4, a5))
+```
+
+It is `Prog::ComputesOver` at the borrows' lending by one lemma
+(`Prog::computes_on`), and `compiler_correct_on` is the compiler's theorem
+in this form. The certificate keeps the statement over any file as
+`_returns_over`.
 
 ## What is assumed
 
@@ -223,6 +253,7 @@ is kept as it is (`HEATHER_OPTIMIZE=off` turns the optimizer off).
 | Piece | Where |
 |---|---|
 | The readable statements | `lib/native/function_ir/function_ir_correct.hthr` |
+| Functions of spans stated by their spans | `lib/native/function_ir/function_ir_borrows.hthr`, `docs/native/span-statements-design.md` |
 | The compiler's theorem as certificates cite it | `lib/native/function_ir/function_ir_compile.hthr` (`compiled_returns`, `compiled_returns_written`, `compiled_returns_marked`, `compiled_returns_unlent`) |
 | The lowering and its proof | `lib/native/function_ir/function_ir_lower*.hthr` |
 | The contract's controls | `lib/_tests/native/function_ir/function_ir_compile_tests.hthr` |
