@@ -276,8 +276,8 @@ fn rule_given(given: List<Expr>) → Tac<List<RuleHyp>> {
 }
 
 // The goal `clause.Sound()` with every defining premise written out, closed
-// by `close` from the valuation and the facts left.
-fn rule_sound_by(stated: Expr → List<Expr>, close: Expr → List<RuleHyp> → Tac<Expr>) → Tac<Expr> {
+// by `close` from the valuation, the buffers and the facts left.
+fn rule_sound_by(stated: Expr → List<Expr>, close: Expr → Expr → List<RuleHyp> → Tac<Expr>) → Tac<Expr> {
     let backward <- lookup(name_of(rule_backward)).or_fail("rule_sound: ");
     let forward <- lookup(name_of(rule_forward)).or_fail("rule_sound: ");
     let equal <- lookup(name_of(rule_equal)).or_fail("rule_sound: ");
@@ -290,7 +290,8 @@ fn rule_sound_by(stated: Expr → List<Expr>, close: Expr → List<RuleHyp> → 
     let walk = RuleWalk(backward, forward, equal, values.local.ref, held.local.ref, stated(Local(values.local.ref)));
     let target <- rule_spelled(8, walk, held.body);
     let premises <- rule_premises(64, walk, Local(held.local.ref));
-    let p <- rule_walk(64, walk, Cons(held.local, Cons(buffers.local, Cons(values.local, g.locals))), premises, [], target, close(Local(values.local.ref)));
+    let p <- rule_walk(64, walk, Cons(held.local, Cons(buffers.local, Cons(values.local, g.locals))), premises, [], target,
+        close(Local(values.local.ref), Local(buffers.local.ref)));
     pure(Lam(values.local.ref, Lam(buffers.local.ref, Lam(held.local.ref, p))))
 }
 
@@ -300,5 +301,5 @@ fn rule_sound_by(stated: Expr → List<Expr>, close: Expr → List<RuleHyp> → 
 // other premises, the `by`'s locals or the proofs given.
 fn rule_sound(theorem: Expr, given: List<Expr> := []) → Tac<Expr> {
     let extra <- rule_given(given);
-    rule_sound_by(λ _ => [], λ _ kept => apply(theorem, rule_assumed(kept ++ extra, kept ++ extra)))
+    rule_sound_by(λ _ => [], λ _ _ kept => apply(theorem, rule_assumed(kept ++ extra, kept ++ extra)))
 }

@@ -450,9 +450,9 @@ fn Node::shifted_right(self node: Node) → Option<Shifted> {
 fn byte_of(made: NatMap<Node>, x: Nat) → Option<StoredByte> {
     nat_map_get(made, x).and_then(λ n => n.widened_byte()).and_then(λ b =>
         nat_map_get(made, b).and_then(λ n => n.narrowed_byte()).and_then(λ a =>
-            shared(Know(40, [x, b, a]), λ low => match nat_map_get(made, a).and_then(λ n => n.shifted_right()) {
+            shared(Know(40, [a, x, b]), λ low => match nat_map_get(made, a).and_then(λ n => n.shifted_right()) {
                 None => Some(StoredByte(a, 0, [low])),
-                Some(s) => Some(StoredByte(s.word, s.by, [low, Know(41, [x, a, s.word, s.by, 0])])),
+                Some(s) => Some(StoredByte(s.word, s.by, [low, Know(41, [x, s.word, s.by, 0, a])])),
             })))
 }
 
@@ -657,8 +657,8 @@ fn StoreGroup::paying(self group: StoreGroup, nodes: List<Node>) → Option<Payi
 
 fn StoreGroup::split(self group: StoreGroup, paying: Paying) → Late {
     match group.swapped {
-        True => Know(42, [paying.value, paying.half, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
-        False => Know(43, [paying.value, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
+        True => Know(42, [group.word, group.first.value, group.second.value, group.third.value, group.fourth.value, paying.value, paying.half]),
+        False => Know(43, [group.word, group.first.value, group.second.value, group.third.value, group.fourth.value, paying.value]),
     }
 }
 

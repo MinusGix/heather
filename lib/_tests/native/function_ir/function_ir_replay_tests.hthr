@@ -24,7 +24,7 @@ fn sums() → List<Node> { [Const(64, 1, 0), Add(64, 2, 0, 1), Add(64, 3, 2, 1)]
 // Every node dropped once its fact is learned; `add_zero` twice, then
 // `move_move`, and the one node the facts now hold is written.
 fn sums_plan() → List<Step> {
-    [Drop, Drop, Derive(0, [64, 0, 2, 1]), Drop, Derive(0, [64, 2, 3, 1]), Derive(1, [64, 3, 2, 0]), Emit(Move(64, 3, 0))]
+    [Drop, Drop, Derive(0, [64, 0, 2, 1]), Drop, Derive(0, [64, 2, 3, 1]), Derive(1, [64, 0, 2, 3]), Emit(Move(64, 3, 0))]
 }
 
 theorem sums_replayed(): replay(rules(), Facts::none(), sums(), sums_plan()).map(λ r => r.nodes) = Some([Move(64, 3, 0)]) { refl }
@@ -110,7 +110,7 @@ theorem pass_apart(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loo
 
 // A byte loaded twice: the second load is a move of the first
 // (`load_again`, rule 19).
-fn again() → List<Step> { [Drop, Derive(19, [2, 1, 0, 0]), Emit(Move(64, 2, 1))] }
+fn again() → List<Step> { [Drop, Derive(19, [0, 0, 1, 2]), Emit(Move(64, 2, 1))] }
 
 theorem loaded_twice(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) =
     Some([BufferLoad(1, 0, 0), Move(64, 2, 1)]) { refl }
@@ -131,7 +131,7 @@ theorem loaded_elsewhere(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 3),
 theorem loaded_of_another(): replay(rules(), Facts::none(), [BufferLoad(1, 1, 0), BufferLoad(2, 0, 0)], Cons(Keep, again())).map(λ r => r.nodes) = None { refl }
 
 theorem loaded_later(): replay(rules(), Facts::none(), [BufferLoad(1, 0, 0), BufferLoad(2, 0, 0)],
-    [Keep, Derive(19, [2, 1, 0, 0])]).map(λ r => r.nodes) = None { refl }
+    [Keep, Derive(19, [0, 0, 1, 2])]).map(λ r => r.nodes) = None { refl }
 
 // Between two leaves a plan walks node by node the loads are still known.
 fn apart(between: StructuredRegion) → StructuredRegion { Compose(leaf([BufferLoad(1, 0, 0)]), Compose(between, leaf([BufferLoad(2, 0, 0)]))) }
@@ -257,7 +257,7 @@ fn pair_beside() → Facts { Facts::none().with(AtMost(0, 1, 3, 0)).with(AtMost(
 // Each load starts a join, the shift moves the first, and the or of the
 // two is the join of both bytes.
 fn pair_steps(count: Nat) → List<Step> {
-    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(31, [6, 5, 4, 0, 0, 3, count, 1, 0])]
+    [Keep, Keep, Keep, Keep, Derive(29, [0, 0, 1]), Derive(30, [0, 0, 1, 1, 0, 8, 5]), Derive(29, [0, 3, 4]), Derive(31, [0, 0, 3, 5, 4, count, 1, 0, 6])]
 }
 
 theorem pair_joined(): replay(rules(), pair_beside(), pair_nodes(), pair_steps(1)).map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
@@ -272,7 +272,7 @@ theorem pair_overclaimed(): replay(rules(), pair_beside(), pair_nodes(), pair_st
 
 // The or's operands the other way round are rule 32's, and not rule 31's.
 theorem pair_turned(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
-    [Keep, Keep, Keep, Keep, Derive(29, [1, 0, 0]), Derive(30, [5, 1, 8, 0, 0, 1, 0]), Derive(29, [4, 0, 3]), Derive(32, [6, 5, 4, 0, 0, 3, 1, 1, 0])])
+    [Keep, Keep, Keep, Keep, Derive(29, [0, 0, 1]), Derive(30, [0, 0, 1, 1, 0, 8, 5]), Derive(29, [0, 3, 4]), Derive(32, [0, 0, 3, 5, 4, 1, 1, 0, 6])])
     .map(λ r => r.facts.knows(Joined(6, 0, 0, 2, 0))) = Some(True) { refl }
 
 theorem pair_turned_wrong(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferLoad(4, 0, 3), ShiftLeft(64, 5, 1, 8), BitOr(64, 6, 4, 5)],
@@ -280,14 +280,14 @@ theorem pair_turned_wrong(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0)
 
 // A store after the loads: what they read is known no longer, so nothing
 // is a join of it.
-theorem pair_stored(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferStore(7, 0, 0, 1)], [Keep, Keep, Derive(29, [1, 0, 0])])
+theorem pair_stored(): replay(rules(), pair_beside(), [BufferLoad(1, 0, 0), BufferStore(7, 0, 0, 1)], [Keep, Keep, Derive(29, [0, 0, 1])])
     .map(λ r => r.nodes) = None { refl }
 
 // A word that is four bytes joined and unshifted is the word one load of
 // four bytes at the same index reads, swapped and widened (rule 33).
 fn wide_nodes() → List<Node> { [WideLoad(4, 7, 0, 0), ByteSwap(32, 8, 7), Resize(32, 64, 9, 8)] }
 
-fn wide_steps() → List<Step> { [Keep, Keep, Keep, Derive(33, [6, 7, 8, 9, 0, 0]), Emit(Move(64, 6, 9))] }
+fn wide_steps() → List<Step> { [Keep, Keep, Keep, Derive(33, [0, 0, 6, 7, 9, 8]), Emit(Move(64, 6, 9))] }
 
 theorem word_of_join(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) =
     Some(wide_nodes() ++ [Move(64, 6, 9)]) { refl }
@@ -303,7 +303,7 @@ theorem word_elsewhere(): replay(rules(), Facts::none().with(Joined(6, 0, 1, 4, 
 theorem word_of_another(): replay(rules(), Facts::none().with(Joined(6, 1, 0, 4, 0)), wide_nodes(), wide_steps()).map(λ r => r.nodes) = None { refl }
 
 theorem word_unswapped(): replay(rules(), Facts::none().with(Joined(6, 0, 0, 4, 0)), [WideLoad(4, 7, 0, 0), Resize(32, 64, 9, 7)],
-    [Keep, Keep, Derive(33, [6, 7, 7, 9, 0, 0]), Emit(Move(64, 6, 9))]).map(λ r => r.nodes) = None { refl }
+    [Keep, Keep, Derive(33, [0, 0, 6, 7, 9, 7]), Emit(Move(64, 6, 9))]).map(λ r => r.nodes) = None { refl }
 
 // ---------------------------------------------------------------------------
 // What a range says of a sum, of a difference and of an or of bits (rules

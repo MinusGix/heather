@@ -84,3 +84,18 @@ theorem below_yes_made(): below_yes_rule.make([1, 2, 5, 9, 3]) =
     Some(Clause([Within(1, 0, 5), Within(2, 9, word_top()), Is(UnsignedLessThan(64, 3, 1, 2))], Is(Const(1, 3, 1)))) { refl }
 
 theorem below_yes_guarded(): below_yes_rule.make([1, 2, 9, 9, 3]) = None { refl }
+
+// Memory: a buffer by its number, a byte load and bytes joined; a word's
+// low byte in another's; a word's four bytes.
+theorem buffer_read(): join_byte_rule.make([0, 1, 2]) = Some(Clause([Loaded(BufferLoad(2, 0, 1))], Joined(2, 0, 1, 1, 0))) { refl }
+
+theorem join_word_made(): join_word_rule.make([0, 1, 2, 3, 4, 5]) =
+    Some(Clause([Joined(2, 0, 1, 4, 0), Loaded(WideLoad(4, 3, 0, 1)), Is(ByteSwap(32, 5, 3)), Is(Resize(32, 64, 4, 5))], Is(Move(64, 2, 4)))) { refl }
+
+theorem low_shifted_made(): low_shifted_rule.make([1, 2, 8, 0, 3]) = Some(Clause([Is(LogicalShiftRight(64, 3, 2, 8)), Low(1, 3, 0)], Low(1, 2, 8))) { refl }
+
+theorem split_swapped_made(): split_swapped_rule.make([1, 2, 3, 4, 5, 6, 7]) =
+    Some(Clause([Low(2, 1, 24), Low(3, 1, 16), Low(4, 1, 8), Low(5, 1, 0), Is(Resize(64, 32, 7, 1)), Is(ByteSwap(32, 6, 7))], Split(6, 2, 3, 4, 5))) { refl }
+
+// A move is an equation of two words the theorem binds.
+theorem moves(): move_move_rule.make([64, 1, 2, 3]) = Some(Clause([Is(Move(64, 2, 1)), Is(Move(64, 3, 2))], Is(Move(64, 3, 1)))) { refl }

@@ -502,7 +502,7 @@ Minus, 2026-11-16:
 
 ## 12. What is built
 
-Steps 1 and the generator of step 2.
+Steps 1 and 2, except registration by name.
 
 - **`rule_sound`** (`lib/native/function_ir/function_ir_rule_sound.hthr`):
   a clause's soundness from a theorem about words. It reads each premise
@@ -511,31 +511,43 @@ Steps 1 and the generator of step 2.
   theorem's guards.
 - **`rule theorem`** (`function_ir_rule.hthr`): the theorem is published as
   written, and beside it `name_rule: Rule`, the clause the statement stands
-  for with its guard and its soundness. Read today: binders of `Nat` and
-  `BitVec(w)`, the IR's operators (written as methods or as operators, so
-  `x + 0`), equations, `Range(a, b).Holds(x)`, orders over `toNat()`, and
-  guards through their `Decide` instance.
+  for with its guard and its soundness.
+- **All 45 rules** of `function_ir_rules.hthr` are `rule theorem`s, and
+  `rules()` lists each `name_rule` in its old place. No clause, no
+  soundness proof over a valuation and no unpacking of numbers is written
+  by hand there any more.
 - **A rule's numbers** are its binders in the order written, then the word
-  each operator writes, outermost first. A plan's `Derive` gives them in
-  that order.
+  each operator writes, outermost first. A plan's `Derive` or `Know` gives
+  them in that order.
 - **A term written twice is one node**: the sum in a hypothesis and in
   the conclusion of `sum_tested_low` is one `Add`. Terms are compared as
   written, not by conversion.
 - **A hypothesis about a word the theorem binds** (`a = 0` for a binder
   `a`) is a premise kept as a fact; one about a term (`l.below(r) = 1`) is
-  the term's node and what it is.
-- **Ported**: 31 of the 45 rules of `function_ir_rules.hthr` are
-  `rule theorem`s: x + 0, the ranges, the comparisons both ways, the
-  one-bit or, the orders and their join, the sums that do not wrap, and the
-  swap cancellation. `rules()` lists each `name_rule` in its old place.
-- **Not ported**: the fourteen that need what the reader does not read
-  yet. The joins and the split of a word (29 to 33, 40 to 43) and
-  `load_again` (19) speak of a buffer's bytes; `move_move` (1) and
-  `within_move` (3) have no operator, since a move is equality of words.
-- **Plans still name a rule by its place** and give its numbers in order,
-  in `Derive` and in `Know`. Porting a rule reorders its numbers, so every
-  plan that names it changes with it. That is the cost step 3 removes: the
-  matcher finds the numbers from the statement.
+  the term's node and what it is. A move is an equation of two bound
+  words: `o = s`.
+- **Plans still name a rule by its place** and give its numbers in order.
+  Porting a rule reordered its numbers, so every plan that names it
+  changed with it. That is the cost step 3 removes: the matcher finds the
+  numbers from the statement.
+
+What a statement can say, as built:
+
+| In the statement | Read as |
+|---|---|
+| A binder `n: Nat` | A literal |
+| A binder `x: BitVec(w)` | A word, by its id |
+| A binder `f: BufferNow` | A buffer, by its number, with the bytes it has where the rule is used |
+| `+`, `-`, `&`, `\|`, `⊕`, `<<`, `>>` or the methods, the shifts by a literal, `rotr`, `swap_bytes`, `resize`, a literal, `BitVec::ofBool` of a comparison | The node of that operator, its output the next number |
+| `x = y` for two bound words | `Is(Move(w, x, y))` |
+| `Range(a, b).Holds(x)` | `Within(x, a, b)` |
+| `x.toNat() + m <= y.toNat() + n` | `AtMost(x, m, y, n)` |
+| `x = f.byte(i)` | `Loaded(BufferLoad(x, f, i))` |
+| `x = f.word(i)` | `Loaded(WideLoad(4, x, f, i))` |
+| `x = f.join(i, n) << sh` | `Joined(x, f, i, n, sh)` |
+| `x.low_of(w, sh)` | `Low(x, w, sh)` |
+| `v.quarters(a, b, c, d)` | `Split(v, a, b, c, d)` |
+| A hypothesis that mentions no word | A guard, decided through `Decide` |
 
 Where the build differs from the sections above, for now:
 
@@ -544,5 +556,5 @@ Where the build differs from the sections above, for now:
 | `swap_twice::rule` | `swap_twice_rule`: a member cannot attach to a theorem |
 | `x.within(a, b)` | `Range(a, b).Holds(x)`, the library's existing statement |
 | `x.nat()` | `x.toNat()` |
-| `f: Buffer` and the memory facts (`Loaded`, `Joined`, `Low`, `Split`) | not read yet |
+| `f: Buffer` | `f: BufferNow`: `Buffer` is the source language's buffer declaration |
 | registered by name, plans name rules by key | not yet: a generator cannot publish a `register def`. That needs a new declaration form in the tactic host, an elaborator change |

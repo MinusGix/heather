@@ -42,6 +42,14 @@ fn below_left_clause(c, l, r, b: Nat) → Clause {
     Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, Succ(b))], Within(l, 0, b))
 }
 
+fn join_shift_clause(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }
+
+fn join_or_clause(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, a, b))], Joined(o, f, i, n + m, sh))
+}
+
+fn load_again_clause(b, a, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(a, f, i)), Loaded(BufferLoad(b, f, i))], Is(Move(64, b, a))) }
+
 fn order_join_clause(a, m, b, n, p, c, q, u, v: Nat) → Clause { Clause([AtMost(a, m, b, n), AtMost(b, p, c, q)], AtMost(a, u, c, v)) }
 
 // x + 0 = x.
@@ -87,7 +95,7 @@ theorem join_shift_words(joined: u64, sh, c: Nat): joined.shift_left(sh).shift_l
     sym(joined.shift_left_add(sh, c))
 }
 
-theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() {
+theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift_clause(s, a, c, f, i, n, sh).Sound() {
     λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: u64) => z.shift_left(c), held.left),
         join_shift_words(buffer_join(buffers, f, values(64, i).toNat(), n), sh, c)))
 }
@@ -97,7 +105,7 @@ theorem add_zero_by(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() { by r
 
 theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
 
-theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
+theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift_clause(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
 
 theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add_clause(o, l, r, a, b, c, d).Sound() {
     by rule_sound(within_add_words, given := [leb_below(b + d, word_top(), fits)])
@@ -121,7 +129,7 @@ theorem order_join_by(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v
 }
 
 // Two joins, two orders and an or: the lemma about buffers is the rule.
-theorem join_or_by(o, a, b, f, i, j, n, m, sh: Nat): join_or(o, a, b, f, i, j, n, m, sh).Sound() { by rule_sound(joins_meet) }
+theorem join_or_by(o, a, b, f, i, j, n, m, sh: Nat): join_or_clause(o, a, b, f, i, j, n, m, sh).Sound() { by rule_sound(joins_meet) }
 
 // Two loads of one byte: nothing is left to prove.
-theorem load_again_by(b, a, f, i: Nat): load_again(b, a, f, i).Sound() { by rule_sound(rfl) }
+theorem load_again_by(b, a, f, i: Nat): load_again_clause(b, a, f, i).Sound() { by rule_sound(rfl) }

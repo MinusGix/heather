@@ -620,7 +620,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed {
             False => Passed([], seen),
             True => match nat_map_get(seen.range, s) {
                 None => Passed([], seen.from(o, s)),
-                Some(a) => Passed([], seen.learn(o, a, [s], Derive(3, [o, s, a.low, a.high])).from(o, s)),
+                Some(a) => Passed([], seen.learn(o, a, [s], Derive(3, [s, o, a.low, a.high])).from(o, s)),
             },
         },
         Add(w, o, l, r) => match w.same(64) {
@@ -728,7 +728,7 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
                             True => shared(explain(100, seen.how, seen.proved, [s]), λ why =>
                                 Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [s, from, range.high, b, a]), Emit(Move(64, b, s))])),
                                     Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
-                                        .learn(b, range, [s], Derive(3, [b, s, range.low, range.high])).from(b, s)))),
+                                        .learn(b, range, [s], Derive(3, [s, b, range.low, range.high])).from(b, s)))),
                         }),
                     },
                     _ => None,
@@ -807,11 +807,11 @@ fn Seen::meeting(self seen: Seen, rule, o, above, below: Nat, hi, lo: Join) → 
     seen.beside(hi, lo).map(λ orders =>
         shared(Join(hi.buffer, hi.base, hi.past, hi.at, hi.count + lo.count, lo.shift, []), λ whole =>
             shared(orders.seen.pending ++ (hi.why ++ (lo.why ++ (orders.steps ++
-                [Derive(rule, [o, above, below, hi.buffer, hi.at, lo.at, hi.count, lo.count, lo.shift])]))), λ steps =>
+                [Derive(rule, [hi.buffer, hi.at, lo.at, above, below, hi.count, lo.count, lo.shift, o])]))), λ steps =>
                 shared(orders.seen.settled().joined(o, whole), λ after => match whole.count.same(4) && whole.shift.same(0) {
                     False => Joining(False, steps, after),
                     True => match words_find(after.joins.words, whole.buffer, whole.at) {
-                        Some(word) => Joining(True, steps ++ [Derive(33, [o, word.loaded, word.swapped, word.word, whole.buffer, whole.at]),
+                        Some(word) => Joining(True, steps ++ [Derive(33, [whole.buffer, whole.at, o, word.loaded, word.word, word.swapped]),
                             Emit(Move(64, o, word.word))], after),
                         None => Joining(False, steps, after.asking(whole)),
                     },
@@ -825,15 +825,15 @@ fn Seen::meeting(self seen: Seen, rule, o, above, below: Nat, hi, lo: Join) → 
 fn Seen::joining(self seen: Seen, node: Node) → Joining {
     match node {
         BufferLoad(b, f, x) => Joining(False, [], shared(seen.joined(b, match nat_map_get(seen.order.sums, x) {
-            None => Join(f, x, 0, x, 1, 0, [Derive(29, [b, f, x])]),
-            Some(sum) => Join(f, sum.of, sum.value, x, 1, 0, [Derive(29, [b, f, x])]),
+            None => Join(f, x, 0, x, 1, 0, [Derive(29, [f, x, b])]),
+            Some(sum) => Join(f, sum.of, sum.value, x, 1, 0, [Derive(29, [f, x, b])]),
         }), λ kept => kept.joins_as(Joins(kept.joins.of, kept.joins.loads, kept.joins.swaps, kept.joins.words, Some(b), kept.joins.ends)))),
         ShiftLeft(w, s, a, c) => match w.same(64) {
             False => Joining(False, [], seen),
             True => match seen.join_of(a) {
                 None => Joining(False, [], seen),
                 Some(j) => Joining(False, [], seen.joined(s, Join(j.buffer, j.base, j.past, j.at, j.count, j.shift + c,
-                    j.why ++ [Derive(30, [s, a, c, j.buffer, j.at, j.count, j.shift])]))),
+                    j.why ++ [Derive(30, [j.buffer, j.at, a, j.count, j.shift, c, s])]))),
             },
         },
         BitOr(w, o, l, r) => match w.same(64) {

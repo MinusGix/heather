@@ -1,16 +1,20 @@
-// The optimizer's rules over facts (docs/native/optimizer-design.md §4): each a
-// clause made from an instance's numbers, with the theorem that a valuation
-// and buffers satisfying its premises satisfy its conclusion. A fact is a
-// node's equation, a word's range, an order between two words
-// (`low + add ≤ high + more`, read as naturals), a load made since the
-// last store, or that a word is bytes of a buffer joined. The replayer
+// The optimizer's rules over facts (docs/native/optimizer-design.md §4,
+// docs/native/optimizer-rules-design.md): each a theorem about words under
+// the `rule` prefix (function_ir_rule), which publishes beside it
+// `name_rule`, the clause over nodes its statement stands for with the
+// proof that a valuation and buffers satisfying its premises satisfy its
+// conclusion. A fact is a node's equation, a word's range, an order
+// between two words (`low + add ≤ high + more`, read as naturals), a load
+// made since the last store, that a word is bytes of a buffer joined, or
+// that a word's bytes are other words' low bytes. The replayer
 // (function_ir_replay) applies a rule by its place in `rules()` where its
-// premises are among the facts, so adding one is a clause, its proof and a
-// line of the table, and no change to anything proved about the replayer.
+// premises are among the facts, so adding one is a theorem and a line of
+// the table, and no change to anything proved about the replayer.
 //
-// A rule's numbers are ids, widths and literals, as the clause reads them.
-// One that needs a side condition of its numbers (a width no wider than
-// another) answers `None` where it fails.
+// A rule's numbers are its statement's binders in the order written
+// (literals, words by id, buffers by number), then the word each operator
+// of the statement writes, outermost first. A hypothesis over literals
+// alone is a guard: the rule answers `None` where it fails.
 import function_ir;
 import function_ir_eval;
 import function_ir_replay;
@@ -31,38 +35,13 @@ import option;
 import vector;
 
 // ---------------------------------------------------------------------------
-// Rules by how many numbers they take
-
-fn four_of<A>(f: Nat → Nat → Nat → Nat → A, args: List<Nat>) → Option<A> {
-    match args { Nil => None, Cons(a, r1) => match r1 { Nil => None, Cons(b, r2) => match r2 { Nil => None,
-        Cons(c, r3) => match r3 { Nil => None, Cons(d, r4) => match r4 { Nil => Some(f(a, b, c, d)), Cons(_, _) => None } } } } }
-}
-
-theorem four_of_all<A>(f: Nat → Nat → Nat → Nat → A, P: A → Type, all: (a, b, c, d: Nat) → P(f(a, b, c, d)), x: A, args: List<Nat>):
-    four_of(f, args) = Some(x) → P(x) {
-    match args { Nil => λ h => absurd(h), Cons(a, r1) => match r1 { Nil => λ h => absurd(h), Cons(b, r2) => match r2 { Nil => λ h => absurd(h),
-        Cons(c, r3) => match r3 { Nil => λ h => absurd(h), Cons(d, r4) => match r4 {
-            Nil => λ h => j(Option::some_inj(f(a, b, c, d), x, h), λ y _ => P(y), all(a, b, c, d)),
-            Cons(_, _) => λ h => absurd(h) } } } } }
-}
-
-// A rule that holds at every four numbers.
-fn Rule::four(clause: Nat → Nat → Nat → Nat → Clause, sound: (a, b, c, d: Nat) → clause(a, b, c, d).Sound()) → Rule {
-    Rule(λ args => four_of(clause, args), λ args c made => four_of_all(clause, λ (k: Clause) => k.Sound(), sound, c, args, made))
-}
-
-// ---------------------------------------------------------------------------
 // The rules
 
 // x + 0 is x. Its numbers: the width, `x`, the sum, the literal 0.
 rule theorem add_zero({w: Nat}, x: BitVec(w)): x + 0 = x { BitVec::add_zero(w, x) }
 
 // A move of a move: `o` moved from `s`, `s` from `t`, at width `w`.
-fn move_move(w, o, s, t: Nat) → Clause { Clause([Is(Move(w, s, t)), Is(Move(w, o, s))], Is(Move(w, o, t))) }
-
-theorem move_move_sound(w, o, s, t: Nat): move_move(w, o, s, t).Sound() {
-    λ values _ held => trans(held.right.left, held.left)
-}
+rule theorem move_move({w: Nat}, t, s, o: BitVec(w), first: s = t, second: o = s): o = t { trans(second, first) }
 
 // ---------------------------------------------------------------------------
 // Ranges (docs/native/optimizer-design.md §5.1): what a word's value lies between,
@@ -78,10 +57,8 @@ rule theorem within_const(v: Nat, fits: v <= word_top()): Range(v, v).Holds(BitV
 }
 
 // A copy is within what it copies.
-fn within_move(o, s, a, b: Nat) → Clause { Clause([Is(Move(64, o, s)), Within(s, a, b)], Within(o, a, b)) }
-
-theorem within_move_sound(o, s, a, b: Nat): within_move(o, s, a, b).Sound() {
-    λ values _ held => j(sym(held.left), λ w _ => Range(a, b).Holds(w), held.right.left)
+rule theorem within_move(s, o: u64, a, b: Nat, copy: o = s, in: Range(a, b).Holds(s)): Range(a, b).Holds(o) {
+    j(sym(copy), λ w _ => Range(a, b).Holds(w), in)
 }
 
 // A sum that cannot wrap is within the sums of its parts' bounds.
@@ -382,11 +359,7 @@ rule theorem sum_within_high(i: u64, v, a, b: Nat, range: Range(a, b).Holds(i), 
 
 // The byte a load read is the byte an earlier one read at the same index
 // of the same buffer. The earlier one may be what a store read back.
-fn load_again(b, a, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(a, f, i)), Loaded(BufferLoad(b, f, i))], Is(Move(64, b, a))) }
-
-theorem load_again_sound(b, a, f, i: Nat): load_again(b, a, f, i).Sound() {
-    λ values buffers held => trans(held.right.left, sym(held.left))
-}
+rule theorem load_again(f: BufferNow, i, a, b: u64, first: a = f.byte(i), second: b = f.byte(i)): b = a { trans(second, sym(first)) }
 
 // ---------------------------------------------------------------------------
 // Bytes joined. `Joined(o, f, i, n, sh)` says the word `o` is the `n`
@@ -397,17 +370,12 @@ theorem load_again_sound(b, a, f, i: Nat): load_again(b, a, f, i).Sound() {
 // reads, swapped. However the bytes were joined, the rules meet at the
 // same fact.
 
-fn join_byte(b, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(b, f, i))], Joined(b, f, i, 1, 0)) }
-
-theorem join_byte_sound(b, f, i: Nat): join_byte(b, f, i).Sound() {
-    λ values buffers held => trans(held.left, sym(buffer_join_one(buffers, f, values(64, i).toNat())))
+rule theorem join_byte(f: BufferNow, i, b: u64, loaded: b = f.byte(i)): b = f.join(i, 1).shift_left(0) {
+    trans(loaded, sym(buffer_join_one(f.all, f.number, i.toNat())))
 }
 
-fn join_shift(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }
-
-theorem join_shift_sound(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() {
-    λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: BitVec(64)) => z.shift_left(c), held.left),
-        sym(buffer_join(buffers, f, values(64, i).toNat(), n).shift_left_add(sh, c))))
+rule theorem join_shift(f: BufferNow, i, a: u64, n, sh, c: Nat, joined: a = f.join(i, n).shift_left(sh)): a.shift_left(c) = f.join(i, n).shift_left(sh + c) {
+    trans(cong_fn(λ (z: u64) => z.shift_left(c), joined), sym(f.join(i, n).shift_left_add(sh, c)))
 }
 
 // Two joins side by side: the second starts where the first ends, which
@@ -424,50 +392,25 @@ theorem joins_meet(buffers: Buffers(), f, x, y, n, m, sh: Nat, after: x + n <= y
                 cong_fn(λ (z: BitVec(64)) => z.shift_left(sh), sym(buffer_join_split(buffers, f, x, n, m))))))
 }
 
-fn join_or(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
-    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, a, b))], Joined(o, f, i, n + m, sh))
-}
-
-theorem join_or_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or(o, a, b, f, i, j, n, m, sh).Sound() {
-    λ values buffers held => {
-        let first = held.left;
-        let second = held.right.left;
-        let or = held.right.right.right.right.left;
-        trans(or, trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
-            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
-                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left))))
-    }
+rule theorem join_or(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n).shift_left(8 * m + sh), second: b = f.join(j, m).shift_left(sh),
+    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): a.bor(b) = f.join(i, n + m).shift_left(sh) {
+    trans(cong_fn(λ (z: u64) => z.bor(b), first), trans(cong_fn(λ (z: u64) => f.join(i, n).shift_left(8 * m + sh).bor(z), second),
+        joins_meet(f.all, f.number, i.toNat(), j.toNat(), n, m, sh, after, before)))
 }
 
 // The same with the or's operands the other way round.
-fn join_or_right(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
-    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, b, a))], Joined(o, f, i, n + m, sh))
-}
-
-theorem join_or_right_sound(o, a, b, f, i, j, n, m, sh: Nat): join_or_right(o, a, b, f, i, j, n, m, sh).Sound() {
-    λ values buffers held => {
-        let first = held.left;
-        let second = held.right.left;
-        let or = held.right.right.right.right.left;
-        trans(or, trans(BitVec::bor_comm(64, values(64, b), values(64, a)), trans(cong_fn(λ (z: BitVec(64)) => z.bor(values(64, b)), first),
-            trans(cong_fn(λ (z: BitVec(64)) => buffer_join(buffers, f, values(64, i).toNat(), n).shift_left(8 * m + sh).bor(z), second),
-                joins_meet(buffers, f, values(64, i).toNat(), values(64, j).toNat(), n, m, sh, held.right.right.left, held.right.right.right.left)))))
-    }
+rule theorem join_or_right(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n).shift_left(8 * m + sh), second: b = f.join(j, m).shift_left(sh),
+    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): b.bor(a) = f.join(i, n + m).shift_left(sh) {
+    trans(BitVec::bor_comm(64, b, a), trans(cong_fn(λ (z: u64) => z.bor(b), first), trans(cong_fn(λ (z: u64) => f.join(i, n).shift_left(8 * m + sh).bor(z), second),
+        joins_meet(f.all, f.number, i.toNat(), j.toNat(), n, m, sh, after, before))))
 }
 
 // Four bytes joined and unshifted are what one four-byte load reads at
 // the same index, swapped and widened: the word is that one's.
-fn join_word(o, w, s, r, f, i: Nat) → Clause {
-    Clause([Joined(o, f, i, 4, 0), Loaded(WideLoad(4, w, f, i)), Is(ByteSwap(32, s, w)), Is(Resize(32, 64, r, s))], Is(Move(64, o, r)))
-}
-
-theorem join_word_sound(o, w, s, r, f, i: Nat): join_word(o, w, s, r, f, i).Sound() {
-    λ values buffers held => {
-        let word = buffer_word(buffers, f, values(64, i).toNat(), 4);
-        let swapped: (values(32, s) = word.swap_bytes()) = trans(held.right.right.left, cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), held.right.left));
-        trans(held.left, trans(buffer_join_four(buffers, f, values(64, i).toNat()),
-            sym(trans(held.right.right.right.left, cong_fn(λ (z: BitVec(32)) => BitVec::ofNat(z.toNat(), n := 64), swapped)))))
-    }
+rule theorem join_word(f: BufferNow, i, o: u64, w: u32, r: u64, joined: o = f.join(i, 4).shift_left(0), loaded: w = f.word(i),
+    widened: r = w.swap_bytes().resize(64)): o = r {
+    trans(joined, trans(buffer_join_four(f.all, f.number, i.toNat()),
+        sym(trans(widened, cong_fn(λ (z: u32) => BitVec::ofNat(z.swap_bytes().toNat(), n := 64), loaded)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -481,23 +424,13 @@ theorem join_word_sound(o, w, s, r, f, i: Nat): join_word(o, w, s, r, f, i).Soun
 // meet at that fact: the low half's bytes from the highest are the half
 // swapped, and from the lowest the half itself.
 
-fn low_narrowed(x, b, a: Nat) → Clause { Clause([Is(Resize(64, 8, b, a)), Is(Resize(8, 64, x, b))], Low(x, a, 0)) }
-
-theorem low_narrowed_sound(x, b, a: Nat): low_narrowed(x, b, a).Sound() {
-    λ values buffers held => {
-        let word = values(64, a);
-        let byte = values(8, b);
-        let back: (values(64, x).resize(8) = byte) = trans(cong_fn(λ (z: BitVec(64)) => z.resize(8), held.right.left),
-            BitVec::resize_round_trip(8, 64, Nat::leb_sound(8, 64, trivial), byte));
-        trans(sym(BitVec::resize_truncate(8, 56, values(64, x))), trans(back, trans(held.left, BitVec::resize_truncate(8, 56, word))))
-    }
+rule theorem low_narrowed(a: u64): a.resize(8).resize(64).low_of(a, 0) {
+    let back: (a.resize(8).resize(64).resize(8) = a.resize(8)) = BitVec::resize_round_trip(8, 64, Nat::leb_sound(8, 64, trivial), a.resize(8));
+    trans(sym(BitVec::resize_truncate(8, 56, a.resize(8).resize(64))), trans(back, BitVec::resize_truncate(8, 56, a)))
 }
 
-fn low_shifted(x, a, w, c, sh: Nat) → Clause { Clause([Low(x, a, sh), Is(LogicalShiftRight(64, a, w, c))], Low(x, w, c + sh)) }
-
-theorem low_shifted_sound(x, a, w, c, sh: Nat): low_shifted(x, a, w, c, sh).Sound() {
-    λ values buffers held => trans(held.left, cong_fn(λ (z: BitVec(64)) => low_byte(z),
-        trans(cong_fn(λ (z: BitVec(64)) => z.shift_right(sh), held.right.left), sym(values(64, w).shift_right_add(c, sh)))))
+rule theorem low_shifted(x, w: u64, c, sh: Nat, low: x.low_of(w.shift_right(c), sh)): x.low_of(w, c + sh) {
+    trans(low, cong_fn(λ (z: u64) => low_byte(z), sym(w.shift_right_add(c, sh))))
 }
 
 // The bytes of a word's low half swapped, low first, are the word's low
@@ -520,33 +453,18 @@ theorem plain_bytes(word: BitVec(64), v: BitVec(32), narrowed: v = word.truncate
         ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩)
 }
 
-fn split_swapped(v, r, w, x0, x1, x2, x3: Nat) → Clause {
-    Clause([Low(x0, w, 24), Low(x1, w, 16), Low(x2, w, 8), Low(x3, w, 0), Is(Resize(64, 32, r, w)), Is(ByteSwap(32, v, r))], Split(v, x0, x1, x2, x3))
+rule theorem split_swapped(w, x0, x1, x2, x3: u64, l0: x0.low_of(w, 24), l1: x1.low_of(w, 16), l2: x2.low_of(w, 8), l3: x3.low_of(w, 0)):
+    w.resize(32).swap_bytes().quarters(x0, x1, x2, x3) {
+    let swapped: (w.resize(32).swap_bytes() = w.truncate(32, 32).byte_swap(4)) =
+        trans(cong_fn(λ (z: u32) => z.swap_bytes(), BitVec::resize_truncate(32, 32, w)), BitVec::swap_bytes_32(w.truncate(32, 32)));
+    let bytes = swapped_bytes(w, w.resize(32).swap_bytes(), swapped);
+    ⟨trans(bytes.left, sym(l0)), ⟨trans(bytes.right.left, sym(l1)), ⟨trans(bytes.right.right.left, sym(l2)), trans(bytes.right.right.right, sym(l3))⟩⟩⟩
 }
 
-theorem split_swapped_sound(v, r, w, x0, x1, x2, x3: Nat): split_swapped(v, r, w, x0, x1, x2, x3).Sound() {
-    λ values buffers held => {
-        let word = values(64, w);
-        let half: (values(32, r) = word.truncate(32, 32)) = trans(held.right.right.right.right.left, BitVec::resize_truncate(32, 32, word));
-        let swapped: (values(32, v) = word.truncate(32, 32).byte_swap(4)) = trans(held.right.right.right.right.right.left,
-            trans(cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), half), BitVec::swap_bytes_32(word.truncate(32, 32))));
-        let bytes = swapped_bytes(word, values(32, v), swapped);
-        ⟨trans(bytes.left, sym(held.left)), ⟨trans(bytes.right.left, sym(held.right.left)),
-            ⟨trans(bytes.right.right.left, sym(held.right.right.left)), trans(bytes.right.right.right, sym(held.right.right.right.left))⟩⟩⟩
-    }
-}
-
-fn split_plain(v, w, x0, x1, x2, x3: Nat) → Clause {
-    Clause([Low(x0, w, 0), Low(x1, w, 8), Low(x2, w, 16), Low(x3, w, 24), Is(Resize(64, 32, v, w))], Split(v, x0, x1, x2, x3))
-}
-
-theorem split_plain_sound(v, w, x0, x1, x2, x3: Nat): split_plain(v, w, x0, x1, x2, x3).Sound() {
-    λ values buffers held => {
-        let word = values(64, w);
-        let bytes = plain_bytes(word, values(32, v), trans(held.right.right.right.right.left, BitVec::resize_truncate(32, 32, word)));
-        ⟨trans(bytes.left, sym(held.left)), ⟨trans(bytes.right.left, sym(held.right.left)),
-            ⟨trans(bytes.right.right.left, sym(held.right.right.left)), trans(bytes.right.right.right, sym(held.right.right.right.left))⟩⟩⟩
-    }
+rule theorem split_plain(w, x0, x1, x2, x3: u64, l0: x0.low_of(w, 0), l1: x1.low_of(w, 8), l2: x2.low_of(w, 16), l3: x3.low_of(w, 24)):
+    w.resize(32).quarters(x0, x1, x2, x3) {
+    let bytes = plain_bytes(w, w.resize(32), BitVec::resize_truncate(32, 32, w));
+    ⟨trans(bytes.left, sym(l0)), ⟨trans(bytes.right.left, sym(l1)), ⟨trans(bytes.right.right.left, sym(l2)), trans(bytes.right.right.right, sym(l3))⟩⟩⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -562,17 +480,15 @@ rule theorem swap_twice(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes
         trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
 }
 
-fn always(args: List<Nat>) → Bool { True }
-
 // The table a plan's `Derive` steps index. A rule keeps its place: new
 // ones are added at the end.
 fn rules() → List<Rule> {
     [
         add_zero_rule,
-        Rule::four(move_move, move_move_sound),
+        move_move_rule,
         // 2
         within_const_rule,
-        Rule::four(within_move, within_move_sound),
+        within_move_rule,
         within_add_rule,
         within_shift_rule,
         within_narrow_rule,
@@ -593,7 +509,7 @@ fn rules() → List<Rule> {
         within_and_rule,
         within_and_right_rule,
         // 19
-        Rule::four(load_again, load_again_sound),
+        load_again_rule,
         // 20
         order_set_rule,
         order_clear_rule,
@@ -607,16 +523,12 @@ fn rules() → List<Rule> {
         sum_roomed_low_rule,
         sum_roomed_high_rule,
         // 29
-        Rule::when(always, λ n => join_byte(num(n, 0), num(n, 1), num(n, 2)), λ n _ => join_byte_sound(num(n, 0), num(n, 1), num(n, 2))),
-        Rule::when(always, λ n => join_shift(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
-            λ n _ => join_shift_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6))),
-        Rule::when(always, λ n => join_or(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
-            λ n _ => join_or_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
-        Rule::when(always, λ n => join_or_right(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8)),
-            λ n _ => join_or_right_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6), num(n, 7), num(n, 8))),
+        join_byte_rule,
+        join_shift_rule,
+        join_or_rule,
+        join_or_right_rule,
         // 33
-        Rule::when(always, λ n => join_word(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
-            λ n _ => join_word_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
+        join_word_rule,
         // 34
         sum_within_low_rule,
         sum_within_high_rule,
@@ -627,14 +539,11 @@ fn rules() → List<Rule> {
         // 39
         within_sub_rule,
         // 40
-        Rule::when(always, λ n => low_narrowed(num(n, 0), num(n, 1), num(n, 2)), λ n _ => low_narrowed_sound(num(n, 0), num(n, 1), num(n, 2))),
-        Rule::when(always, λ n => low_shifted(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
-            λ n _ => low_shifted_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4))),
+        low_narrowed_rule,
+        low_shifted_rule,
         // 42
-        Rule::when(always, λ n => split_swapped(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6)),
-            λ n _ => split_swapped_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5), num(n, 6))),
-        Rule::when(always, λ n => split_plain(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
-            λ n _ => split_plain_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
+        split_swapped_rule,
+        split_plain_rule,
         // 44
         swap_twice_rule,
     ]

@@ -21,10 +21,17 @@
 //     (`Range(a, b).Holds(x)`), an order (`x.toNat() + m <= y.toNat() + n`)
 //     or an equation whose left side is a term and whose right is one
 //     operator, a literal or a word;
+//   - a binder of `BufferNow` is a buffer, by its number, as its bytes
+//     are where the rule is used; a fact of its bytes is `x = f.byte(i)`
+//     (a byte load), `x = f.word(i)` (a four-byte load) or
+//     `x = f.join(i, n).shift_left(sh)` (bytes joined);
+//   - `x.low_of(w, sh)` and `v.quarters(a, b, c, d)` are the facts of a
+//     word's bytes in other words;
 //   - the conclusion is a fact of the same forms.
 import function_ir;
 import function_ir_replay;
 import function_ir_rule_sound;
+import function_ir_state;
 import tactic;
 import bitvec;
 import bitvec_bytes;
@@ -51,10 +58,33 @@ fn Rule::when(ok: List<Nat> → Bool, clause: List<Nat> → Clause, sound: (args
 }
 
 // ---------------------------------------------------------------------------
+// What a rule theorem says of memory
+
+// A buffer as a rule theorem speaks of it: one of the buffers, by its
+// number, with the bytes they all have where the rule is used.
+record BufferNow { all: Buffers(), number: Nat }
+
+// What a byte load reads at an index, a four-byte load, and the `n` bytes
+// from an index joined, the first the most significant.
+fn BufferNow::byte(self f: BufferNow, i: u64) → u64 { byte_word(buffer_byte(f.all, f.number, i.toNat())) }
+fn BufferNow::word(self f: BufferNow, i: u64) → u32 { buffer_word(f.all, f.number, i.toNat(), 4) }
+fn BufferNow::join(self f: BufferNow, i: u64, n: Nat) → u64 { buffer_join(f.all, f.number, i.toNat(), n) }
+
+// The low byte of `x` is the low byte of `w` shifted right by `sh`
+// (`Fact::Low`). `v.quarters(a, b, c, d)` (function_ir_replay) is
+// `Fact::Split`.
+fn BitVec::low_of(self x: u64, w: u64, sh: Nat) → Type { low_byte(x) = low_byte(w.shift_right(sh)) }
+
+// ---------------------------------------------------------------------------
 // What the generator's terms are built from
 
 // A word of a statement while it is read: binder number `id` at width `w`.
 fn rule_marker(w: Nat, id: Nat) → BitVec(w) { BitVec::ofNat(0) }
+
+// A buffer of a statement while it is read, and at the buffers a clause's
+// soundness is about.
+fn rule_buffer(id: Nat) → BufferNow { BufferNow([], id) }
+fn rule_buffer_at(buffers: Buffers(), id: Nat) → BufferNow { BufferNow(buffers, id) }
 
 // A type, as the domain of a function the generator can look up.
 fn rule_of_node(x: Node) → Node { x }
@@ -114,6 +144,7 @@ record RuleOps {
     swap_bytes: GlobalRef, resize: GlobalRef, of_nat: GlobalRef, to_nat: GlobalRef, of_bool: GlobalRef,
     unsigned_lt: GlobalRef, signed_lt: GlobalRef, eq_bit: GlobalRef,
     range_holds: GlobalRef, nat_le: GlobalRef, nat_add: GlobalRef,
+    buffer: GlobalRef, buffer_at: GlobalRef, byte: GlobalRef, word: GlobalRef, join: GlobalRef, low_of: GlobalRef, quarters: GlobalRef,
 }
 
 fn rule_ops() → Tac<RuleOps> {
@@ -139,8 +170,15 @@ fn rule_ops() → Tac<RuleOps> {
     let range_holds <- rule_ref(name_of(Range::Holds));
     let nat_le <- rule_ref(name_of(Nat::Le));
     let nat_add <- rule_ref(name_of(Nat::add));
+    let buffer <- rule_ref(name_of(rule_buffer));
+    let buffer_at <- rule_ref(name_of(rule_buffer_at));
+    let byte <- rule_ref(name_of(BufferNow::byte));
+    let word <- rule_ref(name_of(BufferNow::word));
+    let join <- rule_ref(name_of(BufferNow::join));
+    let low_of <- rule_ref(name_of(BitVec::low_of));
+    let quarters <- rule_ref(name_of(BitVec::quarters));
     pure(RuleOps(marker, number, add, sub, band, bor, bxor, shift_left, shift_right, arithmetic_shift_right, rotr, swap_bytes, resize, of_nat, to_nat,
-        of_bool, unsigned_lt, signed_lt, eq_bit, range_holds, nat_le, nat_add))
+        of_bool, unsigned_lt, signed_lt, eq_bit, range_holds, nat_le, nat_add, buffer, buffer_at, byte, word, join, low_of, quarters))
 }
 
 // What is being read: the operators, the constructors of nodes and facts,
@@ -442,12 +480,103 @@ fn rule_side(cx: RuleCx, read: RuleRead, t: Handle, whole: Handle) → Tac<RuleS
     })
 }
 
+// Terms read in order: their words.
+record RuleTerms { read: RuleRead, ids: List<Expr> }
+
+fn rule_terms(cx: RuleCx, read: RuleRead, ts: List<Handle>) → Tac<RuleTerms> {
+    match ts {
+        Nil => pure(RuleTerms(read, [])),
+        Cons(t, rest) => rule_term(64, cx, read, t).bind(λ x => rule_terms(cx, x.read, rest).bind(λ more => pure(RuleTerms(more.read, Cons(x.id, more.ids))))),
+    }
+}
+
+fn rule_nth(hs: List<Handle>, i: Nat) → Expr {
+    match hs { Nil => NatLit(0), Cons(h, rest) => match i { Zero => Hd(h), Succ(k) => rule_nth(rest, k) } }
+}
+
+// The number of a buffer of the statement.
+fn rule_buffer_id(cx: RuleCx, f: Handle) → Tac<Expr> {
+    view(f).bind(λ v => match v {
+        HGlobal(g, _, args) => match rule_same(g, cx.ops.buffer) {
+            True => match args { Cons(id, _) => pure(Hd(id)), Nil => rule_not_fact(f) },
+            False => rule_not_fact(f),
+        },
+        _ => rule_not_fact(f),
+    })
+}
+
+// A load of a buffer at an index into the word `x`.
+fn rule_loaded(cx: RuleCx, x: RuleTerm, args: List<Handle>, node: Expr → Expr → Tac<Expr>) → Tac<Option<RuleFact>> {
+    match args {
+        Cons(f, more) => match more {
+            Cons(i, _) => rule_buffer_id(cx, f).bind(λ buffer => rule_term(64, cx, x.read, i).bind(λ index =>
+                node(buffer, index.id).bind(λ load => cx.fact("Loaded", [load]).bind(λ loaded => pure(Some(RuleFact(index.read, loaded))))))),
+            Nil => pure(None),
+        },
+        Nil => pure(None),
+    }
+}
+
+// An equation of a word with a buffer's bytes, as the memory fact it is:
+// a byte load, a four-byte load, or bytes joined and shifted.
+fn rule_of_memory(cx: RuleCx, x: RuleTerm, r: Handle) → Tac<Option<RuleFact>> {
+    view(r).bind(λ v => match v {
+        HGlobal(g, _, args) => match rule_same(g, cx.ops.byte) {
+            True => rule_loaded(cx, x, args, λ buffer index => cx.node("BufferLoad", [x.id, buffer, index])),
+            False => match rule_same(g, cx.ops.word) {
+                True => rule_loaded(cx, x, args, λ buffer index => cx.node("WideLoad", [NatLit(4), x.id, buffer, index])),
+                False => match rule_same(g, cx.ops.shift_left) {
+                    False => pure(None),
+                    True => match args {
+                        Cons(joined, more) => match more {
+                            Cons(shift, _) => view(joined).bind(λ jv => match jv {
+                                HGlobal(g2, _, inner) => match rule_same(g2, cx.ops.join) {
+                                    False => pure(None),
+                                    True => match inner {
+                                        Cons(f, rest) => match rest {
+                                            Cons(i, last) => match last {
+                                                Cons(count, _) => rule_buffer_id(cx, f).bind(λ buffer => rule_term(64, cx, x.read, i).bind(λ index =>
+                                                    cx.fact("Joined", [x.id, buffer, index.id, Hd(count), Hd(shift)]).bind(λ fact =>
+                                                        pure(Some(RuleFact(index.read, fact)))))),
+                                                Nil => pure(None),
+                                            },
+                                            Nil => pure(None),
+                                        },
+                                        Nil => pure(None),
+                                    },
+                                },
+                                _ => pure(None),
+                            }),
+                            Nil => pure(None),
+                        },
+                        Nil => pure(None),
+                    },
+                },
+            },
+        },
+        _ => pure(None),
+    })
+}
+
 // A statement as a fact, with the node premises its terms need.
 fn rule_fact(cx: RuleCx, read: RuleRead, h: Handle) → Tac<RuleFact> {
     view(h).bind(λ v => match v {
-        HEq(l, r) => rule_term(64, cx, read, l).bind(λ x => rule_root(cx, λ k t => rule_term(64, cx, k, t), x.read, r, x.id).bind(λ root =>
-            cx.fact("Is", [root.node]).bind(λ is => pure(RuleFact(root.read, is))))),
-        HGlobal(g, _, args) => match rule_same(g, cx.ops.range_holds) {
+        HEq(l, r) => rule_term(64, cx, read, l).bind(λ x => rule_of_memory(cx, x, r).bind(λ memory => match memory {
+            Some(fact) => pure(fact),
+            None => rule_root(cx, λ k t => rule_term(64, cx, k, t), x.read, r, x.id).bind(λ root =>
+                cx.fact("Is", [root.node]).bind(λ is => pure(RuleFact(root.read, is)))),
+        })),
+        HGlobal(g, _, args) => match rule_same(g, cx.ops.low_of) {
+          True => rule_terms(cx, read, args.take(2)).bind(λ ts => match ts.ids {
+            Cons(x, more) => match more {
+                Cons(w, _) => cx.fact("Low", [x, w, rule_nth(args, 2)]).bind(λ low => pure(RuleFact(ts.read, low))),
+                Nil => rule_not_fact(h),
+            },
+            Nil => rule_not_fact(h),
+          }),
+          False => match rule_same(g, cx.ops.quarters) {
+          True => rule_terms(cx, read, args).bind(λ ts => cx.fact("Split", ts.ids).bind(λ parts => pure(RuleFact(ts.read, parts)))),
+          False => match rule_same(g, cx.ops.range_holds) {
             True => match args {
                 Cons(range, more) => match more {
                     Cons(x, _) => view(range).bind(λ rv => match rv {
@@ -477,6 +606,8 @@ fn rule_fact(cx: RuleCx, read: RuleRead, h: Handle) → Tac<RuleFact> {
                 },
             },
         },
+          },
+        },
         _ => rule_not_fact(h),
     })
 }
@@ -484,23 +615,30 @@ fn rule_fact(cx: RuleCx, read: RuleRead, h: Handle) → Tac<RuleFact> {
 // ---------------------------------------------------------------------------
 // Binders
 
-inductive RuleBinder { Literal, Word, Hypothesis }
+inductive RuleBinder { Literal, Word, BufferOf, Hypothesis }
+
+fn rule_is_buffer(written: Head) → Bool {
+    match written { HGlobal(_, name, _) => rule_same_name(name, "BufferNow"), _ => False }
+}
 
 fn rule_binders(fuel: Nat, ty: Handle) → Tac<List<RuleBinder>> {
     match fuel {
         Zero => pure([]),
         Succ(n) => open(ty, "x").bind(λ c => match c {
             Refused(_) => pure([]),
-            Accepted(o) => whnf_or(o.local.ty).bind(view).bind(λ v => rule_binders(n, o.body).bind(λ rest => match v {
-                HGlobal(_, name, _) => match rule_same_name(name, "BitVec") {
-                    True => pure(Cons(Word, rest)),
-                    False => match rule_same_name(name, "Nat") {
-                        True => pure(Cons(Literal, rest)),
-                        False => pure(Cons(Hypothesis, rest)),
+            Accepted(o) => view(o.local.ty).bind(λ written => match rule_is_buffer(written) {
+                True => rule_binders(n, o.body).bind(λ rest => pure(Cons(BufferOf, rest))),
+                False => whnf_or(o.local.ty).bind(view).bind(λ v => rule_binders(n, o.body).bind(λ rest => match v {
+                    HGlobal(_, name, _) => match rule_same_name(name, "BitVec") {
+                        True => pure(Cons(Word, rest)),
+                        False => match rule_same_name(name, "Nat") {
+                            True => pure(Cons(Literal, rest)),
+                            False => pure(Cons(Hypothesis, rest)),
+                        },
                     },
-                },
-                _ => pure(Cons(Hypothesis, rest)),
-            })),
+                    _ => pure(Cons(Hypothesis, rest)),
+                })),
+            }),
         }),
     }
 }
@@ -516,7 +654,7 @@ fn rule_hypotheses(kinds: List<RuleBinder>) → Tac<Nat> {
 }
 
 // A literal or a word of the statement, as the rule's numbers give it.
-inductive RuleArg { Number(n: Expr), WordOf(width: Expr, id: Expr) }
+inductive RuleArg { Number(n: Expr), WordOf(width: Expr, id: Expr), BufferAt(id: Expr) }
 
 // The theorem applied to its literals and words, each a number of the
 // rule, and how many hypotheses are left.
@@ -528,6 +666,7 @@ fn rule_applied(cx: RuleCx, f: Expr, kinds: List<RuleBinder>, args: List<RuleArg
         Cons(k, rest) => match k {
             Hypothesis => rule_hypotheses(kinds).bind(λ n => pure(RuleApplied(f, args, used, n))),
             Literal => rule_applied(cx, App(f, cx.number(used)), rest, args ++ [Number(cx.number(used))], Succ(used)),
+            BufferOf => rule_applied(cx, App(f, App(Global(cx.ops.buffer), cx.number(used))), rest, args ++ [BufferAt(cx.number(used))], Succ(used)),
             Word => infer(f).or_fail("rule: ").bind(λ ty => view(ty).bind(λ v => match v {
                 HPi(dom) => whnf_or(dom).bind(view).bind(λ dv => match dv {
                     HGlobal(_, _, targs) => match targs {
@@ -545,12 +684,13 @@ fn rule_applied(cx: RuleCx, f: Expr, kinds: List<RuleBinder>, args: List<RuleArg
 
 // The theorem at a valuation: its literals the numbers, its words the
 // valuation's at their ids.
-fn rule_at(theorem: Expr, values: Expr, args: List<RuleArg>) → Expr {
+fn rule_at(theorem: Expr, values: Expr, buffer: Expr → Expr, args: List<RuleArg>) → Expr {
     match args {
         Nil => theorem,
         Cons(arg, rest) => match arg {
-            Number(n) => rule_at(App(theorem, n), values, rest),
-            WordOf(width, id) => rule_at(App(theorem, rule_apps(values, [width, id])), values, rest),
+            Number(n) => rule_at(App(theorem, n), values, buffer, rest),
+            WordOf(width, id) => rule_at(App(theorem, rule_apps(values, [width, id])), values, buffer, rest),
+            BufferAt(id) => rule_at(App(theorem, buffer(id)), values, buffer, rest),
         },
     }
 }
@@ -561,6 +701,7 @@ fn rule_words(values: Expr, args: List<RuleArg>) → List<Expr> {
         Nil => [],
         Cons(arg, rest) => match arg {
             Number(_) => rule_words(values, rest),
+            BufferAt(_) => rule_words(values, rest),
             WordOf(width, id) => Cons(rule_apps(values, [width, id]), rule_words(values, rest)),
         },
     }
@@ -685,8 +826,9 @@ fn rule(name: String) → Tac<List<Decl>> {
     let guarded <- rule_guards_hold(holds, both, left, right, yes, hypotheses.guards, Local(ok.ref));
     let under <- rule_ref(name_of(rule_under));
     let goal <- as_type(rule_apps(Global(under), [bits, Local(ok.ref), App(Global(sound_of), clause)])).or_fail("rule: the clause: ");
-    let proof <- focus(GoalInfo(goal, [ok, numbers]), rule_sound_by(λ values => rule_words(values, applied.args), λ values kept =>
-        rule_closed(applied.hypotheses, rule_at(Global(theorem), values, applied.args), rule_assumed(kept ++ guarded, kept ++ guarded))));
+    let proof <- focus(GoalInfo(goal, [ok, numbers]), rule_sound_by(λ values => rule_words(values, applied.args), λ values buffers kept =>
+        rule_closed(applied.hypotheses, rule_at(Global(theorem), values, λ id => rule_apps(Global(ops.buffer_at), [buffers, id]), applied.args),
+            rule_assumed(kept ++ guarded, kept ++ guarded))));
     let made = rule_apps(Global(when), [Lam(numbers.ref, bits), Lam(numbers.ref, clause), Lam(numbers.ref, Lam(ok.ref, proof))]);
     let ty <- infer(made).or_fail("rule: the rule made: ");
     pure([Decl(AsValue, name ++ "_rule", [], Hd(ty), made)])
