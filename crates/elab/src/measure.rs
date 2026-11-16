@@ -2038,7 +2038,7 @@ impl<'a> Rewrite<'a> {
         // closer alone, as Part A had it; with one it binds the writer's
         // statement to the closer and does §4's arithmetic on top with
         // `Nat::scaled_lt`/`Nat::scaled_le`.
-        let on_expr = on.as_ref().map(|o| o.expr.clone()).or(automatic);
+        let on_expr = on.as_ref().map(|o| self.with_read_facts(&o.expr, &goal)).or(automatic);
         let body = match &clean {
             None => Block {
                 stmts: Vec::new(),
@@ -2145,6 +2145,39 @@ impl<'a> Rewrite<'a> {
             };
         }
         acc
+    }
+
+    /// The writer's discharge as the binders it reads: itself, and where a
+    /// search in it reads its context (`{ let d = x.half_add_le(); omega }`)
+    /// also the arithmetic facts in scope about the goal, as a found proof's
+    /// are (`lift_found_proof`). The search names none of them, so without
+    /// these the lifted `f#obl_N` would quantify none, and a test's `h: 0 < x`
+    /// that the discharge reads at the call would be missing from it
+    /// (issues/decreases-on-block-let-no-unfold.md). Used only to choose
+    /// the binders, never as the proof.
+    fn with_read_facts(&self, on: &Expr, goal: &Ty) -> Expr {
+        let mut searches = false;
+        crate::surface::walk_expr(on, &mut |e| {
+            searches |= crate::defaults::is_context_search(e)
+                || matches!(&e.kind, ExprKind::App { head, .. } if crate::defaults::is_context_search(head));
+        });
+        if !searches {
+            return on.clone();
+        }
+        let span = on.span;
+        let mut facts = Vec::new();
+        for (i, b) in self.scope.iter().enumerate() {
+            let Some(ty) = &b.ty else { continue };
+            if self.scope[i + 1..].iter().any(|c| c.name == b.name) { continue; }
+            if arithmetic_fact(ty, goal, &self.scope) {
+                facts.push(Stmt::Let { name: format!("__read_fact_{}", facts.len()), ty: None,
+                    expr: var(&b.name, span), span, opaque: false });
+            }
+        }
+        if facts.is_empty() {
+            return on.clone();
+        }
+        Expr { kind: ExprKind::Block(Box::new(Block { stmts: facts, result: Box::new(on.clone()), ons: Vec::new(), span })), span }
     }
 
     /// Lift one site's obligation into `f#obl_N` and return the reference that
