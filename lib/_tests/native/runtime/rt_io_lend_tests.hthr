@@ -129,13 +129,14 @@ fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
 // A pass, over `[n, buf]`: read up to 256 bytes into the buffer, lend what
 // came back to `raise_span` from index 0 to the count, write what it left.
 // It ends in the context `[w, from, fd, word, left, zero, count, buf', max,
-// fd, n, buf]`: `left` (4) the bytes the function left, `buf'` (7) the
-// read's, gone once the function has the buffer.
+// at, fd, n, buf]`: `left` (4) the bytes the function left, `buf'` (7) the
+// read's, gone once the function has the buffer. Each literal operand is a
+// `Let` of its own (`fd` and `at` both 0), as the reflector reads them.
 fn pass_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [1, 3, 1, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 256), ETm::Invoke(Reads(0), [2, 4, 1, 0],
     ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 5],
-    ETm::Pure(Lit(Word(64), 0))))))))))
+    ETm::Pure(Lit(Word(64), 0)))))))))))
 }
 
 // `n := 1`, then the loop rebinding `n` to the read's count and the buffer
@@ -352,4 +353,20 @@ theorem tr_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
     Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io))
 {
     by io_loop_bridge("Io::tr_upper", [], [], ["raise_span"], "tr_world", "tr_lents")
+}
+
+// End to end: the lowered statements' tree, read against any world, is the
+// surface method itself, up to silent steps. The lowering's theorem
+// (`tr_reads`) and the bridge the reflector writes (`tr_bridged`), joined.
+fn tr_surface_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
+            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+        λ io => Io::tr_upper(io, buf))
+{
+    Io::reads_then(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
+            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+        λ io => tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io), λ io => Io::tr_upper(io, buf),
+        tr_reads(buf, perform),
+        λ io => Eutt::sym(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io),
+            tr_bridged()(io, buf)))
 }
