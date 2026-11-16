@@ -197,6 +197,10 @@ record Projected { ty: GlobalRef, fields: List<FieldProj> }
 // registered as the instance `class<args…>(index…)`, its index arguments
 // named (an instance head spells its index by name), its fields read off the
 // value: the same instance written in source as `{ f := name.f, … }`.
+// `class` is a name in the caller's scope or a qualified key
+// (`runtime::Compile`), which needs its module only in the caller's import
+// closure, so a generator's instances reach a module that never imported
+// the class.
 inductive DeclForm {
     AsTheorem,
     AsFunction,
