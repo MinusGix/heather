@@ -32,3 +32,7 @@ an issue with its fix, and the comment shrinks to a link.
 2. History and noise cut, one file per commit, kernel PRs for Minus to merge.
 3. A full read of the five large files (`term`, `typing`, `conv`, `eval`,
    `value`), which the first pass only keyword-swept.
+
+## Log
+
+- 2026-11-16: Pass 2 (PR #684): full read of value/eval/conv/typing/term — nine docs on the wrong item moved, conv's 36-copy out-of-line note stated once, [[slug]] links in code replaced by issue paths. Citation sweep: 79 issue files cited from crates/kernel/src, all exist; 67 closed, none cited as if still pending; of the 12 open, conversion-typed-eliminator-congruence had landed in full and is closed.
