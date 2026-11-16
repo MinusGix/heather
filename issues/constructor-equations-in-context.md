@@ -28,3 +28,23 @@ Some(capacity) => λ same => j(Option::some_inj(p.reads(…), c, same), λ x _ =
 ## Done when
 
 On the model, the six non-recursive cases of `emits_extends` need no arm for a refused test, and an arm that succeeds is written at `c` already replaced. In `native_compile_correct.hthr` no arm reads `λ none => absurd(none)` and no `j` has `some_inj` as its equation.
+
+## Log
+
+- 2026-11-16: Items 1–4 built. `subst` injects through an equation of one
+  constructor's applications down to fields with a local side, substitutes
+  them one at a time (reading `h` again in each case), and closes the goal on
+  a clash (`LocalSubsts::inject`, `crates/elab/src/subst_local.rs`;
+  `docs/tactics/equation-rewrite-design.md` §8). `known` proves `True` and
+  closes a goal from a hypothesis whose sides, or fields, are different
+  constructors (`Tested::known`), so `induct`'s default leaf closes a refused
+  test's case. `split_all` substitutes through the equations its splits
+  leave (`injected_hypothesis`, `docs/tactics/goal-combinators.md`). Probes:
+  `lib/_tests/std/tactic/constructor_equation_tests.hthr`. In
+  `native_compile_correct.hthr` 23 of the 25 `j(some_inj(…), motive, …)`
+  transports are now `subst(same, …)`; the two left are a transport applied
+  to arguments and a `sym` of one. Left for the "Done when": the 41
+  `λ none => absurd(none)` arms, which go when those proofs are by `induct`
+  (induct-through-result-matches). The
+  leaf's context report still lists the shadowed binders a split re-bound
+  (induct-case-goal-report's subject).

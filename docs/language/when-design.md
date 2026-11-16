@@ -382,7 +382,14 @@ language` and log rulings there.
 - `known` (`Tested::known`, beside the tested call): the innermost local or
   pattern binding whose type converts to the goal, or the `left`/`right` of
   one that is a conjunction, else the `decreases` closer (`omega`, then
-  `bv_omega` over words). It is a context search (`is_context_search`), so
+  `bv_omega` over words). Before the closer it proves `True` outright, and
+  closes any goal from a hypothesis equating two different constructors, at
+  the top or under fields of one constructor (`None = Some(c)`,
+  `Some(None) = Some(Some(x))`, `Succ(n) = 0`), by `absurd`, so `induct`'s
+  default leaf closes a refused test's case
+  (`issues/constructor-equations-in-context.md`). The constructors are read
+  off the sides' values by the value machine, so a stuck side costs one
+  evaluation. It is a context search (`is_context_search`), so
   a `decreases` body's `w.val()` is lifted like any found proof. Its
   refusal names the goal and says "test it (a `match` or `if let` on
   `Present`/`Absent`) or prove it". A `match` arm's binders are aliases, not
