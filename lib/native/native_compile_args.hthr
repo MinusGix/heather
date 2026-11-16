@@ -439,7 +439,7 @@ theorem Target::goes_arg_head(self t: Target, v: Nat → BitVec(8), buf, cap: Na
             });
         let test = t.goes_block_jcc(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree, E, pre, jumped, λ _ => refl);
         let load = t.goes_load_byte(head, 0, ByteLoad(Rdx, Rsi), w_loaded, tree,
-            λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([TestRR(Rdx, Rdx)], u).gprs,
+            λ u => pre(execute_block_normal([TestRR(Rdx, Rdx)], u).gprs,
                 execute_block_normal([TestRR(Rdx, Rdx)], u).flags, execute_block_normal([TestRR(Rdx, Rdx)], u).memory), test);
         load(s, here, resident, Exists(byte, ⟨b.proof.left, ⟨b.proof.right.left, ⟨⟨held, ⟨refl, b.proof.right.right⟩⟩, refl⟩⟩⟩))
     }
@@ -577,7 +577,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
         let to_out = t.io().goes_jmp(t.program, t.origin, t.code_fits(), w_jumped.witness, moved, 0, joined, w_jumped.proof, prog_len(missed),
             lands_out, tree, λ (g: Gprs) (f: Flags) (mm: X86Memory(t.r.profile)) => t.Held(live, env1, g, mm) ∧ (env1.set_word(len, read_gpr(Rax, g)) = final),
             at_out(env1));
-        let fin: t.Goes(prog_len(done), tree, λ (w: MachineState<X86Memory(t.r.profile)>) => t.ArgAt(v, buf, cap, arg, pointer, arg.len(), vals, w.gprs, w.memory)) = t.goes_weaken(t.goes_block(done, 0, [MovRR(Rax, R8)], w_moved, tree,
+        let fin: t.Goes(prog_len(done), tree, λ w => t.ArgAt(v, buf, cap, arg, pointer, arg.len(), vals, w.gprs, w.memory)) = t.goes_weaken(t.goes_block(done, 0, [MovRR(Rax, R8)], w_moved, tree,
                 λ (w: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env1, w.gprs, w.memory) ∧ (env1.set_word(len, read_gpr(Rax, w.gprs)) = final), to_out),
             λ w at => ⟨Exists(words, ⟨t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, arg, pointer, arg.len(), refl, w.memory, at.right.right),
                     j(sym(at.right.left.right.right.right.right), λ vs _ => t.Agreeing(live, env1, words, vs), agrees)⟩),
@@ -591,7 +591,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
         let setting = t.goes_block(e1, 0, sets, w_x, tree, post, looped);
         let post2 = λ (w: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(sets, w));
         let loading = t.goes_load(slot, 0, WordLoad(Rsi, Rbx), w_e1, tree, post2, setting);
-        let summing = t.goes_block(counted, 0, slots, w_slot, tree, λ (w: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(64)>(λ word =>
+        let summing = t.goes_block(counted, 0, slots, w_slot, tree, λ w => Exists<BitVec(64)>(λ word =>
                 (read_gpr(Rbx, w.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
                 ((read_word(t.site().data, w.memory, read_gpr(Rbx, w.gprs)) = Some(word)) ∧ post2(word_load_after(WordLoad(Rsi, Rbx), word, w)))),
             loading);
@@ -662,8 +662,8 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
     // where the two ways meet: the length (or minus one) stored
     let at_out = λ (before: Env) => t.goes_result(live, out, before, final, missing, len, in_len, sub, apart, within, tree, next);
     // past argc: minus one
-    let missing_goes: t.Goes(prog_len(jumped.label(past)), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧ (env.args.nth(env.number(index)) = None)) = t.goes_weaken(t.goes_block(jumped.label(past), 0, [MovRI(Rax, missing_word())], w_missed, tree,
-            λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧ (env.set_word(len, read_gpr(Rax, u.gprs)) = final), at_out(env)),
+    let missing_goes: t.Goes(prog_len(jumped.label(past)), tree, λ u => t.Held(live, env, u.gprs, u.memory) ∧ (env.args.nth(env.number(index)) = None)) = t.goes_weaken(t.goes_block(jumped.label(past), 0, [MovRI(Rax, missing_word())], w_missed, tree,
+            λ u => t.Held(live, env, u.gprs, u.memory) ∧ (env.set_word(len, read_gpr(Rax, u.gprs)) = final), at_out(env)),
         λ u held => ⟨held.left, sym(j(sym(held.right), λ o _ => (match o as λ _ => Env {
                 None => env.set_word(len, missing_word()),
                 Some(arg) => env.set_buffer(buf, fill(env.buffer(buf), arg)).set_word(len, count_word(arg.len())),
@@ -712,7 +712,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
                     ⟨q.left, ⟨q.right.left, ⟨trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), q.right.right.right.left), k_value),
                         ⟨under, q.right.right.right.right⟩⟩⟩⟩)
             });
-        let comparing: t.Goes(prog_len(c3), tree, λ (w: MachineState<X86Memory(t.r.profile)>) => Q3(w.gprs, w.memory)) = t.goes_weaken(t.goes_block_jcc(c3, 0, [CmpRR(Rcx, R9)], w_c4, tree, AE, pre, compared, λ _ => refl),
+        let comparing: t.Goes(prog_len(c3), tree, λ w => Q3(w.gprs, w.memory)) = t.goes_weaken(t.goes_block_jcc(c3, 0, [CmpRR(Rcx, R9)], w_c4, tree, AE, pre, compared, λ _ => refl),
             λ w held2 => ⟨held2, refl⟩);
         let indexed = t.goes_word_to(live, env, c2, index, Rcx, in_index, holds, w_c3, tree, Q3, comparing);
         let post_argc = λ (w: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, w.gprs, w.memory) ∧
@@ -727,7 +727,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
             word_bytes_at_kept(t.argv(), m0, t.r.profile.data(), m0, t.argv_reads(m0), rsp, word_of_nat(64, argc), stacked.left.right.left));
         let stack = t.read_stack(v, m0, placed_v.left);
         t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], w_c0, tree,
-            λ (w: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(64)>(λ word =>
+            λ w => Exists<BitVec(64)>(λ word =>
                 (read_gpr(Rbx, w.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
                 ((read_word(t.site().data, w.memory, read_gpr(Rbx, w.gprs)) = Some(word)) ∧ post_rsp(word_load_after(WordLoad(Rdx, Rbx), word, w)))),
             saved)(s, here, resident,

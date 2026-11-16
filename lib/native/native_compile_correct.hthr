@@ -430,7 +430,7 @@ theorem Region::paired(self body: Region, rest: Stmt, homes: Homes, out: List<Na
 // A tree the same as one the code runs as.
 theorem Target::at_similar(self t: Target, {at: Nat}, {live: List<Nat>}, {tree, other: ITree<BitVec(64)>(Events::linux())}, {env: Env},
     same: ITree::Same(Events::linux(), tree, other), goes: t.At(at, live, other, env)): t.At(at, live, tree, env) {
-    t.site().goes_same(t.io(), at, tree, other, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), same, goes)
+    t.site().goes_same(t.io(), at, tree, other, λ s => t.Held(live, env, s.gprs, s.memory), same, goes)
 }
 
 // A loop of `m` more rounds over its set `set` (what is live at its head):
@@ -1448,7 +1448,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
                                     paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
                                 let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
-                                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
+                                    λ u => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
                                 λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
@@ -1788,9 +1788,9 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     tree: ITree<BitVec(64)>(Events::linux()), g0: Gprs, top: List<BitVec(64)>,
     zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
     more: (d: Nat) → t.room = Succ(d) →
-        t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ (v: MachineState<X86Memory(t.r.profile)>) =>
+        t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ v =>
             t.Bare(env, d, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]))):
-    t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+    t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ s =>
         t.Bare(env, t.room, t.index - 8, top, s.gprs, s.memory) ∧ (s.gprs = g0)) {
     let layout = t.layout();
     let label = layout.procedure_label(index);
@@ -1805,7 +1805,7 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     // does not write.
     let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
     let after = λ (d: Nat) (eq: t.room = Succ(d)) => {
-        let weak: t.Goes(prog_len(counted), tree, λ (v: MachineState<X86Memory(t.r.profile)>) => based(d, v.memory) ∧ r(v.gprs, v.memory)) =
+        let weak: t.Goes(prog_len(counted), tree, λ v => based(d, v.memory) ∧ r(v.gprs, v.memory)) =
             t.goes_weaken(more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
         weak
     };
@@ -1821,11 +1821,11 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
         },
         zero, after);
     let labelled = t.goes_block(pre_i, label, [], w_lbl, tree,
-        λ (v: MachineState<X86Memory(t.r.profile)>) => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
-    let entered: t.Goes(prog_len(pre_i), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
+        λ v => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
+    let entered: t.Goes(prog_len(pre_i), tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
             λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩⟩⟩);
     j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
-        λ at _ => t.Goes(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
+        λ at _ => t.Goes(at, tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
 }
 
 // No room: every procedure's count goes to the shared exit, as the
@@ -1924,7 +1924,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
                 env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.right.left)), body);
             let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, passed,
                 tree, w_entry, inside_params, pf.right.right.left, pf.right.left, pf.right.right.right.right.left, long, next_c);
-            j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ (v: MachineState<X86Memory(t.r.profile)>) =>
+            j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
                 t.Bare(env, d2, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
         };
         t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, top,
@@ -1980,7 +1980,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
             λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow), callable(index, proc, found), long, k2, taken);
         t.site().goes_same(t.io(), prog_len(p), ITree::bind(Events::linux(), src.performs(call, n, d)(index, args, results, env), k),
             ITree::bind(Events::linux(), src.procedure_tree(call, n, d, proc)(va, env), k2),
-            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
+            λ s => t.Held(live, env, s.gprs, s.memory),
             src.performs_tree(call, n, d, index, proc, found_src, args, results, env, k), main)
     }
 }
@@ -2049,7 +2049,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
         paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
     let after = λ (end: Env) => t.goes_finish(c.prog, w_whole, Ret(BitVec::zero()),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
+        λ u => t.Held([], end, u.gprs, u.memory),
         λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
     let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
     λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),

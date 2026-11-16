@@ -584,7 +584,7 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                             let q_in = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ PortsAt(values, inputs, ins, g);
                             let narrowed = λ (i: Nat) (m: Mem(i, left)) => keeps(i, out.mem_filter(i, λ (id: Nat) => absent(id, words), m),
                                 out.mem_filter_holds(i, λ (id: Nat) => absent(id, words), m));
-                            let entered: t.Goes(prog_len(loaded), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q_in(s.gprs, s.memory)) = t.goes_weaken(at_loaded,
+                            let entered: t.Goes(prog_len(loaded), tree, λ s => q_in(s.gprs, s.memory)) = t.goes_weaken(at_loaded,
                                 λ s held => {
                                     let kept = t.held_kept(left, env, s.gprs, execute_block_normal(code, s).gprs, s.memory,
                                         t.held_sub(held.left, narrowed),

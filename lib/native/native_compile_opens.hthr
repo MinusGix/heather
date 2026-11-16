@@ -79,10 +79,10 @@ theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         λ a u here resident held => t.goes_result(live, out, env, shape.answer(env, a), asked, result, in_result, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
-        (t.site().Resident(s.memory) → (a: CloseResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ (u: MachineState<X86Memory(t.r.profile)>) =>
+        (t.site().Resident(s.memory) → (a: CloseResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ u =>
             t.site().Resident(u.memory) ∧ after(a, u)));
     let q1 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
-    let at_w1: t.Goes(prog_len(w1), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => q1(s.gprs, s.memory)) = t.goes_weaken(called,
+    let at_w1: t.Goes(prog_len(w1), Vis(c, tree), λ s => q1(s.gprs, s.memory)) = t.goes_weaken(called,
         λ s held => held(s.flags, s.rip));
     let at_w0 = t.goes_known_to(live, env, w0, known, fd, Rdi, in_fd, m_fd, w_w1, Vis(c, tree), q1, at_w1);
     let post0 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
@@ -391,7 +391,7 @@ theorem Target::goes_path_body(self t: Target, env: Env, buf, cap: Nat, found: t
         λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, Succ(i), g, m), again);
     let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.PathAt(env, buf, path, vals, Succ(i), u.gprs, u.memory);
     let added = t.goes_block(moved, 0, adds, w_stepped, tree, post, jumped);
-    let storing = t.goes_store_byte(tested, 0, ByteStore(Rdi, Rdx), w_moved, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(adds, u)),
+    let storing = t.goes_store_byte(tested, 0, ByteStore(Rdi, Rdx), w_moved, tree, λ u => post(execute_block_normal(adds, u)),
         added);
     λ u here resident held => {
         let at = held.left;
@@ -513,7 +513,7 @@ theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t
             let b = t.path_byte(env, buf, cap, found, path, vals, of, i, short, u.gprs, u.memory, at);
             let byte = b.witness;
             let load = t.goes_load_byte(counted, 0, ByteLoad(Rdx, Rsi), w_loaded, tree,
-                λ (w: MachineState<X86Memory(t.r.profile)>) => {
+                λ w => {
                     let after = execute_block_normal([TestRR(Rdx, Rdx)], w);
                     (t.PathAt(env, buf, path, vals, i, after.gprs, after.memory) ∧ ((read_gpr(Rdx, after.gprs) = byte.zero_extend(56)) ∧
                         ((path.nth(i) = Some(byte)) ∧ (i < path.len())))) ∧
@@ -642,12 +642,12 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         λ a u here resident held => t.goes_result(live, out, env, shape.answer(env, a), asked, result, in_result, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
-        (t.site().Resident(s.memory) → (a: OpenResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ (u: MachineState<X86Memory(t.r.profile)>) =>
+        (t.site().Resident(s.memory) → (a: OpenResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ u =>
             t.site().Resident(u.memory) ∧ after(a, u)));
     let at_ended = t.goes_block(ended, 0, asking, w_set, Vis(c, tree), call_pre, called);
     // The NUL stored past the path.
     let storing = t.goes_store_byte(zeroed, 0, ByteStore(Rdi, Rdx), w_ended, Vis(c, tree),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => call_pre(execute_block_normal(asking, u)), at_ended);
+        λ u => call_pre(execute_block_normal(asking, u)), at_ended);
     let store_pre = λ (u: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rdi) = True) ∧
         (t.writes().writable(u.memory, read_gpr(Rdi, u.gprs), 1) ∧
         (t.site().Resident(byte_store_after(t.writes(), ByteStore(Rdi, Rdx), u).memory) ∧
@@ -701,7 +701,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         let looped = t.goes_path_loop(placed_env, path, cap, found, bytes, vals, of, small, clamped, h, d, w_copy, w_copied, Vis(c, tree), fin, name.len(), 0,
             name.len().add_left_zero());
         let setting = t.goes_block(clamped, 0, sets, w_set0, Vis(c, tree),
-            λ (w: MachineState<X86Memory(t.r.profile)>) => t.PathAt(placed_env, path, bytes, vals, 0, w.gprs, w.memory), looped);
+            λ w => t.PathAt(placed_env, path, bytes, vals, 0, w.gprs, w.memory), looped);
         let rcx: (read_gpr(Rcx, u0.gprs) = word_of_nat(64, bytes.len())) = trans(sym(word_of_nat_toNat(64, read_gpr(Rcx, u0.gprs))),
             cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(held0.right, sym(bytes_len))));
         setting(u0, here0, resident0, ⟨Nat::nonneg(name.len()), ⟨refl, ⟨rcx, ⟨t.buffer_rip(path), ⟨t.scratch_rip(),
@@ -713,8 +713,8 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         ((read_gpr(Rcx, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_cl(g, m)) ∧
         ((read_gpr(Rcx, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_cl(write_gpr(Rcx, read_gpr(R9, g), g), m));
     let q_r0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g).toNat() = env.number(len));
-    let at_r0: t.Goes(prog_len(r0), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => q_r0(s.gprs, s.memory)) = t.goes_weaken(t.goes_block(r0, 0, [MovRI(R9, BitVec::ofNat(cap))], w_r1, Vis(c, tree),
-            λ (u: MachineState<X86Memory(t.r.profile)>) => clamp_pre(u.gprs, u.memory), at_r1),
+    let at_r0: t.Goes(prog_len(r0), Vis(c, tree), λ s => q_r0(s.gprs, s.memory)) = t.goes_weaken(t.goes_block(r0, 0, [MovRI(R9, BitVec::ofNat(cap))], w_r1, Vis(c, tree),
+            λ u => clamp_pre(u.gprs, u.memory), at_r1),
         λ s held => {
             let rcx = read_gpr(Rcx, s.gprs);
             let bound = BitVec::ofNat(cap, n := 64);
