@@ -87,7 +87,7 @@ theorem word_kept_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, st
 // room: the call may store a one there.
 theorem own_word_not_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), i, k: Nat,
     below: k + 8 <= i, room: i <= stack.size, memory: M):
-    ¬ stack.Stable(i, λ (m: M) => read_word(data, m, stack.at(k)) = Some(BitVec::zero())) {
+    ¬stack.Stable(i, λ (m: M) => read_word(data, m, stack.at(k)) = Some(BitVec::zero())) {
     λ stable => {
         let fits: (k + 8 <= stack.size) = omega(below, room);
         let one: BitVec(64) = BitVec::ofNat(1);
