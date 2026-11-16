@@ -1,6 +1,6 @@
 ---
 title: Cut the kernel's comments to the ones that carry a reason
-status: open
+status: closed
 labels: [kernel,code-health,docs]
 area: kernel
 created: 2026-11-16
@@ -36,3 +36,4 @@ an issue with its fix, and the comment shrinks to a link.
 ## Log
 
 - 2026-11-16: Pass 2 (PR #684): full read of value/eval/conv/typing/term — nine docs on the wrong item moved, conv's 36-copy out-of-line note stated once, [[slug]] links in code replaced by issue paths. Citation sweep: 79 issue files cited from crates/kernel/src, all exist; 67 closed, none cited as if still pending; of the 12 open, conversion-typed-eliminator-congruence had landed in full and is closed.
+- 2026-11-16: Done. All three follow-up issues are closed (PR #687), and the plan's three passes landed (PRs #679 and #684). Closed.
