@@ -324,6 +324,7 @@ impl<'a> Walk<'a> {
         }
         if let Kind::Leaf = self.nodes[index].kind {
             self.mask_bound(&w, word, &spelled)?;
+            self.zero_extend_value(word, &spelled)?;
         }
         Ok(Some(index))
     }
@@ -350,6 +351,27 @@ impl<'a> Walk<'a> {
         };
         if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
             self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
+        }
+        Ok(())
+    }
+
+    /// A word widened by zeros, `x.zero_extend(e)`, has `x`'s value: a
+    /// byte read and compared as a `u64` (`b.zero_extend(56) < 0x80`) is
+    /// the byte's own comparison. Its leaf gets that equation, and `x` is a
+    /// word of its own at its width.
+    fn zero_extend_value(&mut self, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        let Some(args) = named_args(self.elab, word, "bitvec::BitVec::zero_extend") else { return Ok(()) };
+        let [n, extra, x] = args.as_slice() else { return Ok(()) };
+        let (Ok(ns), Ok(es), Some(xs)) = (nat_term_source(self.elab, self.cx, n), nat_term_source(self.elab, self.cx, extra), self.elab.spell_term_source(self.cx, x)) else {
+            return Ok(());
+        };
+        let width = self.literal(n).map(|n| n.to_string()).unwrap_or_else(|| ns.clone());
+        if self.word_at(width, x)?.is_none() {
+            return Ok(());
+        }
+        let statement = format!("bitvec::BitVec::toNat({spelled}) = bitvec::BitVec::toNat({xs})");
+        if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+            self.bridges.push((format!("__bv_widened{}", self.bridges.len()), statement, format!("bitvec::BitVec::concat_zero_toNat({ns}, {es}, {xs})")));
         }
         Ok(())
     }

@@ -1008,6 +1008,20 @@ impl Checking<'_> {
                 if self.key_of("bitvec_omega::add_form").is_none() {
                     return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
                 }
+                // A negated word fact (`¬(x < lo)`, `x = y → False`), such as
+                // a branch equation's side condition: assume it and refute
+                // the assumption, which the inner call reads as a fact in
+                // scope, as `omega` does at a negated Nat relation.
+                if omega_cert::negated_domain(self, cx, expected).is_some() {
+                    let assumed = Expr {
+                        kind: ExprKind::Lam {
+                            binders: vec![heather_syntax::LamBinder { name: "__bv_assumed".into(), ty: None, implicit: false, span: e.span }],
+                            body: Box::new(e.clone()),
+                        },
+                        span: e.span,
+                    };
+                    return self.elab_check(cx, &assumed, expected, lvl);
+                }
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
                 let generate = |careful| {
                     bv_omega::generate(self, cx, expected, careful).map_err(|detail| ElabError::Elab {
