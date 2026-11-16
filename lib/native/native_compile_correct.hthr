@@ -1473,33 +1473,37 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
 
 // Procedure `index` is in `whole` as its compile put it: it fits, its body
 // emits after its way in from some prefix, and its way out is in `whole`.
-fn Procedure::Hosted(self proc: Procedure, layout: Layout, index: Nat, whole: Prog) → Type {
-    Exists<Prog>(λ pre => Exists<Nat>(λ names => Exists<Compiled>(λ b =>
-        (proc.fits(layout) = True) ∧ ((proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b)) ∧
-        proc.exit_code(b.prog, layout).Within(whole)))))
+record Hosted(proc: Procedure, layout: Layout, index: Nat, whole: Prog) {
+    pre: Prog,
+    names: Nat,
+    b: Compiled,
+    fits: proc.fits(layout) = True,
+    emitted: proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b),
+    within: proc.exit_code(b.prog, layout).Within(whole),
 }
 
 // The program holds every procedure of the target, and the shared exit of
 // a call too deep.
-fn Target::Hosts(self t: Target) → Type {
-    ((i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → proc.Hosted(t.layout(), i, t.program)) ∧
-        Exists<Prog>(λ dp => dp.deep_exit(t.layout()).Within(t.program))
+record Hosts(t: Target) {
+    hosted: (i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → Hosted(proc, t.layout(), i, t.program),
+    deep: Prog,
+    deep_within: deep.deep_exit(t.layout()).Within(t.program),
 }
 
 theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat, c: Compiled, code: proc.code(p, layout, index, names) = Some(c)):
-    (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+    (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
     (match proc.fits(layout) as λ f => proc.fits(layout) = f → (match f {
             False => None,
             True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
                 None => None,
                 Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)),
             },
-        }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+        }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
         False => λ _ none => absurd(none),
         True => λ fits same0 => (match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) as λ o =>
                 proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) = o →
                 (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(c) →
-                (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+                (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
             None => λ _ none => absurd(none),
             Some(b) => λ emitted same => subst(Option::some_inj(Compiled(proc.exit_code(b.prog, layout), b.names), c, same),
                 λ whole w => {
@@ -1510,7 +1514,7 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
                     let framed = then(saved, Block(frame_down(layout.words)));
                     let moved = b.prog.words_to(layout, proc.results, result_registers());
                     let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
-                    ⟨Exists(p, Exists(names, Exists(b, ⟨fits, ⟨emitted, w⟩⟩))), calc {
+                    ⟨Hosted(p, names, b, fits, emitted, w), calc {
                         p <= labelled := Exists(1, refl),
                         <= counted := Exists(6, refl),
                         <= saved := Prog::within_saves(layout.kept(), counted),
@@ -1563,21 +1567,21 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
 // `i` of them at label `index + i`.
 theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p: Prog) → (index, names: Nat) → (d: Compiled) →
     procs.procedures_code(p, layout, index, names) = Some(d) → (whole: Prog) → d.prog.Within(whole) →
-    p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+    p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
     match procs {
         Nil => λ p index names d code whole w => subst(Option::some_inj(Compiled(p, names), d, code),
             ⟨p.within_self(), λ i proc none => absurd(none)⟩),
         Cons(first, rest) => λ p index names d => (match first.code(p, layout, index, names) as λ o => first.code(p, layout, index, names) = o →
                 (match o { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) }) = Some(d) →
                 (whole: Prog) → d.prog.Within(whole) →
-                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
             None => λ _ none => absurd(none),
             Some(c) => λ code others whole w => {
                 let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
                 let here = first.code_hosted(p, layout, index, names, c, code, whole, Prog::within_trans(later.left, w));
                 ⟨Prog::within_trans(here.right, later.left), λ i => match i {
                     Zero => λ proc same => subst(Option::some_inj(first, proc, same), here.left),
-                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => proc.Hosted(layout, x, whole), later.right(k, proc, found)),
+                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => Hosted(proc, layout, x, whole), later.right(k, proc, found)),
                 }⟩
             },
         })(refl),
@@ -1587,17 +1591,21 @@ theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p
 // What `compile_calls` built: `main` emitted, exit 0 after it in the
 // program, the program hosting every procedure and the shared exit, laid
 // out, and the functions linked after some code of its own.
-fn Source::CallsBuilt(self src: Source, low: BitVec(64), homes: Homes, program: Prog) → Type {
-    let layout = src.layout(low, homes);
-    Exists<Compiled>(λ c => (src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = Some(c)) ∧
-        (then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program) ∧
-        (((i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → proc.Hosted(layout, i, program)) ∧
-        (Exists<Prog>(λ dp => dp.deep_exit(layout).Within(program)) ∧ (program.laid_out().IsTrue() ∧
-        Exists<Prog>(λ base => Exists<Nat>(λ names => base.links(src.functions, homes.places, names) = Some(program))))))))
+record CallsBuilt(src: Source, low: BitVec(64), homes: Homes, program: Prog) {
+    c: Compiled,
+    emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(c),
+    exit_within: then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program),
+    hosted: (i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → Hosted(proc, src.layout(low, homes), i, program),
+    deep: Prog,
+    deep_within: deep.deep_exit(src.layout(low, homes)).Within(program),
+    laid: program.laid_out().IsTrue(),
+    base: Prog,
+    names: Nat,
+    linked: base.links(src.functions, homes.places, names) = Some(program),
 }
 
 theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, program: Prog, compiled: src.compile_calls(low, homes) = Some(program)):
-    src.CallsBuilt(low, homes, program) {
+    CallsBuilt(src, low, homes, program) {
     let layout = src.layout(low, homes);
     let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     let laid = src.calls_laid(low, homes, program, compiled);
@@ -1611,7 +1619,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
                 },
-            }) = Some(program) → src.CallsBuilt(low, homes, program) {
+            }) = Some(program) → CallsBuilt(src, low, homes, program) {
         None => λ _ none => absurd(none),
         Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
                 src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
@@ -1620,16 +1628,16 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                         None => None,
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
-                }) = Some(program) → src.CallsBuilt(low, homes, program) {
+                }) = Some(program) → CallsBuilt(src, low, homes, program) {
             None => λ _ none => absurd(none),
             Some(d) => λ code => {
                 let base = d.prog.deep_exit(layout);
                 (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
                         (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
-                        src.CallsBuilt(low, homes, program) {
+                        CallsBuilt(src, low, homes, program) {
                     None => λ _ none => absurd(none),
                     Some(whole) => λ linked => (match whole.laid_out() as λ b => (match b as λ _ => Option<Prog> { False => None, True => Some(whole) }) = Some(program) →
-                            src.CallsBuilt(low, homes, program) {
+                            CallsBuilt(src, low, homes, program) {
                         False => λ none => absurd(none),
                         True => λ same => {
                             let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
@@ -1637,9 +1645,9 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                             let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
                             let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
                             let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
-                            let r: src.CallsBuilt(low, homes, program) = Exists(c, ⟨emitted, ⟨Prog::within_trans(hosted.left, w_d),
-                                ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, program), hosted.right(i, proc, found)),
-                                ⟨Exists(d.prog, w_base), ⟨laid, Exists(base, Exists(d.names, linked_p))⟩⟩⟩⟩⟩);
+                            let r: CallsBuilt(src, low, homes, program) = CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
+                                λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
+                                d.prog, w_base, laid, base, d.names, linked_p);
                             r
                         },
                     }),
@@ -1661,19 +1669,25 @@ theorem Nat::same_as_eq(self n: Nat, m: Nat, same: n.same_as(m).IsTrue()): n = m
 }
 
 // What a fitting call gives the proof: its procedure, and each check.
-fn Layout::CallFits(self layout: Layout, out: List<Nat>, args, results: List<Nat>, proc: Procedure) → Type {
-    (args.len() = proc.params.len()) ∧ ((results.len() = proc.results.len()) ∧ ((args.len() <= 6) ∧ ((results.len() <= 6) ∧
-        (layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue() ∧ layout.homes.moves_apart(out, results).IsTrue()))))
+record CallFits(layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) {
+    proc: Procedure,
+    found: layout.procedures.nth(index) = Some(proc),
+    args_len: args.len() = proc.params.len(),
+    results_len: results.len() = proc.results.len(),
+    args_few: args.len() <= 6,
+    results_few: results.len() <= 6,
+    words: layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue(),
+    apart: layout.homes.moves_apart(out, results).IsTrue(),
 }
 
 theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>, fit: layout.call_fits(out, index, args, results).IsTrue()):
-    Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+    CallFits(layout, out, index, args, results) {
     (match layout.procedures.nth(index) as λ o => layout.procedures.nth(index) = o → Bool::IsTrue(match o {
             None => False,
             Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
                 (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
                 layout.homes.moves_apart(out, results))))),
-        }) → Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+        }) → CallFits(layout, out, index, args, results) {
         None => λ _ no => false_elim(no),
         Some(proc) => λ found f => {
             let b1 = Bool::both(f);
@@ -1681,26 +1695,29 @@ theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat,
             let b3 = Bool::both(b2.right);
             let b4 = Bool::both(b3.right);
             let b5 = Bool::both(b4.right);
-            Exists(proc, ⟨found, ⟨args.len().same_as_eq(proc.params.len(), b1.left), ⟨results.len().same_as_eq(proc.results.len(), b2.left),
-                ⟨Nat::leb_sound(args.len(), 6, b3.left), ⟨Nat::leb_sound(results.len(), 6, b4.left), ⟨b5.left, b5.right⟩⟩⟩⟩⟩⟩)
+            CallFits(proc, found, args.len().same_as_eq(proc.params.len(), b1.left), results.len().same_as_eq(proc.results.len(), b2.left),
+                Nat::leb_sound(args.len(), 6, b3.left), Nat::leb_sound(results.len(), 6, b4.left), b5.left, b5.right)
         },
     })(refl, fit)
 }
 
 // What a procedure that fits gives the proof.
-fn Procedure::FitsParts(self proc: Procedure, layout: Layout) → Type {
-    proc.body.checks(layout.homes, proc.results).IsTrue() ∧ (proc.body.live_in(layout.homes, proc.results).within(proc.params).IsTrue() ∧
-        (layout.homes.moves_apart(proc.body.live_in(layout.homes, proc.results), proc.params).IsTrue() ∧
-        (layout.words_fit(proc.params ++ proc.results).IsTrue() ∧ ((proc.params.len() <= 6) ∧ (proc.results.len() <= 6)))))
+record ProcedureFits(proc: Procedure, layout: Layout) {
+    checks: proc.body.checks(layout.homes, proc.results).IsTrue(),
+    entry_within: proc.body.live_in(layout.homes, proc.results).within(proc.params).IsTrue(),
+    entry_apart: layout.homes.moves_apart(proc.body.live_in(layout.homes, proc.results), proc.params).IsTrue(),
+    words: layout.words_fit(proc.params ++ proc.results).IsTrue(),
+    params_few: proc.params.len() <= 6,
+    results_few: proc.results.len() <= 6,
 }
 
-theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): proc.FitsParts(layout) {
+theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): ProcedureFits(proc, layout) {
     let entry = proc.body.live_in(layout.homes, proc.results);
     (match proc.body.checked(layout.homes, proc.results) as λ o => proc.body.checked(layout.homes, proc.results) = o → (match o as λ _ => Bool {
             None => False,
             Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
                 (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
-        }) = True → proc.FitsParts(layout) {
+        }) = True → ProcedureFits(proc, layout) {
         None => λ _ none => absurd(none),
         Some(l) => λ got same => {
             let sound = proc.body.checked_sound(layout.homes, proc.results, l, got);
@@ -1711,7 +1728,7 @@ theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.f
             let b2 = Bool::both(b1.right);
             let b3 = Bool::both(b2.right);
             let b4 = Bool::both(b3.right);
-            ⟨sound.right, ⟨b1.left, ⟨b2.left, ⟨b3.left, ⟨Nat::leb_sound(proc.params.len(), 6, b4.left), Nat::leb_sound(proc.results.len(), 6, b4.right)⟩⟩⟩⟩⟩
+            ProcedureFits(sound.right, b1.left, b2.left, b3.left, Nat::leb_sound(proc.params.len(), 6, b4.left), Nat::leb_sound(proc.results.len(), 6, b4.right))
         },
     })(refl, fits)
 }
@@ -1828,16 +1845,15 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
 
 // No room: every procedure's count goes to the shared exit, as the
 // source's call past the depth.
-theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n: Nat, room: t.room = 0, hosts: t.Hosts()):
+theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n: Nat, room: t.room = 0, hosts: Hosts(t)):
     t.Procedures(src, call, n, 0) {
     let layout = t.layout();
     λ index proc found env values long g0 passed ret above fits_above k ends => {
-        let hosted = hosts.left(index, proc, found);
-        let pre_i = hosted.witness;
-        let hw = proc.hosted_within(layout, index, t.program, pre_i, hosted.proof.witness, hosted.proof.proof.witness,
-            hosted.proof.proof.proof.right.left, hosted.proof.proof.proof.right.right);
-        let dp = hosts.right.witness;
-        let w_deep = hosts.right.proof;
+        let hosted = hosts.hosted(index, proc, found);
+        let pre_i = hosted.pre;
+        let hw = proc.hosted_within(layout, index, t.program, pre_i, hosted.names, hosted.b, hosted.emitted, hosted.within);
+        let dp = hosts.deep;
+        let w_deep = hosts.deep_within;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
             calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := w_deep, };
         let tree: ITree<BitVec(64)>(Events::linux()) = k(Exited(call_depth_status()));
@@ -1855,34 +1871,33 @@ theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n:
 // from past the return address up as they were, no code of the procedure
 // storing above its own activation.
 theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n, d: Nat, room: t.room = Succ(d),
-    tp: t.procedures = src.procedures, hosts: t.Hosts(), answers: t.Answered(call),
-    ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
+    tp: t.procedures = src.procedures, hosts: Hosts(t), answers: t.Answered(call),
+    ih: (c: Target) → c.procedures = src.procedures → Hosts(c) → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
     t.Procedures(src, call, n, Succ(d)) {
     let layout = t.layout();
     let kept = t.homes.kept();
     λ index proc found env values long g0 passed ret above fits_above k ends s here resident pre => {
         // The procedure in the program.
-        let hosted = hosts.left(index, proc, found);
-        let pre_i = hosted.witness;
-        let names_i = hosted.proof.witness;
-        let b_i = hosted.proof.proof.witness;
-        let fits_eq = hosted.proof.proof.proof.left;
-        let emitted_i = hosted.proof.proof.proof.right.left;
-        let w_exit = hosted.proof.proof.proof.right.right;
-        let pf = proc.fits_parts(layout, fits_eq);
+        let hosted = hosts.hosted(index, proc, found);
+        let pre_i = hosted.pre;
+        let names_i = hosted.names;
+        let b_i = hosted.b;
+        let emitted_i = hosted.emitted;
+        let w_exit = hosted.within;
+        let pf = proc.fits_parts(layout, hosted.fits);
         let entry_live = proc.body.live_in(t.homes, proc.results);
         let entry = proc.entry_code(pre_i, layout, index);
         let counted = pre_i.label(layout.procedure_label(index)).count_down(layout);
         let hw = proc.hosted_within(layout, index, t.program, pre_i, names_i, b_i, emitted_i, w_exit);
         let w_entry = hw.right.left;
         let w_b = hw.right.right;
-        let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+        let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
             proc.params.mem_append_l(proc.results, i, m));
-        let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+        let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
             proc.params.mem_append_r(proc.results, i, m));
-        let dp = hosts.right.witness;
+        let dp = hosts.deep;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := hosts.right.proof, };
+            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := hosts.deep_within, };
         let start = Env(Nil, env.buffers, env.args).set_words(proc.params, values);
         let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, start), k);
         let few: (kept.len() <= 6) = t.homes.kept_few();
@@ -1916,12 +1931,12 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
                     ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.room, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
                         kept_s, holding_s)
                 });
-            let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
+            let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
                 n, start, k, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
             let next_c = c.at_like(prog_len(entry), entry_live, tree, start, env.set_words(proc.params, values),
-                env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.right.left)), body);
+                env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
             let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, passed,
-                tree, w_entry, inside_params, pf.right.right.left, pf.right.left, pf.right.right.right.right.left, long, next_c);
+                tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
             j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
                 t.Bare(env, d2, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
         };
@@ -1939,21 +1954,20 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
     let layout = t.layout();
     let rets = result_registers();
     λ p out index args results fit within apart n2 env k exits next => {
-        let parts = layout.call_fits_parts(out, index, args, results, fit);
-        let proc = parts.witness;
-        let found = parts.proof.left;
-        let fp = parts.proof.right;
+        let fp = layout.call_fits_parts(out, index, args, results, fit);
+        let proc = fp.proc;
+        let found = fp.found;
         let found_src: (src.procedures.nth(index) = Some(proc)) = trans(cong_fn<List<Procedure>, Option<Procedure>>(λ ps => ps.nth(index), sym(tp)), found);
         let saved = out.minus(results);
         let live = args.union(saved);
-        let names_fit = fp.right.right.right.right.left;
+        let names_fit = fp.words;
         let inside_args = λ (i: Nat) (m: Mem(i, args)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit, args.mem_append_l(results ++ saved, i, m));
         let inside_results = λ (i: Nat) (m: Mem(i, results)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit,
             args.mem_append_r(results ++ saved, i, results.mem_append_l(saved, i, m)));
         let cb = p.calls(layout, layout.procedure_label(index), 0, args);
         let w_cb: cb.Within(t.program) = Prog::within_trans(Prog::within_words_from(layout, out, results, rets, cb), within);
         let va = env.words_at(args);
-        let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.left);
+        let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.args_len);
         let none: (0 <= 3) = omega();
         let k2 = λ (flow: Flow) => k(proc.leave(env, results, flow));
         // Each answer taken: the results from their registers, or the exit.
@@ -1962,11 +1976,11 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
                 let aw = after.words_at(proc.results);
                 let mixed = Env(env.words, after.buffers, env.args);
                 let tk = k2(Onward(after));
-                let res_le6: (results.len() <= rets.len()) = fp.right.right.right.left;
-                let res_le_aw: (results.len() <= aw.len()) = omega(after.words_at_len(proc.results), fp.right.left);
+                let res_le6: (results.len() <= rets.len()) = fp.results_few;
+                let res_le_aw: (results.len() <= aw.len()) = omega(after.words_at_len(proc.results), fp.results_len);
                 let gf = t.goes_words_from(out, tk, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, mixed.set_words(results, aw), g, m), results)(
                     rets, aw, cb, live, mixed, λ i m => args.union_right(saved, i, m),
-                    inside_results, fp.right.right.right.right.right, trivial, trivial, res_le6, res_le_aw, within,
+                    inside_results, fp.apart, trivial, trivial, res_le6, res_le_aw, within,
                     next(mixed.set_words(results, aw)));
                 t.goes_weaken(gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩)
             },
@@ -1987,7 +2001,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
 // procedures are callable with `d` calls of room, their bodies' calls by
 // the depth below.
 theorem Source::calls_at(self src: Source, call: Writers(), n: Nat, d: Nat):
-    (t: Target) → t.procedures = src.procedures → t.Hosts() → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
+    (t: Target) → t.procedures = src.procedures → Hosts(t) → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
     match d {
         Zero => λ t tp hosts _ room => t.calls_of(src, call, n, 0, tp, t.procedures_deep(src, call, n, room, hosts)),
         Succ(d1) => λ t tp hosts answers room => t.calls_of(src, call, n, Succ(d1), tp,
@@ -2013,20 +2027,19 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let ok = src.allocation_sound(homes, allocated);
     let ok2 = ok.right;
     let built = src.calls_built(r.low, homes, program, compiled);
-    let c = built.witness;
-    let emitted = built.proof.left;
-    let w_whole = built.proof.right.left;
+    let c = built.c;
+    let emitted = built.emitted;
+    let w_whole = built.exit_within;
     // `main`'s frame: the stack's top words.
     let index = stack.size - 8 * src.words;
     let top_i: (stack.size = index + 8 * src.words) = omega(deep);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
     let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
-    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right.left, args,
+    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
         src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
-    let hosts: t.Hosts() = ⟨built.proof.right.right.left, built.proof.right.right.right.left⟩;
-    let linked = built.proof.right.right.right.right.right;
-    let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
-        src.functions, linked.proof.proof);
+    let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
+    let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, built.names, program, t.site(), t.laid, stack, program.within_self(),
+        src.functions, built.linked);
     let linking = Bool::both(Bool::is_true_and(program_evaluable(src.functions) && program_placeless(src.functions), program_rowed(src.functions), meets.left).left);
     let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
     let fns = t.functions_run(call, answers);
