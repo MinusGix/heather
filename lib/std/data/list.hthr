@@ -1098,6 +1098,17 @@ theorem List::nth_update_none<A>(self xs: List<A>): (i: Nat) → (f: A → A) �
     }
 }
 
+// Writing an element's own value over it leaves the list as it was.
+theorem List::update_nth_self<A>(self xs: List<A>, i: Nat, x: A, at: xs.nth(i) = Some(x)): xs.update(i, λ _ => x) = xs {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match i {
+            Zero => cong_fn<A, List<A>>(λ c => Cons(c, t), sym(Option::some_inj(h, x, at))),
+            Succ(k) => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), t.update_nth_self(k, x, at)),
+        },
+    }
+}
+
 // Past its end, an update leaves the list as it was.
 theorem List::update_past<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.len() <= i → xs.update(i, f) = xs {
     match xs {

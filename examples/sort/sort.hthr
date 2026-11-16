@@ -89,19 +89,14 @@ theorem read_split(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, sized: (ys ++
     (ys ++ Cons(z, rest)).byte_within(n, j) = z
 {
     let total = ys.len_append(Cons(z, rest));
-    let inside: (j.toNat() < n.toNat()) = omega;
-    let found: ((ys ++ Cons(z, rest)).nth(0 + ys.len()) = Some(z)) = ys.nth_append_r(Cons(z, rest), 0);
-    let index: (0 + ys.len() = j.toNat()) = omega;
-    trans((ys ++ Cons(z, rest)).byte_within_inside(n, j, inside), rewrite(sym(index), cong_fn(λ (o: Option<u8>) => o.unwrap_or(0), found)))
+    simp_only(List::byte_within_inside, List::byte_at, List::nth_append_at, discharge := omega)
 }
 
 theorem write_split(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, v: u8, sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat()):
     (ys ++ Cons(z, rest)).with_byte_within(n, j, v) = ys ++ Cons(v, rest)
 {
     let total = ys.len_append(Cons(z, rest));
-    let inside: (j.toNat() < n.toNat()) = omega;
-    let index: (0 + ys.len() = j.toNat()) = omega;
-    trans((ys ++ Cons(z, rest)).with_byte_within_inside(n, j, v, inside), rewrite(sym(index), ys.update_append_r(Cons(z, rest), 0, λ _ => v)))
+    simp_only(List::with_byte_within_inside, List::with_byte, List::update_append_at, discharge := omega)
 }
 
 // ---------------------------------------------------------------------------

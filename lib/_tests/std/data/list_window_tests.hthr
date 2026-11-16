@@ -39,3 +39,24 @@ theorem outside_grows(): ¬(five().put_window(4, [7, 8]).len() = five().len()) {
 
 // A window starts at its start, not at the list's.
 theorem window_is_offset(): ¬(five().window(1, 4) = five().take(3)) { decide }
+
+// ---------------------------------------------------------------------------
+// A list split at an index, and reads over writes, as `simp_only` laws at
+// an open list and index: the index is named by the prefix's length.
+
+theorem read_at_seam<A>(ys, zs: List<A>, z: A, i: Nat, at: ys.len() = i): (ys ++ Cons(z, zs)).nth(i) = Some(z) {
+    simp_only(List::nth_append_at)
+}
+
+theorem write_at_seam<A>(ys, zs: List<A>, z, v: A, i: Nat, at: ys.len() = i): (ys ++ Cons(z, zs)).update(i, λ _ => v) = ys ++ Cons(v, zs) {
+    simp_only(List::update_append_at)
+}
+
+theorem read_written<A>(xs: List<A>, i: Nat, v: A, held: i < xs.len()): xs.update(i, λ _ => v).nth(i) = Some(v) {
+    simp_only(List::nth_update_set)
+}
+
+// Writes at one index do not commute: the second wins.
+theorem writes_one_index(): ¬([1].update(0, λ _ => 2).update(0, λ _ => 3) = [1].update(0, λ _ => 3).update(0, λ _ => 2)) {
+    λ e => Nat::succ_ne_zero(0, Nat::succ_inj(1, 0, Nat::succ_inj(2, 1, Option::some_inj(3, 2, cong_fn(λ (l: List<Nat>) => l.nth(0), e)))))
+}
