@@ -614,6 +614,9 @@ proved true (`h: b.IsTrue()`) or proved false (`h: (!b).IsTrue()`):
 | `n.same(m)` | `n = m` (`guard_same`) | `n ≠ m` (`guard_not_same`) |
 | `a.leb(b)` at `Int` | `a <= b` (`guard_int_leb`) | `b < a` (`guard_int_not_leb`) |
 | `a.same(b)` at `Int` | `a = b` (`guard_int_same`) | `a ≠ b` (`guard_int_not_same`) |
+| `a.unsigned_lt_bit(b)` at a word | `toNat(a) < toNat(b)` (`bitvec_omega::guard_lt`) | `toNat(b) <= toNat(a)` (`guard_not_lt`) |
+| `a.unsigned_le_bit(b)` at a word | `toNat(a) <= toNat(b)` (`bitvec_omega::guard_le`) | `toNat(b) < toNat(a)` (`guard_not_le`) |
+| `a.eq_bit(b)` at a word | `toNat(a) = toNat(b)` (`bitvec_omega::guard_eq`) | `toNat(a) ≠ toNat(b)` (`guard_not_eq`) |
 | any other Bool `r` | `bit(r) = 1` (`guard_bit`) | `bit(r) = 0` (`guard_not_bit`) |
 
 A fact `¬b.IsTrue()` is `b` proved false (`guard_negated`). The rules take
@@ -853,3 +856,22 @@ Each opening is also reached by the kernel's conversion when it checks the
 certificate, which spells the original term and converts it at the
 normalized row: the cost of `docs/proof-patterns.md` §3 (records at a literal program) applies,
 so the budgets above stay small.
+
+## 23. A word's comparison bit as the comparison (2026-11-16)
+
+`issues/omega-if-bit-word-comparison.md`. An `if larger: x < y` over words
+binds `larger` only in a branch that names it; a branch that does not keeps
+the test as the bit's equation, `unsigned_lt_bit(x, y) = True`. §18 read
+that equation as a guard and §17 kept the bit as the atom `bit(r)`,
+unrelated to `toNat(x)` and `toNat(y)`, so `omega` got stuck where
+`bv_omega` (which reads the test off the context itself) did not. The
+guard round now reads the three word tests, `unsigned_lt_bit`,
+`unsigned_le_bit` and `eq_bit`, as the comparison of their operands'
+values, by the `bitvec_omega::guard_*` rules in §17's table. The rules
+live in `bitvec_omega.hthr`, not `omega.hthr`, which does not import
+`bitvec`; where `bitvec_omega` is not loaded, such a bit stays an atom, as
+before. A Bool equation is also read either way round (`True = b` as
+`sym(h)`). Probes, a wrong-way control among them, are in
+`lib/_tests/std/tactic/bitvec_omega_tests.hthr` ("`omega` reads a word's
+comparison bit"); `examples/sort/sort.hthr`'s `insert_at_inserts` states
+its `ab` and `ba` by `omega`.

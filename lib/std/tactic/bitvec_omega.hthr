@@ -238,6 +238,35 @@ theorem equal_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::False): a.to
     λ same => BitVec::ne_of_eq_bit(n, a, b, h)(word_eq(n, a, b, same))
 }
 
+// The same bits as `omega`'s guards (issues/omega-if-bit-word-comparison.md):
+// a test `b.IsTrue()` or `(!b).IsTrue()`, which is what omega's guard round
+// makes of an `if x < y` branch's hidden equation, read as the comparison of
+// the values instead of an atom `bit(b)` unrelated to them. Implicit operands,
+// like `omega::guard_leb`.
+theorem guard_lt({n: Nat}, {a, b: BitVec(n)}, h: a.unsigned_lt_bit(b).IsTrue(), k: a.toNat() < b.toNat() → False): False {
+    k(unsigned_true(n, a, b, eq_true_of_is_true(a.unsigned_lt_bit(b), h)))
+}
+
+theorem guard_not_lt({n: Nat}, {a, b: BitVec(n)}, h: (!a.unsigned_lt_bit(b)).IsTrue(), k: b.toNat() <= a.toNat() → False): False {
+    k(unsigned_false(n, a, b, eq_false_of_not_is_true(a.unsigned_lt_bit(b), a.unsigned_lt_bit(b).is_true_not(h))))
+}
+
+theorem guard_le({n: Nat}, {a, b: BitVec(n)}, h: a.unsigned_le_bit(b).IsTrue(), k: a.toNat() <= b.toNat() → False): False {
+    k(unsigned_le_true(n, a, b, eq_true_of_is_true(a.unsigned_le_bit(b), h)))
+}
+
+theorem guard_not_le({n: Nat}, {a, b: BitVec(n)}, h: (!a.unsigned_le_bit(b)).IsTrue(), k: b.toNat() < a.toNat() → False): False {
+    k(unsigned_le_false(n, a, b, eq_false_of_not_is_true(a.unsigned_le_bit(b), a.unsigned_le_bit(b).is_true_not(h))))
+}
+
+theorem guard_eq({n: Nat}, {a, b: BitVec(n)}, h: a.eq_bit(b).IsTrue(), k: a.toNat() = b.toNat() → False): False {
+    k(equal_true(n, a, b, eq_true_of_is_true(a.eq_bit(b), h)))
+}
+
+theorem guard_not_eq({n: Nat}, {a, b: BitVec(n)}, h: (!a.eq_bit(b)).IsTrue(), k: a.toNat() ≠ b.toNat() → False): False {
+    k(equal_false(n, a, b, eq_false_of_not_is_true(a.eq_bit(b), a.eq_bit(b).is_true_not(h))))
+}
+
 // A plain equation of words in scope, read the same way.
 theorem toNat_of_eq(n: Nat, a, b: BitVec(n), h: a = b): a.toNat() = b.toNat() {
     @cong(λ (w: BitVec(n)) => w.toNat(), a, b, h)

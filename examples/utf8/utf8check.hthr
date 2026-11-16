@@ -1,0 +1,113 @@
+// utf8check: is standard input UTF-8? A whole program in Heather, with no C:
+// `main` reads standard input into its buffer, asks the validator
+// (`utf8_check.hthr`) about the bytes it read, and exits with the answer.
+//
+//     heather write-elf examples/utf8/utf8check.hthr -o utf8check
+//
+// builds it into a Linux executable, and the kernel checks a certificate
+// that the executable is the compile of `main::source`. `main::reads`
+// states that the source's behaviour, read against any world, is `main`
+// itself, and `utf8_status_answers` what `main`'s exit status means.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_omega;
+import omega;
+import itree;
+import coitree;
+import coitree_rec;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import linux_world_while;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_link;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
+import rt_io_bridge;
+import rt_io_program;
+import runtime_file;
+import runtime_program;
+import utf8;
+import utf8_check;
+
+// The answer a program that read its input into a buffer exits with
+// (`main`, below): 0 when the first `filled` bytes of the span
+// are UTF-8, 1 when they are not, 2 when the read failed (`failed` not 0)
+// or the input filled the span, so it may have been cut short. A function
+// lent a span passes its length on as it is, so the count read is a word
+// of its own and the window is `utf8_valid_from`'s.
+runtime fn utf8_status(span: List<u8>, length, filled, failed: u64) → Mutated<List<u8>, u64> {
+    if failed = 0 {
+        if filled < length {
+            if utf8_valid_from(span, length, 0, filled) = filled { Mutated(span, 0) } else { Mutated(span, 1) }
+        } else {
+            Mutated(span, 2)
+        }
+    } else {
+        Mutated(span, 2)
+    }
+}
+
+// What it answers: after a read that did not fail and left room, 0 exactly
+// when the bytes read are UTF-8.
+theorem utf8_status_answers(span: List<u8>, length, filled: u64, sized: length.toNat() <= span.len(), below: filled < length):
+    utf8_status(span, length, filled, 0).value.eq_bit(0) = utf8::is_utf8(span.take(filled.toNat())) {
+    let x = utf8_valid_from(span, length, 0, filled);
+    let room: (decide_bit<filled < length>() = True) = decide_bit_of<filled < length>(below);
+    let verdict: ((match decide_bit<x = filled>() { True => Mutated(span, (0: u64)), False => Mutated(span, (1: u64)) }).value.eq_bit(0) = x.eq_bit(filled)) =
+        decide_bit_split<x = filled>(λ b => (match b { True => Mutated(span, (0: u64)), False => Mutated(span, (1: u64)) }).value.eq_bit(0) = x.eq_bit(filled),
+            λ same => sym(rewrite(same, BitVec::eq_bit_self(64, filled))),
+            λ apart => sym(BitVec::eq_bit_of_ne(64, x, filled, apart)));
+    calc {
+        utf8_status(span, length, filled, 0).value.eq_bit(0) = x.eq_bit(filled) := j(sym(room), λ b _ =>
+            (match b { True => match decide_bit<x = filled>() { True => Mutated(span, (0: u64)), False => Mutated(span, (1: u64)) }, False => Mutated(span, (2: u64)) }).value.eq_bit(0)
+                = x.eq_bit(filled), verdict),
+        = utf8::is_utf8(span.take(filled.toNat())) := valid_prefix(span, length, filled, bv_omega, sized),
+    }
+}
+
+// The program: read standard input into the buffer at a growing offset
+// until a read brings nothing (or fails, or the buffer is full), then exit
+// with the verdict on the bytes read.
+runtime fn main(mut io: Io, buf: ByteBuffer(65536)) → Partial(Mutated<Io, u64>) {
+    let mut buf = buf;
+    let mut filled: u64 = 0;
+    let mut going: u64 = 1;
+    let mut failed: u64 = 0;
+    while 0 < going {
+        let room = 65536 - filled;
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room < r.result;
+        buf := r.buf;
+        failed := if bad { 1 } else { 0 };
+        going := if bad { 0 } else if r.result = 0 { 0 } else { 1 };
+        filled := if bad { filled } else { filled + r.result };
+    }
+    let m = utf8_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    Pointed::ret(Mutated(io, m.value))
+}
