@@ -45,15 +45,15 @@ theorem caller_word_kept<M>(machine: Machine<M>, answer: BitVec(64), i: Nat, s, 
 
 // On the contract: whatever code computes `answer`, called with the word
 // at `k` holding `w` and `k` in its caller's frame, returns with it there.
-theorem computes_keeps_word<M>(code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
-    computes: code.Computes(machine, f, arguments, answer), origin: BitVec(64), last: List<BitVec(8)>, k: Nat, w: BitVec(64)):
+theorem computes_keeps_word<M>(code: Prog, machine: Machine<M>, f: Nat, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    computes: code.Computes(machine, f, room, arguments, answer), origin: BitVec(64), last: List<BitVec(8)>, k: Nat, w: BitVec(64)):
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             (((i <= k) ∧ (k + 8 <= machine.stack.size)) ∧ (read_word(machine.data, s.memory, machine.stack.at(k)) = Some(w))),
         λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.CalleePost(answer)(i, s, t) ∧
             (((i <= k) ∧ (k + 8 <= machine.stack.size)) ∧ (read_word(machine.data, t.memory, machine.stack.at(k)) = Some(w)))) {
     Site<M>(machine.fetch, machine.data, code, last, origin).callee_framed(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i, answer, computes(origin, last),
+        λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ room <= i, answer, computes(origin, last),
         λ i room => machine.stack.stable_given(i, λ (placed: (i <= k) ∧ (k + 8 <= machine.stack.size)) =>
             machine.stack.stable_word(i, k, placed.left, placed.right, Some(w))))
 }
@@ -81,18 +81,18 @@ theorem caller_word_and_buffer_kept<M>(machine: Machine<M>, top: Nat, lending: L
 // may not write reading `ys`, returns with the buffer reading `ys`. The
 // precondition already places the call below `top` (`Stack::LentOver`).
 theorem computes_over_keeps_buffer<M>(code: Prog, machine: Machine<M>, top: Nat, lending: Lending,
-    loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, lending.spans()), f: Nat, arguments: List<BitVec(64)>,
-    before: Buffers(), answer: Ending, computes: code.ComputesOver(machine, top, lending, f, arguments, before, answer),
+    loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, lending.spans()), f: Nat, room: Nat, arguments: List<BitVec(64)>,
+    before: Buffers(), answer: Ending, computes: code.ComputesOver(machine, top, lending, f, room, arguments, before, answer),
     origin: BitVec(64), last: List<BitVec(8)>, b: Nat, only_read: lending.written(b) = False, ys: List<BitVec(8)>,
     short: ys.len() <= buffer_bytes(lending.buffers, b).len()):
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => ((machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => ((machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s)) ∧
             ((i <= top) ∧ Readable(machine.data, s.memory, address_of(lending.addresses, b), ys)),
         λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.AnsweredOver(lending, answer.word, answer.buffers)(i, s, t) ∧
             ((i <= top) ∧ Readable(machine.data, t.memory, address_of(lending.addresses, b), ys))) {
     Site<M>(machine.fetch, machine.data, code, last, origin).answered_framed(machine.stack, asm_labels(code, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ stack_room(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
         lending, answer.word, answer.buffers, computes(origin, last),
         λ i room => machine.stack.stable_in_given(i, lending.spans(), λ (low: i <= top) =>

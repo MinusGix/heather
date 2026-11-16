@@ -216,9 +216,9 @@ impl std::fmt::Display for GlobalVar {
     }
 }
 
-/// A variable prints as the tuple struct it was, so the printed forms that
-/// are hashed (`crates/elab/tests/determinism.rs`) are unchanged for a Ψ
-/// with no signature.
+/// A variable prints as the tuple struct `GlobalVar(i)`, so the printed
+/// forms that are hashed (`crates/elab/tests/determinism.rs`) do not depend
+/// on the encoding for a Ψ with no signature.
 impl std::fmt::Debug for GlobalVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GlobalVar({self})")
@@ -264,8 +264,7 @@ pub enum Type {
     /// relevance plus strictness. Any two terms at this type are convertible
     /// (`conv.rs` irrelevance arm). It has no eliminator: it is inhabited
     /// exactly when its endpoints convert, with one proof up to conversion
-    /// (`transp` was removed with route 2b's fording,
-    /// docs/kernel/iwf-former-design.md §7). Extension beyond DeLaM ch. 04
+    /// (docs/kernel/iwf-former-design.md §7). Extension beyond DeLaM ch. 04
     /// (docs/kernel/sprop-design.md §2.1). Admitted at layer c like every
     /// other former: it has its own code branches (`ty_seq`/`tm_seq`).
     SEq {
@@ -347,7 +346,7 @@ pub enum Type {
     /// neutral at a neutral length, no η of its own (η arrives through the
     /// reductions). No introduction/elimination forms — values are pairs.
     /// Substrate for `Wf` (docs/kernel/wf-former-design.md §1.1); admitted at the
-    /// code layer since phase 3 gave it `TmVec` and its rec.rs branches.
+    /// code layer, with `TmVec` and its rec.rs branches as its code.
     Vec {
         level: Level,
         elem: Rc<Type>,
@@ -355,7 +354,7 @@ pub enum Type {
     },
     /// `Fin(k)` — canonical finite index types: `Fin(0) ⇝ Empty`,
     /// `Fin(S k) ⇝ Unit + Fin(k)`; neutral at a neutral length. Lives at 0.
-    /// Same phase gate as [`Type::Vec`] (docs/kernel/wf-former-design.md §1.2).
+    /// Has a code, as [`Type::Vec`] has (docs/kernel/wf-former-design.md §1.2).
     Fin { len: Rc<Term> },
     /// `Wf^l(x : S). n` — the **finitary** branching fixed point: shapes
     /// `S`, arity a `Nat` *term* with the shape free (`arity` binds one
@@ -369,7 +368,7 @@ pub enum Type {
     /// abstract child function to a constructor form needs funext. `Wf`
     /// stores them in a [`Type::Vec`], i.e. in `Σ`/`Unit`, whose η is
     /// already in `conv.rs` — so the same bridge is a conversion.
-    /// Same phase gate as [`Type::Vec`] (docs/kernel/wf-former-design.md §1.3).
+    /// Has a code, as [`Type::Vec`] has (docs/kernel/wf-former-design.md §1.3).
     Wf {
         level: Level,
         shape: Rc<Type>,
@@ -412,7 +411,8 @@ pub enum Type {
     /// a third larger, and the checker's recursion holds `Type`s in each
     /// frame (`docs/kernel/native-depth-budget-design.md`).
     ///
-    /// Has a code (design §13 step 4), as [`Type::DVec`]: `TmIWf`, and the `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
+    /// Has a code (design §13 step 4), as [`Type::DVec`]: `TmIWf`, and the
+    /// `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
     IWf { sig: Rc<IWfSig>, index: Rc<Term> },
     /// `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` — the indexed final
     /// coalgebra, the dual of [`Type::W`] with [`Type::IWf`]'s index
@@ -427,7 +427,7 @@ pub enum Type {
     ///
     /// The signature is one shared [`MSig`], as `IWf`'s is.
     ///
-    /// Code since docs/kernel/kernel-m-codes-design.md: `TmM` and four branches.
+    /// Has a code (docs/kernel/kernel-m-codes-design.md): `TmM` and four branches.
     M { sig: Rc<MSig>, index: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
@@ -453,7 +453,7 @@ pub enum Type {
 }
 
 /// How many local variable leaves each thread interns ([`Term::var_rc`]).
-/// Indices at or above it are allocated per call, as before: Γ is rarely
+/// Indices at or above it are allocated per call: Γ is rarely
 /// that long, and a bound keeps a thread's table small.
 const INTERNED_LOCAL_VARS: u32 = 4096;
 
@@ -788,8 +788,8 @@ pub enum Term {
     /// [`Term::VecLit`] is for two-valued elements, for any elements. What
     /// it buys is *depth*: a chain is as deep as the literal is long, and
     /// every syntax-directed walk (typing, substitution, hashing, `Drop`)
-    /// recursed once per element, so a few thousand elements overflowed the
-    /// native stack; this node is one level deep at any length, and every
+    /// would recurse once per element, so a few thousand elements would
+    /// overflow the native stack; this node is one level deep at any length, and every
     /// walk loops over `items`. Elements `items[from..]` are the live ones,
     /// so the view's tail is the same array one further on, built in O(1);
     /// `from < items.len()` (the empty vector is `⟨⟩`). Equality and hashes
@@ -860,8 +860,8 @@ pub enum Term {
     // exactly the payload of a `box`.
     //
     // **The intros' annotation is optional** and the projections carry none
-    // (design §2.1). An
-    // unannotated intro is *not inferable* — the verdict `box` already gets —
+    // (design §2.1). An unannotated intro is *not inferable* — the verdict
+    // `box` already gets —
     // and is checked against the expected type, which the checker holds as an
     // `ITy` and views in the value domain; that is what lets a constructor
     // value nested inside a constructor value be written with no type at all,
@@ -937,8 +937,7 @@ pub enum Term {
     /// on a neutral scrutinee. Annotated like `elim_Nat` so it infers.
     ///
     /// `level` is the *motive's*; `scrut_level` is the scrutinee's `Empty`
-    /// level. The two are independent — this is the one variant that carries
-    /// a second level rather than a first.
+    /// level. The two are independent, as at [`Term::ElimSEmpty`].
     ElimEmpty {
         level: Level,
         scrut_level: Level,
@@ -1641,16 +1640,14 @@ pub struct CtxEntry {
 /// the innermost* binding.
 ///
 /// Binder descent extends Γ by one entry while keeping the parent Γ alive,
-/// which a `Vec` can only serve by copying the whole context. That copy was
-/// the #1 self line of a release `heather check lib/certgen/ir_v1.hthr`
-/// (`Vec<CtxEntry>::clone` 5.3%, its drop 2.6%, essentially all of it
-/// `Env::push_entry` at a binder — issues/context-representation-clones.md).
-/// Here extending is one allocation shared with the context it extends, and
+/// which a `Vec` can only serve by copying the whole context at every
+/// binder (issues/context-representation-clones.md). Here extending is one
+/// allocation shared with the context it extends, and
 /// dropping a derived context frees one cell.
 ///
-/// Positions are still quoted the paper's way: position 0 is the *outermost*
-/// entry (so [`std::ops::Index`] and [`CtxEntries::iter`] run outermost-first,
-/// as the `Vec` did), while [`LocalVar`] 0 is the innermost and is served by
+/// Positions are quoted the paper's way: position 0 is the *outermost*
+/// entry (so [`std::ops::Index`] and [`CtxEntries::iter`] run
+/// outermost-first), while [`LocalVar`] 0 is the innermost and is served by
 /// [`CtxEntries::nth_inner`], which runs *with* the spine. The list's own
 /// direction is therefore the variable-lookup direction; anything that wants
 /// the whole context outermost-first pays one O(|Γ|) walk, which every such
@@ -1737,7 +1734,7 @@ impl CtxEntries {
         CtxEntries(Some(Rc::new(CtxNode { entry, len, rest: self.clone() })))
     }
 
-    /// In-place [`CtxEntries::pushed`], for the `Vec`-shaped callers.
+    /// In-place [`CtxEntries::pushed`].
     pub fn push(&mut self, entry: CtxEntry) {
         *self = self.pushed(entry);
     }
@@ -1757,8 +1754,8 @@ impl CtxEntries {
         }
     }
 
-    /// The entry at position `i` counted from the *outermost* end — what
-    /// `entries[i]` meant when this was a `Vec`.
+    /// The entry at position `i` counted from the *outermost* end — the
+    /// paper's position.
     pub fn get(&self, i: usize) -> Option<&CtxEntry> {
         let n = self.len();
         if i >= n {
@@ -1773,7 +1770,7 @@ impl CtxEntries {
     }
 
     /// The outermost `k` entries — `entries[..k]`, sharing the spine (one
-    /// walk, no allocation). Panics if `k > len()`, as slicing did.
+    /// walk, no allocation). Panics if `k > len()`.
     pub fn prefix(&self, k: usize) -> CtxEntries {
         let n = self.len();
         assert!(k <= n, "context prefix {k} out of range for length {n}");
@@ -1785,7 +1782,7 @@ impl CtxEntries {
         cur
     }
 
-    /// Outermost-first, as `Vec::iter` was. O(|Γ|) up front — the spine runs
+    /// Outermost-first. O(|Γ|) up front — the spine runs
     /// the other way.
     pub fn iter(&self) -> CtxIter<'_> {
         let mut v: Vec<&CtxEntry> = Vec::with_capacity(self.len());
@@ -1805,8 +1802,7 @@ impl CtxEntries {
 
     /// `n` copies of one entry — the filler contexts that the shared β
     /// helpers read only the *length* of (`reduce.rs` module doc;
-    /// `issues/kernel-filler-contexts.md`). One cell
-    /// per entry rather than the `Vec`'s single allocation; both callers are
+    /// `issues/kernel-filler-contexts.md`). One cell per entry; both callers are
     /// off the hot path (a code recursor's scope, and `Wf`'s step
     /// telescope), which is why this is a loop and not a shared spine.
     pub fn repeat(entry: CtxEntry, n: usize) -> CtxEntries {
@@ -2025,10 +2021,9 @@ impl GlobalBinding {
 ///
 /// The binding list is persistent and chunked so that *cloning Ψ is O(1)*.
 /// Typing and conversion carry Ψ inside an environment they clone at every
-/// binder descent, and a `fn` is now a bodied binding
-/// (issues/simulate-conversion-cost.md), so a deep copy per descent was the
-/// single largest line of a real profile
-/// (issues/context-representation-clones.md). Sharing is safe here in a way
+/// binder descent, and a `fn` is a bodied binding
+/// (issues/simulate-conversion-cost.md), so a deep copy per descent would
+/// dominate a check (issues/context-representation-clones.md). Sharing is safe here in a way
 /// it is not for Γ: Ψ never appears *inside* a term, so no conversion rule
 /// compares it structurally, and it is only ever extended at declaration
 /// granularity. Appending to a shared context copies at most one bounded tail
@@ -2061,8 +2056,8 @@ pub struct GlobalCtx {
     consts: usize,
 }
 
-/// Ψ prints as it did before it had a boundary when it has none, so the
-/// printed form a world without interfaces hashes to is unchanged
+/// A Ψ with no boundary prints no boundary field, so the printed form a
+/// world without interfaces hashes to does not depend on the field
 /// (`crates/elab/tests/determinism.rs`).
 impl std::fmt::Debug for GlobalCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2638,8 +2633,8 @@ impl GlobalCtx {
     }
 
     /// Ψ followed by `bs`, sharing Ψ's chunks. Building the extended world
-    /// from `to_vec()` copies every binding of Ψ, which per goal query was
-    /// most of a split's elaboration once Ψ held a generated certificate
+    /// from `to_vec()` copies every binding of Ψ, which per goal query would
+    /// be most of a split's elaboration once Ψ holds a generated certificate
     /// (issues/goal-world-copies-psi.md).
     pub fn extended(&self, bs: impl IntoIterator<Item = GlobalBinding>) -> GlobalCtx {
         let mut world = self.clone();
@@ -3767,7 +3762,7 @@ pub fn wf_step_telescope(
 /// positions are ordinary type annotations, so any type convertible with
 /// `Wf(shape). arity` stands in them, and naming `⟦D⟧` once is what stops the
 /// `match` lowering from carrying every field type verbatim through Θ(arms)
-/// copies ([[wf-field-conversion-cost]]).
+/// copies (issues/wf-field-conversion-cost.md).
 ///
 /// What `d_ty` does **not** reach: the `Supf` the step's type is stated at,
 /// whose `shape`/`arity` are the former's own slots and not a type annotation.
@@ -3777,7 +3772,7 @@ pub fn wf_step_telescope(
 /// `shape`/`arity`, which is what every kernel caller wants: `typing.rs` and
 /// `conv.rs` build the telescope *from* the slots of the term in front of
 /// them, so re-spelling there would be inventing a term the checker never saw.
-/// This function is therefore the only transcription of the telescope, still —
+/// This function is therefore the only transcription of the telescope —
 /// `wf_step_telescope` is one call to it.
 #[allow(clippy::too_many_arguments)]
 pub fn wf_step_telescope_at(
@@ -3853,7 +3848,7 @@ mod size_tests {
 
     /// The checker's recursion holds `Type`s and `Term`s in every frame
     /// (`docs/kernel/native-depth-budget-design.md`), so a variant that outgrows the
-    /// rest grows every frame of it: a flat `IWf` signature made a deep
+    /// rest grows every frame of it: a flat `IWf` signature would make a deep
     /// constructor value overflow the stack. A former with many
     /// components keeps them behind one pointer (`IWfSig`). The annotated
     /// formers carry up to three `Level`s, a word each

@@ -99,7 +99,7 @@ theorem lending_marked(): program_marked(lending(), [[True], [True]]) = True { r
 // function write what its row marks, the function meets its contract.
 theorem lending_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), top: Nat):
-    Site<M>(fetch, data, lending_program(), last, origin).CallsLent(stack, program_effects(lending()), 2, [1, 1],
+    Site<M>(fetch, data, lending_program(), last, origin).CallsLent(stack, program_effects(lending()), program_depth(lending()), 2, [1, 1],
         λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), top) {
     lower_program_lent_needs<M>(lending(), plan_program(lending()), [1, 1], lending_program(), lending_lowers(),
         λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), program_marked_needs(lending(), [[True], [True]], trivial),

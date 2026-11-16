@@ -36,6 +36,11 @@ pub(super) struct Compiled {
     /// Where each of the program's other exported functions starts, as the
     /// shape lists them.
     pub entries: Vec<usize>,
+    /// The stack the exported function's theorem asks for below its return
+    /// address (`stack_room`: 136 bytes a level of calls), and each other
+    /// exported function's, as `entries` lists them.
+    pub room: u64,
+    pub rooms: Vec<u64>,
 }
 
 const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower", "function_ir_lower_structured",
@@ -939,6 +944,9 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     for k in 0..m {
         plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {stem}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
     }
+    // How deep each function's calls go, which its room is stated by
+    // (`stack_room`), of the program lowered.
+    plans.push_str(&format!("fn {prefix}_depths() → List<Nat> {{ program_depths({stem}_program()) }}\n"));
     // The last `d` items' numbers, as `Prog::numbers` writes them.
     plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
@@ -949,6 +957,9 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     fork.define(&probe, &first);
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
+    let depths = read(&mut fork, &probe, "depths")?;
+    if depths.len() != m { return Err("the program's depths did not read back".into()); }
+    let room = |function: usize| 136 * (depths[function] + 1);
     let mut placement = Vec::new();
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
@@ -1149,9 +1160,13 @@ theorem {prefix}_laid(): {prefix}_code().laid_out().IsTrue() {{
     {prefix}_table().laid_out_of({prefix}_code(), {length}, {prefix}_checked_{count}(), {prefix}_holes(), {prefix}_reads())
 }}
 
+// The program's calls respect the depth table its rooms are stated by
+// (`program_shallow`, function_ir_lower_calls).
+theorem {prefix}_shallow(): program_shallow({stem}_program()).IsTrue() {{ trivial }}
+
 theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
     {lowers}{prefix}_code(), {prefix}_rest_{last}(), {labels}, {prefix}_emitted_{last}(),
-        {prefix}_laid())
+        {prefix}_laid(), {prefix}_shallow())
 }}
 ", last = m - 1, labels = before.2, count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts),
         lowered = if lent { format!("lower_program_lent({stem}_program(), {prefix}_placement(), {prefix}_counts())") }
@@ -1201,11 +1216,11 @@ fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{
 
 theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
-    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, Cons(span, rest)), {f}, {list}, Cons(span, rest),
+    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, Cons(span, rest)), {f}, {room}, {list}, Cons(span, rest),
         Ending(word := {call}.value, buffers := Cons({call}.after, rest))) {{
     λ origin last => {returns}
 }}
-", room = 136 * (f + 1), returns = if program.tables.is_some() {
+", room = room(f), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
             format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
@@ -1236,13 +1251,13 @@ fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{ 
 
 theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
-    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, now), {f}, {list}, now,
+    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, now), {f}, {room}, {list}, now,
         Ending(word := {call}, buffers := now)) {{
     λ origin last => compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, top, loan, {f}, trivial,{keeps}
         {list}, trivial, now, {call}, {prefix}_agrees(now{comma}{arguments}))
 }}
-", room = 136 * (f + 1), arguments = parameters.join(", "), keeps = keeps(f)));
+", room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
     } else {
         text.push_str(&format!("
 // The code computes the source function (`Prog::Computes`,
@@ -1252,17 +1267,17 @@ theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVe
 // function's value in RAX, keeps the callee-saved registers and RSP, and
 // leaves memory as it was but for stores into its own room below that
 // address (`Stack::Wrote`): on every machine, loaded anywhere.
-theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {list}, {call}) {{
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {room}, {list}, {call}) {{
     compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
 
 // The same at every argument list: the code implements the source function
 // (`Prog::Implements`).
-theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {f}, {arity}, {spec}) {{
+theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {f}, {room}, {arity}, {spec}) {{
     {binders}{prefix}_returns<M>(machine{comma}{arguments})
 }}
-", room = 136 * (f + 1), arguments = parameters.join(", "), arity = parameters.len(), spec = curried(call, &parameters),
+", room = room(f), arguments = parameters.join(", "), arity = parameters.len(), spec = curried(call, &parameters),
             binders = binders(&parameters)));
     }
     // The program's other exported functions, each at its own label: a
@@ -1296,17 +1311,18 @@ theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} 
 // `{call}`'s value in RAX, keeps the callee-saved registers and RSP, and
 // leaves memory as it was but for stores into its own room below that
 // address (`Stack::Wrote`).
-theorem {symbol}_native_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {g}, {list}, {call}({arguments})) {{
+theorem {symbol}_native_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {g}, {room}, {list}, {call}({arguments})) {{
     λ origin last => {proved}
 }}
 
-theorem {symbol}_native_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {g}, {arity}, {spec}) {{
+theorem {symbol}_native_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {g}, {room}, {arity}, {spec}) {{
     {binders}{symbol}_native_returns<M>(machine{comma}{arguments})
 }}
-", label = g + 1, room = 136 * (g + 1), arity = parameters.len(), spec = curried(&format!("{call}({arguments})"), &parameters),
+", label = g + 1, room = room(g), arity = parameters.len(), spec = curried(&format!("{call}({arguments})"), &parameters),
             binders = binders(&parameters)));
     }
-    Ok(Compiled { text, bytes, entry, entries })
+    let rooms = program.entries.iter().map(|entry| room(entry.index)).collect();
+    Ok(Compiled { text, bytes, entry, entries, room: room(f), rooms })
 }
 
 /// The source function as a value of `Words(n)` (function_ir_correct), from

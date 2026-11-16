@@ -39,7 +39,7 @@ theorem returns_is_compiled_returns<M>(functions: List<Function>, placement: Lis
     machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat, defined: Succ(f) <= functions.len(),
     arguments: List<BitVec(64)>, arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
-    code.Returns(machine, origin, last, f, arguments, answer) {
+    code.Returns(machine, origin, last, f, stack_room(functions, f), arguments, answer) {
     compiled_returns<M>(functions, placement, code, lowered, evaluable, machine.fetch, machine.data, last, origin, machine.stack,
         f, defined, arguments, arity, answer, evaluates)
 }
@@ -58,9 +58,31 @@ fn sum() → Function {
 
 // Whatever code the lowering makes of `sum`, it adds.
 theorem sum_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
-    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, [a, b], a + b) {
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, 136, [a, b], a + b) {
     compiled_computes<M>([sum()], placement, code, lowered, trivial, machine, 0, trivial, [a, b], trivial, a + b, refl)
 }
+
+// ---------------------------------------------------------------------------
+// The room is by call depth, not by index
+
+// `sum`, then a function calling it, then `sum` again: the last is a leaf
+// and asks for one level wherever it is in the program, the caller two.
+fn twice_then_sum() → Function {
+    Function(parameters := [0, 1], body := Call(0, [0, 1], 2), result := 2)
+}
+
+fn leaf_after_caller() → List<Function> { [sum(), twice_then_sum(), sum()] }
+
+theorem leaf_after_caller_rooms():
+    (stack_room(leaf_after_caller(), 0) = 136) ∧ ((stack_room(leaf_after_caller(), 1) = 272) ∧ (stack_room(leaf_after_caller(), 2) = 136)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+theorem leaf_after_caller_shallow(): program_shallow(leaf_after_caller()) = True { refl }
+
+// A table its calls do not respect is refused: the caller at the depth of
+// its callee.
+theorem flat_table_refused(): program_shallow_in(leaf_after_caller(), [0, 0, 0]) = False { refl }
 
 // ---------------------------------------------------------------------------
 // A `runtime fn`, as `compile-x86` takes one
@@ -84,7 +106,7 @@ theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, l
 // certificate has the lowering as a literal checked by evaluation; here
 // it is any.
 theorem clamp_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
-    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, [x, lo, hi], clamp(x, lo, hi)) {
+    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, 136, [x, lo, hi], clamp(x, lo, hi)) {
     compiled_computes<M>(clamp::program, placement, code, lowered, trivial, machine, 0, trivial, [x, lo, hi], trivial,
         clamp(x, lo, hi), clamp::agrees(x, lo, hi))
 }
@@ -93,7 +115,7 @@ theorem clamp_computes<M>(placement: List<Place>, code: Prog, lowered: lower_pro
 // returns: for ordered bounds, the code returns a word within them.
 theorem clamp_code_within<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
     machine: Machine<M>, x: u64, {lo, hi: u64}, ordered: lo <= hi):
-    Exists<u64>(λ v => code.Computes(machine, 0, [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) {
+    Exists<u64>(λ v => code.Computes(machine, 0, 136, [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) {
     Exists(clamp(x, lo, hi), ⟨clamp_computes<M>(placement, code, lowered, machine, x, lo, hi), clamp_within(x, ordered)⟩)
 }
 
@@ -101,14 +123,14 @@ theorem clamp_code_within<M>(placement: List<Place>, code: Prog, lowered: lower_
 // implements `clamp`. Unfolded, `Implements` is the binders the theorem
 // above takes, so its proof is `clamp_computes` under them.
 theorem clamp_implements<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
-    machine: Machine<M>): code.Implements(machine, 0, 3, clamp) {
+    machine: Machine<M>): code.Implements(machine, 0, 136, 3, clamp) {
     λ x lo hi => clamp_computes<M>(placement, code, lowered, machine, x, lo, hi)
 }
 
 // And back at any three words.
 theorem clamp_implements_at<M>(placement: List<Place>, code: Prog, lowered: lower_program(clamp::program, placement) = Some(code),
-    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, [x, lo, hi], clamp(x, lo, hi)) {
-    code.implements_at(machine, 0, 3, clamp, clamp_implements<M>(placement, code, lowered, machine), [x, lo, hi], refl)
+    machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, 136, [x, lo, hi], clamp(x, lo, hi)) {
+    code.implements_at(machine, 0, 136, 3, clamp, clamp_implements<M>(placement, code, lowered, machine), [x, lo, hi], refl)
 }
 
 // `compiled_implements` from an agreement at every list of two words.
@@ -119,7 +141,7 @@ theorem sum_agrees(words: List<BitVec(64)>, length: words.len() = 2):
 }
 
 theorem sum_implements<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code), machine: Machine<M>):
-    code.Implements(machine, 0, 2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b) {
+    code.Implements(machine, 0, 136, 2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b) {
     compiled_implements<M>([sum()], placement, code, lowered, trivial, machine, 0, trivial, 2, trivial, λ (a: BitVec(64)) (b: BitVec(64)) => a + b,
         sum_agrees)
 }
@@ -127,11 +149,11 @@ theorem sum_implements<M>(placement: List<Place>, code: Prog, lowered: lower_pro
 // A function of words is a function of spans lent nothing, and back.
 theorem sum_over_none<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
     machine: Machine<M>, a, b: BitVec(64), top: Nat):
-    code.ComputesOver(machine, top, Lending::none(), 0, [a, b], [], Ending(word := a + b, buffers := [])) {
-    code.computes_over_none(machine, 0, [a, b], a + b, sum_computes<M>(placement, code, lowered, machine, a, b), top)
+    code.ComputesOver(machine, top, Lending::none(), 0, 136, [a, b], [], Ending(word := a + b, buffers := [])) {
+    code.computes_over_none(machine, 0, 136, [a, b], a + b, sum_computes<M>(placement, code, lowered, machine, a, b), top)
 }
 
 theorem sum_back<M>(placement: List<Place>, code: Prog, lowered: lower_program([sum()], placement) = Some(code),
-    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, [a, b], a + b) {
-    code.computes_of_over_none(machine, 0, [a, b], a + b, sum_over_none<M>(placement, code, lowered, machine, a, b, machine.stack.size))
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, 136, [a, b], a + b) {
+    code.computes_of_over_none(machine, 0, 136, [a, b], a + b, sum_over_none<M>(placement, code, lowered, machine, a, b, machine.stack.size))
 }

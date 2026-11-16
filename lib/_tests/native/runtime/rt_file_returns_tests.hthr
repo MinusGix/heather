@@ -45,7 +45,7 @@ theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), after: List<BitVec(8)>, value: BitVec(64),
     runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, Mutated(after, value))):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), value, Cons(after, rest))) {
     Ending::returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,

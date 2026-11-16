@@ -49,7 +49,7 @@ theorem Ending::returns_written<M>(functions: List<Function>, placement: List<Pl
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), m: Mutated<List<BitVec(8)>, BitVec(64)>,
     runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
     compiled_returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
@@ -65,7 +65,7 @@ theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Pla
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(),
     m: Mutated<List<BitVec(8)>, BitVec(64)>, runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
     compiled_returns_marked<M>(functions, placement, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
@@ -83,7 +83,7 @@ theorem Ending::returns_written_through<M>(source, functions: List<Function>, pl
     fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), rest: Buffers(), m: Mutated<List<BitVec(8)>, BitVec(64)>,
     runs: program_run(source, before, f, arguments) = FTm::end_of(rest, m)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
     compiled_returns_written_through<M>(source, functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
@@ -99,7 +99,7 @@ theorem Ending::returns_marked_through<M>(source, functions: List<Function>, pla
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), rest: Buffers(),
     m: Mutated<List<BitVec(8)>, BitVec(64)>, runs: program_run(source, before, f, arguments) = FTm::end_of(rest, m)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ stack_room(functions, f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
     compiled_returns_marked_through<M>(source, functions, placement, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,

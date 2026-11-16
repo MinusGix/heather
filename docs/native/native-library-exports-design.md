@@ -1049,12 +1049,11 @@ program.
   span. The first is `compiled_returns_lent` at the entry's index and is
   only text to generate; the second needs `compiled_returns_unlent` over
   a lending that lets the root's span be written.
-- The stack an entry's theorem asks for is by its index in the program
-  (`120 * Succ(f)`), as every function's is, not by what it calls. A small
-  function late in a large program is stated with more room than it
-  uses: `scan_accept`, a few instructions, is stated with the room of
-  every function before it. The bound is sound and loose; tightening it is a change to
-  `compiled_returns`'s premise, by the call depth below a function.
+- (Done 2026-11-16, `issues/stack-room-by-call-depth.md`.) The stack an entry's
+  theorem asks for was by its index in the program, so `scan_accept`, a
+  few instructions, was stated with the room of every function before it.
+  It is now by the call depth below the function (`stack_room`,
+  `program_depths`), a table the lowering computes and checks.
 
 ### 6.4 A method as an export (2026-11-12)
 
