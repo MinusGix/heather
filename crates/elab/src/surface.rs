@@ -873,7 +873,7 @@ const BV_OMEGA_ATOM_SLOTS: u32 = 4;
 
 /// Runs of a `discharge :=` search a `simp_only` reserves slots for: an
 /// over-count costs unused slots, an under-count restarts the declaration.
-const DISCHARGE_RUNS: u32 = 4;
+const DISCHARGE_RUNS: u32 = 8;
 
 fn tactic_slot_score(e: &Expr) -> u32 {
     match &e.kind {

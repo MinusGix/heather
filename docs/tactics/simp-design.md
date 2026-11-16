@@ -766,6 +766,9 @@ and `discharge := e` reserves `e`'s slots for several runs. A closing call
 stops as soon as its sides meet, before computing, and sides that differ only
 by a β-redex meet: a branch equation's leaf keeps the `let`s before its tests,
 and without this every law was tried again, each asking its conditions, at a
-goal that was already closed.
+goal that was already closed. One `discharge := bv_omega` site proves many
+conditions; each proof is lifted into a lemma of its own
+(`GoalArena::allocate_proved`, which once lifted only a site's first), so the
+kernel checks it once rather than wherever the step's transport copies it.
 
 Probes: `lib/_tests/std/tactic/simp_branch_tests.hthr`.
