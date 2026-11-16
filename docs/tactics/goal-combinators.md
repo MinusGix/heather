@@ -167,6 +167,14 @@ Programs call programs, and take preconditions that are calls
   split as a premise. Only equations the user wrote are reverted, and only
   when a split can take them apart; the original stays in context
   unchanged.
+- **An equation of constructors a split leaves** (`Leaf(w).emits(p, names)
+  = Some(c)` reads `Some(Out(Cons(w, p), names)) = Some(c)` in the case
+  where the test passes) is injected and its local substituted before the
+  leaf is reached: the split emits `subst(h, …)` for the innermost such
+  hypothesis it introduced (`injected_hypothesis`), so the leaf's goal is
+  `Within(p, Cons(w, p))`, not one about `c`. A hypothesis whose fields clash
+  closes the case the same way
+  (`issues/constructor-equations-in-context.md`).
 
 What it does not do yet: revise a hypothesis that a split substitutes into
 when the hypothesis has no test of its own to split (only the root reverts,
