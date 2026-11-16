@@ -9,9 +9,9 @@ updated: 2026-11-09
 
 A world is any function of the whole history, so a write to fd 1 may change
 what fd 0 reads (a terminal). That is why `Io` is one world
-(`docs/effects-capabilities-design.md` §1), and it is also why there is no
+(`docs/language/effects-capabilities-design.md` §1), and it is also why there is no
 frame rule: "`f` only touches stdout, so what `g` reads is unaffected" is
-false at some worlds (`docs/effects-locality-design.md` §3 N4). The note
+false at some worlds (`docs/language/effects-locality-design.md` §3 N4). The note
 (§5.3) makes locality a hypothesis about the world instead of a property of
 the type.
 

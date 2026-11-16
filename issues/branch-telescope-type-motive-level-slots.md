@@ -68,7 +68,7 @@ the round-trip tests already exercise against reduction.
 **The correspondence turned out to be an exact order-preserving
 bijection in all 52 branches**: the i-th type-motive local ⟺ the i-th
 layer-**c** `Ty` global. The exception is the paper's own
-(`docs/delam-extensions.md` §16.5) — a `Typ_p` binding is an *external
+(`docs/kernel/delam-extensions.md` §16.5) — a `Typ_p` binding is an *external
 index*, not a sub-code, and carries no call: exactly `t_x`'s and `t_λ`'s
 `U_T`, because a `λ` does not store its codomain. A `covered == 45`
 tripwire fires if any branch gains or loses a call. The invariant is

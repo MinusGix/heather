@@ -30,16 +30,16 @@ fn nat_suite_checks() {
     // The prelude's `CollectionLiteral#tycode_fn` and 4 theorems + the
     // suite's `fn add` and 4 theorems all landed as Ψ-globals (a `fn` is a
     // *defined* one since issues/simulate-conversion-cost.md; the code
-    // function is docs/per-instantiation-type-codes-design.md §2's, over the
+    // function is docs/inductives/per-instantiation-type-codes-design.md §2's, over the
     // prelude's one parameterized declaration). Plus `3·nfields + 1 = 7` for
     // that declaration's *projections*: `CollectionLiteral<C>(n)` is
     // telescoped and its spine is dependent (`fromLiteral` mentions
-    // `element`), which since docs/telescoped-record-projections-design.md
+    // `element`), which since docs/elaborator/telescoped-record-projections-design.md
     // §3 is the device's fourth cell rather than §13.6's decline. Plus 6
     // for the binding-statement classes `Bind`/`Pointed` and the calls
     // `Bind::seq`/`Pointed::ret` the lowering writes
-    // (docs/sequencing-surface-design.md §13). Plus 3 for the `Mutated`
-    // record a `mut self` method returns (docs/effects-capabilities-design.md §2).
+    // (docs/language/sequencing-surface-design.md §13). Plus 3 for the `Mutated`
+    // record a `mut self` method returns (docs/language/effects-capabilities-design.md §2).
     assert_eq!(e.psi().bindings.len(), 26);
 }
 
@@ -51,7 +51,7 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
     // proof never enters a comparison. `bindings[5]` is the suite's `fn`,
     // right after the prelude's one generated definition
     // (`CollectionLiteral#tycode_fn`,
-    // `docs/per-instantiation-type-codes-design.md` §2) and four theorems —
+    // `docs/inductives/per-instantiation-type-codes-design.md` §2) and four theorems —
     // a generated definition is bodied like any other definition, which is
     // why the vector opens with a `true`.
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -64,7 +64,7 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
         .collect();
     // Eight generated definitions for the prelude's one telescoped dependent
     // record (`CollectionLiteral#tycode_fn` and its `3·nfields + 1 = 7`
-    // projection definitions, `docs/telescoped-record-projections-design.md`
+    // projection definitions, `docs/elaborator/telescoped-record-projections-design.md`
     // §3), then the prelude's four theorems, then six definitions for the
     // binding-statement classes and their calls (`Bind`, `Pointed`,
     // `Bind::seq`, `Pointed::ret`), then `fn add`, then the suite's four

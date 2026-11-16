@@ -72,7 +72,7 @@ fn std_list_closure_exports() {
 }
 
 /// The kernel model (`lib/kernel_model/kernel_reduction.hthr` and
-/// `kernel_runs.hthr`, `docs/kernel-model-design.md` §5) exports whole: its
+/// `kernel_runs.hthr`, `docs/kernel/kernel-model-design.md` §5) exports whole: its
 /// proofs are meant to be rechecked by Lean's kernel as well as Heather's,
 /// since what they justify is an optimisation in Heather's own kernel.
 #[test]

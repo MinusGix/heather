@@ -1,9 +1,9 @@
 //! No-confusion on the `IWf` route's families: `absurd` between two
 //! constructors and `inj` at a payload field, on both of the route's forms —
-//! the kernel's `IWf` (`docs/iwf-former-design.md`) and its `W` encoding for
-//! families with a function field (`docs/iwf-infinitary-design.md` §13).
+//! the kernel's `IWf` (`docs/kernel/iwf-former-design.md`) and its `W` encoding for
+//! families with a function field (`docs/kernel/iwf-infinitary-design.md` §13).
 //!
-//! The scheme is `docs/inductive-tier0-lowering.md` §6's, unchanged: a total
+//! The scheme is `docs/inductives/inductive-tier0-lowering.md` §6's, unchanged: a total
 //! function of the family with a **constant** motive — the constructor's tag
 //! code for `absurd`, a payload projection with the left side's own field as
 //! the default for `inj` — transported along the equation by `J`. The only
@@ -90,7 +90,7 @@ impl IwfConfusion<'_> {
             FamForm::W(sig) => {
                 let mut c3 = mcx.clone();
                 c3.push("#a".into(), sig.shape.shift_local(2), sig.ls.clone());
-                c3.push("#f".into(), sig.kids_ty(3, &var(0)), Level::join(sig.lp.clone(), sig.lw.clone()));
+                c3.push("#f".into(), sig.kids_ty(3, &var(0)), Level::max(sig.lp.clone(), sig.lw.clone()));
                 c3.push(
                     "#ih".into(),
                     Type::Pi {
@@ -99,7 +99,7 @@ impl IwfConfusion<'_> {
                         dom: Rc::new(sig.pos_at(4, &var(1))),
                         cod: Rc::new(motive.shift_local(3)),
                     },
-                    Level::join(sig.lp.clone(), mlvl.clone()),
+                    Level::max(sig.lp.clone(), mlvl.clone()),
                 );
                 let step = self.const_case_tree(&c3, spine, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, spine.root(), 5, span)?;
                 Ok(Term::ElimW {
@@ -276,7 +276,7 @@ impl IwfConfusion<'_> {
                 format!(
                     "`inj` at the recursive field of `{}` is not supported: `{}` is an indexed \
                      family, whose children are its tree's subtrees rather than fields of the \
-                     constructor's label (docs/iwf-infinitary-design.md §13)",
+                     constructor's label (docs/kernel/iwf-infinitary-design.md §13)",
                     ctor.name, ind.name
                 ),
                 span,
@@ -305,7 +305,7 @@ impl IwfConfusion<'_> {
                 format!(
                     "field {k} of `{}` has a type that depends on an earlier field, so its \
                      injectivity is not derivable this way yet \
-                     (docs/inductive-tier0-lowering.md §6.2)",
+                     (docs/inductives/inductive-tier0-lowering.md §6.2)",
                     ctor.name
                 ),
                 span,

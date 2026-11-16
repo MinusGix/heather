@@ -42,13 +42,13 @@ use crate::term::{
 const NODE_BUDGET: isize = 512;
 
 /// Maximum nesting depth printed (bounds stack: debug-build formatter frames
-/// are several KB each, and test threads get a 2 MB stack).
+/// are several KB each, and a spawned thread's default stack is 2 MiB).
 const DEPTH_BUDGET: u32 = 64;
 
 /// Where the current thread is in a format call. One value rather than a
 /// counter, a depth and a flag, so that a mode entered inside another
 /// (`write_exact` from inside a bounded `{:?}`) saves and restores the
-/// whole of it (docs/kernel-implicit-state-review.md §7).
+/// whole of it (docs/kernel/kernel-implicit-state-review.md §7).
 #[derive(Clone, Copy)]
 enum FmtState {
     /// No format call is in progress: the next node is an outermost one
@@ -764,7 +764,7 @@ mod tests {
     /// ran the outer budget below zero, the next node took itself for an
     /// outermost one and reset the depth, and unwinding the outer frames
     /// underflowed it: a debug-build panic (§7 of
-    /// docs/kernel-implicit-state-review.md).
+    /// docs/kernel/kernel-implicit-state-review.md).
     #[test]
     fn write_exact_inside_a_bounded_format_resumes_it() {
         let deep = |n: usize| {

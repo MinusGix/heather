@@ -14,7 +14,7 @@ failing target to a merge, it should also run `scripts/affected-targets.mjs
 --paths` over that merge's diff and say whether the failing file was
 selected. A "not selected" is a selector bug to fix (an input the selector
 does not see), and the count of them over time is the data §2.3 of
-docs/testing-architecture-design.md asked for before trusting the lane.
+docs/infrastructure/testing-architecture-design.md asked for before trusting the lane.
 
 ## Log
 

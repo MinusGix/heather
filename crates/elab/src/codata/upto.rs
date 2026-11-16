@@ -1,4 +1,4 @@
-//! Corecursion up to friends (docs/codata-elaborator-design.md §5.5, §5.6).
+//! Corecursion up to friends (docs/inductives/codata-elaborator-design.md §5.5, §5.6).
 //!
 //! A corecursive call may sit under a **friend**, a function of the
 //! definition's own codata family that reads each codata argument at most
@@ -72,7 +72,7 @@ fn call_parts(e: &Expr) -> Option<(&str, &[Ty], Vec<&Expr>)> {
 }
 
 fn join(a: &Level, b: &Level) -> Level {
-    Level::join(a.clone(), b.clone())
+    Level::max(a.clone(), b.clone())
 }
 
 fn pi(dom_level: &Level, cod_level: &Level, dom: Type, cod: Type) -> Type {
@@ -123,7 +123,7 @@ fn sum_case(
     branch: &dyn Fn(usize, u32, Rc<Term>) -> Term,
 ) -> Term {
     fn tail_level(levels: &[Level], j: usize) -> Level {
-        levels[j..].iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()))
+        levels[j..].iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()))
     }
     fn tail(part: Part<'_>, levels: &[Level], j: usize, k: u32) -> Type {
         if j + 1 == levels.len() {
@@ -189,7 +189,7 @@ fn sum_case(
 /// `v` injected as summand `j` of the right-nested sum (at depth `k`).
 fn sum_inj(part: Part<'_>, levels: &[Level], j: usize, k: u32, v: Rc<Term>) -> Rc<Term> {
     let n = levels.len();
-    let tail_level = |r: usize| levels[r..].iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()));
+    let tail_level = |r: usize| levels[r..].iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()));
     let tail = |r: usize| -> Type {
         let mut t = part(n - 1, k);
         for q in (r..n - 1).rev() {
@@ -847,7 +847,7 @@ impl FriendMode {
     fn refuse<T>(&self, what: &str, span: Span) -> R<T> {
         err(
             format!(
-                "`{}` is not a friend of the corecursive `{}` (docs/codata-elaborator-design.md §5.5): {what}",
+                "`{}` is not a friend of the corecursive `{}` (docs/inductives/codata-elaborator-design.md §5.5): {what}",
                 self.friend, self.user
             ),
             span,
@@ -990,7 +990,7 @@ impl UpTo<'_> {
         let scope = self.names.module_scope(module).cloned().map(Rc::new);
         let _scope = scope.as_ref().map(|s| self.use_scope(s));
         let refuse = |what: String| -> R<Option<Friend>> {
-            err(format!("`{name}` cannot be a friend of this corecursion (docs/codata-elaborator-design.md §5.6): {what}"), span)
+            err(format!("`{name}` cannot be a friend of this corecursion (docs/inductives/codata-elaborator-design.md §5.6): {what}"), span)
         };
         let hcx = cx.hygienic();
         let site_len = hcx.names.len();
@@ -1260,14 +1260,14 @@ impl UpTo<'_> {
         }
         // Every position lives at one level, so the positions' case tree is
         // a family of codes at one universe.
-        let lp = lp_parts.iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()));
+        let lp = lp_parts.iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()));
         if lp_parts.iter().any(|l| !l.equiv(&lp)) {
             return err(
                 "corecursion up to a friend needs every function argument's domain (and the codata's positions, beside nested constructors) at one universe level this round",
                 span,
             );
         }
-        let ls = sums.iter().fold(Level::Zero, |acc, (_, l)| Level::join(acc, l.clone()));
+        let ls = sums.iter().fold(Level::Zero, |acc, (_, l)| Level::max(acc, l.clone()));
         let lk = join(&li, &lp);
         let lw0 = join(&ls, &lp);
         let level = if indexed { join(&lw0, &lk) } else { lw0 };
@@ -1423,7 +1423,7 @@ impl UpTo<'_> {
                         msg
                     } else {
                         format!(
-                            "`{}` is not a friend of the corecursive `{user}` (docs/codata-elaborator-design.md §5.5): its body does not elaborate over the free carrier: {msg}",
+                            "`{}` is not a friend of the corecursive `{user}` (docs/inductives/codata-elaborator-design.md §5.5): its body does not elaborate over the free carrier: {msg}",
                             friend.written
                         )
                     };
@@ -1480,7 +1480,7 @@ impl UpTo<'_> {
         }
         err(
             format!(
-                "this call to `{who}` is at `{}`, but the place it stands in is at `{}`: a friend's result index must be the one its position wrote (docs/codata-elaborator-design.md §5.6)",
+                "this call to `{who}` is at `{}`, but the place it stands in is at `{}`: a friend's result index must be the one its position wrote (docs/inductives/codata-elaborator-design.md §5.6)",
                 self.display_type(cx, &a),
                 self.display_type(cx, &b)
             ),
@@ -1524,7 +1524,7 @@ impl UpTo<'_> {
                     } else {
                         return err(
                             format!(
-                                "write `{}`'s type arguments at this call (`{}<…>(…)`): its type parameter `{}` is not read off the definition's type, so the friend's node stores it (docs/codata-elaborator-design.md §5.6)",
+                                "write `{}`'s type arguments at this call (`{}<…>(…)`): its type parameter `{}` is not read off the definition's type, so the friend's node stores it (docs/inductives/codata-elaborator-design.md §5.6)",
                                 friend.written,
                                 friend.written,
                                 friend.decl.tyvars[i].name
@@ -1699,7 +1699,7 @@ impl UpTo<'_> {
                     match nested_self_call(&selfref, a) {
                         Some(at) => err(
                             format!(
-                                "this call to `{}` sits in a data argument of the friend `{}`, where no corecursive call is guarded (docs/codata-elaborator-design.md §5.5)",
+                                "this call to `{}` sits in a data argument of the friend `{}`, where no corecursive call is guarded (docs/inductives/codata-elaborator-design.md §5.5)",
                                 selfref.written_name, friend.written
                             ),
                             at,

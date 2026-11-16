@@ -15,13 +15,13 @@
 // the result is not it. `placeless` is the check, linear in the region but
 // for a loop nested in loops, whose taints its enclosing loops recompute;
 // `program_eval_placeless` is the theorem
-// (docs/native-one-compiler-design.md §2.3).
+// (docs/native/native-one-compiler-design.md §2.3).
 //
 // A call over views computes addresses of its own: a view's base is its
 // buffer's address plus its start. The base is hidden from there on as the
 // address it is made from is, and reaches the callee at an address place;
 // the view's bounds are read, so they are no address
-// (docs/native-library-exports-design.md §3.1, V4d).
+// (docs/native/native-library-exports-design.md §3.1, V4d).
 //
 // A function that writes its buffer is placeless by the same check: a
 // store reads its index and its value, neither of them an address id, and
@@ -38,6 +38,7 @@ import function_ir_writes;
 import function_ir_run;
 import nat_map;
 import bitvec;
+import bitvec_rotate;
 import bool;
 import list;
 import list_window;
@@ -280,6 +281,8 @@ theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Va
             agree(w, right, Inr(Inl(refl)))),
         ShiftLeft(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), agree(w, value, Inl(refl))),
         LogicalShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount),
+            agree(w, value, Inl(refl))),
+        RotateRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount),
             agree(w, value, Inl(refl))),
         ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount),
             agree(w, value, Inl(refl))),

@@ -1,4 +1,4 @@
-// What a stream filter computes (docs/native-stream-filter-design.md §2.1):
+// What a stream filter computes (docs/archive/native-stream-filter-design.md §2.1):
 // a step that, from a state and a byte, gives the next state and the byte it
 // emits, if any, folded over the input. Nothing here is about machines; the
 // burned read profile (elf64_read_filter, at the native-v0 tag) ran a filter
@@ -127,8 +127,8 @@ theorem mapping_emitted(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>): (s:
 
 // ---------------------------------------------------------------------------
 // What a counting step's fold computes, from what one byte does to a count
-// (docs/native-programs-read-like-programs-design.md §3, S1; moved here from
-// the burned filter_program, docs/native-program-logic-design.md §3.1). A
+// (docs/archive/native-programs-read-like-programs-design.md §3, S1; moved here from
+// the burned filter_program, docs/native/native-program-logic-design.md §3.1). A
 // program proves the per-byte fact, usually by `split_all`; these carry it
 // over the input.
 

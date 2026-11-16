@@ -6,7 +6,7 @@ created: 2026-09-24
 updated: 2026-09-30
 ---
 
-Found 2026-09-24 by the bounded-loop probes (`docs/native-bounded-loops-design.md` §8 V2).
+Found 2026-09-24 by the bounded-loop probes (`docs/archive/native-bounded-loops-design.md` §8 V2).
 `select_here` in `crates/elab/src/function_ir_x86_lower/structured.rs` refuses a
 temporary that is also an input (`InputOverlapsTemporary`), and an output must be
 a temporary, so `cursor ← cursor + 1` in one typed certificate is refused.

@@ -1,5 +1,5 @@
 //! `cat` implements `tr_spec(λ b => b)` (`lib/native/native_cat_spec.hthr`;
-//! `issues/native-source-cat-implements.md`, `docs/itree-simulation-design.md`
+//! `issues/native-source-cat-implements.md`, `docs/itrees/itree-simulation-design.md`
 //! §6), through the statement kit `lib/native/native_source_sim.hthr`:
 //!
 //!  1. the closure checks from images, and the kit is *there*, named one by

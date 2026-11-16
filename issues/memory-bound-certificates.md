@@ -23,4 +23,4 @@ memory envelope.
 
 ## Log
 
-- 2026-08-14: Referenced substantively by docs/datarepr-design.md (§2.3, §5.2): the OutOfMem strengthening ladder erases arms only relative to an assumed capacity, and this issue's metered model is named as the refinement of that stance when a customer wants a stated envelope.
+- 2026-08-14: Referenced substantively by docs/native/datarepr-design.md (§2.3, §5.2): the OutOfMem strengthening ladder erases arms only relative to an assumed capacity, and this issue's metered model is named as the refinement of that stance when a customer wants a stated envelope.

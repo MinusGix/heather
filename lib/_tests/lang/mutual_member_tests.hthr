@@ -2,7 +2,7 @@
 // (issues/mutual-family-member-declarations.md): `fn D::f` and
 // `theorem D::f` on a member of a mutual group elaborate, dot calls on a
 // member's values resolve to them, and a cycle of member declarations over
-// the family is one structural group (docs/mutual-inductive-design.md §6),
+// the family is one structural group (docs/inductives/mutual-inductive-design.md §6),
 // as the same cycle of free functions is. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import nat; import logic;

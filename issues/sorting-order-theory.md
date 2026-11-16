@@ -10,7 +10,7 @@ updated: 2026-11-09
 
 `lib/lang/list_algos.hthr` has `Sorted`, `isort` and `count` at `Nat` only.
 `sort` (an `nh-heap` target), `uniq` and `comm` compare byte strings and
-need the theory generic. `docs/native-mathematics-survey.md` §8; survey
+need the theory generic. `docs/surveys/native-mathematics-survey.md` §8; survey
 rank 8.
 
 ## Scope

@@ -912,7 +912,7 @@ fn Int::le_dec(self a, b: Int) → a <= b ∨ ¬(a <= b) {
     }
 }
 
-// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// Closed facts by evaluation (`norm_num`, docs/tactics/numeral-normalisation-design.md):
 // equality and order as `Bool`s through `Nat`'s `same` and `leb`, which the
 // kernel runs on numerals of any size, so a closed comparison is computed
 // rather than converted.
@@ -1375,7 +1375,7 @@ theorem Int::neg_respects({a, a2: Int}, ha: Int::Same(a, a2)): Int::Same(-a, -a2
 theorem Int::le_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2), h: a <= b): a2 <= b2 { subst(ha, subst(hb, h)) }
 theorem Int::lt_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2), h: a < b): a2 < b2 { subst(ha, subst(hb, h)) }
 
-// The `Nat → Int` cast edge (docs/casting-design.md §12): `n.int()`, which
+// The `Nat → Int` cast edge (docs/language/casting-design.md §12): `n.int()`, which
 // is `OfNat(n)`. Its laws hold by computation: `Int::add` and `Int::mul` on
 // two `OfNat`s are `OfNat` of the `Nat` operation, and the orders agree.
 fn Int::ofNat_hom() → OrderedSemiringHom<Nat, Int>(Nat::int,

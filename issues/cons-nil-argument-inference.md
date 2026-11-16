@@ -21,4 +21,4 @@ anything new.
 
 ## Log
 
-- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/native-programs-read-like-programs-design.md S6, docs/goal-combinators.md). Suite 3156 passed.
+- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/archive/native-programs-read-like-programs-design.md S6, docs/tactics/goal-combinators.md). Suite 3156 passed.

@@ -14,7 +14,7 @@ does not check. On the showcase that is 4 s of an 8.3 s edit check at width
 one, plus 1.1 s to re-encode the whole image (`perf/snapshots`, 2026-09-17,
 `edit` mode).
 
-`docs/declaration-slice-replay-design.md` is the design: record item
+`docs/infrastructure/declaration-slice-replay-design.md` is the design: record item
 boundaries (slices) in the module delta and image; on a source miss, replay
 the previous image's slices in order while each item's source digest matches
 and the semantic prefix is still exact, elaborate from source at the first

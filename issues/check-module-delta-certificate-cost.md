@@ -61,7 +61,7 @@ Next step: `--timings` of the same certificate through both paths and diff `decl
   | then (20, 22) again | 1.33 / 1.26 s | 1.56 / 1.47 s |
 
   The repeat pays the two probe generations (~0.2 s) before the image hits. What an other-inputs build still elaborates is the input-dependent 1,780 declarations and the library replay.
-- 2026-09-23: Copy-on-write counter and audit. Every registry copy-on-write write now goes through `stats::make_mut` (`Rc::make_mut`, counted and timed when it actually copies, with `#[track_caller]` on the elaborator's and `Shared`'s `deref_mut`). Two `--timings` columns, `cow_ns` and `cow_copies` (`scripts/timings --columns "cow ms,copies"`), and a `*.cow-sites.txt` beside the TSV: copies, ms, copied type, write site, costliest first (docs/instrumentation-design.md, "Elaborator state").
+- 2026-09-23: Copy-on-write counter and audit. Every registry copy-on-write write now goes through `stats::make_mut` (`Rc::make_mut`, counted and timed when it actually copies, with `#[track_caller]` on the elaborator's and `Shared`'s `deref_mut`). Two `--timings` columns, `cow_ns` and `cow_copies` (`scripts/timings --columns "cow ms,copies"`), and a `*.cow-sites.txt` beside the TSV: copies, ms, copied type, write site, costliest first (docs/infrastructure/instrumentation-design.md, "Elaborator state").
 
   Audit, release, after this issue's two fixes:
 

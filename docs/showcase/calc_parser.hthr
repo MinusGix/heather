@@ -2,7 +2,7 @@
 //
 // `import parser;` is the whole library. The facade reexports the cursor
 // model, the contracts, the diagnostics, the combinators, the primitives and
-// the recursion guard under one module name (docs/modules-design.md §3.4), so
+// the recursion guard under one module name (docs/language/modules-design.md §3.4), so
 // the operations below are spelled unqualified and still resolve to the
 // component that declares each one — `rest` is `parser_core::rest`, and an
 // axiom audit reports that component, not the facade.
@@ -14,7 +14,7 @@ import option;
 import parser;
 import calc;
 // The mutual `decreases` group below shares one recursion whose motive is a
-// nested `Pair` (docs/mutual-recursion-design.md §3); nothing here names it.
+// nested `Pair` (docs/language/recursion/mutual-recursion-design.md §3); nothing here names it.
 import pair;
 
 inductive PTok { TNum(n: Nat), TPlusSym, TStarSym, TOpen, TClose }

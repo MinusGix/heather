@@ -1,6 +1,6 @@
 // Probes of `runtime fn` on functions that write a span
 // (lib/native/runtime/runtime.hthr's `runtime_span`;
-// docs/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
+// docs/native/native-one-compiler-design.md §2.6, U4 step 4c-3c): what the
 // generator publishes for a store, for calls of functions that write, and
 // for loops (with a callee that only reads, with one that writes, with a
 // store as a statement, an exit inside, two calls of their own, a plain
@@ -206,7 +206,7 @@ theorem copy_first_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pl
 // A `decreases` function's companions (`ext`, `irrel`, the unfold) follow a
 // `mut self` call statement before the loop's own call and a branch under
 // the loop's test, so each of these is a `runtime fn` as it stands
-// (docs/decreases-unfolding-design.md). Before, the first had to make its
+// (docs/language/recursion/decreases-unfolding-design.md). Before, the first had to make its
 // store in its own call's argument and the others decide after the loop.
 
 // A store as a statement before the loop's own call.
@@ -322,6 +322,110 @@ theorem loops_accepted():
      (lower_program_lent(clear_text::program, plan_program(clear_text::program), program_counts(clear_text::program)).is_some() = True)) {
     ⟨refl, ⟨refl, refl⟩⟩
 }
+
+// A byte read once, by a `let` before the inner test: insertion sort's inner
+// loop (issues/runtime-mut-self-let-read-walk.md). The read is a claimed
+// call on the receiver, which the companions follow as `f#body` binds it.
+runtime fn List::insert_below(mut self s: List<u8>, n, j, x: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        let below = s.byte_within(n, j - 1);
+        if larger: x < below.zero_extend(56) { s.put_within(n, j, below); s.insert_below(n, j - 1, x) }
+        else { s.put_within(n, j, x.truncate(8, 56)); j }
+    } else { s.put_within(n, j, x.truncate(8, 56)); j }
+}
+
+theorem insert_below_runs(): program_run(List::insert_below::program, [[b(1), b(5), b(7), b(0)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(3), b(5), b(7)], [b(7)]]) { refl }
+
+// Its branch equations read the `let` too, so a test of `below` is stated
+// over the read itself (it once named `zero_extend` on the marked call).
+theorem insert_below_moves_up(s: List<u8>, n, j, x: u64, h: 0 < j, larger: x < s.byte_within(n, j - 1).zero_extend(56)):
+    List::insert_below(s, n, j, x) = List::insert_below(s.with_byte_within(n, j, s.byte_within(n, j - 1)), n, j - 1, x)
+{
+    List::insert_below::True::True(s, n, j, x, h, larger)
+}
+
+// The inner test a plain `if` (issues/measured-loop-inner-if-companions.md),
+// the read written where it is used…
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        if key < s.byte_within(n, j - 1).zero_extend(56) {
+            s.put_within(n, j, s.byte_within(n, j - 1)); s.sift(n, j - 1, key)
+        } else { j }
+    } else { j }
+}
+
+theorem sift_runs(): program_run(List::sift::program, [[b(1), b(5), b(7), b(3)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(5), b(5), b(7)], [b(7)]]) { refl }
+
+// …and bound by a `let`, after one shadowing the measured index.
+runtime fn List::sift_let(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        let j = j - 1;
+        let prev = s.byte_within(n, j);
+        if key < prev.zero_extend(56) { s.put_within(n, j + 1, prev); s.sift_let(n, j, key) }
+        else { j + 1 }
+    } else { j }
+}
+
+theorem sift_let_runs(): program_run(List::sift_let::program, [[b(1), b(5), b(7), b(3)], [b(7)]], 0, [w(4096), w(4), w(3), w(3)]) =
+    Ending(w(1), [[b(1), b(5), b(5), b(7)], [b(7)]]) { refl }
+
+// ---------------------------------------------------------------------------
+// A byte read before a store and used after it
+//
+// A `let` is an alias, so each read below stands where its value is used,
+// after a store or a call that wrote over it; the reflector binds it
+// before that store (issues/rt-file-read-before-store.md).
+
+// Two bytes exchanged: the second store's byte is the one the first
+// replaced.
+runtime fn List::swap(mut self span: List<u8>, length, i, j: u64) → u64 {
+    let a = span.byte_within(length, i);
+    let b = span.byte_within(length, j);
+    span.put_within(length, i, b);
+    span.put_within(length, j, a);
+    i
+}
+
+theorem swap_runs(): program_run(List::swap::program, [[b(97), b(98), b(99)], [b(7)]], 0, [w(4096), w(3), w(0), w(2)]) =
+    Ending(w(0), [[b(99), b(98), b(97)], [b(7)]]) { refl }
+
+theorem swap_stated(span: List<u8>, rest: List<List<u8>>, place, length, i, j: u64):
+    program_run(List::swap::program, Cons(span, rest), 0, [place, length, i, j]) =
+        Ending(List::swap(span, length, i, j).value, Cons(List::swap(span, length, i, j).after, rest)) {
+    List::swap::runs_over(span, rest, place, length, i, j)
+}
+
+theorem swap_accepted(): lower_program_lent(List::swap::program, plan_program(List::swap::program), program_counts(List::swap::program)).is_some() = True { refl }
+
+// Insertion sort over `sift` above: `sort_from` reads its key, lets
+// `sift` move bytes over it, and stores the key where `sift` left room.
+runtime fn List::sort_from(mut self span: List<u8>, length, i: u64) → u64 decreases (length - i).toNat() {
+    if h: i < length {
+        let key = span.byte_within(length, i);
+        let hole = span.sift(length, i, key.zero_extend(56));
+        span.put_within(length, hole, key);
+        span.sort_from(length, i + 1)
+    } else {
+        i
+    }
+}
+
+// At every file. (`heather compile-x86` certifies the program; running it
+// by `refl` here is past a declaration's budget.)
+theorem sort_from_stated(span: List<u8>, rest: List<List<u8>>, place, length, i: u64):
+    program_run(List::sort_from::program, Cons(span, rest), 1, [place, length, i]) = FTm::end_of(rest, List::sort_from(span, length, i)) {
+    List::sort_from::runs_over(span, rest, place, length, i)
+}
+
+// The key is bound before `sift` is called, and the store after it is of
+// that variable.
+theorem sort_from_reflection(): List::sort_from::rt = FFun([Word(64), Word(64), Word(64)], Word(64),
+    Let(Prim(Ult(64), [0, 1]), IfEq(0,
+        Let(Byte(0, 1, 2), Let(Prim(Zext(8, 56), [0]), Call(0, [5, 4, 3, 0],
+            Put(0, 5, 2, Let(Lit(Word(64), 1), Let(Prim(Add(64), [5, 0]), Again([8, 7, 0]))))))),
+        Pure(Var(1))))) { refl }
 
 // ---------------------------------------------------------------------------
 // What the generator refuses

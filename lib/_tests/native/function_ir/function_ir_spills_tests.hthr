@@ -1,0 +1,132 @@
+// Probes of what a call saves (`Spilling`,
+// lib/native/function_ir/function_ir_lower_calls.hthr;
+// issues/function-ir-verified-live-spills.md): a call whose place names a
+// mask over the eight registers a caller saves stores and loads only those,
+// a register it leaves out is no word of the file after it, and a call with
+// no such place saves all eight as before. Each program here is lowered by
+// evaluation and pinned to its instructions. The controls: a mask that
+// leaves out a word read after the call, and what the planner asks saved.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_refusal;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+fn Prog::saving(self p: Prog, registers: List<Gpr>) → Prog { registers.spills(p, 0) }
+fn Prog::restoring(self p: Prog, registers: List<Gpr>) → Prog { registers.reloads(p, 0) }
+
+// ---------------------------------------------------------------------------
+// The mask, and a placement's head
+
+theorem mask_names_one(): masked(saved_registers(), 4) = [Rsi] { refl }
+theorem mask_names_some(): masked(saved_registers(), 133) = [Rcx, Rsi, R11] { refl }
+theorem mask_names_all(): masked(saved_registers(), 255) = saved_registers() { refl }
+theorem mask_names_none(): masked(saved_registers(), 0) = [] { refl }
+// A bit past the eighth names nothing.
+theorem mask_past_eight(): masked(saved_registers(), 256) = [] { refl }
+
+theorem head_is_the_saves(): call_saves([Spilling(4), Into(Rax)]) = [Rsi] { refl }
+theorem head_is_not_a_place(): after_saves([Spilling(4), Into(Rax)]) = [Into(Rax)] { refl }
+theorem no_head_saves_all(): call_saves([Into(Rax)]) = saved_registers() { refl }
+theorem no_head_all_places(): after_saves([Into(Rax)]) = [Into(Rax)] { refl }
+theorem every_mask_is_allowed(): saves_ok(masked(saved_registers(), 133)) = True { refl }
+
+// The file after a call: the result, what was saved, and nothing where a
+// caller-saved register was left out; a register the callee keeps is as
+// it was whatever the mask.
+theorem called_keeps_saved(file: File): file.called([Rsi], 9).at(Rsi) = file.at(Rsi) { refl }
+theorem called_drops_unsaved(file: File): file.called([Rsi], 9).at(Rdi) = None { refl }
+theorem called_has_result(file: File): file.called([Rsi], 9).at(Rax) = Some(Held(9, Word)) { refl }
+theorem called_keeps_kept(file: File): file.called([], 9).at(R12) = file.at(R12) { refl }
+
+// ---------------------------------------------------------------------------
+// One word read after a call
+
+// double(a) = a + a, function 0.
+fn double() → Function {
+    Function(parameters := [0],
+        body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Add(width := 64, output := 1, left := 0, right := 0)],
+            outputs := Ports([word(1)]))),
+        result := 1)
+}
+
+// add_double(a, b) = double(a) + b, function 1: `b` arrives in RSI and is
+// read after the call, `a` is not.
+fn add_double() → Function {
+    Function(parameters := [0, 1],
+        body := Compose(Call(0, [0], 2),
+            Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(3)])))),
+        result := 3)
+}
+
+fn pair() → List<Function> { [add_double(), double()] }
+
+// The call saves RSI alone: one store before it and one load after.
+fn one_saved() → List<Place> { [Into(Rax), Spilling(4), Into(Rax)] }
+
+fn one_saved_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate(0)]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .label(2).put(Block([frame_allocate(64)]))
+        .saving([Rsi]).put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring([Rsi])
+        .put(Block([AddRR(Rax, Rsi)]))
+        .put(Block([])).put(Block([frame_free(64)])).put(Ret)
+}
+
+theorem one_saved_lowers(): lower_program(pair(), one_saved()) = Some(one_saved_program()) { refl }
+
+theorem one_saved_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, one_saved_program(), last, origin).Calls(stack, program_callees(pair()), program_room(pair()), 2) {
+    lower_program_correct<M>(pair(), one_saved(), one_saved_program(), one_saved_lowers(), fetch, data, last, origin, stack)
+}
+
+// With no head the call saves all eight, as it did before there was one.
+fn all_saved_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate(0)]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .label(2).put(Block([frame_allocate(64)]))
+        .saving(saved_registers()).put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring(saved_registers())
+        .put(Block([AddRR(Rax, Rsi)]))
+        .put(Block([])).put(Block([frame_free(64)])).put(Ret)
+}
+theorem all_saved_lowers(): lower_program(pair(), [Into(Rax), Into(Rax)]) = Some(all_saved_program()) { refl }
+theorem full_mask_is_no_head(): lower_program(pair(), [Into(Rax), Spilling(255), Into(Rax)]) = Some(all_saved_program()) { refl }
+
+// A mask that leaves `b` out is refused where `b` is read: the word is in
+// no register the file names.
+theorem unsaved_read_refused(): lower_program(pair(), [Into(Rax), Spilling(0), Into(Rax)]) = None { refl }
+// Saving the wrong register is the same refusal.
+theorem wrong_saved_refused(): lower_program(pair(), [Into(Rax), Spilling(8), Into(Rax)]) = None { refl }
+
+// The planner asks for what is read after the call, and its placement
+// lowers to the one store and load.
+theorem planner_saves_the_live(): add_double().plan() = [Spilling(4), Into(Rax)] { refl }
+theorem planned_lowers(): lower_program(pair(), plan_program(pair())) = Some(one_saved_program()) { refl }

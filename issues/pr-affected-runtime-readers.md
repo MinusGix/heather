@@ -7,7 +7,7 @@ created: 2026-10-30
 updated: 2026-10-30
 ---
 
-`scripts/affected-targets.mjs` (docs/testing-architecture-design.md
+`scripts/affected-targets.mjs` (docs/infrastructure/testing-architecture-design.md
 §2.2.1) treats a test file whose sources read files or spawn processes as
 reading all of `lib/`, `examples/`, `docs/showcase/` and the editor corpus.
 About thirty files qualify, and they include the suite's heaviest: the

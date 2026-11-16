@@ -7,7 +7,7 @@ created: 2026-10-30
 updated: 2026-10-30
 ---
 
-Three gaps the cast slice (docs/casting-design.md §9) worked around in the
+Three gaps the cast slice (docs/language/casting-design.md §9) worked around in the
 tactic host (`crates/elab/src/host.rs`):
 
 - **No field access from the tactic side.** A record value, or a record

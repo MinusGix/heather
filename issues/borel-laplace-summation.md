@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §3.8: Borel–Laplace summation of
+`docs/library/analysis-foundations-design.md` §3.8: Borel–Laplace summation of
 Gevrey-1 series. It is a homomorphism of differential algebras on its domain,
 so formal identities and ODEs transfer to the summed functions.
 

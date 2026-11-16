@@ -13,7 +13,7 @@ updated: 2026-11-10
 carry, no population count and no leading-zero count. Hashes and ciphers
 are written in exactly these, and so are bit sets and the decimal printer.
 
-Measured for `docs/native-lexer-crypto-roadmap.md` (probes in the project
+Measured for `docs/native/native-lexer-crypto-roadmap.md` (probes in the project
 folder's `native-roadmap/`, release binary, cloud box, width one):
 
 | probe | kernel steps |

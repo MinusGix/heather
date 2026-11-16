@@ -27,7 +27,7 @@
 # vouched for by target/decl-cache). It is a round's final verification:
 # what it leaves out is the exact policy's check that the *current* frontend
 # still elaborates unchanged library modules identically, which the nightly
-# master sentinel runs instead (docs/testing-architecture-design.md §2.1).
+# master sentinel runs instead (docs/infrastructure/testing-architecture-design.md §2.1).
 # After an elab edit that check is most of the extra cost: every library
 # module re-elaborated. Unfiltered, it also leaves out the native x86
 # certificate gates (crates/cli/tests/native*.rs, about half the suite's CPU,
@@ -39,16 +39,14 @@
 # the test files the diff can affect (scripts/affected-targets.mjs:
 # Cargo's dep-info per binary and per family member, every test that reads
 # lib/ or spawns at run time, and everything when a changed path cannot be
-# placed; docs/testing-architecture-design.md §2.2.1).
+# placed; docs/infrastructure/testing-architecture-design.md §2.2.1).
 # HEATHER_PR_AFFECTED=all runs every one.
-# Both stale-image lanes also run the `heather` binary with the kernel's
-# sampled self-checks off (HEATHER_KERNEL_SELF_CHECKS=off, read by
-# crates/cli/src/main.rs; crates/kernel/src/checks.rs): a check walks the
-# whole term a skip stepped over, and on the library's `runtime fn`
-# generator modules one check in sixteen was over twenty times the module
-# (issues/kernel-self-check-cost-on-skipped-terms.md). The test binaries'
-# own in-process kernels keep the sample, and so does every process of the
-# default lane. Set the variable yourself to choose another level.
+# No lane samples the kernel's slow self-checks (crates/kernel/src/checks.rs,
+# off by default): a check walks the whole term a skip stepped over, and on
+# the library's `runtime fn` generator modules one check in sixteen was over
+# twenty times the module (issues/kernel-self-check-cost-on-skipped-terms.md).
+# HEATHER_KERNEL_SELF_CHECKS=sampled or full turns them on for the `heather`
+# binary's runs.
 # --long additionally runs every slow kernel self-check on every occasion
 # (crates/kernel/src/checks.rs) in its own target directory; not a gate,
 # a sweep to run when the kernel's traversals or bounds memo changed.
@@ -102,7 +100,6 @@ if [[ "${1:-}" == --fast ]]; then
   # the exact policy does, which the master sentinel runs nightly; a round's
   # final verification is `--pr`, which runs everything this lane skips.
   export HEATHER_SEMANTIC_IMAGES=accept-stale
-  export HEATHER_KERNEL_SELF_CHECKS="${HEATHER_KERNEL_SELF_CHECKS:-off}"
   echo "fast lane: semantic test images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the full lane rebuilds them"
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
@@ -126,12 +123,13 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_head_takes_its_count_as_gnu_head
         --skip compiled_decimals_round_trip_the_widest_words
         --skip source_to_native_binary
+        --skip utf8_validator_agrees_with_rust
+        --skip binary_search_agrees_with_partition_point --skip sort_agrees_with_slice_sort
         --skip linked_exports_are_what_the_compiler_emits)
 elif [[ "${1:-}" == --pr ]]; then
   shift
   TEST_LANE=pr
   export HEATHER_SEMANTIC_IMAGES=accept-stale
-  export HEATHER_KERNEL_SELF_CHECKS="${HEATHER_KERNEL_SELF_CHECKS:-off}"
   echo "pr lane: the tests the diff can affect run; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
   # The native certificate gates run when the round changed something they
   # check: the native library and the machine/OS models it is proved over,
@@ -169,7 +167,7 @@ elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long
   # Every slow kernel self-check on every occasion (crates/kernel/src/checks.rs;
-  # the default samples one bounds-skip verification in sixteen). Builds in
+  # off by default). Builds in
   # its own target directory so switching lanes does not rebuild the
   # workspace twice.
   CARGO_FLAGS=(--features heather-kernel-lib/long-checks)
@@ -178,7 +176,7 @@ elif [[ "${1:-}" == --long ]]; then
 fi
 
 # `--test <file>` keeps meaning that file's tests when the file is a member of
-# an elab family binary (docs/elab-test-families-design.md §D4): the helper
+# an elab family binary (docs/infrastructure/elab-test-families-design.md §D4): the helper
 # rewrites it to `--test <family>` with a `<file>::` filter, or `<file>::<name>`
 # when a filter was given. The warm-up choice below reads the args as the
 # caller wrote them.
@@ -212,7 +210,7 @@ if ! $HAS_LIBTEST_SEPARATOR; then
 fi
 
 # A fresh cloud container starts from the image stores the last green master
-# sentinel published (scripts/sentinel seed; docs/testing-architecture-design.md
+# sentinel published (scripts/sentinel seed; docs/infrastructure/testing-architecture-design.md
 # §3.1.2), so its first suite replays library modules instead of elaborating
 # them all cold. Seconds, once; skipped when the stores exist or off-cloud.
 # Replay rechecks every image, so a seeded one can only be a miss. Never the
@@ -304,7 +302,7 @@ native_bin_warmup() {
 # The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
 # library gate, the showcase gate and native_cat.rs/native_tools.rs's
 # `write-elf` share. Every module is keyed by its own closure
-# (docs/module-dag-design.md), so `write-elf` replays what the gate built;
+# (docs/infrastructure/module-dag-design.md), so `write-elf` replays what the gate built;
 # cold, it would have to build its closure itself, most of the library, which
 # no one process does under the rail. So the warmup is
 # the gate: one child per folder, three at a time, each well inside the

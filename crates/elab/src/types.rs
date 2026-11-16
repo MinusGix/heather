@@ -19,7 +19,7 @@ use crate::names::qkey;
 pub(crate) const COLLECTION_LITERAL_TAG: u32 = 1 << 16;
 
 /// A nominal declaration's tag, derived from its qualified name alone
-/// (`docs/module-dag-design.md` §3,
+/// (`docs/infrastructure/module-dag-design.md` §3,
 /// `issues/nominal-tags-from-declaration-identity.md`).
 ///
 /// It used to be the count of inductives committed before it, so what a
@@ -52,7 +52,7 @@ struct TypeLayer {
     by_tag: HashMap<u32, Rc<Inductive>>,
     iwf_by_shape: HashMap<u32, Rc<Inductive>>,
     constructors: NameMap<String, (Rc<Inductive>, usize)>,
-    /// A mutual group's members (docs/mutual-inductive-design.md §2): each
+    /// A mutual group's members (docs/inductives/mutual-inductive-design.md §2): each
     /// member's qualified name to its family and its position there.
     members: NameMap<String, (Rc<Inductive>, usize)>,
     record_fields: NameSet<String>,
@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// A declaration's tag is a function of its qualified name, not of what
-    /// was committed before it (`docs/module-dag-design.md` §3).
+    /// was committed before it (`docs/infrastructure/module-dag-design.md` §3).
     #[test]
     fn a_tag_does_not_depend_on_the_declarations_before_it() {
         let mut alone = Elaborator::new();

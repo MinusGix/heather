@@ -8,7 +8,7 @@ updated: 2026-10-31
 ---
 
 Split from [[cast-reading-at-class-carrier]], which landed `ring`,
-`linarith` and `nlinarith` at a class carrier (docs/casting-design.md §16).
+`linarith` and `nlinarith` at a class carrier (docs/language/casting-design.md §16).
 
 `cast_from` / `cast_to` (lib/std/tactic/cast.hthr) still find their carrier
 in `cast_carriers()` by global names (`Rat::Same`, `Rat::le_respects`, …):

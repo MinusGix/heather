@@ -1,5 +1,5 @@
 // Formal topologies: frames presented by a small basis and a cover relation
-// (docs/frame-locale-design.md §6).
+// (docs/library/frame-locale-design.md §6).
 //
 // A formal topology is a small type `P` of basic opens with a preorder and a
 // relation `a ◁ U` ("the basic open `a` is covered by the family `U`"). It is
@@ -12,7 +12,7 @@
 // The cover is axiomatic: any relation with the four rules below presents a
 // frame (`FormalTopology::frame`). The usual way to present a particular
 // locale, a small set of axioms whose cover is the least relation closed
-// under the rules, is `Cover` below (docs/frame-locale-design.md §6.1).
+// under the rules, is `Cover` below (docs/library/frame-locale-design.md §6.1).
 
 import logic;
 import relation_props;

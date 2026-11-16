@@ -13,7 +13,7 @@ finished issue open (README rule 3). The **form** half of that issue is paid
 everywhere; this is the **span** half, which turned out to be a separable
 problem rather than the same fix.
 
-The pattern compiler (`docs/nested-match-patterns-design.md` §3.4) expands a
+The pattern compiler (`docs/language/matching/nested-match-patterns-design.md` §3.4) expands a
 deep pattern into a generated inner `match`, and gives it the *whole* match's
 span, because the level it reports about has no source text of its own — the
 user wrote a pattern, and a missing constructor there belongs to a **column**,
@@ -72,4 +72,4 @@ not answerable by reading.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/nested-match-patterns-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/language/matching/nested-match-patterns-design.md`).

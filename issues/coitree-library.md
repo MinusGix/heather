@@ -8,7 +8,7 @@ created: 2026-10-22
 updated: 2026-10-22
 ---
 
-`lib/std/itree/coitree.hthr` (`docs/coitree-design.md`): `CoTree<R>(E)` as codata
+`lib/std/itree/coitree.hthr` (`docs/itrees/coitree-design.md`): `CoTree<R>(E)` as codata
 with observations `Obs`, the combinators written observation-seeded, their
 unfolding laws, approximations into `ITree` as a `Program`, and `Bisim` as
 indexed codata with refl/sym/trans, the monad laws, a bind congruence and

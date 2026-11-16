@@ -32,6 +32,7 @@ fn verified_call_lowering_checks_and_lowers_the_examples() {
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         // The lending laws the calls module's contract is stated under.
         ("x86_64_lending", include_str!("../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
+        ("x86_64_frame", include_str!("../../../lib/std/arch/x86_64/x86_64_frame.hthr")),
         // A call over views: the machine's laws of a lent window, and what the
         // lowering checks of a view before it lends it.
         ("x86_64_views", include_str!("../../../lib/std/arch/x86_64/x86_64_views.hthr")),

@@ -1,5 +1,5 @@
 // FunctionIR's meaning with the file threaded, as a relation
-// (docs/native-one-compiler-design.md §2.6).
+// (docs/native/native-one-compiler-design.md §2.6).
 //
 // The relation the function compiler is proved against
 // (`StructuredRegionHoldsOver`, function_ir) reads a file that never
@@ -144,6 +144,29 @@ theorem nodes_run_still(values: Valuation(), nodes: List<Node>): (before, after:
             let here = node.runs_still(values, before, mid, both.left, ran.proof.left);
             let later = nodes_run_still(values, rest, mid, after, both.right, ran.proof.right);
             ⟨trans(later.left, here.left), ⟨here.right, j(here.left, λ m _ => NodesHoldOver(m, values, rest), later.right)⟩⟩
+        },
+    }
+}
+
+// Nodes after nodes run where the first run and the rest run from the file
+// they left.
+theorem nodes_run_append(values: Valuation(), first: List<Node>): (rest: List<Node>) → (before, mid, after: Buffers()) →
+    NodesRun(first, values, before, mid) → NodesRun(rest, values, mid, after) → NodesRun(first ++ rest, values, before, after) {
+    match first {
+        Nil => λ rest before mid after ran later => j(ran, λ m _ => NodesRun(rest, values, m, after), later),
+        Cons(node, more) => λ rest before mid after ran later =>
+            Exists(ran.witness, ⟨ran.proof.left, nodes_run_append(values, more, rest, ran.witness, mid, after, ran.proof.right, later)⟩),
+    }
+}
+
+// And only so: there is a file between them.
+theorem nodes_run_split(values: Valuation(), first: List<Node>): (rest: List<Node>) → (before, after: Buffers()) →
+    NodesRun(first ++ rest, values, before, after) → Exists<Buffers()>(λ mid => NodesRun(first, values, before, mid) ∧ NodesRun(rest, values, mid, after)) {
+    match first {
+        Nil => λ rest before after ran => Exists(before, ⟨refl, ran⟩),
+        Cons(node, more) => λ rest before after ran => {
+            let later = nodes_run_split(values, more, rest, ran.witness, after, ran.proof.right);
+            Exists(later.witness, ⟨Exists(ran.witness, ⟨ran.proof.left, later.proof.left⟩), later.proof.right⟩)
         },
     }
 }
@@ -731,7 +754,7 @@ theorem program_stores_within_lendless(functions: List<Function>, marks: List<Bo
 // needs lent to write: those it stores into (a written view's buffer among
 // them) and those the functions it calls need. At a call over views the
 // callee's needs are met by the views, each lent to write where the callee
-// needs it so (docs/native-library-exports-design.md §3.1).
+// needs it so (docs/native/native-library-exports-design.md §3.1).
 
 // The views as marks: which are lent to write.
 fn views_marks(views: List<View>) → List<Bool> {

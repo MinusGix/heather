@@ -50,3 +50,23 @@ theorem table_read_bytes(): assemble(no_fills(), table_read_prog(Start, BRax, XR
      BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xc8)] { refl }
 // The jump's displacement reads back as the table's length.
 theorem table_jump_reads_back(): BitVec::ofNat(16, n := 32).sign_extend(32).toNat() = 16 { refl }
+
+// A piece is stated by its bytes (`Asm::numbers`, x86_64_asm): the load
+// and a table are each measured by a lemma, and each is the literal piece
+// of the same bytes, since a piece's measure is a verdict. So a compiler
+// states a program with them as a literal and knows nothing of the
+// instruction.
+theorem indexed_piece_literal(): asm_indexed_load(table_read_load(BRax, XRcx)) =
+    Piece([BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xc8)], 4, trivial) { refl }
+theorem table_piece_literal(): table_piece([0x0102]) =
+    Piece([BitVec::ofNat(2), BitVec::ofNat(1), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)], 8, trivial) { refl }
+theorem indexed_piece_numbers(): asm_indexed_load(table_read_load(BRax, XRcx)).numbers() = [13, 4, 0x48, 0x8b, 0x04, 0xc8] { refl }
+theorem table_piece_numbers(): table_piece([0x0102]).numbers() = [13, 8, 2, 1, 0, 0, 0, 0, 0, 0] { refl }
+
+// Negative controls: a literal of another index register's bytes is not
+// the piece, and a literal cannot claim a length its bytes do not have.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem indexed_piece_other(): asm_indexed_load(table_read_load(BRax, XRcx)) =
+    Piece([BitVec::ofNat(0x48), BitVec::ofNat(0x8b), BitVec::ofNat(0x04), BitVec::ofNat(0xd0)], 4, trivial) { refl }
+// expect-error: `trivial` proves `True`
+fn piece_overlong() → Asm { Piece([BitVec::ofNat(0x48), BitVec::ofNat(0x8b)], 4, trivial) }

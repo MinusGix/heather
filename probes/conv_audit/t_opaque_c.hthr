@@ -1,4 +1,0 @@
-import nat;
-record W { after: Nat, pres: after = 0 }
-theorem mk_w(): W { W(after := 0, pres := refl) }
-theorem via_app(): 0 = 0 { mk_w().pres }

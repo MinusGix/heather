@@ -11,6 +11,11 @@ repository root.
   a row whose binary and import closure are unchanged is not recompiled) and
   the Rust declarations with them (`generated/exports.rs`, never edited:
   `crates/cli/tests/linked_exports.rs`).
+- **`compile-x86` runs the optimizer** over a program that is lent spans
+  (inline, then tidy: `docs/native/optimizer-design.md` §9.1), so the assembly here
+  is the optimised program's. `HEATHER_OPTIMIZE=off` compiles without it, to
+  measure a pass or to tell a refusal of the passes from the lowering's;
+  never check in what it writes.
 - **A new export** is a line in the table (its header states the columns), a
   wrapper in `src/`, and tests against an independent reference. Run `scripts/linked` before writing the wrapper: the compiler
   links this crate, so a wrapper of a symbol not yet generated stops the build

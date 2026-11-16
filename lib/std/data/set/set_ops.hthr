@@ -1,7 +1,7 @@
 // The spellings the `sets` tactic (lib/std/tactic/set_tactic.hthr) reads
 // beside the carriers and operations it finds by instance
 // (lib/std/data/set/dec_set.hthr): its registry entries
-// (docs/registered-values-design.md) for Boolean spellings of list
+// (docs/metaprogramming/registered-values-design.md) for Boolean spellings of list
 // membership that are not a carrier's own `has`, relations between two sets,
 // and equalities between elements. Only the entry types live here, so a
 // theory module can import this without the tactic.

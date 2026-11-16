@@ -1,9 +1,0 @@
-import nat;
-inductive Step { Go(next: Nat), Stop(result: Nat) }
-fn payload(s: Step) → Nat { match s { Go(p) => p, Stop(p) => p } }
-fn dbl(n: Nat) → Nat { n + n }
-theorem use_word(w: Nat, c: Nat, computed: w = dbl(c)): w = dbl(c) { computed }
-// The per-arm spelling where the outside spelling is expected: an argument.
-theorem as_arg(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }): w = dbl(payload(r)) {
-    use_word(w, payload(r), h)
-}

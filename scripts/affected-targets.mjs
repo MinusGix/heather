@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Which test binaries a round's diff can affect (`scripts/test --pr`;
-// docs/testing-architecture-design.md §2.2). scripts/test builds every test
+// docs/infrastructure/testing-architecture-design.md §2.2). scripts/test builds every test
 // binary first, then hands this file Cargo's JSON manifest; it writes the
 // manifest back with only the affected binaries' artifacts, for
 // run-test-targets.mjs to run as before.
@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 export const GLOBAL = /^(Cargo\.toml|Cargo\.lock|\.cargo\/|rust-toolchain|scripts\/(test|run-test-targets\.mjs|affected-targets\.mjs|check-elab-test-families\.mjs)$)/;
 // No test binary reads these (scripts/test's own checks run on every lane).
 // A file some `.d` names is never one of these, whatever its path.
-export const NO_TEST = /^(docs\/(?!showcase\/)|issues\/|perf\/|book\/|book\.toml$|probes\/|editors\/|scripts\/|\.claude\/|\.gitignore$)|\.md$/;
+export const NO_TEST = /^(docs\/(?!showcase\/)|issues\/|perf\/|book\/|book\.toml$|editors\/|scripts\/|\.claude\/|\.gitignore$)|\.md$/;
 // Read at run time by tests (lib/ also at compile time, through include_str!).
 export const RUNTIME_DATA = /^(lib\/|examples\/|docs\/showcase\/|tree-sitter-heather\/|crates\/linked\/generated\/)/;
 // A binary whose own sources say this may read run-time data. File I/O and

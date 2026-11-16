@@ -1,6 +1,6 @@
 // Probes of the lowering of a call over views (`File::emit_lend`,
 // function_ir_lower_calls; function_ir_lower_views;
-// docs/native-library-exports-design.md §3.1): a function that lends its
+// docs/native/native-library-exports-design.md §3.1): a function that lends its
 // callee a window of its buffer to write, one that lends two windows of
 // one buffer, one to read and one to write, the code each lowers to, the
 // contract each meets at every lending of its counts, and what is
@@ -99,7 +99,7 @@ theorem lending_marked(): program_marked(lending(), [[True], [True]]) = True { r
 // function write what its row marks, the function meets its contract.
 theorem lending_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), top: Nat):
-    Site<M>(fetch, data, lending_program(), last, origin).CallsLent(stack, program_effects(lending()), 2, [1, 1],
+    Site<M>(fetch, data, lending_program(), last, origin).CallsLent(stack, program_effects(lending()), program_room(lending()), 2, [1, 1],
         λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), top) {
     lower_program_lent_needs<M>(lending(), plan_program(lending()), [1, 1], lending_program(), lending_lowers(),
         λ (f: Nat) (v: Nat) => marked(marks_row([[True], [True]], f), v), program_marked_needs(lending(), [[True], [True]], trivial),
@@ -113,10 +113,10 @@ theorem lending_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::writing([1, 1], addresses, five(), [True]).spans())):
     Site<M>(fetch, data, lending_program(), last, origin).Returns(stack, asm_labels(lending_program())(2),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), w(1), w(4), w(1), w(9)], i, s) ∧ 136 * 2 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), w(1), w(4), w(1), w(9)], i, s) ∧ 184 <= i) ∧
             stack.LentOver(Lending::writing([1, 1], addresses, five(), [True]), top, 1, [a, w(5), w(1), w(4), w(1), w(9)], five())(i, s),
         stack.AnsweredOver(Lending::writing([1, 1], addresses, five(), [True]), w(9), [[b(1), b(2), b(9), b(4), b(5)]])) {
-    compiled_returns_marked<M>(lending(), plan_program(lending()), [1, 1], addresses, [[True], [True]], lending_program(), lending_lowers(),
+    compiled_returns_marked<M>(lending(), plan_program(lending()), program_room(lending()), [1, 1], addresses, [[True], [True]], lending_program(), lending_lowers(),
         lending_evaluable(), trivial, fetch, data, last, origin, stack, top, five(), 1, trivial, loan, [a, w(5), w(1), w(4), w(1), w(9)],
         trivial, Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]), lending_runs(a))
 }
@@ -170,10 +170,10 @@ theorem renaming_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: L
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::writing([1, 2], addresses, two(), [False, True]).spans())):
     Site<M>(fetch, data, renaming_program(), last, origin).Returns(stack, asm_labels(renaming_program())(2),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(3), c, w(4), w(3), w(9)], i, s) ∧ 136 * 2 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(3), c, w(4), w(3), w(9)], i, s) ∧ 184 <= i) ∧
             stack.LentOver(Lending::writing([1, 2], addresses, two(), [False, True]), top, 1, [a, w(3), c, w(4), w(3), w(9)], two())(i, s),
         stack.AnsweredOver(Lending::writing([1, 2], addresses, two(), [False, True]), w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]])) {
-    compiled_returns_marked<M>(renaming(), plan_program(renaming()), [1, 2], addresses, [[True], [False, True]], renaming_program(),
+    compiled_returns_marked<M>(renaming(), plan_program(renaming()), program_room(renaming()), [1, 2], addresses, [[True], [False, True]], renaming_program(),
         renaming_lowers(), renaming_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
         [a, w(3), c, w(4), w(3), w(9)], trivial, Ending(w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]]), renaming_runs(a, c))
 }
@@ -233,10 +233,10 @@ theorem crossed_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last:
     stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a, c: BitVec(64), top: Nat,
     loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 2], addresses, two(), [True, False]).spans())):
     Site<M>(fetch, data, crossed_program(), last, origin).Returns(stack, asm_labels(crossed_program())(2),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(3), c, w(4), w(1)], i, s) ∧ 136 * 2 <= i) ∧
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(3), c, w(4), w(1)], i, s) ∧ 184 <= i) ∧
             stack.LentOver(Lending::writing([2, 2], addresses, two(), [True, False]), top, 1, [a, w(3), c, w(4), w(1)], two())(i, s),
         stack.AnsweredOver(Lending::writing([2, 2], addresses, two(), [True, False]), w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]])) {
-    compiled_returns_marked<M>(crossed(), plan_program(crossed()), [2, 2], addresses, [[False, True], [True, False]], crossed_program(),
+    compiled_returns_marked<M>(crossed(), plan_program(crossed()), program_room(crossed()), [2, 2], addresses, [[False, True], [True, False]], crossed_program(),
         crossed_lowers(), crossed_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
         [a, w(3), c, w(4), w(1)], trivial, Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]), crossed_runs(a, c))
 }
@@ -284,7 +284,7 @@ fn halving() → List<Function> { [halves_at(), carry_at()] }
 theorem halving_runs(a: BitVec(64)): program_run(halving(), five(), 1, [a, w(5), w(2), w(1)]) =
     Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
 theorem halving_refused(): lower_program_lent(halving(), plan_program(halving()), [2, 1]) = None { refl }
-theorem halving_refused_why(): halves_at().refused(1, halves_at().plan(), 2, [2, 1]) =
+theorem halving_refused_why(): halves_at().refused(1, halves_at().plan(), 2, [2, 1], index_rooms()) =
     "where 10 is false, the call of function 0 over views (buffer 0 from 4 to 2, buffer 0 from 2 to 1 written): a view to write shares its buffer with another view" { refl }
 
 // A window whose bounds no comparison on the way says.
@@ -293,7 +293,7 @@ fn unguarded() → Function {
         body := Lend([View(buffer := 0, home := 0, start := 2, end := 3, written := True, base := 6, length := 7)], 0, [4, 5], 8))
 }
 theorem unguarded_refused(): lower_program_lent([unguarded(), put_at()], plan_program([unguarded(), put_at()]), [1, 1]) = None { refl }
-theorem unguarded_why(): unguarded().refused(1, unguarded().plan(), 2, [1, 1]) =
+theorem unguarded_why(): unguarded().refused(1, unguarded().plan(), 2, [1, 1], index_rooms()) =
     "the call of function 0 over views (buffer 0 from 2 to 3 written): its view of buffer 0 from 2 to 3: no arm taken on the way here says that its start is at most its end, and its start is not the constant 0" { refl }
 
 // A window that starts before it ends, with nothing said of where it ends
@@ -306,7 +306,7 @@ fn unbounded() → Function {
                     leaf([Move(64, 8, 9)])))))
 }
 theorem unbounded_refused(): lower_program_lent([unbounded(), put_at()], plan_program([unbounded(), put_at()]), [1, 1]) = None { refl }
-theorem unbounded_why(): unbounded().refused(1, unbounded().plan(), 2, [1, 1]) =
+theorem unbounded_why(): unbounded().refused(1, unbounded().plan(), 2, [1, 1], index_rooms()) =
     "where 11 is false, the call of function 0 over views (buffer 0 from 2 to 3 written): its view of buffer 0 from 2 to 3: no arm taken on the way here says that its end is at most the buffer's length 1, and its end is not that length" { refl }
 
 // A view of a buffer the function is not lent.
@@ -316,7 +316,7 @@ fn homeless() → Function {
             Lend([View(buffer := 1, home := 0, start := 9, end := 1, written := True, base := 6, length := 7)], 0, [4, 5], 8)))
 }
 theorem homeless_refused(): lower_program_lent([homeless(), put_at()], plan_program([homeless(), put_at()]), [1, 1]) = None { refl }
-theorem homeless_why(): homeless().refused(1, homeless().plan(), 2, [1, 1]) =
+theorem homeless_why(): homeless().refused(1, homeless().plan(), 2, [1, 1], index_rooms()) =
     "the call of function 0 over views (buffer 1 from 9 to 1 written): its view of buffer 1 from 9 to 1: the scope has no home of that buffer at 0" { refl }
 
 // One view, to a callee that takes two buffers.
@@ -326,7 +326,7 @@ fn short() → Function {
             Lend([View(buffer := 0, home := 0, start := 9, end := 1, written := True, base := 6, length := 7)], 0, [0, 1, 4], 8)))
 }
 theorem short_refused(): lower_program_lent([short(), carry_at()], plan_program([short(), carry_at()]), [2, 1]) = None { refl }
-theorem short_why(): short().refused(1, short().plan(), 2, [2, 1]) =
+theorem short_why(): short().refused(1, short().plan(), 2, [2, 1], index_rooms()) =
     "the call of function 0 over views (buffer 0 from 9 to 1 written): the callee is lent more buffers than the call has views" { refl }
 
 // No view: a call over none is a call.
@@ -334,7 +334,7 @@ fn viewless() → Function {
     Function(parameters := [0, 1, 4, 5], lent := 1, result := 8, body := Lend([], 0, [0, 1, 4, 5], 8))
 }
 theorem viewless_refused(): lower_program_lent([viewless(), put_at()], plan_program([viewless(), put_at()]), [1, 1]) = None { refl }
-theorem viewless_why(): viewless().refused(1, viewless().plan(), 2, [1, 1]) =
+theorem viewless_why(): viewless().refused(1, viewless().plan(), 2, [1, 1], index_rooms()) =
     "the call of function 0 over views (): it has no view, and a call over none is written as a call" { refl }
 
 // ---------------------------------------------------------------------------

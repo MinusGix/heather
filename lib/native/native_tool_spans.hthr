@@ -1,5 +1,5 @@
 // Functions over a buffer they are lent, which the builder's tools call
-// (docs/native-one-compiler-design.md §2.3): `runtime fn`s whose first
+// (docs/native/native-one-compiler-design.md §2.3): `runtime fn`s whose first
 // parameter is a span of bytes, compiled into the tool's file by the
 // function compiler and passed the buffer by the call
 // (`Prog::function_call`). Each is a Heather function, and its program is
@@ -8,12 +8,12 @@
 // stated below from that. `raise_span` stores into the buffer: it is a
 // `runtime fn` over the span it writes, and its program is proved to run
 // to it at every file (`f::runs_over`,
-// docs/native-one-compiler-design.md §2.6). `copy_span` stores into one
+// docs/native/native-one-compiler-design.md §2.6). `copy_span` stores into one
 // span what it reads of another: the span after the written one is lent to
 // read, and the statement is at every file, the span read being the file's
 // next. `List::raise_letters` is `raise_span` as a method of its span, the
 // one export named by a method's path. `copy_window` calls `copy_span` over
-// a window of each of its spans (docs/native-library-exports-design.md
+// a window of each of its spans (docs/native/native-library-exports-design.md
 // §3.1): the loop runs from its own index 0 over two windows and is told
 // nothing of where in the spans they lie.
 // The probes are lib/_tests/native/native_tool_spans_tests.hthr.
@@ -214,4 +214,34 @@ theorem copy_window_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, a
     program_run(copy_window_program(), Cons(out, rest), copy_window_entry(), [place, length, at, size, from, end])
         = FTm::end_of(rest, copy_window(out, length, rest.span(0), size, from, end)) {
     copy_window::runs_over(out, rest, place, length, at, size, from, end)
+}
+
+// ---------------------------------------------------------------------------
+// A verdict on a whole input: what the program `ascii_check`
+// (lib/_tests/native/runtime/runtime_program_tests.hthr) lends its buffer
+// to once it has read standard input into it.
+
+// How many of the bytes from `i` below `count` are at or past 0x80, added
+// to `high`.
+runtime fn ascii_high(span: List<BitVec(8)>, length, count, i, high: BitVec(64)) → BitVec(64) decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => high,
+        True => ascii_high(span, length, count, i.add(BitVec::ofNat(1)),
+            match span.byte_within(length, i).zero_extend(56).unsigned_lt_bit(BitVec::ofNat(128)) { True => high, False => high.add(BitVec::ofNat(1)) }),
+    }
+}
+
+// The verdict on the first `filled` bytes of the span: 0 when they are all
+// ASCII, 1 when one is not, 2 when the read failed or the input filled the
+// span (so it may have been cut short).
+runtime fn ascii_status(span: List<u8>, length, filled, failed: u64) → Mutated<List<u8>, u64> {
+    if failed = 0 {
+        if filled < length {
+            if ascii_high(span, length, filled, 0, 0) = 0 { Mutated(span, 0) } else { Mutated(span, 1) }
+        } else {
+            Mutated(span, 2)
+        }
+    } else {
+        Mutated(span, 2)
+    }
 }

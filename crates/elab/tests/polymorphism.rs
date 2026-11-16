@@ -1,4 +1,4 @@
-//! Type parameters on `fn`/`theorem` (docs/surface-polymorphism.md §9).
+//! Type parameters on `fn`/`theorem` (docs/language/surface-polymorphism.md §9).
 
 use heather_elab::Elaborator;
 
@@ -83,7 +83,7 @@ fn a_type_argument_is_solved_from_under_a_binder() {
 
 #[test]
 fn a_nullary_calls_type_argument_comes_from_the_expected_type() {
-    // Retired-and-replaced (docs/unifier-completeness-design.md §5.1): this
+    // Retired-and-replaced (docs/elaborator/unifier-completeness-design.md §5.1): this
     // was the "cannot infer the type argument" pin — before the general
     // harvest, a call with no argument mentioning `A` was refused even in
     // checking position, where `List<Nat>` says everything. Now the expected
@@ -299,7 +299,7 @@ fn recursion_over_a_container_at_an_open_element_type() {
 
 #[test]
 fn an_unannotated_lambda_argument_is_inferred_from_the_call() {
-    // Retired-and-replaced (docs/unifier-completeness-design.md §4.1): this
+    // Retired-and-replaced (docs/elaborator/unifier-completeness-design.md §4.1): this
     // was the "annotate its binders" pin — an unannotated lambda argument of
     // an implicit-taking callee was refused unconditionally, because
     // explicit arguments were inferred and a lambda without annotations has
@@ -399,7 +399,7 @@ fn a_declaration_named_map_can_recurse() {
 #[test]
 fn less_than_still_parses_as_lt() {
     // `<` is the `Lt` operator too; the speculative type-argument parse must
-    // fall back cleanly (docs/surface-polymorphism.md §1).
+    // fall back cleanly (docs/language/surface-polymorphism.md §1).
     //
     // The fallback name was `lt` until 2026-08-16 and is `Lt` now, matching
     // `<=`'s `Le` — `std/nat` declares the relation capitalized
@@ -422,7 +422,7 @@ fn the_prelude_serves_a_declared_type() {
 }
 
 // -- a polymorphic function as a first-class argument (D2, ------------------
-// docs/unifier-completeness-design.md §5.3: the bare-reference route)
+// docs/elaborator/unifier-completeness-design.md §5.3: the bare-reference route)
 
 #[test]
 fn a_bare_polymorphic_reference_instantiates_at_a_monomorphic_domain() {
@@ -482,7 +482,7 @@ fn a_bare_reference_at_a_polymorphic_expected_type_is_not_instantiated() {
     // would mis-teach (`El ?A ≟ Ty 0` solves `?A := ⌜Type 0⌝`) and reach the
     // kernel as a LevelMismatch on a term nobody wrote. Suppressed: the
     // reference passes verbatim, exactly as before the bare-reference route
-    // existed. The skeleton rule of docs/implicit-binders-design.md §5.3
+    // existed. The skeleton rule of docs/language/implicit-binders-design.md §5.3
     // refines this once implicitness travels with the type.
     ok("fn myid<A>(x: A) -> A { x }
         fn appnat(f: (A: Type<0>) -> A -> A, n: Nat) -> Nat { f(Nat, n) }

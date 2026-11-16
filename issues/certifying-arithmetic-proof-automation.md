@@ -70,7 +70,7 @@ unary closed computations is compatible with that division.
   feared certificate-checking cost an acceptance measurement rather than an
   assumption.
 - 2026-08-26: The first certifying fragment was implemented
-  (`docs/certifying-arithmetic-automation-design.md`): checking-only `arith`
+  (`docs/certifying-arithmetic-automation-design.md@4acf2fe`): checking-only `arith`
   reifies open Nat equalities containing opaque atoms, `+`, and `twice`, then
   emits an ordinary proof from the Nat AC/congruence kit. Success exposes atom
   and swap counts plus the exact used-lemma list; failure exposes its kind,
@@ -135,5 +135,5 @@ unary closed computations is compatible with that division.
   remain useful evidence; [[arith-compact-additive-certificates]] is closed as
   superseded rather than implemented against deleted machinery.
 - 2026-09-25: Customer from certified wc -l's formatter (lib/decimal_line.hthr): most of its hand work is word-to-Nat plumbing. That slice is filed as [[bitvec-nat-lifting-tactic]], and the Nat division lemmas it cites as [[nat-div-mod-lemma-kit]].
-- 2026-09-26: The word-to-Nat slice landed as `bv_omega` (docs/bv-omega-design.md); see [[bitvec-nat-lifting-tactic]]. Its cost is [[bv-omega-check-cost]].
-- 2026-11-05: gardener: cites a file it shares with [[bv-omega-definition-summaries]] (`docs/bv-omega-design.md`).
+- 2026-09-26: The word-to-Nat slice landed as `bv_omega` (docs/tactics/bv-omega-design.md); see [[bitvec-nat-lifting-tactic]]. Its cost is [[bv-omega-check-cost]].
+- 2026-11-05: gardener: cites a file it shares with [[bv-omega-definition-summaries]] (`docs/tactics/bv-omega-design.md`).

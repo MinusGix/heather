@@ -55,7 +55,7 @@ is worth knowing why before adding another special case.
 - 2026-09-16: Noticed during the `calc_parser.hthr` readability pass. Not
   probed — the file was left with the annotations it had, since removing them
   changes elaborated terms and that file is a quoted perf fixture
-  (`docs/complete-post-attribution-design.md` §10.7).
+  (`docs/elaborator/complete-post-attribution-design.md` §10.7).
 - 2026-09-16: Answered: **(2), they were not required.** The showcase now calls the
 eliminators as the `self` methods they are declared as, with nothing annotated:
 `first.and_then(λ left => recognize_certified(plus,0,source,left.end).fold(λ op => …, λ ignored => …))`.

@@ -128,6 +128,6 @@ error message is a different severity from one the checker itself builds.
   needs — an **open** carrier, or there is no `Π` whose codomain mentions its
   binder, and a **refusal**, since the crash was in rendering one — plus the
   recovered-argument case and the zero-binder control.
-  `docs/surface-type-display-design.md` §4 records the rule, beside its own
+  `docs/elaborator/surface-type-display-design.md` §4 records the rule, beside its own
   sentence that a display path which panics is worse than any message it could
   have printed.

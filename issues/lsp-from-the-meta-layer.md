@@ -21,7 +21,7 @@ already a first-class, well-typed value in the language rather than a
 compiler internal:
 
 - **Goal state is already code.** A hole is `u : Trm(Γ ⊢ P)` and its
-  statement is contextual type code (docs/sketches/surface-v3.md §2). The
+  statement is contextual type code (docs/archive/surface-v3.md §2). The
   unfilled-goal listing [[goal-holes]] already renders is not a debug view
   of a compiler data structure — it is a projection of language values.
 - **A `Compile` instance carries its own generated IR and its equivalence
@@ -101,4 +101,4 @@ keystroke.
   delta, implicitly expand profiles through the real resolver, down-rank but
   never hide unmet candidates, and make axiom-backed `using` an explicit
   provenance-bearing editor action.
-- 2026-11-05: gardener: cites a file it shares with [[nested-goal-discharge]] (`docs/sketches/surface-v3.md`).
+- 2026-11-05: gardener: cites a file it shares with [[nested-goal-discharge]] (`docs/archive/surface-v3.md`).

@@ -1,5 +1,5 @@
 // Lowering a call over views: what the lowering checks of the views, and
-// what the checks give (docs/native-library-exports-design.md §3.1).
+// what the checks give (docs/native/native-library-exports-design.md §3.1).
 //
 // A lend's callee runs under a lending of its own: its buffer `v` is view
 // `v`, a window of a buffer of the scope, lying where the view's base says

@@ -1,0 +1,148 @@
+// Probes of functional induction (docs/tactics/functional-induction-design.md):
+// the generated `f::induct` principle of a `decreases` and a structural
+// function, and the `induct f(x̄)` step that applies it, in both forms
+// (`; all_goals { … }` and named arms). Each at a fixed and an accumulating
+// parameter, an open element type, a nested split, a hypothesis that mentions
+// an argument, and the negative controls the step refuses. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import list;
+
+// ---- A `decreases` function: one Bool test, a fixed bound ----
+
+fn up(i: Nat, n: Nat, acc: Nat) → Nat decreases n - i {
+    if h: i < n { up(i + 1, n, acc + 1) } else { acc }
+}
+
+// The principle itself, applied by hand: one case per branch, the test as a
+// hypothesis, the branch's equation, and an IH at the recursive call. `n` is
+// passed unchanged by every call, so it is fixed ahead of the motive.
+theorem up_by_principle(i, n, acc: Nat): up(i, n, acc) = acc + (n - i) {
+    up::induct(n, λ (i: Nat) (acc: Nat) => up(i, n, acc) = acc + (n - i),
+        λ i acc h eq ih => trans(eq, trans(ih, omega)),
+        λ i acc h eq => trans(eq, omega),
+        i, acc)
+}
+
+// The step: every case closed by one leaf, the IH handed to it restated.
+theorem up_gains(i, n, acc: Nat): up(i, n, acc) = acc + (n - i) {
+    induct up(i, n, acc); all_goals { omega }
+}
+
+// A hypothesis that mentions an argument is reverted and reintroduced in
+// each case, so the IH carries it as a premise; the leaf discharges the
+// premise before it sees the IH.
+theorem up_exact(i, n, acc: Nat, below: i <= n): up(i, n, acc) + i = acc + n {
+    induct up(i, n, acc); all_goals { omega }
+}
+
+// A local that only a hypothesis mentions is reverted with it, so the IH
+// holds at every `base`: the case's own `base` is not the call's.
+theorem up_from_base(i, n, acc, base: Nat, seen: acc = base): up(i, n, acc) = base + (n - i) {
+    induct up(i, n, acc) {
+        True => { let next = ih(acc + 1, refl); omega },
+        False => omega,
+    }
+}
+
+// Named arms: each arm sees its own test, the IH under `ih`.
+theorem up_arms(i, n, acc: Nat): acc <= up(i, n, acc) {
+    induct up(i, n, acc) {
+        True => { let step: (acc <= acc + 1) = omega; omega },
+        False => omega,
+    }
+}
+
+// Literal instance: the principle is a theorem like any other, so its
+// conclusion at closed arguments still computes.
+theorem up_lit(): up(1, 4, 0) = 3 { refl }
+
+// ---- A structural function: one constructor test, an open element type ----
+
+fn tally_list<A>(xs: List<A>, acc: Nat) → Nat {
+    match xs {
+        Nil => acc,
+        Cons(_, rest) => tally_list(rest, acc + 1),
+    }
+}
+
+theorem tally_list_len<A>(xs: List<A>, acc: Nat): tally_list(xs, acc) = acc + xs.len() {
+    induct tally_list(xs, acc); all_goals { omega }
+}
+
+theorem tally_list_arms<A>(xs: List<A>, acc: Nat): tally_list(xs, acc) = acc + xs.len() {
+    induct tally_list(xs, acc) {
+        Nil => omega,
+        Cons => omega,
+    }
+}
+
+// A structural function's branch equations come with its principle, built
+// at the first declaration that names one.
+theorem tally_list_cons<A>(x: A, rest: List<A>, acc: Nat): tally_list(List::Cons(x, rest), acc) = tally_list(rest, acc + 1) {
+    tally_list::Cons(List::Cons(x, rest), acc, x, rest, refl)
+}
+
+// ---- Two tests on one path: a constructor match, then a Bool test ----
+
+fn count_below(xs: List<Nat>, k: Nat, acc: Nat) → Nat {
+    match xs {
+        Nil => acc,
+        Cons(x, rest) => if x < k { count_below(rest, k, acc + 1) } else { count_below(rest, k, acc) },
+    }
+}
+
+theorem count_below_bound(xs: List<Nat>, k, acc: Nat): count_below(xs, k, acc) <= acc + xs.len() {
+    induct count_below(xs, k, acc); all_goals { omega }
+}
+
+theorem count_below_grows(xs: List<Nat>, k, acc: Nat): acc <= count_below(xs, k, acc) {
+    induct count_below(xs, k, acc) {
+        Nil => omega,
+        Cons::True => omega,
+        Cons::False => omega,
+    }
+}
+
+// ---- A `for` loop: `List::foldl_invariant` ----
+
+fn loop_count<A>(xs: List<A>) → Nat {
+    let mut n = 0;
+    for x in xs { n := n + 1 }
+    n
+}
+
+theorem loop_count_len<A>(xs: List<A>): loop_count(xs) = xs.len() {
+    xs.foldl_invariant(loop_count::step, λ (done: List<A>) (n: Nat) => n = done.len(),
+        λ done x n h => {
+            let grown: ((done ++ [x]).len() = done.len() + 1) = done.len_append([x]);
+            omega
+        }, 0, refl)
+}
+
+// ---- Negative controls ----
+
+fn plain(n: Nat) → Nat { n + 1 }
+
+// expect-error: needs the induction principle
+theorem induct_not_recursive(n: Nat): plain(n) = n + 1 {
+    induct plain(n); all_goals { omega }
+}
+
+// expect-error: needs a local variable at `i`
+theorem induct_at_a_literal(acc: Nat): up(0, 3, acc) = acc + 3 {
+    induct up(0, 3, acc); all_goals { omega }
+}
+
+// The leaf has to close every case: here the IH alone does not give the claim.
+// expect-error: omega
+theorem induct_leaf_fails(i, n, acc: Nat): up(i, n, acc) = acc {
+    induct up(i, n, acc); all_goals { omega }
+}
+
+// A structural function declared in another module: its principle is built
+// here, from the declaration `list`'s image keeps, the first time it is
+// asked for.
+theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
+    induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+}

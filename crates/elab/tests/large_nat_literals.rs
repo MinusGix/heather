@@ -25,7 +25,7 @@ theorem maximum_literal_is_reflexive():
     }
 }
 
-/// Numerals have no bound (docs/wide-numerals-design.md): past a machine word
+/// Numerals have no bound (docs/language/wide-numerals-design.md): past a machine word
 /// a literal is still the number it spells — to evaluation, to conversion
 /// against its successor spelling and a computed value, and in every radix —
 /// and a neighbouring literal is still a different number.

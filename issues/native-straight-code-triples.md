@@ -66,7 +66,7 @@ rewritten over these, with its cold check no dearer.
     close, the failed path and the total row. The spill block is an `x86_64_asm`
     program, so the command has no layout list left. The record per phase
     (`CursorStored`, `SpillOut`, `KeepStored`, `BeginStored`) is gone.
-  - The lesson, in `docs/native-runs-design.md` ("Consuming a run"): bind a run's
+  - The lesson, in `docs/native-runs-design.md@4acf2fe` ("Consuming a run"): bind a run's
     end state in a λ, never project it out of a `let`-bound run; projecting made
     the spill's row ten times dearer than the hand-threaded proof.
 

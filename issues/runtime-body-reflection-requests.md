@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-11-01
 ---
 
-Slice R5a of `docs/runtime-fn-setups-design.md` (§3.2, §13): the host
+Slice R5a of `docs/native/runtime-fn-setups-design.md` (§3.2, §13): the host
 requests a `runtime fn` generator needs to read a definition's elaborated
 body. `View` was built for tactics, which read goals and never a
 definition's code.
@@ -28,7 +28,7 @@ definition's code.
 - Sharing by identity: the same handle for the same shared subterm within a
   run (or a `Same(a, b)` request), so a reflector can memoise and rebuild a
   block's aliases as lets. A block's `let` is an alias, so the kernel term
-  has only a shared subterm (`docs/let-and-blocks-design.md` §4.4).
+  has only a shared subterm (`docs/language/let-and-blocks-design.md` §4.4).
 - Record the cost as a shape against the body's DAG size. If one request per
   node dominates, add a bulk `Reflect(h)` answering a tree of heads with
   shared nodes numbered.

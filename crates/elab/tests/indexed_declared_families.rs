@@ -1,5 +1,5 @@
 //! Acceptance for indexed families at a **declared** index type — the
-//! generator for §8.2 of `docs/inductive-indexed-lowering.md`, end to end from
+//! generator for §8.2 of `docs/inductives/inductive-indexed-lowering.md`, end to end from
 //! the surface. The hand prototype behind it is `indexed_declared_index.rs`,
 //! whose kernel terms these declarations lower to.
 //!
@@ -382,7 +382,7 @@ fn cross_class_equations_fail_to_state() {
 #[test]
 fn declaration_rejections_carry_their_messages() {
     // A child at an index that is no index: the `IWf` route takes a child at
-    // any index (docs/iwf-former-design.md §8), so what is left to say is the
+    // any index (docs/kernel/iwf-former-design.md §8), so what is left to say is the
     // type error, and it is said at the declaration rather than at first use.
     let m = elab_err(
         "inductive Col { CZ, CS(n: Nat) }
@@ -394,7 +394,7 @@ fn declaration_rejections_carry_their_messages() {
     assert!(m.contains("`Col` is expected"), "{m}");
     // A recursive field away from any pattern variable: route 1 has no `rec`
     // for it, and the `IWf` route stores the child's index, so it declares
-    // (fording's F1, lifted; docs/iwf-former-design.md §8.2).
+    // (fording's F1, lifted; docs/kernel/iwf-former-design.md §8.2).
     let e = elab(&format!(
         "inductive Sh2 {{ L2, N2(a: Sh2, b: Sh2) }}
          inductive Bad : (s: Sh2) -> Type {{

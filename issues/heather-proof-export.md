@@ -26,7 +26,7 @@ replacement symbol where the two theories differ. The first round:
 
 ## Log
 
-- 2026-10-20: exploration round. Design: `docs/export-fragment-design.md`;
+- 2026-10-20: exploration round. Design: `docs/library/export-fragment-design.md`;
   prototype `crates/export` (kernel Ψ → HX → Lean and Rocq printers, two
   hand-written preludes) with `scripts/export-recheck`; probes in
   `crates/export/probes/`. On a Nat-and-enum slice, Lean 4.20 checks all 22

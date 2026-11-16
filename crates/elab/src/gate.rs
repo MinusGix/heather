@@ -1,5 +1,5 @@
 //! The kernel gate as an interceptable boundary
-//! (`issues/parallel-checking-and-caching.md`, `docs/cache-v1-design.md` §1).
+//! (`issues/parallel-checking-and-caching.md`, `docs/infrastructure/cache-v1-design.md` §1).
 //!
 //! Every finished definition or theorem passes one `typing::check_type` +
 //! `typing::check_term` pair before it is committed, at four sites:
@@ -25,7 +25,7 @@
 //!
 //! **The gate is trusted.** `admits` returning `true` means the kernel does
 //! not run on that declaration and it is pushed to Ψ regardless. Whoever
-//! installs one owns the trust argument (`docs/cache-v1-design.md` §6).
+//! installs one owns the trust argument (`docs/infrastructure/cache-v1-design.md` §6).
 
 use heather_kernel::rc::Rc;
 use std::sync::Arc;
@@ -171,7 +171,7 @@ impl KernelGate for NoGate {
 /// A gate that never admits the named declarations and never learns that
 /// they passed: `heather check --only` wraps the verdict store in one so the
 /// probed items face the kernel on every run and the store is left exactly
-/// as it was found (`docs/check-only-design.md` §2). Names are matched
+/// as it was found (`docs/infrastructure/check-only-design.md` §2). Names are matched
 /// bare — the gate sees `GateItem::name`, not the module — which is the
 /// probe's own granularity.
 pub struct Except {

@@ -13,7 +13,7 @@ A module that writes `runtime fn f` must also import `tactic`, `char`,
 `runtime`: the generator spells its output with `lookup(name)`, which
 resolves in the module being checked, so every name it publishes through has
 to be in that module's scope. Every example in `examples/x86-native` now
-carries the eight lines (docs/runtime-fn-setups-design.md §16.9). Without
+carries the eight lines (docs/native/runtime-fn-setups-design.md §16.9). Without
 `tactic` the refusal is "`generate` runs a value of the `tactic` protocol";
 without the others it is the generator's own "`X` is not in scope".
 

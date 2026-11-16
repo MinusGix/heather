@@ -31,7 +31,7 @@ member it lies in (`FormalPoint::in_cover`).
    the two maps, what they preserve (order, negation through
    `RealLine::negation`), and the assumption inventory, which should be empty.
 
-Design: docs/localic-reals-design.md §5.
+Design: docs/library/localic-reals-design.md §5.
 
 ## What it assumes from elsewhere
 

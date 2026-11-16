@@ -1,6 +1,6 @@
 //! INVESTIGATION SCAFFOLDING — `issues/surface-existential.md`, 2026-08-01.
 //! Deliberately uncommitted and NOT wired into CI; see
-//! `docs/surface-existential-investigation.md` §B.
+//! `docs/language/surface-existential-investigation.md` §B.
 //!
 //! The question: can today's kernel, with no new former, express a
 //! **value-indexed existential**
@@ -194,7 +194,7 @@ fn lands_at_level_zero_and_not_at_one() {
 
 /// `⟨2, refl⟩ : Halts(4)`. The `refl` checks only because the kernel runs
 /// `dbl 2 ⇝ 4`: this is exactly the "discharge by computed bound" story of
-/// `docs/ir-simulate-design.md` §6, and it is what an `equiv` instance does.
+/// `docs/archive/ir-simulate-design.md` §6, and it is what an `equiv` instance does.
 #[test]
 fn intro_at_a_closed_parameter_discharges_by_conversion() {
     let gamma = nil_ctx();

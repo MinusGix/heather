@@ -32,6 +32,7 @@ fn checker() -> heather_elab::Elaborator {
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         // The lending laws the calls module's contract is stated under.
         ("x86_64_lending", include_str!("../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
+        ("x86_64_frame", include_str!("../../../lib/std/arch/x86_64/x86_64_frame.hthr")),
         // A call over views: the machine's laws of a lent window, and what the
         // lowering checks of a view before it lends it.
         ("x86_64_views", include_str!("../../../lib/std/arch/x86_64/x86_64_views.hthr")),
@@ -50,8 +51,8 @@ fn verified_loop_lowering_checks_and_lowers_the_examples() {
 
 #[test]
 fn a_back_edge_to_the_wrong_label_is_refused() {
-    let mutant = EXAMPLES.replace(".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)\n}\n\ntheorem triangle_lowers",
-        ".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)\n}\n\ntheorem triangle_lowers");
+    let mutant = EXAMPLES.replace(".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)\n}\n\ntheorem triangle_lowers",
+        ".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)\n}\n\ntheorem triangle_lowers");
     assert_ne!(mutant, EXAMPLES, "the mutation site moved");
     let mut elaborator = checker();
     assert!(elaborator.elab_module_source("function_ir_lower_loops_examples", &mutant).is_err(),

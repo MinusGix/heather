@@ -10,7 +10,7 @@
 Where checking time goes, found without running the suite, and what to
 hillclimb on first. Native first, as asked. The numbers are a dated diary
 entry (`perf/README.md`'s rule: numbers live under `perf/` and in issue logs,
-not in docs). The convention is `docs/cloud-benchmarks.md`. Each target names
+not in docs). The convention is `docs/infrastructure/cloud-benchmarks.md`. Each target names
 its probe cases (`perf/bench/cases.tsv`, recorded in `results.tsv`) and the
 issue that owns the work.
 
@@ -217,7 +217,7 @@ Added 2026-11-10 with the scanner's automaton
 functions. `lexer/scan-choose-link` is `scan_choose`, the function that
 calls every family: its generator run and its linking proof. The claim it
 watches is a shape: the cost follows the number of callees and never their
-code (`docs/runtime-fn-setups-design.md` §16.14), so a callee growing must
+code (`docs/native/runtime-fn-setups-design.md` §16.14), so a callee growing must
 not move its counters. No row is saved for it yet; the saved table is
 another box's.
 
@@ -238,7 +238,7 @@ on the cloud box at d64c439:
 | `itree_trace::IsTrace::split_bind` | 1.3 s | kernel 0.9 s: 306K steps, 139K conversion queries | `itree/split-bind` |
 
 The `cert/*` cases read the certificate write-elf writes on the day
-(`docs/cloud-benchmarks.md`), not a frozen copy: `cert/yes-pieces` 205K
+(`docs/infrastructure/cloud-benchmarks.md`), not a frozen copy: `cert/yes-pieces` 205K
 steps over 7 items and `cert/yes-labels` 29K over 15, close to the last
 rows the frozen copy gave (`issues/native-certificate-pieces-remaining-cost.md`).
 

@@ -8,9 +8,9 @@ updated: 2026-10-26
 ---
 
 Heather has no float literal and no decimal-fraction literal. Numerals are
-the only `Rat`/`CReal` constants, and `docs/radix-numerals-design.md` covers
+the only `Rat`/`CReal` constants, and `docs/archive/radix-numerals-design.md` covers
 only integers. Tests and clients build floats from fields. The Coq
-hardware-float survey (`docs/coq-hardware-floats-survey.md` §5.3) sets out
+hardware-float survey (`docs/surveys/coq-hardware-floats-survey.md` §5.3) sets out
 the design Coq landed on, and the part Coq could not do that Heather can.
 
 ## Proposal
@@ -26,7 +26,7 @@ the design Coq landed on, and the part Coq could not do that Heather can.
   decided by `round_rat_exact`.
 - **A printer with a proved round trip.** Coq prints with `printf "%.17g"`
   and leaves an in-language printer as future work. Heather's printers are
-  in-language already (`docs/parser-canonical-printers-design.md`), so
+  in-language already (`docs/library/parser-canonical-printers-design.md`), so
   the paper's Lemma 1 can be a theorem: for a format of precision `p`
   and output radix `β'` with `2^p < β'^(p'-1)`, printing `p'` significant
   digits and parsing by nearest rounding gives back the same float. Nine
@@ -82,5 +82,5 @@ renders floats.
   refused. Tests: `crates/elab/tests/lib_std_float.rs` (warning, hex
   refusal), `lib/_tests/std/num/float/literal_tests.hthr` (values at
   binary64/32 and e2m1, exactness bits, overflow, subnormals, Rat).
-  Design: `docs/floating-point-design.md` §15. The printer and its
+  Design: `docs/library/floating-point-design.md` §15. The printer and its
   round-trip theorem moved to [[float-printer-round-trip]]; closing.

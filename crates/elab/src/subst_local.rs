@@ -1,5 +1,5 @@
 //! `subst(h, e)`: eliminate a local variable along an equation
-//! (`docs/equation-rewrite-design.md` §8, `issues/subst-local-equation.md`).
+//! (`docs/tactics/equation-rewrite-design.md` §8, `issues/subst-local-equation.md`).
 //!
 //! At a checking position with goal `G` in `Γ = Γ₀, x : A, Δ`, with
 //! `h : t = x` (or `x = t`) and `t` not mentioning `x`: every later local
@@ -207,7 +207,7 @@ impl LocalSubsts<'_> {
                 dom: Rc::new(dom),
                 cod: Rc::new(motive),
             };
-            motive_level = Level::join(dom_level, motive_level);
+            motive_level = Level::max(dom_level, motive_level);
         }
         let psi = self.goal_psi();
         typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.policy.fuel).map_err(|_| {

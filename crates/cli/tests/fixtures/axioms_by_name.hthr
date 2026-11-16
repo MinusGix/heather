@@ -1,0 +1,18 @@
+// An axiom reached by a tactic that resolves a name *string*: no written
+// name in `through_tactic`'s proof resolves to `stuck_is_zero`, and
+// `--deny-axioms` still has to see it
+// (issues/axiom-provenance-misses-tactic-references.md).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
+
+fn stuck(n: Nat) → Nat { match n { Zero => 1, Succ(k) => stuck(k) } }
+
+axiom stuck_is_zero(): stuck(0) = 0;
+
+fn by_name(name: String) → Tac<Expr> {
+    let h <- resolve(name).or_fail("by_name: ");
+    pure(Hd(h))
+}
+
+theorem through_tactic(): stuck(0) = 0 { by by_name("stuck_is_zero") }
+theorem absurd(): 1 = 0 { through_tactic() }
+theorem clean(): stuck(0) = 1 { refl }

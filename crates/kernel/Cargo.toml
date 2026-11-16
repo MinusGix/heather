@@ -21,7 +21,7 @@ long-checks = ["heather-kernel-lib/long-checks"]
 heather-kernel-lib = { path = "../kernel-lib" }
 
 # Run through scripts/bench (ulimit), not `cargo bench` directly —
-# docs/benchmarking.md.
+# docs/infrastructure/benchmarking.md.
 [[bench]]
 name = "kernel"
 path = "benches/kernel/main.rs"

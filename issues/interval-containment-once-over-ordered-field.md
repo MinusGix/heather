@@ -123,7 +123,7 @@ containment for free.
   prototyped (combined X-of-Y classes exist only because two constraints
   installing the same `≈`, `+`, `*` are refused,
   [[constraints-sharing-indices]]). The record is
-  [[casting-standard]]'s `OrderedRingHom` (docs/casting-design.md §5.6),
+  [[casting-standard]]'s `OrderedRingHom` (docs/language/casting-design.md §5.6),
   so one value serves the cast graph and this section; take its field
   names. The readings still convert: at the identity morphism `HasIn`
   reduces to `Has` by β. Longer term the ℚ-embedding is derivable in every

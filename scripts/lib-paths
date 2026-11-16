@@ -2,10 +2,10 @@
 """Find and rewrite stale `lib/…/<stem>.hthr` paths.
 
 Module names are file stems and the loader searches every folder below the
-library (docs/modules-design.md §3.2), so moving a module between folders
+library (docs/language/modules-design.md §3.2), so moving a module between folders
 changes no `import`, but every place that cites the file by *path* goes
 stale: a Rust `include_str!` stops building, a doc link dies
-(docs/lib-layout-design.md). This finds each cited path that no longer
+(docs/library/lib-layout-design.md). This finds each cited path that no longer
 exists, in tracked files, and rewrites it to the stem's one file under
 `lib/`. A branch that predates a move runs `scripts/lib-paths --fix` after
 rebasing.
@@ -13,7 +13,7 @@ rebasing.
     scripts/lib-paths            # list stale paths it can rewrite; exit 1 if any
     scripts/lib-paths --fix      # rewrite them in place
 
-Left alone: `probes/` and `perf/snapshots/` (frozen history of older trees)
+Left alone: `perf/snapshots/` (frozen history of older trees)
 and citations of modules that no longer exist anywhere (deleted modules
 stay cited as history). Stdlib only, like `scripts/issue`.
 """
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP = ("probes/", "perf/snapshots/")
+SKIP = ("perf/snapshots/",)
 SUFFIXES = (".rs", ".md", ".hthr", ".py", ".mjs", ".js", ".toml", ".sh", ".json", ".tsv")
 # An optional run of `../` (a relative include_str!), then a path below lib/.
 PATH = re.compile(r"((?:\.\./)*)lib/((?:[A-Za-z0-9_]+/)*)([A-Za-z0-9_]+)\.hthr")

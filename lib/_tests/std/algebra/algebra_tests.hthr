@@ -1,5 +1,5 @@
 // Probes of `lib/std/algebra/algebra.hthr`, the library's classes and
-// instances (`docs/traits-design.md` §13, `issues/traits.md`): which instance
+// instances (`docs/language/classes/traits-design.md` §13, `issues/traits.md`): which instance
 // is registered at each carrier, that the extends chain reaches one value
 // from every direction, that the generic instance answers at an element type
 // nobody enumerated, and the refusals that keep the policy honest. Tests,
@@ -44,7 +44,7 @@ theorem alg_open<A>(xs, ys: List<A>): (monoid_list_alg<List<A>>(++)).list_fold([
 }
 
 // Two structures on one carrier, both registered, as equals
-// (`docs/operation-indexed-classes-design.md` §3). `all_of` and `any_of` are
+// (`docs/language/classes/operation-indexed-classes-design.md` §3). `all_of` and `any_of` are
 // one generic fold at one carrier under two operations, and they compute
 // differently because the operation is part of the goal's type: no local
 // binding, no shadowing, and nothing nominates one of them.
@@ -129,7 +129,7 @@ theorem or_zero_is_False(): Bool::Monoid(Bool::or).unit = False { refl }
 // expect-error(kernel): `(Monoid#bool#Bool#or).unit` and `True` are not
 theorem or_zero_is_True(): Bool::Monoid(Bool::or).unit = True { refl }
 
-// The headline (`docs/operation-indexed-classes-design.md` §13 item 1): one
+// The headline (`docs/language/classes/operation-indexed-classes-design.md` §13 item 1): one
 // generic law, proved once against `CommMonoid`, spent at three structures,
 // two of them on one carrier. Each corollary's goal names its operation, so
 // the index is pinned by unification alone (§4.2's equal-arity flex-rigid
@@ -184,7 +184,7 @@ theorem ordinary_nat(): three() = 3 { refl }
 
 // One instance per (class, carrier head, index): a second `Monoid<Bool>` at an
 // index already registered is refused, and the message names the index that
-// collided (`docs/operation-indexed-classes-design.md` §3.1, §11).
+// collided (`docs/language/classes/operation-indexed-classes-design.md` §3.1, §11).
 // expect-error: already has an instance
 // expect-error: index
 instance Monoid<Bool>(Bool::or) {
@@ -244,7 +244,7 @@ theorem mul_by_receiver_is_mul(a: Nat, b: Nat): mul_by_receiver(a, b) = a.mul(b)
 // ---------------------------------------------------------------------------
 // Owner-keyed dispatch and the upcast.
 
-// Owner-keyed dispatch (`docs/traits-owner-dispatch-design.md` §2) builds the
+// Owner-keyed dispatch (`docs/language/classes/traits-owner-dispatch-design.md` §2) builds the
 // goal at the class that declares the member, and at an indexed class the
 // index comes from the binder in scope: `x.assoc(y, z)` inside a `Monoid`
 // binder is a `Semigroup` goal at that binder's own operation, answered by
@@ -260,7 +260,7 @@ theorem assoc_from_a_comm_monoid<A: CommMonoid(o)>(o: A → A → A, x: A, y: A,
 // The negative control the index adds: at a concrete carrier a receiver fixes
 // the carrier and nothing fixes the operation, so the dispatch is refused by
 // name with both Bool monoids listed
-// (`docs/operation-indexed-classes-design.md` §5.1). Scope, then refuse, and
+// (`docs/language/classes/operation-indexed-classes-design.md` §5.1). Scope, then refuse, and
 // here there is no scope.
 // expect-error: not pinned
 // expect-error: Semigroup<Bool>(Bool::and)
@@ -297,7 +297,7 @@ fn assoc_of<G> requires m: Semigroup<G>(o) (o: G → G → G, x: G) → G { o(x,
 fn use_grandparent<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G) → G { assoc_of(o, x) }
 
 // A dispatched projection reads through the upcast
-// (`docs/traits-named-upcast-design.md`), so the anonymous spelling and the
+// (`docs/language/classes/traits-named-upcast-design.md`), so the anonymous spelling and the
 // named-dictionary one are one term. This is the pin that retired
 // `issues/upcast-assembly-cost-at-open-carriers.md`: the two spellings stopped
 // being two terms.
@@ -347,7 +347,7 @@ fn dbl_from_comm<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G) → G 
 
 // Owner-keying is not a tiebreak: two unrelated classes each declaring `le`
 // at one carrier are two owners, and the receiver still refuses to choose,
-// naming both (`docs/traits-receiver-dispatch-design.md` §4 rule 3).
+// naming both (`docs/language/classes/traits-receiver-dispatch-design.md` §4 rule 3).
 class Ordish<A> { le: A → A → Bool }
 instance Ordish<Nat> { le := nat::Nat::leb }
 // expect-error: Cmp<Nat>
@@ -363,7 +363,7 @@ theorem generic_agrees(a: Nat, b: Nat): generic(Nat::add, a, b) = a.add(b) { ref
 // class in it is keyed at the same index.
 theorem one_unit(): Nat::Monoid(Nat::add).unit = Nat::CommMonoid(Nat::add).unit { refl }
 
-// The library's own type projections (`docs/traits-type-projection-design.md`),
+// The library's own type projections (`docs/language/classes/traits-type-projection-design.md`),
 // where the file uses them: at an open carrier inside `mconcat` and
 // `mconcat_single`, and at a concrete one in the hierarchy lemmas. The
 // load-bearing claim is that the projection is the very term the dictionary
@@ -381,7 +381,7 @@ theorem the_empty_nat_fold(): sum(Nil) = Nat::Monoid(Nat::add).unit { refl }
 // The negative control: a type parameter with no constraint providing the
 // field reports the value slot, with every registered instance listed, which
 // is the diagnosis a reader needs in order to know which structure was wanted
-// (`docs/operation-indexed-classes-design.md` §11).
+// (`docs/language/classes/operation-indexed-classes-design.md` §11).
 // expect-error: not pinned
 // expect-error: Monoid<Nat>(Nat::add)
 // expect-error: Monoid<Bool>(Bool::or)

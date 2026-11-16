@@ -5,7 +5,7 @@
 // `register def …: MonoEntry = …;` with its lemmas named by `name_of`, so a
 // name is checked where it is written, where the lemma is in scope, and
 // `mono` reads every entry its client's world has with
-// `registered(MonoEntry)` (docs/registered-values-design.md). A client that
+// `registered(MonoEntry)` (docs/metaprogramming/registered-values-design.md). A client that
 // does not import `creal` sees none of `creal`'s entries and pays nothing
 // for them.
 //

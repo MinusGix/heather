@@ -22,7 +22,7 @@ runtime fn zero_from(ctx: List<u8>, cn, i: u64) → Mutated<List<u8>, u64> decre
 }
 ```
 
-> error: `runtime fn zero_from`: the generator failed: `zero_from` cannot be a runtime fn that writes a span: it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it (docs/decreases-unfolding-design.md)
+> error: `runtime fn zero_from`: the generator failed: `zero_from` cannot be a runtime fn that writes a span: it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it (docs/language/recursion/decreases-unfolding-design.md)
 
 With the evidence named, `if h: i < 64 { … }`, the same function certifies, and its program is the `match h: i.unsigned_lt_bit(64)` spelling's by `refl` (`lib/native/crypto/sha256_block.hthr`'s loops are written so). The declaration elaborates without `h:` (the measure is discharged from the branch's condition either way), and only the companions differ: as an ordinary `fn` the same body has the access points `rec` and `body` and no `ext` or `unfold`, where the `if h:` spelling has both. Either the plain `if` should get the same companions, or the refusal should say what to write: "name the test's evidence, `if h: i < 64`".
 

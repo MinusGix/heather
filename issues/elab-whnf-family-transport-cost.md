@@ -8,7 +8,7 @@ created: 2026-10-25
 updated: 2026-10-25
 ---
 
-On the `IWf`-on-`W` route (`docs/iwf-infinitary-design.md`), a constructor
+On the `IWf`-on-`W` route (`docs/kernel/iwf-infinitary-design.md`), a constructor
 with two or more recursive fields stores its children's trees `k̄` and an
 equation `Id(ρ(k̄); f)`. A `match` arm on it transports along that equation
 (§7, `J₂`), and along the index equation (`J₁`). On a literal constructor

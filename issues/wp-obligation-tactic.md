@@ -10,7 +10,7 @@ updated: 2026-10-20
 
 A tactic that discharges the routine part of a computed obligation
 (`Wp`, and `Stretch`/`Straight` until they are its instances; design
-`docs/native-program-logic-design.md` §8–9).
+`docs/native/native-program-logic-design.md` §8–9).
 
 A caller's term against a computed obligation is the same shape every time:
 an `Exists` per slot, page offset, loaded word or byte whose witness

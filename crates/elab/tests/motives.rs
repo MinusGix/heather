@@ -1,5 +1,5 @@
 //! Motives are lambdas, and `=` is an expression
-//! (`docs/surface-universe.md` §13). Tracking issue:
+//! (`docs/language/surface-universe.md` §13). Tracking issue:
 //! `issues/motives-as-lambdas.md`, landed as phase 3 of the Type Session.
 //!
 //! Two syntaxes collapsed into one. `match … as z -> M` and

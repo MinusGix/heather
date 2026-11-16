@@ -72,8 +72,8 @@ fn triangle_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(
 
 fn triangle_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()]))
-        .put(Block([MovRI(Rax, w(0))]))
+        .label(1).put(Block([frame_allocate(0)]))
+        .put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .put(Block([MovRR(Rcx, Rdi), MovRR(R8, Rax)]))
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
         .put(Block([AddRR(R8, Rcx), XorRR(R9, R9), CmpRR(Rcx, Rcx), SetBelow(R9b)]))
@@ -82,14 +82,14 @@ fn triangle_program() → Prog {
         .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
         .label(4).put(Block([MovRI(Rdx, w(1))]))
         .label(5)
-        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)
 }
 
 theorem triangle_lowers(): lower_program([triangle()], triangle_placement()) = Some(triangle_program()) { refl }
 
 theorem triangle_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, triangle_program(), last, origin).Calls(stack, program_callees([triangle()]), 1) {
+    Site<M>(fetch, data, triangle_program(), last, origin).Calls(stack, program_callees([triangle()]), program_room([triangle()]), 1) {
     lower_program_correct<M>([triangle()], triangle_placement(), triangle_program(), triangle_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -132,7 +132,7 @@ fn gcd_placement() → List<Place> { [Into(Rax), Into(R8), Into(R9), Into(Rcx), 
 
 fn gcd_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()]))
+        .label(1).put(Block([frame_allocate(0)]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)]))
         .put(Block([MovRR(Rcx, Rax), MovRR(R8, Rdi), MovRR(R9, Rsi)]))
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
@@ -146,14 +146,14 @@ fn gcd_program() → Prog {
         .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
         .label(4).put(Block([MovRI(Rdx, w(1))]))
         .label(5)
-        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)
 }
 
 theorem gcd_lowers(): lower_program([gcd()], gcd_placement()) = Some(gcd_program()) { refl }
 
 theorem gcd_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, gcd_program(), last, origin).Calls(stack, program_callees([gcd()]), 1) {
+    Site<M>(fetch, data, gcd_program(), last, origin).Calls(stack, program_callees([gcd()]), program_room([gcd()]), 1) {
     lower_program_correct<M>([gcd()], gcd_placement(), gcd_program(), gcd_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -190,10 +190,10 @@ fn scale_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(Rdx
 
 fn scaled_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()]))
+        .label(1).put(Block([frame_allocate(0)]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free()])).put(Ret)
-        .label(2).put(Block([frame_allocate()]))
+        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .label(2).put(Block([frame_allocate(64)]))
         .put(Block([MovRR(Rcx, Rsi), MovRR(R8, Rdi)]))
         .label(3).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 5))
         .saving().put(Block([])).put(Block([MovRR(Rdi, R8)])).put(CallTo(1)).put(Block([])).restoring()
@@ -203,14 +203,14 @@ fn scaled_program() → Prog {
         .label(4).put(Block([MovRR(R8, Rax)])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))
         .label(5).put(Block([MovRI(Rdx, w(1))]))
         .label(6)
-        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(64)])).put(Ret)
 }
 
 theorem scaled_lowers(): lower_program(scaled(), scale_placement()) = Some(scaled_program()) { refl }
 
 theorem scaled_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, scaled_program(), last, origin).Calls(stack, program_callees(scaled()), 2) {
+    Site<M>(fetch, data, scaled_program(), last, origin).Calls(stack, program_callees(scaled()), program_room(scaled()), 2) {
     lower_program_correct<M>(scaled(), scale_placement(), scaled_program(), scaled_lowers(), fetch, data, last, origin, stack)
 }
 

@@ -21,7 +21,7 @@ explicitly, and those two are filled another way"
 no measured recursion is a method.
 
 Who is waiting: a `runtime fn` that writes a span
-(docs/native-one-compiler-design.md §2.6, U4 step 4c). Its source was
+(docs/native/native-one-compiler-design.md §2.6, U4 step 4c). Its source was
 designed as a `mut self` method on the span's bytes; a loop over the span
 is a measured recursion, so today it is written as a plain function that
 returns `Mutated<List<BitVec(8)>, R>` itself, with `let mut span = span;`
@@ -54,7 +54,7 @@ lower to the call itself where it is the method's last expression.
   `lib/_tests/std/core/decreases_unfolding_tests.hthr` (`count_down` with
   its unfolding, `count_named`, `count_first`, `push_down`, `peek` against
   another type's `peek`, `fill_down`, `fill_sum`, a negative control);
-  docs/termination-measures-design.md §4 amended.
+  docs/language/recursion/termination-measures-design.md §4 amended.
 
   What this does not give: the tail-call spelling the last paragraph asks
   for has no reachable shape. A receiver changes only in statement forms

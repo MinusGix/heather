@@ -8,7 +8,7 @@ updated: 2026-10-03
 
 The structured lowering compares into a byte register through `LowByteGpr`,
 which has only AL, CL, DL and BL: the legacy encodings without a REX
-prefix. In the stream filter's step piece (docs/native-stream-filter-design.md
+prefix. In the stream filter's step piece (docs/archive/native-stream-filter-design.md
 §10, `crates/elab/src/function_ir_source/filter_step.rs`), RAX holds the
 input byte and RCX belongs to the per-byte loop, so a step has only RBX and
 RDX for comparison bits. Those are also the two results the contract fixes

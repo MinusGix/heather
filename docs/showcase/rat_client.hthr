@@ -1,4 +1,4 @@
-// Rationals as a setoid client (docs/setoid-rationals-round.md).
+// Rationals as a setoid client (docs/showcase/setoids.md).
 //
 // The proofs below never look inside a fraction. They use the laws
 // `std/rat` states modulo `≈` and the same relational tools the finite-set
@@ -38,7 +38,7 @@ theorem distr_right(x, y, z: Rat): (x + y) * z ≈ x * z + y * z {
 
 // Division by a rational apart from zero undoes multiplication by it. `x⁻¹`
 // takes that apartness, and finds it in scope: there is no `0⁻¹` to reason
-// around (docs/inverse-power-notation-design.md).
+// around (docs/library/inverse-power-notation-design.md).
 theorem mul_inv_cancel(x, y: Rat, h: x.Apart(0)): (y * x) * x⁻¹ ≈ y {
     calc {
         (y * x) * x⁻¹ ≈ y * (x * x⁻¹) := y.mul_assoc(x, x⁻¹),

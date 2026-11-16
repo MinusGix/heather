@@ -1,5 +1,5 @@
 //! An instance may be keyed at a **type former**, not only at a declared type
-//! (`docs/decide-class-design.md` §2, `issues/decide-class.md`).
+//! (`docs/language/classes/decide-class-design.md` §2, `issues/decide-class.md`).
 //!
 //! The carrier a decidability class is *for* is a proposition stated by
 //! recursion into `Type` — `Le(n, m)`, `Not(P)` — and such a carrier reaches
@@ -177,7 +177,7 @@ instance<P> Dec<Neg(P)> requires self: Dec<Neg(P)> {{ d := self.d }}
 fn a_duplicate_at_one_former_head_is_a_declaration_error() {
     // The coarsening the widening accepts, observed: two carriers sharing the
     // head `Neg` collide, and that is refused rather than silently overwritten
-    // (`docs/traits-layer1-design.md` §4.1, unchanged by this round).
+    // (`docs/language/classes/traits-layer1-design.md` §4.1, unchanged by this round).
     let e = bad(&format!(
         r#"{LOGIC}{NEG_INSTANCE}
 instance Dec<Neg(Bot)> {{ d := L(λ (h: Bot) => h) }}

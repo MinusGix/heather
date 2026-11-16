@@ -76,7 +76,7 @@ theorem exact_third(): Rat(1, 3) * 3 <= 1 { IntervalExpr::le_of_search(IMul(thir
 // The contract at an open expression and precision.
 theorem encloses(e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }
 
-// Interface definitions (docs/interface-definitions-design.md): `neg`,
+// Interface definitions (docs/language/interface-definitions-design.md): `neg`,
 // `add`, `sub`, `mul` and `npow` are interface definitions of `interval`.
 // Here, outside that module, a call at closed arguments still computes (the
 // verdicts above, and `cube` below), but a call at an open argument is an

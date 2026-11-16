@@ -49,7 +49,7 @@ Unlike a body, this rescoping *is* cacheable as it stands: it is `shift_global(v
   instead. The memo is ~40 lines, so building it *is* the price experiment, and its
   result is what should decide whether the second candidate — never materialising Δ
   at all, by threading `value::Env::gshift` through `Conv::subst`/`apply_subst_ty`
-  the way `docs/lazy-global-offset-design.md` threads it through bodies — is still
+  the way `docs/kernel/lazy-global-offset-design.md` threads it through bodies — is still
   worth a round. Round in flight against this entry.
 - 2026-09-19: Fixed, by memoizing the signature. `reduce::BodyCache` became
   `reduce::GlobalCache` — same owner, same Ψ lifetime, same `push_tele` rebuild —

@@ -1,6 +1,6 @@
 //! Indexed families, route 1: the family by large elimination on the index.
 //!
-//! This module is the mechanization of `docs/inductive-indexed-lowering.md`,
+//! This module is the mechanization of `docs/inductives/inductive-indexed-lowering.md`,
 //! and is meant to be read against it — the section numbers in the comments
 //! are that document's, and `crates/elab/tests/indexed_route1.rs` (`Nat`) and
 //! `crates/elab/tests/indexed_declared_index.rs` (§8.2) are the hand
@@ -145,7 +145,7 @@ pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
             arg: scrut,
         },
         // …and in the checked spelling, which has no annotation to carry
-        // (docs/app-by-head-type-design.md §6.2).
+        // (docs/elaborator/app-by-head-type-design.md §6.2).
         Term::AppAt { fun, .. } if matches!(&**fun, Term::GlobalTm { .. }) => {
             Term::AppAt { fun: Rc::clone(fun), arg: scrut }
         }
@@ -279,7 +279,7 @@ pub(crate) struct IdxBranch {
     /// same value rebuilt as a tuple of [`Self::pat`]'s projections (tag
     /// first), equal to it by Σ- and `Unit`-η. A caller that cases again on
     /// a pattern rewrites the branch's goal through it, so that the goal
-    /// mentions the pattern (docs/mutual-inductive-design.md §4). `None` at
+    /// mentions the pattern (docs/inductives/mutual-inductive-design.md §4). `None` at
     /// `Nat`, whose pattern is the branch's own binder, and at a recursive
     /// declared index.
     pub(crate) value: Option<(Rc<Term>, Rc<Term>)>,
@@ -383,7 +383,7 @@ impl IndexedFamilies<'_> {
         let Type::El { level, tm } = ty else {
             return None;
         };
-        // The nominal read (`docs/family-type-code-defs-design.md` §6): where
+        // The nominal read (`docs/inductives/family-type-code-defs-design.md` §6): where
         // the declaration has a family function, its occurrences are `El l
         // (D#fam^δ i)` and the declaration is identified by *being* that
         // definition — a lookup, not the fueled tag search below. An `El` of
@@ -438,7 +438,7 @@ impl IndexedFamilies<'_> {
     /// through an `I -> Type` **function value** — `F(n)` where
     /// `fn F(n: Nat) -> Type { V<Nat>(n) }` is `El` of a δ/β-**redex**, not of
     /// the eliminator the structural read wants
-    /// (`docs/record-type-values.md` §4/§6).
+    /// (`docs/language/record-type-values.md` §4/§6).
     ///
     /// The fallback is *not* `whnf`, and that is the whole subtlety: whnf of a
     /// family form at a constructor-headed index reduces the eliminator away,
@@ -575,7 +575,7 @@ impl IndexedFamilies<'_> {
         };
         let Some(ind) = self.lookup_inductive(name).cloned() else {
             // A mutual group's member at an index
-            // (docs/mutual-inductive-design.md §2).
+            // (docs/inductives/mutual-inductive-design.md §2).
             if let Some((fam, k)) = self.lookup_member(name) {
                 let idx = match args {
                     [idx] => Some(idx),
@@ -622,7 +622,7 @@ impl IndexedFamilies<'_> {
         let (ity, ilvl) = self.index_type_at(cx, &ind, &lowered, &vargs, span)?;
         let idx_t = self.elab_check(cx, idx, &ity, &ilvl)?;
         // Route 2b's families are Σ+`sEq`, not `El` of an eliminator
-        // (docs/inductive-fording-lowering.md §6); the classifier decided which
+        // (docs/archive/inductive-fording-lowering.md §6); the classifier decided which
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
             return IwfFamily(self)
@@ -702,7 +702,7 @@ impl IndexedFamilies<'_> {
             code::code_of(&ty).ok_or_else(|| crate::ElabError::Elab {
                 msg: format!(
                     "a field of `{}`'s `{}` class has no type code, so it cannot appear \
-                     in an indexed family (docs/inductive-indexed-lowering.md §3)",
+                     in an indexed family (docs/inductives/inductive-indexed-lowering.md §3)",
                     ind.name, icts[k].name
                 ),
                 span,
@@ -728,7 +728,7 @@ impl IndexedFamilies<'_> {
     /// constructor's branch — its argument terms and `rec`s, scoped in the
     /// branch context — and the motive at that constructor. Shared by the
     /// family (at the constant motive `Ty l`) and by an `IWf` `match`'s index
-    /// inversion (`docs/iwf-former-design.md` §8.3).
+    /// inversion (`docs/kernel/iwf-former-design.md` §8.3).
     #[allow(clippy::too_many_arguments)]
     /// `value` rebuilt from its projections: `⟨fst v, ⟨fst (snd v), … ⟨⟩⟩⟩`
     /// along the constructor's Σ spine, each projection spelled exactly as
@@ -1892,7 +1892,7 @@ impl IndexedFamilies<'_> {
 #[cfg(test)]
 mod fingerprint {
     //! §10.1's seam, **closed 2026-08-06** by
-    //! `docs/family-type-code-defs-design.md` §6.
+    //! `docs/inductives/family-type-code-defs-design.md` §6.
     //!
     //! `indexed_of` used to read the family purely structurally: an `El` of
     //! *any* eliminator at motive `Ty _` with a nominal tag somewhere in a
@@ -2154,7 +2154,7 @@ inductive Bal : (s: Shape) -> Type {
             // The occurrence used to state its domain, which had to be the
             // index type's code reference so that every occurrence did not
             // copy the index type inline. Since
-            // `docs/app-by-head-type-design.md` it states none: the domain
+            // `docs/elaborator/app-by-head-type-design.md` it states none: the domain
             // is the family function's, once, in Ψ.
             assert!(matches!(&**tm, Term::AppAt { .. }), "the occurrence is `app@`");
             assert_eq!(IndexedFamilies(&el).indexed_of(&ty).expect("reads back").0.tag, ind.tag);

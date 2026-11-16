@@ -319,8 +319,7 @@ impl Level {
         }
     }
 
-    /// `a ⊔ b`. With canonical levels there is one spelling of the result,
-    /// so this and [`Level::join`] are the same operation.
+    /// `a ⊔ b`. With canonical levels there is one spelling of the result.
     pub fn max(a: Level, b: Level) -> Level {
         if a == Level::Omega || b == Level::Omega {
             return Level::Omega;
@@ -335,12 +334,6 @@ impl Level {
         c.add(a, 0);
         c.add(b, 0);
         c.finish()
-    }
-
-    /// `a ⊔ b`; the same as [`Level::max`]. The name the inference sites
-    /// use, from when `max` preserved a spelling and this one shrank it.
-    pub fn join(a: Level, b: Level) -> Level {
-        Level::max(a, b)
     }
 
     /// Constant level `n`.
@@ -558,7 +551,7 @@ impl LevelNf {
     /// [`Level`] stops being canonical**, `Level::equiv` stops being `==`,
     /// and every structural term comparison — [`crate::conv`]'s `code_eq`
     /// among them — silently becomes *too fine*: the exact defect `code_eq`
-    /// once had (see `docs/ch05-06-lemma-audit.md`, §Static Code),
+    /// once had (see `docs/kernel/ch05-06-lemma-audit.md`, §Static Code),
     /// reintroduced by a feature that looks unrelated. Any such sort must
     /// come with a decision procedure for level equality and a new
     /// representation, not just a new `Level` constructor.

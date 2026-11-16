@@ -58,7 +58,7 @@ it: there a stale image is a miss for planner and load alike.
   "built" means what a load accepts even for an image written at its key
   with another section.
 - `crates/cache/tests/module_images.rs::an_image_of_another_format_is_never_counted_as_built`;
-  `docs/module-dag-design.md` §12.
+  `docs/infrastructure/module-dag-design.md` §12.
 
 ## Measurements (cloud box, dev binary, one kernel worker, 300 s rail)
 

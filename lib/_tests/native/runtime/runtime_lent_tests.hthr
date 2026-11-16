@@ -1,5 +1,5 @@
 // Probes of `runtime fn` at a function lent a span
-// (docs/native-one-compiler-design.md §2.3, U3c step 3b): a leading
+// (docs/native/native-one-compiler-design.md §2.3, U3c step 3b): a leading
 // `List<BitVec(8)>` parameter followed by a 64-bit word is a span and its
 // length word, `byte_within` on it under that word is the read, and the
 // generator makes the instance the class states at every file. The same two
@@ -171,6 +171,23 @@ runtime fn count_shrinking(span: List<BitVec(8)>, length, i, acc: BitVec(64)) �
         bv_omega
     };
 }
+
+// A byte bound by a `let` and tested by a plain `if` that holds the
+// recursive call: the companions substitute the `let` into the test's
+// proposition too (`decide_bit<b < 128>`), or `b` is free in `f#ext` and
+// the loop has no `ext` to be compiled from. Counts the bytes below 128
+// from `i` up to the first that is not.
+runtime fn ascii_from(span: List<u8>, length, i, left: u64) → u64 decreases left.toNat() {
+    if h: 0 < left {
+        let b = span.byte_within(length, i).zero_extend(56);
+        if b < 128 { ascii_from(span, length, i + 1, left - 1) } else { i }
+    } else {
+        i
+    }
+}
+
+theorem ascii_from_runs(): program_eval_over([[b(104), b(105), b(200), b(97)]], [ascii_from::code], 0, [w(4096), w(4), w(0), w(4)]) = w(2) { refl }
+theorem ascii_from_ends(): program_eval_over([[b(104), b(105)]], [ascii_from::code], 0, [w(4096), w(2), w(0), w(2)]) = w(2) { refl }
 
 // ---------------------------------------------------------------------------
 // A loop over two spans (issues/runtime-loop-over-several-spans.md): the

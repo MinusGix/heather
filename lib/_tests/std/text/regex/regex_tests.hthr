@@ -1,7 +1,7 @@
 // Probes of `regex` (`lib/std/text/regex/regex.hthr`): the parser at the usual
 // spellings, the meaning at closed strings, and the `regex` prefix
 // generator, which rewrites `regex def name = "…";` into the parsed term and
-// its meaning (docs/value-definitions-design.md §4). Tests, not library:
+// its meaning (docs/metaprogramming/value-definitions-design.md §4). Tests, not library:
 // nothing imports this module.
 
 import logic;

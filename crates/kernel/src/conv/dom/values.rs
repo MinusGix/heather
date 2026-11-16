@@ -1,5 +1,5 @@
 //! The **value instantiation** of [`Dom`]: conversion over the environment
-//! machine (docs/nbe-conversion-design.md §13, stage 2b).
+//! machine (docs/kernel/nbe-conversion-design.md §13).
 //!
 //! A weak head normal form is a [`Val`]/[`VTy`], and a sub-structure is a
 //! closure. Two numbers travel with every sub-structure, and they are what
@@ -28,7 +28,7 @@
 //!   shared function in [`crate::term`] / [`crate::rec`], and evaluate the
 //!   result in that same environment extended by the freshly pushed binders.
 //!   The schemas are one source shared with `typing.rs`; a value-domain
-//!   transcription would be a seventh copy of `nth` and a place for the two
+//!   transcription would be another copy of `nth` and a place for the two
 //!   to drift.
 //! - The layer-m arms weaken L or Ψ, and a captured environment does not
 //!   weaken itself: [`Values::under_tele_ty`] is where `value::shift` is
@@ -41,8 +41,8 @@ use crate::level::Level;
 use crate::rec;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, CtxEntries,
-    IWfSig, MSig, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, CtxShape,
+    IWfSig, MSig, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
     self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VMSig, VNeTy, VNeutral,
@@ -84,7 +84,7 @@ pub(crate) struct TmC<'v> {
 pub(crate) struct RecEnv<'v>(value::Env<'v>);
 
 fn glen<'v>(env: &Env<'v>) -> u32 {
-    env.gamma.entries.len() as u32
+    env.len
 }
 
 #[cfg(test)]
@@ -352,10 +352,10 @@ mod tests {
         );
     }
 
-    /// What used to be a hostile near-match — two doubling DAGs whose
-    /// leaves differ, so no node pair lines up — is decided by the lengths
-    /// the programs carry: `2^64` against `2^65` is a refutation within a
-    /// handful of inspections, not a walk that exhausts its fuel. (The
+    /// A hostile near-match — two doubling DAGs whose leaves differ, so no
+    /// node pair lines up — is decided by the lengths the programs carry:
+    /// `2^64` against `2^65` is a refutation within a handful of
+    /// inspections, not a walk that exhausts its fuel. (The
     /// bound itself is still exercised by mixed-context programs in
     /// `value::program`'s own tests.)
     #[test]
@@ -513,13 +513,12 @@ fn open_tm<'v>(env: &Env<'v>, c: &TmC<'v>, pending: u32) -> &'v TmClo<'v> {
 
 /// Run the machine on the checker's own budget. Fuel is a single shared
 /// account (design §6): the evaluator spends from it and hands back what is
-/// left, so a reduction step and a comparison node cost the same one unit
-/// they cost today.
+/// left, so a reduction step and a comparison node cost one unit each.
 ///
 /// The **depth** budget is shared the same way and for a more literal reason:
 /// this call stands on conversion's own native frames, so the machine is told
 /// how many there are and counts its re-entries on top of them
-/// (docs/native-depth-budget-design.md). It is not handed back — the frames
+/// (docs/kernel/native-depth-budget-design.md). It is not handed back — the frames
 /// are gone when the run returns.
 fn run<'v, T>(
     cv: &mut Conv<'v, Values>,
@@ -570,13 +569,6 @@ fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &VNeutral<'v>) -> &'v Val<'v> {
         spine,
         unfold,
     })))
-}
-
-thread_local! {
-    /// The filler Γ entry: at the value domain nothing reads an entry's
-    /// syntax (`Env<'v>::vtys` carries the domain object), only the length and
-    /// the base.
-    static FILLER: Rc<Type> = Rc::new(Type::Nat);
 }
 
 /// Scoped identity for terms, including bounded congruence of suspended
@@ -753,8 +745,8 @@ impl<'v> Dom<'v> for Values {
         // address names one closure throughout. Ψ is by length: within a
         // run it only ever grows (a telescope push), so the length names
         // it, where its handle's address does not — the handle is rebuilt
-        // along the way, and keying on it made the same pair miss on
-        // nearly every δ-round.
+        // along the way, and keying on it makes the same pair miss on
+        // nearly every δ-step.
         Some((
             a.clo as *const TmClo<'v> as usize,
             a.home,
@@ -1045,7 +1037,7 @@ impl<'v> Dom<'v> for Values {
 
             // A run is a `Vec` value, and `Vec` values are Σ-pairs: opaque
             // exactly as `Val::Pair` is, with the Σ-η arm doing the work
-            // (`docs/native-bitvector-values-design.md` §3.3).
+            // (`docs/kernel/native-bitvector-values-design.md` §3.3).
             Val::Lam { .. }
             | Val::WfIh { .. }
             | Val::WIh { .. }
@@ -1078,14 +1070,14 @@ impl<'v> Dom<'v> for Values {
 
     fn push_entry(env: &Env<'v>, ty: &TyC<'v>, level: &Level) -> Env<'v> {
         let vty = open_ty(env, ty, 0);
-        env.push_entry(FILLER.with(Rc::clone), vty, level.clone())
+        env.push_entry(None, vty, level.clone())
     }
 
     fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v> {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
             let vty = e.arena.ty(TyClo::new(e.rho(), Rc::clone(ty)));
-            e = e.push_entry(Rc::clone(ty), vty, level.clone());
+            e = e.push_entry(Some(Rc::clone(ty)), vty, level.clone());
         }
         e.tele.2 = tele.locals.len() as u32;
         e
@@ -1111,7 +1103,7 @@ impl<'v> Dom<'v> for Values {
             };
             return Ok((TyC::here(env, clo), level.clone()));
         }
-        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+        let Some(e) = env.syntax_entry(x) else {
             return Err(NC);
         };
         let rho = value::Env::identity(i);
@@ -1195,7 +1187,7 @@ impl<'v> Dom<'v> for Values {
 
     /// Instantiating a `ΠΠ` binder leaves the captured environment alone:
     /// `inst_univ` renumbers the outer scope back *down*, so the environment
-    /// is already in the post-instantiation scope (stage 1's log, note 4).
+    /// is already in the post-instantiation scope.
     fn inst_univ_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, body: &TyC<'v>, phi: &[Level]) -> R<TyC<'v>> {
         let Some((benv, bbody)) = body.clo.as_syn() else {
             return Err(NC);
@@ -1237,7 +1229,7 @@ impl<'v> Dom<'v> for Values {
     /// `VTail`'s coarser test: a weakening's source length is dropped,
     /// because an environment machine — having substituted nothing — never
     /// renormalizes it, and it is determined by the scope, which the two
-    /// sides of a comparison share (stage 1's log, note 2). The empty tail
+    /// sides of a comparison share. The empty tail
     /// has nothing to drop (`term.rs`, `LocalSubst`).
     fn subst_tails_agree(a: &VSubst<'v>, b: &VSubst<'v>) -> bool {
         a.tail == b.tail
@@ -1843,7 +1835,7 @@ impl<'v> Dom<'v> for Values {
     /// three types in that environment's scope plus the three binders
     /// conversion is about to push, and each is embedded with exactly those
     /// binders' neutrals. Rebuilding `nth` out of domain constructors would
-    /// need a native closure and a seventh transcription; this needs neither.
+    /// need a native closure and another transcription; this needs neither.
     fn wf_step_telescope(
         _cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
@@ -1863,16 +1855,10 @@ impl<'v> Dom<'v> for Values {
         if senv.len() != aenv.len() || senv.len() != menv.len() {
             return Err(NC);
         }
-        let gamma = LocalCtx {
-            base: env.gamma.base,
-            entries: CtxEntries::repeat(
-                CtxEntry { ty: FILLER.with(Rc::clone), level: Level::Zero },
-                senv.len() as usize,
-            ),
-        };
+        let gamma = CtxShape { base: env.gamma.base, len: senv.len() };
         // The three bodies are mixed into one telescope, so they must be
         // read in one scope: each spends its closure's pending global offset
-        // here (`docs/lazy-global-offset-design.md` §5), and the telescope is
+        // here (`docs/kernel/lazy-global-offset-design.md` §5), and the telescope is
         // ambient.
         let (sbody, abody, mbody) =
             (amb_ty(senv, sbody), amb_tm(aenv, abody), amb_ty(menv, mbody));
@@ -2027,7 +2013,7 @@ impl<'v> Dom<'v> for Values {
 // ---------------------------------------------------------------------------
 
 /// Spend a closure's pending global offset on syntax read out of it
-/// (`docs/lazy-global-offset-design.md` §5).
+/// (`docs/kernel/lazy-global-offset-design.md` §5).
 /// An `IWf` signature's closures taken apart: their common environment and
 /// the syntax, each body with its closure's pending global offset spent (see
 /// [`Values::wf_step_telescope`]). `None` when a component is not syntactic
@@ -2106,7 +2092,7 @@ fn amb_tm<'v>(env: &value::Env<'v>, t: &Rc<Term>) -> Rc<Term> {
 
 /// The payload of `sigma` is ambient, and so is the body: a closure under a
 /// global binder — which is what every caller of this passes — is built with
-/// its offset already spent (`docs/lazy-global-offset-design.md` §4).
+/// its offset already spent (`docs/kernel/lazy-global-offset-design.md` §4).
 fn inst_global_ty<'v>(env: &Env<'v>, body: &TyC<'v>, sigma: GlobalSubst) -> R<TyC<'v>> {
     let Some((benv, bbody)) = body.clo.as_syn() else {
         return Err(NC);
@@ -2181,9 +2167,8 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Va
         // reads them off the Σ when it builds the elim, whichever spelling
         // the syntax used.
         // A checked projection stores no annotation, so the view has no
-        // levels — exactly what the syntax domain has shown for `fst@` since
-        // stage 1a, and the arm in `conv.rs` already treats the pair as
-        // `Option`.
+        // levels, as at the syntax domain, and the arm in `conv.rs` treats
+        // the pair as `Option`.
         Elim::Fst { ann } => TmView::Fst {
             levels: ann.as_ref().map(|a| (&a.fst_level, &a.snd_level)),
             pair: head,
@@ -2368,7 +2353,7 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Va
 }
 
 // ---------------------------------------------------------------------------
-// Deferred types (docs/intro-by-type-design.md §3.3)
+// Deferred types (docs/elaborator/intro-by-type-design.md §3.3)
 // ---------------------------------------------------------------------------
 
 /// Evaluate a checker description into this query's arena.

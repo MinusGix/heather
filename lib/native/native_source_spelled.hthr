@@ -43,6 +43,7 @@ fn Node::spelled_node(self node: Node) → List<Nat> {
         WideLoad(bytes, output, buffer, index) => [18, bytes, output, buffer, index],
         WideStore(bytes, output, buffer, index, value) => [19, bytes, output, buffer, index, value],
         ByteSwap(width, output, source) => [20, width, output, source],
+        RotateRight(width, output, value, amount) => [21, width, output, value, amount],
     }
 }
 
@@ -52,7 +53,7 @@ fn List::spell_nodes(self nodes: List<Node>) → List<Nat> {
 
 fn CallShape::spelled_call(self shape: CallShape) → List<Nat> {
     match shape {
-        Reads(fd, buf, len, result) => [0, fd, buf, len, result],
+        Reads(fd, buf, at, len, result) => [0, fd, buf, at, len, result],
         Writes(fd, buf, from, len, result) => [1, fd, buf, from, len, result],
         Opens(path, len, result) => [2, path, len, result],
         Closes(fd, result) => [3, fd, result],

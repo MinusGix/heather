@@ -41,7 +41,7 @@ impl AppUnify<'_> {
     ///
     /// `let p: a = b = pf;` used to parse as annotation `a = b`, binder `=`.
     /// The annotation position now suppresses the comparison rung
-    /// (docs/let-and-blocks-design.md §3), so it parses as annotation `a`,
+    /// (docs/language/let-and-blocks-design.md §3), so it parses as annotation `a`,
     /// binder `=`, value `b = pf` — and `a` is a term, whose only report from
     /// `elab_ty` is `unknown type \`a\``. That is diagnosable but says nothing
     /// about what actually happened, so this appends the spelling that works.
@@ -68,7 +68,7 @@ impl AppUnify<'_> {
 
     /// A projected record field applied to arguments: `w.f(3)`. Routes to
     /// implicit insertion when the field's stored surface type carried marks
-    /// (docs/implicit-binders-design.md §5.1), and to the explicit path —
+    /// (docs/language/implicit-binders-design.md §5.1), and to the explicit path —
     /// with the skeleton-synthesized hint table when there is one —
     /// otherwise. The field name is the display name; `@w.f(…)` stays out of
     /// the grammar this round (§7.1), so there is no explicit flag here.
@@ -112,7 +112,7 @@ impl AppUnify<'_> {
             None => {
                 application::refuse_named(
                     &format!("`{name}`"),
-                    "its type binds no parameter names, so its arguments are positional                      (docs/named-arguments-design.md §7)",
+                    "its type binds no parameter names, so its arguments are positional                      (docs/language/named-arguments-design.md §7)",
                     named,
                 )?;
                 application::apply_explicit(
@@ -131,7 +131,7 @@ impl AppUnify<'_> {
     }
 
     /// `f<T, …>` — fill a declaration's leading type parameters with the
-    /// codes of the written types (docs/surface-polymorphism.md §1).
+    /// codes of the written types (docs/language/surface-polymorphism.md §1).
     ///
     /// Returns the callee's name (for diagnostics downstream), the applied
     /// head with its type and level, and the implicit mask of the parameters
@@ -191,7 +191,7 @@ impl AppUnify<'_> {
             }
             let (a_ty, _) = self.elab_ty(cx, a)?;
             // Quoted from the type the emission sites would write
-            // (`docs/per-instantiation-type-codes-design.md` §5): a written
+            // (`docs/inductives/per-instantiation-type-codes-design.md` §5): a written
             // `f<List<Nat>>` carries `El (List#tycode_fn^δ ⌜Nat⌝)` rather than
             // the boxed literal every emission walk still finds here.
             let emitted = self.emit_ty(cx, &a_ty, 0);
@@ -221,7 +221,7 @@ impl AppUnify<'_> {
     }
 
     /// Is `e` a form the elaborator can only *check*, never infer — the
-    /// deferral trigger's syntactic half (docs/unifier-completeness-design.md
+    /// deferral trigger's syntactic half (docs/elaborator/unifier-completeness-design.md
     /// §4.1)? The set is closed and enumerated by the refusing arms of
     /// [`Inference::elab_infer_at`](crate::inference::Inference::elab_infer_at)/[`Elaborator::elab_infer`]; deferring exactly these
     /// forms loses no solving power, because in inference mode they *error*
@@ -252,7 +252,7 @@ impl AppUnify<'_> {
     ///   sentence as the entry above, at the notation layer: `+` infers to
     ///   `add`, whose type would pin a `Bool` call's carrier to `Nat`, so at a
     ///   meta-bearing domain it waits for the carrier a later argument
-    ///   produces (docs/bare-symbol-checking-carrier-design.md §3.2).
+    ///   produces (docs/language/classes/bare-symbol-checking-carrier-design.md §3.2).
     ///
     /// `Num` is deliberately **excluded**: it infers at `Nat` today and that
     /// default is load-bearing for the suite (`xs[2]`'s `Fin` reading exists
@@ -264,7 +264,7 @@ impl AppUnify<'_> {
         match &e.kind {
             ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::CollectionLit(_) => true,
             // A bare operator symbol that needs a carrier
-            // (docs/bare-symbol-checking-carrier-design.md §3.2, §4.3). Same
+            // (docs/language/classes/bare-symbol-checking-carrier-design.md §3.2, §4.3). Same
             // sentence as the bare implicit prefix two arms down: it *can*
             // infer — `+` infers to `add` — but only at a shape that
             // mis-teaches, since `add`'s type would pin the call's carrier to
@@ -284,7 +284,7 @@ impl AppUnify<'_> {
                     && !self.shadowed(cx, name)
                     && Constructors(self).ctor_here(cx, name).is_none())
                     || Callables(self).bare_implicit_prefix(cx, name).is_some()
-                    // The value analog (docs/implicit-binders-design.md
+                    // The value analog (docs/language/implicit-binders-design.md
                     // §4.3): a bare local/alias whose skeleton has a leading
                     // implicit prefix is checking-only for the same reason
                     // the bare-global member is — it *can* infer, but only
@@ -295,7 +295,7 @@ impl AppUnify<'_> {
                         .is_some_and(|s| s.leading_implicit() > 0)
             }
             // A cast takes its target from the checking position, as a
-            // numeral does (docs/casting-design.md §5.2).
+            // numeral does (docs/language/casting-design.md §5.2).
             ExprKind::App { .. } if surface::is_cast(e) => true,
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
@@ -332,7 +332,7 @@ impl AppUnify<'_> {
     /// [`unification::U::type_args`]: which arguments of the rigid spine `t`
     /// — in the committed world, `d` binders past `cx.gamma` — sit at a `Ty`
     /// domain, read off the **head's** type. An `app(…)` node states its
-    /// domain; an `app@` node's is its head's (`docs/app-by-head-type-design.md`
+    /// domain; an `app@` node's is its head's (`docs/elaborator/app-by-head-type-design.md`
     /// §6.2), so the unifier's type-argument prefix asks here. The domain is
     /// read as the `app` emitter would have written it: the Π of the running
     /// type's weak head, instantiated at the earlier arguments. `None` under
@@ -349,7 +349,7 @@ impl AppUnify<'_> {
 
     /// The domain, and its level, of every argument of the application spine
     /// `t` in `cx`, outermost last — what an `app(…)` node would state, read
-    /// off the head's type instead (`docs/app-by-head-type-design.md` §6.2's
+    /// off the head's type instead (`docs/elaborator/app-by-head-type-design.md` §6.2's
     /// `app_domains`): the head is inferred, and each argument peels one Π
     /// off the weak head of the running type, which is then instantiated at
     /// it — the walk `application.rs` makes when it writes the node. `None`
@@ -484,8 +484,8 @@ impl AppUnify<'_> {
             let meta = Term::GlobalTm { var: GlobalVar::index(slot), subst: LocalSubst::id(&cx.gamma) };
             conclusion = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(meta)));
         }
-        let pat = GeneratedDefs(self).unspell_deep_now(&conclusion, n).unwrap_or(conclusion);
-        let subj = GeneratedDefs(self).unspell_deep_now(goal, 0);
+        let pat = GeneratedDefs(self).unspell_ty_deep(&conclusion).unwrap_or(conclusion);
+        let subj = GeneratedDefs(self).unspell_ty_deep(goal);
         let subj = subj.as_ref().unwrap_or(goal);
         let mut sols = vec![Sol::Unsolved; n as usize];
         let clash = unification::Clash::default();
@@ -566,7 +566,7 @@ impl AppUnify<'_> {
     /// application with implicit insertion is ambiguous, so it is refused —
     /// except that `mask` may cover only a *prefix* of the remaining
     /// parameters (the bare-reference route of
-    /// docs/unifier-completeness-design.md §5.3), in which case the
+    /// docs/elaborator/unifier-completeness-design.md §5.3), in which case the
     /// parameters past the mask are simply left unapplied.
     ///
     /// `param_offset` is how many leading parameters the head has already
@@ -576,7 +576,7 @@ impl AppUnify<'_> {
     /// flavor for the zero-argument checking-position route.
     #[allow(clippy::too_many_arguments)]
     /// Read implicit solutions off an argument's type
-    /// (docs/argument-type-reduction-design.md): one read, in which the
+    /// (docs/elaborator/argument-type-reduction-design.md): one read, in which the
     /// unifier itself unfolds the argument's type wherever it does not meet
     /// the parameter's as it stands (the δ-lazy order,
     /// issues/unifier-lazy-delta.md).
@@ -641,7 +641,7 @@ impl AppUnify<'_> {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
         let before = learned(sols);
         // Both sides in the **inline** spelling first
-        // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
+        // (`docs/inductives/per-instantiation-type-codes-design.md` §4.2, amended
         // 2026-09-10): the congruence below is syntactic, and a callee's
         // domain arrives off its respelled statement, where a parameterized
         // instantiation is `El (app(D#tycode_fn^δ; ā))` and the argument's own
@@ -649,9 +649,9 @@ impl AppUnify<'_> {
         // spelled, it solves nothing and the writer is told to give the type
         // argument. The pattern is in the call's scratch world and the subject
         // in the committed one, which is the whole of the bookkeeping.
-        let dom_inline = GeneratedDefs(self).unspell_deep_now(dom_orig, n);
+        let dom_inline = GeneratedDefs(self).unspell_ty_deep(dom_orig);
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
-        let arg_inline = GeneratedDefs(self).unspell_deep_now(arg_ty, 0);
+        let arg_inline = GeneratedDefs(self).unspell_ty_deep(arg_ty);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
         let unify_checked =
             |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, None, span) };
@@ -687,7 +687,7 @@ impl AppUnify<'_> {
     }
 
 
-    /// Expected-type-directed solving (docs/unifier-completeness-design.md
+    /// Expected-type-directed solving (docs/elaborator/unifier-completeness-design.md
     /// §5): the expected type, consulted for the implicits an argument's type
     /// cannot reach. Called from [`application::apply_implicit`] with the call's
     /// scratch world (`n` metas, `sols` their solutions so far) just before
@@ -757,9 +757,9 @@ impl AppUnify<'_> {
         // elab-unifier-completeness's question, and this round answered it.
         // The same inline-spelling pre-pass `unify_arg_ty` takes, for the same
         // reason (§4.2, amended 2026-09-10).
-        let inline_result = GeneratedDefs(self).unspell_deep_now(result_ty, n);
+        let inline_result = GeneratedDefs(self).unspell_ty_deep(result_ty);
         let result_ty = inline_result.as_ref().unwrap_or(result_ty);
-        let inline_expected = GeneratedDefs(self).unspell_deep_now(expected, 0);
+        let inline_expected = GeneratedDefs(self).unspell_ty_deep(expected);
         let expected = inline_expected.as_ref().unwrap_or(expected);
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
@@ -780,7 +780,7 @@ impl AppUnify<'_> {
                 return Ok(());
             }
             let head = self.whnf(cx, expected, span)?;
-            let head = GeneratedDefs(self).unspell_deep_now(&head, 0).unwrap_or(head);
+            let head = GeneratedDefs(self).unspell_ty_deep(&head).unwrap_or(head);
             self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, None, span);
             return Ok(());
         };
@@ -791,7 +791,7 @@ impl AppUnify<'_> {
         sols[m] = Sol::Withheld;
         self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
         let expected_head = self.whnf(cx, expected, span)?;
-        let expected_head = GeneratedDefs(self).unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
+        let expected_head = GeneratedDefs(self).unspell_ty_deep(&expected_head).unwrap_or(expected_head);
         self.unify_root(cx, result_ty, &expected_head, n, sols, meta_doms, span);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
@@ -821,7 +821,7 @@ impl AppUnify<'_> {
             return Ok(());
         };
         // Two attempts, in this order, and no more
-        // (docs/congruence-in-inference-position-design.md §3).
+        // (docs/elaborator/congruence-in-inference-position-design.md §3).
         //
         // 1. The endpoints **as written**. This is the whole of decision 2 as
         //    it landed, and it stays first so that no goal that generalized
@@ -881,7 +881,7 @@ impl AppUnify<'_> {
                                 dom: Rc::clone(&dom),
                                 body: Rc::new(body.clone()),
                             };
-                            let fl = Level::join(dom_level.clone(), cod_level.clone());
+                            let fl = Level::max(dom_level.clone(), cod_level.clone());
                             typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.policy.fuel)
                                 .is_ok()
                         };
@@ -932,7 +932,7 @@ impl AppUnify<'_> {
     ///
     /// Every spelling is optional and its absence costs a clause, not the
     /// message: `spell_*` declines rather than half-spelling
-    /// (`docs/surface-type-display-design.md` §2), and the position — which is
+    /// (`docs/elaborator/surface-type-display-design.md` §2), and the position — which is
     /// the part the reader could not get before — needs no context at all.
     fn cong_mismatch(
         &self,

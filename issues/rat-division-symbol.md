@@ -23,7 +23,7 @@ no expected carrier is `Nat` division, `0`.
 
 ## Log
 
-- 2026-11-06: Minus chose the proof. Done (docs/division-design.md): `a / b`
+- 2026-11-06: Minus chose the proof. Done (docs/library/division-design.md): `a / b`
   at `Rat` and `CReal` is `a * b⁻¹` at a searched `b.Apart(0)`
   (`div_eq_mul_inv` is `refl`), with the field laws. The search reads locals
   (apartness, a sign, `¬(b ≈ 0)` at `Rat`), closed divisors by computation,

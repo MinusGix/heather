@@ -1,5 +1,5 @@
 // Probes of `bv_omega` (`lib/std/tactic/bitvec_omega.hthr`,
-// `docs/bv-omega-design.md`) and of the `decreases` discharge that falls
+// `docs/tactics/bv-omega-design.md`) and of the `decreases` discharge that falls
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
@@ -38,6 +38,93 @@ theorem literal_in_fact(i: BitVec(8), h: i.toNat() < BitVec::ofNat(200, n := 8).
 // expect-error: may borrow
 theorem lt_bit_wrong_way(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = False):
     BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
+
+// ---- Word arithmetic in the facts, used by the side conditions ----
+
+// `1 < n - i` is a fact about `toNat(n - i)`, which the side condition
+// `i + 2 <= n` (that `n - (i + 2)` does not borrow) needs beside `n - i`'s
+// own fact: side conditions are proved in stages, a hypothesis word's fact
+// before the side conditions that read it (docs/tactics/bv-omega-design.md §2).
+theorem hyp_word_cmp(n, i: BitVec(64), a: i < n, b: 1 < n - i): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The same fact over Nat values.
+theorem hyp_word_nat(n, i: BitVec(64), a: i < n, b: 1 < (n - i).toNat()): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The facts the other way round: `n - i`'s no-borrow needs `a`, after `b`.
+theorem hyp_word_order(n, i: BitVec(64), b: 1 < n - i, a: i < n): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// The Boolean tests nested guards put in scope.
+theorem hyp_word_bits(n, i: BitVec(64), a: i.unsigned_lt_bit(n) = True, b: BitVec::ofNat(1).unsigned_lt_bit(n - i) = True):
+    (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+// A chain: the second word's no-borrow needs the first word's fact.
+theorem hyp_word_chain(n, i: BitVec(64), a: i < n, b: 2 < n - i, c: 0 < (n - i) - 2): (n - (i + 3)).toNat() < (n - i).toNat() { bv_omega }
+// In a checking position.
+theorem hyp_word_checking(n, i: BitVec(64), a: i < n, b: 1 < n - i): (n - i).toNat() - 2 = (n - (i + 2)).toNat() {
+    let step: ((n - (i + 2)).toNat() + 2 = (n - i).toNat()) = bv_omega;
+    omega
+}
+// At an open width, the step a word too (a literal step at an open width
+// may not fit it, which no fact here rules out).
+theorem hyp_word_open(w: Nat, n, i, k: BitVec(w), a: i < n, b: k < n - i): (n - (i + k)).toNat() <= (n - i).toNat() { bv_omega }
+
+// Negative control: `0 < n - i` leaves room for one step, not two.
+// expect-error: may borrow
+theorem hyp_word_one_short(n, i: BitVec(64), a: i < n, b: 0 < n - i): (n - (i + 2)).toNat() < (n - i).toNat() { bv_omega }
+
+// A loop stepping by two under two nested guards: its decrease is found
+// from both tests.
+fn pairs_left(n, i: BitVec(64)) → Nat decreases (n - i).toNat() {
+    if h: i < n {
+        if g: 1 < n - i { 1 + pairs_left(n, i + 2) } else { 0 }
+    } else { 0 }
+}
+theorem pairs_left_lit(): pairs_left(10, 3) = 3 { refl }
+
+// Negative control: the inner guard does not leave room for two steps.
+// expect-error: must decrease the measure
+fn pairs_left_wrong(n, i: BitVec(64)) → Nat decreases (n - i).toNat() {
+    if h: i < n {
+        if g: 0 < n - i { 1 + pairs_left_wrong(n, i + 2) } else { 0 }
+    } else { 0 }
+}
+
+// ---- A plain equation of words in scope ----
+
+// `same: fill = 63` gives `fill.toNat() = 63`, either way round.
+theorem word_eq_hyp(fill: BitVec(64), same: fill = 63): fill.toNat() + 1 = 64 { bv_omega }
+theorem word_eq_hyp_flipped(fill: BitVec(64), same: 63 = fill): fill.toNat() + 1 = 64 { bv_omega }
+// Refuting a branch: the value says the word cannot be 63.
+theorem word_eq_hyp_refutes(fill: BitVec(64), k, len: Nat, at: fill.toNat() = len, short: len + Succ(k) = 63, same: fill = 63): logic::False { bv_omega }
+// Two words, one composite.
+theorem word_eq_hyp_words(i, j: BitVec(64), h: j = i + 1, b: i < 8): j.toNat() = i.toNat() + 1 { bv_omega }
+
+// Negative control: the equation is about another word.
+// expect-error: got stuck
+theorem word_eq_hyp_other(fill, other: BitVec(64), same: other = 63): fill.toNat() + 1 = 64 { bv_omega }
+
+// ---- Word comparisons as goals ----
+
+// `<` and `<=` at a word, and the `<=` bit, as the Nat order over values.
+theorem goal_le_prop(i: BitVec(64), h: i < 8): i + 1 <= 8 { bv_omega }
+theorem goal_lt_prop(n, i: BitVec(64), a: i < n, b: 1 < n - i): i + 1 < n { bv_omega }
+theorem goal_le_bit_true(i: BitVec(64), h: i < 8): (i + 1).unsigned_le_bit(8) = True { bv_omega }
+theorem goal_le_bit_false(i: BitVec(64), h: 8 < i): i.unsigned_le_bit(8) = False { bv_omega }
+// At an open width, in a checking position.
+theorem goal_le_open(w: Nat, i, n: BitVec(w), h: i < n): i + 1 <= n {
+    let r: (i + 1 <= n) = bv_omega;
+    r
+}
+
+// Negative control: `i` may be eight.
+// expect-error: got stuck
+theorem goal_le_wrong(i: BitVec(64), h: i <= 8): i + 1 <= 8 { bv_omega }
+
+// ---- An `if h:` test named only by a discharge ----
+
+// The branches never mention `h`; the `on ?dec1` that proves the recursive
+// call's decrease does, so the branch binds it.
+fn count_down_on(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: n.eq_bit(BitVec::ofNat(0)) = False { count_down_on(n.sub(BitVec::ofNat(1)), acc.add(n)) } else { acc }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+theorem count_down_on_lit(): count_down_on(3, 0) = 6 { refl }
 
 // ---- A variable named `t` (issues/bv-omega-binder-captures-t.md) ----
 
@@ -248,3 +335,28 @@ theorem range_checking(x: BitVec(8), k: Nat, h: k = x.toNat()): k < 300 {
 theorem range_not_below_top(x: BitVec(8)): x.toNat() < 255 { omega }
 // A closed word is its value.
 theorem closed_word(k: Nat): BitVec::ofNat(5, n := 64).toNat() + k = k + 5 { omega }
+
+// A conjunction in scope is read side by side (`m.left`, `m.right`), and a
+// side restated over a word the walk takes apart is rebound under a fresh
+// name: a projection path is no binder (it once wrote `(m.left: …) →`).
+theorem conjunct_fact_restated(lo, hi: BitVec(64), h: lo.toNat() < hi.toNat(), gap: (hi - lo).toNat() + lo.toNat() = hi.toNat(),
+    m: And<(lo + ((hi - lo) >> 1)).toNat() = lo.toNat() + ((hi - lo) >> 1).toNat(), (lo + ((hi - lo) >> 1)).toNat() < hi.toNat()>):
+    (hi - ((lo + ((hi - lo) >> 1)) + 1)).toNat() < (hi - lo).toNat() { bv_omega }
+
+// ---- A word widened by zeros has the narrower word's value ----
+
+// A byte read as a `u64` and compared, as a program spells its tests.
+theorem widened_byte(c: u8, t: c.toNat() < 0x80): c.zero_extend(56) < 0x80 { bv_omega }
+theorem widened_byte_range(c: u8): c.zero_extend(56) < 256 { bv_omega }
+// The test decided by its Boolean, on a byte equal to the one read.
+theorem widened_decided(c, b: u8, read: c = b, t: decide_bit<b.zero_extend(56) < 0x80>() = False): ¬(c.zero_extend(56) < 0x80) { bv_omega }
+// An open width.
+theorem widened_open(n: Nat, x, y: BitVec(n), h: x.toNat() < y.toNat()): x.zero_extend(8) < y.zero_extend(8) { bv_omega }
+// In a checking position: a step of a longer proof.
+theorem widened_step(c: u8, t: c.toNat() < 0x80): c.zero_extend(56).toNat() < 200 {
+    let w: (c.zero_extend(56) < 0x80) = bv_omega;
+    bv_omega
+}
+// Control: a byte reaches 255, so a bound one below it is refused.
+// expect-error: `omega` got stuck
+theorem widened_not_below_top(c: u8): c.zero_extend(56) < 255 { bv_omega }

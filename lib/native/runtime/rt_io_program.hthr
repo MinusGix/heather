@@ -1,0 +1,168 @@
+// A program over `Io`, whole: the lowered statements followed by an `Exit`
+// of the word the value is left in, and its tree read against any world
+// (docs/native/io-programs-design.md §3).
+//
+// `ELoop::lower_reads` reads the statements' tree with the value taken back
+// from its word; a `Source`'s tree (`Source::tree_co`) is the exit status
+// its `main` reports. With `main := Then(stmt, Exit(result))` the two are
+// the same tree up to silent steps (`Stmt::exit_eutt`), so the lowering's
+// theorem is a theorem about the `Source` `write-elf` compiles
+// (`Stmt::exit_reads`). Proved once, for every program.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import nat_map;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import rt;
+import rt_io;
+import rt_io_lower;
+import rt_file_loop;
+
+// After the statements: the word the value is in, as the status, or the
+// status they left with.
+fn Stmt::exit_rest(call: Writers(), perform: PerformsCo(), result: Nat, flow: Flow) → CoTree<Flow>(Events::linux()) {
+    match flow {
+        Onward(next) => Exit(result).denote_co(call, perform)(next),
+        Exited(status) => CRet(Exited(status)),
+    }
+}
+
+// A flow's status as a leaf.
+fn Stmt::status_leaf() → Flow → CoTree<BitVec(64)>(Events::linux()) { λ x => CRet(x.status()) }
+
+// Each flow's status after the `Exit` is the word read back from it.
+fn Stmt::exit_leaf(call: Writers(), perform: PerformsCo(), result: Nat, tys: Nat → RecInfo) → (flow: Flow) →
+    Eutt<BitVec(64)>(Events::linux(), CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, flow), λ x => CRet(x.status())),
+        CRet(flow.read_back(Word(64), tys, result)))
+{
+    λ flow => match flow as λ fl => Eutt<BitVec(64)>(Events::linux(),
+            CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, fl), λ x => CRet(x.status())),
+            CRet(fl.read_back(Word(64), tys, result))) {
+        Onward(next) => Eutt::bind_ret_l(Events::linux(), Exited(next.word(result)), λ x => CRet(x.status())),
+        Exited(status) => Eutt::trans(Events::linux(),
+            CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, Exited(status)), Stmt::status_leaf()), CRet(status), CRet(BitVec::ofNat(status.toNat())),
+            Eutt::bind_ret_l(Events::linux(), Exited(status), Stmt::status_leaf()),
+            j(sym(BitVec::ofNat_toNat(64, status)), λ y _ => Eutt<BitVec(64)>(Events::linux(), CRet(status), CRet(y)),
+                Eutt::refl(Events::linux(), CRet(status)))),
+    }
+}
+
+// The statements then an `Exit` of the result word, as statuses, are the
+// statements' tree with the value read back from that word.
+fn Stmt::exit_eutt(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo) →
+    Eutt<BitVec(64)>(Events::linux(),
+        CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
+        CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)))
+{
+    let t = s.denote_co(call, perform)(env);
+    let k = λ (flow: Flow) => Stmt::exit_rest(call, perform, result, flow);
+    let g = Stmt::status_leaf();
+    Eutt::trans(Events::linux(), CoTree::bind(Events::linux(), CoTree::bind(Events::linux(), t, k), g),
+        CoTree::bind(Events::linux(), t, λ x => CoTree::bind(Events::linux(), k(x), g)),
+        CoTree::bind(Events::linux(), t, λ flow => CRet(flow.read_back(Word(64), tys, result))),
+        Eutt::bind_assoc(Events::linux(), t, k, g),
+        Eutt::bind_cong_r(Events::linux(), t, λ x => CoTree::bind(Events::linux(), k(x), g), λ flow => CRet(flow.read_back(Word(64), tys, result)),
+            Stmt::exit_leaf(call, perform, result, tys)))
+}
+
+// So whatever the statements' tree reads as, with the value read back, the
+// statements then the `Exit` read as too: the lowering's theorem
+// (`ELoop::lower_reads`) is a theorem about a `Source` whose `main` is
+// `Then(stmt, Exit(result))`.
+fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo,
+    f: Io → Partial(Mutated<Io, BitVec(64)>),
+    r: Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)), f)) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()), f)
+{
+    λ io => Eutt::trans(Events::none(),
+        Io::against_co(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()), io),
+        Io::against_co(CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)), io),
+        f(io),
+        Io::against_co_cong(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
+            CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)),
+            Stmt::exit_eutt(s, result, call, perform, env, tys), io),
+        r(io))
+}
+
+// ---------------------------------------------------------------------------
+// A function lent the program's first buffer, from its own theorem
+
+// `k` words, one at a time.
+fn Words(k: Nat, R: Type) → Type { match k { Zero => R, Succ(m) => BitVec(64) → Words(m, R) } }
+
+// A function of `k` words on the first `k` of a list (zero past its end).
+fn Words::apply<R>(k: Nat) → Words(k, R) → List<BitVec(64)> → R {
+    match k as λ n => Words(n, R) → List<BitVec(64)> → R {
+        Zero => λ r _ => r,
+        Succ(m) => λ f ws => Words::apply(m, f(ws.head_or(BitVec::zero())), ws.tail()),
+    }
+}
+
+// A statement of every `k` words, one at a time: what a `runtime fn`'s
+// theorem over its words is.
+fn Words::All(k: Nat, P: List<BitVec(64)> → Type) → Type {
+    match k { Zero => P(Nil), Succ(m) => (w: BitVec(64)) → Words::All(m, λ (ws: List<BitVec(64)>) => P(Cons(w, ws))) }
+}
+
+// So it holds of every list of `k` words.
+fn Words::all_at(ws: List<BitVec(64)>) → (k: Nat) → (P: List<BitVec(64)> → Type) → Words::All(k, P) → ws.len() = k → P(ws) {
+    match ws {
+        Nil => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → 0 = n → P(Nil) {
+            Zero => λ P h _ => h,
+            Succ(m) => λ P h e => false_elim(Nat::zero_ne_succ(m, e)),
+        },
+        Cons(w, rest) => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → Succ(rest.len()) = n → P(Cons(w, rest)) {
+            Zero => λ P h e => false_elim(Nat::succ_ne_zero(rest.len(), e)),
+            Succ(m) => λ P h e => Words::all_at(rest, m, λ (ws: List<BitVec(64)>) => P(Cons(w, ws)), h(w), Nat::succ_inj(rest.len(), m, e)),
+        },
+    }
+}
+
+// A `runtime fn` over a span, `run(span, length, w₁, …, w_k)`, as the
+// table's entry for the program's function `entry`: lent the buffer, its
+// length the buffer's own.
+fn Lent::of_span(k: Nat, entry: Nat, run: List<BitVec(8)> → BitVec(64) → Words(k, Mutated<List<BitVec(8)>, BitVec(64)>)) → Lent {
+    Lent(k, entry, λ own ws => Words::apply(k, run(own, BitVec::ofNat(own.len())), ws))
+}
+
+// Its program agrees with the table: from what its generator proves of it
+// (`run::runs_over`: run over a file whose first buffer is the span, the
+// program's function `entry` ends as `run` does), and that it is lent one
+// buffer.
+theorem Lent::agrees_span(prog: List<Function>, k: Nat, entry: Nat, run: List<BitVec(8)> → BitVec(64) → Words(k, Mutated<List<BitVec(8)>, BitVec(64)>),
+    lent: program_lent(prog, entry) = 1,
+    runs: (span: List<BitVec(8)>) → (rest: Buffers()) → (place: BitVec(64)) → (length: BitVec(64)) →
+        Words::All(k, λ ws => program_run(prog, Cons(span, rest), entry, Cons(place, Cons(length, ws))) = FTm::end_of(rest, Words::apply(k, run(span, length), ws)))):
+    ETm::LentsAgree([Lent::of_span(k, entry, run)], program_writers(prog))
+{
+    λ f => match f {
+        Zero => λ _ own rest words len => {
+            let m = Words::apply(k, run(own, BitVec::ofNat(own.len())), words);
+            let ran: (program_run(prog, [own], entry, Cons(BitVec::zero(), Cons(BitVec::ofNat(own.len()), words))) = FTm::end_of(Nil, m)) =
+                Words::all_at(words, k, λ ws => program_run(prog, [own], entry, Cons(BitVec::zero(), Cons(BitVec::ofNat(own.len()), ws)))
+                    = FTm::end_of(Nil, Words::apply(k, run(own, BitVec::ofNat(own.len())), ws)), runs(own, Nil, BitVec::zero(), BitVec::ofNat(own.len())), len);
+            j(sym(lent), λ n _ => shared(program_run(prog, lent_buffers(n, Cons(own, rest)), entry, stated_homes(0, n, Cons(own, rest)) ++ words),
+                    λ (answer: Ending) => Ending(answer.word, relent(n, answer.buffers, Cons(own, rest)))) = Ending(m.value, Cons(m.after, rest)),
+                cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(own, rest))), ran))
+        },
+        Succ(_) => λ never => false_elim(never),
+    }
+}

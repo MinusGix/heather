@@ -37,7 +37,7 @@ So the arm that returns a read is what the three differ in. Not yet bisected fur
 
 ## Why it matters
 
-A function of a laid record that branches and returns a field in one arm reflects to this shape. The held generator ([[sha256-context-type]], `docs/layout-design.md` §9) would define the function of bytes as the reflection's meaning, so its pin is of the function of the record to the held meaning and never meets this; a function of bytes written by hand does.
+A function of a laid record that branches and returns a field in one arm reflects to this shape. The held generator ([[sha256-context-type]], `docs/native/layout-design.md` §9) would define the function of bytes as the reflection's meaning, so its pin is of the function of the record to the held meaning and never meets this; a function of bytes written by hand does.
 
 ## Done when
 

@@ -1,7 +1,7 @@
 // `sets`: prove a membership goal over any sets with decidable membership,
 // from the membership facts in scope, by a truth table
 // (issues/finite-set-membership-solver.md, issues/sets-any-carrier.md,
-// docs/native-mathematics-survey.md §1).
+// docs/surveys/native-mathematics-survey.md §1).
 //
 // A carrier is any type with a `DecSet` instance (lib/std/data/set/dec_set.hthr):
 // lists, span sets, anything that declares one. Its membership `s.has(x)`

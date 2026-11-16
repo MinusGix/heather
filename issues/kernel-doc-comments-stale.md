@@ -6,7 +6,7 @@ created: 2026-08-06
 updated: 2026-08-06
 ---
 
-Filed from the [[delam-extensions-writeup]] audit (`docs/delam-extensions.md`
+Filed from the [[delam-extensions-writeup]] audit (`docs/kernel/delam-extensions.md`
 §16.11): comment drift, not rule or code defects.
 
 ## Log

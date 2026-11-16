@@ -1,0 +1,703 @@
+// Probes of the optimizer as the compiler runs it
+// (lib/native/function_ir/function_ir_optimize.hthr, docs/native/optimizer-design.md
+// §3, §9): what each search finds for a program, callees first; the
+// stages making the functions found from the plans found, a plan a
+// statement; a function left as it is; a function whose bounds tests a
+// test at its entry decides, and what the lowering makes of it; a word
+// read a byte at a time with its narrowings gone, and then as one load;
+// the functions a root reaches before and after; and what the compiler
+// reads.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_stage;
+import function_ir_fresh;
+import function_ir_inline;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_tidy;
+import function_ir_guard;
+import function_ir_learn;
+import function_ir_prune;
+import function_ir_spelled;
+import function_ir_optimize;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+import string;
+
+fn nodes(ns: List<Node>) → StructuredRegion { StructuredRegion::of_nodes(ns) }
+
+fn made(found: Option<Found>) → Option<Function> { found.map(λ (f: Found) => f.made) }
+fn read(found: Option<Found>) → String { spelled_text(found_spelled(found)) }
+
+// Function 2 is x ↦ (x ^ 7) + x by a call of function 1, x ↦ x ^ 7, which
+// calls function 0, the exclusive or.
+fn xor() → Function { Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2) }
+fn seven() → Function { Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2) }
+fn top() → Function { Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2) }
+fn three() → List<Function> { [top(), seven(), xor()] }
+
+// Function 0 has no call to inline, no test to decide and no length to
+// test; its other plans keep it as it is.
+theorem xor_inlined(): made(xor().find_inlined([], Wanted::usual())) = None { refl }
+theorem xor_copied(): made(xor().find_copied()) = Some(xor()) { refl }
+theorem xor_guarded(): made(xor().find_guarded(xor(), Wanted::usual())) = None { refl }
+theorem xor_learned(): made(xor().find_learned()) = None { refl }
+
+// Function 1 with its call inlined: the callee's body at ids from 3, its
+// parameters and result bound by moves.
+fn seven_inlines() → Inlines { Inlines(3, Both(Stay, Here(3))) }
+
+fn seven_inlined() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]),
+        Compose(nodes([Move(64, 3, 0), Move(64, 4, 1)]), Compose(nodes([BitXor(64, 5, 3, 4)]), nodes([Move(64, 2, 5)])))), 2)
+}
+
+theorem seven_found(): made(seven().find_inlined([xor()], Wanted::usual())) = Some(seven_inlined()) { refl }
+
+// The exclusive or reads the caller's own values,
+fn seven_copies() → Plan { Both(Nodes([Keep]), Both(Nodes([Keep, Keep]), Both(Nodes([Swap(0, 1)]), Nodes([Keep])))) }
+
+fn seven_copied() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]),
+        Compose(nodes([Move(64, 3, 0), Move(64, 4, 1)]), Compose(nodes([BitXor(64, 5, 0, 1)]), nodes([Move(64, 2, 5)])))), 2)
+}
+
+theorem seven_read_through(): made(seven_inlined().find_copied()) = Some(seven_copied()) { refl }
+
+// and the moves of the arguments are gone. The move of the result stays:
+// 2 is the function's result.
+fn seven_dead() → Plan { Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep])))) }
+
+fn seven_made() → Function {
+    Function([0], Compose(nodes([Const(64, 1, 7)]), Compose(nodes([]), Compose(nodes([BitXor(64, 5, 0, 1)]), nodes([Move(64, 2, 5)])))), 2)
+}
+
+theorem seven_swept(): made(seven_copied().find_swept()) = Some(seven_made()) { refl }
+
+fn seven_passes() → Passes() { passes(None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())]) }
+
+// What a certificate states of a function: the test's statement, a stage
+// that found nothing keeping the function; a statement for each move,
+// joined from the last (`Stage::many_made`); and all of them as one
+// (`optimize_made`).
+theorem seven_tested(): guard_stage().maybe().rewrite([xor()], seven(), None) = Some(seven()) { refl }
+theorem seven_move_0(): move_stage().rewrite([xor()], seven(), Inl(seven_inlines())) = Some(seven_inlined()) { refl }
+theorem seven_move_1(): move_stage().rewrite([xor()], seven_inlined(), Inr(seven_copies())) = Some(seven_copied()) { refl }
+theorem seven_move_2(): move_stage().rewrite([xor()], seven_copied(), Inr(seven_dead())) = Some(seven_made()) { refl }
+
+theorem seven_joined_2(): move_stage().many().rewrite([xor()], seven_copied(), [Inr(seven_dead())]) = Some(seven_made()) {
+    move_stage().many_made([xor()], seven_copied(), seven_made(), seven_made(), Inr(seven_dead()), [], seven_move_2(),
+        move_stage().many_none([xor()], seven_made()))
+}
+
+theorem seven_joined_1(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_copies()), Inr(seven_dead())]) = Some(seven_made()) {
+    move_stage().many_made([xor()], seven_inlined(), seven_copied(), seven_made(), Inr(seven_copies()), [Inr(seven_dead())], seven_move_1(),
+        seven_joined_2())
+}
+
+theorem seven_joined_0(): move_stage().many().rewrite([xor()], seven(), [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())]) =
+    Some(seven_made()) {
+    move_stage().many_made([xor()], seven(), seven_inlined(), seven_made(), Inl(seven_inlines()), [Inr(seven_copies()), Inr(seven_dead())],
+        seven_move_0(), seven_joined_1())
+}
+
+theorem seven_staged(): optimize_stage().rewrite([xor()], seven(), seven_passes()) = Some(seven_made()) {
+    optimize_made([xor()], seven(), seven(), seven_made(), None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())], seven_tested(),
+        seven_joined_0())
+}
+
+// The moves are as many as the plans: none is the function, and one that
+// is refused refuses them all.
+theorem seven_once(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_copies())]) = Some(seven_copied()) { refl }
+theorem seven_none(): move_stage().many().rewrite([xor()], seven_inlined(), []) = Some(seven_inlined()) { refl }
+theorem seven_out_of_turn(): move_stage().many().rewrite([xor()], seven_inlined(), [Inr(seven_dead()), Inr(seven_copies())]) = None { refl }
+
+// Function 2 takes function 1 as the stages left it, so no call is left in
+// it and every move is read through: the sum reads the exclusive or.
+fn top_passes() → Passes() {
+    passes(None, [
+        Inl(Inlines(3, Both(Here(6), Stay))),
+        Inr(Both(Both(Nodes([Keep]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Swap(0, 4)]), Nodes([Keep])))), Nodes([Swap(8, 0)]))),
+            Nodes([Swap(8, 0)]))),
+        Inr(Both(Both(Nodes([Drop]), Both(Both(Nodes([Keep]), Both(Nodes([]), Both(Nodes([Keep]), Nodes([Drop])))), Nodes([Drop]))), Nodes([Keep]))),
+    ])
+}
+
+fn top_made() → Function {
+    Function([0], Compose(
+        Compose(nodes([]), Compose(Compose(nodes([Const(64, 4, 7)]), Compose(nodes([]), Compose(nodes([BitXor(64, 8, 0, 4)]), nodes([])))), nodes([]))),
+        nodes([Add(64, 2, 8, 0)])), 2)
+}
+
+theorem top_found(): made(top().find_inlined([seven_made(), xor()], Wanted::usual()))
+    .and_then(λ (f: Function) => made(f.find_copied())).and_then(λ (f: Function) => made(f.find_swept())) = Some(top_made()) { refl }
+
+fn three_made() → List<Function> { [top_made(), seven_made(), xor()] }
+
+// The stage makes those functions from those plans,
+theorem three_run(): optimize_stage().run(three(), [top_passes(), seven_passes(), no_passes()]) = Some(three_made()) { refl }
+
+// and the program made does at each function whatever the program did.
+theorem three_keeps(f: Nat): ProgramRewrites(three(), three_made(), f) {
+    optimize_stage().run_rewrites(three(), [top_passes(), seven_passes(), no_passes()], three_made(), three_run(), f)
+}
+
+// No plan is the function itself.
+theorem three_kept(): optimize_stage().run(three(), [no_passes(), no_passes(), no_passes()]) = Some(three()) { refl }
+
+// A function kept among functions rewritten: function 2 as it is still
+// calls function 1.
+theorem three_some(): optimize_stage().run(three(), [no_passes(), seven_passes(), no_passes()]) = Some([top(), seven_made(), xor()]) { refl }
+
+// A plan in another shape than the function's is refused.
+theorem shape_refused(): optimize_stage().run(three(), [seven_passes(), no_passes(), no_passes()]) = None { refl }
+
+// With nothing small enough to inline, there is nothing to inline.
+theorem none_small(): made(top().find_inlined([seven_made(), xor()], Wanted(0, 400))) = None { refl }
+
+// What the compiler asks before it keeps what the stages made: whether it
+// is within the room asked for, and whether the lowering takes it with the
+// planner's placement.
+theorem made_fits(): top_made().fits(Wanted::usual()) = True { refl }
+theorem no_room(): top_made().fits(Wanted(40, 1)) = False { refl }
+theorem made_lowers(): top_made().lowers(2, [0, 0, 0]) = True { refl }
+
+// Function 2 reaches all three functions before, and itself alone after:
+// the other two are emptied, and the program is closed under what is left.
+theorem reached_before(): program_reached(three(), [2]) = [0, 1, 2] { refl }
+theorem reached_after(): program_reached(three_made(), [2]) = [2] { refl }
+theorem made_closed(): program_closed(three_made(), λ n => n.among(program_reached(three_made(), [2]))) = True { refl }
+theorem made_pruned(): prune(three_made(), λ n => n.among([2])) = [top_made(), seven_made().emptied(), xor().emptied()] { refl }
+
+// What the compiler states of the program it lowers: at the function
+// exported, the emptied program does whatever the published one did.
+theorem three_cut(): ProgramRewrites(three(), [top_made(), seven_made().emptied(), xor().emptied()], 2) {
+    ProgramRewrites::then(three(), three_made(), [top_made(), seven_made().emptied(), xor().emptied()], 2, three_keeps(2),
+        j(made_pruned(), λ made _ => ProgramRewrites(three_made(), made, 2),
+            prune_rewrites(λ n => n.among([2]), three_made(), refl, 2, refl)))
+}
+
+// Not at a function nothing reaches.
+// expect-error: `among(1, [2])` and `True` are not
+theorem three_cut_dead(): ProgramRewrites(three_made(), prune(three_made(), λ n => n.among([2])), 1) {
+    prune_rewrites(λ n => n.among([2]), three_made(), refl, 1, refl)
+}
+
+// What the compiler reads of a search: `None`, or the plan on one line and
+// the function on the next.
+theorem seven_read(): read(seven().find_inlined([xor()], Wanted::usual())) =
+    "Inlines(3, Both(Stay, Here(3)))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Move(64, 3, 0), Move(64, 4, 1)], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+    refl
+}
+
+theorem swept_read(): read(seven_copied().find_swept()) =
+    "Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+    refl
+}
+
+theorem none_read(): read(xor().find_inlined([], Wanted::usual())) = "None" { refl }
+
+// ---------------------------------------------------------------------------
+// Bounds tests decided by a test at the entry (step 4)
+
+// Byte i and byte i + 8 of a span added, for i below 8, or zero. The
+// span's home is 0, its length 1, i is 2.
+fn pair_sum() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
+                Conditional(Ports([]), 5, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
+                        Conditional(Ports([]), 8, Ports([]), Ports([Port(13, 64)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)])),
+                            nodes([Const(64, 13, 0)])))),
+                    nodes([Const(64, 13, 0)]))),
+            nodes([Const(64, 13, 0)]))), 13, 1)
+}
+
+fn pair_guard() → Guard { Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15) }
+
+// A search that inlines callees of size 4 or less: `pair_sum` is larger,
+// so nothing inlines it and a test at its entry is its own to make.
+fn narrow() → Wanted { Wanted(4, 400) }
+
+// The test is kept: past it two tests are decided, where none was.
+theorem pair_tested(): made(pair_sum().find_guarded(pair_sum(), narrow())) = Some(pair_sum().guarded(pair_guard())) { refl }
+
+theorem pair_guard_read(): read(pair_sum().find_guarded(pair_sum(), narrow())).take(69) =
+    "Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15)\nF" { refl }
+
+// A function small enough to be inlined is given no test: whoever it is
+// inlined into tests for it.
+theorem pair_small(): made(pair_sum().find_guarded(pair_sum(), Wanted::usual())) = None { refl }
+
+// The arm past the test with its two decided conditionals gone: each
+// comparison stays, with its bit written after it.
+fn pair_fast() → StructuredRegion {
+    Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+        Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+            Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
+                Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1), Const(1, 8, 1)]),
+                    Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
+            nodes([Const(64, 13, 0)])))
+}
+
+fn pair_made() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body, pair_fast())), 13, 1)
+}
+
+theorem pair_learned(): made(pair_sum().guarded(pair_guard()).find_learned_past()) = Some(pair_made()) { refl }
+
+// The sweep after it keeps a comparison its written bit speaks of, though
+// nothing reads either.
+theorem pair_swept(): made(pair_made().find_swept_past()) = Some(pair_made()) { refl }
+
+// The lowering takes it: a load's bounds test is the comparison of its
+// index with the buffer's length and that comparison's bit known true,
+// which the written bit is.
+theorem pair_lowers(): pair_made().lowers(0, [1]) = True { refl }
+
+// It does not take the function with a written bit left out: the load
+// after it has no test.
+fn pair_unsaid() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body,
+            Compose(nodes([Const(64, 3, 8), UnsignedLessThan(64, 4, 2, 3)]),
+                Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
+                    Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
+                        Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
+                            Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
+                    nodes([Const(64, 13, 0)]))))), 13, 1)
+}
+
+theorem unsaid_refused(): pair_unsaid().lowers(0, [1]) = False { refl }
+
+// And the replayer does not write a bit no fact gives: a certificate could
+// not state that function as made from `pair_sum`.
+theorem unproved_bit(): replay(rules(), Facts::none(), [UnsignedLessThan(64, 5, 2, 1)], [Keep, Emit(Const(1, 5, 1))]).map(λ r => r.nodes) = None { refl }
+
+// The whole of it as one stage's statement.
+theorem pair_staged(): optimize_stage().rewrite([], pair_sum(),
+    passes(Some(pair_guard()), [Inr(pair_sum().guarded(pair_guard()).learn_plan().plain_kept())])) = Some(pair_made()) { refl }
+
+// ---------------------------------------------------------------------------
+// The test comes before the inlining: the plain arm keeps its calls
+
+// The byte at i of a span, or zero, and a function adding bytes 3 and 7 by
+// two calls of it. The first call's result is moved out of the register a
+// call answers in before the second.
+fn byte_at() → Function {
+    Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, 1)
+}
+
+fn two() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 2, 3)]), Compose(Call(0, [0, 1, 2], 3),
+        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5), nodes([Add(64, 6, 7, 5)]))))), 6, 1)
+}
+
+// A search that inlines `byte_at` and nothing as large as `two` with it
+// inlined.
+fn tight() → Wanted { Wanted(8, 400) }
+
+theorem byte_untested(): made(byte_at().find_guarded(byte_at(), tight())) = None { refl }
+
+// `two` inlined and tidied with no test is where its tests are, both of an
+// index against the length.
+fn two_tidied() → Option<Function> {
+    made(two().find_inlined([byte_at()], tight())).and_then(λ (f: Function) => made(f.find_copied())).and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+theorem two_undecided(): two_tidied().map(λ (f: Function) => f.learn_plan().decided()) = Some(0) { refl }
+
+// That function asks for a test of the length against 8, and the test is
+// put on `two` as written: both arms are its body, calls and all.
+fn two_guard() → Guard { Guard(20, [Const(64, 20, 8), UnsignedLessThan(64, 21, 1, 20)], 21) }
+
+theorem two_tested(): two_tidied().and_then(λ (f: Function) => made(f.find_guarded(two(), tight()))) = Some(two().guarded(two_guard())) { refl }
+
+// The stages after it work in the arm past the test alone. There the
+// calls are inlined, both tests are decided, and the moves that bound the
+// calls' arguments and results are gone; the other arm is `two`'s body
+// still.
+fn two_made() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 20, 8), UnsignedLessThan(64, 21, 1, 20)]),
+        Conditional(Ports([]), 21, Ports([]), Ports([Port(6, 64)]), two().body,
+            Compose(nodes([Const(64, 2, 3)]),
+                Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 25, 2, 1), Const(1, 25, 1)]), nodes([BufferLoad(27, 0, 2)])), nodes([]))),
+                    Compose(nodes([Const(64, 4, 7)]),
+                        Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 31, 4, 1), Const(1, 31, 1)]), nodes([BufferLoad(33, 0, 4)])), nodes([]))),
+                            nodes([Add(64, 6, 27, 33)]))))))), 6, 1)
+}
+
+theorem two_found(): made(two().guarded(two_guard()).find_inlined_past([byte_at()], tight()))
+    .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_copied_past()))
+    .and_then(λ (f: Function) => made(f.find_swept_past())) = Some(two_made()) { refl }
+
+// The inlining's plan has no site in the plain arm.
+theorem two_inlines_read(): read(two().guarded(two_guard()).find_inlined_past([byte_at()], tight())).take(97) =
+    "Inlines(22, Both(Stay, Arms(Stay, Both(Stay, Both(Here(6), Both(Stay, Both(Here(6), Stay)))))))\nF" { refl }
+
+// The lowering takes it as the program's second function.
+theorem two_lowers(): two_made().lowers(1, [1, 1]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// A word read a byte at a time: the narrowings go once the tests do
+
+// The first two bytes of a span joined, the first the high one. Each byte
+// is read as the generator writes a checked read: under a test of its
+// index, narrowed to eight bits to leave the conditional, and widened
+// again after it.
+fn be16() → Function {
+    Function([0, 1], Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1)]),
+            Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 8)]), Compose(nodes([BufferLoad(4, 0, 2)]), nodes([Resize(64, 8, 5, 4)])),
+                nodes([Const(8, 5, 0)]))),
+        Compose(nodes([Resize(8, 64, 6, 5), ShiftLeft(64, 7, 6, 8)]),
+            Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1)]),
+                    Conditional(Ports([]), 9, Ports([]), Ports([Port(11, 8)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)])),
+                        nodes([Const(8, 11, 0)]))),
+                nodes([Resize(8, 64, 12, 11), BitOr(64, 13, 7, 12)])))), 13, 1)
+}
+
+// As it stands nothing is a move: what is widened is what one of two arms
+// left, and only one of them is a byte loaded.
+theorem be16_alone(): made(be16().find_learned()) = None { refl }
+
+fn be16_guard() → Guard { Guard(14, [Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)], 15) }
+
+theorem be16_tested(): made(be16().find_guarded(be16(), narrow())) = Some(be16().guarded(be16_guard())) { refl }
+
+// Past the test both conditionals are their arms, so each widening follows
+// its narrowing and the byte narrowed is a load's: two tests decided, and
+// two widenings dropped for a move each (with the two bits, six nodes
+// dropped or written).
+fn be16_learn() → Plan { be16().guarded(be16_guard()).learn_plan().plain_kept() }
+
+theorem be16_decided(): be16_learn().decided() = 2 { refl }
+theorem be16_written(): be16_learn().written() = 6 { refl }
+
+fn be16_learned() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), be16().body,
+            Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1), Const(1, 3, 1)]),
+                    Compose(nodes([BufferLoad(4, 0, 2)]), nodes([Resize(64, 8, 5, 4)]))),
+                Compose(nodes([Move(64, 6, 4), ShiftLeft(64, 7, 6, 8)]),
+                    Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]),
+                            Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)]))),
+                        nodes([Move(64, 12, 10), BitOr(64, 13, 7, 12)])))))), 13, 1)
+}
+
+theorem be16_moves(): made(be16().guarded(be16_guard()).find_learned_past()) = Some(be16_learned()) { refl }
+
+// Read through the moves and swept, the arm past the test is two loads, a
+// shift and an or. The other arm is the function as written.
+fn be16_copies() → Plan {
+    Both(Nodes([Keep, Keep]), Arms(Same, Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Keep]))),
+        Both(Nodes([Keep, Swap(4, 0)]), Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Keep]))), Nodes([Keep, Swap(7, 10)]))))))
+}
+
+fn be16_dead() → Plan {
+    Both(Nodes([Keep, Keep]), Arms(Same, Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Drop]))),
+        Both(Nodes([Drop, Keep]), Both(Both(Nodes([Keep, Keep, Keep]), Both(Nodes([Keep]), Nodes([Drop]))), Nodes([Drop, Keep]))))))
+}
+
+fn be16_made() → Function {
+    Function([0, 1], Compose(nodes([Const(64, 14, 2), UnsignedLessThan(64, 15, 1, 14)]),
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), be16().body,
+            Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1), Const(1, 3, 1)]), Compose(nodes([BufferLoad(4, 0, 2)]), nodes([]))),
+                Compose(nodes([ShiftLeft(64, 7, 4, 8)]),
+                    Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([]))),
+                        nodes([BitOr(64, 13, 7, 10)])))))), 13, 1)
+}
+
+theorem be16_found(): made(be16_learned().find_copied_past()).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(be16_made()) { refl }
+
+// The stage's statement, three moves of the replayer, and the lowering
+// taking what it made.
+theorem be16_staged(): optimize_stage().rewrite([], be16(),
+    passes(Some(be16_guard()), [Inr(be16_learn()), Inr(be16_copies()), Inr(be16_dead())])) = Some(be16_made()) { refl }
+
+theorem be16_lowers(): be16_made().lowers(0, [1]) = True { refl }
+
+// The sweep's plan before the moves are read through would drop a move the
+// shift still reads, and is refused.
+theorem be16_early(): move_stage().many().rewrite([], be16_learned(), [Inr(be16_dead()), Inr(be16_copies())]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A span at an index the caller computed (step 5)
+
+// Two bytes of a span at `base + i * 4` added, or zero where either is
+// past the span's end (`function_ir_learn_tests`): the span's home is 0,
+// its length 1, the base 2 and i 3.
+fn word_pair() → Function {
+    Function([0, 1, 2, 3], Compose(nodes([ShiftLeft(64, 4, 3, 2), Add(64, 5, 2, 4), UnsignedLessThan(64, 6, 5, 1)]),
+        Conditional(Ports([]), 6, Ports([]), Ports([Port(12, 64)]),
+            Compose(nodes([BufferLoad(7, 0, 5)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 5, 8), UnsignedLessThan(64, 10, 9, 1)]),
+                Conditional(Ports([]), 10, Ports([]), Ports([Port(12, 64)]), Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)])),
+                    nodes([Const(64, 12, 0)])))),
+            nodes([Const(64, 12, 0)]))), 12, 1)
+}
+
+fn word_guard() → Guard {
+    Guard(13, [ShiftLeft(64, 13, 3, 2), Add(64, 14, 2, 13), Const(64, 15, 2), Add(64, 16, 14, 15), UnsignedLessThan(64, 17, 16, 14),
+        UnsignedLessThan(64, 18, 1, 16), BitOr(1, 19, 17, 18)], 19)
+}
+
+// The test is kept: past it, once the body reads through its repeats, two
+// tests are decided where none was, which is what the test's two
+// comparisons cost.
+theorem word_tested(): made(word_pair().find_guarded(word_pair(), narrow())) = Some(word_pair().guarded(word_guard())) { refl }
+
+// The searches in the order the compiler runs them past a test: read
+// through, drop, decide, read through, drop.
+fn word_made() → Option<Function> {
+    made(word_pair().find_guarded(word_pair(), narrow())).and_then(λ (f: Function) => made(f.find_copied_past()))
+        .and_then(λ (f: Function) => made(f.find_swept_past())).and_then(λ (f: Function) => made(f.find_learned_past()))
+        .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+}
+
+// The arm past the test: the body's own shift and sum are the test's (13,
+// 14), and the two loads stand with no test between them, each
+// comparison kept with its bit written after it.
+fn word_fast() → Function {
+    Function([0, 1, 2, 3], Compose(nodes(word_guard().nodes), Conditional(Ports([]), 19, Ports([]), Ports([Port(12, 64)]), word_pair().body,
+        Compose(nodes([UnsignedLessThan(64, 6, 14, 1), Const(1, 6, 1)]),
+            Compose(nodes([BufferLoad(7, 0, 14)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 14, 8), UnsignedLessThan(64, 10, 9, 1), Const(1, 10, 1)]),
+                Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)]))))))), 12, 1)
+}
+
+theorem word_staged(): word_made() = Some(word_fast()) { refl }
+
+// The lowering takes it, as it took the function as written.
+theorem word_plain_lowers(): word_pair().lowers(0, [1]) = True { refl }
+theorem word_lowers(): word_fast().lowers(0, [1]) = True { refl }
+
+// Deciding before reading through finds nothing: the test's sum and the
+// body's are two ids until then.
+theorem word_too_early(): made(word_pair().guarded(word_guard()).find_learned_past()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Bytes joined into a word, read as one load (step 5)
+
+// Four bytes of a span from `base` joined into a word, the first the most
+// significant, past a test that the four are inside the span: the shape
+// the searches above leave a big-endian read in. The span's home is 0,
+// its length 1, the base 2; where the test fails the word is zero. The
+// third byte is read `third` past the base, `between` stands after its
+// load, and the second or has its lower operand first.
+fn be_with(third: Nat, between: List<Node>) → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2), UnsignedLessThan(64, 6, 1, 4), BitOr(1, 7, 5, 6)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(30, 64)]), nodes([Const(64, 30, 0)]),
+            Compose(nodes([UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([BufferLoad(9, 0, 2)]),
+                Compose(nodes([ShiftLeft(64, 10, 9, 24), Const(64, 11, 1), Add(64, 12, 2, 11), UnsignedLessThan(64, 13, 12, 1), Const(1, 13, 1)]),
+                    Compose(nodes([BufferLoad(14, 0, 12)]),
+                        Compose(nodes([ShiftLeft(64, 15, 14, 16), BitOr(64, 16, 10, 15), Const(64, 17, third), Add(64, 18, 2, 17), UnsignedLessThan(64, 19, 18, 1),
+                            Const(1, 19, 1)]),
+                            Compose(nodes([BufferLoad(20, 0, 18)]),
+                                Compose(nodes(between ++ [ShiftLeft(64, 21, 20, 8), BitOr(64, 22, 21, 16), Const(64, 23, 3), Add(64, 24, 2, 23),
+                                    UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
+                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, 1)
+}
+
+fn be_bytes() → Function { be_with(2, []) }
+
+// The walk finds the four a join, and asks for a load at the base after
+// the last of the byte loads.
+theorem be_asked(): be_bytes().asked() = [Asked(0, 2, 26)] { refl }
+
+// Not where the third byte is not the next one, nor where a store stands
+// between the loads and the or that would join them.
+theorem be_gapped(): be_with(3, []).asked() = [] { refl }
+
+theorem be_stored(): be_with(2, [BufferStore(27, 0, 2, 9)]).asked() = [] { refl }
+
+// The searches in the order the compiler runs them: the load put, the
+// join found a move of its word, read through, the byte loads swept, the
+// tests no access reads any more dropped, and what they read swept.
+fn word_moves(function: Function) → Option<Function> {
+    made(function.find_worded_past([])).and_then(λ (f: Function) => made(f.find_learned_past()))
+        .and_then(λ (f: Function) => made(f.find_copied_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+        .and_then(λ (f: Function) => made(f.find_learned_past())).and_then(λ (f: Function) => made(f.find_swept_past()))
+}
+
+fn be_made() → Option<Function> { word_moves(be_bytes()) }
+
+// What is left past the test: the comparison of the base and that of the
+// last byte's index, each with its bit, which is what the lowering reads
+// the load's bounds from; the load, its swap and its widening in a leaf
+// of their own; and the word.
+fn be_word() → Function {
+    Function([0, 1, 2], Compose(nodes([Const(64, 3, 4), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 4, 2), UnsignedLessThan(64, 6, 1, 4), BitOr(1, 7, 5, 6)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(30, 64)]), nodes([Const(64, 30, 0)]),
+            Compose(nodes([UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]),
+                Compose(nodes([Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
+                    Compose(Compose(nodes([]), Compose(nodes([WideLoad(4, 31, 0, 2), ByteSwap(32, 32, 31), Resize(32, 64, 33, 32)]), nodes([]))),
+                        nodes([Move(64, 30, 33)]))))))))))), 30, 1)
+}
+
+theorem be_staged(): be_made() = Some(be_word()) { refl }
+
+// The lowering takes both.
+theorem be_bytes_lower(): be_bytes().lowers(0, [1]) = True { refl }
+theorem be_word_lowers(): be_word().lowers(0, [1]) = True { refl }
+
+// The word at a constant offset of a span tested at its entry. The bytes'
+// indexes are the constant and constants added. No order from the constant
+// has room for them, and its range has (rules 34 and 35), so the walk
+// finds the join as it does at an index that is a word.
+fn be_fixed(at: Nat) → Function {
+    Function([0, 1], Compose(nodes([Const(64, 3, 12), UnsignedLessThan(64, 7, 1, 3)]),
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(30, 64)]), nodes([Const(64, 30, 0)]),
+            Compose(nodes([Const(64, 2, at), UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([BufferLoad(9, 0, 2)]),
+                Compose(nodes([ShiftLeft(64, 10, 9, 24), Const(64, 11, 1), Add(64, 12, 2, 11), UnsignedLessThan(64, 13, 12, 1), Const(1, 13, 1)]),
+                    Compose(nodes([BufferLoad(14, 0, 12)]),
+                        Compose(nodes([ShiftLeft(64, 15, 14, 16), BitOr(64, 16, 10, 15), Const(64, 17, 2), Add(64, 18, 2, 17), UnsignedLessThan(64, 19, 18, 1),
+                            Const(1, 19, 1)]),
+                            Compose(nodes([BufferLoad(20, 0, 18)]),
+                                Compose(nodes([ShiftLeft(64, 21, 20, 8), BitOr(64, 22, 21, 16), Const(64, 23, 3), Add(64, 24, 2, 23),
+                                    UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
+                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, 1)
+}
+
+theorem be_fixed_asked(): be_fixed(8).asked() = [Asked(0, 2, 26)] { refl }
+
+// The moves leave no byte load, and the lowering takes what they make.
+theorem be_fixed_bytes(): be_fixed(8).body.byte_loads() = 4 { refl }
+theorem be_fixed_worded(): word_moves(be_fixed(8)).map(λ (f: Function) => f.body.byte_loads()) = Some(0) { refl }
+theorem be_fixed_lowers(): word_moves(be_fixed(8)).map(λ (f: Function) => f.lowers(0, [1])) = Some(True) { refl }
+
+// Not at an offset whose last byte's index wraps: the range has no room.
+theorem be_fixed_wraps(): be_fixed(18446744073709551614).asked() = [] { refl }
+
+// ---------------------------------------------------------------------------
+// A word stored a byte at a time, written as one store (step 5)
+
+// Leaves in a row, as the walks leave SHA-256's moves of its working
+// variables: a leaf a node, a comparison with its bit.
+fn chain(leaves: List<List<Node>>) → StructuredRegion {
+    match leaves { Nil => nodes([]), Cons(leaf, rest) => match rest { Nil => nodes(leaf), Cons(_, _) => Compose(nodes(leaf), chain(rest)) } }
+}
+
+// The byte of the word 3 shifted right by `shift`, narrowed and widened
+// into `x`, through `a` and `b`.
+fn byte_nodes_of(word, a, b, x, shift: Nat) → List<List<Node>> {
+    match shift {
+        Zero => [[Resize(64, 8, b, word)], [Resize(8, 64, x, b)]],
+        Succ(_) => [[LogicalShiftRight(64, a, word, shift)], [Resize(64, 8, b, a)], [Resize(8, 64, x, b)]],
+    }
+}
+
+fn byte_nodes(a, b, x, shift: Nat) → List<List<Node>> { byte_nodes_of(3, a, b, x, shift) }
+
+// The word 3 stored at the base 2 of the span 0 of length 1 and the next
+// three indexes, each index compared below the length with its bit
+// written: the bytes at shifts `s0` to `s3`, the third store's index the
+// base and `k2`, `between` before the third store, and the second index
+// tested only where `tested`.
+fn tested_leaf(tested: Bool) → List<List<Node>> { match tested { True => [[UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1)]], False => [] } }
+
+fn st_with(k2, s0, s1, s2, s3: Nat, between: List<Node>, tested: Bool) → Function {
+    Function([0, 1, 2, 3], chain(
+        [[UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]] ++ (byte_nodes(5, 6, 7, s0) ++ ([[BufferStore(8, 0, 2, 7)],
+        [Const(64, 9, 1)], [Add(64, 10, 2, 9)]] ++ (tested_leaf(tested) ++
+            (byte_nodes(11, 12, 14, s1) ++ ([[BufferStore(15, 0, 10, 14)],
+        [Const(64, 16, k2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++ (byte_nodes(18, 19, 21, s2) ++ ([between, [BufferStore(22, 0, 17, 21)],
+        [Const(64, 23, 3)], [Add(64, 24, 2, 23)], [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes(30, 25, 27, s3) ++
+        [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+}
+
+// Big-endian: the word's bytes from the highest.
+fn st_bytes() → Function { st_with(2, 24, 16, 8, 0, [], True) }
+
+fn byte_stores(function: Function) → Option<Nat> { function.body.flat().map(λ (ns: List<Node>) => stores_at(ns, 0).len()) }
+
+// The moves in the order the compiler runs them: the word's half, swap
+// and load put after the fourth store, the four paid as one store in the
+// load's place, and what nothing reads swept.
+fn st_moves(function: Function) → Option<Function> {
+    made(function.find_stores([])).and_then(λ (f: Function) => made(f.find_paid())).and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+// The put: three nodes at ids from 30, in a leaf after the fourth store's.
+fn st_put() → Option<List<Nat>> { made(st_bytes().find_stores([])).map(λ (f: Function) => f.body.leaf_sizes()) }
+
+theorem st_put_leaves(): st_put() = Some([2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 2, 1, 1, 1, 3, 0, 1]) { refl }
+
+// What is left: the tests of the indexes (the walk that decides them is
+// what drops the three no access reads), the half, its swap, and one store
+// last in the leaf that holds them.
+fn st_word() → Function {
+    Function([0, 1, 2, 3], Compose(nodes([UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]),
+        Compose(nodes([Const(64, 9, 1), Add(64, 10, 2, 9), UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1), Const(64, 16, 2), Add(64, 17, 2, 16),
+            UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1), Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1),
+            Resize(64, 32, 30, 3), ByteSwap(32, 31, 30), WideStore(4, 32, 0, 2, 31)]),
+        Compose(nodes([]), Compose(nodes([]), Compose(nodes([Const(64, 29, 0)]), nodes([]))))))))), 29, 1)
+}
+
+theorem st_staged(): st_moves(st_bytes()) = Some(st_word()) { refl }
+
+// The lowering takes both: four byte stores, and one `MOV [base], r32`.
+theorem st_bytes_lower(): st_bytes().lowers(0, [1]) = True { refl }
+theorem st_word_lowers(): st_word().lowers(0, [1]) = True { refl }
+
+// Little-endian, the bytes from the lowest: the half is stored with no
+// swap.
+theorem st_plain_stored(): st_moves(st_with(2, 0, 8, 16, 24, [], True)).and_then(byte_stores) = Some(0) { refl }
+theorem st_plain_lowers(): st_moves(st_with(2, 0, 8, 16, 24, [], True)).map(λ (f: Function) => f.lowers(0, [1])) = Some(True) { refl }
+
+// No replay pays stores whose load was not put.
+theorem st_unput(): made(st_bytes().find_paid()) = None { refl }
+
+// Nothing is put where the four are not one word's store: the third
+// index not the next one, the bytes out of order, a load between the
+// stores, or an index with no test against the length that says the sum
+// did not wrap.
+theorem st_gapped(): made(st_with(3, 24, 16, 8, 0, [], True).find_stores([])) = None { refl }
+theorem st_misordered(): made(st_with(2, 16, 24, 8, 0, [], True).find_stores([])) = None { refl }
+theorem st_loaded_between(): made(st_with(2, 24, 16, 8, 0, [BufferLoad(34, 0, 2)], True).find_stores([])) = None { refl }
+theorem st_untested(): made(st_with(2, 24, 16, 8, 0, [], False).find_stores([])) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A word copied big-endian: its two swaps cancel (rule 44)
+
+// The word at the index 3 of the span loaded and swapped, both its first
+// and last byte tested, then stored big-endian at the base 2 as above.
+fn st_copy() → Function {
+    Function([0, 1, 2, 3], Compose(chain([[UnsignedLessThan(64, 31, 3, 1), Const(1, 31, 1)],
+        [Const(64, 32, 3), Add(64, 33, 3, 32), UnsignedLessThan(64, 34, 33, 1), Const(1, 34, 1)],
+        [WideLoad(4, 35, 0, 3), ByteSwap(32, 36, 35), Resize(32, 64, 30, 36)]]),
+        chain([[UnsignedLessThan(64, 4, 2, 1), Const(1, 4, 1)]] ++ (byte_nodes_of(30, 5, 6, 7, 24) ++ ([[BufferStore(8, 0, 2, 7)],
+            [Const(64, 9, 1)], [Add(64, 10, 2, 9)], [UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1)]] ++ (byte_nodes_of(30, 11, 12, 14, 16) ++
+            ([[BufferStore(15, 0, 10, 14)], [Const(64, 16, 2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++
+            (byte_nodes_of(30, 18, 19, 21, 8) ++ ([[BufferStore(22, 0, 17, 21)], [Const(64, 23, 3)], [Add(64, 24, 2, 23)],
+            [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes_of(30, 37, 25, 27, 0) ++ [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+}
+
+fn nodes_swaps(ns: List<Node>) → Nat {
+    match ns { Nil => 0, Cons(node, rest) => match node { ByteSwap(_, _, _) => Succ(nodes_swaps(rest)), _ => nodes_swaps(rest) } }
+}
+
+fn swaps(function: Function) → Option<Nat> { function.body.flat().map(nodes_swaps) }
+
+// The moves the compiler runs after the store's: the second swap a move of
+// the loaded word, read through by the store, and both swaps swept.
+fn st_copy_moves() → Option<Function> {
+    st_moves(st_copy()).and_then(λ (f: Function) => made(f.find_learned())).and_then(λ (f: Function) => made(f.find_copied()))
+        .and_then(λ (f: Function) => made(f.find_swept()))
+}
+
+theorem st_copy_swaps(): swaps(st_copy()) = Some(1) { refl }
+theorem st_copy_stored(): st_moves(st_copy()).and_then(swaps) = Some(2) { refl }
+theorem st_copy_cancelled(): st_copy_moves().and_then(swaps) = Some(0) { refl }
+theorem st_copy_unstored(): st_copy_moves().and_then(byte_stores) = Some(0) { refl }
+
+// The lowering takes it: one `MOV r32, [base]` and one `MOV [base], r32`.
+theorem st_copy_lowers(): st_copy_moves().map(λ (f: Function) => f.lowers(0, [1])) = Some(True) { refl }

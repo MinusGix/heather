@@ -1,5 +1,5 @@
 // A function that writes a span, compiled and linked
-// (docs/native-one-compiler-design.md §2.6, U4 step 4c-3): the class that
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4c-3): the class that
 // states what its code runs to, the class's instances from a reflection,
 // and a program put together from instances of both kinds.
 //

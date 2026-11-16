@@ -11,7 +11,7 @@ updated: 2026-10-22
 `Nat::leb` and `Nat::sub` on two closed numerals run out of fuel once the
 numbers pass about `2^96`, however close together they are. Found while
 evaluating floating-point roundings at binary32 sizes (float-arith,
-`docs/floating-point-design.md` §14): the half-unit count of an ordinary
+`docs/library/floating-point-design.md` §14): the half-unit count of an ordinary
 binary32 value is near `2^150`, so no binary32 rounding computes by `refl`,
 through either `round_dyadic` or `round_rat`.
 
@@ -30,7 +30,7 @@ the subtraction fail.
 ## Why
 
 A numeral past `u64::MAX` evaluates to a run program built by doubling
-(`docs/wide-numerals-design.md` §2): shared `u64` runs under a composition
+(`docs/language/wide-numerals-design.md` §2): shared `u64` runs under a composition
 DAG. `leb` and `sub` are synchronous folds, so their application cancels the
 two programs' common prefix with `ContextProgram::cancel_matching_prefix`
 (`crates/kernel/src/value/program.rs`). Bisimilar DAG fronts are skipped by

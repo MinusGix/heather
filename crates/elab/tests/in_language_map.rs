@@ -1,12 +1,12 @@
 //! The first in-language derived artifact, end to end
-//! (docs/in-language-map-design.md §7): `lib/lang/vec_code.hthr`'s `map_code`
+//! (docs/metaprogramming/in-language-map-design.md §7): `lib/lang/vec_code.hthr`'s `map_code`
 //! kernel-checks at `Layer::Meta`, the evaluation hook routes `.map` through
 //! it, and the emitted terms are convertible with the Rust `vec::map`
 //! oracle's — adequacy, not just typing. Fixtures follow
 //! docs/testing-generated-terms.md: literal *and* neutral length, an open
 //! element type, a checking position. The negative controls moved to
 //! crates/elab/tests/template_registration.rs when the registration seam
-//! landed (docs/meta-def-registration-design.md) — see the note at the bottom
+//! landed (docs/metaprogramming/meta-def-registration-design.md) — see the note at the bottom
 //! of this file for which, and why they are declaration-time now.
 
 use heather_elab::Elaborator;
@@ -144,7 +144,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 //
 // Both of this suite's original controls have **moved** to
 // crates/elab/tests/template_registration.rs, and the move is the registration
-// round's point (docs/meta-def-registration-design.md §2.2): a template that
+// round's point (docs/metaprogramming/meta-def-registration-design.md §2.2): a template that
 // cannot serve `vec.map` is now rejected at its own declaration, so neither
 // failure can reach a use site any more.
 //

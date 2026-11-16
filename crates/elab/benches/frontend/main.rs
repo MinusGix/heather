@@ -18,9 +18,9 @@
 //! term volume. Hence three things the kernel suite does not have: absolute
 //! latency budgets, a phase split (parse / elaborate / kernel gate) so a
 //! regression names its layer, and the forded families, which exist to give
-//! `docs/inductive-fording-lowering.md` §14.2 and §14.9 a number.
+//! `docs/archive/inductive-fording-lowering.md` §14.2 and §14.9 a number.
 //!
-//! See `docs/frontend-benchmarking.md`.
+//! See `docs/infrastructure/frontend-benchmarking.md`.
 
 mod harness;
 mod fixtures;

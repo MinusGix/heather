@@ -8,14 +8,14 @@ created: 2026-10-28
 updated: 2026-10-28
 ---
 
-`linarith` reads products as monomials at every carrier (docs/linarith-design.md
+`linarith` reads products as monomials at every carrier (docs/tactics/linarith-design.md
 §3, §8) but combines facts only linearly, so a goal that needs a product of
 facts, or a square's sign, is refused: `0 <= x * x`, or `0 <= a * b` from
 `0 <= a` and `0 <= b`. The probes hold both as refusals
 (`lib/_tests/std/tactic/linarith_tests.hthr`, `int_square_is_not_linear`,
 `creal_product_is_not_linear`).
 
-The approach is chosen in docs/nonlinear-arithmetic-design.md: one
+The approach is chosen in docs/tactics/nonlinear-arithmetic-design.md: one
 certificate (linarith's direct form over product parts, §2), searched first
 by the `nlinarith` heuristic, the build this issue owns (§4):
 
@@ -53,5 +53,5 @@ Done when the two probes above are `nlinarith` successes, the refusals in
   row bound refuses a product problem. This round keeps Fourier–Motzkin.
 
 ## Log
-- 2026-10-28: Design chosen (docs/nonlinear-arithmetic-design.md): one certificate, with nlinarith as the first search. Compared against SOS by SDP (deferred to [[sos-certificate-oracle]], offline and writing hints), polyrith-style oracles (`ring(h)` already searches for equalities), CAD (declined: no certificate, not constructive at `CReal`), and interval branch-and-bound (complementary, [[interval-variable-boxes]]). The body above now records the build.
+- 2026-10-28: Design chosen (docs/tactics/nonlinear-arithmetic-design.md): one certificate, with nlinarith as the first search. Compared against SOS by SDP (deferred to [[sos-certificate-oracle]], offline and writing hints), polyrith-style oracles (`ring(h)` already searches for equalities), CAD (declined: no certificate, not constructive at `CReal`), and interval branch-and-bound (complementary, [[interval-variable-boxes]]). The body above now records the build.
 - 2026-10-28: Built (design §4). `nlinarith(facts…)` in crates/elab/src/linarith.rs: at a field, products of the goal's assumed negation and the written facts (then the context's, at most 12 rows), squares from `ring`'s reading (`FieldReading::squares`) and from even monomials, the goal read back from a refutation (`nlin_le_of_refute`, `Rat::lt_of_not_le`; a `<` goal at `CReal` stays direct); at `Int`/`Nat`, each product a `let` from `nlin_int_*`/`nlin_nat_*` plus a `ring` bridge to monomials, `omega` deciding under `λ __nlin_g`. Lemmas: `OrderedField::sq_nonneg` (constructive), `Rat::`/`CReal::`/`Int::sq_nonneg`, `Int::mul_nonneg`. Probes in `lib/_tests/std/tactic/linarith_tests.hthr` (the two refusals this issue named are successes now). `Rat::mul_nonneg`, `mul_nonpos_l`, `mul_nonpos_r` and `mul_nonneg_of_nonpos` are `nlinarith(ha, hb)`. Closing.

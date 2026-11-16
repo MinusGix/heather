@@ -1,2 +1,0 @@
-record Pt { x: Nat, ok: True }
-theorem t(a: Nat, b: Nat, p: a = b): Pt(a, trivial) = Pt(b, trivial) { cong(p) }

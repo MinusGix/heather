@@ -149,7 +149,7 @@ fn a_false_claim_over_fields_is_refused_and_names_them() {
     assert!(msg.contains("s.words") && msg.contains("s.bytes"), "{msg}");
 }
 
-/// A goal a definition unfolds to (docs/native-stream-filter-design.md §2.4):
+/// A goal a definition unfolds to (docs/archive/native-stream-filter-design.md §2.4):
 /// `filter_program`'s `advances` default meets `counts_advance` at no count and
 /// at one, which omega reads only once the head is unfolded, stopping at the
 /// relation rather than inside `Le`'s recursor, with the count applied.
@@ -173,7 +173,7 @@ fn a_goal_a_definition_unfolds_to_is_read_unfolded() {
 }
 
 /// A field of a definition that unfolds to a constructor reads as what was
-/// put there (docs/native-stream-filter-design.md §2.4): a counting step's
+/// put there (docs/archive/native-stream-filter-design.md §2.4): a counting step's
 /// `.next` is its fold's next count, which `split_all`'s leaf hands omega
 /// instead of a spelling of the projection omega can't re-elaborate.
 #[test]

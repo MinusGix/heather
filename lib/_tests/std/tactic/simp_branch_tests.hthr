@@ -1,0 +1,90 @@
+// Probes of a definition named to `simp_only` taking the branch the context
+// decides (docs/tactics/program-proof-tactics-design.md §3 D): its generated
+// branch equations (`clamp::True`, `clamp::False::True`, …) come with it as
+// conditional laws, their tests discharged by `discharge := …`, and a call
+// nothing decides is unfolded as before. Also `bv_omega` at a negated word
+// fact, the shape of a branch's side condition. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import vector;
+
+fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+// ---- `bv_omega` at a negated word fact ----
+
+theorem not_below(x, lo: u64, a: lo <= x): ¬(x < lo) { bv_omega }
+theorem not_below_arrow(x, lo: u64, a: lo <= x): x < lo → False { bv_omega }
+
+// ---- The branch the context decides ----
+
+// The test is a hypothesis: the default discharger reads it.
+theorem clamp_low(x, lo, hi: u64, h: x < lo): clamp(x, lo, hi) = lo { simp_only(clamp) }
+// The tests follow from the context: `bv_omega` proves them, negations
+// included.
+theorem clamp_high(x, lo, hi: u64, a: lo <= x, b: hi < x): clamp(x, lo, hi) = hi { simp_only(clamp, discharge := bv_omega) }
+theorem clamp_mid(x, lo, hi: u64, a: lo <= x, b: x <= hi): clamp(x, lo, hi) = x { simp_only(clamp, discharge := bv_omega) }
+// At literals the call computes; no branch law is needed.
+theorem clamp_literal(): clamp(70, 10, 50) = 50 { simp_only(clamp) }
+
+// An open element type. (A branch whose arm uses its test's proof, so the
+// equation's right side mentions it, is `Sha256::put_inside` in
+// lib/native/crypto/sha256_stream_agreement.hthr.)
+fn pick<A>(x: u64, a, b: A) → A {
+    if x < 10 { a } else { b }
+}
+theorem pick_small<A>(x: u64, a, b: A, small: x.toNat() < 10): pick(x, a, b) = a { simp_only(pick, discharge := bv_omega) }
+// A test written `if h:`, at an implicit length.
+fn first<A>({n: Nat}, v: [A; n], i: u64, d: A) → A {
+    if h: i.toNat() < n { vector_get(v, i.toNat(), d) } else { d }
+}
+theorem first_inside<A>(n: Nat, v: [A; n], i: u64, d: A, inside: i.toNat() < n): first(v, i, d) = vector_get(v, i.toNat(), d) {
+    simp_only(first)
+}
+
+// In a checking position: a step of a longer proof.
+theorem clamp_mid_twice(x, lo, hi: u64, a: lo <= x, b: x <= hi): clamp(clamp(x, lo, hi), lo, hi) = x {
+    let once: (clamp(x, lo, hi) = x) = simp_only(clamp, discharge := bv_omega);
+    simp_only(once, clamp, discharge := bv_omega)
+}
+
+// ---- What a failing call reports ----
+
+// Nothing decides the test: the call is unfolded as before, and the report
+// says why each branch was not taken.
+// expect-error: `clamp::True`: its side condition `x < lo` is not a hypothesis here, and nothing discharged it (at the call, which was then unfolded)
+theorem clamp_unknown(x, lo, hi: u64): clamp(x, lo, hi) = lo { simp_only(clamp, discharge := bv_omega) }
+
+// ---- A measured definition ----
+
+// Its branch equations start from `count_down_unfold`; a call nothing
+// decides stays a call (its body is the well-founded recursion's), and the
+// recursive call in a leaf is a call as the source wrote it.
+fn count_down(i, left: u64) → u64 decreases left.toNat() {
+    if h: 0 < left {
+        if i < 10 { count_down(i + 1, left - 1) } else { i }
+    } else {
+        i
+    }
+}
+theorem count_down_step(i, left: u64, a: 0 < left, b: i < 10): count_down(i, left) = count_down(i + 1, left - 1) { simp_only(count_down) }
+theorem count_down_stop(i, left: u64, a: 0 < left.toNat(), b: 10 <= i.toNat()): count_down(i, left) = i { simp_only(count_down, discharge := bv_omega) }
+theorem count_down_empty(i, left: u64, a: left = 0): count_down(i, left) = i { simp_only(count_down, discharge := bv_omega) }
+theorem count_down_literal(): count_down(3, 2) = 5 { simp_only(count_down) }
+// In a checking position, at an open element type.
+fn last_of<A>(xs: List<A>, i: u64, d: A) → A decreases i.toNat() {
+    if h: 0 < i { last_of(xs, i - 1, d) } else { d }
+}
+theorem last_of_zero<A>(xs: List<A>, d: A): last_of(xs, 0, d) = d {
+    let z: (last_of(xs, 0, d) = d) = simp_only(last_of, discharge := bv_omega);
+    z
+}
+// The call left as it is, and why each branch was not taken.
+// expect-error: `count_down::True::True`: its side condition `ofNat(0) < left` is not a hypothesis here, and nothing discharged it
+theorem count_down_unknown(i, left: u64): count_down(i, left) = i { simp_only(count_down, discharge := bv_omega) }

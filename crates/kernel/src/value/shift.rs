@@ -1,7 +1,7 @@
 //! Weakening a **value** in the two outer namespaces (L and Ψ).
 //!
 //! Locals go through the environment, so pushing a local binder costs a value
-//! nothing (`docs/nbe-conversion-design.md` §3.2: variables are levels).
+//! nothing (`docs/kernel/nbe-conversion-design.md` §3.2: variables are levels).
 //! Universe variables and globals are different: they stay *syntax* (§3.1),
 //! de Bruijn-indexed from the inner end, so extending L or Ψ renumbers every
 //! occurrence — including the ones buried in a closure's captured
@@ -119,9 +119,9 @@ fn ctx_syn<'v>(c: &LocalCtx, o: Outer<'v>) -> LocalCtx {
 }
 
 /// The recursor tables, shifted by routing them through the syntax map that
-/// already knows all 54 fields: `subst.rs`'s `sub_motives`/`sub_branches` are
-/// private, and transcribing them here a *seventh* time is exactly the
-/// drift hazard `rec.rs` exists to prevent. The wrapper term is discarded.
+/// already knows every field: `subst.rs`'s `sub_motives`/`sub_branches` are
+/// private, and transcribing them here again is exactly the drift hazard
+/// `rec.rs` exists to prevent. The wrapper term is discarded.
 fn tables<'v>(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer<'v>) -> (Rc<Motives>, Rc<Branches>) {
     let wrapper = Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
@@ -147,7 +147,7 @@ fn tables<'v>(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer<'v>) -> (Rc<Motives>, 
 /// Body syntax here is shifted eagerly by the callers below, and a pending
 /// offset composes with that shift in either order (both are uniform at
 /// cutoff 0) — so a closure that still owes `k` still owes exactly `k`
-/// (`docs/lazy-global-offset-design.md` §5).
+/// (`docs/kernel/lazy-global-offset-design.md` §5).
 pub fn env<'v>(e: &Env<'v>, o: Outer<'v>) -> Env<'v> {
     if o.is_none() {
         return *e;

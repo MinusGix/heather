@@ -33,6 +33,7 @@ const X86_MODULES: &[(&str, &str)] = &[
     ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("bitvec", BITVEC),
+    ("bitvec_rotate", include_str!("../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),
@@ -57,7 +58,7 @@ fn elaborated() -> Elaborator {
     if report_metrics {
         e.enable_value_metrics();
     }
-    // One dump, from the one registry (`docs/instrumentation-design.md` §4).
+    // One dump, from the one registry (`docs/infrastructure/instrumentation-design.md` §4).
     if report_phases {
         e.enable_item_timings();
     }

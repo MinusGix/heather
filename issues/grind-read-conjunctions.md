@@ -33,4 +33,4 @@ closes and `compose_same`'s `args_same` and field chains close by grind.
   `k.left`, recursively, up to the reader's depth, and keeps a field that
   is nothing for the premises. `∃` (a field a later one mentions) and `↔`
   stay whole. `conj` closes, and `Env::compose_same`'s `args_same` and both
-  field chains are `by grind()`. Design: `docs/grind-design.md` §12.
+  field chains are `by grind()`. Design: `docs/tactics/grind-design.md` §12.

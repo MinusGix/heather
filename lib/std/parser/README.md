@@ -38,7 +38,7 @@ theorem example(): parser::run(next_number(),[2]) = Ok<Nat,ErrorView>(3) {
 parser's included.
 
 A reexport is the original declaration under a second visible path
-(`docs/modules-design.md` §3.4): `parser::token` and
+(`docs/language/modules-design.md` §3.4): `parser::token` and
 `parser_primitives::token` are one function, `parser::Consumes` and
 `parser_contracts::Consumes` one class, and a certificate built through
 either spelling is accepted by the other. A client may import a component

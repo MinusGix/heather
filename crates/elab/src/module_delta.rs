@@ -66,7 +66,7 @@ pub struct ModuleDelta {
     pub(crate) events: Vec<DeltaEvent>,
     /// One slice per item of the source file, in order: the ranges of
     /// `extension`, `events` and `warnings` that item contributed
-    /// (`docs/declaration-slice-replay-design.md` §3). Empty for a delta
+    /// (`docs/infrastructure/declaration-slice-replay-design.md` §3). Empty for a delta
     /// decoded from an image until the persistent half of that design lands.
     pub(crate) items: Vec<ItemSlice>,
     /// The warnings the module raised, in order, so a replayed slice can
@@ -80,7 +80,7 @@ pub struct ModuleDelta {
 
 /// One item's contribution to a [`ModuleDelta`], as ranges into its flat
 /// vectors, keyed by the item's exact source text
-/// (`docs/declaration-slice-replay-design.md` §3). A mutual measure group is
+/// (`docs/infrastructure/declaration-slice-replay-design.md` §3). A mutual measure group is
 /// one slice at its first member, keyed by every member's text; the other
 /// members' slices are empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,20 +106,20 @@ pub struct SliceReport {
     /// Items elaborated from source.
     pub elaborated: usize,
     /// Items elaborated because `--only` named them
-    /// (`docs/check-only-design.md`); counted in `elaborated` too.
+    /// (`docs/infrastructure/check-only-design.md`); counted in `elaborated` too.
     pub forced: usize,
 }
 
 /// The previous delta a module pass may replay slices from, and whether the
 /// semantic prefix built so far is still exactly the one those slices were
-/// elaborated over (`docs/declaration-slice-replay-design.md` §4).
+/// elaborated over (`docs/infrastructure/declaration-slice-replay-design.md` §4).
 #[derive(Clone)]
 pub(crate) struct SlicePlan {
     pub(crate) previous: Rc<ModuleDelta>,
     pub(crate) exact: bool,
     pub(crate) report: SliceReport,
     /// Item names that must be elaborated from source however exact the
-    /// prefix is (`docs/check-only-design.md` §2); `met` collects the ones
+    /// prefix is (`docs/infrastructure/check-only-design.md` §2); `met` collects the ones
     /// the pass actually saw, so the caller can name the ones it did not.
     pub(crate) force: std::collections::BTreeSet<String>,
     pub(crate) met: std::collections::BTreeSet<String>,
@@ -181,7 +181,7 @@ impl ModuleDelta {
     }
 
     /// Attach the warnings an image stored beside this delta, so its slices
-    /// can re-raise them (`docs/declaration-slice-replay-design.md` §4).
+    /// can re-raise them (`docs/infrastructure/declaration-slice-replay-design.md` §4).
     /// Rejected when a slice's warning range does not fit.
     pub fn with_warnings(mut self, warnings: Vec<crate::diagnostics::Warning>) -> Result<Self, &'static str> {
         let mut at = 0;
@@ -312,32 +312,25 @@ pub(crate) enum DeltaEvent {
         direct_dependencies: Vec<String>,
     },
     GenDef { key: GenDef, abs: u32 },
-    /// The four guard-copy events carry `at`: the Ψ length their kernel
-    /// payloads were built at, which their free globals count from. The
-    /// registry ignores it (a guard copy is compared raw); relocating a
-    /// module onto another world needs it
-    /// (`docs/module-interface-cutoff-design.md` §3). `GenWfSlots`'s
-    /// decoded copy is the exception, scoped at `D#shape`'s own position.
+    /// The four guard-copy events' kernel payloads name committed
+    /// definitions only, as constants, so they read the same in every world
+    /// that extends the one they were cut in, and record no scope.
     GenTyCode {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
-        at: u32,
     },
     GenTyCodeFn {
         tag: u32,
         entry: TyCodeFn,
-        at: u32,
     },
     GenWfSlots {
         tag: u32,
         slots: WfSlots,
-        at: u32,
     },
     GenSpineCodes {
         tag: u32,
         codes: SpineCodes,
-        at: u32,
     },
     GenFamLevels {
         tag: u32,
@@ -540,13 +533,11 @@ impl DeltasMut<'_> {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
-        at: u32,
     ) {
         Deltas(self).record_module_event(|| DeltaEvent::GenTyCode {
             tag,
             inline: Rc::clone(&inline),
             level: level.clone(),
-            at,
         });
         // The guard copy names committed definitions only, which is what
         // lets every later world read it as stored.
@@ -554,31 +545,31 @@ impl DeltasMut<'_> {
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
     }
 
-    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn, at: u32) {
+    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn) {
         Deltas(self).record_module_event(|| DeltaEvent::GenTyCodeFn {
             tag,
             entry: entry.clone(),
-            at,
         });
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&entry.template), 0);
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&entry.stmt), 0);
         self.types.gdefs_mut().insert_ty_code_fn(tag, entry);
     }
 
-    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots, at: u32) {
+    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots) {
         Deltas(self).record_module_event(|| DeltaEvent::GenWfSlots {
             tag,
             slots: slots.clone(),
-            at,
         });
         debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&slots.shape), 0);
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&slots.shape_decoded), 0);
         debug_assert_eq!(heather_kernel::subst::global_var_bound_tm(&slots.arity), 0);
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
     }
 
-    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes, at: u32) {
+    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes) {
         Deltas(self).record_module_event(|| DeltaEvent::GenSpineCodes {
             tag,
             codes: codes.clone(),
-            at,
         });
         debug_assert!(codes.ctors.iter().chain(&codes.nodes).all(|(ty, _)| heather_kernel::subst::global_var_bound_ty(ty) == 0));
         self.types.gdefs_mut().insert_spine_codes(tag, codes);
@@ -654,6 +645,7 @@ impl DeltasMut<'_> {
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
         Deltas(self).record_module_event(|| DeltaEvent::Derived(info.clone()));
+        debug_assert_eq!(heather_kernel::subst::global_var_bound_ty(&Rc::new(info.ty.clone())), 0);
         self.traits.commit_derived(info);
     }
 
@@ -785,7 +777,7 @@ impl Deltas<'_> {
 
 impl Elaborator {
     /// [`Self::check_module_delta`] with the module's *previous* delta to
-    /// replay unchanged items from (`docs/declaration-slice-replay-design.md`
+    /// replay unchanged items from (`docs/infrastructure/declaration-slice-replay-design.md`
     /// §4): an item whose source text matches the previous slice at its
     /// position, while every earlier item reproduced the previous prefix
     /// exactly, is reproduced from the slice — its bindings through the gate,
@@ -805,7 +797,7 @@ impl Elaborator {
     /// [`Self::check_module_delta_from`] with `force`: the named items are
     /// elaborated from source whether or not their slice would replay, so a
     /// probe can time one declaration over a replayed prefix
-    /// (`docs/check-only-design.md`). A name matches an item's declared name
+    /// (`docs/infrastructure/check-only-design.md`). A name matches an item's declared name
     /// (`item_timing_name`), and naming any member of a mutual measure
     /// group elaborates the group. The third result is the set of forced
     /// names the pass met; a caller that named something not in this module
@@ -1198,7 +1190,7 @@ impl Elaborator {
     /// nothing, so the journal holds exactly the module's other items. For a
     /// module whose refusals are its point (`heather check --expectations`),
     /// whose caller judges `errors` and decides whether the delta stands
-    /// for the module (`docs/module-dag-design.md` §11).
+    /// for the module (`docs/infrastructure/module-dag-design.md` §11).
     pub fn check_module_delta_refusing(
         &mut self,
         module: &str,
@@ -1235,7 +1227,7 @@ impl Elaborator {
     /// [`Self::replay_module_delta`] with `replay`, an identity of this exact
     /// replay that its caller vouches for: the stored bytes the delta was
     /// decoded from and the world it is replayed over, module by module
-    /// (`docs/module-dag-design.md` §13). A gate that has seen the identity
+    /// (`docs/infrastructure/module-dag-design.md` §13). A gate that has seen the identity
     /// pass skips the recheck of the whole extension; one whose recheck
     /// passes without opening a sealed proof records it. Everything else a
     /// replay checks (the dependency identity, opened proofs, exports, the
@@ -1304,7 +1296,7 @@ impl DeltasMut<'_> {
     ///
     /// The serial form is one `typing::check_global_ctx_extension` call. The
     /// wide form is the same judgement split the way the deferred gate splits
-    /// a fresh declaration (`docs/parallel-kernel-gate-design.md` §2): each
+    /// a fresh declaration (`docs/kernel/parallel-kernel-gate-design.md` §2): each
     /// binding's *statement* is checked here, in order, and each definition's
     /// *body* is queued as a `check_term` against the frozen prefix it sits
     /// over. The prefix is an O(1) snapshot per binding (`GlobalBindings` is
@@ -1319,7 +1311,7 @@ impl DeltasMut<'_> {
     /// **The gate vouches here exactly as it does at the source gate.** A
     /// stored definition is the binding the cold run's `GateItem::binding`
     /// produced, over the same Ψ prefix, so it asks the oracle the same
-    /// question (`docs/cache-v1-design.md` §3: the name is metadata, not
+    /// question (`docs/infrastructure/cache-v1-design.md` §3: the name is metadata, not
     /// identity) and an `admits` hit skips its statement and body the way it
     /// does for a fresh declaration; a miss is checked and `accepted` at the
     /// same points the source path uses. A theorem is stored without its
@@ -1505,18 +1497,12 @@ impl DeltasMut<'_> {
                 self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
             }
             DeltaEvent::GenDef { key, abs } => self.semantic_commit_gen_def(key, abs),
-            DeltaEvent::GenTyCode { tag, inline, level, at } => {
-                self.semantic_commit_gen_ty_code(tag, inline, level, at);
+            DeltaEvent::GenTyCode { tag, inline, level } => {
+                self.semantic_commit_gen_ty_code(tag, inline, level);
             }
-            DeltaEvent::GenTyCodeFn { tag, entry, at } => {
-                self.semantic_commit_gen_ty_code_fn(tag, entry, at);
-            }
-            DeltaEvent::GenWfSlots { tag, slots, at } => {
-                self.semantic_commit_gen_wf_slots(tag, slots, at);
-            }
-            DeltaEvent::GenSpineCodes { tag, codes, at } => {
-                self.semantic_commit_gen_spine_codes(tag, codes, at);
-            }
+            DeltaEvent::GenTyCodeFn { tag, entry } => self.semantic_commit_gen_ty_code_fn(tag, entry),
+            DeltaEvent::GenWfSlots { tag, slots } => self.semantic_commit_gen_wf_slots(tag, slots),
+            DeltaEvent::GenSpineCodes { tag, codes } => self.semantic_commit_gen_spine_codes(tag, codes),
             DeltaEvent::GenFamLevels { tag, level, index_level } => {
                 self.semantic_commit_gen_fam_levels(tag, level, index_level);
             }
@@ -1590,8 +1576,12 @@ impl Deltas<'_> {
                     }) => Some("representation"),
             DeltaEvent::Impl { repr, op, .. }
                 if self.representations.has_impl(repr, op) => Some("implementation"),
-            DeltaEvent::Access { designed, .. }
-                if self.access_alias(designed).is_some() => Some("designed-access"),
+            // Two modules may designate one spelling for one minted name
+            // (`apps::Nil` for `apps#Nil` of two modules' `apps`): the name
+            // the minted spelling then resolves to is the module's in scope,
+            // as any name is, so only a different minted name conflicts.
+            DeltaEvent::Access { designed, minted }
+                if self.access_alias(designed).is_some_and(|m| m != minted) => Some("designed-access"),
             DeltaEvent::Meta { module, name, slot, .. }
                 if self.meta_programs.definition(module, name).is_some()
                     || slot.is_some_and(|slot| self.meta_programs.slot_owner(slot).is_some()) =>
@@ -1748,7 +1738,7 @@ mod tests {
 
     /// The recheck of a stored suffix runs its definition bodies on the
     /// kernel worker pool (`recheck_extension`); a module's answer never
-    /// depends on the width (`docs/parallel-kernel-gate-design.md` §5.1), so
+    /// depends on the width (`docs/kernel/parallel-kernel-gate-design.md` §5.1), so
     /// the wide replay accepts what the serial one accepts, refuses what it
     /// refuses, and the kernel is what did the refusing at both widths.
     #[test]

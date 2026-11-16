@@ -1,6 +1,0 @@
-import nat;
-record W { after: Nat, pres: after = 0 }
-theorem mk_w(): W { W(after := 0, pres := refl) }
-// The original shape: a field whose type mentions a sibling field, used
-// where the unfolded sibling was expected.
-theorem via_let(): 0 = 0 { let w = mk_w(); w.pres }

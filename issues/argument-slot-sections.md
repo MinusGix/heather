@@ -86,4 +86,4 @@ makes the unindexed left-to-right expansion coincide with positions 0, 1, ... .
   then lowered through ordinary lambdas. Focused acceptance covers nested
   ownership, dependent telescopes, boundaries, and diagnostics; Nat and Int
   contain representative uses. Design record:
-  `docs/argument-slot-sections-design.md`.
+  `docs/language/argument-slot-sections-design.md`.

@@ -274,7 +274,7 @@ fn an_unknown_field_on_a_big_record_is_rejected() {
 // -- 5: the boundary --------------------------------------------------------
 
 // A **parameterized** record used to have no closed lowering to name and kept
-// the inline walk. Since `docs/telescoped-record-projections-design.md` (§3,
+// the inline walk. Since `docs/elaborator/telescoped-record-projections-design.md` (§3,
 // 2026-09-15) it has one: `Monoid<A>` is telescoped and its spine is dependent
 // (`unit_l` mentions `op` and `unit`), which is the device's fourth cell — the
 // closed `RecFam`/`RecProj`/`RecTail` triple with `Θ` in front — so **this test

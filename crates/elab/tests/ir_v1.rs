@@ -1,7 +1,7 @@
 //! FunctionIR v1, `simulate`, and the fuel interface, kept as a **frozen
 //! corpus** (`crates/elab/tests/fixtures/ir_v1.hthr`). The library file
 //! `lib/certgen/ir_v1.hthr` was the source IR of the per-function certificate
-//! path, which burn B2 retired (docs/native-program-logic-design.md §3.2); the
+//! path, which burn B2 retired (docs/native/native-program-logic-design.md §3.2); the
 //! verified compiler's source is `function_ir_source` instead. The copy stays
 //! because it is still the elaborator's heaviest single file of deep proofs
 //! over `nat` alone (`step_mono`'s explicit motives, the ∃-composition kit's
@@ -30,7 +30,7 @@ use heather_elab::Elaborator;
 
 const LIB: &str = include_str!("fixtures/ir_v1.hthr");
 /// The corpus's one import: the Nat kit it used to declare itself
-/// (docs/modules-design.md §7). The test elaborates the **closure**, in the
+/// (docs/language/modules-design.md §7). The test elaborates the **closure**, in the
 /// order the CLI's loader would — dependencies first — into one accumulator.
 const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
 const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
@@ -208,7 +208,7 @@ fn declarations_check_and_wrong_claims_are_refuted() {
 /// library, and two full elaborations do not fit the 300-second rail. They are
 /// the controls the library cannot state about itself —
 /// `Converges(p, env, ir, vs)` is a *predicate*, and the standing risk of the
-/// encoding (docs/surface-value-parameters.md §2) is that a mis-weakened value
+/// encoding (docs/language/surface-value-parameters.md §2) is that a mis-weakened value
 /// parameter would silently make it a vacuous one.
 #[test]
 fn the_full_ir_library_checks() {
@@ -216,7 +216,7 @@ fn the_full_ir_library_checks() {
     // The emission audit rides on the broadest load there is, rather than
     // paying for a whole-library elaboration of its own
     // (issues/emission-spelling-chokepoint.md;
-    // docs/annotation-component-respell-design.md §2.5): every emitted
+    // docs/elaborator/annotation-component-respell-design.md §2.5): every emitted
     // annotation slot of every declaration below is asked whether the one
     // chokepoint would still respell it.
     e.enable_emission_walk();
@@ -267,7 +267,7 @@ fn the_full_ir_library_checks() {
         "an inversion of a Stuck sub-region",
     );
 
-    // `Compile` v1 controls (docs/compile-typeclass-design.md §7 item 3).
+    // `Compile` v1 controls (docs/archive/compile-typeclass-design.md §7 item 3).
     // A wrong-result SPEC: the instance's certificate is the real theorem, so
     // the failure is precisely the coupling — `cert`'s expected type carries
     // `bad_spec` and the delivered convergence is to `add(b, a)`.
@@ -293,7 +293,7 @@ fn the_full_ir_library_checks() {
 
     // The route-1 spike's item (c), against the REAL kit
     // (issues/in-language-certificate-emission.md; the memo is
-    // docs/certgen-emission-route1-spike.md). It rides here because a suite
+    // docs/archive/certgen-emission-route1-spike.md). It rides here because a suite
     // of its own would re-elaborate the whole corpus: a staged meta fn whose
     // `code` block cites the kit's own `ret_conv`.
     //
@@ -315,7 +315,7 @@ fn the_full_ir_library_checks() {
 
     // …and the boundary route 1 routes *around*, still closed: the same
     // statement with the `Ir` at a meta-level LOCAL rather than a Ψ global is
-    // what docs/certgen-transcriber-in-language-design.md §5 calls unstatable,
+    // what docs/archive/certgen-transcriber-in-language-design.md §5 calls unstatable,
     // and it is unstatable against the real `Converges` too. If this ever
     // starts elaborating, route 3 landed.
     refuted(

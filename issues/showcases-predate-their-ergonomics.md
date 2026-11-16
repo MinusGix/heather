@@ -12,7 +12,7 @@ shapes those files are full of, and neither file uses them once.
 
 | feature | landed for | uses in `lib/` | uses in either showcase | shapes in `calc_text` wanting it |
 |---|---|---|---|---|
-| `⟨p, q⟩` anonymous constructors ([[conjunction-introduction-syntax]], closed 2026-08-30; `docs/logic-connectives-design.md` §4.1) | nested conjunction certificates | 17 in `lib/native/function_ir/function_ir.hthr` | **0** | 20 `And(` calls, nested three deep |
+| `⟨p, q⟩` anonymous constructors ([[conjunction-introduction-syntax]], closed 2026-08-30; `docs/library/logic-connectives-design.md` §4.1) | nested conjunction certificates | 17 in `lib/native/function_ir/function_ir.hthr` | **0** | 20 `And(` calls, nested three deep |
 | `calc { }` equational chains ([[calc-equational-chains]], closed 2026-08-18) | `trans`/`j` towers with spelled motives | `lib/std/num/nat.hthr` | **0** | 24 `trans(`, 11 `j(` |
 
 `sum_grammar`, `product_grammar` and `paren_grammar` are the worst of it: each
@@ -54,12 +54,12 @@ itself ([[perf-ab-source-patch]]).
     336, 347 and 372 — as `(next: Cursor<Char>(source)) -> nat::Lt(list_len(rest(
     source, next)), list_len(rest(source, begin))) -> Checked(k, source, next)`,
     differing only in the tier `k`. A plain `fn Recur(level: Nat, source, begin)
-    -> Type { … }` should collapse all four: `docs/types-as-expressions.md`
+    -> Type { … }` should collapse all four: `docs/language/types-as-expressions.md`
     already makes a `fn` returning `Type` first class, and a parameter whose type
     is a call to one is the shape `RefinesOn` uses in `lib/certgen/ir_v1.hthr`.
   - The three `checked_*` fixpoints annotate their λ binders — `λ (next:
     Cursor<Char>(source)) (smaller: nat::Lt(…)) => …` — against an expected Π,
-    where `docs/surface-function-types.md` §5.2 says the annotation is a
+    where `docs/language/surface-function-types.md` §5.2 says the annotation is a
     readability aid and the expected domain is what the binder is pushed with. So
     `λ next smaller => …` should check, and three of the file's longest lines go.
 
@@ -96,7 +96,7 @@ itself ([[perf-ab-source-patch]]).
 
   **Finding 2 — terse `cong` in a calc step is refused at 4 of the 15 sites this
   file offers it, and the boundary is wider than
-  `docs/calc-equational-chains-design.md` §3 records.** §3 has it as one
+  `docs/tactics/calc-equational-chains-design.md` §3 records.** §3 has it as one
   cross-type constructor case. Measured:
 
   | site | context | what it said |
@@ -128,8 +128,8 @@ itself ([[perf-ab-source-patch]]).
   `λ next smaller => checked_expr(source, next) decreasing tail` does **not**
   check: *"this recursive call's obligation names a binder the generator cannot
   type, and a mutual group cannot fall back to stating it at the call
-  (`docs/mutual-recursion-design.md` §4): annotate the binder, or lift the call
-  out of the pattern that introduces it."* `docs/surface-function-types.md` §5.2
+  (`docs/language/recursion/mutual-recursion-design.md` §4): annotate the binder, or lift the call
+  out of the pattern that introduces it."* `docs/language/surface-function-types.md` §5.2
   is right about the *elaborator* — the expected Π does push the domain — but the
   `decreases` obligation generator reads the binder's *written* type, and a
   mutual group has no second chance to state it. The three long lines stay, and

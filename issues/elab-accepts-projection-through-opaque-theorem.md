@@ -7,7 +7,7 @@ updated: 2026-09-24
 ---
 
 Found 2026-09-24 while hand-writing the bounded-loop glue
-(`docs/native-bounded-loops-design.md` §6).
+(`docs/archive/native-bounded-loops-design.md` §6).
 
 Shape: `let read = X_read_artifact(...)` binds a `ReadThenArtifact` built by a
 *theorem*, and the proof then uses `read.memory_preserved` (type
@@ -15,7 +15,7 @@ Shape: `let read = X_read_artifact(...)` binds a `ReadThenArtifact` built by a
 where `X_body_after(byte_load_after(...))` was expected. That equality needs
 `read.continuation.after` to reduce, which needs the theorem to unfold.
 Theorems are opaque (`crates/elab/src/lib.rs`, see
-`docs/decreases-unfolding-design.md`), so it should not reduce.
+`docs/language/recursion/decreases-unfolding-design.md`), so it should not reduce.
 
 The elaborator accepted the declaration. The kernel gate then rejected it as
 `the kernel rejected <decl>: NotConvertible`, located at the declaration

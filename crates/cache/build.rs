@@ -1,6 +1,6 @@
 //! Compile in a fingerprint of the kernel's source.
 //!
-//! `docs/cache-v1-design.md` §6: a cache entry is meaningful only against the
+//! `docs/infrastructure/cache-v1-design.md` §6: a cache entry is meaningful only against the
 //! kernel that produced it, so every entry must be invalidated when that
 //! kernel changes. The alternative — a hand-maintained epoch constant someone
 //! remembers to bump — fails silently in exactly the direction that matters,

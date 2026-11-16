@@ -1,6 +1,6 @@
 // A block assembled in the context and the message's end, as functions of
 // the context (FIPS 180-4 §5.1.1, issues/sha256-context-type.md,
-// docs/layout-design.md §9.5 item 4): a byte into the block, the block run
+// docs/native/layout-design.md §9.5 item 4): a byte into the block, the block run
 // when the sixty-fourth lands, and zeros to the block's end; the padding
 // and the length are `sha256_padding.hthr`, a module of their own so that
 // neither's elaboration is both

@@ -8,7 +8,7 @@ created: 2026-11-02
 updated: 2026-11-02
 ---
 
-Round 4 of [[grind-port]] (`docs/grind-design.md` §6): case splits, and
+Round 4 of [[grind-port]] (`docs/tactics/grind-design.md` §6): case splits, and
 other deciders as theories.
 
 - Split on a `match` scrutinee the graph holds (`split_all`'s `Cases`

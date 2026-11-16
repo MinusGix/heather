@@ -1,0 +1,269 @@
+// The bridge from a surface function over `Io` with loops to the `ELoop`
+// the reflector reads it as (docs/native/io-programs-design.md §2.2): the
+// surface method is the program's meaning, up to silent steps, at every
+// world and every argument. Written as a proof term by `io_loop_bridge`,
+// not proved per program: each loop is one use of `Io::while_agrees`
+// (linux_world_while, proved once), whose premises at a straight pass are
+// `refl`, and whose rest is the bridge of the rest.
+//
+// The term the tactic writes, for `Seq(pre, While(cond, body, rebind,
+// rest))` against `Iterate::then(init, step, k)`:
+//
+//   Io::while_agrees_by(c, b, k, ELoop::test_fn(…), ELoop::pass_fn(…),
+//       ELoop::rest_fn(…), Io::world_of, vals, λ z => refl, λ z => refl,
+//       λ z => <bridge of rest from vals(z) at z.after>, init)
+//
+// where `c` and `b` are the surface's test and body as functions of the
+// state, and `vals` reads a surface state as the loop's environment: each
+// local the loop threads from the state, every other variable as it was
+// before the loop. Untrusted: the kernel checks the term, so a wrong
+// reading fails there.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_world;
+import linux_world_co;
+import linux_world_while;
+import rt;
+import rt_io;
+import rt_io_loop;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// The lowered loop's parts as functions, and its meaning as the bridge
+// states it
+
+fn ELoop::test_fn(w: rt::World, g: List<Ty>, cond: Tm) → rt::Env(w.tys, g) → Bool {
+    λ v => ELoop::truth(w.tys, Tm::ty(cond, w, g), Tm::sem(cond, w, g, v))
+}
+
+fn ELoop::pass_fn(w: rt::World, ls: List<Lent>, g: List<Ty>, body: ETm, rebind: List<Nat>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, g)> {
+    λ v io => Mutated(body.sem_end(w, ls, g, v, io).after,
+        ELoop::gather(w.tys, body.ctx_end(w, g), body.sem_end(w, ls, g, v, io).value, g, rebind))
+}
+
+fn ELoop::rest_fn(w: rt::World, ls: List<Lent>, g: List<Ty>, rest: ELoop) → Mutated<Io, rt::Env(w.tys, g)> → Partial(Mutated<Io, rest.ty(w, g).sem(w.tys)>) {
+    λ m => rest.sem(w, ls, g, m.value, m.after)
+}
+
+// A loop's meaning is the bridge's lowered side, by unfolding.
+theorem ELoop::while_sem(w: rt::World, ls: List<Lent>, g: List<Ty>, cond: Tm, body: ETm, rebind: List<Nat>, rest: ELoop,
+    vals: rt::Env(w.tys, g), io: Io):
+    ELoop::While(cond, body, rebind, rest).sem(w, ls, g, vals, io)
+        = CoTree::bind(Events::none(), Io::while_loop(ELoop::test_fn(w, g, cond), ELoop::pass_fn(w, ls, g, body, rebind), vals, io),
+            ELoop::rest_fn(w, ls, g, rest))
+{ refl }
+
+// The environment and the world a loop-free computation leaves.
+fn ELoop::env_after(t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, vals: rt::Env(w.tys, g), io: Io) → rt::Env(w.tys, t.ctx_end(w, g)) {
+    t.sem_end(w, ls, g, vals, io).value
+}
+
+fn ELoop::world_after(t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, vals: rt::Env(w.tys, g), io: Io) → Io {
+    t.sem_end(w, ls, g, vals, io).after
+}
+
+// Variable `i` of an environment.
+fn ELoop::env_at(w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g), i: Nat) → Ty::at(g, i).sem(w.tys) { Env::get(w.tys, g, vals, i) }
+
+// ---------------------------------------------------------------------------
+// Quoting the program into the term
+
+def io_w_etm: ETm = ETm::Pure(Var(0));
+def io_w_effect: Effect = Closes;
+def io_w_eloop: ELoop = ELoop::Done(ETm::Pure(Var(0)));
+
+record IoQ { rt: RtQ, etm: List<Expr>, effect: List<Expr>, eloop: List<Expr> }
+
+fn Effect::quote(self e: Effect, q: IoQ) → Expr {
+    match e {
+        Reads(c) => ap(runtime_at(q.effect, 0), [NatLit(c)]),
+        Writes(c) => ap(runtime_at(q.effect, 1), [NatLit(c)]),
+        Opens(c) => ap(runtime_at(q.effect, 2), [NatLit(c)]),
+        Closes => runtime_at(q.effect, 3),
+    }
+}
+
+fn ETm::quote(self t: ETm, q: IoQ) → Expr {
+    match t {
+        Pure(v) => ap(runtime_at(q.etm, 0), [Tm::quote(v, q.rt)]),
+        Let(e, body) => ap(runtime_at(q.etm, 1), [Tm::quote(e, q.rt), body.quote(q)]),
+        Invoke(e, args, body) => ap(runtime_at(q.etm, 2), [e.quote(q), q.rt.nat_list(args), body.quote(q)]),
+        Lend(f, cap, buf, args, body) => ap(runtime_at(q.etm, 3), [NatLit(f), NatLit(cap), NatLit(buf), q.rt.nat_list(args), body.quote(q)]),
+    }
+}
+
+fn ELoop::quote(self p: ELoop, q: IoQ) → Expr {
+    match p {
+        Done(t) => ap(runtime_at(q.eloop, 0), [t.quote(q)]),
+        Seq(t, rest) => ap(runtime_at(q.eloop, 1), [t.quote(q), rest.quote(q)]),
+        While(c, body, rebind, rest) => ap(runtime_at(q.eloop, 2), [Tm::quote(c, q.rt), body.quote(q), q.rt.nat_list(rebind), rest.quote(q)]),
+    }
+}
+
+fn io_quoting() → Tac<IoQ> {
+    let ts <- runtime_type_handles();
+    let rq <- runtime_quoting(ts);
+    let etm <- runtime_type_of("io_w_etm").bind(λ h => runtime_ctors_at(h));
+    let effect <- runtime_type_of("io_w_effect").bind(λ h => runtime_ctors_at(h));
+    let eloop <- runtime_type_of("io_w_eloop").bind(λ h => runtime_ctors_at(h));
+    pure(IoQ(rq, etm, effect, eloop))
+}
+
+// ---------------------------------------------------------------------------
+// The term
+
+// The names the term is spelled with.
+record BridgeNames { agrees: Expr, test: Expr, pass: Expr, rest: Expr, world_of: Expr, env_after: Expr, world_after: Expr,
+    env_at: Expr, ctx_end: Expr, pair: Expr, unit: Expr, after: Expr, value: Expr, rfl: Expr, eutt_refl: Expr, none: Expr }
+
+fn bridge_names() → Tac<BridgeNames> {
+    pure(BridgeNames(<- runtime_global("Io::while_agrees_by"), <- runtime_global("ELoop::test_fn"), <- runtime_global("ELoop::pass_fn"),
+        <- runtime_global("ELoop::rest_fn"), <- runtime_global("Io::world_of"), <- runtime_global("ELoop::env_after"),
+        <- runtime_global("ELoop::world_after"), <- runtime_global("ELoop::env_at"), <- runtime_global("ETm::ctx_end"),
+        <- runtime_global("Pair::of"), <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))), <- runtime_global("Io::state_first"), <- runtime_global("Io::state_rest"),
+        <- runtime_global("tactic::rfl"), <- runtime_global("Eutt::refl"), <- runtime_global("Events::none")))
+}
+
+// Component `i` of `n` of a state `z`: `z.value` holds the locals nested,
+// `Mutated(l₀, Mutated(l₁, l₂))`.
+fn bridge_component_in(nm: BridgeNames, x: Expr, i: Nat, n: Nat) → Expr {
+    match n {
+        Zero => x,
+        Succ(m) => match m {
+            Zero => x,
+            Succ(_) => match i {
+                Zero => ap(nm.after, [Blank, Blank, x]),
+                Succ(j) => bridge_component_in(nm, ap(nm.value, [Blank, Blank, x]), j, m),
+            },
+        },
+    }
+}
+
+fn bridge_component(nm: BridgeNames, z: Expr, i: Nat, n: Nat) → Expr {
+    let inner = ap(nm.value, [Blank, Blank, z]);
+    bridge_component_in(nm, inner, i, n)
+}
+
+fn bridge_index_of(ls: List<Nat>, l: Nat, i: Nat) → Option<Nat> {
+    match ls { Nil => None, Cons(x, rest) => match x.same(l) { True => Some(i), False => bridge_index_of(rest, l, Succ(i)) } }
+}
+
+fn bridge_pairs(nm: BridgeNames, xs: List<Expr>) → Expr {
+    match xs { Nil => nm.unit, Cons(x, rest) => ap(nm.pair, [Blank, Blank, x, bridge_pairs(nm, rest)]) }
+}
+
+// Variable `j` of the loop's `d`, read off a surface state `z`: the local
+// the loop threads there, or what it was before the loop.
+fn bridge_var(nm: BridgeNames, wE: Expr, gE: Expr, before: Expr, z: Expr, comps: List<Nat>, d: Nat, j: Nat) → Expr {
+    match bridge_index_of(comps, d - Succ(j), 0) {
+        Some(i) => bridge_component(nm, z, i, comps.len()),
+        None => ap(nm.env_at, [wE, gE, before, NatLit(j)]),
+    }
+}
+
+// The loop's environment read off a surface state `z`.
+fn bridge_vals(nm: BridgeNames, wE: Expr, gE: Expr, before: Expr, z: Expr, comps: List<Nat>, d: Nat) → Expr {
+    bridge_pairs(nm, List::range(d).map(λ j => bridge_var(nm, wE, gE, before, z, comps, d, j)))
+}
+
+// A local of the state's type, for a `λ` over the state.
+fn bridge_local(sty: Handle, under: LocalRef) → Tac<LocalInfo> {
+    assume(Hd(sty), "state", Some(under)).bind(λ c => rt_accepted("a bridge local", c))
+}
+
+// The proof that the surface `surface` is `prog`'s meaning from the
+// environment `env` (of codes `gE`) at the world `world`, under the local
+// `under`: one use of `Io::while_agrees_by` a loop, its premises `refl`,
+// its rest the proof of the rest.
+fn bridge_term(fuel: Nat, nm: BridgeNames, q: IoQ, wE: Expr, lsE: Expr, gE: Expr, env: Expr, world: Expr,
+    prog: ELoop, proof: LoopProof, surface: Handle, under: LocalRef) → Tac<Expr>
+{
+    match fuel {
+        Zero => rt_refuse("the bridge is deeper than its fuel"),
+        Succ(f) => match prog {
+            Done(_) => pure(ap(nm.eutt_refl, [Blank, nm.none, Hd(surface)])),
+            Seq(pre, after_pre) => match after_pre {
+                While(cond, body, rebind, rest) => match proof {
+                    PWhile(init, c, b, kont, kbody, z2, comps, d, rest_proof) => {
+                        let preQ = pre.quote(q);
+                        let g2 = ap(nm.ctx_end, [preQ, wE, gE]);
+                        let before = ap(nm.env_after, [preQ, wE, lsE, gE, env, world]);
+                        let ce = ap(nm.test, [wE, g2, Tm::quote(cond, q.rt)]);
+                        let fe = ap(nm.pass, [wE, lsE, g2, body.quote(q), q.rt.nat_list(rebind)]);
+                        let restf = ap(nm.rest, [wE, lsE, g2, rest.quote(q)]);
+                        let sty <- infer(Hd(init)).bind(λ c0 => rt_accepted("a loop's state's type", c0));
+                        let zv <- bridge_local(sty, under);
+                        // The environment read off a state, spelled out at each
+                        // state rather than applied, so that each `λ` over a
+                        // state is written only where its local is bound.
+                        let vals_at = λ (z: Expr) => bridge_vals(nm, wE, g2, before, z, comps, d);
+                        let vals = Lam(zv.ref, vals_at(Local(zv.ref)));
+                        let zt <- bridge_local(sty, under);
+                        let zb <- bridge_local(sty, under);
+                        let restp <- bridge_term(f, nm, q, wE, lsE, g2, vals_at(Local(z2)), ap(nm.world_of, [Blank, Local(z2)]),
+                            rest, rest_proof, kbody, z2);
+                        pure(ap(nm.agrees, [Blank, Blank, Blank, c, b, Hd(kont), ce, fe, restf, ap(nm.world_of, [Blank]), vals,
+                            Lam(zt.ref, ap(nm.rfl, [Blank, App(ce, vals_at(Local(zt.ref)))])),
+                            Lam(zb.ref, ap(nm.rfl, [Blank, ap(fe, [vals_at(Local(zb.ref)), ap(nm.world_of, [Blank, Local(zb.ref)])])])), Lam(z2, restp), Hd(init)]))
+                    },
+                    PDone => rt_refuse("the bridge's reading lost a loop"),
+                },
+                _ => rt_refuse("a computation before the end that is not followed by a loop"),
+            },
+            While(_, _, _, _) => rt_refuse("a loop the reflector writes after a computation"),
+        },
+    }
+}
+
+// The environment of the parameters, the most recent first.
+fn bridge_env(nm: BridgeNames, params: List<LocalRef>) → Expr { bridge_pairs(nm, params.map(λ x => Local(x))) }
+
+fn bridge_lams(xs: List<LocalRef>, e: Expr) → Expr { match xs { Nil => e, Cons(x, rest) => Lam(x, bridge_lams(rest, e)) } }
+
+// The bridge for a function already read (`rt_io_read_loop_fun`), at the
+// world `wE` and the table `lsE` given as terms: what the program
+// generator states (`runtime_program`).
+fn io_loop_bridge_of(r: LoopOpened, wE: Expr, lsE: Expr) → Tac<Expr> {
+    let nm <- bridge_names();
+    let q <- io_quoting();
+    let gE = Ty::quotes(r.read.params.rev(), q.rt);
+    let under = match r.params { Cons(x, _) => x, Nil => r.io };
+    let proof <- bridge_term(4096, nm, q, wE, lsE, gE, bridge_env(nm, r.params), Local(r.io), r.read.prog, r.proof, r.surface, under);
+    pure(Lam(r.io, bridge_lams(r.params.rev(), proof)))
+}
+
+// `io_loop_bridge(f, funs, recs, lends, world, lents)`: a proof of
+//
+//     (io: Io) → (p₁ …) → Eutt(Events::none(), f(io, p₁, …),
+//         prog.sem(world, lents, g, env, io))
+//
+// for the function `f` over `Io` with loops, `prog` what the reflector reads
+// it as (`rt_io_reflect_loop`, over the functions `funs`, the records
+// `recs` and the functions `lends` it lends a buffer to), `g` its
+// parameters' codes the last first, `env` the parameters as an
+// environment. `world` and `lents` name the `rt::World` and the table of
+// lent functions (`List<Lent>`, in `lends`' order) the reading is at.
+fn io_loop_bridge(fname: String, funs: List<String>, recs: List<String>, lends: List<String>, world: String, lents: String) → Tac<Expr> {
+    let k <- rt_known(funs, recs);
+    let names <- rt_loop_names();
+    let g <- rt_global(fname);
+    let ls <- rt_globals(lends);
+    let r <- rt_io_read_loop_fun(4096, k, names, ls, g);
+    let wE <- runtime_global(world);
+    let lsE <- runtime_global(lents);
+    io_loop_bridge_of(r, wE, lsE)
+}

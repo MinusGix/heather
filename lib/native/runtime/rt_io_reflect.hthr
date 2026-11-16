@@ -1,5 +1,5 @@
 // The effectful reflector: a `mut self` method over `Io`, read from its
-// elaborated body as an `ETm` (docs/effects-capabilities-design.md §8.3,
+// elaborated body as an `ETm` (docs/language/effects-capabilities-design.md §8.3,
 // issues/effects-uniqueness-surface.md, slice 3).
 //
 // Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, a
@@ -17,7 +17,7 @@
 //    read as a value, the world after a call read as a value, or an answer
 //    of a call the chain does not go through (a copy of `io`, a call whose
 //    world after is dropped). That is the linearity check of the default
-//    setup (docs/runtime-fn-setups-design.md §5.1): with no `ETm` able to
+//    setup (docs/native/runtime-fn-setups-design.md §5.1): with no `ETm` able to
 //    name the world, a body that reflects at all threads it straight
 //    through.
 //
@@ -82,10 +82,14 @@ fn rt_io_answer(pos: Nat, g: Nat, c: Handle, i: Nat, d: Nat) → CallRes {
 
 // A computation read so far, the most recent step first: a pure value
 // bound, or a call.
-inductive ESeg { SLet(e: Tm), SInvoke(e: Effect, args: List<Nat>) }
+inductive ESeg { SLet(e: Tm), SInvoke(e: Effect, args: List<Nat>), SLend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>) }
 
 fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
-    segs.foldl(λ acc s => match s { SLet(e) => ETm::Let(e, acc), SInvoke(e, args) => ETm::Invoke(e, args, acc) }, last)
+    segs.foldl(λ acc s => match s {
+        SLet(e) => ETm::Let(e, acc),
+        SInvoke(e, args) => ETm::Invoke(e, args, acc),
+        SLend(f, cap, buf, args) => ETm::Lend(f, cap, buf, args, acc),
+    }, last)
 }
 
 fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
@@ -93,6 +97,97 @@ fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
 fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io), k.nat, k.recursion, k.reprs, k.lent, k.file, k.named) }
 
 record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
+
+// The calls of lent functions the terms `hs` need answered, innermost
+// first: a call whose operands are another's answer comes after it. A call
+// on Linux is not looked into (its answer is the call's own), nor a call
+// already made.
+fn rt_lend_find(fuel: Nat, io: IoKnown, hs: List<Handle>) → Tac<List<Handle>> {
+    match fuel {
+        Zero => rt_refuse("a term deeper than the reflector's fuel"),
+        Succ(f) => match hs {
+            Nil => pure([]),
+            Cons(h, rest) => {
+                let v <- view(h);
+                let found: Pair<List<Handle>, Bool> = match v {
+                    HGlobal(g, _, args) => match io.is_method(g) { True => Pair([], False), False => Pair(args, io.is_lent(g)) },
+                    HField(of, _, args) => Pair(Cons(of, args), False),
+                    HCtor(_, _, _, fields) => Pair(fields, False),
+                    HLocal(_, args) => Pair(args, False),
+                    _ => Pair([], False),
+                };
+                let inner <- rt_lend_find(f, io, found.fst);
+                let made <- rt_lent_answer(io, h);
+                let here: List<Handle> = match found.snd { True => match made { Some(_) => [], None => [h] }, False => [] };
+                let after <- rt_lend_find(f, io, rest);
+                pure(inner ++ here ++ after)
+            },
+        },
+    }
+}
+
+// Whether `length` is `BitVec::ofNat(bytes.len())`, the span's own length.
+fn rt_lend_length(bytes: Handle, length: Handle) → Tac<Bool> {
+    lookup("BitVec::ofNat").bind(λ c => match c {
+        Refused(_) => pure(False),
+        Accepted(of) => lookup("List::len").bind(λ c2 => match c2 {
+            Refused(_) => pure(False),
+            Accepted(len) => defeq(Hd(length), App(App(Global(of), NatLit(64)), App(App(Global(len), Blank), Hd(bytes)))),
+        }),
+    })
+}
+
+// One call of a lent function, `f(bytes, ofNat(bytes.len()), w₁, …)`:
+// its buffer a variable, the span's length the buffer's own, its words
+// variables; then its `Lend`, the bytes it left and its word recorded as
+// the call's answer.
+fn rt_lend_call(fuel: Nat, k: Known, w: IoWalk, c: Handle) → Tac<IoWalk> {
+    view(c).bind(λ v => match v {
+        HGlobal(g, name, args) => match Known::index(w.io.lends, g.id, 0) {
+            None => rt_refuse("`" ++ name ++ "` is not a function the program lends a buffer to"),
+            Some(fi) => match args {
+                Cons(bytes, a1) => match a1 {
+                    Cons(length, words) => {
+                        let kw = k.at_world(w.io);
+                        let cap <- kw.ty_of(bytes).bind(λ t => match t {
+                            Bytes(c0) => pure(c0),
+                            _ => rt_refuse("`" ++ name ++ "` lent something other than a byte buffer"),
+                        });
+                        let own <- rt_lend_length(bytes, length);
+                        let _ <- match own { True => pure(0), False => rt_refuse("`" ++ name ++ "` lent a span whose length is not its buffer's own (`BitVec::ofNat(buf.len())`)") };
+                        let rb <- rt_go(fuel, kw, w.st, bytes, True);
+                        let rw <- RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), rb.fst, words);
+                        let st = rw.fst;
+                        let d = st.depth;
+                        pure(IoWalk(RSt(Succ(Succ(d)), [], st.memo, st.handles, st.locals, st.funs),
+                            Cons(SLend(fi, cap, st.index(RSt::level(rb.snd)), st.indices(rw.snd)), ESeg::lets(st.lets) ++ w.segs),
+                            IoKnown(w.io.world, w.io.methods, w.io.calls, w.io.lends,
+                                w.io.lent ++ [CallRes(w.io.lent.len(), g.id, c, None, [Pair("after", d), Pair("value", Succ(d))])])))
+                    },
+                    Nil => rt_refuse("`" ++ name ++ "` without its span's length"),
+                },
+                Nil => rt_refuse("`" ++ name ++ "` without its span"),
+            },
+        },
+        _ => rt_refuse("a lent function's call that is not one"),
+    })
+}
+
+fn rt_lend_each(fuel: Nat, k: Known, w: IoWalk, cs: List<Handle>) → Tac<IoWalk> {
+    match cs {
+        Nil => pure(w),
+        // A call found twice (two reads of its answer) is made once.
+        Cons(c, rest) => rt_lent_answer(w.io, c).bind(λ made => match made {
+            Some(_) => rt_lend_each(fuel, k, w, rest),
+            None => rt_lend_call(fuel, k, w, c).bind(λ w2 => rt_lend_each(fuel, k, w2, rest)),
+        }),
+    }
+}
+
+// The lent calls the terms `hs` need, made in order.
+fn rt_lend_calls(fuel: Nat, k: Known, w: IoWalk, hs: List<Handle>) → Tac<IoWalk> {
+    rt_lend_find(fuel, w.io, hs).bind(λ cs => rt_lend_each(fuel, k, w, cs))
+}
 
 // The calls in order: each one's operands as variables (bound by the lets
 // before it), then its `Invoke`, its answer recorded for what follows.
@@ -104,16 +199,16 @@ fn rt_io_calls(fuel: Nat, k: Known, w: IoWalk, calls: List<Handle>) → Tac<IoWa
                 None => rt_refuse("`" ++ name ++ "` is not a call on Linux the reflector knows"),
                 Some(i) => match args {
                     Nil => rt_refuse("`" ++ name ++ "` without its world"),
-                    Cons(_, ops) => {
+                    Cons(_, ops) => rt_lend_calls(fuel, k, w, ops).bind(λ w => {
                         let kw = k.at_world(w.io);
                         RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), w.st, ops).bind(λ r =>
                         rt_io_capacity(kw, i, ops).bind(λ cap =>
                         rt_io_calls(fuel, k, IoWalk(
                             RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals, r.fst.funs),
                             Cons(SInvoke(rt_io_effect(i, cap), r.fst.indices(r.snd)), ESeg::lets(r.fst.lets) ++ w.segs),
-                            IoKnown(w.io.world, w.io.methods, w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)])),
+                            IoKnown(w.io.world, w.io.methods, w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)], w.io.lends, w.io.lent)),
                             rest)))
-                    },
+                    }),
                 },
             },
             _ => rt_refuse("a world that is not the capability threaded through calls"),
@@ -136,7 +231,7 @@ fn rt_io_reflect_fun(fuel: Nat, k: Known, names: IoNames, g: Nat) → Tac<EFun> 
         HLam(dom) => rt_io_head(dom).bind(λ dh => match dh.map(λ d => d.same(names.io)).unwrap_or(False) {
             False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
             True => open(b, "io").bind(λ oc => rt_accepted("its world", oc)).bind(λ o => {
-                let io = IoKnown(o.local.ref.id, names.methods, []);
+                let io = IoKnown(o.local.ref.id, names.methods, [], [], []);
                 rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body).bind(λ p =>
                 view(p.snd).bind(λ rv => match rv {
                     HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {

@@ -1,7 +1,7 @@
 // Controls of the contract a compiled function is exported under
 // (function_ir_compile's `compiled_returns`, `compiled_returns_lent`,
 // `compiled_returns_unlent` and `compiled_returns_written`;
-// docs/native-library-exports-design.md §6, the clauses by number). Each
+// docs/native/native-library-exports-design.md §6, the clauses by number). Each
 // clause of the contract is a part of those theorems' statements; a control
 // shows the clause has teeth, that something which would break it is
 // refused or is provably not what the statement allows. The controls that
@@ -90,7 +90,7 @@ theorem store_below_is_wrote<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, 
 //
 // A function that stores into a span is exported under a lending that
 // marks the span (`Lending::writing`, `compiled_returns_written`;
-// docs/native-library-exports-design.md §7): the post then allows stores
+// docs/native/native-library-exports-design.md §7): the post then allows stores
 // of bytes into the marked spans beside the callee's own room
 // (`Stack::WroteIn`). The marks are the whole of what that adds.
 
@@ -168,7 +168,7 @@ theorem first_byte_overlent_refused(): lower_program_lent([first_byte()], plan_p
 //
 // An export's program may hold functions lent nothing beside the one that
 // reads a span, and each can be exported at its own label
-// (docs/native-library-exports-design.md §6.3). Such a function's contract
+// (docs/native/native-library-exports-design.md §6.3). Such a function's contract
 // is the plain one, `Stack::CalleePost`, with no premise about a span:
 // `compiled_returns_unlent`. Here `sum` under `first_byte`, in a program
 // lent a span at its last function only.
@@ -181,9 +181,9 @@ theorem reading_beside_lowers(): lower_program_lent(reading_beside(), plan_progr
 theorem sum_beside_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program_lent(reading_beside(), placement, [0, 1]) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), a, b: BitVec(64)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(1),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 136 * 1 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 48 <= i,
         stack.CalleePost(program_eval_over(Nil, reading_beside(), 0, [a, b]))) {
-    compiled_returns_unlent<M>(reading_beside(), placement, [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
+    compiled_returns_unlent<M>(reading_beside(), placement, program_room(reading_beside()), [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
         refl, [a, b], trivial, program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)
 }
 
@@ -231,6 +231,13 @@ fn Instruction::written(self instruction: Instruction) → Written {
         ShiftImm(_, _, _) => RegisterAndStatus,
         // A byte swap leaves the flags.
         Bswap32(_) => Register,
+        CmpRI8(_, _) => Status,
+        CmpRI32(_, _) => Status,
+        MovRI32(_, _) => Register,
+        // A 32-bit move leaves the flags.
+        MovSelf32(_) => Register,
+        // A rotate writes CF (and leaves OF undefined) at a nonzero count.
+        RorRI32(_, _) => RegisterAndStatus,
     }
 }
 
@@ -239,6 +246,8 @@ fn Instruction::written(self instruction: Instruction) → Written {
 fn every_instruction() → List<Instruction> {
     [MovRR(Rax, Rax), MovRI(Rax, BitVec::ofNat(0)), AddRR(Rax, Rax), SubRR(Rax, Rax), AndRR(Rax, Rax), OrRR(Rax, Rax), XorRR(Rax, Rax),
         CmpRR(Rax, Rax), SetBelow(Al), SetLess(Al), SetEqual(Al), TestRR(Rax, Rax), AddRI8(Rax, BitVec::ofNat(0)),
-        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0)), Bswap32(Rax)]
+        AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0)), Bswap32(Rax),
+        MovSelf32(Rax), RorRI32(Rax, BitVec::ofNat(0)),
+        CmpRI8(Rax, BitVec::ofNat(0)), CmpRI32(Rax, BitVec::ofNat(0)), MovRI32(Rax, BitVec::ofNat(0))]
 }
-theorem inventory_size(): every_instruction().len() = 17 { refl }
+theorem inventory_size(): every_instruction().len() = 22 { refl }

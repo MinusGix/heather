@@ -1,5 +1,5 @@
 //! The Rust side of an export `crates/linked` links: its declaration,
-//! generated (docs/native-library-exports-design.md §6).
+//! generated (docs/native/native-library-exports-design.md §6).
 //!
 //! `compile-x86` states what its code takes in the assembly it writes
 //! ([`header`]: which arguments are words and which are spans, and the stack
@@ -299,7 +299,7 @@ pub fn {function}({taken}) -> u64 {{
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for {span}.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an

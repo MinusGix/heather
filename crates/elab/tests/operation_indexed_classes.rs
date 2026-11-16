@@ -1,5 +1,5 @@
 //! Operation-indexed classes — `class Monoid<A>(op)`
-//! (`docs/operation-indexed-classes-design.md`, round one of §13).
+//! (`docs/language/classes/operation-indexed-classes-design.md`, round one of §13).
 //!
 //! The one sentence the whole feature is: the operation moves from field to
 //! **index**, so `Mon<Bool>(Bool::and)` and `Mon<Bool>(Bool::or)` are different *types*,
@@ -146,7 +146,7 @@ theorem law<A: CMon>(x: A): op(x, A.unit) = x {
 theorem nope(x: Bool): x.or(True) = x { law(x) }
 ");
     // The refusal is unmoved; what it reads like moved on 2026-09-15 with
-    // `docs/telescoped-record-projections-design.md`'s device — `A.unit` is a
+    // `docs/elaborator/telescoped-record-projections-design.md`'s device — `A.unit` is a
     // named projection, so the mismatch is caught in the checking position and
     // the message names the two types rather than the declaration. Assert the
     // substance (see `lib_algebra.rs`'s twin).
@@ -282,7 +282,7 @@ fn flatten_then<B>(xss: List<List<B>>, ys: List<B>) -> List<B> {
 #[test]
 fn the_value_slot_refusal_lists_every_answer() {
     // (a) `T.f` at an indexed class with no scope binder — the boundary
-    //     `docs/traits-type-projection-design.md` §6 left open, decided here
+    //     `docs/language/classes/traits-type-projection-design.md` §6 left open, decided here
     //     as scope-then-refuse.
     let e = bad("fn nope() -> Bool { Bool.unit }");
     assert!(e.contains("not pinned"), "{e}");

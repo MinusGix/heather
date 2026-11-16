@@ -19,7 +19,7 @@ Two sites speculate on a `<`: `Parser::try_tyargs` in the expression grammar
 `Parser::ty` (added by the `Lt` round). Each falls back by **rewinding and
 re-parsing the same tokens the other way**.
 
-`docs/surface-polymorphism.md` §1 said "backtracking is free here — the parser
+`docs/language/surface-polymorphism.md` §1 said "backtracking is free here — the parser
 is a `Vec<Tok>` plus an index — and it is total, so no lookahead heuristic can
 be wrong about a program". Every clause of that is true, and the conclusion was
 still only accidentally safe: it held because the *type* side **failed hard**,

@@ -21,7 +21,7 @@ use crate::resolve::Resolution;
 use crate::name_lookup::NameLookup;
 
 /// The reading a `.name(…)` call has besides the class member
-/// (docs/traits-receiver-dispatch-design.md §3, "another reading exists"):
+/// (docs/language/classes/traits-receiver-dispatch-design.md §3, "another reading exists"):
 /// what a successful dispatch races under §4 rule 2 and what a failed one
 /// falls back to under rule 5.
 pub(crate) struct OtherReading {
@@ -37,7 +37,7 @@ pub(crate) struct OtherReading {
     pub(crate) callee: Option<String>,
     /// The bare name, when this reading is an ambient local, alias or
     /// declaration: one that is **discarded** once the receiver's type shows
-    /// it cannot take the receiver (docs/receiver-member-resolution-design.md
+    /// it cannot take the receiver (docs/language/classes/receiver-member-resolution-design.md
     /// §2). `None` for a member, a constructor or a builtin.
     pub(crate) ambient: Option<String>,
 }
@@ -54,7 +54,7 @@ impl std::ops::Deref for Receivers<'_> {
 
 impl Receivers<'_> {
     /// `x.op(y)` where `op` is a class member and `x`'s type is a carrier with
-    /// an instance (docs/traits-receiver-dispatch-design.md).
+    /// an instance (docs/language/classes/traits-receiver-dispatch-design.md).
     ///
     /// One route for every carrier, because dispatch *is* a resolution goal:
     /// the goal `C<typeof(x)>` is built in kernel form (§2.1) and handed to
@@ -101,7 +101,7 @@ impl Receivers<'_> {
         //
         // *Declares*, and not "has": a class that merely inherits `name` never
         // said anything about it, so it is not a candidate at all — before any
-        // instance is consulted (docs/traits-owner-dispatch-design.md §2). That
+        // instance is consulted (docs/language/classes/traits-owner-dispatch-design.md §2). That
         // is what makes an inherited member dispatchable without a tiebreak,
         // and it leaves two *unrelated* declaring classes ambiguous, which is
         // the case §4 rule 3 exists for.
@@ -211,7 +211,7 @@ impl Receivers<'_> {
             });
         };
         // An answer that came by **upcast** is read *through*: the field is the
-        // child's own (docs/traits-named-upcast-design.md §2).
+        // child's own (docs/language/classes/traits-named-upcast-design.md §2).
         let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
         // Reported rather than asserted, though the candidate filter is what
         // just found this field: a library must not panic to say two of its own
@@ -261,7 +261,7 @@ impl Receivers<'_> {
     }
 
     /// A dispatched projection reads **through** an upcast
-    /// (`docs/traits-named-upcast-design.md` §2).
+    /// (`docs/language/classes/traits-named-upcast-design.md` §2).
     ///
     /// Owner-keyed dispatch builds its goal at the class that *declares* the
     /// field, so at a child dictionary the resolver answers by step 1b with an
@@ -426,7 +426,7 @@ impl Receivers<'_> {
         };
         // The field's carrier is written on the `pair` spelling; a `pair@`
         // layer is checked against its description and carries none
-        // (docs/intro-by-type-design.md), so there it is read off the
+        // (docs/elaborator/intro-by-type-design.md), so there it is read off the
         // instance's declared type below.
         let field_ty = match value {
             Term::Pair { fst_ty, .. } => Some(fst_ty),
@@ -484,8 +484,8 @@ impl Receivers<'_> {
         }
         // One equation: `g`'s subject domain under its `n` type binders is
         // the field's carrier under the instance's `n` type binders. The
-        // contexts line up binder for binder, so only the global prefix
-        // differs — `g`'s type is scoped before `g`, the body before `inst`.
+        // contexts line up binder for binder, and both name committed
+        // definitions as constants, so the two compare as spelled.
         let Some(GlobalBinding::Tm { ty: gty, .. }) = self.psi.bindings.get(g) else {
             return false;
         };
@@ -500,7 +500,7 @@ impl Receivers<'_> {
             let same = match (&**dom, *idom) {
                 (Type::Ty(_), Type::Ty(_)) => true,
                 (Type::Ty(_), _) | (_, Type::Ty(_)) => false,
-                (gd, id) => gd.shift_global((inst - g) as u32) == *id,
+                (gd, id) => *gd == *id,
             };
             if !same {
                 return false;
@@ -515,12 +515,12 @@ impl Receivers<'_> {
                 let Type::Pi { dom: cdom, .. } = &**field_ty else {
                     return false;
                 };
-                gdom.shift_global((inst - g) as u32) == **cdom
+                **gdom == **cdom
             }
             None => self
                 .declared_field_carrier(inst, n, idx)
                 .is_some_and(|cdom| {
-                    gdom.shift_global((self.psi.bindings.len() - g) as u32) == cdom
+                    **gdom == cdom
                 }),
         }
     }
@@ -537,7 +537,7 @@ impl Receivers<'_> {
             return None;
         };
         let oracle = self.semantic_oracle();
-        let mut cur = ty.shift_global((self.psi.bindings.len() - inst) as u32);
+        let mut cur = (**ty).clone();
         let mut gamma = LocalCtx::nil();
         for _ in 0..n {
             let Type::Pi { dom_level, dom, cod, .. } = cur else {

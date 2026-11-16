@@ -1628,7 +1628,7 @@ fn beta_elim_code_tm_elim_empty() {
     //
     // The two levels are deliberately **distinct** here (2 and 1): that is the
     // degree of freedom level-indexing `Empty` adds
-    // (docs/unit-empty-level-indexing.md §3), and firing them in the wrong
+    // (docs/kernel/unit-empty-level-indexing.md §3), and firing them in the wrong
     // order — `fire`'s `phi` is innermost-first — swaps them silently.
     let gamma = nil_ctx(0);
     let delta = nil_ctx(1);
@@ -2348,7 +2348,7 @@ fn beta_elim_code_tm_elim_w() {
 
 /// β on the projections fires on **either** pair spelling, in all four
 /// combinations, and reads nothing from either annotation
-/// (`docs/intro-by-type-design.md` §2.4; `docs/delam-extensions.md` §16.2
+/// (`docs/elaborator/intro-by-type-design.md` §2.4; `docs/kernel/delam-extensions.md` §16.2
 /// already says this for the component form).
 ///
 /// The cross combinations are the ones worth a test: a `fst` over a `pair@`

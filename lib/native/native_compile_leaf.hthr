@@ -2,7 +2,7 @@
 // S3.2): its inputs read from their homes, S4's lowering run over them
 // (`Region::lower_correct`, proved once), and each result put in its home,
 // so the environment after is the source's `Env::compute`
-// (docs/native-register-allocation-design.md).
+// (docs/native/native-register-allocation-design.md).
 //
 // The leaf's registers are ones no word lives in (`Layout::leaf_pool`), so
 // loading the inputs keeps every live word where it is, and S4's code is
@@ -638,6 +638,7 @@ theorem Node::read_ids(self node: Node): node.read_ports().map(λ (port: Port) =
         BitXor(_, _, _, _) => refl,
         ShiftLeft(_, _, _, _) => refl,
         LogicalShiftRight(_, _, _, _) => refl,
+        RotateRight(_, _, _, _) => refl,
         ArithmeticShiftRight(_, _, _, _) => refl,
         UnsignedLessThan(_, _, _, _) => refl,
         SignedLessThan(_, _, _, _) => refl,

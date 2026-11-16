@@ -1,4 +1,4 @@
-//! `reprgen` — the transfer generator (`docs/datarepr-design.md` §3).
+//! `reprgen` — the transfer generator (`docs/native/datarepr-design.md` §3).
 //!
 //! Certgen's sibling, and untrusted for the same reason: it emits **surface
 //! source** — a derived body, its closing lemma, its `refines` theorem and the
@@ -174,7 +174,7 @@ struct Arm<'a> {
 
 /// The one shape v1 transfers: `f(q⃗, x: S)` defined by a total `match` on
 /// `x` — or by the same case analysis spelled `split`, which is one node and
-/// one elimination (docs/match-equation-split-design.md §6) and so is admitted
+/// one elimination (docs/language/matching/match-equation-split-design.md §6) and so is admitted
 /// without the generator learning anything. Everything else declines with a
 /// reason (§3.3).
 struct Fragment<'a> {
@@ -313,7 +313,7 @@ impl ReprGen<'_> {
                         return Err(format!(
                             "`{op}` and `{name}` call each other and neither has an `Impl` at \
                              `{repr}`: a mutually recursive callee closure has no topological \
-                             order to generate in (docs/datarepr-design.md §3.1 phase 0)"
+                             order to generate in (docs/native/datarepr-design.md §3.1 phase 0)"
                         ));
                     }
                     if let Err(why) = self.transfer(&name, repr, out, done, stack, target) {
@@ -445,7 +445,7 @@ impl ReprGen<'_> {
         // The signature restated with `S ↦ R`, in declaration order — the same
         // order the `Impl` record restates it in. Read off the ONE schema the
         // surface `impl` declares its obligations from
-        // (docs/obligation-records-design.md §2.1): the derived `Impl`'s
+        // (docs/language/classes/obligation-records-design.md §2.1): the derived `Impl`'s
         // statements and a hand-written one's are the same paragraph, and were
         // written twice until this call replaced the second copy.
         let sch = DataRepr(self).impl_schema(op, repr)?;
@@ -667,7 +667,7 @@ impl ReprGen<'_> {
         if !d.tyvars.is_empty() {
             return Err(format!(
                 "`{name}` is polymorphic: an `Impl` at a v1 repr is over a monomorphic \
-                 operation (docs/datarepr-design.md §5.1)"
+                 operation (docs/native/datarepr-design.md §5.1)"
             ));
         }
         let mut at_s = Vec::new();
@@ -734,7 +734,7 @@ impl ReprGen<'_> {
                 if rec_param.is_some() {
                     return Err(format!(
                         "`{op}` takes two parameters at `{s}`: v1 recurses on one \
-                         (docs/datarepr-design.md §3.3, as-landed)"
+                         (docs/native/datarepr-design.md §3.3, as-landed)"
                     ));
                 }
                 rec_param = Some((p.name.clone(), i));
@@ -754,7 +754,7 @@ impl ReprGen<'_> {
         // typed (issues/diagnostics-name-the-written-form.md). The fragment
         // admits both, because it reads `ExprKind::Match` and the parser
         // desugars `split` onto that very node
-        // (docs/match-equation-split-design.md §6); only these messages ever
+        // (docs/language/matching/match-equation-split-design.md §6); only these messages ever
         // knew the difference, and until now they got it wrong.
         let kw = match &f.body.result.kind {
             ExprKind::Match { form, .. } => form.keyword(),
@@ -769,7 +769,7 @@ impl ReprGen<'_> {
         let ExprKind::Match { scrut, arms, .. } = &f.body.result.kind else {
             return Err(format!(
                 "`{op}`'s body is not a structural `match` on `{rec_param}`: outside the \
-                 fragment (docs/datarepr-design.md §3.3)"
+                 fragment (docs/native/datarepr-design.md §3.3)"
             ));
         };
         if !matches!(&scrut.kind, ExprKind::Var(v) if *v == rec_param) {
@@ -829,14 +829,14 @@ impl ReprGen<'_> {
                     return Err(format!(
                         "`{op}`'s `{name}` arm uses the recursive child `{used}` \
                          outside a self-call: only the recursion's result crosses to \
-                         the repr side (docs/datarepr-design.md §3.3, as-landed)"
+                         the repr side (docs/native/datarepr-design.md §3.3, as-landed)"
                     ));
                 }
                 if used == rec_param {
                     return Err(format!(
                         "`{op}`'s `{name}` arm mentions the scrutinee `{used}`: the arm becomes \
                          the fold's algebra, where the value being matched is not in scope \
-                         (docs/datarepr-design.md §3.3)"
+                         (docs/native/datarepr-design.md §3.3)"
                     ));
                 }
             }
@@ -845,7 +845,7 @@ impl ReprGen<'_> {
                     return Err(format!(
                         "`{op}` calls itself on `{child}`, which is not a recursive child of \
                          `{name}`: non-structural recursion is outside the fragment \
-                         (docs/datarepr-design.md §3.3)"
+                         (docs/native/datarepr-design.md §3.3)"
                     ));
                 }
             }
@@ -937,7 +937,7 @@ impl Read<'_> {
                     "`{}` calls itself with something other than `{}` at parameter `{}`: the \
                      fold's accumulator carries one value per recursive child and nothing \
                      varies the other parameters down the recursion \
-                     (docs/datarepr-design.md §3.3)",
+                     (docs/native/datarepr-design.md §3.3)",
                     self.op, self.params[i].0, self.params[i].0
                 ));
             }
@@ -946,7 +946,7 @@ impl Read<'_> {
             ExprKind::Var(v) => Some(v.clone()),
             _ => self.no(format!(
                 "`{}` calls itself on something that is not a binder: the fold descends on a \
-                 recursive child (docs/datarepr-design.md §3.3)",
+                 recursive child (docs/native/datarepr-design.md §3.3)",
                 self.op
             )),
         }
@@ -965,7 +965,7 @@ impl Read<'_> {
                 None => self.no(format!(
                     "`{v}` is not an image spine: at a position at the repr'd type an \
                      expression is a constructor, a resolved callee, or the recursion's own \
-                     result (docs/datarepr-design.md §3.3, as-landed)"
+                     result (docs/native/datarepr-design.md §3.3, as-landed)"
                 )),
             },
             ExprKind::App { head, args, .. } => {
@@ -981,7 +981,7 @@ impl Read<'_> {
                         return self.no(format!(
                             "`{}` recurses at a position at the repr'd type, but its own \
                              result is not there: the fold's accumulator stands at the \
-                             result type (docs/datarepr-design.md §3.3)",
+                             result type (docs/native/datarepr-design.md §3.3)",
                             self.op
                         ));
                     }
@@ -1020,7 +1020,7 @@ impl Read<'_> {
                     "`{h}` is not an image spine: it is neither a constructor nor a callee \
                      with an `Impl`, and an arm at the repr'd type is built from \
                      constructors, resolved callees and the recursion's own results \
-                     (docs/datarepr-design.md §3.3, as-landed)"
+                     (docs/native/datarepr-design.md §3.3, as-landed)"
                 ))
             }
             _ => self.no(format!(
@@ -1028,7 +1028,7 @@ impl Read<'_> {
                  belongs, say: at a position at the repr'd type an expression is a \
                  constructor, a resolved callee, or the recursion's own result, and an \
                  honest syntactic predicate declines rather than desugaring \
-                 (docs/datarepr-design.md §3.3, as-landed)",
+                 (docs/native/datarepr-design.md §3.3, as-landed)",
                 self.op
             )),
         }
@@ -1086,7 +1086,7 @@ impl Read<'_> {
                             self.no(format!(
                                 "`{}` recurses inside a position that is spelled identically \
                                  on both sides: the certificate's rewrite chain has no index \
-                                 for it (docs/datarepr-design.md §3.3)",
+                                 for it (docs/native/datarepr-design.md §3.3)",
                                 self.op
                             ))
                         });
@@ -1100,7 +1100,7 @@ impl Read<'_> {
                                 "`{}` calls `{}`, which touches the repr'd type, inside a \
                                  position that is spelled identically on both sides: the \
                                  certificate's rewrite chain has no index for it \
-                                 (docs/datarepr-design.md §3.3)",
+                                 (docs/native/datarepr-design.md §3.3)",
                                 self.op, c.op
                             ))
                         });

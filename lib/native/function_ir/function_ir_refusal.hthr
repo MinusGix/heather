@@ -22,6 +22,7 @@ import function_ir_lower_views;
 import function_ir_lower_calls;
 import function_ir_compile;
 import function_ir_writes;
+import function_ir_spelled;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -36,10 +37,11 @@ import logic;
 import nat;
 import option;
 import string;
-import derive;
 import utf8;
 
-fn refusal_number(n: Nat) → String { decimal_name(20, n) }
+// By long division (`decimal`): a loop's bound is a number of sixty-four
+// bits, and `decimal_name` divides by counting up to it.
+fn refusal_number(n: Nat) → String { decimal(n) }
 
 fn refusal_numbers(ns: List<Nat>) → String {
     match ns {
@@ -56,7 +58,7 @@ fn Gpr::shown(self register: Gpr) → String {
 }
 
 fn Place::shown(self place: Place) → String {
-    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count) }
+    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count), Spilling(mask) => "spilling " ++ refusal_number(mask) }
 }
 
 // What is wrong with a place whatever the node: a callee-saved register
@@ -73,6 +75,7 @@ fn Place::unsaved(self place: Place, saves: Nat) → String {
         },
         Folded => "",
         Saving(_) => " (a count of saves, which is no node's place)",
+        Spilling(_) => " (what a call saves, which is no node's place)",
     }
 }
 
@@ -92,6 +95,7 @@ fn Node::shown(self node: Node) → String {
         BitXor(w, o, a, b) => binary_shown("xor", w, o, a, b),
         ShiftLeft(w, o, a, b) => binary_shown("shl", w, o, a, b),
         LogicalShiftRight(w, o, a, b) => binary_shown("shr", w, o, a, b),
+        RotateRight(w, o, a, b) => binary_shown("ror", w, o, a, b),
         ArithmeticShiftRight(w, o, a, b) => binary_shown("sar", w, o, a, b),
         UnsignedLessThan(w, o, a, b) => binary_shown("below", w, o, a, b),
         SignedLessThan(w, o, a, b) => binary_shown("less", w, o, a, b),
@@ -319,21 +323,25 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, prog: Pr
 
 // `Function::emit_lent` of function `k` after no code: what it refuses.
 // The answer does not depend on the code before a function.
-fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>) → String {
+fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat) → String {
+    let saves = placement_saves(placement);
+    let opened = function_opened(Start, k, function.loads(), function.slots(), saves);
     match function.lent.same(lent_count(counts, k)) {
         False => "the function is lent " ++ refusal_number(function.lent) ++ " buffers and the program's counts say "
             ++ refusal_number(lent_count(counts, k)),
-        True => match input_file(word_ports(function.parameters), parameter_registers()) {
-            None => "the function has " ++ refusal_number(function.parameters.len())
-                ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
-            Some(file) => match function.body.emit_calls(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
-                placement_body(placement), names, k, counts, function.homes()) {
-                None => function.body.refusal(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
-                    placement_body(placement), names, k, counts, function.homes()),
-                Some(body) => match function.closing(placement_saves(placement), body) {
-                    None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
-                        ++ body.file.shown(),
-                    Some(_) => "nothing: the function has code after no other",
+        True => match function.roomy(rooms, k, saves) {
+            False => "the function's frame of " ++ refusal_number(function.frame(saves)) ++ " bytes and its calls do not fit the room of "
+                ++ refusal_number(rooms(k)) ++ " bytes its row of the room table gives it",
+            True => match input_file(word_ports(function.parameters), parameter_registers()) {
+                None => "the function has " ++ refusal_number(function.parameters.len())
+                    ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
+                Some(file) => match function.body.emit_calls(saves, opened, file, placement_body(placement), names, k, counts, function.homes()) {
+                    None => function.body.refusal(saves, opened, file, placement_body(placement), names, k, counts, function.homes()),
+                    Some(body) => match function.closing(saves, body) {
+                        None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
+                            ++ body.file.shown(),
+                        Some(_) => "nothing: the function has code after no other",
+                    },
                 },
             },
         },
@@ -345,8 +353,8 @@ fn bytes_numbers(bytes: List<BitVec(8)>) → List<Nat> {
 }
 
 // The report as bytes, which is what the compiler's evaluator reads.
-fn Function::refusal_bytes(self function: Function, k: Nat, names: Nat, counts: List<Nat>) → List<Nat> {
-    bytes_numbers(utf8::encode(function.refused(k, function.plan(), names, counts)))
+fn Function::refusal_bytes(self function: Function, k: Nat, names: Nat, counts: List<Nat>, rooms: Nat → Nat) → List<Nat> {
+    bytes_numbers(utf8::encode(function.refused(k, function.plan(), names, counts, rooms)))
 }
 
 // The function's nodes and calls, as bytes.

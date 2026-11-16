@@ -8,7 +8,7 @@ created: 2026-11-02
 updated: 2026-11-05
 ---
 
-Round 3 of [[grind-port]] (`docs/grind-design.md` §6): what constructors
+Round 3 of [[grind-port]] (`docs/tactics/grind-design.md` §6): what constructors
 and disequalities say.
 
 - Injectivity: `Cons(a, as)` and `Cons(b, bs)` in one class gives `a = b`
@@ -32,4 +32,4 @@ and `f(a) ≠ f(b) → a ≠ b` close by `grind()`.
 
 ## Log
 
-- 2026-11-05: Round 3 done (docs/grind-design.md §14, host design §25). Injectivity (`Inj`) and disjointness (`Absurd`) as host requests running the surface builders; disequalities read (`≠`, `→ False`, `Not`); goals opened under `→`/`Not` and proved from a contradiction when no equation; `Nat`'s `Succ` as a constructor (`grind::succ_fn`, `grind::succ_inj`); `Spine` contracts a head β-redex; a `KOther` leaf read once in head normal form; and, once the graph as written is stuck, every fact side's head normal form (constructor values as nodes, stuck forms compared by `Defeq`, never nodes; injectivity/disjointness asked about the sides as written). Host: `Whnf` contracts pair projections; `View` sees an applied stuck `match` as `HMatch`. Converted: `round_real`'s disjointness arms and `linux_world_co`'s six `pass_reading_at` steps. Minus decided any std module grind's imports allow may import it; conversions in modules on hand-written closure lists (compile-x86's bundle, the Rust tests' lists) were taken back for the closure's cold cost ([[grind-closure-cost]], §14.5). All three done criteria are probes. Left: [[grind-reduct-fields]].
+- 2026-11-05: Round 3 done (docs/tactics/grind-design.md §14, host design §25). Injectivity (`Inj`) and disjointness (`Absurd`) as host requests running the surface builders; disequalities read (`≠`, `→ False`, `Not`); goals opened under `→`/`Not` and proved from a contradiction when no equation; `Nat`'s `Succ` as a constructor (`grind::succ_fn`, `grind::succ_inj`); `Spine` contracts a head β-redex; a `KOther` leaf read once in head normal form; and, once the graph as written is stuck, every fact side's head normal form (constructor values as nodes, stuck forms compared by `Defeq`, never nodes; injectivity/disjointness asked about the sides as written). Host: `Whnf` contracts pair projections; `View` sees an applied stuck `match` as `HMatch`. Converted: `round_real`'s disjointness arms and `linux_world_co`'s six `pass_reading_at` steps. Minus decided any std module grind's imports allow may import it; conversions in modules on hand-written closure lists (compile-x86's bundle, the Rust tests' lists) were taken back for the closure's cold cost ([[grind-closure-cost]], §14.5). All three done criteria are probes. Left: [[grind-reduct-fields]].

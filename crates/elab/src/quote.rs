@@ -1,5 +1,5 @@
 //! The quotation slice: `meta fn` declarations, `code { … }` quotes, and
-//! `$` splices (docs/in-language-map-design.md).
+//! `$` splices (docs/metaprogramming/in-language-map-design.md).
 //!
 //! A `meta fn` is a layer-m function over code. Its `Ctx`/`TyCode` binders
 //! are **Ψ-extending** (the kernel's `CtxLam`/`TyLam` bind global variables),
@@ -40,7 +40,7 @@ use crate::module_pass::ModulePassMut;
 /// program-layer one (`arity: Nat`), which layer m may bind because Π is
 /// layer-generic and a Ψ global of layer c/p is referenceable at m (`i' ≤ i`).
 /// The ordinary case is what an **analyzer** needs and a template never did
-/// (docs/certgen-transcriber-in-language-design.md §9.1).
+/// (docs/archive/certgen-transcriber-in-language-design.md §9.1).
 enum Sig {
     Ctx,
     Local { ty: Type, level: Level },
@@ -156,7 +156,7 @@ impl std::ops::DerefMut for QuotationMut<'_> {
 }
 
 impl QuotationMut<'_> {
-    /// A `meta fn` declaration (docs/in-language-map-design.md §3): elaborate
+    /// A `meta fn` declaration (docs/metaprogramming/in-language-map-design.md §3): elaborate
     /// the modal signature and quotation body, kernel-check the whole thing
     /// at `Layer::Meta`, and commit it to the meta-program registry.
     pub(crate) fn elab_meta_decl(&mut self, decl: &Decl) -> R<()> {
@@ -216,7 +216,7 @@ impl Quotation<'_> {
                 // code) — that role stays out: a `TyPi`-bound type is layer p
                 // and cannot appear inside layer-c code, so a generic template
                 // still binds its types *inside* the code
-                // (docs/in-language-map-design.md §3). Level 0, like the
+                // (docs/metaprogramming/in-language-map-design.md §3). Level 0, like the
                 // `Code` locals: the slice has no level variables.
                 TyKind::TyCode { ctx } => {
                     seen_local = true;
@@ -327,7 +327,7 @@ impl QuotationMut<'_> {
         if !decl.tyvars.is_empty() {
             return err(
                 "a `meta fn` has no `<A>` type parameters: type arguments are `TyCode` \
-                 binders in this slice (docs/in-language-map-design.md §3)",
+                 binders in this slice (docs/metaprogramming/in-language-map-design.md §3)",
                 decl.span,
             );
         }
@@ -349,7 +349,7 @@ impl QuotationMut<'_> {
                 Stmt::LetCode { name, expr, .. } => (name, expr),
                 // Refused by name: this loop only aliases, and aliasing a
                 // `have` would drop the one thing it asks for
-                // (docs/have-design.md §2).
+                // (docs/language/have-design.md §2).
                 Stmt::Let { opaque: true, span, .. } => {
                     return err("`have` is not part of the meta slice; use `let`", *span);
                 }
@@ -433,14 +433,14 @@ impl QuotationMut<'_> {
             }
         }
 
-        // The registration seam (docs/meta-def-registration-design.md §2.2):
+        // The registration seam (docs/metaprogramming/meta-def-registration-design.md §2.2):
         // a `for` clause claims a slot, and claiming it means *having its
         // type*. A `meta fn` without one registers and is never dispatched —
         // the clause, not the name, is what routes a use site.
         let claimed = match &decl.elaborates {
             // An analyzer slot is checked by whole-signature convertibility;
             // a template slot by its payload's Π spine (design doc §9.1 and
-            // docs/meta-def-registration-design.md's extension section).
+            // docs/metaprogramming/meta-def-registration-design.md's extension section).
             Some(path) if slots::lookup_analyzer(path).is_some() => {
                 let spec = slots::lookup_analyzer(path).expect("just looked up");
                 Quotation(self).register_analyzer(spec, decl, &stmt, &lvl)?;
@@ -549,7 +549,7 @@ impl Quotation<'_> {
     /// Registration-time validation of a `for family.name` clause: resolve the
     /// slot, read the template's Π **order** off its own signature, and check
     /// the signature *is* the slot's type
-    /// (docs/meta-def-registration-design.md §2.2). Every failure here is
+    /// (docs/metaprogramming/meta-def-registration-design.md §2.2). Every failure here is
     /// loud and at the declaration — the class of errors the use site used to
     /// discover ("nothing stops a user meta fn of incompatible shape") is
     /// rejected where it is written, before any use site exists.
@@ -580,7 +580,7 @@ impl Quotation<'_> {
             // trigger this. The other template is named with its module
             // exactly when that module is not this one — a cross-module
             // conflict has to say where to look, and a local one would only
-            // be noisier for it (docs/modules-design.md §4).
+            // be noisier for it (docs/language/modules-design.md §4).
             let who = if m == self.names.module() {
                 format!("`{other}`")
             } else {
@@ -637,7 +637,7 @@ impl Quotation<'_> {
             };
             // Meta-layer signatures refuse implicit marks: the slice is pure
             // quotation and carries zero implicit machinery
-            // (docs/implicit-binders-design.md §3.4).
+            // (docs/language/implicit-binders-design.md §3.4).
             if *implicit {
                 return err(crate::IMPLICIT_MARK_REFUSED, rest.span);
             }
@@ -744,7 +744,7 @@ impl Quotation<'_> {
     }
 
     /// A `code { … }` quote against an expected `Code(g |- T)`
-    /// (docs/in-language-map-design.md §5): hoist one letbox per distinct
+    /// (docs/metaprogramming/in-language-map-design.md §5): hoist one letbox per distinct
     /// `$name` term splice (first-occurrence order, outermost first), then
     /// elaborate the payload at the code scope and box it.
     pub(crate) fn elab_quote(
@@ -757,7 +757,7 @@ impl Quotation<'_> {
         let Some(menv) = cx.meta.as_ref() else {
             return err(
                 "a `code { … }` quote lives inside a `meta fn` \
-                 (docs/in-language-map-design.md §3)",
+                 (docs/metaprogramming/in-language-map-design.md §3)",
                 span,
             );
         };
@@ -850,7 +850,7 @@ impl Quotation<'_> {
         pcx.meta = Some(Rc::new(inner));
         let expected_p = (*qty).clone().shift_global(n);
         // Inside a `box` the component forms stay the only spelling
-        // (`docs/intro-by-type-design.md` §2.3): this payload is what the
+        // (`docs/elaborator/intro-by-type-design.md` §2.3): this payload is what the
         // code recursors range over.
         let depth = self.scope.quote_depth.get() + 1;
         let payload_t =
@@ -862,7 +862,7 @@ impl Quotation<'_> {
             mp.truncate(keep);
         }
         let payload_t = payload_t?;
-        // The quote boundary (`docs/intro-by-type-design.md` §2.3, amended):
+        // The quote boundary (`docs/elaborator/intro-by-type-design.md` §2.3, amended):
         // a term built outside the quotation and pasted into it — a callee's
         // statement copied into an application's annotations, a solution —
         // may carry checked spellings, which a payload may not. Translate
@@ -1022,8 +1022,8 @@ impl Quotation<'_> {
         }
     }
 
-    /// The evaluation hook (docs/in-language-map-design.md §4, registration
-    /// seam docs/meta-def-registration-design.md §2.3): if a template claims
+    /// The evaluation hook (docs/metaprogramming/in-language-map-design.md §4, registration
+    /// seam docs/metaprogramming/meta-def-registration-design.md §2.3): if a template claims
     /// `slot`, apply it to the use site's context, reduce the meta-layer
     /// application to a `box`, and apply the spliced payload to the use site's
     /// ingredients — kernel computation mid-elaboration, replacing the
@@ -1108,7 +1108,7 @@ impl Quotation<'_> {
                 format!(
                     "`{name}` is registered but its evaluation went neutral instead of \
                      reaching a `box` — refusing to emit a half-reduced term \
-                     (docs/in-language-map-design.md §6)"
+                     (docs/metaprogramming/in-language-map-design.md §6)"
                 ),
                 span,
             );
@@ -1164,9 +1164,9 @@ impl Quotation<'_> {
     }
 
     /// `match code e as T { branch(x, …) => …, _ => … }` — the surface of the
-    /// kernel's code recursor (docs/certgen-transcriber-in-language-design.md
+    /// kernel's code recursor (docs/archive/certgen-transcriber-in-language-design.md
     /// §3). The elimination is `ElimCodeTm` on a term-code scrutinee and
-    /// `ElimCodeTy` on a type-code one (docs/fn-signature-reflection-design.md
+    /// `ElimCodeTy` on a type-code one (docs/metaprogramming/fn-signature-reflection-design.md
     /// §3), and the whole slice exists to make the 65 branches writable:
     ///
     /// - **the motive is constant**, so all 65 branches expect the *same* type
@@ -1190,7 +1190,7 @@ impl Quotation<'_> {
         if cx.meta.is_none() {
             return err(
                 "`match code` is layer-m machinery: it lives inside a `meta fn` \
-                 (docs/certgen-transcriber-in-language-design.md §3)",
+                 (docs/archive/certgen-transcriber-in-language-design.md §3)",
                 span,
             );
         }
@@ -1428,7 +1428,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 scan_splices(len, menv, out)
             }
             // `Fin($k)`: the length is an expression, so a splice inside it
-            // hoists like any other (docs/surface-fin-indexing-design.md §6).
+            // hoists like any other (docs/language/surface-fin-indexing-design.md §6).
             TyKind::Fin(len) => scan_splices(len, menv, out),
             TyKind::Squash(inner) => walk_ty(inner, menv, out),
             TyKind::Fn { dom, cod, .. } => {
@@ -1466,7 +1466,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         | ExprKind::Univ { .. } => Ok(()),
         ExprKind::Quote(_) => err("quotes do not nest in this slice", e.span),
         // A block cannot reach here: the parser declines one as a quote
-        // payload's top level (docs/let-and-blocks-design.md §7.2), and a
+        // payload's top level (docs/language/let-and-blocks-design.md §7.2), and a
         // block nested deeper inside a payload would be the same unanalysed
         // question. An `err` rather than a recursive walk, so the answer stays
         // "filed", not "guessed" — a missed arm here is a silently non-hoisted

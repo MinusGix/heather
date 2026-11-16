@@ -1,9 +1,9 @@
 // Coinductive interaction trees: programs that diverge for real
-// (docs/coitree-design.md; milestone `it-coinductive`).
+// (docs/itrees/coitree-design.md; milestone `it-coinductive`).
 //
 // `CoTree<R>(E)` is `ITree<R>(E)` without `Cut`, as `codata`: a value is a
 // possibly infinite tree, lowered onto the kernel's `M`
-// (docs/codata-elaborator-design.md). `spin` is one `CTau` after another
+// (docs/inductives/codata-elaborator-design.md). `spin` is one `CTau` after another
 // forever, and `iter` goes round its body for as long as the body says, with
 // no fuel. The finite library is not retired: `approx(n, t)` cuts a tree at
 // depth `n` into an `ITree`, every finite theorem applies there, and a tree
@@ -24,7 +24,7 @@
 //   `match h : CoTree::obs(E, t)`, and carries `h` into whatever it builds.
 //
 // `Bisim` is strong bisimilarity, coinductive and indexed by the two trees
-// (docs/codata-indexed-design.md): each constructor states both trees'
+// (docs/inductives/codata-indexed-design.md): each constructor states both trees'
 // observations, with the children related again. Equal observations give a
 // bisimilarity, and the monad laws hold up to it.
 
@@ -156,7 +156,7 @@ fn CoTree::iter_next<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), x: Step
 
 // `CoTree<_>(E)` is a carrier for binding statements, and one that iterates,
 // so a block over it may write `let x <- t;` and a `while` with no measure
-// (docs/sequencing-surface-design.md §18). The instances are at the
+// (docs/language/sequencing-surface-design.md §18). The instances are at the
 // constructor `λ R => CoTree<R>(E)`, which a use site learns from
 // `CoTree<Nat>(E)` (issues/codata-type-constructor-carrier.md).
 instance(E: Events) Bind<λ (R: Type) => CoTree<R>(E)> { bind := λ {A} {B} t h => CoTree::bind(E, t, h) }
@@ -164,7 +164,7 @@ instance(E: Events) Pointed<λ (R: Type) => CoTree<R>(E)> { pure := λ {A} a => 
 instance(E: Events) Iterate<λ (R: Type) => CoTree<R>(E)> { iter := λ {A} {B} body a => CoTree::iter(E, body, a) }
 
 // A computation that may not return, with no other effect: Capretta's delay
-// monad (docs/partial-functions-design.md §4.1). `Partial(B)` *is*
+// monad (docs/language/partial-functions-design.md §4.1). `Partial(B)` *is*
 // `CoTree<B>(Events::none())`, so every `CoTree` lemma, `Returns` and
 // `CoTree::get` apply to it, and it is a carrier through the instances
 // above. A `partial fn f(x: A) → B` has type `A → Partial(B)`.

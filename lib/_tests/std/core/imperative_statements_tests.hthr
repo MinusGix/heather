@@ -1,4 +1,4 @@
-// Probes of local state in pure code (docs/sequencing-surface-design.md §4,
+// Probes of local state in pure code (docs/language/sequencing-surface-design.md §4,
 // §5.1; issues/pure-imperative-statements.md): `let mut`, `x := e` and a
 // statement `if`/`match` that joins per variable, all lowered by the parser
 // to ordinary `let`s. Each form at literal and neutral inputs, at an open
@@ -111,6 +111,9 @@ fn sum(xs: List<Nat>) → Nat {
 }
 theorem sum_lit(): sum([1, 2, 3]) = 6 { refl }
 theorem sum_step(n, x: Nat): sum::step(n, x) = n + x { refl }
+// A generated name is spelled by its designed path where a tactic re-parses
+// the goal: `omega` reads `sum::step(n, x)` as an atom, not a refusal.
+theorem sum_step_atom(n, x: Nat, h: sum::step(n, x) = n + x): n <= sum::step(n, x) { omega }
 // Neutral: the function is the fold of its step.
 theorem sum_is_fold(xs: List<Nat>): sum(xs) = xs.foldl(sum::step, 0) { refl }
 

@@ -10,7 +10,7 @@ updated: 2026-11-06
 A tier-2 constructor applied in an expression (`Pure(a)`, `Ask(r, k)` at
 `Tac`; ITree's `Ret`/`Vis`) elaborates to its `W` encoding written out:
 `(λ(c : C). ⟨sup(ℓ; λy. fst(c…)), …snd(c…)…⟩) child`
-(docs/inductive-tier2-w-lowering.md §6, §14), with `⟦D⟧` and the positions
+(docs/inductives/inductive-tier2-w-lowering.md §6, §14), with `⟦D⟧` and the positions
 in its pair, `sup` and child annotations. The kernel gate checks those
 annotations again at every occurrence. Measured on probes over `tactic`
 (`--timings`, width one, 2026-11-06): `fn () → Tac<Nat> { Pure(1) }` is about

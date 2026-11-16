@@ -10,7 +10,7 @@ updated: 2026-10-14
 Decide whether `lib/std/pos.hthr`'s shifted `Pos { pred }` stays, and how
 positivity is spelled and discharged. The options, the probes of what
 `:= infer` does today, and a costed recommendation are in
-`docs/positivity-evidence-design.md`.
+`docs/library/positivity-evidence-design.md`.
 
 The recommendation: grow `:= infer` at proposition goals (computation to
 `True`, then registered evidence rules keyed by the positive term's head),
@@ -50,7 +50,7 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-10: Round 1 implemented ([[infer-proposition-evidence]]): Minus chose rules in `infer`; hand-written rules are spelled `evidence theorem`.
 - 2026-10-11: Round 3 landed: [[function-owned-members]] (`theorem f::name`).
 - 2026-10-11: Round 6, the `positivity` tactic, landed ([[positivity-tactic]], note §10).
-- 2026-10-12: 2026-10-12: Round 2 landed: parameter defaults `h: 0 < n := omega` and `:= positivity` run at the call over the caller's hypotheses ([[named-arguments]], docs/named-arguments-design.md §9.6).
+- 2026-10-12: 2026-10-12: Round 2 landed: parameter defaults `h: 0 < n := omega` and `:= positivity` run at the call over the caller's hypotheses ([[named-arguments]], docs/language/named-arguments-design.md §9.6).
 - 2026-10-13: 2026-10-13: Round 4 landed: [[pos-binder-sugar]] (parameters, results with `f::pos`, record fields; note §11).
 - 2026-10-14: Round 5 landed: [[retire-shifted-pos]] (design §14).
-- 2026-11-05: gardener: cites a file it shares with [[pos-sugar-library-adoption]] (`docs/positivity-evidence-design.md`); [[setoid-roadmap-and-resumption]] (`lib/std/pos.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[pos-sugar-library-adoption]] (`docs/library/positivity-evidence-design.md`); [[setoid-roadmap-and-resumption]] (`lib/std/pos.hthr`).

@@ -54,14 +54,14 @@ fn nat_suite_recursive_style() {
     e.elab_source(NAT_SUITE_REC)
         .expect("recursive-style Nat suite must elaborate and kernel-check");
     // prelude's 5 (4 theorems and `CollectionLiteral#tycode_fn`,
-    // docs/per-instantiation-type-codes-design.md §2) + `3·nfields + 1 = 7`
+    // docs/inductives/per-instantiation-type-codes-design.md §2) + `3·nfields + 1 = 7`
     // for that declaration's projections (its spine is dependent;
-    // docs/telescoped-record-projections-design.md §3) + the suite's `fn add`
+    // docs/elaborator/telescoped-record-projections-design.md §3) + the suite's `fn add`
     // and 4 theorems, all landed as Ψ-globals (a `fn` is a *defined* one
     // since issues/simulate-conversion-cost.md).
     // +6: the prelude's binding-statement classes and calls.
     // +3: the prelude's `Mutated` record (a `mut self` method's result,
-    // docs/effects-capabilities-design.md §2).
+    // docs/language/effects-capabilities-design.md §2).
     assert_eq!(e.psi().bindings.len(), 26);
 }
 
@@ -142,7 +142,7 @@ fn non_descending_self_call_rejected() {
 #[test]
 fn varying_argument_generalized() {
     // The MVP's documented limitation, lifted (issues/ih-generalization.md,
-    // docs/ih-generalization-design.md): a non-decreasing argument that
+    // docs/tactics/ih-generalization-design.md): a non-decreasing argument that
     // changes is generalized into the motive. The refusal survives only where
     // there is no goal to generalize from — tests/ih_generalization.rs holds
     // that control and the rest of the acceptance.
@@ -296,7 +296,7 @@ fn a_deeper_recursion_at_a_type_motive() {
 /// type `M[pred k]`, and `pred k` is stuck at a variable. It becomes usable
 /// only because the window is convoyed through the nested `match`, where the
 /// arm knows its scrutinee is `Succ(l)` and `pred (Succ l)` reduces
-/// (docs/course-of-values-recursion-design.md §5). Nothing here is written by
+/// (docs/language/recursion/course-of-values-recursion-design.md §5). Nothing here is written by
 /// the author of the proof — the arms below are the ordinary ones.
 #[test]
 fn a_deeper_recursion_at_a_dependent_motive() {
@@ -480,7 +480,7 @@ fn self_name_is_not_a_value() {
 
 // -- the window on chain-shaped `Wf` inductives ------------------------------
 //
-// `docs/list-course-of-values-design.md`: the same transformation with `pred`
+// `docs/language/recursion/list-course-of-values-design.md`: the same transformation with `pred`
 // replaced by the recursive-field projection. Every test below mirrors one of
 // the `Nat` tests above, and the dependent ones are dependent for the reason
 // §5 of the `Nat` design gives — a non-dependent motive makes every anchoring

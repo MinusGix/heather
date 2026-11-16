@@ -7,12 +7,12 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
 use heather_kernel::subst::GlobalSubst;
-use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, InstanceDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::{
-    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, branch_equations, datarepr,
+    Elaborator, IMPLICIT_MARK_REFUSED, PendingDecl, R, TopAttempt, application, base_name, branch_equations, function_induction, datarepr,
     emission_walk, err, gate, inductive, loops, meaning, measure, names, partial, pool, recursion,
     recursion_at_top_hoisted, sealing, statements, stats,
 };
@@ -64,19 +64,33 @@ impl std::ops::DerefMut for DeclarationsMut<'_> {
 impl DeclarationsMut<'_> {
     /// A declaration an `instance` synthesizes: its qualified name is the
     /// instance's, not a member of a type or function, so its body names no
-    /// siblings (docs/sections-design.md §6).
+    /// siblings (docs/language/sections-design.md §6).
     pub(crate) fn elab_decl_unowned(&mut self, decl: &Decl) -> R<()> {
         self.elab_decl_as(decl, None)
     }
 
     pub(crate) fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
+        // The induction principles the declaration's `induct` steps and
+        // `f::induct` references name, built first (`demand_principles`).
+        self.demand_principles(decl);
         self.scoped(|s| &mut s.member_owner, owner, |me| {
             DeclarationsMut(me).elab_decl_owned(decl)?;
             // A definition's own equations, one per branch of the test its
             // body is (`branch_equations`): beside every `fn` that has one,
             // so a proof cites `f::True` and never restates `f`.
             if decl.decreases.is_none() && decl.partial.is_none() && branch_equations::candidate(decl) && !loops::has_loop(decl) {
-                DeclarationsMut(me).elab_branch_equations(decl);
+                let self_name = base_name(&decl.name).to_string();
+                // A recursion's equations and principle are built on demand
+                // (`demand_principles`): most recursive functions are never
+                // proved about by induction, and the generators' are large.
+                // One lowered by a measure was recorded by that route.
+                if branch_equations::recursive(decl, &self_name) {
+                    if decl.kind == DeclKind::Fn && !me.pass.recursions.borrow().contains_key(&decl.name) {
+                        me.pass.recursions.borrow_mut().insert(decl.name.clone(), (Rc::new(decl.clone()), branch_equations::Recursion::Structural));
+                    }
+                } else {
+                    DeclarationsMut(me).elab_branch_equations(decl, branch_equations::Recursion::None, true);
+                }
             }
             Ok(())
         })
@@ -88,10 +102,13 @@ impl DeclarationsMut<'_> {
     /// spelling for a reference to report. A condition read as a `Bool`
     /// where it is not a proposition (`if xs.is_empty()`) is tried second,
     /// as the elaborator tries it.
-    fn elab_branch_equations(&mut self, decl: &Decl) {
+    /// Returns the equations built, which are designated only where
+    /// `designate` says so: a recursion's principle (`function_induction`)
+    /// is elaborated from them first, and spells them by their minted names.
+    fn elab_branch_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion, designate: bool) -> Option<Vec<branch_equations::BranchEquation>> {
         let needs = ["bool::Bool::convoy_true", "bool::Bool::picked_true", "bool::decide_bit_of", "bool::decide_bit_of_not"];
         if needs.iter().any(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
-            return;
+            return None;
         }
         let self_name = base_name(&decl.name).to_string();
         let warn_mark = self.pass.warnings.borrow().len();
@@ -121,7 +138,7 @@ impl DeclarationsMut<'_> {
                 let at: Vec<(String, Ty)> = ind.params.iter().cloned().zip(args.iter().cloned()).collect();
                 Some(ctor.fields.iter().map(|(n, t)| (n.clone(), measure::instantiate_ty(t, &at))).collect())
             };
-            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields) {
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, recursion) {
                 Ok(e) => e,
                 Err(e) => {
                     why = e;
@@ -139,12 +156,10 @@ impl DeclarationsMut<'_> {
             self.pass.warnings.borrow_mut().truncate(warn_mark);
             match built {
                 Ok(()) => {
-                    for eq in &equations {
-                        if !matches!(NameLookup(self).resolve_declared(&eq.designed), NameRes::Found(_)) {
-                            self.designate_access(&eq.designed, &eq.decl.name);
-                        }
+                    if designate {
+                        self.designate_equations(&equations);
                     }
-                    return;
+                    return Some(equations);
                 }
                 // The proposition reading's refusal is the one to report: the
                 // `Bool` reading is a fallback for conditions that are not one.
@@ -155,11 +170,175 @@ impl DeclarationsMut<'_> {
         for name in branch_equations::head_names(decl) {
             self.pass.unfold_refusals.borrow_mut().insert(name, why.clone());
         }
+        None
+    }
+
+    fn designate_equations(&mut self, equations: &[branch_equations::BranchEquation]) {
+        for eq in equations {
+            let free = match self.access_alias(&eq.designed) {
+                Some(minted) => minted == eq.decl.name,
+                None => !matches!(NameLookup(self).resolve_declared(&eq.designed), NameRes::Found(_)),
+            };
+            if free {
+                self.designate_access(&eq.designed, &eq.decl.name);
+            }
+        }
+    }
+
+    /// A recursive `fn`'s branch equations and its induction principle
+    /// `f::induct` (`function_induction`), both from the tests its body is.
+    /// Never an error: what the checker refuses is recorded under the
+    /// designed spelling for a reference to report.
+    /// `f::induct` and the equations it is proved from, for every `f` the
+    /// declaration does induction along (`induct f(…)`, or `f::induct`
+    /// named), built before it the first time one is asked for
+    /// (docs/tactics/functional-induction-design.md §6). Built in the
+    /// module that asks, where `f` is declared or imported; a later
+    /// declaration, or an importer, finds it by its designed name. A
+    /// function that has none gets the reason recorded once, for the step
+    /// to report.
+    fn demand_principles(&mut self, decl: &Decl) {
+        let mut heads: Vec<String> = Vec::new();
+        // The heads an `induct` or an `f::induct` names, whose refusal is
+        // reported; an equation's path asks only of a recorded recursion.
+        let mut asked: Vec<String> = Vec::new();
+        let mut note = |e: &Expr| {
+            let head = match &e.kind {
+                ExprKind::App { head, args, .. } => match &head.kind {
+                    ExprKind::Var(n) if n == heather_syntax::INDUCT_ALL_GOALS || n == heather_syntax::INDUCT_CASES => {
+                        let call = match args.first().map(|a| &a.kind) {
+                            Some(ExprKind::Match { scrut, .. }) => Some(&**scrut),
+                            _ => args.first(),
+                        };
+                        call.and_then(|c| c.as_named()).map(|(h, _, _)| {
+                            if !asked.iter().any(|a| a == h) {
+                                asked.push(h.to_string());
+                            }
+                            h.to_string()
+                        })
+                    }
+                    _ => None,
+                },
+                // `f::induct`, or a branch equation `f::True`, `f::Cons`:
+                // a structural recursion's are built with its principle.
+                ExprKind::Var(n) => n.rsplit_once("::")
+                    .filter(|(_, last)| *last == "induct" || last.starts_with(char::is_uppercase))
+                    .map(|(f, last)| {
+                        if last == "induct" && !asked.iter().any(|a| a == f) {
+                            asked.push(f.to_string());
+                        }
+                        f.to_string()
+                    }),
+                _ => None,
+            };
+            if let Some(h) = head && !heads.contains(&h) {
+                heads.push(h);
+            }
+        };
+        for st in &decl.body.stmts {
+            match st {
+                heather_syntax::ast::Stmt::Let { expr, .. }
+                | heather_syntax::ast::Stmt::LetRecord { expr, .. }
+                | heather_syntax::ast::Stmt::LetCode { expr, .. } => crate::surface::walk_expr(expr, &mut note),
+            }
+        }
+        crate::surface::walk_expr(&decl.body.result, &mut note);
+        decl.body.ons.iter().for_each(|o| crate::surface::walk_expr(&o.expr, &mut note));
+        for head in heads {
+            let designed = format!("{head}::induct");
+            let lookup = NameLookup(self);
+            if lookup.key_of_kinds(&designed, crate::names::ANY_KIND).is_some() || self.pass.unfold_refusals.borrow().contains_key(&designed) {
+                continue;
+            }
+            let Some((module, base)) = lookup.key_of_kinds(&head, crate::names::ANY_KIND)
+                .and_then(|key| crate::names::split_qual(&key).map(|(m, b)| (m.to_string(), b.to_string()))) else { continue };
+            // This module's own recursion, as recorded; an imported one, as
+            // its module's image keeps it. A structural function's stored
+            // declaration is the one written (a `decreases` loop's is its
+            // lowering, and it built its principle with itself), so the
+            // importer builds the principle from it, as the function's own
+            // module would have.
+            let recorded = if module == self.names.module() {
+                self.pass.recursions.borrow().get(&base).cloned()
+            } else {
+                self.names.surface_decl_in(&module, &base).filter(|f| {
+                    f.kind == DeclKind::Fn && f.decreases.is_none() && f.partial.is_none() && branch_equations::candidate(f)
+                        && !loops::has_loop(f) && branch_equations::recursive(f, base_name(&f.name))
+                }).map(|f| (Rc::new(f.clone()), branch_equations::Recursion::Structural))
+            };
+            // A path that only looked like an equation (`Nat::Succ`) names
+            // no recursion and asks for nothing.
+            if recorded.is_none() && !asked.contains(&head) {
+                continue;
+            }
+            let Some((function, recursion)) = recorded else {
+                self.pass.unfold_refusals.borrow_mut().insert(designed, format!("`{head}` is not a recursive function whose body is a tree of tests"));
+                continue;
+            };
+            let owner = function.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
+            self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_recursion_equations(&function, recursion));
+        }
+    }
+
+    fn elab_recursion_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion) {
+        let designed = format!("{}::induct", decl.name);
+        let self_name = base_name(&decl.name).to_string();
+        // The calls a principle follows are read as calls, as the measure
+        // route reads them.
+        let normalized;
+        let decl = if recursion == branch_equations::Recursion::Structural {
+            match measure::method_calls_as_calls(&measure::deshadowed(decl), &self_name, self.0) {
+                Ok(d) => {
+                    normalized = d;
+                    &normalized
+                }
+                Err(e) => {
+                    self.pass.unfold_refusals.borrow_mut().insert(designed, e.to_string());
+                    return;
+                }
+            }
+        } else {
+            decl
+        };
+        let Some(equations) = self.elab_branch_equations(decl, recursion, false) else {
+            let why = branch_equations::head_names(decl)
+                .first()
+                .and_then(|n| self.pass.unfold_refusals.borrow().get(n).cloned())
+                .unwrap_or_else(|| "the body has no branch equations".to_string());
+            self.pass.unfold_refusals.borrow_mut().insert(designed, format!("its branch equations were not built: {why}"));
+            return;
+        };
+        let principle = match function_induction::induct(decl, &self_name, &equations, recursion) {
+            Ok(p) => p,
+            Err(why) => {
+                self.designate_equations(&equations);
+                self.pass.unfold_refusals.borrow_mut().insert(designed, why);
+                return;
+            }
+        };
+        let warn_mark = self.pass.warnings.borrow().len();
+        let built = self.session_transaction(|me| {
+            let r = if recursion == branch_equations::Recursion::Measure {
+                DeclarationsMut(me).elab_measure_decl_as(&principle, false)
+            } else {
+                DeclarationsMut(me).elab_decl_owned(&principle)
+            };
+            r.map_err(|e| ElabError::Elab { msg: format!("the generated `{designed}` was refused ({e})"), span: principle.span })
+        });
+        self.pass.warnings.borrow_mut().truncate(warn_mark);
+        self.designate_equations(&equations);
+        match built {
+            Ok(()) if self.access_alias(&designed).is_none_or(|m| m == principle.name) => self.designate_access(&designed, &principle.name),
+            Ok(()) => {}
+            Err(e) => {
+                self.pass.unfold_refusals.borrow_mut().insert(designed, e.to_string());
+            }
+        }
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
         // `unfolding f, g`: the declaration sees through these interface
-        // definitions, its gate included (docs/interface-definitions-design.md §4).
+        // definitions, its gate included (docs/language/interface-definitions-design.md §4).
         if !decl.unfolding.is_empty() {
             let keys = InterfaceDefs(self).unfolding_keys(decl)?;
             let mut inner = decl.clone();
@@ -174,13 +353,13 @@ impl DeclarationsMut<'_> {
         }
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
-        // (docs/in-language-map-design.md §3–4).
+        // (docs/metaprogramming/in-language-map-design.md §3–4).
         if decl.is_meta {
             return QuotationMut(self).elab_meta_decl(decl);
         }
         // An `evidence theorem` is an ordinary theorem, registered for
         // `:= infer` once it has passed its gate
-        // (docs/positivity-evidence-design.md §6 A).
+        // (docs/library/positivity-evidence-design.md §6 A).
         if decl.is_evidence {
             Resolution(self).evidence_shape(decl)?;
             self.elab_decl_one(decl, None)?;
@@ -188,7 +367,7 @@ impl DeclarationsMut<'_> {
         }
         // An `interface fn` is elaborated as the `fn` it is, then registered,
         // with its unfolding equations beside it
-        // (docs/interface-definitions-design.md).
+        // (docs/language/interface-definitions-design.md).
         if decl.is_interface {
             InterfaceDefs(self).interface_shape(decl)?;
             let mut plain = decl.clone();
@@ -200,7 +379,7 @@ impl DeclarationsMut<'_> {
             });
         }
         // `decreases e` is not one declaration but a family of them
-        // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
+        // (docs/language/recursion/decreases-unfolding-design.md §2): the arm, the eliminator,
         // the declaration itself, and — for a `fn` whose body the walk of §3
         // handles — the unfolding companions.
         // `for` loops lift into a named step over a fold, and the
@@ -220,7 +399,7 @@ impl DeclarationsMut<'_> {
         // lowered by measure, or refused where that has no unfolding equation
         // either (issues/fn-recursion-means-the-function.md).
         // A `fn` returning codata recurses *guardedly*, not structurally: its
-        // self-calls become one `corec` (docs/codata-elaborator-design.md §5),
+        // self-calls become one `corec` (docs/inductives/codata-elaborator-design.md §5),
         // so a `match` reading a parameter is the step's own observation.
         let corecursive = matches!(&decl.result.kind,
             heather_syntax::ast::TyKind::Named { name, .. }
@@ -255,7 +434,7 @@ impl DeclarationsMut<'_> {
                 recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
                     // Recursion at the top means the source wherever it
                     // elaborates, and unfolds by conversion; the measure is
-                    // the fallback (docs/recursion-at-the-top-design.md §4).
+                    // the fallback (docs/language/recursion/recursion-at-the-top-design.md §4).
                     if Declarations(self).at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
                         return MeaningMut(self).check_recursion_meaning(decl);
                     }
@@ -283,7 +462,7 @@ impl DeclarationsMut<'_> {
 impl Declarations<'_> {
     /// Can `decl` recurse at the top on parameter `dec` (an index into the
     /// type parameters then the value parameters)? Slice 1 is an explicit
-    /// `Nat` parameter (docs/recursion-at-the-top-design.md §4).
+    /// `Nat` parameter (docs/language/recursion/recursion-at-the-top-design.md §4).
     fn at_top_candidate(&self, decl: &Decl, dec: usize) -> bool {
         dec.checked_sub(decl.tyvars.len())
             .and_then(|i| decl.params.get(i))
@@ -311,7 +490,7 @@ impl DeclarationsMut<'_> {
     /// Elaborate `decl` by `elaborate`; where that refuses a self-call (a
     /// structural refusal: the call does not descend at the guard the
     /// lowering chose), try each explicit `Nat` parameter at the top before
-    /// reporting it (docs/recursion-at-the-top-design.md §4, slice 1).
+    /// reporting it (docs/language/recursion/recursion-at-the-top-design.md §4, slice 1).
     fn elab_at_top_on_refusal(
         &mut self,
         decl: &Decl,
@@ -408,7 +587,7 @@ impl Declarations<'_> {
     /// the recursion and every other explicit parameter is generalized, so
     /// the body recomputes at each level with this level's values: a read of
     /// `z` is this level's `z`, and a `match z` inside takes its arm, whose
-    /// predecessor is the guard's (docs/recursion-at-the-top-design.md §3).
+    /// predecessor is the guard's (docs/language/recursion/recursion-at-the-top-design.md §3).
     fn recursion_at_top_body(&self, decl: &Decl, dec: usize) -> Option<Decl> {
         let param = &decl.params[dec - decl.tyvars.len()];
         if let Some(ind) = self.top_wf(&param.ty) {
@@ -612,7 +791,7 @@ impl DeclarationsMut<'_> {
     /// its own is lowered the same way.
     fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
         // A range of numerals lists `Nat`s, and counts words where the body
-        // needs its index to be one (docs/sequencing-surface-design.md §21):
+        // needs its index to be one (docs/language/sequencing-surface-design.md §21):
         // read at `Nat` first, which every range read before, and at `u64`
         // where that is refused.
         let lists = self.session_transaction(|me| DeclarationsMut(me).elab_loop_family(decl, loops::Ranges::Lists));
@@ -676,10 +855,17 @@ impl DeclarationsMut<'_> {
     }
 
     /// `fn f(x̄) -> T decreases e { body }` is not one declaration but the
-    /// family of `docs/decreases-unfolding-design.md` §2 — `f#body`, `f#rec`,
+    /// family of `docs/language/recursion/decreases-unfolding-design.md` §2 — `f#body`, `f#rec`,
     /// `f` — elaborated in order. Each member is an ordinary declaration
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
+        self.elab_measure_decl_as(decl, true)
+    }
+
+    /// `companions: false` builds the recursion alone, with no unfolding
+    /// equations and nothing generated from them: a generated principle's
+    /// own recursion (`function_induction`) is cited, never unfolded.
+    fn elab_measure_decl_as(&mut self, decl: &Decl, companions: bool) -> R<()> {
         // The lowering reads names by their last binding, so a `let m = m - 1`
         // would shadow the measure's `m` (issues/decreases-shadowed-let.md).
         let decl = &measure::deshadowed(decl);
@@ -779,8 +965,8 @@ impl DeclarationsMut<'_> {
         // term it got wrong must not take `f` down with it. The recorded
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
-        if lifted {
-            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto) {
+        if lifted && companions {
+            match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
                 }
@@ -798,7 +984,7 @@ impl DeclarationsMut<'_> {
                     // `f::ext` (the step's extensionality in its recursion)
                     // and `f::irrel` (the recursor's bound irrelevance) are
                     // what a `runtime fn`'s measured loop is proved from
-                    // (docs/runtime-fn-setups-design.md §16.10).
+                    // (docs/native/runtime-fn-setups-design.md §16.10).
                     if built {
                         self.designate_access(&format!("{}::ext", decl.name), &measure::ext_name(&decl.name));
                         self.designate_access(&format!("{}::irrel", decl.name), &measure::irrel_name(&decl.name));
@@ -808,6 +994,16 @@ impl DeclarationsMut<'_> {
                         // companions, skipped with the reason recorded where
                         // the checker refuses one.
                         self.elab_step_equations(decl, &self_name);
+                        // `f::True`, `f::False`, … and `f::induct`: the
+                        // equations at every leaf, and induction along the
+                        // recursion (`function_induction`). Built with the
+                        // loop, so a module that imports it can do induction
+                        // along it; a structural recursion's are built on
+                        // demand (`demand_principles`).
+                        if decl.kind == DeclKind::Fn {
+                            self.pass.recursions.borrow_mut().insert(decl.name.clone(), (Rc::new(decl.clone()), branch_equations::Recursion::Measure));
+                            self.elab_recursion_equations(decl, branch_equations::Recursion::Measure);
+                        }
                     }
                 }
             }
@@ -816,7 +1012,7 @@ impl DeclarationsMut<'_> {
         // `f::body`: `f` at a bound on its measure, and one step of it with
         // its recursion any function, which a proof by induction on the
         // bound states its claims about where no `f_unfold` exists
-        // (docs/decreases-unfolding-design.md §11). Designated last: the
+        // (docs/language/recursion/decreases-unfolding-design.md §11). Designated last: the
         // companions above are spelled with the minted names, which a
         // designation takes out of the surface.
         self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
@@ -855,7 +1051,7 @@ impl DeclarationsMut<'_> {
     }
 
     /// N > 1 adjacent `decreases` declarations that call one another
-    /// (`docs/mutual-recursion-design.md` §1) are one recursion: the product
+    /// (`docs/language/recursion/mutual-recursion-design.md` §1) are one recursion: the product
     /// motive `f#grp`, one `g#body` per member, the shared `f#grp_rec`, and
     /// each member as a projection (§3). Every generated declaration is
     /// checked the ordinary way, so nothing the generator writes is trusted.
@@ -897,7 +1093,7 @@ impl DeclarationsMut<'_> {
         if self.lookup_inductive("Pair").is_none() {
             return err(
                 "a mutual `decreases` group shares one recursion whose motive is the \
-                 product of its members' (docs/mutual-recursion-design.md §3): \
+                 product of its members' (docs/language/recursion/mutual-recursion-design.md §3): \
                  `import pair;` first",
                 span,
             );
@@ -920,7 +1116,7 @@ impl DeclarationsMut<'_> {
                 measure::unfold_name(&d.name),
                 format!(
                     "`{}` is a member of a mutual `decreases` group, whose unfolding \
-                     equations are deferred (docs/mutual-recursion-design.md §6)",
+                     equations are deferred (docs/language/recursion/mutual-recursion-design.md §6)",
                     base_name(&d.name)
                 ),
             );
@@ -1044,7 +1240,7 @@ impl DeclarationsMut<'_> {
     pub(crate) fn commit_decl(&mut self, pending: PendingDecl) {
         // Registration bookkeeping as its own column: the Ψ push, the name
         // and provenance tables, the module journal's event, and the δ-world
-        // rebuild that follows them (`docs/instrumentation-design.md` §5).
+        // rebuild that follows them (`docs/infrastructure/instrumentation-design.md` §5).
         let _commit = stats::guard(stats::Timer::DeclCommit);
         let PendingDecl {
             aux,
@@ -1125,7 +1321,7 @@ impl Declarations<'_> {
 
     /// A `def`'s value with no written type, inferred: its term, which is
     /// the body, and its type, which is the statement
-    /// (docs/value-definitions-design.md §2.2). A value whose type inference
+    /// (docs/metaprogramming/value-definitions-design.md §2.2). A value whose type inference
     /// cannot find is refused with the spelling that fixes it.
     fn infer_value(&self, cx: &Cx, decl: &Decl, e: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, e).map_err(|error| match error {
@@ -1155,7 +1351,7 @@ impl DeclarationsMut<'_> {
             _ => decl.clone(),
         };
         // The constraint binders' desugaring at an **indexed** class
-        // (docs/operation-indexed-classes-design.md §4): the index binders in
+        // (docs/language/classes/operation-indexed-classes-design.md §4): the index binders in
         // front of the dictionary, or the dictionary floated past the
         // parameters its index links to. `None` — every declaration with no
         // indexed-class constraint — is the identity and costs one walk of the
@@ -1188,7 +1384,7 @@ impl DeclarationsMut<'_> {
         let member = split_qual(&decl.name);
         if let Some((owner, base)) = member {
             // A **type former** owns a namespace too, as of the 2026-08-17
-            // carrier widening (docs/decide-class-design.md §2): `Le::Decide` is
+            // carrier widening (docs/language/classes/decide-class-design.md §2): `Le::Decide` is
             // the canonical name of the decidability instance at `Le`, and it is
             // an ordinary member declaration like every other instance value.
             // Widened here rather than only on the instance path, so that the
@@ -1264,13 +1460,13 @@ impl DeclarationsMut<'_> {
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
         // polymorphism, Tarski-style, so a *use* of one in type position is
-        // `El A` (docs/surface-polymorphism.md §2). They are registered in
+        // `El A` (docs/language/surface-polymorphism.md §2). They are registered in
         // `cx.tyvars`, the same table an `inductive`'s parameters use while
         // its fields are lowered; the difference is only that these survive
         // into the kernel term.
         //
         // The telescope and the result type are one attributed phase
-        // (`docs/instrumentation-design.md` §5): everything a declaration's
+        // (`docs/infrastructure/instrumentation-design.md` §5): everything a declaration's
         // *statement* costs, as against what its proof costs. The bracket is
         // exclusive, so the resolution, unification and generated-definition
         // work it contains stays in those columns and this one is the walk's
@@ -1336,7 +1532,7 @@ impl DeclarationsMut<'_> {
             }
             // `<A: Type<n>>`, defaulting to `Type<0>` — the binder is at
             // `Ty n`, which is itself a type at level `n + 1`
-            // (docs/surface-universe.md §2).
+            // (docs/language/surface-universe.md §2).
             let level = Level::constant(tv.level);
             let (ty, lvl) = (Type::Ty(level.clone()), Level::constant(tv.level + 1));
             cx.push(name.clone(), ty.clone(), lvl.clone());
@@ -1363,7 +1559,7 @@ impl DeclarationsMut<'_> {
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
             // A default is checked here, in the telescope of the parameters
             // before it, as well as at each call that leaves it out, so one no
-            // call uses is still checked (docs/named-arguments-design.md §9.7).
+            // call uses is still checked (docs/language/named-arguments-design.md §9.7).
             if let Some(default) = p.default.as_deref() {
                 Defaults(self).check_default_at_declaration(&cx, &decl.name, &p.name, default, &ty, &lvl)?;
             }
@@ -1386,7 +1582,7 @@ impl DeclarationsMut<'_> {
             // theorem's *statement* may use it), and the body
             // (issues/binder-symbol-as-notation.md). This is exactly the
             // installation the constraint symbol slot performs
-            // (docs/operators-onto-classes-design.md §5(b)) into exactly the
+            // (docs/language/classes/operators-onto-classes-design.md §5(b)) into exactly the
             // same table, which is the point — `as` adds a place to *write* a
             // symbol and never a second way to resolve one. The identifier is
             // untouched: `op` still binds the parameter, so the constraint
@@ -1399,7 +1595,7 @@ impl DeclarationsMut<'_> {
             // is usable as a type for the rest of the telescope, by exactly
             // the machinery a declaration's `<A>` uses. That generalization is
             // the round: a type name is any binder whose type is `Type<n>`,
-            // not only one bound by `<…>` (docs/surface-universe.md §2).
+            // not only one bound by `<…>` (docs/language/surface-universe.md §2).
             if let Type::Ty(level) = &ty {
                 cx.tyvars.push(TyVar {
                     name: p.name.clone(),
@@ -1421,12 +1617,12 @@ impl DeclarationsMut<'_> {
         //
         // A result-position implicit mark has no consumer this round —
         // callers of `f()` get a computed head with no skeleton — and is
-        // refused rather than dropped (docs/implicit-binders-design.md §3.4;
+        // refused rather than dropped (docs/language/implicit-binders-design.md §3.4;
         // result-position skeletons on `GlobalInfo` are the named follow-on).
         if has_implicit_mark(&decl.result) {
             return err(IMPLICIT_MARK_REFUSED, decl.result.span);
         }
-        // `def x = e;` (docs/value-definitions-design.md §2.2): the type is
+        // `def x = e;` (docs/metaprogramming/value-definitions-design.md §2.2): the type is
         // `e`'s, so `e` is inferred once and is the body as well.
         let inferred = match &decl.result.kind {
             TyKind::TypeOf(e)
@@ -1469,7 +1665,7 @@ impl DeclarationsMut<'_> {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
             debug_assert!(decl.decreases.is_none());
-            // A corecursive definition (docs/codata-elaborator-design.md §5):
+            // A corecursive definition (docs/inductives/codata-elaborator-design.md §5):
             // the result is codata and the body calls itself, so the body is
             // one `corec`'s step, checked at the step type with the
             // self-reference turned into seeds rather than induction
@@ -1521,7 +1717,7 @@ impl DeclarationsMut<'_> {
         // Close over the telescope: statement = Π…, proof/body = λ….
         //
         // The binder and result types are **respelled** on the way out
-        // (`docs/annotation-component-respell-design.md` §2.1): every
+        // (`docs/elaborator/annotation-component-respell-design.md` §2.1): every
         // component that is a registered declaration's lowering becomes
         // `El (D#tycode^δ)`, in the Ψ statement and the body's outer λs both.
         // This runs *after* the body is elaborated — every structural read
@@ -1541,7 +1737,7 @@ impl DeclarationsMut<'_> {
         // Respelling, closing the telescope and the one global substitution
         // are one phase — what the elaborator spends turning a checked pair
         // into the pair the kernel is handed
-        // (`docs/instrumentation-design.md` §5).
+        // (`docs/infrastructure/instrumentation-design.md` §5).
         let decl_emit = stats::guard(stats::Timer::DeclEmit);
         let empty_cx = Cx::empty();
         let n_params = param_info.len() as u32;
@@ -1615,7 +1811,7 @@ impl DeclarationsMut<'_> {
         }
 
         // A default's names resolve where the declaration was written, at
-        // every call (docs/named-arguments-design.md §9.4).
+        // every call (docs/language/named-arguments-design.md §9.4).
         let default_scope = Rc::new(self.names.scope().clone());
         let params = Rc::new(
             decl.tyvars
@@ -1712,10 +1908,80 @@ impl DeclarationsMut<'_> {
         })
     }
 
+    /// Record every recorded declaration the term the gate is about to be
+    /// handed reaches, as a dependency of the declaration being checked.
+    ///
+    /// The edges recorded where a written name resolves are the ones the
+    /// source spells. A tactic builds its references from name strings, a
+    /// reduction can leave a callee's references in the term, and neither
+    /// passes a resolution site: `--deny-axioms` accepted a theorem whose
+    /// `simp` set named an axiom
+    /// (`issues/axiom-provenance-misses-tactic-references.md`). So the
+    /// edges are read off the term itself, which is exactly what the verdict
+    /// is about. Called for a declaration and for each proof it lifts, whose
+    /// own references reach the declaration this way.
+    ///
+    /// `scope` is the length of the Ψ the term is scoped in; a reference past
+    /// the committed bindings is one of this declaration's own lifted proofs,
+    /// which this has already read.
+    fn record_reached(&self, scope: usize, body: &Term) {
+        let mut reached = Vec::new();
+        for abs in global_positions(body, scope) {
+            self.reached_from(abs, &mut reached);
+        }
+        let mut direct = self.attempt.direct_dependencies.borrow_mut();
+        for key in reached {
+            direct.insert(key);
+        }
+    }
+
+    /// The recorded declarations a reference to Ψ position `abs` stands for:
+    /// itself when it has a provenance record, and otherwise what it was
+    /// made from.
+    ///
+    /// A global with no record and a body (a generated definition, a
+    /// transparent lifted value) reaches what its body reaches. One with
+    /// neither is a proof lifted out of a declaration, committed just before
+    /// it (`commit_decl`): it stands for that declaration, the next recorded
+    /// one, whose record holds everything the lifted proof reached.
+    fn reached_from(&self, abs: usize, out: &mut Vec<String>) {
+        let Ok(at) = u32::try_from(abs) else { return };
+        if let Some(key) = self.names.global_name_at(at)
+            && self.provenance.is_recorded(key)
+        {
+            out.push(key.to_string());
+            return;
+        }
+        match self.psi.bindings.get(abs) {
+            Some(GlobalBinding::Tm { body: Some(body), .. }) => {
+                let through = self.provenance.reached_through(at, body, || {
+                    let mut inner = Vec::new();
+                    // A binding is scoped in its own prefix of Ψ.
+                    for below in global_positions(body, abs) {
+                        self.reached_from(below, &mut inner);
+                    }
+                    inner.sort();
+                    inner.dedup();
+                    inner
+                });
+                out.extend(through.iter().cloned());
+            }
+            Some(GlobalBinding::Tm { body: None, .. }) => {
+                let owner = (at + 1..self.psi.bindings.len() as u32)
+                    .filter_map(|later| self.names.global_name_at(later))
+                    .find(|key| self.provenance.is_recorded(key));
+                if let Some(key) = owner {
+                    out.push(key.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The kernel gate for one bodied global in `psi`: the cache oracle, then
     /// the statement here, then the body here or on the pool. Shared by a
     /// declaration and the tactic proofs it lifts, which extend Ψ before it
-    /// (`docs/bv-omega-design.md` §7).
+    /// (`docs/tactics/bv-omega-design.md` §7).
     #[allow(clippy::too_many_arguments)]
     fn gate_bodied(
         &mut self,
@@ -1730,9 +1996,10 @@ impl DeclarationsMut<'_> {
     ) -> R<()> {
         // A declaration of a module that imports interface definitions is
         // checked with their bodies withheld, as the elaborator's worlds are
-        // (docs/interface-definitions-design.md §3): the gate's conversion is
+        // (docs/language/interface-definitions-design.md §3): the gate's conversion is
         // where a proof's unfolding actually happens. Withholding only takes
         // δ-steps away, so the gate never accepts more than it would without.
+        self.record_reached(psi.bindings.len(), body);
         let gated;
         let psi = match self.delta_psi.withheld.clone() {
             Some(withheld) => {
@@ -1750,13 +2017,13 @@ impl DeclarationsMut<'_> {
         let recording = heather_kernel::unseal::Recording::start();
         // The statement is checked here, synchronously, whatever the pool is
         // doing: every dependent needs it, and it is the cheap half
-        // (`docs/parallel-kernel-gate-design.md` §2).
+        // (`docs/kernel/parallel-kernel-gate-design.md` §2).
         stats::time_kernel(|| self.kernel_check_type(psi, Layer::Prog, ctx, ty, level))
             .map_err(|e| Refusals(self).kernel_refusal(name, span, e, psi, Layer::Prog, ctx, None, ty, level))?;
         if self.gate_is_inline() {
             // A serial replay may already hold this exact obligation's
             // verdict, earned by a worker of the pass it replaces
-            // (`docs/parallel-kernel-gate-design.md` §5.2). `None` — which is
+            // (`docs/kernel/parallel-kernel-gate-design.md` §5.2). `None` — which is
             // every ordinary run — asks the kernel.
             let verdict = match self.pass.kernel_replay.reuse(psi.bindings.len(), self.policy.fuel, &item) {
                 Some(verdict) => verdict,
@@ -1795,7 +2062,7 @@ impl DeclarationsMut<'_> {
     }
 
     /// The declaration's goal substitution, with every lifted tactic proof
-    /// (`docs/bv-omega-design.md` §7) kernel-checked as a global of its own,
+    /// (`docs/tactics/bv-omega-design.md` §7) kernel-checked as a global of its own,
     /// in its own context, and substituted as a reference to it. Returns the
     /// substitution, the lifted globals in order, and the world they extend
     /// Ψ to (`None` when nothing was lifted). The substitution's payloads are
@@ -1934,4 +2201,19 @@ impl Declarations<'_> {
         out.gamma = LocalCtx::from_vec(cx.gamma.base, entries);
         out
     }
+}
+
+/// The Ψ positions of the free global references in `t`, a term scoped in a
+/// Ψ of length `scope`, each once and in order.
+fn global_positions(t: &Term, scope: usize) -> Vec<usize> {
+    let mut found = std::collections::BTreeSet::new();
+    let _ = t.reindex_global(&mut |r| {
+        let position = match r {
+            GlobalRef::Var(i) => scope.checked_sub(1 + i as usize),
+            GlobalRef::Const(p) => Some(p as usize),
+        };
+        found.extend(position);
+        Some(r)
+    });
+    found.into_iter().collect()
 }

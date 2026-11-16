@@ -15,7 +15,7 @@ proves against it.  A fast simulator and byte encoder are executable views or
 refinements, not alternate authorities.
 
 The source/provenance and licence boundary are recorded in
-`docs/x86-64-reference-materials.md`.  Intel and AMD manuals are normative;
+`docs/native/x86-64-reference-materials.md`.  Intel and AMD manuals are normative;
 ACL2 X86ISA and K are independent formal cross-checks; XED owns encoding and
 resource metadata checks; Remill and Ghidra are pragmatic additional oracles.
 Heather's rules are original statements of architectural facts, not copied or
@@ -109,7 +109,7 @@ access; it does not claim x86 memory is total.
   theorem/API is part of their requirements, but any provisional local helper
   must be re-homed rather than becoming an x86-owned generic library.
 - 2026-08-26: The first implementation round fixes the byte/typed boundary in
-  `docs/x86-64-execution-boundary.md`. The eventual canonical `step` composes
+  `docs/native/x86-64-execution-boundary.md`. The eventual canonical `step` composes
   fetch/decode from bytes at RIP with one typed `execute` relation. Compiler
   encoding and raw-binary analysis prove into the same decoded object; neither
   owns a second instruction meaning. `lib/std/arch/x86_64/x86_64.hthr` begins the vertical

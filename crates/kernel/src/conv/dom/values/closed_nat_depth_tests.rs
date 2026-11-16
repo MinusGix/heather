@@ -165,7 +165,7 @@ fn closed_nat_equality_depth_budget_keeps_the_depth_guard() {
     cv.depth = NATIVE_DEPTH_LIMIT;
     // As if a queue were being drained at this depth: past the deferral
     // threshold counted from zero, the comparison would be queued, not
-    // descended into (docs/deep-term-walks-design.md §3.4).
+    // descended into (docs/kernel/deep-term-walks-design.md §3.4).
     let _drain = cv.deferred.begin_drain(0, NATIVE_DEPTH_LIMIT);
     assert_eq!(cv.tm(&env, &a, &b, &ty, &Level::Zero), Err(ConvError::OutOfFuel));
     assert_eq!(cv.depth, NATIVE_DEPTH_LIMIT);

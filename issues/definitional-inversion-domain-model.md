@@ -9,7 +9,7 @@ updated: 2026-10-25
 ---
 
 Research rung, not scheduled. From the definitional inversion survey
-(`docs/definitional-inversion-survey.md`, which has the argument), on
+(`docs/surveys/definitional-inversion-survey.md`, which has the argument), on
 Carneiro, Coquand et al., arXiv:2607.13662.
 
 **The idea.** Injectivity and disjointness of type formers, sort
@@ -50,4 +50,4 @@ assessment's limit and its reflection schema.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/definitional-inversion-survey.md`).
+- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/surveys/definitional-inversion-survey.md`).

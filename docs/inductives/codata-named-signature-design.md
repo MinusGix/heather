@@ -1,0 +1,161 @@
+# Codata: the named signature and the checked spelling
+
+Status: implemented, 2026-10-22 (`crates/elab/src/codata.rs`,
+`crates/elab/src/gendefs.rs`); §8 the same day, with
+`lib/std/itree/coitree_eutt.hthr` as its workload. Issue: `issues/codata-named-signature.md`.
+It changes how `docs/inductives/codata-elaborator-design.md` ("codata §n") and
+`docs/inductives/codata-indexed-design.md` ("indexed §n") spell their terms, not what
+they mean: every lowering, rule and test there is unchanged.
+
+---
+
+## 1. The problem: the signature is spelled out at every use
+
+`⟦D<ā>(v̄, ī)⟧` is an `M` whose signature (shape, positions, child index;
+indexed §3) was written inline at every occurrence, and every constructor,
+`match` and corecursive close carries that type several times over: in the
+`corec`'s carrier, in each pair's component types, in each injection's sum.
+A declaration whose fields mention another codata type (`Bisim` over
+`CoTree`, two trees per index) nests one inline signature inside the next.
+The terms the kernel was handed were nearly all annotation, and the
+elaborator's own whnf and conversion paid for every copy: the cost of a
+proof like `Bisim::refl` grew with the product of the nested signatures'
+sizes rather than with the proof.
+
+Inductives already avoid this: each declaration's code is a generated
+definition (`D#tycode_fn`), and instances are spelled as a reference to it.
+Codata now does the same, plus one rewrite the inductives do not need (§5).
+
+## 2. The named signature
+
+At declaration time the elaborator builds the inline signature once, over
+`tycode_fn_telescope`'s all-`Ty 0` telescope `tel` plus the index binder
+`i : I` (`Unit` when unindexed), and names its three parts:
+
+```
+D#mshape : Π tel. Π (i : I). Ty ls
+D#mpos   : Π tel. Π i. Π (s : El(D#mshape tel i)). Ty lp
+D#mnext  : Π tel. Π i s. Π (p : El(D#mpos tel i s)). I      (indexed only)
+```
+
+An instance at that profile (every type argument at level zero with a code)
+is then
+
+```
+M(I; i. El(D#mshape ā i); i s. El(D#mpos ā i s); i s p. D#mnext ā i s p)(⟨ī⟩)
+```
+
+with `next` the unit triviality when unindexed. Nothing else about the
+lowering moves: the bodies are exactly the inline pieces, so one δ step
+gives back what codata §2 and indexed §3 wrote, and the kernel checks each
+definition like any generated one. Registration is best-effort (a refusal
+leaves the declaration inline, as for every generated definition), and an
+instance outside the profile keeps the inline spelling.
+
+The three definitions are pushed in order, and each push moves every
+earlier-built term's global indices by one; the pieces built before a push
+are shifted into the frame they are used in. That is the only subtlety, and
+the kernel refuses a mistake there (the statement and the body stop
+agreeing).
+
+Module images carry the three `GenDef` keys (codec bytes 16–18), so an
+importing module spells the instances the same way.
+
+## 3. Structural readers unfold first
+
+The elaborator's own readers take the shape apart: a constructor's label,
+`match`'s branches, the spine an `inj`/`absurd`/declared equation walks.
+They now read a named instance by **unfolding the reference** (the gendef's
+body, one λ peeled per argument, then substituted), never by whnf of the
+whole type. `MParts` keeps both forms: the named one for the terms it
+emits, the unfolded one (`shape_inline`, and the positions behind
+`components`) for the spines it walks. The unfolded signature is built on
+first use: every checking site in a corecursive body reads an `MParts`, and
+most never walk a spine, while unfolding moves each definition's whole body
+into scope. `tag_of` finds the declaration from the reference's key
+directly.
+
+## 4. The instance matcher learns `M`
+
+`Holes::ty`, which finds an inductive instance's arguments by matching
+against its template, had no `M` arm, so an inductive with a codata field
+(`Obs<R>(E)`, whose children are `CoTree<R>(E)`) never got its `tycode_fn`
+reference and was spelled inline too, with the codata signature inside. The
+arm matches levels, then index type, shape, positions and `next`
+structurally, then the index term.
+
+## 5. The checked spelling
+
+The lowering writes every node annotated (`Pair` with both component
+types, `Inl`/`Inr` with the sum, `Fst`/`Snd`/`App` with their types),
+because its readers take those apart. Once a term is finished, nothing
+reads the annotations but the kernel, and the kernel's checked forms
+(`PairAt`, `InlAt`, `InrAt` with no type; `FstAt`, `SndAt`, `AppAt`) need
+none in the positions where it already knows the type. So the three entry
+points (a constructor, `match`, a corecursive close) hand back `slim(t)`:
+
+- an intro in a **checking** position loses its annotation;
+- a projection or application is spelled `fst@`/`snd@`/`app@` only when its
+  receiver **infers** after slimming (a bare `pair@` does not, so
+  `fst(pair@…)` stays annotated with the receiver checked);
+- an application with a λ head stays annotated;
+- the checking positions are the kernel's own (`typing.rs`): pair
+  components, injection payloads, λ bodies under a checked λ, case branches,
+  `J`'s base, `corec`'s step and seed (its signature is kept whole).
+
+Every other node is kept whole, so the rewrite cannot change what a term
+means, only how much of it is annotation. The kernel rechecks every
+declaration, and a mistake here is a rejection (`NotInferable`), which is
+how the receiver rule was found.
+
+**Reducts.** The rule holds of the term as written, not of what reduction
+makes of it. A `match` arm reads its field as `fst@(snd@(v))` over the
+label `v`, which infers while `v` is a binder; reducing the `match` on a
+constructor substitutes the label, a bare `pair@`, for `v`, and the field
+becomes a projection of a bare pair, which does not infer. Nothing in the
+kernel minds (its reductions never re-infer), but an elaborator route that
+emits a weak head it computed (`inj`/`absurd` emit their endpoints and
+fields) must read those projections off first:
+`spelling::contract_projections`, which is Σ's β rule
+(issues/kernel-refuses-inj-through-corecursive-reduct.md).
+
+## 6. Cost
+
+`Bisim::refl` and `Bisim::sym` over `CoTree` dropped by more than an
+order of magnitude; what remains is the elaborator's own work, proportional
+to the declaration, with the signatures counted once each as references.
+
+## 7. Testing
+
+The codata and indexed codata tests are unchanged and pass (they run every
+declaration through the kernel, and their image round trips now carry the
+named keys). `crates/elab/tests/lib_std_coitree.rs` adds a goal display
+over a named instance (`b : Bisim<R>(E, t, spin(E))`), and the library
+itself is the workload the names exist for.
+
+## 8. Match fields in the checked spelling
+
+A `match` on a codata value binds each payload field to its projection out
+of the label, `fst(sndᵏ⁺¹ ℓ)`, as an alias. `Elaborator::projection` writes
+each `Fst`/`Snd` with both component types, and for a dependent payload
+those types mention the earlier fields, each again a projection with its own
+annotations. The term is small as a graph (the components are shared) but
+its tree size grows with the product of the dependencies. That stays harmless
+until something walks it as a tree: the constructor a branch builds shifts
+its label and children under the step's binders, and a local shift rebuilds
+every open node it visits. `Eutt`'s fields are counts and equations about
+`after(nl, t)`, all dependent, so `Eutt::sym` spent nearly all its time in
+those shifts, with no conversion or evaluation behind it.
+
+The branch now binds payload fields with `Elaborator::projection_at`: the
+checked forms `fst@`/`snd@` (`Term::FstAt`/`SndAt`), which carry no
+annotation because the receiver infers. Here it does: the label is the case
+tree's binder, or `fst(out(e))` for a single constructor. The alias's *type*
+is the same inline field type as before, so every structural reader sees
+what it saw; only the spelling of the term changes. Record field projections
+already took this route under the same gate (`emits_at_forms`: not inside a
+quotation, where the term is data and keeps its annotations).
+
+Cost: `Eutt::sym` and `CoTree::bind_cong` lost more than an order of
+magnitude each, and what remains is in proportion to the declaration. The
+codata, indexed codata and coitree tests are unchanged and pass.

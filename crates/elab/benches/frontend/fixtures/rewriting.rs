@@ -1,7 +1,7 @@
 //! Rewriting and let fan-out at growing size (`issues/tactic-scaling-bench-families.md`).
 //!
 //! The `rewrite/*` families are mengine's rewriting benchmarks
-//! (`docs/mengine-survey.md` §1.6, §7), each a small generator with a known
+//! (`docs/surveys/mengine-survey.md` §1.6, §7), each a small generator with a known
 //! linear lower bound that Rocq and Lean are measured against. The `let/*`
 //! families are [[proof-let-substitution-cost]]'s let chains on their own,
 //! with no tactic in them, so they isolate what the statement and the gate
@@ -67,7 +67,7 @@ fn let_chain(k: u64, link: impl Fn(u64) -> String) -> String {
 /// mengine's `rewrite_fa`: `g(f(f(…f(a))))` to `g(a)` by `h: f(x) = x`.
 ///
 /// **Lower bound: linear in n.** Heather's `rewrite` rewrites one instance
-/// per equation (`docs/equation-rewrite-design.md` §6.1: the first match
+/// per equation (`docs/tactics/equation-rewrite-design.md` §6.1: the first match
 /// fixes `x`, then every occurrence *of that instance* is rewritten), so the
 /// proof is `n` rewrites, each a walk of an O(n) goal: n² is what this
 /// fixture can say today, and it is the number a bottom-up or repeated
@@ -137,7 +137,7 @@ fn rewrite_repeat_mod() -> Family {
 /// `refl`'s equality of two separately built DAGs. The `refl` is linear since
 /// [[kernel-equality-walks-dags-as-trees]] (which `let/stmt` isolates), and
 /// the other two since the abstraction keeps one result per shared node
-/// (`docs/equation-rewrite-design.md` §9.5), so the motive is a DAG the
+/// (`docs/tactics/equation-rewrite-design.md` §9.5), so the motive is a DAG the
 /// typing memo shares. What is left is the spelling: `k` rewrites, each a
 /// walk of the O(k) goal, so k², as `rewrite/fa`. One rewrite of every
 /// instance would meet the bound ([[rewrite-every-instance]]).
@@ -175,7 +175,7 @@ const NARY_LETS: u64 = 3;
 ///
 /// **Lower bound: linear in n·m** (here, with m fixed, linear in n). As a
 /// tree the chain is n^m nodes, which the abstraction walked until it kept
-/// one result per shared node (`docs/equation-rewrite-design.md` §9.5).
+/// one result per shared node (`docs/tactics/equation-rewrite-design.md` §9.5).
 fn rewrite_let_nary() -> Family {
     let src = |n: u64| {
         let args = |x: &str| vec![x; n as usize].join(", ");
@@ -210,7 +210,7 @@ fn rewrite_let_nary() -> Family {
 /// `rewrite/let-addr0`'s chain along a relation, rewritten once at its
 /// bottom: `R(g(v₀, v₀) ∙ z, v₀)`-style, `h: (x: A) -> R(g(x, z), x)` applied
 /// at the first link, so every link above it changes and gets one congruence
-/// step (`docs/equation-rewrite-design.md` §9). `R`, `g` and the evidence are
+/// step (`docs/tactics/equation-rewrite-design.md` §9). `R`, `g` and the evidence are
 /// parameters, an `Equivalence` and a `Respects2`, so the family measures the
 /// rewrite and not instance search.
 ///

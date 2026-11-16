@@ -1,6 +1,6 @@
 //! `sEq`/`srefl`/`sEmpty`: the strict propositions of the SProp landing
-//! (`docs/sprop-design.md`, `issues/sprop-strict-prop.md`), as they stand
-//! since `transp` was removed (`docs/iwf-former-design.md` §7, §13 step 6).
+//! (`docs/kernel/sprop-design.md`, `issues/sprop-strict-prop.md`), as they stand
+//! since `transp` was removed (`docs/kernel/iwf-former-design.md` §7, §13 step 6).
 //!
 //! `sEq` has no eliminator: it is a type inhabited exactly when its endpoints
 //! convert, with one proof up to conversion. What is left to pin is the
@@ -161,7 +161,7 @@ fn sempty_and_empty_proofs_are_both_irrelevant() {
     // Two hypotheses at sEmpty are convertible, and since Empty η the same
     // two at Empty are too. §2.2 priced the Empty-reuse alternative on
     // this contrast, which Empty η has since removed
-    // (docs/metatheory-ch07-extensions.md §28); sEmpty stays a separate
+    // (docs/kernel/metatheory-ch07-extensions.md §28); sEmpty stays a separate
     // former for its layer-c admission.
     let g = ext(&nil_ctx(), sempty(), c(0));
     let g = ext(&g, sempty(), c(0));

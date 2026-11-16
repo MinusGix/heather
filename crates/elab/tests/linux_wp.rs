@@ -1,7 +1,7 @@
 //! One computed weakest precondition over the label assembler's items, and
 //! the loop rule over it (`issues/native-one-wp.md`,
 //! `issues/native-loop-rule.md`; round S2 of
-//! `docs/native-program-logic-design.md`).
+//! `docs/native/native-program-logic-design.md`).
 //!
 //!  1. the modules check: `Syscall` and `Proved` in `x86_64_asm`, the
 //!     computed `Wp` with `wp_runs`/`wp_sound`/`loop_at`

@@ -30,9 +30,16 @@ theorem tally_from_zero(acc: Nat): tally(0, acc) = acc + 8 {
         λ a i h => tally::step(i, a, h), λ a i h => tally::done(i, a, h), acc, 0, below)
 }
 
-// The same loop from a neutral start, through an invariant: what the
-// accumulator has gained is how far the counter has come.
+// The same loop from a neutral start, by induction along the function
+// (docs/tactics/functional-induction-design.md): the case where the test
+// holds gets the claim at `start + 1` once `start + 1 <= 8` is shown, and
+// `bv_omega` shows both.
 theorem tally_gains(start: u64, acc: Nat, below: start <= 8): tally(start, acc) = acc + (8 - start.toNat()) {
+    induct tally(start, acc); all_goals { bv_omega }
+}
+
+// The same claim through `run_up_invariant`: the rule `induct` replaces.
+theorem tally_gains_by_rule(start: u64, acc: Nat, below: start <= 8): tally(start, acc) = acc + (8 - start.toNat()) {
     let ran = BitVec::run_up(λ (a: Nat) _ => a + 1, acc, start, (8 - start).toNat());
     let gained: (ran = acc + (8 - start.toNat())) =
         BitVec::run_up_invariant(λ (a: Nat) _ => a + 1, λ a (i: u64) => a + (8 - i.toNat()) = acc + (8 - start.toNat()), 8,

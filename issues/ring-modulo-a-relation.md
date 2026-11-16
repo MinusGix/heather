@@ -38,7 +38,7 @@ the interface does not carry; it belongs to the carrier, as `of_nat` does in
 
 ## Log
 
-- 2026-10-27: built (docs/ring-normalization-design.md §8).
+- 2026-10-27: built (docs/tactics/ring-normalization-design.md §8).
   `CommRingOfInt<A>(≈, +, *)` in semiring.hthr is `CommRing` plus `of_int`
   and its four homomorphism laws; instances at `Rat` (`Rat::ofInt`) and
   `CReal` (the rational numeral embedded). ring.hthr restates `eval` and the

@@ -14,11 +14,11 @@ name `get`" although `Box::get` is declared above; `Box::get(b)` and
 `Owner`'s own members 3,409 times (`scripts/signature-census`), e.g.
 `List::cong_cons` throughout `list.hthr`, `Rat::…` throughout `rat.hthr`.
 
-Proposal (docs/sections-design.md §6): inside the body of a member of `T`,
+Proposal (docs/language/sections-design.md §6): inside the body of a member of `T`,
 `T`'s members are candidates for a bare name at the **same rank as every
 other visible name** — no precedence, not even locals-beat-imports, so that a
 file's own `Rat::add` can never silently take over a bare `add` that resolves
-to an imported declaration today (docs/modules-design.md §8, second
+to an imported declaration today (docs/language/modules-design.md §8, second
 invariant). Landing it can only turn existing library text into ambiguity
 errors, which the round qualifies.
 
@@ -58,4 +58,4 @@ Keyed on the declaration's owner, not on any block, so it is independent of
   `Target::At` vs the `Prog` constructor); each now spells its old reading, so no term changed. Tests
   `crates/elab/tests/owner_siblings.rs`,
   `mutual_recursion::members_calling_each_other_bare_are_one_group`. No sweep of
-  the 3,409 qualified references (docs/sections-design.md §9).
+  the 3,409 qualified references (docs/language/sections-design.md §9).

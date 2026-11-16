@@ -7,7 +7,7 @@ created: 2026-11-11
 updated: 2026-11-11
 ---
 
-Only the kernel gate runs on the worker threads, so a cold check is bounded by the serial elaborator however many cores there are. Found while writing [[performance-overview-2026-11-11]]; the gate's own design is `docs/parallel-kernel-gate-design.md`.
+Only the kernel gate runs on the worker threads, so a cold check is bounded by the serial elaborator however many cores there are. Found while writing [[performance-overview-2026-11-11]]; the gate's own design is `docs/kernel/parallel-kernel-gate-design.md`.
 
 ## Measured
 

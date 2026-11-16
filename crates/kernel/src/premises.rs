@@ -1,4 +1,4 @@
-//! Deferred premises (docs/deep-term-walks-design.md §3.3–3.4): the one
+//! Deferred premises (docs/kernel/deep-term-walks-design.md §3.3–3.4): the one
 //! discipline conversion ([`crate::conv`]) and the checker
 //! ([`crate::typing`]) share for walking a deep term without a native frame
 //! per level.
@@ -11,7 +11,7 @@
 //!
 //! The state this module owns, and the phases it moves through, were eight
 //! fields in `Conv` and four in `Tc`, each pair of copies kept in step by
-//! hand (docs/kernel-implicit-state-review.md §2). Two defects happened
+//! hand (docs/kernel/kernel-implicit-state-review.md §2). Two defects happened
 //! while they were built, both an order or threshold field read at one site
 //! and not another; here each phase is a call:
 //!

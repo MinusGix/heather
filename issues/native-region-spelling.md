@@ -34,5 +34,5 @@ are fine; a large tool with regions would hit the rail.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/native/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
 - 2026-10-31: Done on branch claude/project-thread-xhabhy: every region form spells (Stmt tag 7, `StructuredRegion::spelled_tagged`), write-elf's reader prints them, and the Rust allocator mirrors `region_needs`, `region_graph` and `weighed`; tr's region loop gets the same homes from both (`HEATHER_ELF_ALLOCATOR=both`, the tr CLI test). The `refused(tr_upper()) = []` fuel note moved to [[native-slot-allocator-refl-fuel]].

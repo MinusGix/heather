@@ -1,5 +1,5 @@
 // Proving a native source against a spec, statement by statement
-// (docs/itree-simulation-design.md §6; issues/native-source-cat-implements.md).
+// (docs/itrees/itree-simulation-design.md §6; issues/native-source-cat-implements.md).
 //
 // A source's tree is simulated by its spec under Linux's map and contract
 // (`ITree::LinuxSimK`, up to a continuation). Each statement form has its

@@ -14,11 +14,11 @@ peel finitely many `CTau`s before the next visible step, which is what
 program equivalence needs (`iter`'s productive `CTau` per pass, and the
 `bind` laws of the effect handlers).
 
-Kernel design §4 (`docs/kernel-coinduction-design.md`) spells it as an `M`
+Kernel design §4 (`docs/kernel/kernel-coinduction-design.md`) spells it as an `M`
 whose shape is an inductive peel: an index is a pair of trees, a node is an
 inductive proof that both sides reach matching observations after finitely
 many taus, and the children are the matched subtrees. With indexed codata
-(`docs/codata-indexed-design.md`) the surface version is a `codata` over
+(`docs/inductives/codata-indexed-design.md`) the surface version is a `codata` over
 `(t, u)` whose constructor carries an inductive `Peel` field.
 
 Done when: `Eutt` with refl/sym/trans (trans is the hard one: peeling
@@ -28,8 +28,8 @@ to eutt, and `Eutt` giving equivalent approximation programs (with
 
 ## What it assumes from elsewhere
 - **[[coitree-library]]** owns `CoTree`, `Obs` and `Bisim`. Assumed here:
-  only the observation-seeded style (`docs/coitree-design.md` §2).
+  only the observation-seeded style (`docs/itrees/coitree-design.md` §2).
 
 ## Log
 
-- 2026-10-22: Done (`lib/std/itree/coitree_eutt.hthr`, `docs/coitree-design.md` §7). Drops are counts, not an inductive peel: each constructor names how many `CTau`s each side drops (`CoTree::after`). refl/sym/trans, `of_bisim`, `tau_l`/`tau_r`, the monad laws (through `of_bisim`), and `Eutt::refines`/`refined` (equivalent trees give programs that refine each other). The `bind` congruence up to eutt is left to [[coitree-eutt-bind-cong]]. Making it cheap needed a codata change: a match's payload fields are now checked-spelling projections (`docs/codata-named-signature-design.md` §8).
+- 2026-10-22: Done (`lib/std/itree/coitree_eutt.hthr`, `docs/itrees/coitree-design.md` §7). Drops are counts, not an inductive peel: each constructor names how many `CTau`s each side drops (`CoTree::after`). refl/sym/trans, `of_bisim`, `tau_l`/`tau_r`, the monad laws (through `of_bisim`), and `Eutt::refines`/`refined` (equivalent trees give programs that refine each other). The `bind` congruence up to eutt is left to [[coitree-eutt-bind-cong]]. Making it cheap needed a codata change: a match's payload fields are now checked-spelling projections (`docs/inductives/codata-named-signature-design.md` §8).

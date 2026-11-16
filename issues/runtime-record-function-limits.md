@@ -8,7 +8,7 @@ created: 2026-11-12
 updated: 2026-11-13
 ---
 
-What a `runtime fn` of a laid record does not take yet (docs/layout-design.md §9.5, round 3; probes in `lib/_tests/native/runtime/runtime_held_tests.hthr` and its neighbours). Each is refused by name unless noted.
+What a `runtime fn` of a laid record does not take yet (docs/native/layout-design.md §9.5, round 3; probes in `lib/_tests/native/runtime/runtime_held_tests.hthr` and its neighbours). Each is refused by name unless noted.
 
 - **A branch that is not the function's last statement, with a store in an arm.** It elaborates to a branch inside `Mutated`, which the reflector refuses ("write the branch around the whole result, each arm its own end"). A tail `if`/`else` works.
 - **A call of a function of the record that only reads it** (`self t: T`, answering a word alone). A call of one that takes `mut self` works (probes in `runtime_held_call_tests.hthr`); the term of a reader's call is the call itself, a value among values, and the walk makes calls only where it finds them under `.after` and `.value`. Give the callee `mut self` meanwhile.

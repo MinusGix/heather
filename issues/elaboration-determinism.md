@@ -11,7 +11,7 @@ For most compilers, deterministic output is hygiene. For Heather it is a
 than assume it.
 
 The commitment comes from sketch round 2 ([[surface-syntax]] log,
-docs/sketches/surface-v2.md): `.code` on a top-level `fn` quotes the
+docs/archive/surface-v2.md): `.code` on a top-level `fn` quotes the
 *elaborated* term, and intensional analysis keys on that. So the elaborator's
 output is observable *inside the language* — a meta-function can branch on
 it. Two elaborations that differ in any way a `match code` can see are two

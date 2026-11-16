@@ -1,5 +1,5 @@
 // What a call is lent of memory, and what it may store there
-// (docs/native-one-compiler-design.md §2.6).
+// (docs/native/native-one-compiler-design.md §2.6).
 //
 // A call is lent spans of bytes, by number, and may be allowed to write
 // some of them. `Stack::Lends` (x86_64_stack) says a span reads its bytes
@@ -19,9 +19,12 @@
 //   may have done to memory: stores of words in its own room
 //   (`Stack::Own`) and of bytes into the spans it may write (`Stack::Put`). `Stack::Wrote`
 //   is the case with nothing written.
-// - What a caller keeps across `WroteIn`: its stack words from `i` up to
-//   `top` (`Loan::unchanged`), the code (`Loan::resident`), and a span
-//   nobody was lent to write (`Loan::unwritten_reads`).
+// - What a caller keeps across `WroteIn` is whatever one such store keeps
+//   (`Stack::StableIn`), by the frame rule `Stack::wrote_in_frame`. Stable
+//   under a loan: its stack words from `i` up to `top`
+//   (`Loan::stable_word`), the code (`Loan::stable_resident`), and a span
+//   nobody was lent to write (`Loan::stable_reads`). `Loan::unchanged`,
+//   `Loan::resident` and `Loan::unwritten_reads` are the rule at those.
 // - What a span reads along the way: its bytes across a store below `top`
 //   (`Loan::own_reads`, `Loan::wrote_reads`), the updated bytes after a
 //   store into it (`Loan::put_reads` for one byte, `Loan::store_reads` in
@@ -175,6 +178,54 @@ theorem Stack::wrote_in_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
 }
 
 // ---------------------------------------------------------------------------
+// The frame rule, with spans lent to write
+// (issues/compiled-call-frame-rule.md)
+
+// `P` is stable under a store the call may make: a word of its own room
+// (`Stack::Stable`, x86_64_stack), and bytes stored into a span it may
+// write, from a byte inside it and as far as the span goes.
+fn Stack::StableIn<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    P: M → Type) → Type {
+    stack.Stable(i, P) ∧ ((memory: M) → (b, k: Nat) → spans.written(b) = True → k < spans.size(b) → (bytes: List<BitVec(8)>) →
+        k + bytes.len() <= spans.size(b) → P(memory) → P(stack.writes.store(memory, spans.byte(b, k), bytes)))
+}
+
+// The rule: what held before the call's stores and is stable under one
+// holds after them.
+theorem Stack::wrote_in_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {P: M → Type}, stable: stack.StableIn(i, spans, P), before, after: M, wrote: stack.WroteIn(i, spans, before, after), held: P(before)):
+    P(after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, spans, m, n), P,
+        λ m n was step => match step {
+            Inl(own) => j(sym(own.proof.right.proof), λ x _ => P(x),
+                stable.left(m, own.witness, own.proof.left, own.proof.right.witness, was)),
+            Inr(put) => j(sym(put.proof.proof.right.proof.right), λ x _ => P(x),
+                stable.right(m, put.witness, put.proof.witness, put.proof.proof.left.left, put.proof.proof.left.right,
+                    put.proof.proof.right.witness, put.proof.proof.right.proof.left, was)),
+        }, before, after, held, wrote)
+}
+
+theorem Stack::stable_in_and<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {P, Q: M → Type}, first: stack.StableIn(i, spans, P), second: stack.StableIn(i, spans, Q)):
+    stack.StableIn(i, spans, λ (m: M) => P(m) ∧ Q(m)) {
+    ⟨stack.stable_and(i, first.left, second.left),
+     λ memory b k written inside bytes fits held => ⟨first.right(memory, b, k, written, inside, bytes, fits, held.left),
+        second.right(memory, b, k, written, inside, bytes, fits, held.right)⟩⟩
+}
+
+theorem Stack::stable_in_given<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    {A: Type}, {P: M → Type}, stable: A → stack.StableIn(i, spans, P)): stack.StableIn(i, spans, λ (m: M) => A ∧ P(m)) {
+    ⟨stack.stable_given(i, λ (a: A) => stable(a).left),
+     λ memory b k written inside bytes fits held => ⟨held.left, stable(held.left).right(memory, b, k, written, inside, bytes, fits, held.right)⟩⟩
+}
+
+// With no span to write, stable under the call's own stores is all.
+theorem Stack::stable_in_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    none: (b: Nat) → spans.written(b) = False, {P: M → Type}, stable: stack.Stable(i, P)): stack.StableIn(i, spans, P) {
+    ⟨stable, λ memory b k written inside bytes fits held => absurd(trans(sym(written), none(b)))⟩
+}
+
+// ---------------------------------------------------------------------------
 // What a span reads along the way
 
 // A span's byte at an index word inside it: where it lies is canonical,
@@ -199,15 +250,20 @@ theorem Loan::own_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {
     ⟨reads.left, λ t short => trans(loan.under(memory, k, below, word, c, t, omega(short, fits)), reads.right(t, short))⟩
 }
 
-// So do the stores of a call entered at or below `top`, in its own room.
+// So what a span reads is stable under the own stores of a call entered at
+// or below `top`,
+theorem Loan::stable_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, ys: List<BitVec(8)>,
+    fits: ys.len() <= spans.size(c)): stack.Stable(i, λ (m: M) => Readable(data, m, spans.at(c), ys)) {
+    λ memory k below word held => loan.own_reads(memory, k, omega(below, low), word, c, ys, fits, held)
+}
+
+// and the span reads its bytes after them.
 theorem Loan::wrote_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, ys: List<BitVec(8)>,
     fits: ys.len() <= spans.size(c), before, after: M, wrote: stack.Wrote(i, before, after), reads: Readable(data, before, spans.at(c), ys)):
     Readable(data, after, spans.at(c), ys) {
-    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => Readable(data, m, spans.at(c), ys),
-        λ m n held step => j(sym(step.proof.right.proof), λ x _ => Readable(data, x, spans.at(c), ys),
-            loan.own_reads(m, step.witness, omega(step.proof.left, low), step.proof.right.witness, c, ys, fits, held)),
-        before, after, reads, wrote)
+    stack.wrote_frame(i, loan.stable_span(i, low, c, ys, fits), before, after, wrote, reads)
 }
 
 // Which is the span lent in the earlier sense, to a call that writes no
@@ -215,7 +271,7 @@ theorem Loan::wrote_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>},
 theorem Loan::lends<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, ys: List<BitVec(8)>,
     fits: ys.len() <= spans.size(c), memory: M, reads: Readable(data, memory, spans.at(c), ys)): stack.Lends(i, spans.at(c), ys, memory) {
-    λ after wrote => loan.wrote_reads(i, low, c, ys, fits, memory, after, wrote, reads)
+    stack.stable_through(i, loan.stable_span(i, low, c, ys, fits), memory, reads)
 }
 
 // An index other than `k` lies outside the one byte at `k`.
@@ -272,21 +328,39 @@ fn Stack::UnchangedTo<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, sel
     (k: Nat) → from <= k → k + 8 <= top → read_word(data, after, stack.at(k)) = read_word(data, before, stack.at(k))
 }
 
-// A span the call was not lent to write reads what it did.
+// What a caller keeps, as stable predicates: a word of the stack from `i` up
+// to `top`, the return address among them,
+theorem Loan::stable_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i, k: Nat, above: i <= k, fits: k + 8 <= top, value: Option<BitVec(64)>):
+    stack.StableIn(i, spans, λ (m: M) => read_word(data, m, stack.at(k)) = value) {
+    ⟨stack.stable_word(i, k, above, omega(fits, loan.room), value),
+     λ memory b at written inside bytes stored held => trans(loan.keeps(memory, b, at, written, inside, bytes, stored, k, fits), held)⟩
+}
+
+// code where it lies,
+theorem Loan::stable_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, bytes: List<BitVec(8)>, at: BitVec(64)):
+    stack.StableIn(i, spans, λ (m: M) => CodeResident(fetch, m, bytes, at)) {
+    ⟨stack.stable_resident(i, omega(low, loan.room), bytes, at),
+     λ memory b k written inside stored fits held => loan.keeps_code(memory, b, k, written, inside, stored, fits, bytes, at, held)⟩
+}
+
+// and the bytes of a span the call was not lent to write.
+theorem Loan::stable_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, only_read: spans.written(c) = False,
+    ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c)): stack.StableIn(i, spans, λ (m: M) => Readable(data, m, spans.at(c), ys)) {
+    ⟨loan.stable_span(i, low, c, ys, fits),
+     λ memory b k written inside bytes stored held => loan.store_keeps(memory, b, k, written, inside, bytes, stored, c,
+        λ same => absurd(trans(sym(j(same, λ u _ => spans.written(u) = True, written)), only_read)), ys, fits, held)⟩
+}
+
+// The same across the stores of a call, by the rule. A span the call was
+// not lent to write reads what it did.
 theorem Loan::unwritten_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, only_read: spans.written(c) = False,
     ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c), before, after: M, wrote: stack.WroteIn(i, spans, before, after),
     reads: Readable(data, before, spans.at(c), ys)): Readable(data, after, spans.at(c), ys) {
-    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, spans, m, n), λ (m: M) => Readable(data, m, spans.at(c), ys),
-        λ m n held step => match step {
-            Inl(own) => j(sym(own.proof.right.proof), λ x _ => Readable(data, x, spans.at(c), ys),
-                loan.own_reads(m, own.witness, omega(own.proof.left, low), own.proof.right.witness, c, ys, fits, held)),
-            Inr(put) => j(sym(put.proof.proof.right.proof.right), λ x _ => Readable(data, x, spans.at(c), ys),
-                loan.store_keeps(m, put.witness, put.proof.witness, put.proof.proof.left.left, put.proof.proof.left.right,
-                    put.proof.proof.right.witness, put.proof.proof.right.proof.left, c,
-                    λ same => absurd(trans(sym(j(same, λ u _ => spans.written(u) = True, put.proof.proof.left.left)), only_read)),
-                    ys, fits, held)),
-        }, before, after, reads, wrote)
+    stack.wrote_in_frame(i, spans, loan.stable_reads(i, low, c, only_read, ys, fits), before, after, wrote, reads)
 }
 
 // The caller's words from `i` up to `top`, the return address among them,
@@ -294,29 +368,15 @@ theorem Loan::unwritten_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
 theorem Loan::unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, before, after: M, wrote: stack.WroteIn(i, spans, before, after)):
     stack.UnchangedTo(i, top, before, after) {
-    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, spans, m, n), λ (m: M) => stack.UnchangedTo(i, top, before, m),
-        λ m n held step => match step {
-            Inl(own) => j(sym(own.proof.right.proof), λ x _ => stack.UnchangedTo(i, top, before, x),
-                λ k above fits => trans(stack.apart(m, own.witness, k, omega(own.proof.left, above, fits, loan.room), omega(fits, loan.room),
-                    Inl(omega(own.proof.left, above)), own.proof.right.witness), held(k, above, fits))),
-            Inr(put) => j(sym(put.proof.proof.right.proof.right), λ x _ => stack.UnchangedTo(i, top, before, x),
-                λ k above fits => trans(loan.keeps(m, put.witness, put.proof.witness, put.proof.proof.left.left, put.proof.proof.left.right,
-                    put.proof.proof.right.witness, put.proof.proof.right.proof.left, k, fits), held(k, above, fits))),
-        }, before, after, λ k _ _ => refl, wrote)
+    λ k above fits => stack.wrote_in_frame(i, spans, loan.stable_word(i, k, above, fits, read_word(data, before, stack.at(k))),
+        before, after, wrote, refl)
 }
 
 // Code stays where it was.
 theorem Loan::resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, bytes: List<BitVec(8)>, at: BitVec(64), before, after: M,
     wrote: stack.WroteIn(i, spans, before, after), resident: CodeResident(fetch, before, bytes, at)): CodeResident(fetch, after, bytes, at) {
-    Star::invariant(λ (m: M) (n: M) => stack.Stores(i, spans, m, n), λ (m: M) => CodeResident(fetch, m, bytes, at),
-        λ m n held step => match step {
-            Inl(own) => j(sym(own.proof.right.proof), λ x _ => CodeResident(fetch, x, bytes, at),
-                stack.keeps_code(m, own.witness, omega(own.proof.left, low, loan.room), own.proof.right.witness, bytes, at, held)),
-            Inr(put) => j(sym(put.proof.proof.right.proof.right), λ x _ => CodeResident(fetch, x, bytes, at),
-                loan.keeps_code(m, put.witness, put.proof.witness, put.proof.proof.left.left, put.proof.proof.left.right,
-                    put.proof.proof.right.witness, put.proof.proof.right.proof.left, bytes, at, held)),
-        }, before, after, resident, wrote)
+    stack.wrote_in_frame(i, spans, loan.stable_resident(i, low, bytes, at), before, after, wrote, resident)
 }
 
 // ---------------------------------------------------------------------------

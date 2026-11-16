@@ -22,7 +22,7 @@ the *result* is deep, and its depth grows by one per answered request.
   raising the per-force fuel 64× does not move the threshold, so it is the
   depth rail and not fuel.
 - Mechanism (confirmed 2026-10-21, see the log): `Tac` is a tier-2 inductive, lowered
-  to `Σ(t : W). canon t` (docs/inductive-tier2-w-lowering.md). A `match` binds
+  to `Σ(t : W). canon t` (docs/inductives/inductive-tier2-w-lowering.md). A `match` binds
   the continuation `k` so that `k(x)`'s proof component is projected from the
   *scrutinee's* proof. Each resume therefore chains the new tree's proof onto
   the previous one, and only a leaf arm (the `J` at `Pure`) forces that
@@ -54,4 +54,4 @@ but a search tactic in `tac-first-port` can exceed a thousand requests.
   failed at its final step. Fixed in the evaluator instead, for every level
   at once: the links are applications of a variable bound to the previous
   link's thunk, and such a head is now forced on the machine's own loop
-  (docs/native-depth-budget-design.md §9, [[grind-unrelated-lemma-fuel]]).
+  (docs/kernel/native-depth-budget-design.md §9, [[grind-unrelated-lemma-fuel]]).

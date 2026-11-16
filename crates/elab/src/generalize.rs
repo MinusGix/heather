@@ -1,5 +1,5 @@
 //! Induction-hypothesis generalization (issues/ih-generalization.md,
-//! docs/ih-generalization-design.md).
+//! docs/tactics/ih-generalization-design.md).
 //!
 //! A structurally recursive `match` whose self-calls pass some *non-decreasing*
 //! parameter at something other than the parameter itself needs a motive that
@@ -83,7 +83,7 @@ impl Generalize<'_> {
         // A parameter the *scrutinee's* type depends on is an index
         // (`fn append(n: Nat, xs: Vec(n), …)`), and an indexed `match` rebinds
         // it at each arm's own pattern variable
-        // (`docs/inductive-indexed-lowering.md` §6, `Guard::rebind`). That is
+        // (`docs/inductives/inductive-indexed-lowering.md` §6, `Guard::rebind`). That is
         // the route's business: never a generalization candidate here, and
         // where the family is not indexed the by-binder refusal stands.
         let fixed: Vec<usize> = (0..dec)
@@ -189,7 +189,7 @@ impl Generalize<'_> {
     ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         // A computed scrutinee is abstracted the same way, by syntactic
-        // occurrence (docs/dependent-match-compiler-design.md §5): a binder
+        // occurrence (docs/language/matching/dependent-match-compiler-design.md §5): a binder
         // whose type contains the term is about it. Only binders after every
         // local the term mentions can be, since the motive abstracts the term
         // as it stands in `cx`.
@@ -533,14 +533,14 @@ fn takes_equation_about(ty: &Type, scrutinee: &Term) -> bool {
 }
 
 /// Whether binder `q`'s type mentions the earlier binder `p`.
-fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
+pub(crate) fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
     cx.gamma.entries.get(q).is_some_and(|entry| {
         entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
     })
 }
 
 /// An alias whose type mentions a `match`'s scrutinee, carried through the
-/// match as a convoy (docs/dependent-match-compiler-design.md §7.2).
+/// match as a convoy (docs/language/matching/dependent-match-compiler-design.md §7.2).
 pub(crate) struct DependentAlias {
     pub(crate) name: String,
     pub(crate) ty: Type,

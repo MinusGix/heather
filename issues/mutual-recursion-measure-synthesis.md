@@ -9,7 +9,7 @@ updated: 2026-09-16
 
 
 
-Residue of [[mutual-recursion-declarations]] (docs/mutual-recursion-design.md
+Residue of [[mutual-recursion-declarations]] (docs/language/recursion/mutual-recursion-design.md
 §5). `even`/`odd` on `Nat` with no `decreases` does not group: the structural
 eliminator hands out no sibling ih, so the measure route is the only one that
 generalizes, and today it needs the measure written on every member. Taking

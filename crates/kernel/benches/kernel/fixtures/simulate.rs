@@ -43,7 +43,7 @@
 //! ([[value-domain-allocation-constant]]). §11 item 5's later re-aim, a
 //! depth-of-*nesting* family, is retired rather than owed: four hand-built
 //! kernel families failed to reproduce that axis at all
-//! (`docs/nbe-conversion-design.md` §12), its instrument is
+//! (`docs/kernel/nbe-conversion-design.md` §12), its instrument is
 //! `scripts/probe-whnf-sharing` at the CLI, and its subject no longer
 //! exists.
 

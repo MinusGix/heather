@@ -53,7 +53,7 @@ with bounded selection rather than eagerly traversing every record.
   retain priority. Record fields participate through explicit bindings, with
   checked field-signature recovery for unannotated projections. The calculator
   removes both ordinal discharges. Design and limits:
-  `docs/termination-local-evidence-design.md`. Focused acceptance: **41 passed**;
+  `docs/language/recursion/termination-local-evidence-design.md`. Focused acceptance: **41 passed**;
   full `scripts/test`: **2659 passed, 0 failed, 5 ignored**. Negative controls
   reject false, reversed, insufficient, circular, and invalid manual evidence;
   unrelated unknown locals do not prevent direct proof selection.

@@ -4,10 +4,14 @@
 
 use heather_elab::Elaborator;
 
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
 
 fn with_option() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", LOGIC).expect("logic");
+    e.elab_module_source("bool", BOOL).expect("bool");
     e.elab_module_source("option", OPTION).expect("option");
     e
 }
@@ -131,7 +135,7 @@ fn indexed_family_keeps_the_existing_homogeneous_equation_boundary() {
     );
 
     // The equation binding on an indexed family is the index packed with
-    // the value (docs/dependent-match-compiler-design.md §9), so `h` is
+    // the value (docs/language/matching/dependent-match-compiler-design.md §9), so `h` is
     // available and `cong(h)` gives the index.
     ok(
         &mut with_option(),

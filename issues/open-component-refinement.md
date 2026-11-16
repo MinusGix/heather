@@ -9,7 +9,7 @@ updated: 2026-09-24
 
 Investigate **refinement between open components** in the style of
 CompCertO (Koenig, Shao, *CompCertO: Compiling Certified Open C Components*,
-PLDI 2021 — `docs/compcerto-koenig-shao-pldi2021.pdf`), where correctness is
+PLDI 2021 — `docs/papers/compcerto-koenig-shao-pldi2021.pdf`), where correctness is
 stated through *language interfaces* and *simulation conventions*: how two
 levels agree at a boundary such as a calling convention or the syscall ABI.
 

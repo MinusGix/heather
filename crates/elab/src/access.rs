@@ -1,10 +1,10 @@
 //! The designed access spellings of a repr and its `Impl`s
-//! (`docs/repr-access-spellings-design.md`).
+//! (`docs/native/repr-access-spellings-design.md`).
 //!
 //! A `datarepr` and an `impl` mint names — `Repr_N`, `N_spec_rec`,
 //! `Impl_R_f` — because their artifacts are emitted as surface source and
 //! re-parsed, and generated text can only declare names the surface can
-//! write (`docs/datarepr-design.md` §1.4 as-landed note 1). Those names are
+//! write (`docs/native/datarepr-design.md` §1.4 as-landed note 1). Those names are
 //! not the surface. The surface is `<owner>::<member>` at the name the author
 //! wrote: `BinNat::abs`, `Impl(add, BinNat)::refines`.
 //!
@@ -57,6 +57,10 @@ impl Elaborator {
     /// Record a designed access path and the declaration it resolves to. The
     /// minted name becomes unspellable in user source at the same moment.
     pub(crate) fn designate_access(&mut self, designed: &str, minted: &str) {
+        // Designated again by another module for the same minted name: the
+        // registry already says so, and the event is recorded for this
+        // module's own image.
+        let again = self.access_alias(designed) == Some(minted);
         let access = self.representations.access_mut();
         access
             .alias
@@ -65,11 +69,13 @@ impl Elaborator {
             minted.to_string(),
             Restriction::Designed(designed.to_string()),
         );
-        access
-            .display
-            .push((minted.to_string(), designed.to_string()));
-        access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        if let Some((owner, member)) = designed.rsplit_once("::") {
+        if !again {
+            access
+                .display
+                .push((minted.to_string(), designed.to_string()));
+            access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        }
+        if !again && let Some((owner, member)) = designed.rsplit_once("::") {
             access
                 .owners
                 .entry(owner.to_string())
@@ -113,12 +119,12 @@ impl Elaborator {
         match access.restricted.get(name)? {
             Restriction::Designed(d) => Some(format!(
                 "`{name}` is a generated name and is not part of the surface — write \
-                 `{d}` (docs/repr-access-spellings-design.md §2)"
+                 `{d}` (docs/native/repr-access-spellings-design.md §2)"
             )),
             Restriction::Internal(of) => Some(format!(
                 "`{name}` is an internal of {of} and has no surface spelling: a route's \
                  intermediate is not an access point \
-                 (docs/repr-access-spellings-design.md §3.3)"
+                 (docs/native/repr-access-spellings-design.md §3.3)"
             )),
         }
     }
@@ -144,7 +150,7 @@ impl Elaborator {
                 .join(", ");
             return Some(format!(
                 "`{owner}` has no member `{member}`: its access points are {list} \
-                 (docs/repr-access-spellings-design.md §3.1)"
+                 (docs/native/repr-access-spellings-design.md §3.1)"
             ));
         }
         if !owner.ends_with(')') {

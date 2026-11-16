@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-26
 ---
 
-Round 3 of `docs/native-real-programs-plan.md` (§3.6, §6). Found by building
+Round 3 of `docs/native/native-real-programs-plan.md` (§3.6, §6). Found by building
 probe programs with `write-elf` (2026-10-26):
 
 - `write-elf` never checks that the layout fits the region. `cat(2048)`

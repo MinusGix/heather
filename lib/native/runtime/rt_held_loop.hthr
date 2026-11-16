@@ -1,4 +1,4 @@
-// A loop in a function of a laid record (docs/layout-design.md §9.3,
+// A loop in a function of a laid record (docs/native/layout-design.md §9.3,
 // §9.5 round 4).
 //
 // A function of the record that calls itself last satisfies its own

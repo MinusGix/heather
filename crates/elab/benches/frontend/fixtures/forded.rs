@@ -1,6 +1,6 @@
 //! **The round's soul** — the forded families, whose cost is what a kernel
 //! `def` for generated terms is meant to cut
-//! (`docs/inductive-fording-lowering.md` §14.2 and §14.9, and the two
+//! (`docs/archive/inductive-fording-lowering.md` §14.2 and §14.9, and the two
 //! 2026-08-04 trigger entries in `issues/frontend-benchmarks.md`).
 //!
 //! The seam, in one paragraph. A forded declaration lowers to
@@ -23,7 +23,7 @@
 //!
 //! **The bands record the exponents that exist, not the ones the design
 //! wants**, which is the kernel doc's rule for a band that records a defect
-//! (docs/benchmarking.md, "Adding a family").
+//! (docs/infrastructure/benchmarking.md, "Adding a family").
 //!
 //! Re-recorded 2026-08-04 by `issues/generated-term-defs.md`, and the result
 //! is not the one the phase-1 comment predicted. Routing `μ`, the index type's
@@ -40,7 +40,7 @@
 //! annotation, per motive instantiation, of which there are Θ(constructors).
 //! Θ(n) copies of a Θ(n) type is the residual quadratic, and it is not
 //! reachable by the same lever: `GlobalBinding::Ty` has no body, so a *type*
-//! cannot be a Ψ definition at all. See `docs/inductive-fording-lowering.md`
+//! cannot be a Ψ definition at all. See `docs/archive/inductive-fording-lowering.md`
 //! §14.11.
 //!
 //! The bands below are therefore tightened around the new exponents rather
@@ -87,7 +87,7 @@ fn computed_arms() -> Family {
         // *types* became `El (code^δ)` references — 2.79 → 2.54 and ~0.6× on
         // the constant. What is left quadratic is the `Supf`/`ElimWf`
         // **shape** slots, which carry the `Wf`'s shape component and no
-        // registered code names (`docs/inductive-fording-lowering.md`
+        // registered code names (`docs/archive/inductive-fording-lowering.md`
         // §14.11's closing note). Band tightened around the measured slope.
         what: "a route-2b family with n constructors, and the n-arm match over it",
         unit: "arms",
@@ -163,7 +163,7 @@ fn occurrences() -> Family {
 /// (`Tw(SLeaf)`, `Tw(SBud(s))` with `s` a field), and the classifier tries
 /// route 1 **first** (`inductive.rs::classify_indexed_route`), so this
 /// declaration has never had a skeleton, a `μ`, or a form-A inversion. It is
-/// `docs/inductive-indexed-lowering.md` §8.2 — route 1 at a declared index —
+/// `docs/inductives/inductive-indexed-lowering.md` §8.2 — route 1 at a declared index —
 /// swept along the index type's constructor count, which is that scheme's own
 /// cost dimension: the family node carries one branch per index constructor
 /// and is re-emitted per occurrence.
@@ -231,7 +231,7 @@ fn declared_index_tags() -> Family {
         // index branch (`zj`), whose `shape` annotation is the index type's
         // Θ(n) shape component and is instantiated Θ(n) times per arm — no
         // registered code names a `Wf`'s *shape*, only the whole `Wf`
-        // (`docs/inductive-fording-lowering.md` §14.11's closing note,
+        // (`docs/archive/inductive-fording-lowering.md` §14.11's closing note,
         // `issues/wf-shape-annotation-slots.md`). Band records the exponent
         // that exists, per the suite's rule.
         //

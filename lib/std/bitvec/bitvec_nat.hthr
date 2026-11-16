@@ -83,6 +83,33 @@ theorem BitVec::toNat_band_le_right(n: Nat, x, y: BitVec(n)): x.band(y).toNat() 
     j(sym(BitVec::band_comm(n, x, y)), λ w _ => w.toNat() <= y.toNat(), BitVec::toNat_band_le_left(n, y, x))
 }
 
+// An or is at most its operands added: a bit of `x | y` is set where one of
+// them has it, and where both do the sum carries. Exact where no bit is
+// set in both, which is what bytes joined by shifts are.
+theorem BitVec::of_bit_or_le(a, b: Bool): Nat::of_bit(a || b) <= Nat::of_bit(a) + Nat::of_bit(b) {
+    match a {
+        False => match b { False => trivial, True => trivial },
+        True => match b { False => trivial, True => trivial },
+    }
+}
+
+theorem BitVec::toNat_bor_le_add(n: Nat): (x, y: BitVec(n)) → x.bor(y).toNat() <= x.toNat() + y.toNat() {
+    match n {
+        Zero => λ x y => trivial,
+        Succ(_, ih) => λ x y => {
+            let t = x.tail_bits().bor(y.tail_bits()).toNat();
+            let u = x.tail_bits().toNat();
+            let v = y.tail_bits().toNat();
+            let tails: (t.twice() <= u.twice() + v.twice()) =
+                j(Nat::twice_add(u, v), λ w _ => t.twice() <= w, Nat::twice_le_twice_iff(t, u + v).mpr(ih(x.tail_bits(), y.tail_bits())));
+            j(Nat::add_swap_middle(Nat::of_bit(x.head_bit()), Nat::of_bit(y.head_bit()), u.twice(), v.twice()),
+                λ w _ => Nat::of_bit(x.head_bit() || y.head_bit()) + t.twice() <= w,
+                Nat::add_le_mono(Nat::of_bit(x.head_bit() || y.head_bit()), Nat::of_bit(x.head_bit()) + Nat::of_bit(y.head_bit()),
+                    t.twice(), u.twice() + v.twice(), BitVec::of_bit_or_le(x.head_bit(), y.head_bit()), tails))
+        },
+    }
+}
+
 // With the mask a numeral: `(x & 15).toNat() <= 15`, the form `bv_omega`
 // states, the literal's value read past the width (`toNat_ofNat_le`).
 theorem BitVec::toNat_band_ofNat_le(n: Nat, x: BitVec(n), m: Nat): x.band(BitVec::ofNat(m)).toNat() <= m {
@@ -164,7 +191,7 @@ theorem BitVec::neg_eq_ofNat(n: Nat, a: BitVec(n)): a.neg() = BitVec::ofNat(Nat:
                 trans(Nat::cong(λ (y: Nat) => y + Nat::pow(2, n), BitVec::zero_toNat(n)), Nat::pow(2, n).add_left_zero()))))))
 }
 
-// The values, modulo `2^n` (P6 of docs/native-mathematics-survey.md).
+// The values, modulo `2^n` (P6 of docs/surveys/native-mathematics-survey.md).
 theorem BitVec::toNat_add_mod(n: Nat, a, b: BitVec(n)): a.add(b).toNat() = (a.toNat() + b.toNat()).mod(Nat::pow(2, n)) {
     trans(@cong(λ (w: BitVec(n)) => w.toNat(), a.add(b), BitVec::ofNat(a.toNat() + b.toNat()), BitVec::add_eq_ofNat(n, a, b)),
         BitVec::toNat_ofNat_mod(n, a.toNat() + b.toNat()))
@@ -172,6 +199,11 @@ theorem BitVec::toNat_add_mod(n: Nat, a, b: BitVec(n)): a.add(b).toNat() = (a.to
 
 theorem BitVec::toNat_mul_mod(n: Nat, a, b: BitVec(n)): a.mul(b).toNat() = (a.toNat() * b.toNat()).mod(Nat::pow(2, n)) {
     BitVec::toNat_ofNat_mod(n, a.toNat() * b.toNat())
+}
+
+// A sum that does not wrap is the sum of the numbers.
+theorem BitVec::toNat_add_of_lt(n: Nat, a, b: BitVec(n), fits: a.toNat() + b.toNat() < Nat::pow(2, n)): a.add(b).toNat() = a.toNat() + b.toNat() {
+    trans(BitVec::toNat_add_mod(n, a, b), (a.toNat() + b.toNat()).mod_of_lt(Nat::pow(2, n), fits))
 }
 
 theorem BitVec::toNat_sub_mod(n: Nat, a, b: BitVec(n)):
@@ -355,7 +387,7 @@ theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
 }
 
 // The modular image of a Nat at a width: `value` increments from zero. It is
-// how typed machine certificates carry a Nat (docs/native-bounded-loops-design.md
+// how typed machine certificates carry a Nat (docs/archive/native-bounded-loops-design.md
 // §9a): every equality about it is unconditional, and a bound is needed only
 // to read the word back as the Nat (`toNat_word_of_nat`).
 fn word_of_nat(n: Nat, value: Nat) → BitVec(n) { BitVec::zero().iterate_increment(value) }

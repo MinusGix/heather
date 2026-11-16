@@ -206,7 +206,7 @@ theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree
         cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exited_with, BitVec::ofNat_toNat(64, raise_letter(byte_word(byte))))))
 }
 
-// It compiles (docs/native-one-compiler-design.md §2.2): the call is the
+// It compiles (docs/native/native-one-compiler-design.md §2.2): the call is the
 // function's code after the program's, called by the System V convention.
 // The homes carry where the function's values go (`Homes::placed`), a
 // proposal like the words' own; with none the functions do not link.
@@ -235,7 +235,7 @@ theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::o
 theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
     Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
 
-// A function lent the program's buffer (docs/native-one-compiler-design.md
+// A function lent the program's buffer (docs/native/native-one-compiler-design.md
 // §2.3): the newlines of "a\n\nb", counted by a function the program
 // calls. The source's meaning answers the call over the buffer as it is,
 // with no address (`program_readers`).
@@ -356,7 +356,7 @@ theorem asks_where_refused(): asks_where().source().refusal(region_low(),
 
 // A function that stores into its buffer links: a program lends its
 // buffers to write, and the statements after the call read the file the
-// callee left (docs/native-one-compiler-design.md §3, U4 step 4b-3).
+// callee left (docs/native/native-one-compiler-design.md §3, U4 step 4b-3).
 // overwrites(i): `i`'s low byte at `i` of the buffer, answering the byte
 // then there, or 256 past the capacity.
 fn overwrites() → Function {
@@ -450,7 +450,7 @@ theorem line_copied_spelled(): line_copied(2, 5).source().functions.spell_functi
 // (`tail_c7_window_tool`, crates/cli/tests/native_tools.rs).
 
 // ---------------------------------------------------------------------------
-// Procedures (docs/native-procedures-design.md)
+// Procedures (docs/native/native-procedures-design.md)
 
 // The sum of 0..n by a non-tail recursion: the parameter is read after the
 // call. Its words are its own, numbered from 0.

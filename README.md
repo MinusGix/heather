@@ -43,19 +43,19 @@ theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, l
 
 // So clamping twice is clamping once.
 theorem clamp_twice(x: u64, {lo, hi: u64}, ordered: lo <= hi): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
-    let within = clamp_within(x, ordered);
-    clamp_inside(within.left, within.right)
+    split_all; all_goals { bv_omega }
 }
 ```
 
-`split_all` splits the goal on each test `clamp` makes, and `bv_omega`
-decides the linear facts about machine words left in each case.
+`split_all` splits the goal on each test `clamp` makes, inner calls
+included, and `bv_omega` decides the linear facts about machine words left
+in each case.
 
 `heather compile-x86 examples/readme/words.hthr clamp -o clamp.s` writes the
 function as 46 bytes of x86-64:
 
 ```text
-    add    $-0x70,%rsp      ; its room on the stack
+    add    $0x0,%rsp        ; a leaf's frame: none
     cmp    %rsi,%rdi        ; x < lo ?
     jae    1f
     mov    %rsi,%rax        ; lo
@@ -65,46 +65,159 @@ function as 46 bytes of x86-64:
     mov    %rdx,%rax        ; hi
     jmp    3f
 2:  mov    %rdi,%rax        ; x
-3:  add    $0x70,%rsp
+3:  add    $0x0,%rsp
     ret
 ```
 
 and a certificate beside them, which the kernel checks before anything is
-written. It is two theorems put together. The first is the generator's,
-published with every `runtime fn`: the program it built from `clamp`'s body
-computes `clamp`.
+written. The compiler is proved correct once, for every program it accepts
+([what that theorem says, assumes and leaves out](docs/native/compiler-theorem.md)):
+
+<!-- checked: lib/native/function_ir/function_ir_correct.hthr -->
+```heather
+theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
+    code.Computes(machine, f, rooms(f), arguments, program_eval(functions, f, arguments)) { … }
+```
+
+`code.Computes(…)` is the System V contract at every load address: entered
+with the arguments in RDI, RSI, RDX, …, the code returns the answer in RAX,
+keeps the callee-saved registers, and stores nowhere but its own room on the
+stack. Every `runtime fn` comes with its generator's half, `clamp::agrees`:
+the program built from `clamp`'s body evaluates to `clamp`. Together:
 
 <!-- checked: examples/readme/words.hthr -->
 ```heather
-theorem clamp_program(x, lo, hi: u64): program_eval(clamp::program, 0, [x, lo, hi]) = clamp(x, lo, hi) {
-    clamp::agrees(x, lo, hi)
+// Whatever machine code `compile-x86` lowers `clamp`'s program to, that
+// code implements `clamp`: at any three words, wherever it is loaded, it
+// returns what `clamp` does.
+theorem clamp_implements<M>(placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(clamp::program, placement, [], rooms) = Some(code), machine: Machine<M>):
+    code.Implements(machine, 0, rooms(0), 3, clamp) { … }
+
+// So the theorems about `clamp` are theorems about the code: for ordered
+// bounds, it returns a word within them.
+theorem clamp_code_within<M>(placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(clamp::program, placement, [], rooms) = Some(code), machine: Machine<M>,
+    x: u64, {lo, hi: u64}, ordered: lo <= hi):
+    Exists<u64>(λ v => code.Computes(machine, 0, rooms(0), [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) { … }
+```
+
+The certificate `compile-x86` writes is this at the code above, with the
+lowering a literal checked by evaluation. Nothing in `words.hthr` mentions a
+register.
+
+## A loop, over bytes
+
+A `runtime fn` whose first parameter is a span of bytes is compiled to a
+function of a pointer and a length, and a `decreases` loop to a loop. This is
+`wc -l`:
+
+<!-- checked: examples/readme/lines.hthr -->
+```heather
+// How many of the span's bytes from `i` are newlines, added to `count`.
+runtime fn List::newlines(self span: List<u8>, length, i, count: u64) → u64
+    decreases (length - i).toNat() {
+    if h: i < length {
+        if span.byte_within(length, i) = 10 {
+            span.newlines(length, i + 1, count + 1)
+        } else {
+            span.newlines(length, i + 1, count)
+        }
+    } else {
+        count
+    }
+}
+
+// At most one newline a byte.
+theorem List::newlines_at_most(self span: List<u8>, length, i, count: u64, room: count.toNat() + (length.toNat() - i.toNat()) < 2 ^ 64):
+    span.newlines(length, i, count).toNat() <= count.toNat() + (length.toNat() - i.toNat()) {
+    induct List::newlines(span, length, i, count); all_goals { bv_omega }
+}
+
+// `wc -l`: the newlines among the span's first `length` bytes.
+runtime fn List::count_lines(self span: List<u8>, length: u64) → u64 {
+    span.newlines(length, 0, 0)
+}
+
+theorem List::count_lines_at_most(self span: List<u8>, length: u64): span.count_lines(length) <= length {
+    let bound = span.newlines_at_most(length, 0, 0, bv_omega);
+    bv_omega
 }
 ```
 
-The second is the compiler's correctness, proved once in
-`lib/native/function_ir/`: any program it lowers, called at a function's
-label with the arguments in their registers, returns what the program
-computes in RAX, keeps the callee-saved registers, and stores nowhere but
-its own room on the stack.
+`induct` is induction along the function: one case per branch, each with
+its test as a hypothesis and the claim at the recursive call. No proof here
+is about indices: `byte_within` is total, and its read is compiled under its
+own bounds test.
+`heather compile-x86 examples/readme/lines.hthr List::count_lines` writes 317
+bytes that C calls as `uint64_t list_count_lines(const uint8_t *, uint64_t)`.
 
-<!-- checked: lib/native/function_ir/function_ir_compile.hthr -->
+## A sort that writes its buffer, proved to sort
+
+A `mut self` span is a buffer the function stores into: `s.put_within(n, j, b)`
+writes byte `b` at offset `j`, and the compiled code writes the caller's
+memory. This is the textbook insertion sort, each loop a recursion the
+compiler turns into a loop (`examples/sort/`):
+
+<!-- checked: examples/sort/sort.hthr -->
 ```heather
-theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, program: Prog,
-    lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
-    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
-    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
-    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
-    evaluates: program_eval(functions, f, arguments) = answer):
-    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i,
-        stack.CalleePost(answer))
+// Opens a hole for `key` in the sorted bytes before `j`, whose place `j` is
+// free: each byte above `key` moves up one. Answers where the hole is.
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if h: 0 < j {
+        let below = s.byte_within(n, j - 1);
+        if larger: key < below.zero_extend(56) {
+            s.put_within(n, j, below);
+            s.sift(n, j - 1, key)
+        } else {
+            j
+        }
+    } else {
+        j
+    }
+}
+
+runtime fn List::sort_from(mut self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
+    if h: i < n {
+        let key = s.byte_within(n, i);
+        let hole = s.sift(n, i, key.zero_extend(56));
+        s.put_within(n, hole, key);
+        s.sort_from(n, i + 1)
+    } else {
+        i
+    }
+}
+
+runtime fn sort_in_place(s: List<u8>, n: u64) → Mutated<List<u8>, u64> {
+    let mut s = s;
+    let end = s.sort_from(n, 0);
+    Mutated(s, end)
+}
+
+theorem sort_in_place_sorts(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
+    s.SortedPerm(BitVec::unsigned_le, sort_in_place(s, n).after)
+{
+    sort_from_sorts(s, n, 0, sized, rewrite(s.take_zero(), trivial))
+}
+
+theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
+    sort_in_place(s, n).after = s.insertion_sort(BitVec::unsigned_le)
+{
+    s.sorted_perm_unique(BitVec::unsigned_le, sort_in_place(s, n).after, s.insertion_sort(BitVec::unsigned_le),
+        sort_in_place_sorts(s, n, sized), s.insertion_sort_correct(BitVec::unsigned_le))
+}
 ```
 
-The certificate instantiates it at `clamp`'s program, its lowering (a
-literal, checked by evaluation) and `clamp_program`. So `clamp_within` is a
-fact about what these bytes return, and nothing in `words.hthr` mentions a
-register. The platform around the code (the loader, stack alignment, the C
-caller) is outside the proof.
+`.after` is the buffer as the function leaves it. The first theorem says it
+is sorted and a permutation of what was there. The second follows in one
+step, since a list has only one sorted permutation: the compiled loop is the
+library's functional insertion sort. `sort_from_sorts`, the outer loop's
+invariant, and the inner loop's `insert_at_inserts` are in the file, with
+[how the proof goes](examples/sort/README.md). Compiled, it is a command-line
+tool: `printf 'hello world' | bytesort` prints ` dehllloorw`.
 
 ## SHA-256, compiled and proved
 
@@ -287,5 +400,6 @@ To link the result from C or Rust, see
   `crates/linked` — compiled Heather linked into Rust; `crates/lsp` — editor
   support
 - `book/` — the language guide (`mdbook build`); `docs/` — design documents,
-  starting from [`docs/roadmap.md`](docs/roadmap.md)
+  mapped in [`docs/README.md`](docs/README.md), and the roadmap,
+  [`docs/roadmap.md`](docs/roadmap.md)
 - `issues/` — the issue tracker (`scripts/issue`, `issues/README.md`)

@@ -37,7 +37,7 @@ unfolding) proposition is still skipped.
 - 2026-10-12: LANDED. Omega now reads a fact or goal through a defined proposition, a call
   computing to `Succ(…)`/`OfNat(…)`, a field of a call that unfolds to a
   constructor, a factor computing to a numeral, and a `cong` of a function
-  literal; design in docs/omega-measure-reduction-design.md §11. Acceptance: the
+  literal; design in docs/tactics/omega-measure-reduction-design.md §11. Acceptance: the
   typed restatements in `lib/std/pos.hthr` and `lib/std/num/rat.hthr` are gone
   (`Pos::mul_val` keeps its two product facts, which are not restatements), and
   `crates/elab/tests/omega_defined_propositions.rs` covers the rows plus three

@@ -7,7 +7,7 @@
 //!
 //! What the positives vary (docs/testing-generated-terms.md): a neutral
 //! scrutinee (a computed one refines by syntactic occurrence, the last tests
-//! below, docs/dependent-match-compiler-design.md §5), a hypothesis behind a
+//! below, docs/language/matching/dependent-match-compiler-design.md §5), a hypothesis behind a
 //! defined head, an **open** element type (`Opt<A>`), a goal that refines
 //! with the hypothesis, a dependent chain of hypotheses, and checking
 //! position throughout. The controls show that the refinement is per arm.

@@ -12,7 +12,7 @@ updated: 2026-11-09
 with lazy dispatch methods, the cheap producer first and a fuel-bounded
 search last, a check being a search with a small budget, and a failed search
 skipping the optimization. This issue owns making that real.
-`docs/facts-on-demand-design.md` is the design and the record of the first
+`docs/native/facts-on-demand-design.md` is the design and the record of the first
 round.
 
 ## What landed (2026-11-01)
@@ -23,7 +23,7 @@ round.
   `is_search_rule`). No image change.
 - **`Synth`**, a host request running `:= infer`'s search at a handle,
   refused with the trace when nothing answers
-  (`docs/host-elaboration-interface-design.md` §21).
+  (`docs/metaprogramming/host-elaboration-interface-design.md` §21).
 - **`request` / `request_in` / `budgeted`** (`lib/std/tactic/fact_request.hthr`):
   producers, then the requester's fallbacks under a request budget, each
   answer checked at the goal; `None` means skip.
@@ -59,4 +59,4 @@ round.
   range analysis, the range analysis and the exhaustive check; the fourth,
   a real out-of-bounds read, kept).
 - 2026-11-05: gardener: cites a file it shares with [[regex-dfa-compiler]] (`docs/compilation-vision.md`).
-- 2026-11-09: 2026-11-09: a framework that makes each new analysis a lattice, transfers and local lemmas is filed as [[dataflow-checked-fixpoints]], with [[word-abstract-domains]] as its numeric domains (docs/native-mathematics-survey.md §5–6).
+- 2026-11-09: 2026-11-09: a framework that makes each new analysis a lattice, transfers and local lemmas is filed as [[dataflow-checked-fixpoints]], with [[word-abstract-domains]] as its numeric domains (docs/surveys/native-mathematics-survey.md §5–6).

@@ -1,4 +1,4 @@
-# Heather frontend benchmark baseline — see docs/frontend-benchmarking.md
+# Heather frontend benchmark baseline — see docs/infrastructure/frontend-benchmarking.md
 # Regenerate with: scripts/bench-frontend --save
 env	host	vm
 env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz

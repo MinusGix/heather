@@ -1,5 +1,5 @@
-// A call's code, as claims of trees (docs/native-procedures-design.md §4–§5;
-// docs/native-procedures-are-functions-design.md, steps 5a to 5c): the
+// A call's code, as claims of trees (docs/native/native-procedures-design.md §4–§5;
+// docs/native/native-procedures-are-functions-design.md, steps 5a to 5c): the
 // pieces `native_compile_correct` chains into a call's claim and a
 // procedure's.
 //
@@ -1526,7 +1526,7 @@ fn Target::Ends(self t: Target, answer: Answer, env: Env, g0: Gprs, ret: BitVec(
     }
 }
 
-// The one contract of a callee (docs/native-procedures-are-functions-design.md
+// The one contract of a callee (docs/native/native-procedures-are-functions-design.md
 // §2.4). Label `label` is a callee's: entered as the one call sequence
 // enters it (`Prog::calls`), the homes of the `lent` buffers it is lent and
 // then words it accepts in the call registers, the return address on the
@@ -1703,7 +1703,7 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
 // region of zeros, with the command line above the stack, holds the start,
 // and `main` is the activation running, its frame at the stack's top with
 // no frames above it and `depth` calls of room
-// (docs/native-procedures-design.md §5). Nothing is asked of what the
+// (docs/native/native-procedures-design.md §5). Nothing is asked of what the
 // stack held.
 theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slotted(live).IsTrue(), bare: t.frames = Nil,
     depth: Nat, deep: t.room = depth, small: depth < Nat::pow(2, 64),

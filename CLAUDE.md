@@ -10,12 +10,18 @@ Notes for one area sit beside it and load when a session works there:
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
 - **Cap every direct `heather` run too**: deep conversion workloads are
-  memory-superlinear. `(ulimit -v 8388608 -t 120 -c 0; target/release/heather
-  check <file>)`, loosening deliberately per run — never uncapped. Keep
-  `-c 0`: a process killed at the rail otherwise writes a core of its full size.
+  memory-superlinear. `target/release/heather check --limits dev <file>`
+  (8 GiB of address space, 120 CPU-s, no core), loosening deliberately per
+  run (`--limits dev,cpu=600`, `memory=16G`) — never uncapped. Every
+  subcommand takes `--limits`, and `HEATHER_LIMITS=dev` in the environment
+  does the same; it is off unless asked for, so it stays out of commands
+  written for users (`crates/cli/src/limits.rs`). Keep `core=0` (in `dev`):
+  a process killed at the rail otherwise writes a core of its full size.
+  `cargo` and anything that is not `heather` still takes the shell's
+  `ulimit`.
   - **To probe one declaration**: `--cache --only <item> --timings f.tsv`
     elaborates and gates just it over a replayed prefix
-    (`docs/check-only-design.md`; the run is labelled and `scripts/timings`
+    (`docs/infrastructure/check-only-design.md`; the run is labelled and `scripts/timings`
     refuses to diff it against a whole run).
   - **A run killed at the rail still leaves its attribution**: a `--timings`
     table is appended as scopes close, and `<stem>.open.tsv` beside it names
@@ -45,20 +51,22 @@ Notes for one area sit beside it and load when a session works there:
 | A change to the kernel's traversals or bounds memo | `scripts/test --long` (own target dir) as a sweep, not a gate |
 
 The header of `scripts/test` says exactly what each lane runs and skips; why
-the lanes are cut this way is `docs/testing-architecture-design.md`.
+the lanes are cut this way is `docs/infrastructure/testing-architecture-design.md`.
 
 - **`--fast` and `--pr` replay semantic images an earlier compiler build
   wrote** instead of re-elaborating unchanged library modules (a module
   whose dependency changed in a way it did not observe has its image moved,
-  `docs/module-interface-cutoff-design.md`). Plain
+  `docs/infrastructure/module-interface-cutoff-design.md`). Plain
   `scripts/test` is the exact image policy, which re-elaborates every library
   module after a compiler edit; it is the nightly master sentinel's lane, so
   run it yourself only for the two rows above that name it.
-- **`--fast` and `--pr` run the `heather` binary with the kernel's sampled
-  self-checks off** (`HEATHER_KERNEL_SELF_CHECKS=off`): the sample is most of
-  a `runtime fn` generator module's check under the test profile
-  (`issues/kernel-self-check-cost-on-skipped-terms.md`). To time a module as
-  those lanes see it with `target/debug/heather`, set it too.
+- **The kernel's slow self-checks are off by default in every lane**
+  (`crates/kernel/src/checks.rs`): a sample of them was most of a `runtime
+  fn` generator module's check under the test profile
+  (`issues/kernel-self-check-cost-on-skipped-terms.md`). The kernel's
+  property tests and `--long` run them in full;
+  `HEATHER_KERNEL_SELF_CHECKS=sampled` or `full` turns them on for one
+  `heather` run.
 - **`--fast`** also skips the whole-library acceptance tests, the mutation
   controls and the native x86 certificate gates
   (`crates/cli/tests/native*.rs`): the `SKIP` list in `scripts/test`.
@@ -154,7 +162,7 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
 - **Tactics build `Tac` values through calls**: `pure(a)`, `ask(r)`,
   `ask_then(r, k)`, never `Pure(…)`/`Ask(…)` as a value (patterns are
   free). A written tier-2 constructor re-spells `Tac`'s `W` encoding for the
-  kernel at every occurrence and every wildcard copy (docs/grind-design.md
+  kernel at every occurrence and every wildcard copy (docs/tactics/grind-design.md
   §14.6, issues/tier2-constructor-value-cost.md).
 - **Syntax is shared through the kernel's `Rc`**: `use heather_kernel::rc::Rc;`
   (`crate::rc::Rc` inside the kernel), never `std::sync::Arc` under an alias.
@@ -175,6 +183,12 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
   The issue files are the only tracked state: there is no committed index.
   `scripts/issue index` prints the one-line-per-issue overview to stdout and
   `scripts/issue list` the table; never commit an `INDEX.md`.
+- **Docs: `docs/README.md` is the map**; a new doc goes in its area's
+  folder there, and a later round extends its subject's doc. A doc whose code is deleted or
+  replaced leaves in the same change: deleted if nothing live cites it (its
+  mentions become `docs/<name>.md@<rev>`), moved to `docs/archive/` if code
+  still cites its sections. Papers go in `docs/papers/` with a row in its
+  README.
 - Commit a completed issue fix once it is verified. Keep commits narrowly
   scoped, with descriptive messages, so small iterations are easy to resume
   across sessions.
@@ -189,6 +203,11 @@ the lanes are cut this way is `docs/testing-architecture-design.md`.
   compares). A build that fails with `undefined symbol: scan_token` is one of
   those files having lost a symbol: `git checkout HEAD --
   crates/linked/generated/<file>.s`, build, then run `scripts/linked`.
+- **A `compile-x86` that dies at the rail inside `evaluate_numbers`**: set
+  `HEATHER_READ_TRACE=1` and it reports each read's evaluator steps, time and
+  the process's peak memory during it. A read keeps everything it evaluates
+  until it ends, so the read with the steps is the one holding the memory
+  (`issues/compile-x86-address-space-margin.md`).
 - When `compile-x86` answers "the verified lowering refused this program
   with the planner's placement", it names the node refused, its place and
   what each register held (`lib/native/function_ir/function_ir_refusal.hthr`

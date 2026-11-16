@@ -1,5 +1,5 @@
 //! No-confusion on the `IWf` route's families, both forms
-//! (`docs/iwf-infinitary-design.md` §13): `absurd` between two constructors
+//! (`docs/kernel/iwf-infinitary-design.md` §13): `absurd` between two constructors
 //! and `inj` at a payload field, kernel-checked, at literal and open data,
 //! at literal and open indices, with negative controls.
 

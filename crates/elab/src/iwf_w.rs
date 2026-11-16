@@ -1,5 +1,5 @@
 //! Indexed families with a recursive **function** field: the `IWf` route's
-//! surface lowered on the kernel's `W` (docs/iwf-infinitary-design.md; the
+//! surface lowered on the kernel's `W` (docs/kernel/iwf-infinitary-design.md; the
 //! section numbers below are that document's).
 //!
 //! ```text
@@ -47,7 +47,7 @@ fn app(fun: Term, arg: Term) -> Term {
 }
 
 fn join(a: &Level, b: &Level) -> Level {
-    Level::join(a.clone(), b.clone())
+    Level::max(a.clone(), b.clone())
 }
 
 fn pi(dom_level: &Level, cod_level: &Level, dom: Type, cod: Type) -> Type {
@@ -620,7 +620,7 @@ fn code_or(t: &Type, what: &str, span: Span) -> R<Term> {
         None => err(
             format!(
                 "{what} has no code, which an indexed family with a recursive function \
-                 field needs (docs/iwf-infinitary-design.md §1)"
+                 field needs (docs/kernel/iwf-infinitary-design.md §1)"
             ),
             span,
         ),
@@ -845,7 +845,7 @@ impl IwfW<'_> {
                                 "the recursive function fields of `{first}` and `{}` have \
                                  domains at different universe levels; an indexed family \
                                  with function fields needs one level for all of them \
-                                 (docs/iwf-infinitary-design.md §1)",
+                                 (docs/kernel/iwf-infinitary-design.md §1)",
                                 ind.ctors[k].name
                             ),
                             span,
@@ -1494,7 +1494,7 @@ impl IwfW<'_> {
                     children.push((Rc::new(term.clone()), Rc::new(ih), ih_ty, mlvl.clone()));
                     // Under a member constructor the varying index is the
                     // member's own, the constructor's one argument
-                    // (docs/mutual-inductive-design.md §5).
+                    // (docs/inductives/mutual-inductive-design.md §5).
                     let at = if env.rebind_inner {
                         ind.index_ty
                             .as_ref()

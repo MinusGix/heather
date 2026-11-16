@@ -1,6 +1,6 @@
 // A window of a list and the list with a window replaced: the two halves
 // of reading and writing part of a buffer through a view of it
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 //
 // `xs.window(start, end)` is the elements from `start` up to `end`, and
 // `xs.put_window(start, ys)` is `xs` with `ys` written over it from
@@ -569,4 +569,50 @@ theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len()
 // Only the empty list has no length.
 theorem List::nil_of_len_zero<A>(self xs: List<A>): xs.len() = 0 → xs = Nil {
     match xs { Nil => λ _ => refl, Cons(_, t) => λ no => { let pos: (Cons(_, t).len() = Succ(t.len())) = refl; false_elim(omega) } }
+}
+
+// Updating past a prefix updates the rest.
+theorem List::update_append_r<A>(self xs, ys: List<A>, i: Nat, f: A → A): (xs ++ ys).update(i + xs.len(), f) = xs ++ ys.update(i, f) {
+    match xs {
+        Nil => {},
+        Cons(h, t) => List::cong_cons(h, t.update_append_r(ys, i, f)),
+    }
+}
+
+// The last element split off a nonempty list.
+theorem List::split_last<A>(self xs: List<A>, k: Nat, pad: A, at: xs.len() = Succ(k)): xs = xs.take(k) ++ [xs.nth(k).unwrap_or(pad)] {
+    match xs {
+        Nil => absurd(at),
+        Cons(h, t) => match k {
+            Zero => {
+                let none: (t.len() = 0) = omega;
+                match t { Nil => refl, Cons(_, _) => absurd(none) }
+            },
+            Succ(m) => List::cong_cons(h, t.split_last(m, pad, omega)),
+        },
+    }
+}
+
+// A list split at an index it holds: before it, the element, after it.
+theorem List::split_at<A>(self xs: List<A>, k: Nat, pad: A, inside: k < xs.len()):
+    xs = xs.take(k) ++ Cons(xs.nth(k).unwrap_or(pad), xs.drop(Succ(k)))
+{
+    match xs {
+        Nil => { let no: False = omega; false_elim(no) },
+        Cons(h, t) => match k {
+            Zero => List::cong_cons(h, sym(t.drop_zero())),
+            Succ(m) => List::cong_cons(h, t.split_at(m, pad, omega)),
+        },
+    }
+}
+
+// Taking at least the whole list takes all of it.
+theorem List::take_all<A>(self xs: List<A>, k: Nat, past: xs.len() <= k): xs.take(k) = xs {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match k {
+            Zero => { let no: False = omega; false_elim(no) },
+            Succ(m) => List::cong_cons(h, t.take_all(m, omega)),
+        },
+    }
 }

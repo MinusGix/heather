@@ -1,6 +1,6 @@
 // Heather's scanner: the automaton that cuts a source file into tokens, a
 // byte at a time, as compiled code (issues/self-lexer-linked.md, stage L1 of
-// docs/native-lexer-crypto-roadmap.md §3).
+// docs/native/native-lexer-crypto-roadmap.md §3).
 //
 // A scanner says where each token starts and ends and which kind it is. It
 // is the half of a lexer that reads every byte, and it holds no values: a

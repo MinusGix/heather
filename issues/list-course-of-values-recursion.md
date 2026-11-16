@@ -11,7 +11,7 @@ on a grandchild (or great-great-grandchild) of the scrutinee. Structural
 recursion on lists refuses that — "argument `bytes` has to be one of the
 recursive fields bound by the enclosing `match`. A deeper subterm is refused
 too" — while `Nat` admits it since [[recursion-at-deeper-subterms]]
-(`docs/course-of-values-recursion-design.md`, customer `nat::half`). The
+(`docs/language/recursion/course-of-values-recursion-design.md`, customer `nat::half`). The
 `decreases` route is no help either: a measured body written with the
 equation bindings its obligations need gets no unfolding equation
 ([[unfolding-computed-scrutinee]]), so nothing about it is provable at an
@@ -31,7 +31,7 @@ directly and delete the fuel.
 
 ## Log
 
-- 2026-09-18: Design 2026-09-18: docs/list-course-of-values-design.md — the Nat window with `pred` replaced by the recursive-field projection, on chain-shaped Wf inductives; convoy by term with constructor rebuild; customer is the fuel-free `utf8::decode`.
+- 2026-09-18: Design 2026-09-18: docs/language/recursion/list-course-of-values-design.md — the Nat window with `pred` replaced by the recursive-field projection, on chain-shaped Wf inductives; convoy by term with constructor rebuild; customer is the fuel-free `utf8::decode`.
 - 2026-09-18: **Done.** `crates/elab/src/wf.rs` carries the `Nat` window to
   chain-shaped `Wf` declarations: `tail_D` as a `Branches::Tail` eliminator,
   the window and convoy threaded as `WfRec`/`WfConvoy`, and
@@ -40,7 +40,7 @@ directly and delete the fuel.
   `rest`/`rest2`/`rest3`/`rest4` directly, `decode_at` and the fuel are gone,
   and theorems 3–6 close (`decode_at_encode_chars` is now
   `decode_encode_chars`, with no `list_len` anywhere in its statement).
-  `docs/list-course-of-values-design.md` §7 records the five amendments the
+  `docs/language/recursion/list-course-of-values-design.md` §7 records the five amendments the
   implementation made, of which the load-bearing one is that a `Wf` arm's
   child is not a subterm of the arm's value, so the convoyed `match`'s
   codomain is rebuilt rather than synthesized.

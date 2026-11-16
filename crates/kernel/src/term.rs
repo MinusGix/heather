@@ -216,9 +216,9 @@ impl std::fmt::Display for GlobalVar {
     }
 }
 
-/// A variable prints as the tuple struct it was, so the printed forms that
-/// are hashed (`crates/elab/tests/determinism.rs`) are unchanged for a Ψ
-/// with no signature.
+/// A variable prints as the tuple struct `GlobalVar(i)`, so the printed
+/// forms that are hashed (`crates/elab/tests/determinism.rs`) do not depend
+/// on the encoding for a Ψ with no signature.
 impl std::fmt::Debug for GlobalVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GlobalVar({self})")
@@ -264,9 +264,8 @@ pub enum Type {
     /// relevance plus strictness. Any two terms at this type are convertible
     /// (`conv.rs` irrelevance arm). It has no eliminator: it is inhabited
     /// exactly when its endpoints convert, with one proof up to conversion
-    /// (`transp` was removed with route 2b's fording,
-    /// docs/iwf-former-design.md §7). Extension beyond DeLaM ch. 04
-    /// (docs/sprop-design.md §2.1). Admitted at layer c like every
+    /// (docs/kernel/iwf-former-design.md §7). Extension beyond DeLaM ch. 04
+    /// (docs/kernel/sprop-design.md §2.1). Admitted at layer c like every
     /// other former: it has its own code branches (`ty_seq`/`tm_seq`).
     SEq {
         level: Level,
@@ -280,7 +279,7 @@ pub enum Type {
     /// reason. As at [`Type::Empty`] (Empty η),
     /// any two terms at this type are convertible — vacuously sound, and it
     /// keeps absurdity proofs invisible when they ride in data
-    /// (docs/sprop-design.md §2.2; the Empty-reuse alternative is §2.2's
+    /// (docs/kernel/sprop-design.md §2.2; the Empty-reuse alternative is §2.2's
     /// costed shed). Admitted at layer c with [`Type::SEq`].
     SEmpty {
         level: Level,
@@ -310,7 +309,7 @@ pub enum Type {
     /// **Level-indexed, not level-polymorphic** — `Unit^l` and `Unit^{l'}` are
     /// distinct types, so every type still has exactly one level. That is
     /// load-bearing: see [`crate::typing`]'s `ty_check` and
-    /// `docs/unit-empty-level-indexing.md`.
+    /// `docs/kernel/unit-empty-level-indexing.md`.
     Unit {
         level: Level,
     },
@@ -346,8 +345,8 @@ pub enum Type {
     /// former: `Vec(T; 0) ⇝ Unit`, `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)`;
     /// neutral at a neutral length, no η of its own (η arrives through the
     /// reductions). No introduction/elimination forms — values are pairs.
-    /// Substrate for `Wf` (docs/wf-former-design.md §1.1); admitted at the
-    /// code layer since phase 3 gave it `TmVec` and its rec.rs branches.
+    /// Substrate for `Wf` (docs/kernel/wf-former-design.md §1.1); admitted at the
+    /// code layer, with `TmVec` and its rec.rs branches as its code.
     Vec {
         level: Level,
         elem: Rc<Type>,
@@ -355,7 +354,7 @@ pub enum Type {
     },
     /// `Fin(k)` — canonical finite index types: `Fin(0) ⇝ Empty`,
     /// `Fin(S k) ⇝ Unit + Fin(k)`; neutral at a neutral length. Lives at 0.
-    /// Same phase gate as [`Type::Vec`] (docs/wf-former-design.md §1.2).
+    /// Has a code, as [`Type::Vec`] has (docs/kernel/wf-former-design.md §1.2).
     Fin { len: Rc<Term> },
     /// `Wf^l(x : S). n` — the **finitary** branching fixed point: shapes
     /// `S`, arity a `Nat` *term* with the shape free (`arity` binds one
@@ -364,12 +363,12 @@ pub enum Type {
     /// alone — the arity is data, not a type.
     ///
     /// The difference from [`Type::W`] is the whole point (route C of
-    /// docs/branching-inductives-choice.md): `W` stores children in a `Π`,
+    /// docs/inductives/branching-inductives-choice.md): `W` stores children in a `Π`,
     /// which this kernel deliberately does not η-expand, so bridging an
     /// abstract child function to a constructor form needs funext. `Wf`
     /// stores them in a [`Type::Vec`], i.e. in `Σ`/`Unit`, whose η is
     /// already in `conv.rs` — so the same bridge is a conversion.
-    /// Same phase gate as [`Type::Vec`] (docs/wf-former-design.md §1.3).
+    /// Has a code, as [`Type::Vec`] has (docs/kernel/wf-former-design.md §1.3).
     Wf {
         level: Level,
         shape: Rc<Type>,
@@ -381,12 +380,11 @@ pub enum Type {
     /// `DVec(S k; i. F) ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec(k; j. F[inr j/i])`
     /// (the injections annotated by `Fin(S k)`'s reduct, `Unit^0 + Fin(k)`);
     /// neutral at a neutral length, no η of its own. Lives at `l`. Children
-    /// substrate of `IWf` (docs/iwf-former-design.md §1.1); its projection is
+    /// substrate of `IWf` (docs/kernel/iwf-former-design.md §1.1); its projection is
     /// the derived [`dnth`], not a former.
     ///
-    /// Code since the rec.rs round (design §13 step 4): `TmDVec` and the
-    /// `ty_dvec`/`tm_dvec` branches, as `Vec` became at its phase 3. A
-    /// takes-a-binder former rather than a
+    /// Has a code (design §13 step 4): `TmDVec` and the `ty_dvec`/`tm_dvec`
+    /// branches, as `Vec` has. A takes-a-binder former rather than a
     /// family argument because Heather has no type-valued functions. `Vec^l(T;
     /// k)` and `DVec^l(k; _. T)` agree reduct for reduct at a canonical
     /// length and are distinct neutral types at a neutral one; they are not
@@ -398,7 +396,7 @@ pub enum Type {
     },
     /// `IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` — the finitary indexed
     /// fixed point, Dybjer's finitary inductive families in [`Type::Wf`]'s
-    /// shape (docs/iwf-former-design.md §1.2). `idx` is the index type `I`
+    /// shape (docs/kernel/iwf-former-design.md §1.2). `idx` is the index type `I`
     /// at `li`, `shape` the shapes `S` at `l`; `arity` (`n : Nat`) and `out`
     /// (the constructor's output index `o : I`) bind one local, `x : S`;
     /// `child` (the child index `c : I` at position `i`) binds two,
@@ -411,14 +409,14 @@ pub enum Type {
     /// The signature (everything but the index) is one shared [`IWfSig`]:
     /// flat, its two levels and five components would make every `Type`
     /// a third larger, and the checker's recursion holds `Type`s in each
-    /// frame (`docs/native-depth-budget-design.md`).
+    /// frame (`docs/kernel/native-depth-budget-design.md`).
     ///
-    /// Code since the rec.rs round (design §13 step 4), as [`Type::DVec`]:
-    /// `TmIWf`, and the `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
+    /// Has a code (design §13 step 4), as [`Type::DVec`]: `TmIWf`, and the
+    /// `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
     IWf { sig: Rc<IWfSig>, index: Rc<Term> },
     /// `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` — the indexed final
     /// coalgebra, the dual of [`Type::W`] with [`Type::IWf`]'s index
-    /// (docs/kernel-coinduction-design.md §1.1). `idx` is the index type `I`
+    /// (docs/kernel/kernel-coinduction-design.md §1.1). `idx` is the index type `I`
     /// at `li`; `shape` (`S @ l`) binds `i : I`, `pos` (`P @ l'`) binds
     /// `i, s : S`, and `next` (the child's index `o : I`) binds `i, s,
     /// p : P`; `index` is `j : I`, in Γ. The shapes depend on the index and
@@ -429,7 +427,7 @@ pub enum Type {
     ///
     /// The signature is one shared [`MSig`], as `IWf`'s is.
     ///
-    /// Code since docs/kernel-m-codes-design.md: `TmM` and four branches.
+    /// Has a code (docs/kernel/kernel-m-codes-design.md): `TmM` and four branches.
     M { sig: Rc<MSig>, index: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
@@ -455,7 +453,7 @@ pub enum Type {
 }
 
 /// How many local variable leaves each thread interns ([`Term::var_rc`]).
-/// Indices at or above it are allocated per call, as before: Γ is rarely
+/// Indices at or above it are allocated per call: Γ is rarely
 /// that long, and a bound keeps a thread's table small.
 const INTERNED_LOCAL_VARS: u32 = 4096;
 
@@ -548,7 +546,7 @@ pub enum Term {
     },
     /// `sEq^l(s; t; u) : Ty l` where `s : Ty l`, `t, u : El^l s` — encoding
     /// of strict equality; mirrors [`Term::TmId`]. Extension
-    /// (docs/sprop-design.md §6).
+    /// (docs/kernel/sprop-design.md §6).
     TmSEq {
         level: Level,
         ty: Rc<Term>,
@@ -557,7 +555,7 @@ pub enum Term {
     },
     /// `sEmpty^l : Ty l` — encoding of the strict empty type; mirrors
     /// [`Term::TmEmpty`], carrying its level for the same reason. Extension
-    /// (docs/sprop-design.md §6).
+    /// (docs/kernel/sprop-design.md §6).
     TmSEmpty {
         level: Level,
     },
@@ -611,7 +609,7 @@ pub enum Term {
     /// `Vec^l(s; k) : Ty l` where `s : Ty l` and `k : Nat` — encoding of the
     /// fixed-length tuple (decoded by `El (Vec^l(s; k)) ⇝ Vec^l(El^l s; k)`).
     /// The length is an ordinary term of the *same* scope: `Vec` binds
-    /// nothing. Extension (docs/wf-former-design.md §6).
+    /// nothing. Extension (docs/kernel/wf-former-design.md §6).
     TmVec {
         level: Level,
         elem: Rc<Term>,
@@ -633,7 +631,7 @@ pub enum Term {
     /// `DVec^l(k; i. f) : Ty l` where `k : Nat` and `f : Ty l` under
     /// `i : Fin k` — encoding of the dependent tuple (decoded by
     /// `El (DVec^l(k; i. f)) ⇝ DVec^l(k; i. El^l f)`;
-    /// docs/iwf-former-design.md §6). The length is a term of the same scope,
+    /// docs/kernel/iwf-former-design.md §6). The length is a term of the same scope,
     /// the family binds one local, as the type former's does.
     TmDVec {
         level: Level,
@@ -642,7 +640,7 @@ pub enum Term {
     },
     /// `IWf^{l,li}(u_I; x:u_S. n; x. o; x i. c)(m) : Ty (l ⊔ li)` — encoding
     /// of the finitary indexed fixed point applied at index `m`
-    /// (docs/iwf-former-design.md §6), decoded by `El(TmIWf …) ⇝
+    /// (docs/kernel/iwf-former-design.md §6), decoded by `El(TmIWf …) ⇝
     /// IWf(El idx; x : El shape. arity; out; child)(index)`. `arity` and
     /// `out` bind `x`, `child` binds `x, i : Fin arity`; they and `index` are
     /// terms (of `Nat` and of `El idx`), carried across the decoding
@@ -660,7 +658,7 @@ pub enum Term {
     },
     /// `M^{l,l',li}(u_I; i. u_S; i s. u_P; i s p. o)(j) : Ty (l ⊔ l' ⊔ li)` —
     /// encoding of the indexed final coalgebra applied at index `j`
-    /// (docs/kernel-m-codes-design.md §1), decoded by `El(TmM …) ⇝
+    /// (docs/kernel/kernel-m-codes-design.md §1), decoded by `El(TmM …) ⇝
     /// M(El idx; i. El shape; i s. El pos; i s p. next)(index)`. `shape`
     /// binds the index, `pos` the index and the shape, `next` all three; the
     /// index of the child (`next`) and `index` are terms of `El idx`, carried
@@ -679,7 +677,7 @@ pub enum Term {
     // ---- natural numbers ----
     Zero,
     /// A closed natural-number literal, of any size
-    /// (`docs/wide-numerals-design.md`). This is observationally the same
+    /// (`docs/language/wide-numerals-design.md`). This is observationally the same
     /// constructor spine as `Succ^value(Zero)` (and `NatLit(0)` is `Zero`),
     /// but keeps source numerals compact until evaluation can hand them to the
     /// generic context-program representation.
@@ -718,7 +716,7 @@ pub enum Term {
         proof: Rc<Term>,
     },
 
-    // ---- strict equality (extension; docs/sprop-design.md) ----
+    // ---- strict equality (extension; docs/kernel/sprop-design.md) ----
     /// `srefl^l(I; a) : sEq^l(I; a; a)`. Fully annotated so it synthesizes;
     /// the only canonical form at [`Type::SEq`], which is what makes
     /// β-on-`srefl` sufficient for closed computation. Mirrors
@@ -765,7 +763,7 @@ pub enum Term {
 
     /// `[b₀, …, b_{w-1}]^l(T; zero, one)` — a closed prefix of a `Vec`
     /// whose every element is one of two terms, held as a machine word
-    /// (`docs/bitvector-literal-entry-design.md` §3,
+    /// (`docs/kernel/bitvector-literal-entry-design.md` §3,
     /// `issues/packed-vector-literal-term.md`). Observationally the
     /// right-nested pair chain the `Vec` rule types, element `i` being `one`
     /// when bit `i` of `bits` is set and `zero` otherwise, ending in `⟨⟩^l`:
@@ -790,8 +788,8 @@ pub enum Term {
     /// [`Term::VecLit`] is for two-valued elements, for any elements. What
     /// it buys is *depth*: a chain is as deep as the literal is long, and
     /// every syntax-directed walk (typing, substitution, hashing, `Drop`)
-    /// recursed once per element, so a few thousand elements overflowed the
-    /// native stack; this node is one level deep at any length, and every
+    /// would recurse once per element, so a few thousand elements would
+    /// overflow the native stack; this node is one level deep at any length, and every
     /// walk loops over `items`. Elements `items[from..]` are the live ones,
     /// so the view's tail is the same array one further on, built in O(1);
     /// `from < items.len()` (the empty vector is `⟨⟩`). Equality and hashes
@@ -834,12 +832,12 @@ pub enum Term {
         pair: Rc<Term>,
     },
 
-    // ---- checked spellings (extension; docs/intro-by-type-design.md) ----
+    // ---- checked spellings (extension; docs/elaborator/intro-by-type-design.md) ----
     //
     // Five forms, one per intro or projection above, carrying **the type the
     // term was checked at** in place of that type's components — and a sixth,
     // `app@`, carrying nothing, whose Π is its head's
-    // (`docs/app-by-head-type-design.md`). They exist
+    // (`docs/elaborator/app-by-head-type-design.md`). They exist
     // because the elaborator normalizes a type to decide a match and would
     // otherwise have to write the reduct's halves into the annotation — an
     // object exponential as a tree and linear as a value graph
@@ -862,8 +860,8 @@ pub enum Term {
     // exactly the payload of a `box`.
     //
     // **The intros' annotation is optional** and the projections carry none
-    // (design §2.1, revised after stage 2's first measurement). An
-    // unannotated intro is *not inferable* — the verdict `box` already gets —
+    // (design §2.1). An unannotated intro is *not inferable* — the verdict
+    // `box` already gets —
     // and is checked against the expected type, which the checker holds as an
     // `ITy` and views in the value domain; that is what lets a constructor
     // value nested inside a constructor value be written with no type at all,
@@ -909,7 +907,7 @@ pub enum Term {
     },
     /// `app@(f; a) : T[a/x]` where `f` infers `F`, `F ⇝* Π^{l,l'}(x:S). T`
     /// and `a : S` — the checked spelling of [`Term::App`]
-    /// (`docs/app-by-head-type-design.md`). No annotation and no levels: the
+    /// (`docs/elaborator/app-by-head-type-design.md`). No annotation and no levels: the
     /// Π is the one the head infers. When `F` is syntactically a Π the rule
     /// returns `T[a/x]` as syntax, exactly the `App` rule's result; only a
     /// head whose type needs reduction yields a description (design §3.1).
@@ -929,7 +927,7 @@ pub enum Term {
     /// recoverable from the expected type. Without it `⟨⟩` inhabits `Unit^l`
     /// for *every* `l`, and a term with many types is exactly what ch. 04
     /// §Non-cumulativity says the code eliminator cannot survive — the
-    /// failure that sank route (b) in `docs/unit-empty-level-indexing.md` §6.1.
+    /// failure that sank route (b) in `docs/kernel/unit-empty-level-indexing.md` §6.1.
     Triv {
         level: Level,
     },
@@ -939,8 +937,7 @@ pub enum Term {
     /// on a neutral scrutinee. Annotated like `elim_Nat` so it infers.
     ///
     /// `level` is the *motive's*; `scrut_level` is the scrutinee's `Empty`
-    /// level. The two are independent — this is the one variant that carries
-    /// a second level rather than a first.
+    /// level. The two are independent, as at [`Term::ElimSEmpty`].
     ElimEmpty {
         level: Level,
         scrut_level: Level,
@@ -1018,7 +1015,7 @@ pub enum Term {
         scrut: Rc<Term>,
     },
 
-    // ---- finitary branching trees (extension; docs/wf-former-design.md) ----
+    // ---- finitary branching trees (extension; docs/kernel/wf-former-design.md) ----
     /// `sup_f^l(x:S. n; a; cs) : Wf^l(x:S). n` where `a : S` and
     /// `cs : Vec^l(Wf^l(x:S).n; n[a/x])` — the children are a **tuple**,
     /// not a function. Fully annotated so it synthesizes; `arity` binds one
@@ -1042,7 +1039,7 @@ pub enum Term {
     /// **transient**: applied at literal indices (after the generated
     /// recursor cases on the tag), never stored in data and never compared.
     /// That is why the η-deficiency of functions costs nothing here — the
-    /// resolution of wrinkle 6.2 in docs/branching-inductives-choice.md.
+    /// resolution of wrinkle 6.2 in docs/inductives/branching-inductives-choice.md.
     /// Neutral on a neutral scrutinee. [`nth`] is materialized by this
     /// rule rather than being a former of its own.
     ElimWf {
@@ -1055,7 +1052,7 @@ pub enum Term {
         scrut: Rc<Term>,
     },
 
-    // ---- finitary indexed trees (extension; docs/iwf-former-design.md) ----
+    // ---- finitary indexed trees (extension; docs/kernel/iwf-former-design.md) ----
     /// `sup_i^{l,li}(I; x:S. n; x. o; x i. c; a; cs) : IWf(…)(o[a/x])` where
     /// `a : S` and `cs : DVec^{l⊔li}(n[a/x]; k. IWf(…)(c[a/x, k/i]))` — the
     /// constructor *is* at its output index, so it stores no equation
@@ -1083,7 +1080,7 @@ pub enum Term {
         scrut: Rc<Term>,
     },
 
-    // ---- indexed final coalgebras (extension; docs/kernel-coinduction-design.md) ----
+    // ---- indexed final coalgebras (extension; docs/kernel/kernel-coinduction-design.md) ----
     /// `corec^{k}(sig; i. X; i x. c; j; x) : M(sig)(j)` — primitive
     /// corecursion (the apomorphism, design §1.3). `carrier` (`X @ k`) binds
     /// `i : I`; `step` binds `i, x : X` and has type
@@ -1259,7 +1256,7 @@ pub struct Branches {
     pub ty_sigma: Rc<Term>,
     /// `(ℓ, g. t_Unit)` — univs: ℓ; globals: g. Code of the type `Unit^ℓ`;
     /// mirrors `ty_nat` plus the level binder `Unit` gained in
-    /// docs/unit-empty-level-indexing.md. Extension beyond ch. 04
+    /// docs/kernel/unit-empty-level-indexing.md. Extension beyond ch. 04
     /// (kernel-v1-extensions).
     pub ty_unit: Rc<Term>,
     /// `(ℓ, g. t_Empty)` — univs: ℓ; globals: g. Code of the type `Empty^ℓ`;
@@ -1291,7 +1288,7 @@ pub struct Branches {
     /// `u_t : Trm_c(g ⊢ Nat @ 0)`; locals: `x_M` (type motive!), `x_s`,
     /// `x_s'`, `x_t` (at level **0**, the scrutinee's — ch. 04 writes `ℓ`
     /// here, contradicting its own `t_ze`/`t_succ`; see
-    /// docs/delam-extensions.md §16.1).
+    /// docs/kernel/delam-extensions.md §16.1).
     pub tm_elim_nat: Rc<Term>,
     /// `(ℓ, ℓ', g, U_S, U_T, u_t, x_S, x_t. t_λ)` — univs: ℓ, ℓ'; globals: g,
     /// `U_S : Typ_c(g, ℓ)`, `U_T : Typ_p((g, x : U_S^id @ ℓ), ℓ')`
@@ -1361,7 +1358,7 @@ pub struct Branches {
     /// `U_M : Typ_c((g, x : Empty^ℓ' @ ℓ'), ℓ)`,
     /// `u_t : Trm_c(g ⊢ Empty^ℓ' @ ℓ')`; locals: `x_M` (type motive!), `x_t`
     /// (term motive, at **ℓ'** — the scrutinee's level, see
-    /// docs/delam-extensions.md §7.7). Code of
+    /// docs/kernel/delam-extensions.md §7.7). Code of
     /// `elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)`; mirrors `tm_elim_nat` minus
     /// base/step. Extension (kernel-v1-extensions).
     pub tm_elim_empty: Rc<Term>,
@@ -1431,7 +1428,7 @@ pub struct Branches {
     /// Extension.
     pub tm_elim_w: Rc<Term>,
 
-    // -- finitary branching branches (docs/wf-former-design.md §6) --
+    // -- finitary branching branches (docs/kernel/wf-former-design.md §6) --
     /// `(ℓ, g, U_T, u_k, x_T, x_k. t_Vec)` — univs: ℓ; globals: g,
     /// `U_T : Typ_c(g, ℓ)`, `u_k : Trm_c(g ⊢ Nat @ 0)`; locals: `x_T` (type
     /// motive), `x_k` (*term* motive — the length is a term). Code of the
@@ -1481,7 +1478,7 @@ pub struct Branches {
     /// the step telescope is [`wf_step_telescope`], shared with typing.
     pub tm_elim_wf: Rc<Term>,
 
-    // -- strict equality (extension; docs/sprop-design.md §6) --
+    // -- strict equality (extension; docs/kernel/sprop-design.md §6) --
     /// `(ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_sEq)` — mirrors `ty_id`
     /// field-for-field (`sEq` is `Id` minus relevance; the code recursor is
     /// structural on syntax, so irrelevance changes nothing here).
@@ -1514,7 +1511,7 @@ pub struct Branches {
     /// `∥U_B[squash x/z]∥`; `u_q : ∥U_A∥`.
     pub tm_elim_squash: Rc<Term>,
 
-    // -- M-types (docs/kernel-m-codes-design.md §2) --
+    // -- M-types (docs/kernel/kernel-m-codes-design.md §2) --
     /// `(ℓ, ℓ', ℓi, g, U_I, U_S, U_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
     /// t_M)` — code of the type `M(U_I; U_S; U_P; u_o)(u_j)`. `U_S` is
     /// scoped over `i : U_I`, `U_P` over `(i, s)`, `u_o : U_I` over `(i, s,
@@ -1532,7 +1529,7 @@ pub struct Branches {
     /// code of `out(σ; u_j; u_m)`.
     pub tm_out: Rc<Term>,
 
-    // -- dependent tuples and indexed trees (docs/iwf-former-design.md §6) --
+    // -- dependent tuples and indexed trees (docs/kernel/iwf-former-design.md §6) --
     //
     // heather-coq's M17c branches 55–60 (`RecSpec`'s `brDecls`/`br_calls`),
     // whose scopes were derived from the layer-C rules before these existed;
@@ -1633,6 +1630,48 @@ impl LocalCtx {
     }
 }
 
+/// What the β helpers and the code-recursor telescopes read of a Γ: its
+/// base and how many entries it has. They build identity substitutions
+/// `id_Γ` and nothing else, so a caller with no syntactic Γ (the value
+/// machine, whose binders' types are values) hands them this and no
+/// entries at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtxShape {
+    pub base: CtxBase,
+    pub len: u32,
+}
+
+impl CtxShape {
+    /// The shape under `by` more global variables: a context variable base
+    /// is renumbered, as [`LocalCtx::shift_global`] renumbers it.
+    pub fn shift_global(self, by: u32) -> CtxShape {
+        let base = match self.base {
+            CtxBase::Nil => CtxBase::Nil,
+            CtxBase::Var(g) => CtxBase::Var(g.shifted(by)),
+        };
+        CtxShape { base, len: self.len }
+    }
+}
+
+impl LocalCtx {
+    /// Γ's [`CtxShape`].
+    pub fn shape(&self) -> CtxShape {
+        CtxShape { base: self.base, len: self.entries.len() as u32 }
+    }
+}
+
+impl From<&LocalCtx> for CtxShape {
+    fn from(c: &LocalCtx) -> CtxShape {
+        c.shape()
+    }
+}
+
+impl From<&CtxShape> for CtxShape {
+    fn from(c: &CtxShape) -> CtxShape {
+        *c
+    }
+}
+
 #[derive(Clone, Eq)]
 pub struct CtxEntry {
     pub ty: Rc<Type>,
@@ -1643,16 +1682,14 @@ pub struct CtxEntry {
 /// the innermost* binding.
 ///
 /// Binder descent extends Γ by one entry while keeping the parent Γ alive,
-/// which a `Vec` can only serve by copying the whole context. That copy was
-/// the #1 self line of a release `heather check lib/certgen/ir_v1.hthr`
-/// (`Vec<CtxEntry>::clone` 5.3%, its drop 2.6%, essentially all of it
-/// `Env::push_entry` at a binder — issues/context-representation-clones.md).
-/// Here extending is one allocation shared with the context it extends, and
+/// which a `Vec` can only serve by copying the whole context at every
+/// binder (issues/context-representation-clones.md). Here extending is one
+/// allocation shared with the context it extends, and
 /// dropping a derived context frees one cell.
 ///
-/// Positions are still quoted the paper's way: position 0 is the *outermost*
-/// entry (so [`std::ops::Index`] and [`CtxEntries::iter`] run outermost-first,
-/// as the `Vec` did), while [`LocalVar`] 0 is the innermost and is served by
+/// Positions are quoted the paper's way: position 0 is the *outermost*
+/// entry (so [`std::ops::Index`] and [`CtxEntries::iter`] run
+/// outermost-first), while [`LocalVar`] 0 is the innermost and is served by
 /// [`CtxEntries::nth_inner`], which runs *with* the spine. The list's own
 /// direction is therefore the variable-lookup direction; anything that wants
 /// the whole context outermost-first pays one O(|Γ|) walk, which every such
@@ -1739,7 +1776,7 @@ impl CtxEntries {
         CtxEntries(Some(Rc::new(CtxNode { entry, len, rest: self.clone() })))
     }
 
-    /// In-place [`CtxEntries::pushed`], for the `Vec`-shaped callers.
+    /// In-place [`CtxEntries::pushed`].
     pub fn push(&mut self, entry: CtxEntry) {
         *self = self.pushed(entry);
     }
@@ -1759,8 +1796,8 @@ impl CtxEntries {
         }
     }
 
-    /// The entry at position `i` counted from the *outermost* end — what
-    /// `entries[i]` meant when this was a `Vec`.
+    /// The entry at position `i` counted from the *outermost* end — the
+    /// paper's position.
     pub fn get(&self, i: usize) -> Option<&CtxEntry> {
         let n = self.len();
         if i >= n {
@@ -1775,7 +1812,7 @@ impl CtxEntries {
     }
 
     /// The outermost `k` entries — `entries[..k]`, sharing the spine (one
-    /// walk, no allocation). Panics if `k > len()`, as slicing did.
+    /// walk, no allocation). Panics if `k > len()`.
     pub fn prefix(&self, k: usize) -> CtxEntries {
         let n = self.len();
         assert!(k <= n, "context prefix {k} out of range for length {n}");
@@ -1787,7 +1824,7 @@ impl CtxEntries {
         cur
     }
 
-    /// Outermost-first, as `Vec::iter` was. O(|Γ|) up front — the spine runs
+    /// Outermost-first. O(|Γ|) up front — the spine runs
     /// the other way.
     pub fn iter(&self) -> CtxIter<'_> {
         let mut v: Vec<&CtxEntry> = Vec::with_capacity(self.len());
@@ -1803,19 +1840,6 @@ impl CtxEntries {
     /// Outermost-first, owned.
     pub fn to_vec(&self) -> Vec<CtxEntry> {
         self.iter().cloned().collect()
-    }
-
-    /// `n` copies of one entry — the filler contexts that the shared β
-    /// helpers read only the *length* of (`reduce.rs` module doc). One cell
-    /// per entry rather than the `Vec`'s single allocation; both callers are
-    /// off the hot path (a code recursor's scope, and `Wf`'s step
-    /// telescope), which is why this is a loop and not a shared spine.
-    pub fn repeat(entry: CtxEntry, n: usize) -> CtxEntries {
-        let mut c = CtxEntries::empty();
-        for _ in 0..n {
-            c.push(entry.clone());
-        }
-        c
     }
 }
 
@@ -2026,10 +2050,9 @@ impl GlobalBinding {
 ///
 /// The binding list is persistent and chunked so that *cloning Ψ is O(1)*.
 /// Typing and conversion carry Ψ inside an environment they clone at every
-/// binder descent, and a `fn` is now a bodied binding
-/// (issues/simulate-conversion-cost.md), so a deep copy per descent was the
-/// single largest line of a real profile
-/// (issues/context-representation-clones.md). Sharing is safe here in a way
+/// binder descent, and a `fn` is a bodied binding
+/// (issues/simulate-conversion-cost.md), so a deep copy per descent would
+/// dominate a check (issues/context-representation-clones.md). Sharing is safe here in a way
 /// it is not for Γ: Ψ never appears *inside* a term, so no conversion rule
 /// compares it structurally, and it is only ever extended at declaration
 /// granularity. Appending to a shared context copies at most one bounded tail
@@ -2045,7 +2068,7 @@ pub struct GlobalCtx {
     /// opaque again, never wrong.
     pub sealed: SealedProofs,
     /// The elaborator's **interface boundary**
-    /// (`docs/interface-definitions-design.md` §3): definitions whose body
+    /// (`docs/language/interface-definitions-design.md` §3): definitions whose body
     /// this world withholds at open arguments. `None` but in the
     /// elaborator's worlds for a module that imports interface definitions,
     /// and in the gate's Ψ for that module's declarations. Withholding only
@@ -2062,8 +2085,8 @@ pub struct GlobalCtx {
     consts: usize,
 }
 
-/// Ψ prints as it did before it had a boundary when it has none, so the
-/// printed form a world without interfaces hashes to is unchanged
+/// A Ψ with no boundary prints no boundary field, so the printed form a
+/// world without interfaces hashes to does not depend on the field
 /// (`crates/elab/tests/determinism.rs`).
 impl std::fmt::Debug for GlobalCtx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2639,8 +2662,8 @@ impl GlobalCtx {
     }
 
     /// Ψ followed by `bs`, sharing Ψ's chunks. Building the extended world
-    /// from `to_vec()` copies every binding of Ψ, which per goal query was
-    /// most of a split's elaboration once Ψ held a generated certificate
+    /// from `to_vec()` copies every binding of Ψ, which per goal query would
+    /// be most of a split's elaboration once Ψ holds a generated certificate
     /// (issues/goal-world-copies-psi.md).
     pub fn extended(&self, bs: impl IntoIterator<Item = GlobalBinding>) -> GlobalCtx {
         let mut world = self.clone();
@@ -2782,7 +2805,7 @@ pub fn vec_lit_chain(
 
 /// The child a value nests *through*, for the walks that iterate down a
 /// deep term instead of recursing one native frame per level
-/// (docs/deep-term-walks-design.md): a pair's tail (or its head, when the
+/// (docs/kernel/deep-term-walks-design.md): a pair's tail (or its head, when the
 /// tail is a leaf — a constructor's children tuple `⟨xs, ⟨⟩⟩` nests through
 /// `xs`), an injection's payload, a constructor value's children, a
 /// successor's predecessor, an application's argument. These are the forms
@@ -2877,7 +2900,7 @@ pub fn vec_items_chain(level: &Level, elem: &Rc<Type>, items: &[Rc<Term>]) -> Te
 // `Wf`'s typing and β rules mention `nth` and a three-entry step telescope.
 // Neither is a former: both are fixed syntax schemas, built here once so the
 // typing rule (typing.rs) and the neutral comparison (conv.rs) cannot drift
-// apart — the transcription hazard flagged in docs/wf-former-design.md §6.
+// apart — the transcription hazard flagged in docs/kernel/wf-former-design.md §6.
 // ---------------------------------------------------------------------------
 
 /// `nth^l(T; k; cs; i) : T` — project the `i`th component out of a
@@ -2891,7 +2914,7 @@ pub fn vec_items_chain(level: &Level, elem: &Rc<Type>, items: &[Rc<Term>]) -> Te
 ///
 /// So at a literal length it reduces to the projections *whatever the tuple
 /// is* — including a neutral one, which is what makes the `Fin`-indexed
-/// induction hypothesis usable (docs/wf-former-design.md §3).
+/// induction hypothesis usable (docs/kernel/wf-former-design.md §3).
 ///
 /// All four arguments live in the ambient Γ; the result does too.
 pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc<Term>) -> Term {
@@ -3026,7 +3049,7 @@ pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc
 }
 
 // ---------------------------------------------------------------------------
-// Derived constructions for `DVec` (docs/iwf-former-design.md §1.1, §3)
+// Derived constructions for `DVec` (docs/kernel/iwf-former-design.md §1.1, §3)
 //
 // The successor reduct and `dnth` are transcribed binder by binder from the
 // Coq formalization (heather-coq `theories/Syntax/Term.v`: `dvecHd`,
@@ -3097,7 +3120,7 @@ pub fn dvec_succ_reduct(level: &Level, pred: &Rc<Term>, fam: &Rc<Type>) -> Type 
 }
 
 /// `dnth^l(n; i. F; cs; i) : F` — the `i`th component of a
-/// `DVec^l(n; i. F)` (docs/iwf-former-design.md §3). Not a former: a fixed
+/// `DVec^l(n; i. F)` (docs/kernel/iwf-former-design.md §3). Not a former: a fixed
 /// `elim_Nat` schema on the length, whose motive quantifies over an
 /// **embedding** `e : Fin k̂ → Fin n` so that the family stays `F` over the
 /// full length (a motive cannot quantify over families):
@@ -3301,7 +3324,7 @@ pub fn dnth(level: &Level, len: &Rc<Term>, fam: &Rc<Type>, cs: Rc<Term>, idx: Rc
 }
 
 // ---------------------------------------------------------------------------
-// Derived constructions for `IWf` (docs/iwf-former-design.md §1.2, §2, §4)
+// Derived constructions for `IWf` (docs/kernel/iwf-former-design.md §1.2, §2, §4)
 //
 // Transcribed from the Coq formalization (heather-coq `theories/Syntax/
 // Term.v`: `iwfFam`, `iwfIH`, `iwfmotty`, `iwfcsty`, `iwfihty`,
@@ -3330,7 +3353,7 @@ pub struct IWfSig {
 impl IWfSig {
     /// The family's level, `l ⊔ li` (design §1.2).
     pub fn family_level(&self) -> Level {
-        Level::join(self.level.clone(), self.idx_level.clone())
+        Level::max(self.level.clone(), self.idx_level.clone())
     }
 
 }
@@ -3468,7 +3491,7 @@ pub fn iwf_ih(
 }
 
 // ---------------------------------------------------------------------------
-// Derived constructions for `M` (docs/kernel-coinduction-design.md §1)
+// Derived constructions for `M` (docs/kernel/kernel-coinduction-design.md §1)
 //
 // One transcription serves typing, both reducers and conversion, as the `IWf`
 // schemas above do. Scopes are named in each doc comment; `f` is the family's
@@ -3494,7 +3517,7 @@ pub struct MSig {
 impl MSig {
     /// The family's level, `l ⊔ l' ⊔ li` (design §1.1).
     pub fn family_level(&self) -> Level {
-        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+        Level::max(Level::max(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 
     /// `S[j/i]`, in Γ for `j` in Γ.
@@ -3535,7 +3558,7 @@ impl Rc<MSig> {
 
 /// The signature a [`Term::TmIWf`] code decodes to: the index type and the
 /// shapes read through `El` at their levels, the arity, output and child
-/// index carried across unchanged (docs/iwf-former-design.md §6). The one
+/// index carried across unchanged (docs/kernel/iwf-former-design.md §6). The one
 /// place the decoding is spelled, so both reducers and the typing rule agree
 /// on it.
 pub fn iwf_sig_of_code(
@@ -3561,7 +3584,7 @@ pub fn iwf_sig_of_code(
 
 /// The signature a [`Term::TmM`] code decodes to: each piece read through
 /// `El` at its own level, `next` carried across unchanged
-/// (docs/kernel-m-codes-design.md §1). The one place the decoding is
+/// (docs/kernel/kernel-m-codes-design.md §1). The one place the decoding is
 /// spelled, so both reducers and the typing rule agree on it.
 pub fn m_sig_of_code(
     level: &Level,
@@ -3613,7 +3636,7 @@ pub fn m_out_ty(sig: &Rc<MSig>, j: &Term) -> Type {
 /// ```
 pub fn m_step_ty(sig: &Rc<MSig>, carrier_level: &Level, carrier: &Type) -> Type {
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // In (Γ, i, s, p): the child's index, its seed's type and its tree type.
     let o = sig.next.as_ref();
     let child_seed = carrier.inst_top(3, o);
@@ -3660,7 +3683,7 @@ pub fn m_out_corec(
 ) -> Term {
     let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // The step's type at j, in Γ: Σ(s : S[j]). Π(p : P[j, s]). X[o] + M(o).
     let Type::Sigma { snd: step_snd, .. } = m_step_ty(sig, carrier_level, carrier).inst_top(0, j) else {
         unreachable!("m_step_ty builds a Σ")
@@ -3744,7 +3767,7 @@ pub fn m_out_corec(
 /// the binder `x` was — which is the same shortcut `elim_W`'s rules take
 /// with `T[a/x]`.
 pub fn wf_step_telescope(
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     level: &Level,
     motive_level: &Level,
     shape: &Rc<Type>,
@@ -3764,25 +3787,25 @@ pub fn wf_step_telescope(
 /// rebuilt from `shape`/`arity`.
 ///
 /// The elaborator passes `El (D#tycode^δ)` here
-/// (`docs/family-type-code-defs-design.md`, 2026-08-12 extension): those two
+/// (`docs/inductives/family-type-code-defs-design.md`): those two
 /// positions are ordinary type annotations, so any type convertible with
 /// `Wf(shape). arity` stands in them, and naming `⟦D⟧` once is what stops the
 /// `match` lowering from carrying every field type verbatim through Θ(arms)
-/// copies ([[wf-field-conversion-cost]]).
+/// copies (issues/wf-field-conversion-cost.md).
 ///
 /// What `d_ty` does **not** reach: the `Supf` the step's type is stated at,
 /// whose `shape`/`arity` are the former's own slots and not a type annotation.
 /// Those are `slots`' business — the elaborator passes
 /// `El (D#shape^δ)`/`app(D#arity^δ; x₀)` there
-/// (`docs/wf-shape-code-design.md` §3.2), and `None` keeps the caller's own
+/// (`docs/inductives/wf-shape-code-design.md` §3.2), and `None` keeps the caller's own
 /// `shape`/`arity`, which is what every kernel caller wants: `typing.rs` and
 /// `conv.rs` build the telescope *from* the slots of the term in front of
 /// them, so re-spelling there would be inventing a term the checker never saw.
-/// This function is therefore the only transcription of the telescope, still —
+/// This function is therefore the only transcription of the telescope —
 /// `wf_step_telescope` is one call to it.
 #[allow(clippy::too_many_arguments)]
 pub fn wf_step_telescope_at(
-    gamma: &LocalCtx,
+    gamma: impl Into<CtxShape>,
     level: &Level,
     motive_level: &Level,
     shape: &Rc<Type>,
@@ -3791,6 +3814,7 @@ pub fn wf_step_telescope_at(
     d_ty: &Type,
     slots: Option<(&Rc<Type>, &Rc<Term>)>,
 ) -> (Type, Type, Type) {
+    let gamma: CtxShape = gamma.into();
     let wf = d_ty.clone();
     // Every *arity* written below is an annotation like `d_ty` is — a `Vec`
     // length, a `Fin` length, `nth`'s length — so it takes `slots`' spelling
@@ -3853,9 +3877,9 @@ mod size_tests {
     use super::{Term, Type};
 
     /// The checker's recursion holds `Type`s and `Term`s in every frame
-    /// (`docs/native-depth-budget-design.md`), so a variant that outgrows the
-    /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
-    /// constructor value overflow the 8 MiB stack. A former with many
+    /// (`docs/kernel/native-depth-budget-design.md`), so a variant that outgrows the
+    /// rest grows every frame of it: a flat `IWf` signature would make a deep
+    /// constructor value overflow the stack. A former with many
     /// components keeps them behind one pointer (`IWfSig`). The annotated
     /// formers carry up to three `Level`s, a word each
     /// (`issues/kernel-level-eight-bytes.md`).

@@ -86,6 +86,9 @@ fn Instruction::defines(self instruction: Instruction, defined: DefinedFlags) �
         ShiftOne(_, _) => DefinedFlags::but_af(),
         ShiftImm(_, _, immediate) => shift_imm_defines(shift_count(immediate), defined),
         Bswap32(_) => defined,
+        CmpRI8(_, _) => DefinedFlags::all(), CmpRI32(_, _) => DefinedFlags::all(), MovRI32(_, _) => defined,
+        MovSelf32(_) => defined,
+        RorRI32(_, immediate) => ror32_defines(ror32_count(immediate), defined),
     }
 }
 
@@ -98,6 +101,10 @@ theorem execute_normal_defines<M>(instruction: Instruction, s: MachineState<M>):
         AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
         ShiftImm(op, d, immediate) => shift_imm_flags_defined(op, read_gpr(d, s.gprs), shift_count(immediate), s.flags),
         Bswap32(_) => refl,
+        CmpRI8(_, _) => refl, CmpRI32(_, _) => refl, MovRI32(_, _) => refl,
+        MovSelf32(_) => refl,
+        RorRI32(d, immediate) => ror32_flags_defined(ror32_value(read_gpr(d, s.gprs), ror32_count(immediate)),
+            ror32_count(immediate), s.flags),
     }
 }
 
@@ -155,13 +162,24 @@ theorem Instruction::reads_within(self instruction: Instruction, a, b: DefinedFl
         MovRR(_, _) => λ r => r, MovRI(_, _) => λ r => r, AddRR(_, _) => λ r => r, SubRR(_, _) => λ r => r,
         AndRR(_, _) => λ r => r, OrRR(_, _) => λ r => r, XorRR(_, _) => λ r => r, CmpRR(_, _) => λ r => r,
         TestRR(_, _) => λ r => r, AddRI8(_, _) => λ r => r, AddRI32(_, _) => λ r => r, ShiftOne(_, _) => λ r => r,
-        ShiftImm(_, _, _) => λ r => r, Bswap32(_) => λ r => r,
+        ShiftImm(_, _, _) => λ r => r, Bswap32(_) => λ r => r, MovSelf32(_) => λ r => r, RorRI32(_, _) => λ r => r,
+        CmpRI8(_, _) => λ r => r, CmpRI32(_, _) => λ r => r, MovRI32(_, _) => λ r => r,
     }
 }
 
 theorem shift_imm_defines_within(count: Nat, a, b: DefinedFlags, w: a.within(b) = True):
     shift_imm_defines(count, a).within(shift_imm_defines(count, b)) = True {
     match count { Zero => w, Succ(_) => refl }
+}
+
+theorem ror32_defines_within(count: Nat, a, b: DefinedFlags, w: a.within(b) = True):
+    ror32_defines(count, a).within(ror32_defines(count, b)) = True {
+    match count {
+        Zero => w,
+        Succ(_) => and_true_intro(refl, and_true_intro(and_true_left(and_true_right(w)),
+            and_true_intro(and_true_left(and_true_right(and_true_right(w))),
+                and_true_intro(within_zf(w), and_true_intro(within_sf(w), refl))))),
+    }
 }
 
 theorem Instruction::defines_within(self instruction: Instruction, a, b: DefinedFlags, w: a.within(b) = True):
@@ -173,6 +191,9 @@ theorem Instruction::defines_within(self instruction: Instruction, a, b: Defined
         AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
         ShiftImm(_, _, immediate) => shift_imm_defines_within(shift_count(immediate), a, b, w),
         Bswap32(_) => w,
+        CmpRI8(_, _) => refl, CmpRI32(_, _) => refl, MovRI32(_, _) => w,
+        MovSelf32(_) => w,
+        RorRI32(_, immediate) => ror32_defines_within(ror32_count(immediate), a, b, w),
     }
 }
 
@@ -493,10 +514,10 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 
 // Near (rel32) forms of the same two transfers, for edges a short branch
 // cannot reach: a bounded loop's exit and back edge span its whole body
-// (docs/native-bounded-loops-design.md §2). The displacement is little-endian
+// (docs/archive/native-bounded-loops-design.md §2). The displacement is little-endian
 // after the opcode, relative to the end of the instruction. `JumpSignNear`
 // (JS) is how a program tells a syscall's error return, a negative word,
-// from a count (docs/native-syscall-failures-design.md §4).
+// from a count (docs/archive/native-syscall-failures-design.md §4).
 inductive NearControl {
     JumpIfNear(cc: ConditionCode, displacement: BitVec(32)),
     JumpNear(displacement: BitVec(32)),

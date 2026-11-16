@@ -17,7 +17,7 @@ theorem v5(w: Nat, s: WcState, sp: Bool, h: wc_next(sp, False, s).bytes = w): w 
                                                                             -- could not spell
 ```
 
-Found writing `examples/x86-native/wc.hthr`'s fold proofs (docs/native-wc-design.md
+Found writing `examples/x86-native/wc.hthr`'s fold proofs (docs/archive/native-wc-design.md
 §6, V5). The facts are about states (`s.words`, `step_fold(…).bytes`), so every
 arithmetic step needed a helper theorem over plain `Nat`s (`add_grown`,
 `words_grown`, `joins_word`, `starts_word`, `from_zero`), applied with the
@@ -35,7 +35,7 @@ spell. Then drop wc's helper theorems for inline `omega`s.
 
 ## Log
 
-- 2026-09-29: Done (docs/omega-measure-reduction-design.md §10). The term omega met was not a
+- 2026-09-29: Done (docs/tactics/omega-measure-reduction-design.md §10). The term omega met was not a
   reduct: `WcState` is closed and not dependent, so it registers no projection
   definitions and `s.words` *is* the inline walk `fst(snd(snd(s)))`, which the
   speller had no case for. Fixed in the speller: a field read spells as `r.name`

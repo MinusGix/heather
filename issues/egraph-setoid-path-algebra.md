@@ -32,4 +32,4 @@ worth stating once here rather than per client.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[egraph-add-value-theorem]] (`lib/std/data/egraph.hthr`); [[egraph-ematch-soundness]] (`lib/std/data/egraph.hthr`).
-- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §3): probed 2026-11-08, `by grind` reads `a ≈ b` at `Rat` as its cross-multiplication equation and cannot close `a.abs() + 1 ≈ c.abs() + 1` from `a ≈ b`, `b ≈ c`. The cheaper half of the ≈ plumbing is [[carrier-respects-as-rewrite-evidence]] (setoid rewrite lacks evidence for every Rat/CReal operation but `+` and `*`).
+- 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §3): probed 2026-11-08, `by grind` reads `a ≈ b` at `Rat` as its cross-multiplication equation and cannot close `a.abs() + 1 ≈ c.abs() + 1` from `a ≈ b`, `b ≈ c`. The cheaper half of the ≈ plumbing is [[carrier-respects-as-rewrite-evidence]] (setoid rewrite lacks evidence for every Rat/CReal operation but `+` and `*`).

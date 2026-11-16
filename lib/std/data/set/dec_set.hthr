@@ -1,6 +1,6 @@
 // Sets with decidable membership: a carrier `S` of sets of `A` whose
 // membership is a Boolean, and its operations, each a class indexed by the
-// membership and the operation (docs/operation-indexed-classes-design.md:
+// membership and the operation (docs/language/classes/operation-indexed-classes-design.md:
 // index what identifies the structure, field what it provides), whose one
 // law says how the operation's membership combines its arguments'.
 //

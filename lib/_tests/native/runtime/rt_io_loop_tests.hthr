@@ -1,5 +1,5 @@
 // Probes of effectful `rt` programs with loops lowered to a `Source`
-// (`rt_io_loop`, `native_source_io`; docs/effects-capabilities-design.md
+// (`rt_io_loop`, `native_source_io`; docs/language/effects-capabilities-design.md
 // §8.6): a loop that echoes stdin to stdout until the end of the input, the
 // statements it lowers to, those statements and its meaning run against a
 // scripted world (each to the same end as the surface `while` it models),
@@ -43,7 +43,7 @@ fn Io::echo_all(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)
     let mut buf = buf;
     let mut n: BitVec(64) = BitVec::ofNat(1);
     while BitVec::ofNat(0).unsigned_lt_bit(n) {
-        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
         let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
         buf := r.buf;
         n := r.result;
@@ -58,7 +58,7 @@ fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
 // came back. It ends in the context `[w, from, fd, count, buf', max, fd, n,
 // buf]`.
 fn pass_body() → ETm {
-    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 3, 1, 0],
     ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
     ETm::Pure(Lit(Word(64), 0))))))))
 }
@@ -136,7 +136,7 @@ fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
         λ io => echo_all_prog().sem(ETm::plain_world(), [], echo_g(), Pair(buf, trivial), io))
 {
     echo_all_prog().lower_reads(ETm::plain_world(), [], echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(0, call), perform, start(buf), Pair(buf, trivial),
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(call), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 

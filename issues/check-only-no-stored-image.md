@@ -119,4 +119,4 @@ should fall under the budget on its own; then this issue is only the diagnostic.
   Not done here: exercising it on `calc_text` itself (~6 min, 9.8 GiB); the
   mechanism is unit-tested and `calc_text` is stage 2's subject anyway.
   The issue's *cost* half stays open and is this round's stages 1–2.
-- 2026-09-22: 2026-09-22: The cost half is closed by docs/app-by-head-type-design.md (54bb800f): calc_text's image tally fell 362M → 11.4M nodes and it publishes. Warm --cache recheck ~1.1s (22 semantic modules replayed); --only checked_run 1.4s. The diagnostic half was already done (d89d92f). Closing.
+- 2026-09-22: 2026-09-22: The cost half is closed by docs/elaborator/app-by-head-type-design.md (54bb800f): calc_text's image tally fell 362M → 11.4M nodes and it publishes. Warm --cache recheck ~1.1s (22 semantic modules replayed); --only checked_run 1.4s. The diagnostic half was already done (d89d92f). Closing.

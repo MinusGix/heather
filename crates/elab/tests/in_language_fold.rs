@@ -185,7 +185,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 
 // Two of this suite's original controls **moved** to
 // crates/elab/tests/template_registration.rs when the registration seam landed
-// (docs/meta-def-registration-design.md §2.2): the short template no longer
+// (docs/metaprogramming/meta-def-registration-design.md §2.2): the short template no longer
 // registers at all, and the "swapped" one turned out to be a legal
 // *permutation* of the same signature — accepted, and producing the same term,
 // which is what the seam promised. The control that stays is the one about the
@@ -258,7 +258,7 @@ meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
 
 /// `map_code` and `fold_code` coexist: the lib declares both, and a file that
 /// uses both routes each to its own template — two slots, two claims, no
-/// interference (docs/meta-def-registration-design.md §8 item 5's positive
+/// interference (docs/metaprogramming/meta-def-registration-design.md §8 item 5's positive
 /// half). This is the fixture that would notice a hook dispatching on the
 /// wrong slot.
 #[test]

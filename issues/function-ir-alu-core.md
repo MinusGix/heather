@@ -69,7 +69,7 @@ allocation details.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: Pulled by `nh-front` (`docs/runtime-fn-setups-design.md` §7.1): the default setup's primitive table needs `Mul`, `UDiv` and `URem` nodes (the decimal formatter as a `runtime fn`, hashing), each with its node equation for the setup's once-proof.
+- 2026-10-31: 2026-10-31: Pulled by `nh-front` (`docs/native/runtime-fn-setups-design.md` §7.1): the default setup's primitive table needs `Mul`, `UDiv` and `URem` nodes (the decimal formatter as a `runtime fn`, hashing), each with its node equation for the setup's once-proof.
 
 **2026-11-02.** The `runtime fn` default setup's lowering
 (`lib/native/runtime/rt_lower.hthr`) refuses `rt`'s `Zext` for want of a node:
@@ -85,4 +85,4 @@ narrow value. A zero-extend (and truncate) node with its equation would let
   refuses `Resize` as it refuses shifts, and the memory-resident leaf treats
   it as never wide. Its x86 rule (`MOVZX`, or `AND` with a mask, at 64) is
   this issue's.
-- 2026-11-09: 2026-11-09: each instruction form added to the encoder costs a decoder round-trip induction today; combinators proved once are filed as [[codec-round-trips]] (docs/native-mathematics-survey.md §8).
+- 2026-11-09: 2026-11-09: each instruction form added to the encoder costs a decoder round-trip induction today; combinators proved once are filed as [[codec-round-trips]] (docs/surveys/native-mathematics-survey.md §8).

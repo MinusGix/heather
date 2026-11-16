@@ -15,9 +15,9 @@ pub enum TokKind {
     /// hexadecimal digit and `0x1fi8` is `0x1f` at `i8`.
     SuffixedNum(Numeral, String),
     /// `1.5`, `1e-3`, `0x1.8p3`: a numeral with a point or an exponent
-    /// (docs/floating-point-design.md §15), held as its value.
+    /// (docs/library/floating-point-design.md §15), held as its value.
     Scaled(ScaledLit),
-    /// `'x'` — one Unicode scalar value (docs/string-char-design.md §3). The
+    /// `'x'` — one Unicode scalar value (docs/library/string-char-design.md §3). The
     /// payload is Rust's `char`, which *is* the scalar-value type: the lexer
     /// refuses a surrogate escape, so nothing downstream has to re-check that
     /// a lexed character is a `Char`.
@@ -134,7 +134,7 @@ pub enum TokKind {
     Bullet,    // ∙
     Approx,    // ≈ — relation notation, no fallback
     /// `^` — power, an infix operator on a rung of its own above `*`, and
-    /// right-associative (docs/inverse-power-notation-design.md §2). ASCII,
+    /// right-associative (docs/library/inverse-power-notation-design.md §2). ASCII,
     /// as Lean spells it: there is no Unicode power sign worth the typing.
     Caret,     // ^
     /// `⁻¹` (U+207B U+00B9) — the inverse, the grammar's one **postfix**
@@ -162,7 +162,7 @@ pub enum TokKind {
     Vee,       // ∨
     Iff,       // ↔   (and `<->`)
     /// `<-` and `←` (U+2190): the bind of a binding statement, `let x <- e;`,
-    /// and the nested bind `(<- e)` (docs/sequencing-surface-design.md §3.1).
+    /// and the nested bind `(<- e)` (docs/language/sequencing-surface-design.md §3.1).
     /// `<-` is matched after `<->` takes its three bytes, so `a <-> b` is
     /// unchanged; `a<-b` for `a < -b` is written nowhere in the library.
     LArrow,    // ←   (and `<-`)
@@ -172,7 +172,7 @@ pub enum TokKind {
     /// bytes each, matched in the three-byte window beside `∃`.
     BigSum,    // ∑
     BigProd,   // ∏
-    /// `↑` (U+2191) — a cast (docs/casting-design.md §5.2, §14): a prefix
+    /// `↑` (U+2191) — a cast (docs/language/casting-design.md §5.2, §14): a prefix
     /// operator whose target the checking position supplies. Three bytes,
     /// matched beside `∑`.
     UpArrow,   // ↑
@@ -182,7 +182,7 @@ pub enum TokKind {
     /// decided by the parser; the lexer only knows the sigil.
     Dollar,    // $
     /// `λ` (U+03BB). `fun` is the ASCII synonym and stays an `Ident`, matched
-    /// by the parser's keyword helpers (docs/surface-function-types.md §3.2).
+    /// by the parser's keyword helpers (docs/language/surface-function-types.md §3.2).
     Lambda,
     Eq,        // =   (both `let x = e` binding and `a = b` equality)
     /// `≠` (U+2260), the Unicode-only negated-equality spelling. It is a
@@ -191,7 +191,7 @@ pub enum TokKind {
     Ne,
     EqEq,      // ==  (lexed but rejected by the parser — see `=`)
     ColonEq,   // :=
-    /// `::` — qualification (docs/modules-design.md §4). Only ever *seen* by
+    /// `::` — qualification (docs/language/modules-design.md §4). Only ever *seen* by
     /// the parser in `import m::{a, b};`: a `::` between two identifiers is
     /// joined into a single qualified [`TokKind::Ident`] here (see the
     /// identifier rule), because a qualified name is one name and no
@@ -334,7 +334,7 @@ fn bang_eq_error(start: usize) -> LexError {
 /// letter, or `_`; a letter or `_` that cannot continue it is an error
 /// rather than the start of the next token, so `0b12`, `0xfg`, `12abc`
 /// and `1_` are all refused with the offending character named. The
-/// value has no bound (docs/wide-numerals-design.md): a position that needs
+/// value has no bound (docs/language/wide-numerals-design.md): a position that needs
 /// a machine integer refuses a larger numeral itself, where it knows why.
 fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
     let bytes = src.as_bytes();
@@ -513,7 +513,7 @@ fn fraction_follows(bytes: &[u8], i: usize, radix: u32) -> bool {
 /// and the offset past the escape.
 ///
 /// The set is `\n \t \r \\ \' \" \0` and `\u{hex}`
-/// (docs/string-char-design.md §3) — deliberately small, and closed: a
+/// (docs/library/string-char-design.md §3) — deliberately small, and closed: a
 /// spelling that is not in it is an error rather than a literal backslash, so
 /// widening the set later cannot change what an existing file means.
 fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexError> {
@@ -1060,18 +1060,18 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            // `nat::Nat::sub` is **one** identifier token (docs/modules-design.md
+            // `nat::Nat::sub` is **one** identifier token (docs/language/modules-design.md
             // §4). Adjacency decides, as it does for `?name`: a `::` followed
             // by an identifier start joins, so `nat::{Le}` (the import-list
             // form) still lexes as `nat` `::` `{`.
             //
             // A **chain**, not one join (2026-08-17,
-            // docs/instance-resolved-key-design.md §5). Module names are
+            // docs/elaborator/instance-resolved-key-design.md §5). Module names are
             // single-segment, so for a long time one join was the whole
             // grammar; a *member of a member's* namespace is three segments —
             // `int::Le::Decide` is the module, the carrier and the class — and
             // is now the printed form of a name the registry hands out, so it
-            // has to be writable verbatim (docs/repr-access-spellings-design.md
+            // has to be writable verbatim (docs/native/repr-access-spellings-design.md
             // §2's invariant). The loop is the whole change: what a joined name
             // *means* is decided by `names::resolve_kinds` against the tables,
             // exactly as it was for two segments, and `split_qual`'s
@@ -1099,7 +1099,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             continue;
         }
         // numerals: decimal, or `0x`/`0o`/`0b` radix forms, with `_`
-        // separators between digits (docs/radix-numerals-design.md). The
+        // separators between digits (docs/archive/radix-numerals-design.md). The
         // token carries only the value: a radix form is a *spelling* of the
         // same numeral, and everything downstream (carrier choice, the
         // emitted kernel term) is decided by the value alone.
@@ -1114,7 +1114,7 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             emit!(Tok { kind, span: Span { start, end: i } });
             continue;
         }
-        // character and string literals (docs/string-char-design.md §3). One
+        // character and string literals (docs/library/string-char-design.md §3). One
         // syntax form each: `'x'` is a scalar value and `"…"` a sequence of
         // them, and neither delimiter had any other reading before this —
         // `'` and `"` were both "unexpected character".
@@ -1392,7 +1392,7 @@ mod tests {
         assert!(refused("0x)").starts_with("`0x` needs"));
     }
 
-    /// A numeral has no bound (docs/wide-numerals-design.md): `u64::MAX` and
+    /// A numeral has no bound (docs/language/wide-numerals-design.md): `u64::MAX` and
     /// one past it read the same way in every radix.
     #[test]
     fn a_numeral_past_a_machine_word_reads_in_every_radix() {

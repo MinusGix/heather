@@ -8,7 +8,7 @@ created: 2026-11-03
 updated: 2026-11-06
 ---
 
-A relation `rewrite` (`docs/equation-rewrite-design.md` §9, §11) matches a
+A relation `rewrite` (`docs/tactics/equation-rewrite-design.md` §9, §11) matches a
 codata constructor as an occurrence (`CTau(t)` against `Eutt::tau_l`, §11.2)
 but does not walk *into* one: `CTau(bind(bind(t, f), g))` with `bind_assoc`
 is refused ("a form that is no application or λ"), because a constructor is a
@@ -24,7 +24,7 @@ stand-ins; the walk needs the children themselves.
 
 ## Log
 
-- 2026-11-06: done (`docs/equation-rewrite-design.md` §11.5). `CtorNode`
+- 2026-11-06: done (`docs/tactics/equation-rewrite-design.md` §11.5). `CtorNode`
   (`crates/elab/src/codata/node.rs`) reads a constructor `corec`'s children
   off the step's case tree — plain children and function children (the
   function as written, a λ walked pointwise), unindexed and indexed — and

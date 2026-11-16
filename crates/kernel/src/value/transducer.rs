@@ -1,5 +1,5 @@
 //! Bit transducers: Mealy machines over a word, iterated natively
-//! (`docs/native-bitvector-values-design.md` §§4, 5).
+//! (`docs/kernel/native-bitvector-values-design.md` §§4, 5).
 //!
 //! A fold over a `Vec`'s *length* whose step reads one bit from each of `a`
 //! vector arguments and a state from a finitely enumerable type, and whose
@@ -14,11 +14,11 @@
 //! the loops that run it over a word. How a step *came* to be tabulated is
 //! the evaluator's probe (`eval/transduce.rs`); nothing in this module
 //! evaluates, and nothing in it names a library type — which is what keeps
-//! the arithmetic testable against a reference semantics ([`tests`]) and the
+//! the arithmetic testable against a reference semantics (its tests) and the
 //! trusted part small, exactly as `value/algebra.rs` is for the `Nat`
 //! classes.
 //!
-//! Three output algebras, because the library's folds have three shapes
+//! Five output algebras, one per shape of the library's folds
 //! (design §§4.1, 5):
 //!
 //! - **cons** — one bit per step onto the recursive result: `bxor`, `add`,

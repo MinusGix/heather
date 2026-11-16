@@ -37,7 +37,7 @@ subjects are what names organize around. Proposal, in two coupled halves:
    convention.
 2. **Reachability through evidence.** A member of `T`'s namespace is in
    scope wherever a `T` is in evidence, by the one-resolution-judgment
-   direction (docs/modules-design.md §8):
+   direction (docs/language/modules-design.md §8):
    - *Elimination-shaped* members reach through a **receiver** —
      `p.trans(q)` with `p : a = b`; the method fallback is already
      receiver-directed, so this is Lean dot-notation landing on built
@@ -145,7 +145,7 @@ the prelude layer-2 round or the first file that wants two order kits.
   intended surface is `Derivation::tier`, `Derivation::meaning`,
   `Derivation::spell`, `Derivation::WellFormed`.
 
-  What the probe settled (`probes/str/p11.hthr`): the **receiver half of this
+  What the probe settled (`probes/str/p11.hthr@ef3961a`): the **receiver half of this
   issue already works** for a user-declared inductive. `fn Derivation::tier(self
   d: Derivation) → Nat` declares, and `Sum(…).tier() = 0` holds by `refl`. So the
   gap the showcase actually hit is not the mechanism but the habit — the standard
@@ -167,7 +167,7 @@ the prelude layer-2 round or the first file that wants two order kits.
   member cannot be named at all except through a receiver: inside
   `fn Tree::flat_d(self t: Tree, …)`, the qualified self-call `Tree::flat_d(l, …)`
   is refused with "`Tree::flat_d` is qualified by `Tree`, which is neither an
-  imported module nor a type in scope here" (`probes/str/p13.hthr`).
+  imported module nor a type in scope here" (`probes/str/p13.hthr@ef3961a`).
 
   So the two halves of this issue are not independent after all. Because there is
   no qualified spelling, every use of a member goes through the receiver path, and
@@ -185,8 +185,8 @@ the prelude layer-2 round or the first file that wants two order kits.
 - 2026-09-22: The 2026-09-22 std namespacing refactor moved `nat`'s `add` to `Nat::add`; certgen still identifies functions by surface name, filed as [[certgen-namespaced-function-identity]].
 - 2026-09-23: 2026-09-23: the refactor's fallout on master is fixed and the full suite is green (2904 passed). The fixes were fmt drift, lib_algebra and operators_onto_classes test respellings, and certgen now keys functions on global identity (certgen-namespaced-function-identity, closed).
 - 2026-09-24: 2026-09-24: Namespace round (#1a) chartered from the refactor's residue. Probe of the 80 remaining lib `@` sites (all BitVec) found [[receiver-with-unsolved-implicit-unbound]]: member lookup refuses any receiver whose type carries a meta (`R::mk().get()`, `Nil.len()`), with a false "declared below" hint. It joins the facade re-export of members, `x.f()` vs a bare `f` in scope, [[type-member-missing-self-diagnostic]] and [[receiver-member-ih-generalization]].
-- 2026-09-24: 2026-09-24: #1a design: docs/receiver-member-resolution-design.md. It covers owner-by-head for uninferable receivers, dropping ambient readings that cannot take the receiver (a non-function local like `let len = …`, or a disjoint subject carrier), the declared-below and missing-self diagnostics, and the lib `@` sweep. The facade re-export of members already works (`Cursor::start` through `import parser`).
-- 2026-09-24: 2026-09-24: #1a landed (docs/receiver-member-resolution-design.md §7): an uninferable receiver names its owner by its head; ambient readings that cannot take the receiver no longer block the member; the declared-below and missing-self diagnostics are fixed; lib `@` lines went 90 → 42; calc_text's `spell` is a member. Residue: [[nested-uninferable-argument-under-checking]] (chains headed by an uninferable call) and [[method-chain-receiver-reinference]] (2^depth).
-- 2026-10-26: The non-receiver reach inside an owner is filed as [[owner-sibling-names]] (docs/sections-design.md §6): inside a member of `T`, `T`'s members are bare-name candidates at ambiguity rank, no precedence. The library writes `Owner::x` inside `Owner`'s own members 3,409 times. Owner blocks were weighed and not recommended (doc §5.4): owners stay on heads for grep.
-- 2026-10-26: 2026-10-26: inside a member of T, T's other members are now reachable bare at ambiguity rank (issues/owner-sibling-names.md, docs/sections-design.md §6) — the elimination half of this issue in non-receiver positions.
-- 2026-11-05: gardener: cites a file it shares with [[requires-placement-syntax]] (`docs/sections-design.md`).
+- 2026-09-24: 2026-09-24: #1a design: docs/language/classes/receiver-member-resolution-design.md. It covers owner-by-head for uninferable receivers, dropping ambient readings that cannot take the receiver (a non-function local like `let len = …`, or a disjoint subject carrier), the declared-below and missing-self diagnostics, and the lib `@` sweep. The facade re-export of members already works (`Cursor::start` through `import parser`).
+- 2026-09-24: 2026-09-24: #1a landed (docs/language/classes/receiver-member-resolution-design.md §7): an uninferable receiver names its owner by its head; ambient readings that cannot take the receiver no longer block the member; the declared-below and missing-self diagnostics are fixed; lib `@` lines went 90 → 42; calc_text's `spell` is a member. Residue: [[nested-uninferable-argument-under-checking]] (chains headed by an uninferable call) and [[method-chain-receiver-reinference]] (2^depth).
+- 2026-10-26: The non-receiver reach inside an owner is filed as [[owner-sibling-names]] (docs/language/sections-design.md §6): inside a member of `T`, `T`'s members are bare-name candidates at ambiguity rank, no precedence. The library writes `Owner::x` inside `Owner`'s own members 3,409 times. Owner blocks were weighed and not recommended (doc §5.4): owners stay on heads for grep.
+- 2026-10-26: 2026-10-26: inside a member of T, T's other members are now reachable bare at ambiguity rank (issues/owner-sibling-names.md, docs/language/sections-design.md §6) — the elimination half of this issue in non-receiver positions.
+- 2026-11-05: gardener: cites a file it shares with [[requires-placement-syntax]] (`docs/language/sections-design.md`).

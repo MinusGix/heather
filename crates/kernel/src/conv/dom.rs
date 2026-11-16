@@ -1,5 +1,5 @@
 //! The **comparison domain**: the boundary through which [`super::Conv`]'s
-//! arms reach their inputs (docs/nbe-conversion-design.md §13, stage 2a).
+//! arms reach their inputs (docs/kernel/nbe-conversion-design.md §13).
 //!
 //! Conversion is a structural comparison of two weak head normal forms. *What
 //! a weak head normal form is* is the only thing that changes when the checker
@@ -31,24 +31,22 @@
 //!   ([`Dom::embed_ty`]), and synthesizing the types the rules build
 //!   (`Π`, `Vec`, `El`, …). These are methods rather than call-site syntax
 //!   because at the value domain they are closure application and environment
-//!   extension, not substitution: leaving them at the call sites is what would
-//!   make stage 2b a rewrite instead of an instantiation.
+//!   extension, not substitution, so at the call sites they would be written
+//!   twice.
 //!
 //! The syntax instantiation is asymmetric — `Ty = Type` but `Tm = Rc<Term>`
 //! — and that is a measured choice, not an oversight. A conversion's *root*
-//! is a `&Type` the caller lends us, and wrapping it cost 1.3× on
-//! `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`; a
-//! conversion's *neutral spines* hand the same term to the neutral judgment
-//! twice over, and copying it there cost as much again. See
+//! is a `&Type` the caller lends us, and wrapping it is a visible cost when
+//! every conversion is as small as `Nat ≈ Nat`; a conversion's *neutral
+//! spines* hand the same term to the neutral judgment twice over, and
+//! copying it there costs as much again. See
 //! [`Dom::whnf_ty_root`].
 //!
-//! Two things are deliberately *not* abstracted, and stage 2b owns both:
-//! [`super::Env<'v>`]'s Γ stays a syntactic [`LocalCtx`] (only its length and base
-//! are read by the telescope helpers — entry *types* are read only by
-//! `tm_ne`'s variable arm, through [`Dom::var_type`]), and the recursor
-//! telescope tables in [`crate::rec`] keep producing syntax, which the arms
-//! then embed. See the stage-2a log entry in
-//! `issues/nbe-conversion-round.md`.
+//! Two things are deliberately *not* abstracted: [`super::Env<'v>`]'s Γ is
+//! read by the telescope helpers as a [`CtxShape`] (its length and base;
+//! entry *types* are read only by `tm_ne`'s variable arm, through
+//! [`Dom::var_type`]), and the recursor telescope tables in [`crate::rec`]
+//! keep producing syntax, which the arms then embed.
 
 use crate::rc::Rc;
 
@@ -57,7 +55,7 @@ use crate::rec;
 use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, OutOfFuel};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, Branches, IWfSig, MSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, Branches, CtxShape, IWfSig, MSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
 use super::{Conv, ConvError, Env, R, NC};
@@ -261,11 +259,11 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     // The stored Π / Σ annotations are not part of these views: the typed
     // application and projection rules read the head's inferred type
     // instead, so the view never builds closures for them. `levels` is `None`
-    // for the checked spelling `app@` (docs/app-by-head-type-design.md §4),
+    // for the checked spelling `app@` (docs/elaborator/app-by-head-type-design.md §4),
     // for the reason given at `Fst` below.
     App { levels: Option<(&'a Level, &'a Level)>, fun: D::TmC, arg: D::TmC },
     // `levels` is `None` for the checked spellings `fst@` / `snd@`
-    // (docs/intro-by-type-design.md), which store no levels at all — their
+    // (docs/elaborator/intro-by-type-design.md), which store no levels at all — their
     // annotation is one whole type and finding the levels inside it would
     // mean reducing, which a view may not do. The arms read them as a
     // redundant cross-check on the *component* spelling and take the real
@@ -413,7 +411,7 @@ pub(super) struct MSigC<'a, 'v, D: Dom<'v>> {
 impl<'v, D: Dom<'v>> MSigC<'_, 'v, D> {
     /// The family's level, `l ⊔ l' ⊔ li`.
     pub(super) fn family_level(&self) -> Level {
-        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+        Level::max(Level::max(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 }
 
@@ -463,8 +461,8 @@ pub(super) trait Dom<'v>: Sized {
     /// operation — at the value domain, evaluation in the identity
     /// environment of Γ (design §3.2). It exists as a method rather than as
     /// `embed` + [`Dom::whnf_ty`] because the syntax domain can then reduce
-    /// the borrow in place: wrapping every root cost 1.3× on
-    /// `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`.
+    /// the borrow in place, where wrapping every root is a visible cost
+    /// when every conversion is as small as `Nat ≈ Nat`.
     fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Self::Ty>;
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Self::Tm>;
     fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
@@ -521,7 +519,7 @@ pub(super) trait Dom<'v>: Sized {
     /// this so that two vectors at a canonical length are compared by length
     /// and element once, instead of through the `Σ` encoding both reduce
     /// to, which repeats the element comparison per level
-    /// (docs/wf-former-design.md §5).
+    /// (docs/kernel/wf-former-design.md §5).
     fn vec_former(cv: &Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> Option<(Level, Self::TyC, Self::TmC)>;
     fn view_tm<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Tm) -> TmView<'a, 'v, Self>;
     /// The weak head form of a sub-structure that is **already** in weak head
@@ -609,8 +607,7 @@ pub(super) trait Dom<'v>: Sized {
     /// extended context, and de Bruijn does the rest. At the value domain
     /// only the *body syntax* is; the environment the closure captured is
     /// still in the outer scope, and the two have to be brought back together
-    /// (`value::shift`, and the stage-2b log for why stage 1's argument does
-    /// not cover this case).
+    /// (`value::shift`).
     fn under_tele_ty(
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
@@ -634,8 +631,8 @@ pub(super) trait Dom<'v>: Sized {
     /// Do the two substitutions have the same tail? Stated as a predicate
     /// rather than as equality because the value domain's tail deliberately
     /// carries less than the syntax's (`VTail` drops the source context's
-    /// length, which an environment machine has no opportunity to renormalize
-    /// — stage 1's log).
+    /// length, which an environment machine has no opportunity to
+    /// renormalize).
     fn subst_tails_agree(a: &Self::Subst, b: &Self::Subst) -> bool;
     /// `T[δ|ₖ]` — a target-context entry type carried back along the first
     /// `k` steps of `δ`. With `k = δ.terms.len()` this is `T[δ]`, the type of
@@ -795,12 +792,12 @@ pub(super) trait Dom<'v>: Sized {
     /// Decide two values at a Σ the `Vec` type rule produced by comparing a
     /// common prefix of their **bits** as a machine word, instead of taking
     /// the chain one η-projection at a time
-    /// (`docs/native-bitvector-values-design.md` §7).
+    /// (`docs/kernel/native-bitvector-values-design.md` §7).
     ///
     /// `Ok(None)` means only that this domain — or this Σ, or these values —
     /// has no word to compare; the ordinary η arm follows and decides exactly
-    /// the pairs it decides today, so this is a fast path and never a new
-    /// verdict. `Err(NotConvertible)` is a verdict: two canonical bits that
+    /// the pairs it decides without this, so this is a fast path and never a
+    /// new verdict. `Err(NotConvertible)` is a verdict: two canonical bits that
     /// differ, which is one comparison rather than a walk to the difference.
     #[allow(clippy::too_many_arguments)]
     fn bit_vec_eq(
@@ -987,15 +984,15 @@ pub(super) trait Dom<'v>: Sized {
 /// Every accessor is total, so every one returns `Ok`.
 ///
 /// Every method is `#[inline]`: they are thin adapters that must fold into
-/// the arms, and leaving them as calls — a view returned through memory, a
-/// whnf moved twice — cost 1.3× on `nat/check-numeral`.
+/// the arms; as calls, a view is returned through memory and a whnf moved
+/// twice, on the hottest path there is.
 pub(super) struct Syn;
 
 /// `Γ ⊢ x : T` — the identity substitution of `env`'s Γ, weakened past the
 /// `k` binders `cur` has and `home` does not.
 fn id_at<'v>(home: &Env<'v>, cur: &Env<'v>) -> LocalSubst {
-    let k = (cur.gamma.entries.len() - home.gamma.entries.len()) as u32;
-    LocalSubst::id(&home.gamma).shift_local(k)
+    let k = cur.len - home.len;
+    LocalSubst::id(home.shape()).shift_local(k)
 }
 
 /// An `M` signature's view at the syntax domain: its own components.
@@ -1053,13 +1050,13 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Type> {
-        step_ty(cv, env, t, step_type)
+        step_ty(cv, env, t, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Rc<Term>> {
         let mut cur = t.clone();
-        while let Some(next) = stepped(step_term(&cur, &env.gamma))? {
+        while let Some(next) = stepped(step_term(&cur, env.shape()))? {
             cv.spend()?;
             cur = next;
         }
@@ -1074,32 +1071,32 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Type>) -> R<Type> {
-        step_ty(cv, env, t, step_type)
+        step_ty(cv, env, t, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
-        step_tm(cv, env, t, step_term)
+        step_tm(cv, env, t, |t, g| step_term(t, g))
     }
 
     #[inline]
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
         let defs = cv.defs(env);
-        let Some(first) = stepped(step_type_delta(w, &env.gamma, defs))? else {
+        let Some(first) = stepped(step_type_delta(w, env.shape(), defs))? else {
             return Ok(w.clone());
         };
         cv.spend()?;
-        step_ty(cv, env, &first, step_type)
+        step_ty(cv, env, &first, |t, g| step_type(t, g))
     }
 
     #[inline]
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> R<Rc<Term>> {
         let defs = cv.defs(env);
-        let Some(first) = stepped(step_term_delta(w, &env.gamma, defs))? else {
+        let Some(first) = stepped(step_term_delta(w, env.shape(), defs))? else {
             return Ok(Rc::clone(w));
         };
         cv.spend()?;
-        step_tm(cv, env, &Rc::new(first), step_term)
+        step_tm(cv, env, &Rc::new(first), |t, g| step_term(t, g))
     }
 
     fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, mut w: Rc<Term>) -> R<Rc<Term>> {
@@ -1522,7 +1519,7 @@ impl<'v> Dom<'v> for Syn {
             },
 
             // The checked spellings view exactly as the forms they spell
-            // (docs/intro-by-type-design.md §9.0 item 3): the annotation is
+            // (docs/elaborator/intro-by-type-design.md §9.0 item 3): the annotation is
             // not part of any of these views, so there is nothing to see
             // through and nothing to reduce. This is also what makes
             // `inl@(T;a)` and `inl(A;B;a)` convertible without a new arm.
@@ -1574,7 +1571,7 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn var_type(_cv: &mut Conv<'v, Self>, env: &Env<'v>, x: LocalVar) -> R<(Rc<Type>, Level)> {
-        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+        let Some(e) = env.syntax_entry(x) else {
             return Err(NC);
         };
         Ok((Rc::new(e.ty.shift_local(x.0 + 1)), e.level.clone()))
@@ -2061,7 +2058,7 @@ impl<'v> Dom<'v> for Syn {
         // to the App's bound variable, Γ weakens by 2. Built once and shared
         // by the two sides.
         let cod_ann = Rc::new(
-            cod.apply_local(&LocalSubst::id(&outer.gamma).shift_local(2).extended(var0())),
+            cod.apply_local(&LocalSubst::id(outer.shape()).shift_local(2).extended(var0())),
         );
         let dom_up = Rc::new(dom.shift_local(1));
         let app = |t: &Rc<Term>| {
@@ -2157,7 +2154,7 @@ impl<'v> Dom<'v> for Syn {
         motive: &Rc<Type>,
     ) -> R<(Rc<Type>, Rc<Type>, Rc<Type>)> {
         let (cs, ih, step) =
-            wf_step_telescope(&env.gamma, level, motive_level, shape, arity, motive);
+            wf_step_telescope(env.shape(), level, motive_level, shape, arity, motive);
         Ok((Rc::new(cs), Rc::new(ih), Rc::new(step)))
     }
 
@@ -2225,7 +2222,7 @@ impl<'v> Dom<'v> for Syn {
             code_level.clone(),
             ctx.clone(),
             (**scrut).clone(),
-            &env.gamma,
+            env.shape(),
         )))
     }
 
@@ -2247,7 +2244,7 @@ impl<'v> Dom<'v> for Syn {
             ctx.clone(),
             (**ty).clone(),
             (**scrut).clone(),
-            &env.gamma,
+            env.shape(),
         )))
     }
 }
@@ -2255,9 +2252,7 @@ impl<'v> Dom<'v> for Syn {
 thread_local! {
     /// The two closed forms of [`Dom::nat`] / [`Dom::zero`], allocated once
     /// per thread. Conversion synthesizes them once per comparison node on
-    /// its hottest paths, and an `Rc::new` there is measurable: building them
-    /// per checker cost 1.5× on `nat/check-numeral` (`scripts/bench --check`,
-    /// 2026-07-31).
+    /// its hottest paths, and an `Rc::new` there is measurable.
     static NAT: Rc<Type> = Rc::new(Type::Nat);
     static ZERO: Rc<Term> = Rc::new(Term::Zero);
 }
@@ -2276,10 +2271,11 @@ fn step_ty<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Type,
-    step: impl Fn(&Type, &LocalCtx) -> Result<Option<Type>, OutOfFuel>,
+    step: impl Fn(&Type, &CtxShape) -> Result<Option<Type>, OutOfFuel>,
 ) -> R<Type> {
+    let gamma = env.shape();
     let mut cur = t.clone();
-    while let Some(next) = stepped(step(&cur, &env.gamma))? {
+    while let Some(next) = stepped(step(&cur, &gamma))? {
         cv.spend()?;
         cur = next;
     }
@@ -2290,13 +2286,14 @@ fn step_tm<'v>(
     cv: &mut Conv<'v, Syn>,
     env: &Env<'v>,
     t: &Rc<Term>,
-    step: impl Fn(&Term, &LocalCtx) -> Result<Option<Term>, OutOfFuel>,
+    step: impl Fn(&Term, &CtxShape) -> Result<Option<Term>, OutOfFuel>,
 ) -> R<Rc<Term>> {
-    let Some(mut cur) = stepped(step(t, &env.gamma))? else {
+    let gamma = env.shape();
+    let Some(mut cur) = stepped(step(t, &gamma))? else {
         return Ok(Rc::clone(t));
     };
     cv.spend()?;
-    while let Some(next) = stepped(step(&cur, &env.gamma))? {
+    while let Some(next) = stepped(step(&cur, &gamma))? {
         cv.spend()?;
         cur = next;
     }

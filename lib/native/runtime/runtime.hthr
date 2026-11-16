@@ -1,10 +1,10 @@
 // `runtime fn`: the default setup, the `Compile` class, and the generator
-// that marks a function for the machine (docs/runtime-fn-setups-design.md
+// that marks a function for the machine (docs/native/runtime-fn-setups-design.md
 // §2, §9; issues/runtime-fn-default-setup.md).
 //
 // An ordinary `fn` is kerneltime mathematics. Writing `runtime fn f` runs
 // the generator `runtime` over the elaborated `f` (a declaration prefix,
-// docs/value-definitions-design.md §3), which
+// docs/metaprogramming/value-definitions-design.md §3), which
 //
 // - reflects `f`'s body into `rt` (`rt_reflect.hthr`), finding the other
 //   runtime fns it calls;
@@ -122,8 +122,8 @@ fn Sig::is_held_at(self s: Sig, tys: Nat → RecInfo) → Bool {
 
 fn Op::judge(self o: Op) → Verdict {
     match o {
-        Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
-        Set(_) => Refused("a byte write: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+        Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
+        Set(_) => Refused("a byte write: byte buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
         ConsLine(_) => Refused("a list of lines: arena lists are not lowered by the default setup yet"),
         _ => Ok,
     }
@@ -145,13 +145,13 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Make(_, _) => Ok,
         Field(_, _, _) => Ok,
         Call(f, _) => match f {
-            Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/runtime-fn-setups-design.md §16.11)"),
+            Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/native/runtime-fn-setups-design.md §16.11)"),
             Succ(_) => match Sig::at(sigs, f).is_held_at(tys) {
                 True => Ok,
                 False => Refused("a call of a function that does not take and return 64-bit words (issues/function-ir-multi-word-calls.md)"),
             },
         },
-        Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+        Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
         Byte(_, _, _) => Ok,
     }
@@ -225,7 +225,7 @@ record Setup {
     sound: (f: Fun) → (w: World) → f.Holds(w, lower(f, w)),
     // The lowering reads the world's type table and signatures, never its
     // callees' meanings or its file, so one code serves a function at every
-    // file (docs/native-one-compiler-design.md §2.3).
+    // file (docs/native/native-one-compiler-design.md §2.3).
     static: (f: Fun) → (w: World) → (cs: Sig::Sems(w.tys, w.sigs)) → (spans: List<List<BitVec(8)>>) → lower(f, w.over(cs, spans)) = lower(f, w),
 }
 
@@ -328,7 +328,7 @@ theorem Setup::lowered_over(s: Setup, f: Fun, w: World, cs: Sig::Sems(w.tys, w.s
 fn World::at(self w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), b: Buffers()) → World { w.over(callees(b), b) }
 
 // ---------------------------------------------------------------------------
-// A function at a file (docs/native-one-compiler-design.md §2.3, U3c). A
+// A function at a file (docs/native/native-one-compiler-design.md §2.3, U3c). A
 // function lent spans takes, in Heather, each span's bytes and then its
 // length word: `f(span, length, words…)`. Its code takes the span's home
 // instead, two words (where the bytes are, how many), and reads the bytes
@@ -382,7 +382,7 @@ fn Ty::lent_at<F>(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: I
 
 // The `Compile` class (design §9.3): a function's code and the code's
 // agreement with the function, keyed on the function itself (an
-// operation-indexed class, docs/operation-indexed-classes-design.md). The
+// operation-indexed class, docs/language/classes/operation-indexed-classes-design.md). The
 // `runtime` generator publishes an instance per runtime fn; a hand-written
 // instance (tuned FunctionIR and its proof) is one too.
 //
@@ -451,7 +451,7 @@ fn Setup::lent_callees<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r
 // `f` along the pin and to the one code along `static`. At a runtime fn
 // `typed` and `pinned` are both `refl`, which the kernel checks by
 // conversion (the reflection's meaning unfolds to `f`'s body node for node,
-// docs/runtime-fn-setups-design.md §4.3), and `ok` and `plain` are
+// docs/native/runtime-fn-setups-design.md §4.3), and `ok` and `plain` are
 // evaluation, once, at `w`.
 //
 // The agreement is a theorem of its own, stated as the class states it: a
@@ -853,7 +853,7 @@ theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → B
 
 // An instance's function as a word function at a file: its meaning there,
 // uncurried. A program is linked at every file at once
-// (docs/native-one-compiler-design.md §2.3): a function lent spans reads
+// (docs/native/native-one-compiler-design.md §2.3): a function lent spans reads
 // the file's, and a function lent nothing is the same at each.
 //
 // The instance is read by pattern and not through the class's members. A
@@ -963,8 +963,15 @@ fn World::of(tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs
 
 fn runtime_fail<A>(why: String) → Tac<A> { fail("runtime: " ++ why, []) }
 
+// A name the generator reads, where the `runtime fn` is: one of this
+// module's own is reached by its module's key even where `runtime` is not
+// imported, as in a module of programs, which imports `runtime_program`
+// in its place (its `runtime` and this one would clash).
 fn runtime_ref(name: String) → Tac<GlobalRef> {
-    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): ")
+    lookup(name).bind(λ c => match c {
+        Accepted(g) => pure(g),
+        Refused(_) => lookup("runtime::" ++ name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): "),
+    })
 }
 
 fn runtime_global(name: String) → Tac<Expr> { runtime_ref(name).bind(λ g => pure(Global(g))) }
@@ -1922,7 +1929,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities),
         // Every function of the program against its source, and not the
         // last alone: what a caller of another of its functions cites (an
-        // export with several entries, docs/native-library-exports-design.md
+        // export with several entries, docs/native/native-library-exports-design.md
         // §6.3). `f::names` is which function is where: each function's
         // name as its characters' codes, a zero after each, the first
         // function's first.
@@ -1995,7 +2002,7 @@ fn runtime_shapes(reprs: List<ReprEntry>) → Nat → RecInfo {
 }
 
 // ---------------------------------------------------------------------------
-// A runtime fn that writes a span (docs/native-one-compiler-design.md §2.6,
+// A runtime fn that writes a span (docs/native/native-one-compiler-design.md §2.6,
 // U4 step 4c-3c): a function from a span's bytes to `Mutated`, a `mut self`
 // method's kernel type. The generator reads it as a computation over the
 // file (`rt_file_reflect.hthr`), builds its `CompileSpan` instance
@@ -2166,7 +2173,7 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     let companion <- lookup(name ++ "::ext");
     let found: Tac<Expr> = match companion {
         Accepted(g) => pure(Global(g)),
-        Refused(_) => runtime_span_refused(name, "it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it (docs/decreases-unfolding-design.md)"),
+        Refused(_) => runtime_span_refused(name, "it has no `ext` companion, which a loop's instance is built from: the function's own call is where a `decreases` function's companions do not follow it (docs/language/recursion/decreases-unfolding-design.md)"),
     };
     let ext <- found;
     let irrel <- runtime_global(name ++ "::irrel");
@@ -2990,7 +2997,7 @@ fn runtime_reads(name: String, f: GlobalRef) → Tac<List<Decl>> {
 }
 
 // ---------------------------------------------------------------------------
-// A function of a laid record (docs/layout-design.md §9)
+// A function of a laid record (docs/native/layout-design.md §9)
 //
 // `runtime fn T::m(mut self t: T, x: u64, …) → R` at a record `T` laid
 // over bytes is compiled as a function over the span that holds the

@@ -16,7 +16,7 @@ client split them by hand: `linarith(hz.left, hz.right)` for a fact, and
 The library had 94 `.left`/`.right` arguments inside `linarith` calls and
 38 `abs_le_intro` wrappers.
 
-Wanted (docs/linarith-design.md §9):
+Wanted (docs/tactics/linarith-design.md §9):
 
 - A written or context fact that is a conjunction, or whose head unfolds to
   one, gives each side as a row (field route and `Int`/`Nat` route).
@@ -25,7 +25,7 @@ Wanted (docs/linarith-design.md §9):
 
 ## Log
 
-- 2026-11-06: Built (docs/linarith-design.md §9). Probes in
+- 2026-11-06: Built (docs/tactics/linarith-design.md §9). Probes in
   `lib/_tests/std/tactic/linarith_tests.hthr` (`conj_*`). The library sweep
   dropped the 12 `abs_le_intro` calls whose sides were both `linarith` calls
   and merged `.left`/`.right` pairs in `real_fn.hthr` and

@@ -24,7 +24,7 @@ theorem p_use2(a: K): K.unit < K.multiplicative.unit { p_nopoint() }   // same r
 }
 ```
 
-`docs/constructive-ordered-field-design.md` ("Calling a generic theorem")
+`docs/library/constructive-ordered-field-design.md` ("Calling a generic theorem")
 records why: with implicit endpoints the hypothesis `?lt(?x, ?y)` is not
 solvable against the carrier's `<` before the carrier is known, so every
 generic theorem takes its points explicitly, and
@@ -35,7 +35,7 @@ out of scope by design". The expected type does not pin the dictionary either
 ## What it costs
 
 That one decision shapes most of the ordered-algebra library
-(docs/stdlib-math-awkwardness-survey.md §1):
+(docs/surveys/stdlib-math-awkwardness-survey.md §1):
 
 - Every generic call restates endpoints the hypotheses already fix (1,571
   calls to `StrictOrder::`, `PseudoOrder::`, `OrderedAddMonoid::`, …,
@@ -67,7 +67,7 @@ not exclusive:
    and run instance search then, instead of refusing at the first attempt.
 2. **Solve `?lt(?x, ?y) ≟ lt(a, b)` first-order when the head is a local
    or a dictionary field**, as a ranked approximation in the sense of
-   [[unifier-guesses-postponed]] (P2 of docs/elaborator-principles-survey.md):
+   [[unifier-guesses-postponed]] (P2 of docs/elaborator/elaborator-principles-survey.md):
    it is the only solution that keeps `?lt` an index of the class.
 
 The cause above is the design note's statement; this issue has not

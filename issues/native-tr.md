@@ -12,7 +12,7 @@ template twice. It writes inside the read loop, so read and write histories
 interleave. And it stores a byte for every byte it reads, translating each
 chunk in place before writing it back. Its claim has no bound on the input.
 
-Design: `docs/native-tr-design.md`. The byte map is lowered through the
+Design: `docs/archive/native-tr-design.md`. The byte map is lowered through the
 compiler (needs [[function-ir-narrow-arithmetic]]'s add/subtract, slice N);
 the map loop and the process are library code proved once. `tr -d` and
 `tr -s` are [[native-loop-emitting-stores]].

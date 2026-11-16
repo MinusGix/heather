@@ -13,7 +13,7 @@ builder when resolving it fails. It treats every failure that way, not only
 loader otherwise refuses) is silently skipped, and the bundled copy is used.
 
 Found adding the fallback for `examples/x86-native/wc.hthr`'s `import
-bitvec_omega` (docs/native-wc-design.md §6.1). Fix: make `resolve` report
+bitvec_omega` (docs/archive/native-wc-design.md §6.1). Fix: make `resolve` report
 not-found apart from ambiguity, and fall back only on not-found.
 Related: [[bundled-module-names-outside-build]].
 

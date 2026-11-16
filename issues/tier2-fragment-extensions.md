@@ -7,7 +7,7 @@ created: 2026-10-20
 updated: 2026-10-21
 ---
 
-`docs/inductive-tier2-w-lowering.md` §1 lowers a fragment and refuses the
+`docs/inductives/inductive-tier2-w-lowering.md` §1 lowers a fragment and refuses the
 rest by name. Each item below is its own small round; none blocks the
 interaction-tree library, which is why they are grouped.
 
@@ -20,7 +20,7 @@ interaction-tree library, which is why they are grouped.
   this needs either the children split per field (a Π over a Σ of codes) or
   a different encoding of the branching constructors.
 - **Generated definitions.** The leaf predicate is named (`D#canon`,
-  docs/inductive-tier2-w-lowering.md §13, 2026-10-21); `S`, `P` and the
+  docs/inductives/inductive-tier2-w-lowering.md §13, 2026-10-21); `S`, `P` and the
   whole `⟦D⟧` stay inline. Naming `P` (and `W₀` with it) is the next lever if
   a later profile shows the remaining copies; nothing measured asks for it
   yet.
@@ -41,7 +41,7 @@ declined with its reason.
 
 ## Log
 - 2026-10-21: The generated-definitions bullet is now measured, by the first
-  real client (`lib/std/itree/itree.hthr`, `docs/itree-core-round.md`). Each law
+  real client (`lib/std/itree/itree.hthr`, `docs/itrees/itree-core-round.md`). Each law
   proved by induction over `ITree<R>(E)` (a four-arm `match` at a motive
   computed by a large elimination, `ITree::Same`) costs seconds of kernel gate
   at width one, and a callgrind profile of one of them (`bind_ret_r`) puts
@@ -62,4 +62,4 @@ declined with its reason.
   more than an order of magnitude, with the query, miss and step counts
   falling in proportion; `scripts/perf ab` numbers are on the PR. Counts
   move by design here (the terms are smaller); verdicts do not.
-- 2026-11-05: gardener: cites a file it shares with [[kernel-coinductive-types]] (`docs/itree-core-round.md`).
+- 2026-11-05: gardener: cites a file it shares with [[kernel-coinductive-types]] (`docs/itrees/itree-core-round.md`).

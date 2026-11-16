@@ -1,5 +1,5 @@
 // Probes of the verified lowering's shifts (function_ir_lower,
-// docs/runtime-fn-setups-design.md §16.13 round 3): legalization of the
+// docs/native/runtime-fn-setups-design.md §16.13 round 3): legalization of the
 // count, apart from selection, and the code each count selects.
 import function_ir;
 import function_ir_lower;
@@ -41,8 +41,8 @@ theorem shl_0_code(): code_of(ShiftLeft(64, 1, 0, 0).lower(Rax, in_rdi())) = [Mo
 theorem shl_3_code(): code_of(ShiftLeft(64, 1, 0, 3).lower(Rax, in_rdi())) =
     [MovRR(Rax, Rdi), ShiftImm(OpShl, Rax, BitVec::ofNat(3))] { refl }
 theorem shr_1_code(): code_of(LogicalShiftRight(64, 1, 0, 1).lower(Rax, in_rdi())) = [MovRR(Rax, Rdi), ShiftOne(OpShr, Rax)] { refl }
-theorem shl_64_code(): code_of(ShiftLeft(64, 1, 0, 64).lower(Rax, in_rdi())) = [MovRI(Rax, BitVec::zero())] { refl }
-theorem shr_65_code(): code_of(LogicalShiftRight(64, 1, 0, 65).lower(Rax, in_rdi())) = [MovRI(Rax, BitVec::zero())] { refl }
+theorem shl_64_code(): code_of(ShiftLeft(64, 1, 0, 64).lower(Rax, in_rdi())) = [MovRI32(Rax, BitVec::ofNat(0))] { refl }
+theorem shr_65_code(): code_of(LogicalShiftRight(64, 1, 0, 65).lower(Rax, in_rdi())) = [MovRI32(Rax, BitVec::ofNat(0))] { refl }
 // Past the width SAR is SAR by 63: one instruction, not a chain.
 theorem sar_65_code(): code_of(ArithmeticShiftRight(64, 1, 0, 65).lower(Rax, in_rdi())) =
     [MovRR(Rax, Rdi), ShiftImm(OpSar, Rax, BitVec::ofNat(63))] { refl }

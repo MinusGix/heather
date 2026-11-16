@@ -37,7 +37,8 @@
 //! in `elab` maintains anything, which is what storing the bound *at
 //! construction* would have asked of every one of them, and the whole
 //! trusted surface is this file's arithmetic (whose binder counts must
-//! mirror `subst.rs`'s dep table, the one drift hazard, see below) and the
+//! mirror `subst.rs`'s dep table, the one drift hazard, see below and
+//! `issues/kernel-binder-count-tables.md`) and the
 //! pointer's rule that a value reached mutably has its head emptied first.
 //!
 //! The first question about a node walks whatever of its subtree has no
@@ -45,19 +46,13 @@
 //! question is a read of the node the caller already holds. A node is
 //! walked once for as long as it lives.
 //!
-//! ## What it replaced
+//! ## Why not a table
 //!
-//! Until 2026-11-10 the answers were in direct-mapped tables keyed by the
-//! node's address (one pair a thread for the substitutions, one for the
-//! typing memo, one for the global namespace), each entry under a weak
-//! reference so that the address stayed its node's, and filled at a node's
-//! second query so that a term built, walked once and dropped paid a marker
-//! and not an entry. What that cost on a cold check, and why a larger table
-//! would not have recovered it, is in
-//! `issues/free-variable-bounds-in-the-node.md`. What it cost in reasoning:
-//! which subtrees a substitution skipped depended on what had been asked
-//! before and on which addresses collided, so the substitution counters
-//! were not functions of the input. Now they are.
+//! Address-keyed tables (`issues/free-variable-bounds-in-the-node.md`) cost
+//! a cold check more than a larger table recovers, and made which subtrees
+//! a substitution skipped depend on what had been asked before and on which
+//! addresses collided, so the substitution counters were not functions of
+//! the input. In the node, they are.
 //!
 //! ## How wrong bounds are caught
 //!
@@ -66,14 +61,15 @@
 //! counter uses: every skip taken on this metadata is re-verified in debug
 //! builds by running the real traversal and asserting it was a no-op
 //! (`sub_ty`/`sub_tm` in subst.rs), and the test suite runs in the dev
-//! profile — including the 300-seed substitution laws over generated terms
+//! profile — including the substitution laws over generated terms
 //! covering every variant. A binder count here that drifts from the
-//! traversal's dep table fails those tests; it cannot silently ship.
+//! traversal's dep table fails those tests on any skip they take.
 
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
 use crate::rc::{Rc, USES_BITS};
+use crate::rec;
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, Type};
 
@@ -299,7 +295,7 @@ impl Walk {
 
     /// A deep node's spine answered from the bottom up, so the recursion
     /// that follows meets an answer one level down instead of walking the
-    /// chain one native frame per node (docs/deep-term-walks-design.md).
+    /// chain one native frame per node (docs/kernel/deep-term-walks-design.md).
     /// Each node below `t` is computed with the depth reset: its own spine
     /// child is already answered, so it recurses a level or two.
     fn warm_spine(&mut self, t: &Rc<Term>) {
@@ -464,8 +460,9 @@ impl Walk {
     }
 
     // The binder counts below (the `.under(k)` arguments) are the LOCAL column
-    // of subst.rs's traversal — `dep(_, _, k)` in map_type/map_term/map_motives/
-    // map_branches — and must stay identical to it. Other-context children
+    // of subst.rs's traversal — `dep(_, _, k)` in map_type/map_term/map_motives
+    // — and must stay identical to it; the branches' come from the one table
+    // both read, `rec::BRANCH_DEPTHS`. Other-context children
     // (everything subst.rs routes through other_ty/other_tm/other_ctx) are
     // omitted entirely, matching `LOCAL_OP` scoping.
 
@@ -778,72 +775,10 @@ impl Walk {
     }
 
     fn branches_use(&mut self, b: &Branches) -> LocalUse {
-        LocalUse::CLOSED
-            .join(self.term_use(&b.ty_nat))
-            .join(self.term_use(&b.ty_pi).under(2))
-            .join(self.term_use(&b.ty_ty))
-            .join(self.term_use(&b.ty_el).under(1))
-            .join(self.term_use(&b.ty_id).under(3))
-            .join(self.term_use(&b.ty_sigma).under(2))
-            .join(self.term_use(&b.ty_unit))
-            .join(self.term_use(&b.ty_empty))
-            .join(self.term_use(&b.tm_var))
-            .join(self.term_use(&b.tm_nat))
-            .join(self.term_use(&b.tm_pi).under(2))
-            .join(self.term_use(&b.tm_ty))
-            .join(self.term_use(&b.tm_zero))
-            .join(self.term_use(&b.tm_succ).under(1))
-            .join(self.term_use(&b.tm_elim_nat).under(4))
-            .join(self.term_use(&b.tm_lam).under(2))
-            .join(self.term_use(&b.tm_app).under(4))
-            .join(self.term_use(&b.tm_id).under(3))
-            .join(self.term_use(&b.tm_refl).under(2))
-            .join(self.term_use(&b.tm_j).under(6))
-            .join(self.term_use(&b.tm_sigma).under(2))
-            .join(self.term_use(&b.tm_pair).under(4))
-            .join(self.term_use(&b.tm_fst).under(3))
-            .join(self.term_use(&b.tm_snd).under(3))
-            .join(self.term_use(&b.tm_unit))
-            .join(self.term_use(&b.tm_empty))
-            .join(self.term_use(&b.tm_triv))
-            .join(self.term_use(&b.tm_elim_empty).under(2))
-            .join(self.term_use(&b.ty_sum).under(2))
-            .join(self.term_use(&b.tm_sum).under(2))
-            .join(self.term_use(&b.tm_inl).under(3))
-            .join(self.term_use(&b.tm_inr).under(3))
-            .join(self.term_use(&b.tm_case).under(6))
-            .join(self.term_use(&b.ty_w).under(2))
-            .join(self.term_use(&b.tm_w).under(2))
-            .join(self.term_use(&b.tm_sup).under(4))
-            .join(self.term_use(&b.tm_elim_w).under(5))
-            .join(self.term_use(&b.ty_vec).under(2))
-            .join(self.term_use(&b.tm_vec).under(2))
-            .join(self.term_use(&b.ty_fin).under(1))
-            .join(self.term_use(&b.tm_fin).under(1))
-            .join(self.term_use(&b.ty_wf).under(2))
-            .join(self.term_use(&b.tm_wf).under(2))
-            .join(self.term_use(&b.tm_supf).under(4))
-            .join(self.term_use(&b.tm_elim_wf).under(5))
-            .join(self.term_use(&b.ty_seq).under(3))
-            .join(self.term_use(&b.tm_seq).under(3))
-            .join(self.term_use(&b.ty_sempty))
-            .join(self.term_use(&b.tm_sempty))
-            .join(self.term_use(&b.tm_srefl).under(2))
-            .join(self.term_use(&b.tm_elim_sempty).under(2))
-            .join(self.term_use(&b.ty_squash).under(1))
-            .join(self.term_use(&b.tm_squash).under(1))
-            .join(self.term_use(&b.tm_squash_in).under(2))
-            .join(self.term_use(&b.tm_elim_squash).under(4))
-            .join(self.term_use(&b.ty_m).under(5))
-            .join(self.term_use(&b.tm_m).under(5))
-            .join(self.term_use(&b.tm_corec).under(8))
-            .join(self.term_use(&b.tm_out).under(6))
-            .join(self.term_use(&b.ty_dvec).under(2))
-            .join(self.term_use(&b.tm_dvec).under(2))
-            .join(self.term_use(&b.ty_iwf).under(6))
-            .join(self.term_use(&b.tm_iwf).under(6))
-            .join(self.term_use(&b.tm_sup_i).under(7))
-            .join(self.term_use(&b.tm_elim_iwf).under(9))
+        rec::branch_terms(b)
+            .into_iter()
+            .zip(rec::BRANCH_DEPTHS)
+            .fold(LocalUse::CLOSED, |u, (t, (_, _, local))| u.join(self.term_use(t).under(local)))
     }
 }
 
@@ -922,7 +857,7 @@ pub(crate) fn global_bound_term(t: &Rc<Term>) -> u32 {
     let depth = GLOBAL_DEPTH.with(|d| d.get());
     if depth >= crate::term::SPINE_ITERATE_AT {
         // The spine below `t`, bottom up, so the walk of each node meets an
-        // answer one level down (docs/deep-term-walks-design.md).
+        // answer one level down (docs/kernel/deep-term-walks-design.md).
         let mut path = Vec::new();
         let mut cur = crate::term::spine_child(t);
         while let Some(c) = cur {

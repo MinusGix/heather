@@ -9,7 +9,7 @@ updated: 2026-10-22
 ---
 
 The effectful source's programs are meant to run by kernel evaluation first
-(`docs/native-effect-source-design.md`; Minus, 2026-10-21). Running `cat`
+(`docs/native/native-effect-source-design.md`; Minus, 2026-10-21). Running `cat`
 (`crates/elab/tests/fixtures/native_source_cat.hthr`) against a scripted
 world by `refl` stops a few loop passes in. The cause is that the value
 cache drops values that are still live, not the cost of the work itself.
@@ -47,7 +47,7 @@ are fragile. They are this issue's instrument.
 ## What would fix it
 
 The tactic host already solved this for its own runs with
-`ValueArena::retaining` (`docs/inductive-tier2-w-lowering.md`, part 3). Two
+`ValueArena::retaining` (`docs/inductives/inductive-tier2-w-lowering.md`, part 3). Two
 directions to price, as kernel design and not as a constant:
 - A retaining arena for an evaluation-shaped gate query, for example `refl`
   at a closed goal, bounded by the fuel the query may spend.

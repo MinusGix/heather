@@ -6,9 +6,9 @@ created: 2026-08-17
 updated: 2026-08-18
 ---
 
-Filed as residue by the round that fixed [[instance-key-collides-across-modules]] (`docs/instance-resolved-key-design.md`).
+Filed as residue by the round that fixed [[instance-key-collides-across-modules]] (`docs/elaborator/instance-resolved-key-design.md`).
 
-That round's rule is *no component of a registry key is a spelling*. It was applied to the **instance** registry and deliberately not to the **designation** table beside it, which is keyed on `(symbol, carrier head written name)` (`docs/operators-onto-classes-design.md` §3.2, `Elaborator::designations`) and has the same latent collision for the same reason.
+That round's rule is *no component of a registry key is a spelling*. It was applied to the **instance** registry and deliberately not to the **designation** table beside it, which is keyed on `(symbol, carrier head written name)` (`docs/language/classes/operators-onto-classes-design.md` §3.2, `Elaborator::designations`) and has the same latent collision for the same reason.
 
 ## The shape of it
 
@@ -41,4 +41,4 @@ The written head did not become unnecessary — it became a separate field. `Des
 
 Acceptance is `crates/elab/tests/designation_resolved_key.rs` (6 tests): the collision pair registers and each use gets its own operation, pinned by `refl` against the qualified operation at neutral operands and at computing ones; a third `Box` declared where it is used is *not* covered by its namesake next door (the control without which the positive passes over a one-entry table); the genuine duplicate is still refused, qualifying carrier and occupant; and a duplicate at another module's carrier is refused too. `++` throughout, because it has no fallback name, so a lookup that misses cannot be quietly rescued by rung 3. Latent as filed — nothing in `lib/` moved.
 
-One test fixture said the old rule out loud and was updated: `the_designation_declaration_refuses_by_name` asserted 'one entry per (symbol, carrier head)'. `docs/operators-onto-classes-design.md` §3.2 carries the amendment.
+One test fixture said the old rule out loud and was updated: `the_designation_declaration_refuses_by_name` asserted 'one entry per (symbol, carrier head)'. `docs/language/classes/operators-onto-classes-design.md` §3.2 carries the amendment.

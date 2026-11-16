@@ -1,5 +1,5 @@
 // Traces of interaction trees, and refinement between programs
-// (docs/itree-refinement-round.md; issues/interaction-trees-container-model.md
+// (docs/itrees/itree-refinement-round.md; issues/interaction-trees-container-model.md
 // Q2 and Q3, milestone `it-refinement`).
 //
 // A trace is a finite record of one interaction: the commands issued, the
@@ -15,7 +15,7 @@
 // see (the paper's §7). The family's members are ordered by `Below`, a tree
 // being another with some subtrees cut sooner; a family going up in that
 // order has `fuel_monotone`, and `Converges` is a trace reached at some
-// fuel, the shape `simulate`'s interface has (docs/ir-simulate-design.md §6).
+// fuel, the shape `simulate`'s interface has (docs/archive/ir-simulate-design.md §6).
 
 import logic;
 import nat;
@@ -421,7 +421,7 @@ theorem IsTrace::fuel_monotone<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::G
 }
 
 // A trace the program produces at some fuel: the `converges` of
-// docs/ir-simulate-design.md §6, with the bound hidden.
+// docs/archive/ir-simulate-design.md §6, with the bound hidden.
 record Converges<R>(E: Events, p: Nat → ITree<R>(E), tr: Trace<R>(E)) {
     n: Nat,
     h: IsTrace(E, p(n), tr),

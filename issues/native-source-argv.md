@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-27
 ---
 
-Round 6 of `docs/native-real-programs-plan.md` (§3.5, §6). A `Source` has no
+Round 6 of `docs/native/native-real-programs-plan.md` (§3.5, §6). A `Source` has no
 arguments: its tree is fixed, and the process image maps no stack. The
 machine side states argv's layout (`ArgvAt`,
 `lib/std/os/linux/linux_x86_64_io.hthr`). Nine of the plan's fourteen tools

@@ -1,5 +1,5 @@
 // `cat` implements `tr_spec(λ b => b)` at every capacity below 2^63
-// (issues/native-source-cat-implements.md; docs/itree-simulation-design.md §7).
+// (issues/native-source-cat-implements.md; docs/itrees/itree-simulation-design.md §7).
 //
 // cat (`native_cat`) reads into its buffer and writes what it read in as
 // many writes as Linux takes; the spec reads and then writes its pending
@@ -504,12 +504,13 @@ theorem cat_read_some(args: List<List<BitVec(8)>>, call: Writers(), perform: Per
     size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless, f1: Nat,
     enough: Succ(Succ(cat_budget(n, k) + n)) <= Succ(f1), b0: BitVec(8), bs: List<BitVec(8)>, fits: Succ(bs.len()) <= c):
     ITree::LinuxSimK(cat_outer_after(n, k), cat_checked().denote(call, perform, n,
-        cat_read(args, c, count_word(Succ(bs.len())).toNat(), 0, 0, w6, w12, w13, w14, w17, w18, fill(buf, Cons(b0, bs)))),
+        cat_read(args, c, count_word(Succ(bs.len())).toNat(), 0, 0, w6, w12, w13, w14, w17, w18, fill_at(buf, 0, Cons(b0, bs)))),
         cat_spec_read(st, f1, ReadBytes(Cons(b0, bs))))
 {
     let bytes = Cons(b0, bs);
     let w3 = count_word(Succ(bs.len())).toNat();
-    let landed = fill(buf, bytes);
+    let landed = fill_at(buf, 0, bytes);
+    let at_start: (landed = fill(buf, bytes)) = fill_at_zero(buf, bytes);
     let w0 = cat_spec_read(st, f1, ReadBytes(bytes));
     let hw: (w3 = Succ(bs.len())) = cat_word_back(Succ(bs.len()), { omega });
     let small3: (w3 < Nat::pow(2, 63)) = { omega };
@@ -520,11 +521,11 @@ theorem cat_read_some(args: List<List<BitVec(8)>>, call: Writers(), perform: Per
     let env1 = cat_read(args, c, w3, 0, 0, w6, w12, w13, w14, w17, w18, landed);
     let env2 = cat_env(args, c, w3, 0, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, landed);
     let in_buf: (bytes.len() <= buf.len()) = j(sym(size), λ x _ => Succ(bs.len()) <= x, fits);
-    let size2: (landed.len() = c) = trans(cat_fill_len(buf, bytes, in_buf), size);
+    let size2: (landed.len() = c) = trans(cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), at_start), trans(cat_fill_len(buf, bytes, in_buf), size));
     let st2 = filter_state(mapping(λ (b: BitVec(8)) => b), bytes, st);
     let pending = filter_emitted(mapping(λ (b: BitVec(8)) => b), bytes, st);
     let owed: (pending = span(landed, 0, left)) = trans(cat_emitted(bytes, st),
-        trans(sym(cat_fill_span(buf, bytes, in_buf)),
+        trans(sym(trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => span(xs, 0, bytes.len()), at_start), cat_fill_span(buf, bytes, in_buf))),
             @cong(λ (len: Nat) => span(landed, 0, len), Succ(bs.len()), left, { omega })));
     let head: CatWriting(n, k, n, env2, w0) =
         CatWriting(c, w3, 0, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, landed,
@@ -546,9 +547,9 @@ theorem cat_read_some(args: List<List<BitVec(8)>>, call: Writers(), perform: Per
 theorem cat_read_answer(args: List<List<BitVec(8)>>, call: Writers(), perform: Performs(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless, f1: Nat,
     enough: Succ(Succ(cat_budget(n, k) + n)) <= Succ(f1), a: ReadResult):
-    Contract::linux().valid(ReadCmd(BitVec::ofNat(0), c.min(buf.len())), a) →
+    Contract::linux().valid(ReadCmd(BitVec::ofNat(0), c.min(buf.len() - 0)), a) →
     ITree::LinuxSimK<Flow, BitVec(64)>(λ x w => ITree::LinuxSimK(cat_outer_after(n, k), cat_read_tail().then_rest(call, perform, n, x), w),
-        Ret(Onward(Reads(0, 0, 2, 3).answer(cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
+        Ret(Onward(Reads(0, 0, 16, 2, 3).answer(cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
         cat_spec_read(st, f1, a))
 {
     match a {
@@ -557,8 +558,8 @@ theorem cat_read_answer(args: List<List<BitVec(8)>>, call: Writers(), perform: P
                 let out: cat_done(Exited(BitVec::ofNat(0)), cat_spec_read(st, f1, ReadBytes(Nil))) = SimRet(BitVec::ofNat(0), refl, refl);
                 out
             },
-            Cons(b0, bs) => λ (valid: Succ(bs.len()) <= c.min(buf.len())) => {
-                let whole: (c.min(buf.len()) = c) = j(sym(size), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
+            Cons(b0, bs) => λ (valid: Succ(bs.len()) <= c.min(buf.len() - 0)) => {
+                let whole: (c.min(buf.len() - 0) = c) = j(sym(trans(Nat::sub_zero(buf.len()), size)), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
                 cat_read_some(args, call, perform, n, k, c, w6, w12, w13, w14, w17, w18, buf, size, pos, small, st, f1, enough, b0, bs,
                     j(whole, λ x _ => Succ(bs.len()) <= x, valid))
             },
@@ -582,15 +583,15 @@ theorem cat_read_call(args: List<List<BitVec(8)>>, call: Writers(), perform: Per
         cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
 {
     let env = cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf);
-    let whole: (c.min(buf.len()) = c) = j(sym(size), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
-    let asks: (0 < c.min(buf.len())) = j(sym(whole), λ x _ => 0 < x, pos);
+    let whole: (c.min(buf.len() - 0) = c) = j(sym(trans(Nat::sub_zero(buf.len()), size)), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
+    let asks: (0 < c.min(buf.len() - 0)) = j(sym(whole), λ x _ => 0 < x, pos);
     let calls: SimVis<BitVec(64)>(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
-            ReadCmd(BitVec::ofNat(0), c.min(buf.len())), v,
+            ReadCmd(BitVec::ofNat(0), c.min(buf.len() - 0)), v,
             λ a w => ITree::LinuxSimK<Flow, BitVec(64)>(λ x w2 => ITree::LinuxSimK(cat_outer_after(n, k), cat_read_tail().then_rest(call, perform, n, x), w2),
-                Ret(Onward(Reads(0, 0, 2, 3).answer(env, a))), w)) =
+                Ret(Onward(Reads(0, 0, 16, 2, 3).answer(env, a))), w)) =
         SimVis(asks, cat_spec_read(st, f1), spec, λ a valid => cat_read_answer(args, call, perform, n, k, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
             buf, size, pos, small, st, f1, enough, a, valid));
-    Stmt::sim_then(Invoke(Reads(0, 0, 2, 3)), cat_read_tail(), call, perform, n, env, cat_outer_after(n, k), v, calls)
+    Stmt::sim_then(Invoke(Reads(0, 0, 16, 2, 3)), cat_read_tail(), call, perform, n, env, cat_outer_after(n, k), v, calls)
 }
 
 theorem cat_read_head(args: List<List<BitVec(8)>>, call: Writers(), perform: Performs(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,

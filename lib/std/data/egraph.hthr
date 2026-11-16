@@ -1,6 +1,6 @@
 // E-graphs: terms up to equations, closed under congruence, with the
 // reason each pair of classes met (issues/egraph-library.md,
-// docs/grind-design.md §8).
+// docs/tactics/grind-design.md §8).
 //
 // A graph holds nodes, each an operator applied to earlier nodes (`ENode`),
 // numbered from 0 in the order they were added. Every node is in a class,

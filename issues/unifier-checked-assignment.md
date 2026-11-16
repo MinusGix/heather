@@ -16,7 +16,7 @@ whole reads, at two call sites (`unify_arg_ty`, `solve_from_expected`), for
 callers of `unify_root`/`unify_under` (`host.rs` ×3,
 `application/polymorphic.rs`) are unchecked.
 
-## Proposal (P1 of docs/elaborator-principles-survey.md)
+## Proposal (P1 of docs/elaborator/elaborator-principles-survey.md)
 
 One `assign(i, s)` used by every write:
 

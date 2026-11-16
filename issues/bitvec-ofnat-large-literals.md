@@ -121,4 +121,4 @@ owns scaling with graph size.
   [[bitvec-closed-reduction-cost]]; closed `mul` at machine width still
   reduces its argument by one width-multiple per step, which is the same
   magnitude-bound as before and not this issue's customer.
-- 2026-09-13: 2026-09-13: the top-down spelling this issue produced was replaced by the odd_bit/half recursion its header had rejected — the rejection expired when half's window was classified (2026-09-09). 5.7× at width 64, magnitude-flat, docs/bitvector-literal-entry-design.md §4.3; the acceptance rails re-check unchanged.
+- 2026-09-13: 2026-09-13: the top-down spelling this issue produced was replaced by the odd_bit/half recursion its header had rejected — the rejection expired when half's window was classified (2026-09-09). 5.7× at width 64, magnitude-flat, docs/kernel/bitvector-literal-entry-design.md §4.3; the acceptance rails re-check unchanged.

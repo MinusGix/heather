@@ -1,5 +1,5 @@
 // Probes of `lib/std/num/float/literal.hthr` and the decimal and hex float
-// literals (docs/floating-point-design.md §15): the values literals denote
+// literals (docs/library/floating-point-design.md §15): the values literals denote
 // at `Rat` and at formats, the rounding at binary64 where `round_rat` does
 // not evaluate, and the exactness bit the inexact-literal warning reads.
 // Tests, not library: nothing outside lib/_tests imports this module

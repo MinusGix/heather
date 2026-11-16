@@ -1,4 +1,4 @@
-// The facts `bv_omega` builds, one per word (docs/bv-omega-design.md). A
+// The facts `bv_omega` builds, one per word (docs/tactics/bv-omega-design.md). A
 // word's value is `w.toNat() + Q = P`, where `P` and `Q` are *forms*: sums
 // `c₁ * a₁ + (c₂ * a₂ + (… + k))` over the call's atoms in a fixed order,
 // with literal coefficients. Adding two forms is one `form_*` step per atom,
@@ -214,6 +214,20 @@ theorem unsigned_lt_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_lt(b)): a.toNat(
 
 theorem unsigned_le_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_le(b)): a.toNat() <= b.toNat() { h }
 
+// The same tests as goals: each from the Nat order over the values, which
+// `bv_omega` proves as a subgoal.
+theorem unsigned_lt_of_nat(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.unsigned_lt(b) { h }
+
+theorem unsigned_le_of_nat(n: Nat, a, b: BitVec(n), h: a.toNat() <= b.toNat()): a.unsigned_le(b) { h }
+
+theorem unsigned_le_of_true(n: Nat, a, b: BitVec(n), h: a.toNat() <= b.toNat()): a.unsigned_le_bit(b) = bool::True {
+    @cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::False, unsigned_of_false(n, b, a, h))
+}
+
+theorem unsigned_le_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() < a.toNat()): a.unsigned_le_bit(b) = bool::False {
+    @cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::True, unsigned_of_true(n, b, a, h))
+}
+
 // The equality bit, read the same way: what `split_all` states at a split of
 // `a.eq_bit(b)`.
 theorem equal_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::True): a.toNat() = b.toNat() {
@@ -222,6 +236,11 @@ theorem equal_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::True): a.toNa
 
 theorem equal_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::False): a.toNat() ≠ b.toNat() {
     λ same => BitVec::ne_of_eq_bit(n, a, b, h)(word_eq(n, a, b, same))
+}
+
+// A plain equation of words in scope, read the same way.
+theorem toNat_of_eq(n: Nat, a, b: BitVec(n), h: a = b): a.toNat() = b.toNat() {
+    @cong(λ (w: BitVec(n)) => w.toNat(), a, b, h)
 }
 
 // A value equation already supplies the range needed for this word equality.

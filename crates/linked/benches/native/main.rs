@@ -1,7 +1,7 @@
 //! How fast the code our compiler emits runs, against Rust references:
 //! the linked SHA-256 and the linked scanner (`crates/linked`). Run through
 //! `scripts/bench-native`, never bare `cargo bench` (the script builds both
-//! profiles and enters the caps); `docs/native-benchmarking.md` says how to
+//! profiles and enters the caps); `docs/native/native-benchmarking.md` says how to
 //! read the table and when to re-record the snapshot.
 //!
 //! The binary has three modes, and the script drives them:
@@ -80,7 +80,7 @@ impl Timed {
 
 /// Nanoseconds per unit of `work`, which does `units` units a call: the
 /// minimum and the median over samples of at least a fixed time each. The
-/// minimum is the statistic for deterministic work (docs/benchmarking.md).
+/// minimum is the statistic for deterministic work (docs/infrastructure/benchmarking.md).
 fn ns_per_unit(units: f64, quick: bool, mut work: impl FnMut()) -> (f64, f64) {
     let target = if quick { 0.005 } else { 0.03 };
     let samples = if quick { 3 } else { 15 };
@@ -140,7 +140,7 @@ fn mirror_digest(message: &[u8]) -> [u8; 32] {
     context[block::HASH..block::HASH + 32].try_into().expect("thirty-two bytes")
 }
 
-/// The fixture rule (docs/benchmarking.md): a case that stops doing its work
+/// The fixture rule (docs/infrastructure/benchmarking.md): a case that stops doing its work
 /// gets faster, so every case is held to an independent answer before it is
 /// timed. The mirror is held to the linked code byte for byte, the whole
 /// context after each exported function, which is what says it is the same

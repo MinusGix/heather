@@ -60,12 +60,12 @@ fn nat_suite_ergonomic() {
     // The `fn` counts too: it is a *defined* Ψ-global since
     // issues/simulate-conversion-cost.md, and so does the prelude's
     // `CollectionLiteral#tycode_fn`
-    // (`docs/per-instantiation-type-codes-design.md` §2) together with the
+    // (`docs/inductives/per-instantiation-type-codes-design.md` §2) together with the
     // `3·nfields + 1 = 7` projection definitions its dependent spine now gets
-    // (`docs/telescoped-record-projections-design.md` §3).
+    // (`docs/elaborator/telescoped-record-projections-design.md` §3).
     // +6: the prelude's binding-statement classes and calls.
     // +3: the prelude's `Mutated` record (a `mut self` method's result,
-    // docs/effects-capabilities-design.md §2).
+    // docs/language/effects-capabilities-design.md §2).
     assert_eq!(e.psi().bindings.len(), 26);
 }
 
@@ -343,7 +343,7 @@ fn generics_and_le_share_a_file() {
 // -- the growth invariant, from the operators side --------------------------
 //
 // `+`/`<=` stopped being a parser desugaring in the operators-onto-classes
-// round (docs/operators-onto-classes-design.md): the symbol survives into the
+// round (docs/language/classes/operators-onto-classes-design.md): the symbol survives into the
 // AST and the elaborator resolves it. Everything above is the pin — the whole
 // Nat suite written in `+`, with `ORDER_KIT`'s own `add`/`Le`, and **no
 // designation anywhere** — and it passes unchanged because the ladder's third
@@ -380,11 +380,11 @@ fn a_symbol_with_no_name_behind_it_says_so() {
 // -- calc chains: the composed behavior (issues/calc-equational-chains.md) --
 //
 // The desugaring above is 2026-07-24; what these pin is 2026-08-18's finding
-// (docs/calc-equational-chains-design.md): because every emitted `trans` pins
+// (docs/tactics/calc-equational-chains-design.md): because every emitted `trans` pins
 // its endpoints BY NAME, each step proof is a checking position at the stated
 // equation — so the result-only deferral reaches into a step and the terse
 // `cong(p)` works there, exactly as far as the LGG's wall
-// (docs/congruence-in-inference-position-design.md §1.1/§1.2) and no further.
+// (docs/elaborator/congruence-in-inference-position-design.md §1.1/§1.2) and no further.
 
 // `add` and the two lemmas the chains lean on; the scrutinees below are
 // neutral (open variables), so nothing reduces away the step annotations.

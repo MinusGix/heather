@@ -18,7 +18,7 @@ are from 2026-09-25, release build, `--kernel-workers 1`, cold:
 | `n % 1000 / 100 = b % 10` from `n = a*10 + n%10`, `a = b*10 + a%10` | 8.2 s | 3.2 s | 83,334 | 1.35M |
 | `decimal_line::units_arith` (14 bound/sum goals, record of 26 facts) | 11.3 s | 6.4 s | 139,764 | 2.2M |
 
-(Probe files: `probes/dg/dg.hthr`, `probes/dd/dd.hthr`, and
+(Probe files: `perf/fixtures/omega_div_mod/dg.hthr`, `perf/fixtures/omega_div_mod/dd.hthr`, and
 `lib/decimal_line.hthr`.) The largest `omega` goal above has perhaps six
 atoms. The cost looks superlinear in the number of `div`/`mod` atoms, not in
 the size of the goal. Each atom brings a quotient variable, a remainder

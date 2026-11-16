@@ -78,7 +78,7 @@ pub(crate) fn method_arity_error<T>(
 }
 
 /// `xs.map(f)`. Two forms, and the split is what
-/// `docs/container-fields.md` §4.2 is about:
+/// `docs/language/container-fields.md` §4.2 is about:
 ///
 /// - `f` is an ordinary function: the `elim_Nat` schema `map`.
 /// - `f` is the **self-name** and `xs` the enclosing arm's container
@@ -96,7 +96,7 @@ pub(crate) fn elab_map(
     let (xs_t, xs_ty, _) = elab.infer_vector_expr(cx, xs)?;
     // `decoded`, not `whnf`: the receiver may be a vector *field* projected
     // out of a record that arrived as a code, in which case its type is
-    // `El (TmVec …)` (docs/record-type-values.md §6). Reducing further
+    // `El (TmVec …)` (docs/language/record-type-values.md §6). Reducing further
     // would unfold the `Vec` into its Σ-chain and lose the element type
     // and the length this reads off it — the same reason `elab_vec_lit`
     // decodes rather than normalizes.
@@ -133,14 +133,14 @@ pub(crate) fn elab_map(
         );
     };
     let _ = dom;
-    // The evaluation hook (docs/in-language-map-design.md §4): when a
+    // The evaluation hook (docs/metaprogramming/in-language-map-design.md §4): when a
     // template claims `vec.map`, the emitted term comes from evaluating it
     // — kernel computation mid-elaboration — and the Rust schema below
     // serves the instances the level-0 template declines, and every file
     // that declares no template at all. What this site knows is the slot
     // and the *names* of its ingredients; the Π order is the template's
     // own and lives in its signature
-    // (docs/meta-def-registration-design.md §3).
+    // (docs/metaprogramming/meta-def-registration-design.md §3).
     if let Some(t) = elab.try_vector_template(
         cx,
         Slot::VecMap,
@@ -377,7 +377,7 @@ pub(crate) fn elab_fold(
 }
 
 /// `xs[i]` — the kernel's `nth` schema
-/// (docs/surface-fin-indexing-design.md §5.2). Modelled on
+/// (docs/language/surface-fin-indexing-design.md §5.2). Modelled on
 /// [`elab_fold`], and inferring rather than checking: the
 /// element type comes off the receiver.
 ///
@@ -441,7 +441,7 @@ pub(crate) fn elab_nth(
 }
 
 /// The self-call over a container binder: `tabulate(len, λ(i : Fin len).
-/// ih (inr^m i))` (`docs/container-fields.md` §4.2).
+/// ih (inr^m i))` (`docs/language/container-fields.md` §4.2).
 ///
 /// The ih is indexed by `Fin (Succ^m len)` — `m` plain children first,
 /// then the container's — so the index map is `m` `inr`s.
@@ -485,7 +485,7 @@ pub(crate) fn elab_container_ih(
     }
     // The two spellings are not interchangeable: `.map` produces data and
     // `.cong` produces a proof, so each is rejected where the other belongs
-    // (docs/container-proofs.md §6).
+    // (docs/language/container-proofs.md §6).
     if as_eq && c.result.is_some() {
         return err(
             format!(
@@ -497,7 +497,7 @@ pub(crate) fn elab_container_ih(
     if !as_eq && c.eq.is_some() {
         return err(
             format!(
-                "`{name}` proves an equation, so a recursive call over a container                      proves the two children vectors equal rather than producing one:                      write `.cong({name})` (docs/container-proofs.md §6)"
+                "`{name}` proves an equation, so a recursive call over a container                      proves the two children vectors equal rather than producing one:                      write `.cong({name})` (docs/language/container-proofs.md §6)"
             ),
             span,
         );
@@ -507,7 +507,7 @@ pub(crate) fn elab_container_ih(
             format!(
                 "recursing over a container field needs `{name}`'s result type to be \
                  independent of its argument, or else an equation `a = b` at a type \
-                 that is (docs/container-proofs.md §7); a dependent result of any \
+                 that is (docs/language/container-proofs.md §7); a dependent result of any \
                  other shape is not supported yet"
             ),
             span,
@@ -519,7 +519,7 @@ pub(crate) fn elab_container_ih(
     let ih = c.ih.shift_local(by);
     // `h = λ(i : Fin len). ih (inr^m i)` — the index map, shared by both
     // phases: the ih is indexed by `Fin (Succ^m len)`, so the container's
-    // own indices start at `m` (docs/container-fields.md §10.3). The
+    // own indices start at `m` (docs/language/container-fields.md §10.3). The
     // application is annotated with the ih's *own* Π type rather than a
     // rebuilt one, since phase 3's codomain is dependent.
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
@@ -571,7 +571,7 @@ pub(crate) fn elab_container_ih(
             len: Rc::clone(&len_rc),
         };
         // The evaluation hook, as in `elab_map`/`elab_fold` — the
-        // call `docs/meta-def-registration-design.md` §9 says this site
+        // call `docs/metaprogramming/meta-def-registration-design.md` §9 says this site
         // gains once the surface can write `Fin` and its indices.
         // `lib/lang/vec_code.hthr`'s `tabulate_code` claims `vec.tabulate` when
         // the lib is in scope; without it this declines silently and the
@@ -605,7 +605,7 @@ pub(crate) fn elab_container_ih(
         ));
     }
     // Phase 3: an equational motive proves the two children *vectors* equal
-    // (docs/container-proofs.md §5). `f'`/`g'` are the endpoint functions
+    // (docs/language/container-proofs.md §5). `f'`/`g'` are the endpoint functions
     // applied at each index; `h` proves them pointwise equal, verbatim.
     let e = c.eq.as_ref().expect("checked above");
     let (a_ty, kids) = (e.ty.shift_local(by), c.term.shift_local(by));

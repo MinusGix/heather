@@ -9,8 +9,8 @@ updated: 2026-10-28
 ---
 
 `codata` declarations in the elaborator, over the kernel's `M` / `corec` /
-`out` (`docs/kernel-coinduction-design.md` §10 step 4). Design and the
-round's record: `docs/codata-elaborator-design.md`.
+`out` (`docs/kernel/kernel-coinduction-design.md` §10 step 4). Design and the
+round's record: `docs/inductives/codata-elaborator-design.md`.
 
 ## Scope of round 1
 
@@ -28,11 +28,11 @@ round's record: `docs/codata-elaborator-design.md`.
 
 ## Follow-ups
 
-- ~~[[codata-indexed]]~~: done, the index is read by observation (`docs/codata-indexed-design.md`).
+- ~~[[codata-indexed]]~~: done, the index is read by observation (`docs/inductives/codata-indexed-design.md`).
 - [[codata-nested-guards]]: a constructor nested above a self-call.
 - ~~[[codata-codes]]~~: done, codata declarations are bound at layer c.
 - The library: the coinductive tree, `approx`, `Bisim`, eutt and the bridge
-  (`docs/kernel-coinduction-design.md` §4, §6), milestone `it-coinductive`.
+  (`docs/kernel/kernel-coinduction-design.md` §4, §6), milestone `it-coinductive`.
 
 ## Log
 
@@ -48,5 +48,5 @@ round's record: `docs/codata-elaborator-design.md`.
   encoding bug: a function child's codomain was left unshifted under its
   binder.
 - 2026-10-22: With [[codata-codes]] done, codata declarations are bound at layer c; §6 rewritten, `layers_follow_codata` became `codata_declarations_are_code`, and codata works as a type argument.
-- 2026-10-22: 2026-10-22: [[codata-indexed]] done: indexed codata reads its index by observation (docs/codata-indexed-design.md).
+- 2026-10-22: 2026-10-22: [[codata-indexed]] done: indexed codata reads its index by observation (docs/inductives/codata-indexed-design.md).
 - 2026-10-28: Closed (tracker tidy): round 1's scope landed, and the milestone it served (`it-codata`) is done in `docs/roadmap.md`. Of the follow-ups, [[codata-indexed]] and [[codata-codes]] are closed, the library is done ([[coitree-library]], [[coitree-eutt]], [[coitree-program-bridge]]), and the one left, [[codata-nested-guards]], is its own issue.

@@ -10,7 +10,7 @@ updated: 2026-11-08
 
 Of [[sint-native-lowering]]'s four signed operations, `lt_bit` (`Slt`,
 `JL`) and `shift_right` (`Ashr`, `SAR`) reflect since the `datarepr`
-round (docs/runtime-fn-setups-design.md §16.13). The other two have no `rt`
+round (docs/native/runtime-fn-setups-design.md §16.13). The other two have no `rt`
 op to land on:
 
 - **`SInt::extend` (`MOVSX`)** unfolds to `BitVec::sign_extend`, which the

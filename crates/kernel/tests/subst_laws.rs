@@ -456,7 +456,7 @@ fn global_local_commute_weakening_focus() {
 
 /// Abstraction inverts substitution: `T.abstract_local(p)[p/z] = T`, whatever
 /// subset of the occurrences the walk found
-/// (`docs/goal-motive-synthesis-design.md` §3). This is the whole soundness
+/// (`docs/elaborator/goal-motive-synthesis-design.md` §3). This is the whole soundness
 /// argument for motive synthesis — the eliminator's obligation `M[e/z] ≡ T` —
 /// so it is a law and not a unit test, and it is checked at a *random* pattern
 /// as well as at a variable, since the operation's point is that the pattern

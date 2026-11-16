@@ -44,7 +44,7 @@ theorem tr_map_compiles(): refused(tr_map(5)) = [] { refl }
 // read, 9 the read's room, 19 standard output, 20 the write's result.
 fn tr_upper() → Source {
     Source::of([Buffer(16)], Then(ops([Const(64, 0, 0), Const(64, 9, 16), Const(64, 19, 1)]),
-        Then(Invoke(Reads(0, 0, 9, 1)),
+        Then(Invoke(Reads(0, 0, 0, 9, 1)),
             Then(ops([Const(64, 2, 0)]),
                 Then(Compute(byte_map()),
                     Then(Invoke(Writes(19, 0, 0, 1, 20)), Exit(7)))))))

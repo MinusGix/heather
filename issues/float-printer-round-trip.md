@@ -10,11 +10,11 @@ updated: 2026-10-26
 Split from [[float-literal-entry]], which landed the parsing half: decimal
 and hex literals elaborate at every `Float(F)` through
 `Format::round_decimal`, proved a correct rounding
-(`lib/std/num/float/literal.hthr`, `docs/floating-point-design.md` §15).
+(`lib/std/num/float/literal.hthr`, `docs/library/floating-point-design.md` §15).
 
 What remains is the printing half. Heather's printers are in-language
-(`docs/parser-canonical-printers-design.md`), so the Coq survey's Lemma 1
-(`docs/coq-hardware-floats-survey.md` §5.3) can be a theorem: for a format
+(`docs/library/parser-canonical-printers-design.md`), so the Coq survey's Lemma 1
+(`docs/surveys/coq-hardware-floats-survey.md` §5.3) can be a theorem: for a format
 of precision `p` and output radix `β'` with `2^p < β'^(p'-1)`, printing `p'`
 significant digits and reading the result back with `round_decimal` under
 `NearestEven` gives the same float. Nine digits for binary32 and seventeen
@@ -38,4 +38,4 @@ in `lib/std/num/float/`, and the 9/17-digit corollaries are stated.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[parser-canonical-printers]] (`docs/parser-canonical-printers-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[parser-canonical-printers]] (`docs/library/parser-canonical-printers-design.md`).

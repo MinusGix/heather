@@ -8,7 +8,7 @@ created: 2026-10-20
 updated: 2026-10-20
 ---
 
-The float library (`docs/floating-point-design.md` §4.2, §5.5; milestone
+The float library (`docs/library/floating-point-design.md` §4.2, §5.5; milestone
 `math-float`) wants notation the lexicon does not have. Asking for one
 general rule plus a few tokens is better than adding one-off tokens:
 
@@ -16,7 +16,7 @@ general rule plus a few tokens is better than adding one-off tokens:
    `≈`) immediately followed by one Unicode subscript letter
    (`ₐ ₑ ₒ ₓ ₕ ₖ ₗ ₘ ₙ ₚ ₛ ₜ ᵢ ⱼ ᵣ ᵤ ᵥ`) lexes as one symbol, a name in the
    symbol namespace given meaning by `designation` like `<`
-   (`docs/operators-onto-classes-design.md`). This is the same adjacency
+   (`docs/language/classes/operators-onto-classes-design.md`). This is the same adjacency
    rule `·₁₂` already uses. Floats use `<ᵢ ≤ᵢ =ᵢ` for IEEE quiet comparison
    and `<ₜ ≤ₜ` for totalOrder. Other uses: `≤ₗ` lexicographic, `≈ₛ` a
    second setoid.

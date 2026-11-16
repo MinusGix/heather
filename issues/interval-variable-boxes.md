@@ -9,11 +9,11 @@ updated: 2026-10-28
 
 `by intervals()` proves closed comparisons by evaluating enclosures, and
 refuses a leaf that does not compute, such as a variable
-(`lib/std/tactic/interval_tactic.hthr`, docs/floating-point-design.md §16).
+(`lib/std/tactic/interval_tactic.hthr`, docs/library/floating-point-design.md §16).
 CoqInterval and Flyspeck prove inequalities with free variables by
 confining each variable to a box and bisecting it.
 
-Sketch (docs/nonlinear-arithmetic-design.md §8):
+Sketch (docs/tactics/nonlinear-arithmetic-design.md §8):
 
 - Facts `lo <= x`, `x <= hi` with closed bounds make `x` an interval leaf.
   This requires containment with a variable leaf in `IntervalExpr`/`RealExpr`,
@@ -32,7 +32,7 @@ are complementary. The cost is exponential in the number of variables
 bisected.
 
 No customer yet. Candidates are the float error bounds and the analysis
-layers' sign facts (docs/analysis-foundations-design.md §3.5, where Gruntz's
+layers' sign facts (docs/library/analysis-foundations-design.md §3.5, where Gruntz's
 sign facts come from `by intervals()`).
 
 ## What it assumes from elsewhere
@@ -43,4 +43,4 @@ sign facts come from `by intervals()`).
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[linarith-simplex-search]] (`docs/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/nonlinear-arithmetic-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[linarith-simplex-search]] (`docs/tactics/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/tactics/nonlinear-arithmetic-design.md`).

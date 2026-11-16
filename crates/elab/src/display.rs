@@ -2,7 +2,7 @@
 //! bounded presentation path; generated annotations additionally require
 //! complete source spelling and a caller-owned type comparison.
 //!
-//! `docs/surface-type-display-design.md`. [[goal-display-decodes]] gave the
+//! `docs/elaborator/surface-type-display-design.md`. [[goal-display-decodes]] gave the
 //! display sites a *reader* — δ-step an `El` until a non-`El` head appears —
 //! which covers every type whose wrapper is removable. This module is the
 //! other direction: a `fn … -> Type` relation at open arguments is stuck as
@@ -106,7 +106,7 @@ impl Elaborator {
 
     /// What a numeral elaborates to at each carrier a closed `Numeral`
     /// instance embeds it into, over the literal as local `0`, scoped where
-    /// the display reads (docs/carrier-directed-numerals-design.md): the
+    /// the display reads (docs/language/carrier-directed-numerals-design.md): the
     /// body of the instance's `ofNat` field, which is what
     /// [`Literals::reduced_embedding`](crate::literals::Literals::reduced_embedding) leaves of a literal at that carrier —
     /// `Rat::ofInt(OfNat(n))` at `Rat`, and at `Int`, whose field is the
@@ -307,7 +307,7 @@ pub fn global_type_source(el: &Elaborator, name: &str) -> Option<String> {
 /// display respells by that name (issues/type-name-display-respelling.md).
 ///
 /// A `def` at a universe is expanded where it is read
-/// (docs/fixed-width-integers-design.md §2), so nothing after elaboration can
+/// (docs/library/fixed-width-integers-design.md §2), so nothing after elaboration can
 /// tell `u8` from `BitVec(8)`. The expansion is a pure function of the
 /// definition, so it is read once, off the definition's body, when the name
 /// is first written, and the display looks an instance up here. Only bodies
@@ -715,12 +715,12 @@ impl Speller<'_> {
         }
         // A codata instance, `M(…)(⟨⟩)`: its declaration's name, with the type
         // arguments read off the shape it carries (a tier-1 spine), and value
-        // arguments elided (docs/codata-elaborator-design.md §2).
+        // arguments elided (docs/inductives/codata-elaborator-design.md §2).
         if let Type::M { sig, index } = ty
             && let Some(ind) = self.el.tag_of(ty).filter(|i| i.codata)
         {
             // An indexed one shows its index, the components of the tuple
-            // (docs/codata-indexed-design.md §2).
+            // (docs/inductives/codata-indexed-design.md §2).
             let idx = if ind.co_index.is_empty() {
                 String::new()
             } else {
@@ -746,7 +746,7 @@ impl Speller<'_> {
             }
             let shape = sig.shape_at(index);
             // A named signature carries its arguments: `El(D#mshape ā j)`
-            // (docs/codata-named-signature-design.md §2), type arguments as
+            // (docs/inductives/codata-named-signature-design.md §2), type arguments as
             // codes and value arguments as written.
             if let Type::El { tm, .. } = &shape
                 && let Some((crate::gendefs::GenDef::MShape(_), args)) = self.el.gen_app_of(tm)
@@ -781,16 +781,16 @@ impl Speller<'_> {
             let shown = format!("{}{targs}{vargs}{idx}", ind.name);
             return if targs == "<…>" || !vargs.is_empty() { self.elided(shown) } else { shown };
         }
-        // An `IWf`-route family at an index (docs/iwf-former-design.md §8):
+        // An `IWf`-route family at an index (docs/kernel/iwf-former-design.md §8):
         // `D<ā>(e)`, or for a mutual group's family the member the index
-        // selects, `Tm(e)` (docs/mutual-inductive-design.md §2).
+        // selects, `Tm(e)` (docs/inductives/mutual-inductive-design.md §2).
         if let Type::IWf { sig, index } = ty
             && let Some((ind, _)) = IwfFamily(self.el).iwf_of(ty)
         {
             return self.iwf_instance(&ind, &sig.shape, index, d);
         }
         // …and its `W` encoding, for a family with a function field
-        // (docs/iwf-infinitary-design.md §5).
+        // (docs/kernel/iwf-infinitary-design.md §5).
         if matches!(ty, Type::Sigma { .. })
             && let Some((ind, fam)) = IwfFamily(self.el).iwf_of(ty)
         {
@@ -986,6 +986,15 @@ impl Speller<'_> {
         // `if h:` lower to, as the reader wrote it: a lowered `decreases`
         // body's test, read back in a goal or an unfolding equation, is not
         // `app@(case[0,0,0](M Π…`.
+        // A case on an injection, as its contractum: the instance of a
+        // motive at an arm is the goal with the arm's constructor where the
+        // scrutinee stood, and the arm proves what that reduces to.
+        if !self.qualified
+            && !self.annotations
+            && let Some(r) = crate::spelling::iota_case(t)
+        {
+            return self.tm(&crate::spelling::contract_projections(&Rc::new(r)), d + 1);
+        }
         if self.rough.is_none() && !self.qualified {
             if let Some(shown) = self.convoy(t, d) {
                 return shown;
@@ -1103,7 +1112,7 @@ impl Speller<'_> {
 
     /// `match h: e { … }`: a case analysis whose motive is `Π(e = z). M`,
     /// applied to `refl` — what `match h:` and `if h:` lower to
-    /// (docs/dependent-match-compiler-design.md §4). Each arm is a `λ` over
+    /// (docs/language/matching/dependent-match-compiler-design.md §4). Each arm is a `λ` over
     /// the equation, which takes the name `h` (or a fresh one) in the arm.
     fn convoy(&self, t: &Term, d: u32) -> Option<String> {
         let (case, arg) = crate::spelling::app_of(t)?;
@@ -1390,7 +1399,7 @@ impl Speller<'_> {
             // The checked spellings carry the **whole sum**, not a summand,
             // and `tag_of` already walks a `Sum` to its leftmost constructor
             // — so the same lookup serves, one node higher
-            // (`docs/intro-by-type-design.md` §4.2). An annotation that is
+            // (`docs/elaborator/intro-by-type-design.md` §4.2). An annotation that is
             // not structurally a sum (an un-reduced `El(case(…))`) declines,
             // and the display falls back to `raw_tm` as it does for every
             // other shape it cannot read; a whnf here would need a span the
@@ -1518,7 +1527,7 @@ impl Speller<'_> {
 
     /// The numeral `t` is at a carrier other than `Nat`: exactly when `t` is
     /// what that numeral elaborates to there, the carrier's `Numeral`
-    /// embedding at it (docs/carrier-directed-numerals-design.md), read
+    /// embedding at it (docs/language/carrier-directed-numerals-design.md), read
     /// backwards — `OfNat(2)` at `Int`, `ofInt(OfNat(0))` at `Rat`
     /// (issues/diagnostic-numeral-literal-spelling.md). Read off the
     /// instance's own field, never by reducing `t`: a term that only
@@ -1688,7 +1697,7 @@ impl Speller<'_> {
 
         // Record projections have a nominal generated-definition key. The
         // spine is the declaration's telescope and then the receiver
-        // (`docs/per-instantiation-type-codes-design.md` §13), so the
+        // (`docs/inductives/per-instantiation-type-codes-design.md` §13), so the
         // receiver is the last argument and the arguments before it are the
         // instantiation — dropped, exactly as a call's implicits are. Do not
         // unfold definitions or guess how an applied function-valued field
@@ -1816,8 +1825,11 @@ impl Speller<'_> {
             CallHead::Field(name) => {
                 let receiver = args[0];
                 let shown = self.tm(receiver, d + 1);
-                return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
-                    && self.form(receiver).bare_receiver()
+                // An arm's binder is a projection of the scrutinee and reads
+                // as its name, so it is as bare as a variable.
+                return if (matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+                    && self.form(receiver).bare_receiver())
+                    || self.alias(receiver).is_some()
                 {
                     format!("{shown}.{name}")
                 } else {
@@ -2104,6 +2116,20 @@ impl Speller<'_> {
                 return None;
             }
         }
+        // A generated name (`sum#step`, `f#True`) is minted with a `#` no
+        // source can write: spelled for re-parsing, it is its designed path
+        // (`sum::step`) where that path still names it, and otherwise
+        // declines like any other unspellable node, so `omega` abstracts it.
+        if self.qualified && name.contains('#') {
+            // Designed paths are not module-qualified.
+            let declared = NameLookup(self.el).global_declared_name_at(abs)?;
+            let designed = self.el.display_paths(&declared);
+            let back = self.el.access_alias(&designed) == Some(declared.as_str());
+            if designed.contains('#') || !back {
+                return None;
+            }
+            name = designed;
+        }
         let params = NameLookup(self.el).params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written
         // determines: `BitVec::ofNat(5)` alone cannot say its width, so it is
@@ -2123,7 +2149,7 @@ impl Speller<'_> {
                     // A defaulted parameter's value is whatever the call
                     // gave, the default or an override, and nothing else
                     // determines it, so it is spelled by name in both modes
-                    // (docs/named-arguments-design.md §9.6).
+                    // (docs/language/named-arguments-design.md §9.6).
                     Shown::Named(p.name.clone())
                 } else if !self.qualified
                     || p.solver.is_some()

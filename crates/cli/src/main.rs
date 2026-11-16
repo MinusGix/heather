@@ -10,7 +10,7 @@
 //! does not check).
 //!
 //! `--cache` opts into the content-addressed declaration cache
-//! (docs/cache-v1-design.md): declarations whose interface-closure hash a
+//! (docs/infrastructure/cache-v1-design.md): declarations whose interface-closure hash a
 //! previous run recorded as kernel-accepted skip the kernel gate. It is opt-in
 //! precisely so that an unflagged `heather check` — the merge gate, and what
 //! `scripts/bench-frontend` drives — keeps meaning exactly what it always
@@ -24,7 +24,7 @@
 //! line counts the refusals it matched.
 //!
 //! The import closure is one elaboration into one shared Ψ
-//! (docs/modules-design.md §3.2): the loader orders the modules, this file
+//! (docs/language/modules-design.md §3.2): the loader orders the modules, this file
 //! feeds them in that order, and each module's diagnostics are rendered
 //! against its *own* source.
 //!
@@ -52,10 +52,11 @@ use heather_cli::{expect, loader, semantic::SemanticSession};
 mod color;
 mod eval;
 mod fmt;
+mod limits;
 mod native;
 
 /// Where the standard library lives when nobody says otherwise
-/// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
+/// (docs/language/modules-design.md §3.2). Defaulted only if it exists, so a run from
 /// a directory without one behaves exactly as it did before modules.
 const DEFAULT_LIB: &str = loader::STDLIB_DIR;
 const DEFAULT_LIB_ROOT: &str = "lib";
@@ -98,8 +99,8 @@ fn report_lexer() {
 }
 
 /// `HEATHER_KERNEL_SELF_CHECKS`: how often this process re-derives what the
-/// kernel's memos let it skip (`heather_kernel::checks`): `off`, `sampled`
-/// (the kernel's default) or `full`. The checks exist only in a build with
+/// kernel's memos let it skip (`heather_kernel::checks`): `off` (the
+/// kernel's default), `sampled` or `full`. The checks exist only in a build with
 /// debug assertions, so a release binary ignores the level. The kernel reads
 /// no environment itself; the binary owns its process and sets the policy.
 ///
@@ -107,9 +108,8 @@ fn report_lexer() {
 /// subtree's size while the skip's was constant. One in sixteen of them is
 /// a few percent of most checks and over twenty times a module of `runtime
 /// fn` generators, which shift the same large closed terms again and again
-/// (`issues/kernel-self-check-cost-on-skipped-terms.md`). `scripts/test`'s
-/// stale-image lanes turn them off for the binary's runs; the exact lane
-/// keeps the sample.
+/// (`issues/kernel-self-check-cost-on-skipped-terms.md`), so no lane of
+/// `scripts/test` asks for the sample; this is how a run opts in.
 fn choose_kernel_self_checks() -> Result<(), String> {
     use heather_kernel::checks::{set_skip_verification, SkipVerification};
     let Ok(level) = std::env::var("HEATHER_KERNEL_SELF_CHECKS") else { return Ok(()) };
@@ -122,22 +122,52 @@ fn choose_kernel_self_checks() -> Result<(), String> {
     Ok(())
 }
 
+/// One arena for glibc's `malloc`, by running this binary again with
+/// `MALLOC_ARENA_MAX=1` where it was not set.
+///
+/// Rust's allocations go to mimalloc, but glibc still `calloc`s a record
+/// for every thread-local destructor a thread registers, and a thread's
+/// first `malloc` makes it an arena of its own: 64 MiB of address space
+/// reserved for a few bytes. A kernel gate of eight workers and the pools
+/// beside it held sixteen of them, a gibibyte of the 8 GiB `ulimit -v` the
+/// scripts run `compile-x86` under, and of the suite's 6 GiB rail
+/// (issues/compile-x86-address-space-margin.md). glibc reads the setting
+/// when the process starts, so it cannot be set from here, and `mallopt`
+/// is `unsafe`, which the workspace forbids. `exec` returns only when it
+/// failed, and then this process goes on as it is.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn one_malloc_arena() {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("MALLOC_ARENA_MAX").is_some() { return; }
+    let (Ok(exe), Some(name)) = (std::env::current_exe(), std::env::args_os().next()) else { return };
+    let _ = std::process::Command::new(exe).arg0(name).args(std::env::args_os().skip(1)).env("MALLOC_ARENA_MAX", "1").exec();
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn one_malloc_arena() {}
+
 fn main() -> ExitCode {
+    one_malloc_arena();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(msg) = limits::choose(&mut args).and_then(|limits| limits.apply()) {
+        eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
+        return ExitCode::from(2);
+    }
     if let Err(msg) = choose_kernel_self_checks() {
         eprintln!("{}: {msg}", color::error_label(color::stderr_enabled()));
         return ExitCode::from(2);
     }
     choose_lexer();
-    let code = run();
+    let code = run(args);
     report_lexer();
     code
 }
 
-fn run() -> ExitCode {
+fn run(args: Vec<String>) -> ExitCode {
     let stderr_color = color::stderr_enabled();
-    let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {
         Some((cmd, rest)) if cmd == "check" => match parse_check_args(rest) {
+            Ok((opts, files)) if opts.build_worker && files.is_empty() && opts.cache => build_worker(&opts),
             Ok((opts, files)) if !files.is_empty() => check(&opts, &files),
             Ok(_) => usage(),
             Err(msg) => {
@@ -186,8 +216,11 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\
                      \x20      heather warm-native <file.hthr>... (--cache-dir <dir> [--through <module> | --unbuilt] | --list) [-L <dir>]... [--kernel-workers <n>]\n\
-                     \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>]\n\
-                     \x20      heather linked-exports <generated dir> [--check | --rows]";
+                     \x20      heather write-elf <file.hthr> [<program>] -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>]\n\
+                     \x20      heather linked-exports <generated dir> [--check | --rows]\n\
+                     \n\
+                     \x20      Every command also takes --limits <dev | off | memory=<size>,cpu=<seconds>,core=<size>> (or HEATHER_LIMITS):\n\
+                     \x20      resource limits for development runs, off unless asked for (`dev` is memory=8G,cpu=120,core=0).";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -219,11 +252,11 @@ struct Opts {
     /// `--only a,b,mod::c`: elaborate and kernel-check exactly these
     /// declarations over a replayed prefix, publish nothing, and label the
     /// run so its numbers cannot pass for a whole-run's
-    /// (`docs/check-only-design.md`). Needs `--cache`.
+    /// (`docs/infrastructure/check-only-design.md`). Needs `--cache`.
     only: Option<Vec<String>>,
     /// `--timings <path.tsv>` (`-` for stderr), or `HEATHER_TIMINGS` in the
     /// environment: write the attribution table — one row per declaration, per
-    /// module and for the run (`docs/instrumentation-design.md` §4).
+    /// module and for the run (`docs/infrastructure/instrumentation-design.md` §4).
     /// Diagnostic only; it can never change a verdict.
     timings: Option<stats::Dest>,
     /// `--accept-stale-images`: replay semantic module images another build
@@ -233,7 +266,7 @@ struct Opts {
     images: ImageFreshness,
     /// `--kernel-workers N` (or `HEATHER_KERNEL_WORKERS`): check declarations'
     /// proofs on N kernel worker threads, joined before the module is accepted
-    /// (`docs/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
+    /// (`docs/kernel/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
     kernel_workers: Option<usize>,
     /// `--expectations`: read `// expect-error…` directives, so a declaration
     /// they mark must be refused for the reason they name, and is then not
@@ -242,21 +275,21 @@ struct Opts {
     /// `--world <dir>`: accepted and ignored. It loaded the library's shared
     /// modules in one order before each root's own, so that the gate's
     /// processes keyed each module alike; a module is now checked over its
-    /// own closure in every process (`docs/module-dag-design.md`).
+    /// own closure in every process (`docs/infrastructure/module-dag-design.md`).
     #[allow(dead_code)]
     world: Option<PathBuf>,
     /// `--build-jobs N`: before checking, elaborate every module of the load
-    /// that has no image yet, each in a `heather check` of its own, up to N
-    /// at a time, a module once its closure's images exist and the longest
-    /// chain first (`docs/module-dag-design.md` §12). Each process spends
-    /// its own CPU rail on its own module; the check that follows replays.
+    /// that has no image yet, over N worker processes, a module once its
+    /// closure's images exist and the longest chain first
+    /// (`docs/infrastructure/module-dag-design.md` §12). A worker is retired well inside
+    /// its CPU and memory rails; the check that follows replays.
     build_jobs: Option<usize>,
     /// `--build-only`: stop after `--build-jobs`' builds.
     build_only: bool,
     /// `--build-times <file.tsv>`: a row per module `--build-jobs` built,
     /// with when it became ready, started and finished and the import that
     /// readied it, so the chain that set the build step's length can be
-    /// read back (`docs/module-dag-design.md` §12).
+    /// read back (`docs/infrastructure/module-dag-design.md` §12).
     build_times: Option<PathBuf>,
     /// `--build-first <dir>`: among modules ready to build, those below a
     /// named directory and their closures start before the rest, so a
@@ -270,6 +303,10 @@ struct Opts {
     ///
     /// [`BuildPlan`]: heather_cli::semantic::BuildPlan
     unbuilt: bool,
+    /// `--build-worker`: build the modules `--build-jobs`' scheduler names
+    /// on standard input, one after another in one session
+    /// ([`build_worker`]). Not for a command line: the scheduler starts it.
+    build_worker: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -295,6 +332,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         build_times: None,
         build_first: Vec::new(),
         unbuilt: false,
+        build_worker: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -391,6 +429,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.unbuilt = true;
             continue;
         }
+        if a == "--build-worker" {
+            opts.build_worker = true;
+            continue;
+        }
         if let Some(rest) = a.strip_prefix("--only") {
             let spec = match rest.strip_prefix('=') {
                 Some(d) if !d.is_empty() => d.to_string(),
@@ -484,7 +526,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         eprintln!("timings: could not write: {e}");
     }
     // A `--only` run's row is labelled, so `scripts/timings` can refuse to
-    // read its numbers as a whole run's (`docs/check-only-design.md` §3).
+    // read its numbers as a whole run's (`docs/infrastructure/check-only-design.md` §3).
     let run_label = opts.only.as_ref().map(|names| format!("only={}", names.join(","))).unwrap_or_default();
     let run_scope = opts.timings.as_ref().map(|_| stats::scope(stats::ScopeKind::Run, "", &run_label));
     // One cache for the whole run, shared across roots: a declaration two
@@ -510,7 +552,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
         // import, which at prelude sizes costs milliseconds (caching is
-        // docs/modules-design.md §8's round, not this one).
+        // docs/language/modules-design.md §8's round, not this one).
         let mut elab = match Elaborator::with_prelude() {
             Ok(e) => e,
             Err(e) => {
@@ -530,7 +572,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         );
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never
-        // cached (docs/cache-v1-design.md §4).
+        // cached (docs/infrastructure/cache-v1-design.md §4).
         if let Some(c) = &own {
             c.begin_run();
             elab.set_gate(Arc::clone(c) as Arc<dyn heather_elab::gate::KernelGate>);
@@ -563,7 +605,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
         // Every module is checked over its own import closure
-        // (`docs/module-dag-design.md`), so the closure is all a check loads:
+        // (`docs/infrastructure/module-dag-design.md`), so the closure is all a check loads:
         // `--world` no longer changes what a module means or how its image is
         // keyed, and is accepted for the callers that still pass it.
         let loaded = loader::load_many(&root_refs, &search);
@@ -618,7 +660,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
         if report_metrics {
             // The collector pins the kernel gate to this thread
-            // (`docs/parallel-kernel-gate-design.md` §4), so asking for both
+            // (`docs/kernel/parallel-kernel-gate-design.md` §4), so asking for both
             // it and a worker pool silently yields the serial gate. Say which
             // one won rather than leaving the flag looking honoured.
             if elab.kernel_workers() > 1 {
@@ -631,7 +673,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         // In the loader's order, except that a module another process is
         // building is set aside while one whose imports are checked can go
-        // first (`docs/module-dag-design.md` §7): the library gate's
+        // first (`docs/infrastructure/module-dag-design.md` §7): the library gate's
         // children share one store, and without this one waits on another's
         // build lock with modules of its own ready.
         let common_at = modules.iter().position(|m| m.name == heather_elab::COMMON_MODULE);
@@ -641,7 +683,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             .map(|(i, m)| heather_cli::semantic::module_imports(&m.name, &m.src, common_at.is_some_and(|c| c < i)))
             .collect();
         // What each module still to come needs, so a finished module's world
-        // goes once nothing left imports it (`docs/module-dag-design.md` §8).
+        // goes once nothing left imports it (`docs/infrastructure/module-dag-design.md` §8).
         semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));
         let position: std::collections::HashMap<&str, usize> =
             modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
@@ -702,7 +744,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             };
             // Warnings are drained per module, before the next one is checked:
             // a span indexes into the source it came from
-            // (docs/diagnostic-warnings-design.md §3). They do not fail the
+            // (docs/elaborator/diagnostic-warnings-design.md §3). They do not fail the
             // run and they do not touch the `ok` line — a warned file is a
             // checked file (§4).
             let warns = outcome.warnings;
@@ -733,7 +775,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             let shown = display_path(&m.path, path);
             // One source span elaborated for several declarations reports its
             // error once per declaration: a `section` head binder is spliced
-            // into every member (docs/sections-design.md §5.3), a class field's
+            // into every member (docs/language/sections-design.md §5.3), a class field's
             // type into every projection. Identical renderings are shown once,
             // with their count.
             let mut distinct: Vec<(String, usize)> = Vec::new();
@@ -804,7 +846,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         if root_ok && opts.only.is_some() {
             // Reserved wording, like `(cache)`: a `--only` run never reads
-            // as a check of the module (`docs/check-only-design.md` §3).
+            // as a check of the module (`docs/infrastructure/check-only-design.md` §3).
             println!(
                 "{path}: {} (only) — {} declaration{} elaborated for --only, {} replayed{refusals}",
                 color::success("ok", stdout_color),
@@ -821,14 +863,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     let n = c.counts().since(&before);
                     // Modules moved onto a changed world are replays too,
                     // and said so only when there are any
-                    // (`docs/module-interface-cutoff-design.md`).
+                    // (`docs/infrastructure/module-interface-cutoff-design.md`).
                     let relocated = match semantic.relocated() {
                         0 => String::new(),
                         k => format!(" ({k} moved onto a changed dependency world)"),
                     };
                     // A replay a stored verdict vouched for whole asked
                     // nothing about its declarations
-                    // (`docs/module-dag-design.md` §13).
+                    // (`docs/infrastructure/module-dag-design.md` §13).
                     let relocated = match n.replay_hits {
                         0 => relocated,
                         k => format!("{relocated} ({k} vouched for whole)"),
@@ -994,7 +1036,7 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
 
 /// `heather obligations [--json] <file>` — every obligation-bearing field of
 /// every such declaration in the file, with its state, its provenance and the
-/// statement it owes (`docs/obligation-records-design.md` §6).
+/// statement it owes (`docs/language/classes/obligation-records-design.md` §6).
 ///
 /// It **checks the file first**, and prints nothing if the check fails: under
 /// inline-first a listed file is a certified file, so the `state` column never
@@ -1178,6 +1220,162 @@ fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
+/// One of `--build-jobs`' worker processes, as its scheduler sees it.
+struct BuildWorker {
+    child: std::process::Child,
+    /// Closed to let the worker leave.
+    stdin: Option<std::process::ChildStdin>,
+    /// Its standard error, a file: the diagnostics of every module it built.
+    log: PathBuf,
+    /// The module it is building (its index in the plan) and where that
+    /// build's diagnostics begin in the log.
+    job: Option<(usize, u64)>,
+    jobs_done: usize,
+    /// The plan's modules its session has loaded: what it built, and their
+    /// closures.
+    held: Vec<bool>,
+}
+
+/// When a build worker has done enough: every process under `scripts/test`
+/// has a CPU rail and an address-space rail of its own, and a worker spends
+/// them on every module it builds.
+struct Retire {
+    cpu_ms: u64,
+    rss_kb: u64,
+}
+
+impl Retire {
+    /// A third of the CPU rail and a quarter of the address-space rail this
+    /// process (and so its children) runs under, as `/proc/self/limits`
+    /// states them; with no address-space rail, a quarter of the suite's
+    /// 6 GiB.
+    fn from_rails() -> Retire {
+        let limits = std::fs::read_to_string("/proc/self/limits").unwrap_or_default();
+        let rail = |name: &str| -> Option<u64> {
+            limits.lines().find_map(|line| line.strip_prefix(name)?.split_whitespace().next()?.parse().ok())
+        };
+        Retire {
+            cpu_ms: rail("Max cpu time").map_or(u64::MAX, |seconds: u64| seconds.saturating_mul(1000) / 3),
+            rss_kb: rail("Max address space").unwrap_or(6 << 30) / 4 / 1024,
+        }
+    }
+
+    fn due(&self, cpu_ms: u64, rss_kb: u64) -> bool {
+        cpu_ms > self.cpu_ms || rss_kb > self.rss_kb
+    }
+}
+
+/// `--build-worker`: build each module named on standard input, in one
+/// session, and answer each on standard output. A request is a line holding
+/// a module's file; the module is checked over its closure as `heather
+/// check <module file>` checks it, with the diagnostics on standard error,
+/// and the answer is a line `ok|failed\t<cpu ms>\t<rss kB>`, the
+/// CPU this process has used and the memory it holds, which the scheduler
+/// retires it by ([`Retire`]). The session keeps every module it has
+/// checked, so a later module's closure is loaded only where it is new. The
+/// verdicts it recorded are saved after each module, as a process per
+/// module saved them.
+fn build_worker(opts: &Opts) -> ExitCode {
+    use std::io::{BufRead, Write};
+    let (cache, rejected) = Cache::open(opts.cache_dir.clone());
+    let cache = Arc::new(cache);
+    let mut elab = match Elaborator::with_prelude() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("the prelude failed to check: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    elab.set_review_lints(opts.review);
+    elab.set_meaning_check(opts.meaning_check);
+    elab.set_kernel_workers(
+        opts.kernel_workers.or_else(heather_elab::kernel_workers_from_env).unwrap_or(heather_elab::DEFAULT_KERNEL_WORKERS),
+    );
+    cache.begin_run();
+    elab.set_gate(Arc::clone(&cache) as Arc<dyn heather_elab::gate::KernelGate>);
+    let mut semantic =
+        SemanticSession::new(Some(opts.cache_dir.clone())).with_freshness(opts.images).without_process_world();
+    if opts.expectations {
+        semantic = semantic.with_expectations();
+    }
+    // Every module given to the session, and those of them that did not
+    // check.
+    let mut given = std::collections::HashSet::new();
+    let mut unchecked = std::collections::HashSet::new();
+    let mut rejected = rejected.as_ref().and_then(|r| r.message());
+    for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+        let path = line.as_str();
+        if let Some(message) = rejected.take() {
+            eprintln!("{message}");
+        }
+        let mut ok = true;
+        match loader::load(Path::new(path), &opts.search) {
+            Err(e) => {
+                eprintln!("{}", e.msg);
+                ok = false;
+            }
+            Ok(modules) => {
+                for m in &modules {
+                    if !given.insert(m.name.clone()) {
+                        ok &= !unchecked.contains(&m.name);
+                        continue;
+                    }
+                    let outcome = semantic.check(&mut elab, m, m.lint_profile());
+                    for notice in &outcome.notices {
+                        eprintln!("{notice}");
+                    }
+                    let errors = if semantic.blocked_by_import(&m.name) {
+                        outcome.errors
+                    } else if outcome.expected_refusals > 0 || !opts.expectations {
+                        outcome.errors
+                    } else {
+                        expect::judge(&m.src, outcome.errors).errors
+                    };
+                    if errors.is_empty() {
+                        continue;
+                    }
+                    ok = false;
+                    unchecked.insert(m.name.clone());
+                    let shown = m.path.display().to_string();
+                    for e in &errors {
+                        eprintln!("{}\n", e.render_snippet(&m.src, &shown));
+                    }
+                    eprintln!("{shown}: {} error{}", errors.len(), if errors.len() == 1 { "" } else { "s" });
+                }
+            }
+        }
+        if let Err(e) = cache.save() {
+            eprintln!("cache: could not write {}: {e}", opts.cache_dir.display());
+        }
+        let (cpu_ms, rss_kb) = process_use();
+        let mut out = std::io::stdout().lock();
+        if writeln!(out, "{}\t{cpu_ms}\t{rss_kb}", if ok { "ok" } else { "failed" }).and_then(|()| out.flush()).is_err() {
+            break;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// The CPU this process has used, in milliseconds, and the memory it holds
+/// now, in kilobytes, as `/proc` states them (zero where there is none).
+/// The scheduler retires a worker by them, so neither has to be exact: the
+/// clock tick is taken to be Linux's hundredth of a second.
+fn process_use() -> (u64, u64) {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    // After the command's closing parenthesis, `utime` and `stime` are the
+    // twelfth and thirteenth fields.
+    let ticks: u64 = stat
+        .rsplit_once(')')
+        .map(|(_, rest)| rest.split_whitespace().skip(11).take(2).filter_map(|f| f.parse::<u64>().ok()).sum())
+        .unwrap_or(0);
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let rss_kb = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:")?.split_whitespace().next()?.parse().ok())
+        .unwrap_or(0);
+    (ticks * 10, rss_kb)
+}
+
 /// A directory target's imports may name modules kept below it, beside the
 /// roots `roots_for_path` takes from there:
 /// the target joins the search directories, and the loader looks below every
@@ -1185,11 +1383,21 @@ fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// cannot shadow or conflict with the public `base.hthr`). Module names
 /// remain flat: duplicate names below are still ambiguous.
 /// `--build-jobs`: elaborate the modules of `modules` that have no image,
-/// one `heather check` each, `jobs` at a time (`docs/module-dag-design.md`
-/// §12). A module is started once every module of its closure has an image,
-/// longest remaining chain first, measured in source bytes. One that fails
-/// is reported with the tail of its output and leaves its dependents
-/// unbuilt; the check that follows elaborates and reports them as usual.
+/// over `jobs` worker processes (`docs/infrastructure/module-dag-design.md` §12). A
+/// module is started once every module of its closure has an image, longest
+/// remaining chain first, measured in source bytes. One that fails is
+/// reported with the tail of its output and leaves its dependents unbuilt;
+/// the check that follows elaborates and reports them as usual.
+///
+/// A worker ([`build_worker`]) builds one module after another in one
+/// session, so a closure it has loaded for one module is not loaded again
+/// for the next: a process per module replayed every module's closure,
+/// which was two fifths of the step's CPU. A module goes to the idle worker
+/// that holds most of its closure. A worker is retired once it has spent a
+/// third of its CPU rail or holds a quarter of its address-space rail
+/// ([`Retire`]), so a module still has most of a rail to itself; one whose
+/// worker dies under it after other modules is built again by a worker of
+/// its own before it is called failed.
 fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jobs: usize) {
     use heather_cli::semantic::{BuildPlan, BuildState};
     let mut plan = BuildPlan::new(opts.cache_dir.clone(), opts.images, modules);
@@ -1219,73 +1427,167 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
             }
         }
     }
+    // What each module's closure holds, for placing a module with the
+    // worker that already has most of it loaded.
+    let mut closure: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut held: Vec<usize> = plan.imports(i).flat_map(|d| closure[d].iter().copied().chain([d])).collect();
+        held.sort_unstable();
+        held.dedup();
+        closure.push(held);
+    }
     let exe = std::env::current_exe().expect("the running binary");
     let logs = std::env::temp_dir().join(format!("heather-build-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&logs);
+    let retire = Retire::from_rails();
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Option<String>)>();
+    let mut workers: std::collections::BTreeMap<usize, BuildWorker> = Default::default();
+    let mut next_worker = 0usize;
     let mut started = vec![false; n];
+    let mut retried = vec![false; n];
     // Seconds since the step began: when each module started and finished.
     let clock = std::time::Instant::now();
     let (mut start, mut end) = (vec![None; n], vec![None::<f64>; n]);
-    let mut running: Vec<(usize, std::process::Child, PathBuf)> = Vec::new();
     let (mut built, mut failed) = (0usize, Vec::new());
+    let tail = |log: &Path, from: u64| {
+        let text = std::fs::read(log).unwrap_or_default();
+        let text = String::from_utf8_lossy(text.get(from as usize..).unwrap_or_default());
+        let tail: Vec<&str> = text.lines().rev().take(12).collect();
+        tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+    };
     loop {
         plan.refresh();
-        while running.len() < jobs {
+        while workers.len() < jobs || workers.values().any(|w| w.job.is_none()) {
             let Some(i) = (0..n)
                 .filter(|&i| !started[i] && plan.state(i) == BuildState::Ready)
                 .max_by_key(|&i| (first[i], chain[i], std::cmp::Reverse(i)))
             else {
                 break;
             };
+            // The idle worker holding most of the module's closure; a new
+            // one when every worker is busy.
+            let idle = workers
+                .iter()
+                .filter(|(_, w)| w.job.is_none())
+                .max_by_key(|(id, w)| (closure[i].iter().filter(|&&d| w.held[d]).count(), std::cmp::Reverse(**id)))
+                .map(|(id, _)| *id);
+            let id = match idle {
+                Some(id) => id,
+                None => {
+                    let mut cmd = std::process::Command::new(&exe);
+                    cmd.arg("check").arg("--cache-dir").arg(&opts.cache_dir);
+                    if opts.images == ImageFreshness::AcceptStale {
+                        cmd.arg("--accept-stale-images");
+                    }
+                    if opts.expectations {
+                        cmd.arg("--expectations");
+                    }
+                    for dir in search {
+                        cmd.arg("-L").arg(dir);
+                    }
+                    cmd.arg("--build-worker");
+                    let id = next_worker;
+                    let log = logs.join(format!("worker-{id}.log"));
+                    let spawned = std::fs::File::create(&log).and_then(|err| {
+                        cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(err).spawn()
+                    });
+                    let mut child = match spawned {
+                        Ok(child) => child,
+                        Err(e) => {
+                            started[i] = true;
+                            failed.push(format!("{}: could not start: {e}", plan.modules()[i].name));
+                            continue;
+                        }
+                    };
+                    next_worker += 1;
+                    let (stdin, stdout) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"));
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                            if tx.send((id, Some(line))).is_err() {
+                                return;
+                            }
+                        }
+                        let _ = tx.send((id, None));
+                    });
+                    workers.insert(id, BuildWorker { child, stdin: Some(stdin), log, job: None, jobs_done: 0, held: vec![false; n] });
+                    id
+                }
+            };
+            let m = &plan.modules()[i];
+            let w = workers.get_mut(&id).expect("chosen");
+            let from = std::fs::metadata(&w.log).map_or(0, |log| log.len());
+            let sent = {
+                use std::io::Write;
+                let stdin = w.stdin.as_mut().expect("open while it serves");
+                writeln!(stdin, "{}", m.path.display()).and_then(|()| stdin.flush())
+            };
+            if sent.is_err() {
+                // It died between jobs; its reader says so, and the module
+                // goes to another.
+                w.stdin = None;
+                w.job = Some((usize::MAX, from));
+                continue;
+            }
             started[i] = true;
             start[i] = Some(clock.elapsed().as_secs_f64());
-            let m = &plan.modules()[i];
-            let log = logs.join(format!("{}.log", m.name));
-            let mut cmd = std::process::Command::new(&exe);
-            cmd.arg("check").arg("--cache-dir").arg(&opts.cache_dir);
-            if opts.images == ImageFreshness::AcceptStale {
-                cmd.arg("--accept-stale-images");
-            }
-            if opts.expectations {
-                cmd.arg("--expectations");
-            }
-            for dir in search {
-                cmd.arg("-L").arg(dir);
-            }
-            cmd.arg(&m.path);
-            let out = std::fs::File::create(&log).expect("a build log");
-            cmd.stdout(std::process::Stdio::null()).stderr(out);
-            match cmd.spawn() {
-                Ok(child) => running.push((i, child, log)),
-                Err(e) => failed.push(format!("{}: could not start: {e}", m.name)),
-            }
+            w.job = Some((i, from));
         }
-        if running.is_empty() {
+        if workers.values().all(|w| w.job.is_none()) {
             break;
         }
-        // No wait-any in std: poll the few children there are.
-        let finished = loop {
-            if let Some(k) = running.iter_mut().position(|(_, child, _)| matches!(child.try_wait(), Ok(Some(_)) | Err(_))) {
-                break running.swap_remove(k);
+        let Ok((id, message)) = rx.recv() else { break };
+        // A worker already retired closes its output as it leaves.
+        let Some(w) = workers.get_mut(&id) else { continue };
+        match message {
+            Some(line) => {
+                let Some((i, from)) = w.job.take() else { continue };
+                let mut fields = line.split('\t');
+                let ok = fields.next() == Some("ok");
+                let cpu_ms: u64 = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
+                let rss_kb: u64 = fields.next().and_then(|f| f.parse().ok()).unwrap_or(0);
+                end[i] = Some(clock.elapsed().as_secs_f64());
+                w.jobs_done += 1;
+                w.held[i] = true;
+                for &d in &closure[i] {
+                    w.held[d] = true;
+                }
+                if ok {
+                    built += 1;
+                } else {
+                    failed.push(format!("{} (failed):\n{}", plan.modules()[i].name, tail(&w.log, from)));
+                }
+                if retire.due(cpu_ms, rss_kb) {
+                    let mut w = workers.remove(&id).expect("present");
+                    drop(w.stdin.take());
+                    let _ = w.child.wait();
+                    let _ = std::fs::remove_file(&w.log);
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
-        let (i, mut child, log) = finished;
-        let status = child.wait();
-        end[i] = Some(clock.elapsed().as_secs_f64());
-        if status.as_ref().is_ok_and(|s| s.success()) {
-            built += 1;
-        } else {
-            let text = std::fs::read_to_string(&log).unwrap_or_default();
-            let tail: Vec<&str> = text.lines().rev().take(12).collect();
-            let status = status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-            failed.push(format!(
-                "{} ({status}):\n{}",
-                plan.modules()[i].name,
-                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
-            ));
+            None => {
+                let mut w = workers.remove(&id).expect("present");
+                drop(w.stdin.take());
+                let status = w.child.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+                let lines = w.job.filter(|(i, _)| *i != usize::MAX).map(|(i, from)| (i, tail(&w.log, from)));
+                let _ = std::fs::remove_file(&w.log);
+                let Some((i, lines)) = lines else { continue };
+                if w.jobs_done > 0 && !retried[i] {
+                    // It may have died of what it had spent on the modules
+                    // before this one: a worker of its own decides.
+                    retried[i] = true;
+                    started[i] = false;
+                } else {
+                    end[i] = Some(clock.elapsed().as_secs_f64());
+                    failed.push(format!("{} ({status}):\n{lines}", plan.modules()[i].name));
+                }
+            }
         }
-        let _ = std::fs::remove_file(&log);
+    }
+    for (_, mut w) in workers {
+        drop(w.stdin.take());
+        let _ = w.child.wait();
+        let _ = std::fs::remove_file(&w.log);
     }
     let _ = std::fs::remove_dir(&logs);
     if let Some(path) = &opts.build_times {

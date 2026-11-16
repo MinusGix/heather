@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-`docs/analysis-foundations-design.md` §3.8: a series is a formal object, and
+`docs/library/analysis-foundations-design.md` §3.8: a series is a formal object, and
 a sum is a separate, partial operation whose laws are tracked. This issue
 owns the summation-method interface and the theorems that make divergent
 series ordinary working material.

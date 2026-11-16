@@ -1,11 +1,11 @@
 //! The bit criterion, and packing a `Vec` prefix into a machine word
-//! (`docs/native-bitvector-values-design.md` §§3.1, 7).
+//! (`docs/kernel/native-bitvector-values-design.md` §§3.1, 7).
 //!
-//! `Vec^l(T; n)` is a right-nested Σ (`docs/wf-former-design.md` §1.2), so a
+//! `Vec^l(T; n)` is a right-nested Σ (`docs/kernel/wf-former-design.md` §1.2), so a
 //! vector of `n` elements is `n` pair nodes. When `T` has exactly **two**
 //! canonical inhabitants and both payloads are proof-irrelevant — which is
 //! precisely what a two-constructor nullary inductive lowers to
-//! (`docs/inductive-tier0-lowering.md` §3: `Tag_D`-prefixed field spines
+//! (`docs/inductives/inductive-tier0-lowering.md` §3: `Tag_D`-prefixed field spines
 //! under a sum) — the whole chain is `n` bits, and everything a consumer can
 //! observe about element `i` is which injection it is.
 //!
@@ -75,7 +75,7 @@ impl<'v> Sigma<'v> {
 
 impl<'v> Eval<'_, 'v> {
     /// A [`Term::VecLit`] — entry route four
-    /// (`docs/bitvector-literal-entry-design.md` §3.3): straight to a
+    /// (`docs/kernel/bitvector-literal-entry-design.md` §3.3): straight to a
     /// [`Val::BitRun`] when the element type meets the bit criterion and its
     /// two elements are that type's own injections, in either order or the
     /// same one twice. The run is the chain the literal spells, bit for bit,
@@ -248,7 +248,7 @@ impl<'v> Eval<'_, 'v> {
 
     /// Whether a strict equality `sEq(I; lhs; rhs)` is unit-like: both
     /// endpoints the **same closed natural number**, which is the nominal
-    /// tag's shape (`docs/inductive-tier0-lowering.md` §3.3). Then `srefl` is
+    /// tag's shape (`docs/inductives/inductive-tier0-lowering.md` §3.3). Then `srefl` is
     /// its one inhabitant up to conversion. An `sEq` at unequal endpoints is
     /// *empty*, and one at open or non-`Nat` endpoints is not decided here
     /// (that would be conversion's job), so both answer `false` and the type
@@ -369,7 +369,7 @@ impl<'v> Eval<'_, 'v> {
 
     /// Pack the longest common prefix of two vectors at `tail_ty`'s Σ-chain
     /// into two words (design §7). `None` is "not one bit packed", which
-    /// leaves the caller's behaviour exactly as it is today.
+    /// leaves the caller on its ordinary path.
     ///
     /// The value walk and the type walk go in lockstep: `tail_ty` is the Σ's
     /// own tail, so each further bit costs one [`Eval::vec_ty`] — which is
@@ -395,8 +395,8 @@ impl<'v> Eval<'_, 'v> {
             let Some((l_bit, l_rest)) = self.bit_step(bt, &sigma, &left)? else { break };
             let Some((r_bit, r_rest)) = self.bit_step(bt, &sigma, &right)? else { break };
             // One fuel unit per bit consumed (design §8): strictly less than
-            // the η path spent on the same bit, so no verdict fuel allowed
-            // today becomes a refusal.
+            // the η path spends on the same bit, so no verdict the η path
+            // reaches becomes a refusal.
             self.spend()?;
             left_bits |= u64::from(l_bit) << width;
             right_bits |= u64::from(r_bit) << width;
@@ -427,8 +427,7 @@ impl<'v> Eval<'_, 'v> {
         Ok(Some(BitPrefix { left_bits, right_bits, left, right, ty: out_ty }))
     }
 
-    /// A run over a closed tail, for the tests and for round 3's merging
-    /// frame: `bits` of `width` over `Triv`, at `elem`'s injections.
+    /// A run over a closed tail, for the tests: `bits` of `width` over `Triv`, at `elem`'s injections.
     #[cfg(test)]
     pub(crate) fn closed_bit_run(
         &mut self,
@@ -557,7 +556,7 @@ mod tests {
 
     /// What a declared two-constructor nullary inductive lowers to: each half
     /// is its nominal tag `sEq⁰(Nat; k; k)` followed by the `Unit` terminator
-    /// (`docs/inductive-tier0-lowering.md` §3.3). The tag's proof is part of
+    /// (`docs/inductives/inductive-tier0-lowering.md` §3.3). The tag's proof is part of
     /// the canonical payload, so the criterion must read `srefl` as unit-like
     /// or no declared enum would ever pack.
     #[test]

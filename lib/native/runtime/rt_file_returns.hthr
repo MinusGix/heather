@@ -1,5 +1,5 @@
 // An export's return theorem at a span function's ending
-// (docs/native-library-exports-design.md §7): what `compile-x86` states a
+// (docs/native/native-library-exports-design.md §7): what `compile-x86` states a
 // certificate's `…_returns` with.
 import function_ir;
 import function_ir_eval;
@@ -7,6 +7,7 @@ import function_ir_lower;
 import function_ir_lower_structured;
 import function_ir_lower_calls;
 import function_ir_compile;
+import function_ir_stage;
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;
@@ -39,34 +40,68 @@ import function_ir_state;
 // function's value on the other: the kernel advances the function first,
 // and one that calls a loop at a numeral is then computed pass by pass
 // (issues/conversion-callee-unfolded-before-the-meet.md).
-theorem Ending::returns_written<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
-    marks: List<Bool>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem Ending::returns_written<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
+    marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
     fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(), m: Mutated<List<BitVec(8)>, BitVec(64)>,
     runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
-    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
-    compiled_returns_written<M>(functions, placement, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
+    compiled_returns_written<M>(functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
         stack, top, before, loan, f, below, arguments, fits, FTm::end_of(rest, m), runs)
 }
 
-theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Place>, counts: List<Nat>, addresses: List<BitVec(64)>,
-    tables: List<List<Bool>>, program: Prog, lowered: lower_program_lent(functions, placement, counts) = Some(program),
+theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
+    tables: List<List<Bool>>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
     before: Buffers(), f: Nat, below: Succ(f) <= functions.len(),
     loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks_row(tables, f)).spans()),
     arguments: List<BitVec(64)>, fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), rest: Buffers(),
     m: Mutated<List<BitVec(8)>, BitVec(64)>, runs: program_run(functions, before, f, arguments) = FTm::end_of(rest, m)):
-    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ 136 * Succ(f) <= i) ∧
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
         stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
-    compiled_returns_marked<M>(functions, placement, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
+    compiled_returns_marked<M>(functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
         stack, top, before, f, below, loan, arguments, fits, FTm::end_of(rest, m), runs)
+}
+
+// The same through an optimizer (`compiled_returns_written_through`): the
+// code lowered from `functions`, the run the `source`'s.
+theorem Ending::returns_written_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
+    evaluable: program_evaluable(source).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks).spans()),
+    f: Nat, below: Succ(f) <= functions.len(), keeps: ProgramRewrites(source, functions, f), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), rest: Buffers(), m: Mutated<List<BitVec(8)>, BitVec(64)>,
+    runs: program_run(source, before, f, arguments) = FTm::end_of(rest, m)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
+    compiled_returns_written_through<M>(source, functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
+        last, origin, stack, top, before, loan, f, below, keeps, arguments, fits, FTm::end_of(rest, m), runs)
+}
+
+theorem Ending::returns_marked_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>,
+    addresses: List<BitVec(64)>, tables: List<List<Bool>>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
+    evaluable: program_evaluable(source).IsTrue(), marks: program_marked(functions, tables).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    before: Buffers(), f: Nat, below: Succ(f) <= functions.len(), keeps: ProgramRewrites(source, functions, f),
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(counts, addresses, before, marks_row(tables, f)).spans()),
+    arguments: List<BitVec(64)>, fits: arity_fits(program_arity(source, f), arguments.len()).IsTrue(), rest: Buffers(),
+    m: Mutated<List<BitVec(8)>, BitVec(64)>, runs: program_run(source, before, f, arguments) = FTm::end_of(rest, m)):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
+            stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
+        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
+    compiled_returns_marked_through<M>(source, functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,
+        last, origin, stack, top, before, f, below, keeps, loan, arguments, fits, FTm::end_of(rest, m), runs)
 }

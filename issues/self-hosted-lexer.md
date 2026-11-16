@@ -8,7 +8,7 @@ created: 2026-10-31
 updated: 2026-11-10
 ---
 
-Round R7 of `docs/compiler-milestones-proposal.md` (§5, §7), milestone `self-lexer`: Heather's lexer, in
+Round R7 of `docs/native/compiler-milestones-proposal.md` (§5, §7), milestone `self-lexer`: Heather's lexer, in
 Heather, compiled natively. This is the first half of what
 [[self-hosting-first-component]] filed.
 
@@ -34,7 +34,7 @@ Heather, compiled natively. This is the first half of what
 - 2026-11-07: [[long-string-literal-stack-overflow]] closed: a string literal of any length now checks (a 178 KB file's text elaborates as a `String`), so a file's bytes can reach a term as a literal. Two limits remain on that route: one declaration's fuel (a `String::len` by `refl` runs out past about 100,000 characters), and comparing two long lists by value, which meets the conversion's depth budget at about a thousand elements ([[long-vector-conversion-depth]]); a `lex(src) = tokens` theorem over a whole file meets the second.
 - 2026-11-07: [[function-ir-evaluable-quadratic]] fixed: `compile-x86` of the probes' `step` certifies (1483 program bytes); the certificate checks evaluability in one pass per function, and the largest, `step_full`'s, takes about 29% of a declaration's fuel. A function about twice its size would run out again: [[function-ir-scan-id-cost]].
 - 2026-11-10: Minus (2026-11-10) named the target as "lexer in Heather linked directly".
-  `docs/native-lexer-crypto-roadmap.md` reads that as the scanner linked into
+  `docs/native/native-lexer-crypto-roadmap.md` reads that as the scanner linked into
   the `heather` binary ([[self-lexer-linked]]), which needs no effects surface
   and no heap: the caller owns the source bytes and the token buffer. The
   `heather-lex` process of this issue becomes the side branch: the same

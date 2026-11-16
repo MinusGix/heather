@@ -59,6 +59,7 @@ impl Reader<'_> {
             18 => ("WideLoad", 4),
             19 => ("WideStore", 5),
             20 => ("ByteSwap", 3),
+            21 => ("RotateRight", 4),
             tag => return Err(format!("node tag {tag}")),
         };
         Ok(format!("{name}({})", join(&self.take(fields)?)))
@@ -140,7 +141,7 @@ impl Reader<'_> {
 
     fn call(&mut self) -> Result<String, String> {
         let (name, fields) = match self.next()? {
-            0 => ("Reads", 4),
+            0 => ("Reads", 5),
             1 => ("Writes", 5),
             2 => ("Opens", 3),
             3 => ("Closes", 2),

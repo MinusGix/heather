@@ -7,11 +7,11 @@ updated: 2026-10-02
 ---
 
 After `split_all` splits a scrutinee, it simplifies through constructors,
-projections and β (docs/automatic-author-surface-design.md §2.1), but not
+projections and β (docs/automatic-author-surface-design.md@4acf2fe §2.1), but not
 through a *non-recursive* definition applied to the constructor it just
 substituted. The goal keeps the definition's head, so a leaf such as `omega`
 sees a stuck spelling. Two cases from the 2026-10-02 probes
-(docs/native-programs-read-like-programs-design.md §4):
+(docs/archive/native-programs-read-like-programs-design.md §4):
 
 - **Bool connectives.** A step whose predicate is
   `!b.unsigned_lt_bit(10) && b.unsigned_lt_bit(11)`: the Filter's `advances`
@@ -33,4 +33,4 @@ Related: [[native-programs-read-like-programs]].
 
 ## Log
 
-- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/native-programs-read-like-programs-design.md S6, docs/goal-combinators.md). Suite 3156 passed.
+- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/archive/native-programs-read-like-programs-design.md S6, docs/tactics/goal-combinators.md). Suite 3156 passed.

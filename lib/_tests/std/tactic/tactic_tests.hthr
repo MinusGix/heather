@@ -1,5 +1,5 @@
 // Probes of the tactic host (`lib/std/tactic/tactic.hthr`,
-// `crates/elab/src/host.rs`, `docs/host-elaboration-interface-design.md`):
+// `crates/elab/src/host.rs`, `docs/metaprogramming/host-elaboration-interface-design.md`):
 // the `Goal` view, and at a class carrier how `View` presents a dictionary's
 // field reads and a dictionary's own type, and `apply` with a class's lemma,
 // whose dictionary `Match` finds in scope. Tests, not library: nothing
@@ -137,3 +137,35 @@ fn split_each(t: Tac<Expr>) → Tac<Expr> {
     goal().bind(λ g => constructor(g.target).bind(λ c => match c { Accepted(sp) => close_by(sp, g.locals, t), Refused(w) => fail(w, []) }))
 }
 theorem split_blanks(x, c: Nat): SplitPair(x, c) { by split_each(split_blank_rfl()) }
+
+// A handle is usable wherever what it mentions is bound, not only under
+// the binders it was found beneath: a `Bool` arm's body, read under its
+// payload's binder, is a term of the outer locals once it does not
+// mention the payload (what `rt_io_bridge` reads a loop's body by).
+fn pick_or_zero(b: Bool, n: Nat) → Nat { match b { True => n, False => Zero } }
+
+fn true_arm_of(name: String, under_payload: Bool) → Tac<Expr> {
+    let g <- lookup(name).or_fail("lookup: ");
+    let bd <- body(g).or_fail("body: ");
+    let ob <- open(bd, "b").or_fail("open: ");
+    let on <- open(ob.body, "n").or_fail("open: ");
+    let m <- arms(on.body).or_fail("arms: ");
+    match m.arms.nth(1) {
+        Some(a) => {
+            let o <- open(a.body, "payload").or_fail("open: ");
+            match under_payload {
+                True => pure(Lam(ob.local.ref, Lam(on.local.ref, Hd(o.body)))),
+                // The arm's whole body mentions the binder it is under.
+                False => pure(Lam(ob.local.ref, Hd(on.body))),
+            }
+        },
+        None => fail("no `True` arm", []),
+    }
+}
+
+def true_arm: Bool → Nat → Nat = by true_arm_of("pick_or_zero", True);
+
+theorem true_arm_is(b: Bool, n: Nat): true_arm(b, n) = n { refl }
+
+// expect-error: it mentions that binder's local
+def outside_its_binder: Bool → Nat = by true_arm_of("pick_or_zero", False);

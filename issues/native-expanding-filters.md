@@ -7,7 +7,7 @@ created: 2026-10-01
 updated: 2026-10-21
 ---
 
-The stream filter (docs/native-stream-filter-design.md §1) emits at most one
+The stream filter (docs/archive/native-stream-filter-design.md §1) emits at most one
 byte per input byte, written in place behind the read cursor in the one RW
 page. A filter whose output can be longer than its input does not fit:
 
@@ -28,4 +28,4 @@ one-byte, in-place shape for step 2 (2026-10-01).
 
 ## Log
 
-- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.
+- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.

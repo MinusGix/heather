@@ -221,6 +221,7 @@ pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
 mod branch_equations;
+mod function_induction;
 mod meaning;
 mod measure_context;
 mod metaprograms;
@@ -235,7 +236,7 @@ mod quote;
 mod range_sum;
 mod sealing;
 // The projected-tuple-tower round's two instruments
-// (`docs/projected-tuple-tower-design.md` §11, `probes/README.md`): the
+// (`docs/elaborator/projected-tuple-tower-design.md` §11, `probes/README.md@ef3961a`): the
 // value-graph counter that priced the naming, and the readback itself. Both
 // are inert unless `HEATHER_RB` is set.
 mod recursion;
@@ -289,7 +290,7 @@ pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_t
 pub const PRELUDE: &str = include_str!("prelude.hthr");
 
 /// The prelude's module name: an implicit import of every module
-/// (docs/modules-design.md §3.2). Public so a loader can skip resolving it to
+/// (docs/language/modules-design.md §3.2). Public so a loader can skip resolving it to
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 pub const COMMON_MODULE: &str = names::COMMON_MODULE;
@@ -544,7 +545,7 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
 
 /// What to call a type projection's subject in a diagnostic: the text that
 /// was written, when the shape is one a reader would recognize
-/// (docs/traits-type-projection-design.md §7). `None` for anything else, which
+/// (docs/language/classes/traits-type-projection-design.md §7). `None` for anything else, which
 /// falls back to the carrier's nominal tag. A display and never a key.
 fn subject_text(e: &Expr) -> Option<String> {
     match &e.kind {
@@ -584,14 +585,14 @@ fn dress_true(s: &str) -> String {
 
 /// The §3.4 shared refusal: an implicit mark whose skeleton would have no
 /// consumer must not be silently erased — the writer believes call sites
-/// will infer, and they will not (docs/implicit-binders-design.md §3.4).
+/// will infer, and they will not (docs/language/implicit-binders-design.md §3.4).
 pub(crate) const IMPLICIT_MARK_REFUSED: &str = "implicit binders take effect in parameter types, `let` annotations, field \
      types, and lambdas; this position cannot use one — see \
      issues/implicit-binders-in-function-types.md";
 
 /// The receiver-shaped builtins: names that a `.` call reaches without any
 /// declaration behind them, so [`Elaborator::shadowed`] cannot see them. Read
-/// only by receiver dispatch (docs/traits-receiver-dispatch-design.md §3),
+/// only by receiver dispatch (docs/language/classes/traits-receiver-dispatch-design.md §3),
 /// which needs to know whether a call *had* another reading before it claims
 /// one — a class field named `map` must make `xs.map(f)` ambiguous, never
 /// silently the class's.
@@ -601,7 +602,7 @@ const BUILTIN_METHODS: [&str; 8] = [
 
 /// Where a resolved dictionary came from, when it came by **upcast**: the
 /// *child* dictionary and its class type ([`Resolution::resolve_goal_from`](crate::resolve::Resolution::resolve_goal_from),
-/// `docs/traits-named-upcast-design.md` §2.1). `None` for every other answer,
+/// `docs/language/classes/traits-named-upcast-design.md` §2.1). `None` for every other answer,
 /// which is every answer already at the goal's own class.
 type Upcast = Option<(Term, Type)>;
 
@@ -629,7 +630,7 @@ struct OperatorFallbackUse {
 /// registries; it performs no elaboration and cannot fail.
 struct PendingDecl {
     /// Lifted tactic proofs the binding refers to, pushed just before it
-    /// (`docs/bv-omega-design.md` §7).
+    /// (`docs/tactics/bv-omega-design.md` §7).
     aux: Vec<GlobalBinding>,
     binding: GlobalBinding,
     /// A theorem's proof, kept sealed beside its opaque binding when its
@@ -812,17 +813,17 @@ enum MismatchNote {
     Located(String),
 }
 
-/// What a `p.f` turned out to be (docs/surface-records.md §4.2).
+/// What a `p.f` turned out to be (docs/language/surface-records.md §4.2).
 enum DotResolution {
     /// An already inferred intrinsic selected by its receiver.
     Inferred(Term, Type, Level),
     /// A record field: the projection, its type and level, plus the field's
     /// implicitness skeleton, derived on demand from the *stored surface*
     /// field type — no new storage, keyed positionally by the same index the
-    /// kernel Σ-walk uses (docs/implicit-binders-design.md §3.1).
+    /// kernel Σ-walk uses (docs/language/implicit-binders-design.md §3.1).
     Project(Term, Type, Level, Option<Rc<Skel>>),
     /// A **class member reached through an instance**
-    /// (docs/traits-receiver-dispatch-design.md §2): the projection of a
+    /// (docs/language/classes/traits-receiver-dispatch-design.md §2): the projection of a
     /// *resolved* dictionary, carrying its own argument list because the
     /// receiver is one of the arguments (`x.op(y)` is `π_op(dict)(x, y)`) and
     /// the written list is not.
@@ -1174,7 +1175,7 @@ impl matching::MotiveSynthesisElab for Elaborator {
         // that type is irrelevant (Unit, Empty, sEmpty, …) the presumption is
         // the whole answer — a `Nat` candidate "converts" to a scrutinee at
         // `Empty`, and abstracting it breaks the motive
-        // (docs/metatheory-ch07-extensions.md §28). So a hit stands only once
+        // (docs/kernel/metatheory-ch07-extensions.md §28). So a hit stands only once
         // the candidate's own type converts too; misses, the common case, pay
         // nothing extra.
         let oracle = self.goal_oracle();
@@ -1194,6 +1195,13 @@ impl matching::MotiveSynthesisElab for Elaborator {
                         .convert_type(&cx.gamma, Layer::Prog, &ty, scrutinee_type, scrutinee_level)
                         .is_ok()
                 })
+    }
+
+    fn motive_well_formed(&self, cx: &Cx, motive: &Type, scrutinee_type: &Type, scrutinee_level: &Level) -> bool {
+        let mut inner = cx.clone();
+        inner.push("__motive_z".to_string(), scrutinee_type.clone(), scrutinee_level.clone());
+        let oracle = self.goal_oracle();
+        typing::infer_type(oracle.world(), 0, Layer::Prog, &inner.gamma, motive, self.policy.fuel).is_ok()
     }
 }
 
@@ -1293,7 +1301,7 @@ impl application::ExplicitArgElab for Elaborator {
         scratch: u32,
     ) -> Option<(Option<Type>, Option<Type>)> {
         // The one chokepoint, in the application's scratch world
-        // (`docs/annotation-component-respell-design.md` §2.5); `cod` binds
+        // (`docs/elaborator/annotation-component-respell-design.md` §2.5); `cod` binds
         // the argument, hence depth 1.
         let nd = GeneratedDefs(self).emit_ty_in(cx, dom, 0, scratch);
         let nc = GeneratedDefs(self).emit_ty_in(cx, cod, 1, scratch);
@@ -1450,10 +1458,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         // A numeral or character literal waits for a later argument to fix
         // its carrier, and falls back to its own type (`Nat`, `Char`) when
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
-        // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
+        // `9` is a byte (docs/archive/native-programs-read-like-programs-design.md S3).
         let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
         // A binding statement's continuation (`Bind::seq(e, λ #bindN => rest)`,
-        // docs/sequencing-surface-design.md §2.2) waits for the expected type:
+        // docs/language/sequencing-surface-design.md §2.2) waits for the expected type:
         // the rest of the block is checked at the carrier's `M(B)`, never
         // inferred from its first token, so that `Pure(match … { … })` at the
         // end of a block checks as it would without the bind.
@@ -1585,7 +1593,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         let written = params.get(obligation.param).and_then(|p| p.solver.as_deref());
         // A class goal is displayed as written (`Monoid<A>`, layer 2 §7). A
         // proposition is displayed as this call instantiated it: `0 < 5`, not
-        // the callee's `0 < n` (docs/positivity-evidence-design.md §3). Spelled,
+        // the callee's `0 < n` (docs/library/positivity-evidence-design.md §3). Spelled,
         // not decoded: decoding reduces `0 < 0` to `False`, which hides the
         // goal the caller asked for. Operator notation in it is
         // issues/diagnostic-operator-resugaring.md's.
@@ -1626,7 +1634,7 @@ impl application::ImplicitApplicationElab for Elaborator {
             }
             // A class goal is displayed as written (`Monoid<A>`, layer 2 §7).
             // A proposition is displayed as this call instantiated it: `0 <
-            // 5`, not the callee's `0 < n` (docs/positivity-evidence-design.md
+            // 5`, not the callee's `0 < n` (docs/library/positivity-evidence-design.md
             // §3). Spelled, not decoded: decoding reduces `0 < 0` to `False`,
             // which hides the goal the caller asked for. Operator notation in
             // it is issues/diagnostic-operator-resugaring.md's. Spelled only
@@ -1836,7 +1844,7 @@ fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemP
 
 /// The refusal of a declaration's own name used as a value. A declaration
 /// with no value parameters (a `def`, or a parameterless `fn`) has no
-/// recursive call to make at all (docs/value-definitions-design.md §2.1).
+/// recursive call to make at all (docs/metaprogramming/value-definitions-design.md §2.1).
 fn self_name_refusal(selfref: &SelfRef, name: &str) -> String {
     if selfref.params.len() == selfref.n_tyvars {
         format!("`{name}` refers to itself, and a value (a `def`, or a `fn` without parameters) is not recursive")
@@ -1882,7 +1890,7 @@ impl Default for Elaborator {
 }
 
 /// What a lifted obligation quantifies its arm binders at
-/// (`docs/decreases-unfolding-design.md` §4): the constructor's stored field
+/// (`docs/language/recursion/decreases-unfolding-design.md` §4): the constructor's stored field
 /// types, instantiated at the scrutinee's type arguments.
 impl measure::BinderTys for Elaborator {
     fn local_evidence(&self, decl: &Decl, scope: &[measure::Binder], goal: &Ty, arithmetic: bool) -> Option<Expr> {
@@ -1913,12 +1921,12 @@ impl measure::BinderTys for Elaborator {
 /// to eight workers and the wall was bounded by the serial elaborator past
 /// four, so a wider default costs nothing but memory (peak RSS roughly tripled
 /// at eight; the suite's per-process rail is sized for that). The width is
-/// never a semantic decision — `docs/parallel-kernel-gate-design.md` §5.1 is
+/// never a semantic decision — `docs/kernel/parallel-kernel-gate-design.md` §5.1 is
 /// what makes a default above 1 safe to ship.
 pub const DEFAULT_KERNEL_WORKERS: usize = 8;
 
 /// The kernel worker count `HEATHER_KERNEL_WORKERS` asks for, if it names a
-/// usable one (`docs/parallel-kernel-gate-design.md` §4).
+/// usable one (`docs/kernel/parallel-kernel-gate-design.md` §4).
 ///
 /// A `--kernel-workers` flag wins over this; an unparseable or zero value is
 /// ignored rather than refused, because instrumentation must never be the
@@ -1965,14 +1973,14 @@ impl Elaborator {
     /// **This is a trust decision**, not a performance knob: a gate that
     /// admits a declaration means the kernel never sees it. The elaborator
     /// neither audits the oracle nor knows what it is —
-    /// `docs/cache-v1-design.md` §6 is where the argument for the one shipped
+    /// `docs/infrastructure/cache-v1-design.md` §6 is where the argument for the one shipped
     /// implementation lives.
     pub fn set_gate(&mut self, gate: Arc<dyn gate::KernelGate>) {
         self.policy.gate = Some(gate);
     }
 
     /// How many kernel worker threads a module's proof obligations are checked
-    /// on (`docs/parallel-kernel-gate-design.md`).
+    /// on (`docs/kernel/parallel-kernel-gate-design.md`).
     ///
     /// 1 means the kernel runs inline at the gate, on this thread, in
     /// declaration order, exactly as it always has. Above 1 — which is the
@@ -2043,7 +2051,7 @@ impl Elaborator {
     /// Called at the end of both module paths, before either returns, so that
     /// nothing downstream — an accepted verdict, a published image, a written
     /// executable — can observe a module whose proofs are still in flight
-    /// (`docs/parallel-kernel-gate-design.md` §5). Idempotent: with nothing
+    /// (`docs/kernel/parallel-kernel-gate-design.md` §5). Idempotent: with nothing
     /// outstanding it is a branch.
     ///
     /// **A failing join vouches for nothing.** The pass that queued these
@@ -2061,7 +2069,7 @@ impl Elaborator {
         }
         // The wall this thread really spent blocked is what the *enclosing*
         // scopes are charged; the workers' own clocks go to their declaration
-        // rows below (`docs/parallel-kernel-gate-design.md` §7).
+        // rows below (`docs/kernel/parallel-kernel-gate-design.md` §7).
         stats::add(stats::Timer::KernelGate, waited.elapsed().as_nanos() as u64);
         let mut failure = None;
         for outcome in &outcomes {
@@ -2205,7 +2213,7 @@ impl Elaborator {
     }
 
     /// Keep every theorem's proof from here on, for an exporter
-    /// (`docs/export-fragment-design.md` §1). Off by default: an ordinary
+    /// (`docs/library/export-fragment-design.md` §1). Off by default: an ordinary
     /// check drops a proof whose statement carries no data.
     pub fn keep_proofs_for_export(&mut self) {
         self.pass.export_proofs.get_or_insert_with(Default::default);
@@ -2250,7 +2258,7 @@ impl Elaborator {
         let metrics = Rc::new(ValueMetrics::default());
         // Scope rows carry the value-machine columns too, so the registry
         // needs to be able to read the collector this elaborator installed
-        // (`docs/instrumentation-design.md` §3).
+        // (`docs/infrastructure/instrumentation-design.md` §3).
         stats::set_value_metrics_source(Some((*metrics).clone()));
         self.policy.value_metrics = Some(metrics);
     }
@@ -2279,7 +2287,7 @@ impl Elaborator {
 
     /// Begin collecting scope rows — per surface item here, plus whatever
     /// module and run scopes the driver opens
-    /// (`docs/instrumentation-design.md` §3). Collection is per *thread*, not
+    /// (`docs/infrastructure/instrumentation-design.md` §3). Collection is per *thread*, not
     /// per elaborator: a caller measures the elaborator it drives on its own
     /// thread and nothing else.
     pub fn enable_item_timings(&mut self) {
@@ -2292,7 +2300,7 @@ impl Elaborator {
     }
 
     /// Begin auditing every emitted annotation slot against the chokepoint
-    /// (`emission_walk`; docs/annotation-component-respell-design.md §2.5).
+    /// (`emission_walk`; docs/elaborator/annotation-component-respell-design.md §2.5).
     /// Each checked declaration is walked once more, so this is a debugging
     /// and test-time switch, not a default.
     pub fn enable_emission_walk(&mut self) {
@@ -2381,7 +2389,7 @@ impl Elaborator {
     /// An elaborator with the stage-1 prelude already elaborated and
     /// kernel-checked.
     ///
-    /// The degenerate module call (docs/modules-design.md §10.2): the prelude
+    /// The degenerate module call (docs/language/modules-design.md §10.2): the prelude
     /// is an ordinary module that happens to be elaborated first and to be
     /// implicitly imported by every other one.
     pub fn with_prelude() -> R<Self> {
@@ -2411,7 +2419,7 @@ impl Elaborator {
     /// [`Self::elab_source`] for text a *generator* wrote: the minted names
     /// (`Repr_N::abs`, `Impl_R_f::body`) are the surface inside it, exactly as
     /// they are when the same text is elaborated as part of the declaration
-    /// that produced it (`docs/repr-access-spellings-design.md` §6).
+    /// that produced it (`docs/native/repr-access-spellings-design.md` §6).
     ///
     /// The standing customer is the perturbed-emission mutation control: it
     /// re-checks generated text with one byte changed, and through the user
@@ -2424,7 +2432,7 @@ impl Elaborator {
     /// Elaborate a module, kernel-checking every declaration.
     ///
     /// A module's answer never depends on the worker count
-    /// (`docs/parallel-kernel-gate-design.md` §5.1): the parallel pass is an
+    /// (`docs/kernel/parallel-kernel-gate-design.md` §5.1): the parallel pass is an
     /// accelerator for modules that are *accepted*, and any deferred failure
     /// discards it whole and re-runs the module serially, so what the caller
     /// receives is what the serial gate would have said — the same error, at
@@ -2444,7 +2452,7 @@ impl Elaborator {
         ModulePassMut(self).serially(|me| me.elab_module_pass(module, src, &mut false))
     }
 
-    // -- name resolution (docs/modules-design.md §4) -------------------------
+    // -- name resolution (docs/language/modules-design.md §4) -------------------------
 
     /// Resolve a written name to the module that declares it, by the §4
     /// regime. Every table lookup below goes through this.
@@ -2453,13 +2461,13 @@ impl Elaborator {
         // no declaration, are refused *here* — before anything can report them
         // as unknown, since "unknown" is exactly the wrong thing to say about
         // a name that exists and is not the surface
-        // (docs/repr-access-spellings-design.md §6).
+        // (docs/native/repr-access-spellings-design.md §6).
         if let Some(msg) = self.access_refusal(name) {
             return NameRes::Restricted(msg);
         }
         // `f::unfold` is the unfolding equation's designed spelling; the
         // equation is still declared as `f_unfold`, which stays a deprecated
-        // spelling of it (docs/decreases-unfolding-design.md §2). A function
+        // spelling of it (docs/language/recursion/decreases-unfolding-design.md §2). A function
         // that declares a member `unfold` of its own keeps it.
         if let Some(base) = name.strip_suffix("::unfold") && self.access_alias(name).is_none() {
             let declared = NameLookup(self).resolve_declared(name);
@@ -2469,7 +2477,7 @@ impl Elaborator {
             return self.resolve_name(&format!("{base}_unfold"));
         }
         // A companion the walk declined to generate: say which body shape
-        // stopped it (docs/decreases-unfolding-design.md §3, §6.1), since
+        // stopped it (docs/language/recursion/decreases-unfolding-design.md §3, §6.1), since
         // "unknown name" — or "no member `step`" — is the wrong thing to say
         // about an equation the reader is right to expect. A name the module
         // declared itself is not one.
@@ -2479,12 +2487,12 @@ impl Elaborator {
         }
         if let Some(why) = self.pass.unfold_refusals.borrow().get(name) {
             // A reason that already names the document that explains it — a
-            // group's, `docs/mutual-recursion-design.md` §6 — points there
+            // group's, `docs/language/recursion/mutual-recursion-design.md` §6 — points there
             // instead.
             let see = if why.contains("docs/") {
                 ""
             } else {
-                ", see docs/decreases-unfolding-design.md §3"
+                ", see docs/language/recursion/decreases-unfolding-design.md §3"
             };
             if let Some(f) = name.strip_suffix("_unfold") {
                 return NameRes::Restricted(format!("no unfolding equation for `{f}`: {why}{see}"));
@@ -2497,11 +2505,23 @@ impl Elaborator {
                 ));
             }
             return NameRes::Restricted(format!(
-                "no step equation `{name}` (docs/decreases-unfolding-design.md §6.1): {why}"
+                "no step equation `{name}` (docs/language/recursion/decreases-unfolding-design.md §6.1): {why}"
             ));
         }
         if let Some(msg) = self.unknown_access_path(name) {
             return NameRes::Restricted(msg);
+        }
+        // A designed path whose generated declaration more than one imported
+        // module made, for different declarations of one name: say so, since
+        // "neither imported nor in scope" is wrong about a name two modules
+        // declare (docs/tactics/functional-induction-design.md §6).
+        if let Some(target) = self.access_alias(name)
+            && let NameRes::Ambiguous(modules) = NameLookup(self).resolve_declared(target)
+        {
+            let list = modules.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(" and ");
+            return NameRes::Restricted(format!(
+                "`{name}` is ambiguous: {list} each generate it, for different declarations of the name"
+            ));
         }
         declared
     }
@@ -2538,7 +2558,7 @@ impl Elaborator {
     /// `Impl(add, BinNat)::refines`) resolves to the declaration it names, and
     /// strictly as a *fallback*: only a name with no reading of its own takes
     /// it, so nothing that resolved before the alias existed can be
-    /// reinterpreted by it (docs/repr-access-spellings-design.md §5).
+    /// reinterpreted by it (docs/native/repr-access-spellings-design.md §5).
     fn key_of(&self, name: &str) -> Option<String> {
         NameLookup(self).key_of_kinds(name, names::ANY_KIND)
     }
@@ -2561,7 +2581,7 @@ impl Elaborator {
     }
 
     /// The mutual group member a name denotes in type position
-    /// (docs/mutual-inductive-design.md §2): its family and its position
+    /// (docs/inductives/mutual-inductive-design.md §2): its family and its position
     /// among the family's members. A member is declared as an `Inductive`
     /// name, so it resolves, shadows and is imported exactly as a type does;
     /// it is found here and not by [`Self::lookup_inductive`] because it has
@@ -2589,7 +2609,7 @@ impl Elaborator {
         let res = self.resolve_name(name);
         let mut msg = miss_msg(&res, name, fallback.into())
             .unwrap_or_else(|| format!("`{name}` cannot be used here"));
-        // §8 of `docs/mutual-recursion-design.md`: a member whose run was
+        // §8 of `docs/language/recursion/mutual-recursion-design.md`: a member whose run was
         // broken forward-references a name that *is* declared, further down.
         // "unknown" is true and unhelpful; say what would have grouped them.
         let later = self
@@ -2606,7 +2626,7 @@ impl Elaborator {
                 msg.push_str(
                     "; adjacent `decreases` declarations share one recursion only when \
                      each of them carries `decreases`, nothing else stands between them, \
-                     and they call *each other* (docs/mutual-recursion-design.md §1). \
+                     and they call *each other* (docs/language/recursion/mutual-recursion-design.md §1). \
                      A call that is not answered needs the callee declared first",
                 );
             }
@@ -2637,7 +2657,7 @@ impl Elaborator {
     }
 
     /// Take the warnings raised since the last call
-    /// (`docs/diagnostic-warnings-design.md` §3). Draining rather than
+    /// (`docs/elaborator/diagnostic-warnings-design.md` §3). Draining rather than
     /// borrowing is the point: the CLI renders each module against *that
     /// module's* source, so a warning has to leave with the text its span
     /// indexes into, before the next file is checked.
@@ -2660,7 +2680,7 @@ impl Elaborator {
 
     /// [`Self::check_source`] into a named module — what the CLI's loader
     /// calls once per file of the import closure, in topological order
-    /// (docs/modules-design.md §3.2). A module whose imports are themselves
+    /// (docs/language/modules-design.md §3.2). A module whose imports are themselves
     /// broken reports that and checks nothing: there is no recovery point
     /// before the scope exists.
     pub fn check_module_source(&mut self, module: &str, src: &str) -> Vec<ElabError> {
@@ -2668,7 +2688,7 @@ impl Elaborator {
     }
 
     /// The canonical derived instances minted so far, in mint order
-    /// (docs/traits-layer2-design.md §8) — one per *derivation*, not per use
+    /// (docs/language/classes/traits-layer2-design.md §8) — one per *derivation*, not per use
     /// site, which is the coherence invariant this table is.
     pub fn derived_instances(&self) -> Vec<&str> {
         self.traits
@@ -2725,7 +2745,7 @@ impl Elaborator {
 
     /// The layer a term binding was bound at, by the name the current module
     /// resolves: `c` for every declaration, codata included
-    /// (docs/kernel-m-codes-design.md §0).
+    /// (docs/kernel/kernel-m-codes-design.md §0).
     pub fn global_layer(&self, name: &str) -> Option<Layer> {
         match self.psi.bindings.get(self.global_abs(name)?)? {
             GlobalBinding::Tm { layer, .. } => Some(*layer),
@@ -2890,7 +2910,7 @@ impl Elaborator {
                     self.attempt.goal_arena.solve_named(name, t);
                 }
                 // `on _: P := e;` — discharge *every* goal whose statement is
-                // `P` (docs/sketches/surface-v2.md §2: one bound proof feeding
+                // `P` (docs/archive/surface-v2.md §2: one bound proof feeding
                 // many sites). `P` is elaborated per goal, in that goal's own
                 // context, since that is where its statement lives.
                 OnTarget::Stmt(pat) => {
@@ -2923,7 +2943,7 @@ impl Elaborator {
                     }
                 }
                 // A `split` arm, consumed by the parser into an `Arm`
-                // (docs/match-equation-split-design.md §6); one that reaches a
+                // (docs/language/matching/match-equation-split-design.md §6); one that reaches a
                 // block's `ons` is a parse error, not an elaboration one.
                 OnTarget::Ctor { ctor, .. } => {
                     return err(
@@ -2983,13 +3003,13 @@ impl Elaborator {
             // A generated declaration's type (`host::Leaves::Member`).
             TyKind::Named { name, .. } if let Some(k) = host::leaf_index(name) => Host(self).host_ty_leaf(cx, k, ty.span),
             // An expression in type position: infer it, require its type to be
-            // a universe, and decode (docs/surface-universe.md §4). `El` is the
+            // a universe, and decode (docs/language/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
             TyKind::OfExpr(e) => self.expr_elab().lower_expression_type(self, cx, e, ty.span),
             // A `def`'s type, inferred from its value
-            // (docs/value-definitions-design.md §2.2). `check_decl` reads the
+            // (docs/metaprogramming/value-definitions-design.md §2.2). `check_decl` reads the
             // value once for both; this is every other reading of the stored
             // declaration.
             TyKind::TypeOf(e) => {
@@ -3048,7 +3068,7 @@ impl Elaborator {
     /// locals, `let` aliases and declarations, so none of them is a keyword.
     /// (Which of these readings races a type-owned member is finer than
     /// this: `member_head` asks `ambient_reading_survives`,
-    /// docs/receiver-member-resolution-design.md §2.)
+    /// docs/language/classes/receiver-member-resolution-design.md §2.)
     fn shadowed(&self, cx: &Cx, name: &str) -> bool {
         cx.names.iter_inner().any(|n| n == name)
             || cx.aliases.iter_inner().any(|a| a.name == *name)
@@ -3056,7 +3076,7 @@ impl Elaborator {
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
             // self-call took the built-in vector-`map` path instead
-            // (found writing docs/surface-polymorphism.md §9's headline test).
+            // (found writing docs/language/surface-polymorphism.md §9's headline test).
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
     }
 
@@ -3081,7 +3101,7 @@ impl Elaborator {
         }
         // `Succ` as a *value*: the kernel has it as a term former, not a
         // global, so there is nothing to pass and the η-expansion is built here
-        // (docs/constructor-function-values.md §2.1). Unlike a declared
+        // (docs/language/constructor-function-values.md §2.1). Unlike a declared
         // constructor this needs no expected type — its type is a constant —
         // which is what makes `p.cong(Succ)` work even though `cong`'s
         // implicits put the argument in *inference* position.
@@ -3144,7 +3164,7 @@ impl Elaborator {
                 // after it. A layer-m term *may* name a layer-c global
                 // (`i' ≤ i`, typing.rs:756), which is what lets an analyzer's
                 // arms call ordinary library functions
-                // (docs/certgen-transcriber-in-language-design.md §4).
+                // (docs/archive/certgen-transcriber-in-language-design.md §4).
                 let var = GlobalVar::constant(*abs);
                 let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");
@@ -3172,12 +3192,12 @@ impl Elaborator {
             }
             // The last stop for every written name, so this is where an
             // ambiguity has to surface as an ambiguity rather than as an
-            // absence (docs/modules-design.md §4).
+            // absence (docs/language/modules-design.md §4).
             None => {
                 // `G::AddCommMonoid` — a class **at a type**, resolved. Here
                 // and not earlier: a registered instance is an ordinary global
                 // and was found above, so this reaches only the carriers that
-                // have none (docs/traits-type-projection-design.md §5).
+                // have none (docs/language/classes/traits-type-projection-design.md §5).
                 if let Some(r) = Projections(self).class_at_type(cx, name, &[], span) {
                     return r;
                 }
@@ -3297,15 +3317,15 @@ impl Elaborator {
     /// by this occurrence's substitution aborted the kernel
     /// (issues/merged-call-through-upcast-panics.md).
     ///
-    /// Of the inline respellings only the reference's has a scratch-world
-    /// reading ([`GeneratedDefs::unspell_here_in`]); the sum and `Wf` ones read their
-    /// head at committed indices, so they are not asked here. A probe that
+    /// Of the inline respellings only the reference's is read here
+    /// ([`Self::unspell_here`], a constant, so the same in the scratch
+    /// world); the sum and `Wf` ones are not asked. A probe that
     /// meets a sum or a `Wf` wanted a `Π` and refuses either way.
     pub(crate) fn whnf_in(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type> {
         if scratch == 0 {
             return self.whnf(cx, ty, span);
         }
-        if let Some(inline) = GeneratedDefs(self).unspell_here_in(ty, scratch) {
+        if let Some(inline) = self.unspell_here(ty) {
             return Ok(inline);
         }
         let stand_in = GlobalBinding::Tm {
@@ -3328,7 +3348,7 @@ impl Elaborator {
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
         // A reference to a registered lowering reduces back to the **registry's
         // own copy**, not to the kernel's lazy decode of it
-        // (`docs/wf-shape-code-design.md` §3.3). The two are the same type; the
+        // (`docs/inductives/wf-shape-code-design.md` §3.3). The two are the same type; the
         // decode's spelling is `Wf(El ⌜S⌝). n` with every component still
         // `El`-wrapped, and the whole elaborator — every structural reader, and
         // every *guard* that hands out a reference — anchors on the inline
@@ -3387,7 +3407,7 @@ impl Elaborator {
     /// padding takes this; only `GoalArena::allocate`'s own
     /// `goal_base − 1 − k` does not.
     /// Does elaboration here emit the checked spellings
-    /// (`docs/intro-by-type-design.md` §4.1)? Everywhere but inside a
+    /// (`docs/elaborator/intro-by-type-design.md` §4.1)? Everywhere but inside a
     /// quotation payload: the kernel refuses them there (§2.3).
     pub(crate) fn emits_at_forms(&self) -> bool {
         !self.under_quotation()
@@ -3453,7 +3473,7 @@ fn base_name(name: &str) -> &str {
 }
 
 /// Does `block` call one of `names` at a position the measure walk rewrites —
-/// the head of a saturated application (`docs/mutual-recursion-design.md` §1)?
+/// the head of a saturated application (`docs/language/recursion/mutual-recursion-design.md` §1)?
 /// Shadowing is not tracked here: an over-approximated edge only groups two
 /// declarations that did not need grouping, which §1 says costs nothing, while
 /// the rewrite itself does track it and leaves a shadowed call alone.
@@ -3487,7 +3507,7 @@ fn calls_in(block: &heather_syntax::Block, names: &[String], out: &mut Vec<usize
     scan(&block.result);
 }
 
-/// The mutual groups of `docs/mutual-recursion-design.md` §1: within each
+/// The mutual groups of `docs/language/recursion/mutual-recursion-design.md` §1: within each
 /// maximal run of *consecutive* `decreases` declarations, the strongly
 /// connected components of size > 1, as item indices in declaration order.
 ///
@@ -3566,17 +3586,17 @@ struct ItemPlan {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GroupKind {
     /// `decreases` declarations under one measure
-    /// (docs/mutual-recursion-design.md §1).
+    /// (docs/language/recursion/mutual-recursion-design.md §1).
     Measure,
-    /// Mutual `inductive` declarations (docs/mutual-inductive-design.md §1).
+    /// Mutual `inductive` declarations (docs/inductives/mutual-inductive-design.md §1).
     Inductive,
     /// Declarations without a measure that call one another, one of them
-    /// recursing over a mutual family (docs/mutual-inductive-design.md §6).
+    /// recursing over a mutual family (docs/inductives/mutual-inductive-design.md §6).
     Structural,
 }
 
 /// The reserved name of a match's anonymous equation once it is bound
-/// (docs/dependent-match-compiler-design.md §4.1). `__` names are the
+/// (docs/language/matching/dependent-match-compiler-design.md §4.1). `__` names are the
 /// machinery's; a certificate may spell it, a user does not write it.
 pub(crate) const MATCH_EQ: &str = "__match_eq";
 
@@ -3603,7 +3623,7 @@ enum TopAttempt {
 }
 
 /// Recursion at the top on a tier-1 `Wf` parameter `z`
-/// (docs/recursion-at-the-top-design.md §4, slice 3), by hoisting: one
+/// (docs/language/recursion/recursion-at-the-top-design.md §4, slice 3), by hoisting: one
 /// `match z` around the body, each arm rebinding `z` to its constructor
 /// term, and every `match z` in the body replaced by its arm for that
 /// constructor (a `match` on a known constructor, taken at the surface).

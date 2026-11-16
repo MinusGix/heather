@@ -1,5 +1,5 @@
 // Maps out of a presented frame are checked on its generators
-// (docs/localic-reals-design.md §2).
+// (docs/library/localic-reals-design.md §2).
 //
 // A frame presented by an axiom set (`Cover`, formal_topology.hthr) is the
 // free one on its basis subject to the axioms. Its universal property: a

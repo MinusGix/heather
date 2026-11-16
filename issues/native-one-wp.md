@@ -9,7 +9,7 @@ created: 2026-10-20
 updated: 2026-10-21
 ---
 
-Round S2 of `docs/native-program-logic-design.md` (§6.1, §6.3): one computed
+Round S2 of `docs/native/native-program-logic-design.md` (§6.1, §6.3): one computed
 weakest precondition over every `Asm` item, the target-side tool the
 compiler's per-construct lemmas are proved with.
 

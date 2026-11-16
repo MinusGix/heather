@@ -13,7 +13,7 @@ result, a decoded code — while a sibling site respelled the same type
 (`respell_ty_deep`). Every fix was "route this site through
 `respell_emitted`", and the invariant now lives in about a dozen call sites
 (`application.rs`, `inductive.rs` ×4, `wf.rs` ×3, `gendefs.rs`) plus
-docs/annotation-component-respell-design.md §2.4.
+docs/elaborator/annotation-component-respell-design.md §2.4.
 
 ## Shape
 
@@ -21,7 +21,7 @@ docs/annotation-component-respell-design.md §2.4.
    `decode_deep`, then `respell_ty_deep`) that every constructor of a `Term`
    or `Type` with an annotation slot goes through, so a new emitter cannot
    forget it. Structural reads keep taking the inline copy — the line of
-   docs/wf-shape-code-design.md §4 is unchanged; only the *emitted* slot is
+   docs/inductives/wf-shape-code-design.md §4 is unchanged; only the *emitted* slot is
    funnelled.
 2. **A walker.** A debug-time (or `value-metrics`) pass over a checked
    declaration's term and statement that flags any annotation slot whose

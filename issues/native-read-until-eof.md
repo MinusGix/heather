@@ -10,7 +10,7 @@ The certified `wc -l` reads stdin once, up to 4096 bytes. On a pipe or a
 larger file it counts only a prefix. It should loop: read, stop at the empty
 read, count each chunk into a running total.
 
-Design: docs/native-read-until-eof-design.md. Decisions (2026-09-27, with
+Design: docs/native-read-until-eof-design.md@4acf2fe. Decisions (2026-09-27, with
 the user): the contract is additive (the loop from any count adds
 `spec(chunk)`, and `spec` adds over concatenation); the read-once profile is
 replaced rather than kept beside it.

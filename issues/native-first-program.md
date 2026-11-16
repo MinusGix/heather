@@ -14,7 +14,7 @@ with the count as its status. The process claim: for every input the read may
 return, the file has a run with trace `[ReadEvent(0, bytes), ExitEvent(wc_l(bytes) mod 256)]`,
 where `wc_l` is an ordinary Heather function.
 
-Design: `docs/native-first-program-design.md`.
+Design: `docs/archive/native-first-program-design.md`.
 
 ## Current state
 

@@ -1,5 +1,5 @@
 // Register allocation for the effectful source's compiler
-// (docs/native-register-allocation-design.md; issues/native-register-allocation.md).
+// (docs/native/native-register-allocation-design.md; issues/native-register-allocation.md).
 //
 // Every word of the environment has a home between statements: its slot,
 // as the memory-resident compiler gave every word, or a register of the
@@ -122,7 +122,7 @@ fn List::within(self a: List<Nat>, b: List<Nat>) → Bool {
 // What a call reads, and the word it writes.
 fn CallShape::reads(self shape: CallShape) → List<Nat> {
     match shape {
-        Reads(fd, _, len, _) => [fd, len],
+        Reads(fd, _, at, len, _) => [fd, at, len],
         Writes(fd, _, from, len, _) => [fd, from, len],
         Opens(_, len, _) => [len],
         Closes(fd, _) => [fd],
@@ -133,7 +133,7 @@ fn CallShape::reads(self shape: CallShape) → List<Nat> {
 
 fn CallShape::result(self shape: CallShape) → Nat {
     match shape {
-        Reads(_, _, _, result) => result,
+        Reads(_, _, _, _, result) => result,
         Writes(_, _, _, _, result) => result,
         Opens(_, _, result) => result,
         Closes(_, result) => result,

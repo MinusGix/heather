@@ -16,13 +16,13 @@ fn source_nested_conditionals_execute() {
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         let certificate = std::fs::read_to_string(dir.join(format!("{name}.certificate.hthr"))).unwrap();
         // Each shape goes through the verified lowering: the certificate
-        // instantiates `compiled_returns`, and nothing in it is generated
+        // instantiates `compiled_computes`, and nothing in it is generated
         // per instruction.
-        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>("] {
+        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_computes<M>("] {
             assert!(certificate.contains(claim), "missing {claim}: {}", String::from_utf8_lossy(&result.stderr));
         }
         // A runtime fn's program and agreement are its generator's, from
-        // the `Compile` instances (docs/runtime-fn-setups-design.md §16.9).
+        // the `Compile` instances (docs/native/runtime-fn-setups-design.md §16.9).
         // The three whose tests call the Bool helper `unequal` are not
         // runtime fns yet: they agree through the decision tree the Rust
         // reflector compiles, spelled in source operations, made the source

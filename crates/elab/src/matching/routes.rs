@@ -22,7 +22,7 @@ use crate::declarations::Declarations;
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
 /// chain's end needs it — see [`Routes::chain_convoy`], which builds one,
-/// and `docs/course-of-values-recursion-design.md` §5 for why passing it
+/// and `docs/language/recursion/course-of-values-recursion-design.md` §5 for why passing it
 /// through the `match` is what makes the deeper values usable.
 struct Convoy {
     dec: usize,
@@ -102,7 +102,7 @@ impl Routes<'_> {
         &self,
         cx: &Cx,
         form: MatchForm,
-        // Diagnostics only (`docs/diagnostic-warnings-design.md` §7.1):
+        // Diagnostics only (`docs/elaborator/diagnostic-warnings-design.md` §7.1):
         // whether the pattern compiler built this node.
         generated: bool,
         arms: &[Arm],
@@ -114,7 +114,7 @@ impl Routes<'_> {
         span: Span,
     ) -> R<Term> {
         // Deep patterns and the `_` arm, compiled away before the dispatch
-        // below sees anything (docs/nested-match-patterns-design.md §9). The
+        // below sees anything (docs/language/matching/nested-match-patterns-design.md §9). The
         // pass is idempotent and its fast path is every `match` written
         // before it existed, so calling it here *and* at the two direct
         // `elab_infer` entry points costs nothing.
@@ -141,7 +141,7 @@ impl Routes<'_> {
         let split = crate::recursion::case_split(cx, &scrut_t, arms);
         let cx = split.as_ref().unwrap_or(cx);
         let head = self.whnf(cx, scrut_ty, span)?;
-        // An indexed family in family form (docs/inductive-indexed-lowering.md
+        // An indexed family in family form (docs/inductives/inductive-indexed-lowering.md
         // §6) — checked on the *raw* type, since whnf at a literal index
         // reduces the family away, index and all. The `Empty` case wins
         // first: a family whose branch at this literal index is `Empty`
@@ -163,7 +163,7 @@ impl Routes<'_> {
                 cx, form, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span,
             );
         }
-        // `Fin(n)` (docs/surface-fin-indexing-design.md §4.2). Tested on the
+        // `Fin(n)` (docs/language/surface-fin-indexing-design.md §4.2). Tested on the
         // **raw** scrutinee type for the same reason `indexed_of_at` is: the
         // whnf of `Fin(Succ k)` is a bare `Type::Sum`, which carries no hint
         // that its arms should be called `FZ`/`FS`. After the `tag_of` check,
@@ -287,7 +287,7 @@ impl Routes<'_> {
         // recursion's parameter meets that parameter's constructor term, and
         // takes its arm: `Succ(k)` binds `k` to the predecessor the guard
         // already holds, so a self-call at `k` is the ih
-        // (docs/recursion-at-the-top-design.md §3). The term is the arm the
+        // (docs/language/recursion/recursion-at-the-top-design.md §3). The term is the arm the
         // recursor would reduce to.
         if ih.is_none() && self.scope.recursion_at_top.is_some() {
             let at = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
@@ -336,7 +336,7 @@ impl Routes<'_> {
         // A nested `match` on the chain's end, with values below it still
         // uncollected: it must **convoy** them, or its arms cannot see that the
         // value one below `k` is the value at `l`
-        // (docs/course-of-values-recursion-design.md §5).
+        // (docs/language/recursion/course-of-values-recursion-design.md §5).
         let convoy = if ih.is_none() && dec.is_none() {
             self.chain_convoy(cx, &scrut_t)
         } else {
@@ -620,7 +620,7 @@ impl Routes<'_> {
     /// `link` selects how the scan walks one step down: `None` is `Nat`'s
     /// `Succ(k)` arm, `Some(ind)` a chain-shaped declaration's recursive
     /// constructor and the binder at its recursive field
-    /// (`docs/list-course-of-values-design.md` §5).
+    /// (`docs/language/recursion/list-course-of-values-design.md` §5).
     pub(crate) fn cov_depth(
         &self,
         cx: &Cx,
@@ -696,7 +696,7 @@ impl Routes<'_> {
 
     /// `match` on `Fin(Succ k)`: the kernel's `Case` over the sum that
     /// `Fin(Succ k)` unfolds to, with the arms named `FZ` and `FS(j)`
-    /// (docs/surface-fin-indexing-design.md §4.2).
+    /// (docs/language/surface-fin-indexing-design.md §4.2).
     ///
     /// `Fin` has no eliminator of its own — it is a former whose whnf is
     /// `Unit⁰ + Fin(k)` — so the summands are written **unfolded** here while
@@ -803,8 +803,8 @@ impl Routes<'_> {
 /// are indexed by: component `i` at `z` is the motive at `step^i z`.
 ///
 /// The two spellings share the two computation facts the whole scheme rests on
-/// (`docs/course-of-values-recursion-design.md` §3,
-/// `docs/list-course-of-values-design.md` §2): at a *recursive* constructor
+/// (`docs/language/recursion/course-of-values-recursion-design.md` §3,
+/// `docs/language/recursion/list-course-of-values-design.md` §2): at a *recursive* constructor
 /// the step is that constructor's own child, so the step's annotation reduces
 /// to the arm's binder; at a *base* constructor it is the scrutinee itself, so
 /// every component of the base tuple sits at one and the same type.

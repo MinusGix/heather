@@ -1,4 +1,4 @@
-// Arithmetic on floats (docs/floating-point-design.md §7.1, §14; roadmap
+// Arithmetic on floats (docs/library/floating-point-design.md §7.1, §14; roadmap
 // submilestone `float-arith`).
 //
 // Every operation computes its exact result and rounds it once. Addition,

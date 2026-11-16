@@ -1,4 +1,4 @@
-//! Parameter defaults at a call (docs/named-arguments-design.md §9).
+//! Parameter defaults at a call (docs/language/named-arguments-design.md §9).
 //!
 //! A call that leaves a defaulted parameter out reaches the spine walkers
 //! with [`application::PARAM_DEFAULT`]'s marker in that slot
@@ -76,7 +76,7 @@ impl Defaults<'_> {
         else {
             return err("internal parameter default names no defaulted parameter", span);
         };
-        // A tested call's probe stops here (docs/when-design.md §4).
+        // A tested call's probe stops here (docs/language/when-design.md §4).
         if let Some(stop) = crate::tested::Tested(self).capture(cx, owner, &name, &default.expr, expected, lvl, span) {
             return stop;
         }
@@ -112,7 +112,7 @@ impl Defaults<'_> {
             });
         }
         // A condition a search was left with can also be tested, where the
-        // caller can name `When` (docs/when-design.md §4).
+        // caller can name `When` (docs/language/when-design.md §4).
         let or_test = if is_context_search(&default.expr)
             && !matches!(&default.expr.kind, ExprKind::Var(v) if v == crate::tested::KNOWN)
             && crate::tested::Tested(self).when_visible()

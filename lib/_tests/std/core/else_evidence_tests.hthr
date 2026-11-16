@@ -1,4 +1,4 @@
-// Probes of the `else` that knows why (docs/when-design.md §5, §10; Minus
+// Probes of the `else` that knows why (docs/language/when-design.md §5, §10; Minus
 // 2026-11-14: every type, every field): when a `_` arm stands for exactly one
 // constructor, as an `if let`'s `else` on a two-constructor type does, that
 // constructor's fields are bound in it under names the source cannot spell,

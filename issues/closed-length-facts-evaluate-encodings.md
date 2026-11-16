@@ -24,7 +24,7 @@ evaluates it, which unfolds `structured_bytes` and runs the encoder on the
 formatter's three copies ([[conversion-cost-at-large-values]] is the closest
 closed relative).
 
-Worked around (docs/native-wc-design.md §6.1): `read_fields_code_len` proves
+Worked around (docs/archive/native-wc-design.md §6.1): `read_fields_code_len` proves
 the length once over open parts in the library, and the certificate
 instantiates it with the formatter's `_byte_length` lemmas.
 `image_facts`'s other path, reading the length off the spelled code, is

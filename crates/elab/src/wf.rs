@@ -1,6 +1,6 @@
 //! Tier-1 inductive declarations: the lowering onto the `Wf` former.
 //!
-//! This module is the mechanization of `docs/inductive-tier1-wf-lowering.md`
+//! This module is the mechanization of `docs/inductives/inductive-tier1-wf-lowering.md`
 //! and is meant to be read against it — the section numbers in the comments
 //! are that document's. The doctrine is tier 0's
 //! (`inductive.rs`, `issues/inductive-compiler.md`): untrusted like the rest
@@ -96,14 +96,14 @@ pub(crate) struct Tel<'a> {
     /// constructors carry a `Wf`-lowered field wrote that field type verbatim
     /// into every `Case`, every `Inr` and every injection — Θ(arms²) copies of
     /// `⟦T⟧`, and most of a lowered body's node mass, measured
-    /// (`docs/wf-shape-code-design.md` §3.4).
+    /// (`docs/inductives/wf-shape-code-design.md` §3.4).
     pub spine_emit: Spine,
     /// The `Wf` slot pair as it is written into emitted terms, kept because
     /// the course-of-values lowering has to rebuild the `sup_f` the telescope
     /// states its step at ([`Tel::value_at`]) with those very slots.
     slots: (Rc<Type>, Rc<Term>),
     /// What this `match` carries beyond the ordinary lowering
-    /// (`docs/list-course-of-values-design.md`). [`TelRec::None`] for every
+    /// (`docs/language/recursion/list-course-of-values-design.md`). [`TelRec::None`] for every
     /// `match` written before the window existed.
     rec: TelRec<'a>,
 }
@@ -135,7 +135,7 @@ pub(crate) enum WfRec<'a> {
     /// The ordinary lowering, byte for byte.
     None,
     /// A course-of-values recursion carrying `d` values
-    /// (`docs/list-course-of-values-design.md` §3).
+    /// (`docs/language/recursion/list-course-of-values-design.md` §3).
     Cov { d: usize, step: ChainStep },
     /// A nested `match` on the chain's end, convoying the enclosing
     /// recursion's window in as an argument (§4).
@@ -143,7 +143,7 @@ pub(crate) enum WfRec<'a> {
 }
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
-/// chain's end needs it (`docs/list-course-of-values-design.md` §4). The `Nat`
+/// chain's end needs it (`docs/language/recursion/list-course-of-values-design.md` §4). The `Nat`
 /// twin is `matching::routes`'s `Convoy`, and every field here means what its
 /// field there means.
 pub(crate) struct WfConvoy {
@@ -366,7 +366,7 @@ pub(crate) enum Branches<'a> {
     /// A body the caller builds, for an eliminator on this declaration that is
     /// not a `match` on it: the family over a declared index and its derived
     /// eliminator both case on the *index* type here
-    /// (docs/inductive-indexed-lowering.md §8.2), so the branch body is an
+    /// (docs/inductives/inductive-indexed-lowering.md §8.2), so the branch body is an
     /// indexed-family thing and only the `cs`/`ih` threading is tier 1's.
     ///
     /// Called as `(bcx, tel, i, value, d_body, body_ty)` with `bcx` the branch
@@ -385,7 +385,7 @@ pub(crate) enum Branches<'a> {
         t: usize,
         default: Rc<Term>,
     },
-    /// `tail_D` (`docs/list-course-of-values-design.md` §2): the one child at
+    /// `tail_D` (`docs/language/recursion/list-course-of-values-design.md` §2): the one child at
     /// *every* recursive constructor, and `default` — the scrutinee itself —
     /// at every base one, so that `tail_D(Nil) ⇝ Nil` the way `pred 0 ⇝ 0`.
     ///
@@ -397,14 +397,14 @@ pub(crate) enum Branches<'a> {
 }
 
 /// Is `ind` **chain-shaped** — does every constructor carry at most one
-/// recursive field and no container (`docs/list-course-of-values-design.md`
+/// recursive field and no container (`docs/language/recursion/list-course-of-values-design.md`
 /// §1)?
 ///
 /// Only such a declaration has a *chain* for the course-of-values window to
 /// walk. A branching constructor's window would be a tree of values, which is
 /// a different tupling and has no customer; a container field is a group of
 /// children rather than one, and a self-call over it maps rather than
-/// descends (`docs/container-fields.md` §4.2).
+/// descends (`docs/language/container-fields.md` §4.2).
 pub(crate) fn chain_shaped(ind: &Inductive) -> bool {
     ind.ctors
         .iter()
@@ -539,7 +539,7 @@ impl Wf<'_> {
         // Does this `match` descend on one of the enclosing declaration's own
         // parameters? If so, a self-call in an arm is the ih (§6.4).
         // The `match` recursion at the top wrapped the body in is the guard
-        // whatever the planner would say (docs/recursion-at-the-top-design.md
+        // whatever the planner would say (docs/language/recursion/recursion-at-the-top-design.md
         // §4, slice 3).
         let dec = Declarations(self).top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut, arms));
         let Type::Wf { level, .. } = scrut_ty else {
@@ -554,7 +554,7 @@ impl Wf<'_> {
         // components have to be built from the *respelled* spelling, and this
         // is where both halves can see it.
         let plain = Rc::new(self.annotation_type(cx, &motive, 1));
-        // How many past values the arms read (`docs/list-course-of-values-design.md`
+        // How many past values the arms read (`docs/language/recursion/list-course-of-values-design.md`
         // §3). `1` is the ordinary recursion and emits exactly the term it
         // always did; more makes the recursor carry a tuple.
         let d = match dec {
@@ -783,7 +783,7 @@ impl Wf<'_> {
     }
 
     /// `tail_D`, the projection that plays `pred` for a chain-shaped `Wf`
-    /// (`docs/list-course-of-values-design.md` §2), as a term over
+    /// (`docs/language/recursion/list-course-of-values-design.md` §2), as a term over
     /// `(cx.gamma, z : ⟦D⟧)`:
     ///
     /// ```text
@@ -834,13 +834,13 @@ impl Wf<'_> {
     }
 
     /// The match motive's **head**, for phase 3's "is this an equation?" test
-    /// (docs/container-proofs.md §5).
+    /// (docs/language/container-proofs.md §5).
     ///
     /// Structural first, exactly as `record_of_at`: a written `a = b` is
     /// already an `Id` and nothing is paid. Only a motive that arrived as a
     /// *code* — `El (Agree z)` for a named statement
-    /// (`docs/types-as-expressions.md`), or `El` of a β-redex for one reached
-    /// through a `Val -> Type` value (`docs/record-type-values.md` §6) —
+    /// (`docs/language/types-as-expressions.md`), or `El` of a β-redex for one reached
+    /// through a `Val -> Type` value (`docs/language/record-type-values.md` §6) —
     /// reduces, and then `whnf` is the right amount: `Id` is a weak-head
     /// normal form, so this cannot overshoot the shape it is looking for.
     ///
@@ -920,7 +920,7 @@ impl Wf<'_> {
         let plain = Rc::new(self.annotation_type(cx, &motive, 1));
         // The motive of the recursor actually emitted. Three shapes, and the
         // first is what every `match` on a tier-1 inductive has always
-        // emitted (`docs/list-course-of-values-design.md` §3–§4):
+        // emitted (`docs/language/recursion/list-course-of-values-design.md` §3–§4):
         //   ordinary : M
         //   window   : Σ(M[z], M[tail z], …)   — the carried values
         //   convoy   : T_outer(anchor z) -> M[z]  — the window passed in
@@ -985,7 +985,7 @@ impl Wf<'_> {
         let structural = StructuralWf::new(scrut_ty).expect("the Wf was checked above");
         let emitted = structural.annotation(self, cx);
         // The `Wf` slot pair as it is **written into emitted terms**
-        // (`docs/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
+        // (`docs/inductives/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
         // `app(D#arity^δ; x₀)` where this declaration has the pair registered,
         // the inline slots otherwise. The structural reads a few lines down —
         // `cx3`'s `#a` entry, `spine` — take `shape`/`arity` themselves, per
@@ -1290,7 +1290,7 @@ impl Wf<'_> {
         // This branch's arity. Without a container it is the literal `m`;
         // with one it is `Succ^m(len)` for `len` projected out of the label,
         // which is the *same* term the `Wf`'s arity computes here
-        // (docs/container-fields.md §3.3). `Succ`-headed either way, which is
+        // (docs/language/container-fields.md §3.3). `Succ`-headed either way, which is
         // what lets `Vec` unfold `m` times and `Fin` admit the `m` literal
         // indices below.
         let container_len = match ctor.container() {
@@ -1362,7 +1362,7 @@ impl Wf<'_> {
                 for (k, name) in arm.binders.iter().map(|p| p.name().to_string()).enumerate() {
                     // The container binder is the *tail* of the children
                     // tuple — one `snd` per preceding plain child, no `nth`
-                    // and no index arithmetic (docs/container-fields.md §3.5).
+                    // and no index arithmetic (docs/language/container-fields.md §3.5).
                     if let FieldKind::Container { .. } = ctor.kind[k] {
                         let tail_len = container_len
                             .clone()
@@ -1408,7 +1408,7 @@ impl Wf<'_> {
                         // child (§4.3).
                         let result = crate::vec::strengthen(&tel.motive, tel.gamma0)
                             .map(|t| t.shift_local(d_body));
-                        // Phase 3 (docs/container-proofs.md §5): a dependent
+                        // Phase 3 (docs/language/container-proofs.md §5): a dependent
                         // motive that is an equation at a `z`-independent type
                         // still relates the children pointwise. The endpoints
                         // are wrapped as `λ(z : ⟦D⟧). …` so the call site can
@@ -1418,7 +1418,7 @@ impl Wf<'_> {
                         // a *named* statement (`fn Agree(r: Rose) -> Type
                         // { … = … }`) arrives as `El` of a call, and the `Id`
                         // is one δ/β step below it
-                        // (docs/record-type-values.md §6).
+                        // (docs/language/record-type-values.md §6).
                         let motive = self.motive_head(tel);
                         let eq = match (&result, &*motive) {
                             (
@@ -1570,7 +1570,7 @@ impl Wf<'_> {
                         // the rebuilt spelling is the one with the child as a
                         // *subterm*, which is what lets a nested `match` on it
                         // refine this goal the way `Succ k` does for `Nat`
-                        // (`docs/list-course-of-values-design.md` §7.4).
+                        // (`docs/language/recursion/list-course-of-values-design.md` §7.4).
                         //
                         // The components are annotated at it, where the kernel
                         // checks them; a shifted component differs from its
@@ -1842,7 +1842,7 @@ impl Wf<'_> {
 ///
 /// `base` is `Zero` for a constructor with no container field — recovering
 /// tier 1's literal `m` exactly — and the container's length term otherwise
-/// (docs/container-fields.md §3.3). Either way the length is `Succ`-headed
+/// (docs/language/container-fields.md §3.3). Either way the length is `Succ`-headed
 /// `m` times, which is all `nth` and `Fin` need in order to reduce down to
 /// the `t`-th projection.
 pub(crate) fn nth_child(
@@ -1906,7 +1906,7 @@ pub(crate) fn fin_index(t: usize, m: usize, base: &Term) -> Term {
 #[cfg(test)]
 mod tycode {
     //! The tier-1 `D#tycode` spelling
-    //! (`docs/family-type-code-defs-design.md`, 2026-08-12 extension;
+    //! (`docs/inductives/family-type-code-defs-design.md`, 2026-08-12 extension;
     //! `issues/wf-field-conversion-cost.md`).
     //!
     //! Two obligations, and they are different in kind. The **emission** side
@@ -2257,7 +2257,7 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
         .expect("a meta body's `match` on a coded declaration checks at layer m");
     }
 
-    // -- the component respell (docs/annotation-component-respell-design.md) --
+    // -- the component respell (docs/elaborator/annotation-component-respell-design.md) --
 
     /// `respell_ty_deep` replaces exactly the components that are registered
     /// lowerings, at the right depths: a `Π` over two coded declarations
@@ -2324,7 +2324,7 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
             panic!("the result respells too")
         };
         // The cascade: a later declaration's call reads its domain off that
-        // statement. Since `docs/app-by-head-type-design.md` it reads it at
+        // statement. Since `docs/elaborator/app-by-head-type-design.md` it reads it at
         // check time and writes none: the call is `app@(tid; t)`, so no
         // annotation exists that could carry an inline copy of `T`.
         e.el.elab_source("fn call_it(t: T) -> T { tid(t) }")
@@ -2418,7 +2418,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         assert!(r.is_err(), "a false equation must still be refused");
     }
 
-    // -- the Wf slot pair (docs/wf-shape-code-design.md) --------------------
+    // -- the Wf slot pair (docs/inductives/wf-shape-code-design.md) --------------------
 
     /// The registration boundary of the pair, which is narrower than
     /// `TyCode`'s in one direction: a **non-recursive** declaration lowers to
@@ -2747,7 +2747,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
     /// of two **neutral** references — which is what makes a label check
     /// against it one δ and an `==` — and the elaborator's own `whnf` of that
     /// reduct is the inline `⟦Flat⟧` again, so no structural reader sees the
-    /// names (docs/wf-shape-code-design.md §3.3's line, one level down).
+    /// names (docs/inductives/wf-shape-code-design.md §3.3's line, one level down).
     #[test]
     fn a_flat_whole_type_code_decodes_through_its_spine_and_unspells_at_whnf() {
         let e = env();
@@ -2977,7 +2977,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
     /// A constructor **value** of a flat declaration carries the type it was
     /// checked at — `El (Flat#tycode^δ)`, the reference, not its unfolding —
     /// on its outermost injection, and **nothing** on the injections inside
-    /// it (`docs/intro-by-type-design.md` §4.1). Until stage 2 every level
+    /// it (`docs/elaborator/intro-by-type-design.md` §4.1). Until stage 2 every level
     /// of the path carried spine references in its `Inl`/`Inr` components;
     /// the checked spelling writes no components at all. Pinned structurally
     /// at a literal value, in the checking position a `fn`'s declared return
@@ -3058,7 +3058,7 @@ theorem s2(): or_else(3, None) = 3 { refl }
         let (box_ty, l) =
             e.el.lower_instance(&e.cx, &e.ind("Box"), &[(flat_ty.clone(), fl)], &[], SPAN)
                 .expect("`Box<Flat>` lowers");
-        // Since `docs/per-instantiation-type-codes-design.md` the *whole*
+        // Since `docs/inductives/per-instantiation-type-codes-design.md` the *whole*
         // instantiation has a name, so the chokepoint hands back the code
         // function's application — and the slot pair, which may not hold a
         // reference to the whole (§8), asks its own question.
@@ -3175,7 +3175,7 @@ theorem oflat_computes(): sel(oflat(OSome(FC(4, 5)))) = 5 { refl }
         while let Term::Lam { body, .. } = cur {
             cur = body;
         }
-        // Since `docs/app-by-head-type-design.md` the call is `app@(f; t)`:
+        // Since `docs/elaborator/app-by-head-type-design.md` the call is `app@(f; t)`:
         // it states no `dom`/`cod`, so there is no annotation left for the
         // binder's inline type to leak into — the respell's whole subject is
         // gone. What stays pinned is that the call is written that way at a
@@ -3273,7 +3273,7 @@ theorem app_open_neutral(n: Nat, v: [T; n]): app_open(n, λ (w: [T; n]) => n, v)
         };
         assert!(GeneratedDefs(&e.el).is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("Flat").tag)));
         // …and the label's one annotation is *that* shape
-        // (`docs/intro-by-type-design.md` §4.1): the checked spelling carries
+        // (`docs/elaborator/intro-by-type-design.md` §4.1): the checked spelling carries
         // the sum whole, where the component spelling carried its summands.
         let _ = lhs;
         let Term::InrAt { ty: Some(at), .. } = &**label else {
@@ -3357,7 +3357,7 @@ fn getb(p: PrT()) -> T { p.b }
         };
         let Term::Lam { body, .. } = &**body else { panic!("one λ") };
         // `p.b` is entry 2 of the spine: `fst@(snd@(snd@(p)))`. The checked
-        // projections carry no annotation at all (`docs/intro-by-type-design.md`
+        // projections carry no annotation at all (`docs/elaborator/intro-by-type-design.md`
         // §2.1), so the adjacent-link agreement this test pinned for the
         // component spelling has nothing left to compare: the receiver infers
         // each link's type. What stays pinned is the chain's shape, and below,
@@ -3496,7 +3496,7 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
             panic!("a `fn` keeps its body")
         };
         // `pair@^{R4}(tag_refl; pair@(FB(1); ⟨⟩))` since stage 2
-        // (`docs/intro-by-type-design.md` §4.1): a record has no injection, so
+        // (`docs/elaborator/intro-by-type-design.md` §4.1): a record has no injection, so
         // its tuple's root carries the type it was checked at, and the field
         // links carry nothing. The field value carries the field's stated
         // type — the declaration's reference — on its outermost injection,
@@ -3581,7 +3581,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         let Type::Sigma { snd, .. } = &inline else { panic!("the instance is a Σ (tag first): {inline:?}") };
         let Type::Sigma { fst, .. } = &**snd else { panic!("…then the field") };
         let Type::Id { lhs, .. } = &**fst else { panic!("`ok` is an equation") };
-        // Since stage 2 (`docs/intro-by-type-design.md` §2.1) the projection
+        // Since stage 2 (`docs/elaborator/intro-by-type-design.md` §2.1) the projection
         // carries no annotation and the literal only its root's, so the two
         // spellings this test held equal no longer exist to disagree: the
         // projection's type is read off the literal's.
@@ -3610,11 +3610,11 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         assert!(r.is_err(), "a mismatched instance must still be refused");
     }
 
-    // -- the code *function* (docs/per-instantiation-type-codes-design.md) ---
+    // -- the code *function* (docs/inductives/per-instantiation-type-codes-design.md) ---
 
     mod tycode_fn {
         //! `D#tycode_fn` — the per-instantiation spelling
-        //! (`docs/per-instantiation-type-codes-design.md`).
+        //! (`docs/inductives/per-instantiation-type-codes-design.md`).
         //!
         //! The same two obligations as the module above and the same
         //! discipline: emission is checked by elaborating real source, and
@@ -3885,7 +3885,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
                 let Term::Lam { body, .. } = &**body else { panic!("parameter") };
                 let Term::ElimWf { step, .. } = &**body else { panic!("match") };
                 let Some((fun, _)) = crate::spelling::app_of(step) else { panic!("apply ih") };
-                // Since `docs/app-by-head-type-design.md` the application is
+                // Since `docs/elaborator/app-by-head-type-design.md` the application is
                 // `app@` and carries no annotation to copy a payload into; the
                 // children vector's type is the case tree's motive's domain.
                 let cs_ty = match &**fun {
@@ -3925,7 +3925,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             // actual cs domain: an inline Wf here passes semantic tests but
             // copies every payload into each child-vector annotation.
             let Some((fun, _)) = crate::spelling::app_of(step) else { panic!("apply ih") };
-            // Since `docs/app-by-head-type-design.md` the application is
+            // Since `docs/elaborator/app-by-head-type-design.md` the application is
             // `app@` and carries no annotation to copy a payload into; the
             // children vector's type is the case tree's motive's domain.
             let cs_ty = match &**fun {
@@ -4055,7 +4055,7 @@ theorem chain_is_k(k: Nat): chain(k) = k { refl }
 
         // -- the stored template's own Ψ frame -------------------------------
 
-        /// `docs/telescoped-record-projections-design.md` §2.1: a stored
+        /// `docs/elaborator/telescoped-record-projections-design.md` §2.1: a stored
         /// `TyCodeFn` is read through a rescoping, because it was computed
         /// before its own binding was pushed.
         mod stale_template {
@@ -4315,7 +4315,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
         /// receiver itself — as a **chain** (`fst` of a pair whose first
         /// component is `ty`), because the boundary keeps the inline walk at a
         /// *bare* binder and takes the reference at a chain
-        /// (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5). These probes
+        /// (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5). These probes
         /// are about the reference, so they hold one.
         fn receiver(ty: &Type, l: &Level) -> (Cx, Rc<Term>) {
             let mut cx = Cx::empty();
@@ -4360,7 +4360,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
                 );
             }
             // `Dep<A>(n)`'s spine **is** dependent, and since
-            // `docs/telescoped-record-projections-design.md` §3 that is the
+            // `docs/elaborator/telescoped-record-projections-design.md` §3 that is the
             // fourth cell rather than a decline: the closed triple with the
             // declaration's own `Θ` in front. The tail family is the
             // discriminator — the simple telescoped device writes its tails
@@ -4533,7 +4533,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
             let r = GeneratedDefs(&e.el).respell_ty(&acx, &open).expect("the open instance respells");
             let mut cx = acx.clone();
             // A chain, not the bare binder — the boundary keeps the walk at a
-            // bare `Var` (`docs/x86-scaling-rail-out-of-fuel-design.md` §2.5).
+            // bare `Var` (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5).
             let unit = || Rc::new(Type::Unit { level: Level::Zero });
             cx.push(
                 "#v".into(),
@@ -4628,7 +4628,7 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
 
         #[test]
         fn the_reference_is_minted_at_a_chain_and_not_at_a_binder() {
-            // `docs/x86-scaling-rail-out-of-fuel-design.md` §2.5: the boundary
+            // `docs/archive/x86-scaling-rail-out-of-fuel-design.md` §2.5: the boundary
             // is on shapes that survive substitution. A bare binder is exactly
             // what a use site replaces, so it keeps the walk; a chain over one
             // is §13.1's measured payer and keeps the reference; a computed
@@ -4666,7 +4666,7 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
         #[test]
         fn a_record_field_type_and_its_use_site_spell_a_computed_receiver_alike() {
             // The x86 rail's shape in a dozen lines
-            // (`docs/x86-scaling-rail-out-of-fuel-design.md` §1): a record
+            // (`docs/archive/x86-scaling-rail-out-of-fuel-design.md` §1): a record
             // whose later field type reads a field of an **earlier** one,
             // constructed at a *computed* state — so the declaration's
             // declaration's spelling meets a global-headed receiver while the
@@ -4721,7 +4721,7 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
 
         // -- the dependent telescoped device --------------------------------
 
-        /// `docs/telescoped-record-projections-design.md` §3/§4: the fourth
+        /// `docs/elaborator/telescoped-record-projections-design.md` §3/§4: the fourth
         /// cell of the projection table — the closed `recfam`/`proj`/`tail`
         /// triple with the declaration's own `Θ` in front — and §2.2/§2.3's
         /// two extensions to the hole matcher, which are its prerequisites.
@@ -5091,7 +5091,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
                 // spelling-design.md` §3). At a *closed* argument the subject
                 // spells the same parameter two ways: a binder's type is a
                 // **structural read** and keeps the inline lowering
-                // (`docs/annotation-component-respell-design.md` §2.5's own
+                // (`docs/elaborator/annotation-component-respell-design.md` §2.5's own
                 // rule), while the type argument of `idty(a)` is an annotation
                 // and went through the chokepoint, so it is the reference.
                 // `code_of` of the first is `TmSum(…)` and the second is
@@ -5147,7 +5147,7 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
             #[test]
             fn a_type_argument_arriving_as_a_quote_is_now_seen_through() {
                 // **Flipped 2026-09-16** by
-                // `docs/instance-match-quote-arm-design.md`. This test was
+                // `docs/elaborator/instance-match-quote-arm-design.md`. This test was
                 // `a_type_argument_arriving_as_a_quote_still_declines`, and it
                 // pinned the boundary the *name* arm could not reach: a type
                 // argument that arrives as a code literal (`El «Nat»`) against
@@ -5233,13 +5233,13 @@ record ByCodeLk<A> { a: A, ok: idty(a) = a }
             #[test]
             fn the_axes_on_a_record_whose_type_argument_is_a_quote() {
                 // The quote arm on real source
-                // (`docs/instance-match-quote-arm-design.md` §5 item 8).
+                // (`docs/elaborator/instance-match-quote-arm-design.md` §5 item 8).
                 // `ByCode<Nat>`'s `A` argument has no name to take, so before
                 // this arm every one of these reads fell to `project_field`'s
                 // `Fst`/`Snd` walk. The four axes: a **literal** receiver (an
                 // assembled record returned by a `fn` and read through, the
                 // idiom the amendment to §7 item 7 of
-                // `docs/closed-argument-and-parameter-domain-spelling-design.md`
+                // `docs/elaborator/closed-argument-and-parameter-domain-spelling-design.md`
                 // settled on) and a **neutral** one; an **open** element type
                 // beside the closed one; a **checking** position, where a
                 // wrong field type is a rejection and not a different term;
@@ -5281,7 +5281,7 @@ theorem c_checking_open<A>(c: ByCode<A>): idty(c.a) = c.a { c.ok }
                 // It is **not** empty, and asserting that it were would pin
                 // someone else's defect to this test (the 2026-09-15
                 // amendment to §7 item 7 of
-                // `docs/closed-argument-and-parameter-domain-spelling-design.md`,
+                // `docs/elaborator/closed-argument-and-parameter-domain-spelling-design.md`,
                 // `issues/emission-walker-residual-sites`): every finding is an
                 // `App`'s `dom`/`cod` carrying the boxed `El ⌜Nat⌝` literal,
                 // which is the quote layer's standing residue and is exactly

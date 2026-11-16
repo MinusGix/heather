@@ -4,7 +4,7 @@
 // recursion on `xs` rather than as an inductive relation: the textbook
 // relation (nil, skip, swap, trans) is a family over two list indices whose
 // constructors compute their indices (`x :: l1 ++ l2`), which the indexed
-// family generator refuses (docs/inductive-indexed-lowering.md §1). The
+// family generator refuses (docs/inductives/inductive-indexed-lowering.md §1). The
 // recursive definition reads one element at a time:
 //
 //   Perm(Nil, ys)       — `ys` is empty;

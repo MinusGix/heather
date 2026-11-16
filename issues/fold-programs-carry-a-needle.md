@@ -7,7 +7,7 @@ updated: 2026-10-01
 ---
 
 The read profile's programs are folds now (`read_program`'s `CountProgram`
-and `FieldsProgram`, docs/automatic-author-surface-design.md §2.2). A fold step
+and `FieldsProgram`, docs/automatic-author-surface-design.md@4acf2fe §2.2). A fold step
 reads no needle, but the process still carries one:
 
 - the setup loads it into RCX (`mov rcx, 0`);
@@ -24,4 +24,4 @@ rather than as a refactor on its own.
 
 ## Log
 
-- 2026-10-01: Closed by deletion (docs/native-stream-filter-design.md): every read-profile program is now a stream filter, whose process (elf64_read_filter) has no needle register, and the state process that carried it is gone.
+- 2026-10-01: Closed by deletion (docs/archive/native-stream-filter-design.md): every read-profile program is now a stream filter, whose process (elf64_read_filter) has no needle register, and the state process that carried it is gone.

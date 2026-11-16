@@ -31,9 +31,9 @@ procedures.
 ## Reading
 
 - Cruz-Filipe, Heule, Hunt, Kaufmann, Schneider-Kamp, *Efficient Certified
-  RAT Verification*, CADE 2017 — `docs/1612.02353.pdf` (the LRAT format).
+  RAT Verification*, CADE 2017 — `docs/papers/1612.02353.pdf` (the LRAT format).
 - Szeider, *Streaming LRAT Certificates into Lean Theorems* (2026) —
-  `docs/2607.00815.pdf` (a resumable, streaming checker in Lean core).
+  `docs/papers/2607.00815.pdf` (a resumable, streaming checker in Lean core).
 
 ## Acceptance (first round, investigation)
 
@@ -53,5 +53,5 @@ before a generator is worth writing.
 
 ## Log
 
-- 2026-10-25: Second customer, from `docs/multi-width-bitvector-survey.md` §5 (Bhat et al., OOPSLA 2026, `docs/3839511.pdf`). A multi-width claim bounded by a global width o (all widths below 65, say) reduces to one QF_BV query at width o by masks, instead of o^k queries, one per width assignment. The reduction's correctness (the paper's Lemma 4.2) is a structural induction that Heather can prove once, where the paper trusts an unverified translator. What remains is exactly this issue's decision. Rung B of [[bitvec-width-generic-decision]] (k-induction over transducers) also needs it. Benchmarks for the first round should include a wide, mask-heavy query.
-- 2026-11-05: gardener: cites a file it shares with [[function-ir-narrow-arithmetic]] (`docs/multi-width-bitvector-survey.md`).
+- 2026-10-25: Second customer, from `docs/surveys/multi-width-bitvector-survey.md` §5 (Bhat et al., OOPSLA 2026, `docs/papers/3839511.pdf`). A multi-width claim bounded by a global width o (all widths below 65, say) reduces to one QF_BV query at width o by masks, instead of o^k queries, one per width assignment. The reduction's correctness (the paper's Lemma 4.2) is a structural induction that Heather can prove once, where the paper trusts an unverified translator. What remains is exactly this issue's decision. Rung B of [[bitvec-width-generic-decision]] (k-induction over transducers) also needs it. Benchmarks for the first round should include a wide, mask-heavy query.
+- 2026-11-05: gardener: cites a file it shares with [[function-ir-narrow-arithmetic]] (`docs/surveys/multi-width-bitvector-survey.md`).

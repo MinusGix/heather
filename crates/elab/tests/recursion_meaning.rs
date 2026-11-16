@@ -13,7 +13,7 @@
 //!   import where the measure route is not available;
 //! - a recursive `match` **off the body's result**, or under a branch on its
 //!   parameter, is refused at its recursive call. The measure route has no
-//!   unfolding equation for those shapes (docs/decreases-unfolding-design.md §3).
+//!   unfolding equation for those shapes (docs/language/recursion/decreases-unfolding-design.md §3).
 //!
 //! Every accepted case is pinned by what it *computes*, at a literal (`refl`)
 //! and, for the fallback, through its unfolding equation at a symbolic one.
@@ -86,7 +86,7 @@ fn refused(src: &str, needle: &str) {
 // -- Reading the parameter: compiled at the top, else by measure --------------
 //
 // A `Nat` recursion that reads its parameter is compiled at the top
-// (docs/recursion-at-the-top-design.md §5): it unfolds by conversion, and its
+// (docs/language/recursion/recursion-at-the-top-design.md §5): it unfolds by conversion, and its
 // `f_unfold` is generated as the measure route's was. The measure is the
 // fallback where that does not elaborate (a call two below, a `List`).
 

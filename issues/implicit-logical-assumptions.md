@@ -16,7 +16,7 @@ one concrete provider for that context. An `axiom` remains separate: it is a
 named, irreducible trust leaf used only when somebody deliberately closes a
 conditional world.
 
-The earlier sketch in `docs/implicit-logical-assumptions-design.md` proposed
+The earlier sketch in `docs/language/implicit-logical-assumptions-design.md` proposed
 an axiom-specific fallback for selected `:= infer` parameters. This issue
 supersedes that part of the sketch: there is only `infer`. Axioms are never an
 ambient candidate set merely because they are visible or imported. Evidence
@@ -475,8 +475,8 @@ types and constructors. Profiles, file scope, section-level type parameters,
   be eliminated into another squash. It should therefore leave closed
   canonicity at relevant types intact, and closed programs keep computing.
   This is a conjecture, proposed for checking in heather-coq. Felicissimo et
-  al., LICS 2026 (`docs/LIPIcs.LICS.2026.41.pdf`) prove the analogous result
+  al., LICS 2026 (`docs/papers/LIPIcs.LICS.2026.41.pdf`) prove the analogous result
   for irrelevant axioms that hold in a set model. For a classical profile, it
   argues for stating providers squashed whenever a squashed statement serves the
   consumer.
-- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/LIPIcs.LICS.2026.41.pdf`).
+- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/papers/LIPIcs.LICS.2026.41.pdf`).

@@ -34,11 +34,15 @@ fn checker() -> heather_elab::Elaborator {
         ("function_ir_lower_reads", include_str!("../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
         // The lending laws the calls module's contract is stated under.
         ("x86_64_lending", include_str!("../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
+        ("x86_64_frame", include_str!("../../../lib/std/arch/x86_64/x86_64_frame.hthr")),
         // A call over views: the machine's laws of a lent window, and what the
         // lowering checks of a view before it lends it.
         ("x86_64_views", include_str!("../../../lib/std/arch/x86_64/x86_64_views.hthr")),
         ("function_ir_lower_views", include_str!("../../../lib/native/function_ir/function_ir_lower_views.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
+        // What a pass owes for a program lowered in another's place
+        // (`ProgramRewrites`), which the return theorems are stated through.
+        ("function_ir_stage", include_str!("../../../lib/native/function_ir/function_ir_stage.hthr")),
         ("function_ir_compile", include_str!("../../../lib/native/function_ir/function_ir_compile.hthr")),
     ])
 }

@@ -8,7 +8,7 @@ updated: 2026-10-30
 ---
 
 A warm check now spends most of its time moving imports, not checking them.
-After moved replays were vouched for whole (`docs/module-dag-design.md` §13,
+After moved replays were vouched for whole (`docs/infrastructure/module-dag-design.md` §13,
 2026-10-30), a warm check of `lib/_tests/std/tactic/mono_tests.hthr` (release,
 cloud box, width one) is about 3.7 s, of which `image_relocate_ns` is about
 2.3 s, decode about 0.5 s, and everything else under 0.8 s. Stack samples sit
@@ -28,7 +28,7 @@ indices into a set, which a memo hit cannot change. Two levers, in order:
    payload of a `ModuleDelta::relocate`, not one per binding: decoded
    bindings share subterms with each other.
 2. **Move less often.** A closure of `n` modules replays about twice that
-   many images (`docs/module-dag-design.md` §6: 43 replays for 26 modules
+   many images (`docs/infrastructure/module-dag-design.md` §6: 43 replays for 26 modules
    here), and each moved replay rewrites its image again. Keeping a moved
    delta per (image, map) for the process, or reaching more worlds by
    extending a snapshot instead of rebuilding, removes rewrites rather than

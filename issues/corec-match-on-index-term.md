@@ -39,5 +39,5 @@ mentions the scrutinee (literal and neutral scrutinee).
 
 ## Log
 
-- 2026-11-06: Fixed 2026-11-06: corec_check reads a match arm's refined index off the step type's named shape (step_index) and builds the arm's node at it (MParts::reindexed). Both examples are probes in lib/_tests/std/itree/coitree_tests.hthr (sp_self, iter_self); Rust acceptance + controls in crates/elab/tests/codata_indexed.rs. Inline signatures (type args above Ty 0) still fall through; docs/codata-elaborator-design.md §5.2.
+- 2026-11-06: Fixed 2026-11-06: corec_check reads a match arm's refined index off the step type's named shape (step_index) and builds the arm's node at it (MParts::reindexed). Both examples are probes in lib/_tests/std/itree/coitree_tests.hthr (sp_self, iter_self); Rust acceptance + controls in crates/elab/tests/codata_indexed.rs. Inline signatures (type args above Ty 0) still fall through; docs/inductives/codata-elaborator-design.md §5.2.
 - 2026-11-06: Residue (inline signatures) filed as [[corec-match-on-index-term-inline-sig]].

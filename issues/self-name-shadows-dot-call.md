@@ -21,7 +21,7 @@ the dot call is refused as ambiguous (a residue of
 on its own". The other reading is the theorem's own name. While its first
 parameter was `x: Rat`, receiver-member resolution discarded it, because its
 subject carrier (`Rat`) differs from the receiver's (`Int`)
-(docs/receiver-member-resolution-design.md §2). With the endpoints implicit,
+(docs/language/classes/receiver-member-resolution-design.md §2). With the endpoints implicit,
 the subject is the first explicit parameter `h: x <= y`, whose carrier is not
 known, so the ambiguity stays.
 
@@ -46,4 +46,4 @@ Possible fixes, to decide:
 
 ## Log
 
-- 2026-10-20: Fixed: the subject test widens from "known carrier differs" to "every type the subject's type can reduce to is disjoint from the receiver's carrier" (`subject_excludes`, docs/receiver-member-resolution-design.md §2). A closed definition is read at its own parameters, `case`/`elim_Nat` stuck on a neutral are read branch by branch (an `elim_Nat` recursive result adds nothing), Π/universe/equation/Unit/Empty are disjoint from every carrier; anything else declines. Applies to the self-reference, committed globals and locals alike. `rat.hthr` spells both main scaling calls as dot calls (the two at a literal `0` receiver stay qualified, since a bare `0` receiver defaults to `Nat`); `type_members` pins three positives and two negative controls (a family with a `Nat` branch, a local family `F: Nat -> Type`).
+- 2026-10-20: Fixed: the subject test widens from "known carrier differs" to "every type the subject's type can reduce to is disjoint from the receiver's carrier" (`subject_excludes`, docs/language/classes/receiver-member-resolution-design.md §2). A closed definition is read at its own parameters, `case`/`elim_Nat` stuck on a neutral are read branch by branch (an `elim_Nat` recursive result adds nothing), Π/universe/equation/Unit/Empty are disjoint from every carrier; anything else declines. Applies to the self-reference, committed globals and locals alike. `rat.hthr` spells both main scaling calls as dot calls (the two at a literal `0` receiver stay qualified, since a bare `0` receiver defaults to `Nat`); `type_members` pins three positives and two negative controls (a family with a `Nat` branch, a local family `F: Nat -> Type`).

@@ -46,7 +46,7 @@ the match-motive synthesis does; it is not needed to get the benefit.
 - `err_in_nonpos` derived from `err_in_nonneg` through negation, or a note
   in this issue saying why the slopes make that longer than the copy.
 
-Related: docs/stdlib-math-awkwardness-survey.md §9.
+Related: docs/surveys/stdlib-math-awkwardness-survey.md §9.
 
 ## Log
 
@@ -55,7 +55,7 @@ Related: docs/stdlib-math-awkwardness-survey.md §9.
   swap, le)` (lib/std/tactic/wlog.hthr) abstracts `m` and `n` out of the
   goal into `P` and applies the carrier's `T::wlog_le`, with the two cases
   written as unannotated `λ`s checked where the lemma puts them. Host side
-  (docs/host-elaboration-interface-design.md §26): an `Abstract` request,
+  (docs/metaprogramming/host-elaboration-interface-design.md §26): an `Abstract` request,
   and quoted arguments held as surface syntax when they infer no type.
   `CReal::atanh_regular` is the customer: one arm plus a five-line swap.
   Probes in lib/_tests/std/tactic/wlog_tests.hthr. The sign version

@@ -1,5 +1,5 @@
 //! Records: named-field Σ sugar and field access
-//! (`docs/surface-records.md` §10). Tracking issue: `issues/surface-records.md`.
+//! (`docs/language/surface-records.md` §10). Tracking issue: `issues/surface-records.md`.
 //!
 //! Nothing here touches the kernel. A record is a one-constructor tier-0
 //! inductive, so every term below is emitted by the generator that already
@@ -328,7 +328,7 @@ fn the_method_desugaring_still_works() {
         theorem absurd_method(a: Nat, p: Some(a) = None): 0 = 1 { p.absurd() }
 
         // `.cong(f)` over an arbitrary function — the deferred spelling that
-        // `docs/constructor-function-values.md` closed — and `calc`, whose
+        // `docs/language/constructor-function-values.md` closed — and `calc`, whose
         // desugaring builds an explicit `@trans` spine. `cong` is not in the
         // prelude (its function argument is not inferable from the proof), so
         // it is declared here, as the function-types suite does.
@@ -374,7 +374,7 @@ fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
     // at all: since 2026-08-17 a motive-less `match` takes its motive from a
     // non-binding arm (`issues/match-arg-of-polymorphic-callee-needs-motive.md`),
     // and since 2026-10-31 from any arm whose type lives outside its binders
-    // (docs/dependent-match-compiler-design.md §6), so the `mk()` arms this
+    // (docs/language/matching/dependent-match-compiler-design.md §6), so the `mk()` arms this
     // probe used to use now elaborate — and a receiver that infers is not a
     // receiver nobody has looked at. An unannotated `λ` infers nothing.
     let e = bad(r#"
@@ -563,7 +563,7 @@ fn an_inductive_is_not_a_record() {
 
 // A record's constructor is a real constructor (§2.1), so everything an
 // inductive's constructor can do it can do — including being a function value
-// (docs/constructor-function-values.md).
+// (docs/language/constructor-function-values.md).
 #[test]
 fn a_records_constructor_is_an_ordinary_constructor() {
     ok(r#"
@@ -571,7 +571,7 @@ fn a_records_constructor_is_an_ordinary_constructor() {
         fn ap<A, B>(f: A -> B, x: A) -> B { f(x) }
         fn positional() -> Box<Nat> { Box(3) }
         // A constructor as a function *value*, in checking position — the
-        // half `docs/constructor-function-values.md` §2 landed. (A *bare*
+        // half `docs/language/constructor-function-values.md` §2 landed. (A *bare*
         // unsaturated constructor in inference position is still open there,
         // which is why the result is annotated by `boxed`'s return type
         // rather than projected straight out of the call.)

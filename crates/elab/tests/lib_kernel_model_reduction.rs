@@ -1,7 +1,7 @@
 //! `lib/kernel_model/kernel_reduction.hthr` — a reference model of the
 //! kernel's weak-head reduction and the substitution property the fold
 //! classifier (`crates/kernel/src/eval/probe.rs`) relies on
-//! (`docs/kernel-model-design.md`, milestone `hih-kernel-model`): the
+//! (`docs/kernel/kernel-model-design.md`, milestone `hih-kernel-model`): the
 //! refusal that needs the checker. The model run at literals, the probe lemma
 //! at open values, and the `¬` theorems that each hypothesis is needed are
 //! `lib/_tests/kernel_model/kernel_reduction_tests.hthr`, which the

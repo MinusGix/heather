@@ -1,5 +1,5 @@
 //! Acceptance for indexed families, route 1 — the generator, end to end
-//! (docs/inductive-indexed-lowering.md §9 item 8; the hand prototype behind
+//! (docs/inductives/inductive-indexed-lowering.md §9 item 8; the hand prototype behind
 //! it is `indexed_route1.rs`).
 //!
 //! Every declaration below is lowered to the index-recursive family form and
@@ -180,7 +180,7 @@ fn branching_tree_mirror_and_involution() {
 fn rejections_carry_their_messages() {
     // A computed result index and a deep pattern used to be rejections naming
     // route 2b as "not yet generated". Route 2b **is** generated now
-    // (docs/inductive-fording-lowering.md; the observers are
+    // (docs/archive/inductive-fording-lowering.md; the observers are
     // `indexed_route_2b_gen.rs` §13.2 items 9 and 11), so both declarations
     // land — by fording, not by this scheme. What stays a rejection is what
     // neither fragment covers, and the list below is that.
@@ -197,9 +197,9 @@ fn rejections_carry_their_messages() {
     // A bare-variable index in *every* constructor is not an index at all: it
     // is uniform, so it is a **parameter**, and it lowers by substitution with
     // none of fording's machinery. This message used to send it toward route
-    // 2b; `docs/surface-existential-investigation.md` §C.7 identified that as
+    // 2b; `docs/language/surface-existential-investigation.md` §C.7 identified that as
     // the wrong steer, and `record Q(n: Nat)` is now the grammar it names
-    // (docs/surface-value-parameters.md).
+    // (docs/language/surface-value-parameters.md).
     let m = elab_err("inductive Q : (n: Nat) -> Type { Mk(n: Nat) : Q(n) }");
     assert!(m.contains("a **parameter**, not an index"), "{m}");
     assert!(m.contains("record Q(n: Nat)"), "{m}");
@@ -255,7 +255,7 @@ fn wrong_indices_are_rejected() {
 // at 0, scrutinee at 1) both do real work — everything else in this file is
 // uniformly level 0 and would not notice a dropped join.
 //
-// `P` is **unparameterized**, so since `docs/family-type-code-defs-design.md`
+// `P` is **unparameterized**, so since `docs/inductives/family-type-code-defs-design.md`
 // §6 its occurrences are `El l (P#fam^δ i)` rather than the inlined
 // `elim_Nat` — this is the fixture that crosses the new spelling with a
 // nonzero level and an open element type (`x: A` under the field `A: Type`),

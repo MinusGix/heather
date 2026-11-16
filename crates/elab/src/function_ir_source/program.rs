@@ -19,7 +19,7 @@
 //! only where the connective needs it.
 //!
 //! A loop, a recursion on a fuel or a `decreases` recursion on a word's
-//! `toNat`, is a `runtime fn`'s (docs/runtime-fn-setups-design.md §16.11):
+//! `toNat`, is a `runtime fn`'s (docs/native/runtime-fn-setups-design.md §16.11):
 //! this reflector refuses one, naming the marker. It stays for tests through
 //! `Bool` helpers, which the default setup does not compile yet, and for
 //! `heather reflect`.
@@ -62,7 +62,7 @@ pub struct ProgramFunction {
     pub decided: bool,
     /// A test calls a `Bool` helper, whose body is inlined: the default
     /// `runtime fn` setup does not compile that yet (`compile-x86` keeps
-    /// such a program on this reflector, docs/runtime-fn-setups-design.md
+    /// such a program on this reflector, docs/native/runtime-fn-setups-design.md
     /// §16.9).
     pub helped: bool,
 }
@@ -254,7 +254,7 @@ impl Program<'_> {
             .ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not a function of at most six BitVec(64) parameters returning BitVec(64)")))?;
         let (_, term) = self.body_of(at, arity)?;
         if self.measured(at, &name, &term) {
-            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
+            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/native/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
         }
         self.stack.push(at);
         let parameters: Vec<Port> = (0..arity as u64).map(|id| Port { id, width: 64 }).collect();
@@ -409,7 +409,7 @@ impl Body {
         }
         if program.loop_signature(at).is_some() {
             let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
-            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
+            return unsupported(&format!("`{name}` is a loop: mark it `runtime fn {}` (docs/native/runtime-fn-setups-design.md §16.11)", name.rsplit("::").next().unwrap_or(&name)));
         }
         let Some(arity) = program.word_signature(at) else {
             let name = NameLookup(program.elaborator).global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
@@ -624,8 +624,21 @@ fn absolute(term: &Term, caller: usize) -> Option<usize> {
 /// A nullary global of type `List<Nat>`, evaluated and read back: how the
 /// compiler learns the bytes and offsets `lower_program` computed, which
 /// the certificate then states as literals and the kernel checks.
+///
+/// With `HEATHER_READ_TRACE` set, each read reports on stderr the evaluator
+/// steps it took, its time, and the process's peak resident and mapped
+/// memory during it: a read keeps what it evaluates until it ends, so the
+/// one that holds a compile's memory is the one with the steps.
 pub fn evaluate_numbers(elaborator: &Elaborator, name: &str) -> Result<Vec<u64>, SourceError> {
-    with_reads(elaborator, |reads| reads.numbers(name))
+    if std::env::var_os("HEATHER_READ_TRACE").is_none() { return with_reads(elaborator, |reads| reads.numbers(name)); }
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    let (started, steps) = (std::time::Instant::now(), heather_kernel::stats::snapshot().eval_steps);
+    let out = with_reads(elaborator, |reads| reads.numbers(name));
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let field = |key: &str| status.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).unwrap_or(0) / 1024;
+    eprintln!("read {name}: {} steps, {} ms, peak {} MB resident, {} MB mapped", heather_kernel::stats::snapshot().eval_steps - steps,
+        started.elapsed().as_millis(), field("VmHWM"), field("VmSize"));
+    out
 }
 
 /// Reads of one world that share what they force: `read` is given a

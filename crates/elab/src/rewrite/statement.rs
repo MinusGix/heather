@@ -1,5 +1,5 @@
 //! A simplifier's step along a law between statements, `P ↔ Q`
-//! (`docs/simp-design.md` §12, `issues/simp-iff-laws.md`).
+//! (`docs/tactics/simp-design.md` §12, `issues/simp-iff-laws.md`).
 //!
 //! The term walk (`relation.rs`) rewrites terms inside a goal, across term
 //! operations that carry congruence evidence. A statement's contexts are
@@ -423,7 +423,7 @@ impl Walk<'_, '_, '_> {
             dom: Rc::clone(dom),
             cod: Rc::new(body.iff_ty),
         };
-        let level = Level::join(dom_level.clone(), body.iff_level);
+        let level = Level::max(dom_level.clone(), body.iff_level);
         // The two predicates, `λ x. ⌜B(x)⌝` and `λ x. ⌜B'(x)⌝`.
         let (Some(before), Some(after)) = (crate::code::code_of(cod), crate::code::code_of(&body.to)) else { return Ok(None) };
         let predicate = |w: &mut Self, code: Term| {

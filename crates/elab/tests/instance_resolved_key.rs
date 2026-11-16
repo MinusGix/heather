@@ -1,5 +1,5 @@
 //! The instance registry's key is a **resolved carrier**, never a spelling
-//! (`docs/instance-resolved-key-design.md`,
+//! (`docs/elaborator/instance-resolved-key-design.md`,
 //! `issues/instance-key-collides-across-modules.md`).
 //!
 //! Five claims, and each one has the negative that tells it apart from the

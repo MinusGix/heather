@@ -285,7 +285,7 @@ theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 }
 
 // ---------------------------------------------------------------------------
-// What a call may store (docs/native-one-compiler-design.md §2.1)
+// What a call may store (docs/native/native-one-compiler-design.md §2.1)
 
 // One store a function entered at stack offset `i` may make: a word of its
 // own room, below its return address.
@@ -296,7 +296,8 @@ fn Stack::Own<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack:
 // What a call entered at `i` may have done to memory: stores of its own,
 // one after another. What a caller keeps across the call is what such
 // stores leave: its words at and above `i` (`wrote_unchanged`), the code
-// (`wrote_resident`), and anything else stable under them.
+// (`wrote_resident`), and anything else stable under them (`Stack::Stable`,
+// `wrote_frame`).
 fn Stack::Wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
     Star(λ (m: M) (n: M) => stack.Own(i, m, n), before, after)
 }
@@ -333,61 +334,147 @@ theorem Stack::wrote_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
         λ m n step => Exists(step.witness, ⟨omega(step.proof.left, le), step.proof.right⟩), before, after, wrote)
 }
 
+// ---------------------------------------------------------------------------
+// The frame rule: what a call did not write is still there
+// (issues/compiled-call-frame-rule.md)
+
+// `P` holds of memory after a word is stored below `i`, if it held before:
+// what a call entered at `i` leaves true. What a caller keeps across a call
+// is said once, of any such predicate (`wrote_frame`); with spans lent to
+// write it is `Stack::StableIn` (x86_64_lending).
+fn Stack::Stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, P: M → Type) → Type {
+    (memory: M) → (k: Nat) → k + 8 <= i → (word: BitVec(64)) → P(memory) →
+        P(stack.writes.store(memory, stack.at(k), word_bytes(word)))
+}
+
+// The rule: what held before a call's own stores and is stable under one
+// holds after them. The predicate is read off the proof it is stable.
+theorem Stack::wrote_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, stable: stack.Stable(i, P), before, after: M, wrote: stack.Wrote(i, before, after), held: P(before)): P(after) {
+    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), P,
+        λ m n was step => j(sym(step.proof.right.proof), λ x _ => P(x),
+            stable(m, step.witness, step.proof.left, step.proof.right.witness, was)),
+        before, after, held, wrote)
+}
+
+// Two stable predicates are stable together.
+theorem Stack::stable_and<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, {P, Q: M → Type},
+    first: stack.Stable(i, P), second: stack.Stable(i, Q)): stack.Stable(i, λ (m: M) => P(m) ∧ Q(m)) {
+    λ memory k below word held => ⟨first(memory, k, below, word, held.left), second(memory, k, below, word, held.right)⟩
+}
+
+// A fact that is not about memory rides along, and the stable predicate may
+// lean on it: how a frame speaks of the offset the call was entered at
+// ("the word at `k`, when `k` is at or above it").
+theorem Stack::stable_given<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, {A: Type},
+    {P: M → Type}, stable: A → stack.Stable(i, P)): stack.Stable(i, λ (m: M) => A ∧ P(m)) {
+    λ memory k below word held => ⟨held.left, stable(held.left, memory, k, below, word, held.right)⟩
+}
+
+// Stable under the stores of a call entered higher, stable under those of
+// one entered lower: a callee's callee stores less.
+theorem Stack::stable_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat, le: d <= i,
+    {P: M → Type}, stable: stack.Stable(i, P)): stack.Stable(d, P) {
+    λ memory k below word held => stable(memory, k, omega(below, le), word, held)
+}
+
+// A word of the stack at or above `i` is stable: the caller's frame, the
+// return address at `i` itself.
+theorem Stack::stable_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, k: Nat,
+    above: i <= k, fits: k + 8 <= stack.size, value: Option<BitVec(64)>):
+    stack.Stable(i, λ (m: M) => read_word(data, m, stack.at(k)) = value) {
+    λ memory own below word held => trans(stack.apart(memory, own, k, omega(below, above, fits), fits, Inl(omega(below, above)), word), held)
+}
+
+// So is code where it lies.
+theorem Stack::stable_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64)): stack.Stable(i, λ (m: M) => CodeResident(fetch, m, bytes, at)) {
+    λ memory k below word held => stack.keeps_code(memory, k, omega(below, room), word, bytes, at, held)
+}
+
 // The caller's words at and above `i`, the return address included, are as
 // they were.
 theorem Stack::wrote_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
     room: i <= stack.size, before, after: M, wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
-    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => stack.Unchanged(i, before, m),
-        λ m n held step => j(sym(step.proof.right.proof), λ x _ => stack.Unchanged(i, before, x),
-            stack.unchanged_trans(i, before, m, stack.writes.store(m, stack.at(step.witness), word_bytes(step.proof.right.witness)), held,
-                stack.store_below(m, step.witness, i, omega(step.proof.left, room), step.proof.left, step.proof.right.witness))),
-        before, after, stack.unchanged_refl(i, before), wrote)
+    λ k above fits => stack.wrote_frame(i, stack.stable_word(i, k, above, fits, read_word(data, before, stack.at(k))),
+        before, after, wrote, refl)
 }
 
 // Code stays where it was.
 theorem Stack::wrote_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
     room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64), before, after: M, wrote: stack.Wrote(i, before, after),
     resident: CodeResident(fetch, before, bytes, at)): CodeResident(fetch, after, bytes, at) {
-    Star::invariant(λ (m: M) (n: M) => stack.Own(i, m, n), λ (m: M) => CodeResident(fetch, m, bytes, at),
-        λ m n held step => j(sym(step.proof.right.proof), λ x _ => CodeResident(fetch, x, bytes, at),
-            stack.keeps_code(m, step.witness, omega(step.proof.left, room), step.proof.right.witness, bytes, at, held)),
-        before, after, resident, wrote)
+    stack.wrote_frame(i, stack.stable_resident(i, room, bytes, at), before, after, wrote, resident)
+}
+
+// `P` holds of `memory` through a call entered at `i`: now, and after
+// whatever the call stores of its own. It is the rule's conclusion held
+// for later, for a predicate known stable only from here on.
+fn Stack::Through<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, P: M → Type,
+    memory: M) → Type {
+    (after: M) → stack.Wrote(i, memory, after) → P(after)
+}
+
+// A stable predicate that holds, holds through the call.
+theorem Stack::stable_through<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, stable: stack.Stable(i, P), memory: M, held: P(memory)): stack.Through(i, P, memory) {
+    λ after wrote => stack.wrote_frame(i, stable, memory, after, wrote, held)
+}
+
+// What holds through a call holds now, still holds through it after some
+// of its stores, and holds through whatever it calls, which is entered
+// lower.
+theorem Stack::through_now<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, memory: M, through: stack.Through(i, P, memory)): P(memory) {
+    through(memory, stack.wrote_refl(i, memory))
+}
+
+theorem Stack::through_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, before, after: M, through: stack.Through(i, P, before), wrote: stack.Wrote(i, before, after)):
+    stack.Through(i, P, after) {
+    λ later more => through(later, stack.wrote_trans(i, before, after, later, wrote, more))
+}
+
+theorem Stack::through_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat,
+    le: d <= i, {P: M → Type}, memory: M, through: stack.Through(i, P, memory)): stack.Through(d, P, memory) {
+    λ after wrote => through(after, stack.wrote_deeper(d, i, le, memory, after, wrote))
 }
 
 // ---------------------------------------------------------------------------
-// A lent span (docs/native-library-exports-design.md §4.2)
+// A lent span (docs/native/native-library-exports-design.md §4.2)
 
 // Bytes `xs` read at `a`, below the canonical boundary.
 fn Readable<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>) → Type {
     (a.toNat() + xs.len() <= Nat::pow(2, 47)) ∧ ((k: Nat) → k < xs.len() → data.read(memory, next_rip(a, k)) = xs.nth(k))
 }
 
-// A span is lent to a call entered at `i`: nothing the call may store
-// changes what it reads. Stated as stability and not as where the span
-// lies, so a load's proof compares no addresses: memory now is `Wrote`
-// from memory at entry, so the span reads its bytes here. Where it lies is
-// the memory model's to say (`DataRegion::lends`, x86_64_byte_memory).
+// A span is lent to a call entered at `i`: it reads its bytes through the
+// call (`Stack::Through`), so nothing the call may store changes what it
+// reads. Stated as that and not as where the span lies, so a load's proof
+// compares no addresses: memory now is `Wrote` from memory at entry, so
+// the span reads its bytes here. Where it lies is the memory model's to
+// say (`DataRegion::lends`, x86_64_byte_memory).
 fn Stack::Lends<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
     xs: List<BitVec(8)>, memory: M) → Type {
-    (after: M) → stack.Wrote(i, memory, after) → Readable(data, after, a, xs)
+    stack.Through(i, λ (m: M) => Readable(data, m, a, xs), memory)
 }
 
 // A lent span reads its bytes, stays lent across the call's own stores, and
 // is lent to whatever the call calls, which is entered lower.
 theorem Stack::lends_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
     xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): Readable(data, memory, a, xs) {
-    lent(memory, stack.wrote_refl(i, memory))
+    stack.through_now(i, memory, lent)
 }
 
 theorem Stack::lends_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
     xs: List<BitVec(8)>, before, after: M, lent: stack.Lends(i, a, xs, before), wrote: stack.Wrote(i, before, after)):
     stack.Lends(i, a, xs, after) {
-    λ later more => lent(later, stack.wrote_trans(i, before, after, later, wrote, more))
+    stack.through_after(i, before, after, lent, wrote)
 }
 
 theorem Stack::lends_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat, le: d <= i,
     a: BitVec(64), xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): stack.Lends(d, a, xs, memory) {
-    λ after wrote => lent(after, stack.wrote_deeper(d, i, le, memory, after, wrote))
+    stack.through_deeper(i, d, le, memory, lent)
 }
 
 // A register holding base plus index addresses the lent span's byte there,

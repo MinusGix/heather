@@ -1,5 +1,5 @@
 // Probes of `runtime fn` loops (lib/native/runtime/runtime.hthr,
-// docs/runtime-fn-setups-design.md §16.11): a recursion on a fuel and a
+// docs/native/runtime-fn-setups-design.md §16.11): a recursion on a fuel and a
 // `decreases` recursion on a word's `toNat`, with no proof written for them
 // here, and the loops a runtime fn refuses. Split from runtime_tests so that
 // each module checks cold under the library gate's rail. Tests, not library:
@@ -40,7 +40,7 @@ runtime fn halve(n: BitVec(64), d: Nat) → BitVec(64) decreases d {
 }
 
 // ---------------------------------------------------------------------------
-// Loops (docs/runtime-fn-setups-design.md §16.11): a recursion on a fuel and
+// Loops (docs/native/runtime-fn-setups-design.md §16.11): a recursion on a fuel and
 // a `decreases` recursion on a word's `toNat` lower to loops, their
 // instances resting on their equations (`refl` per word for a fuel; the
 // generated `f::ext` and `f::irrel` for a measure), and link as any callee.
@@ -76,6 +76,24 @@ runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
 }
 
 theorem count_down_runs(n, acc: BitVec(64)): program_eval(count_down::program, 0, [n, acc]) = count_down(n, acc) { count_down::agrees(n, acc) }
+
+// An `on` clause over a test nested under the one it reads: the body is
+// the inner `match` under the obligation's binding, applied, which the
+// reflector contracts as `View` does (it once answered "it is not a
+// `match`").
+runtime fn count_down_odd(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: 0 < n {
+        if odd: n.band(1) = 1 { count_down_odd(n - 1, acc + n) } else { acc }
+    } else {
+        acc
+    }
+    on ?dec1 := { let positive = h; bv_omega };
+}
+
+theorem count_down_odd_runs(n, acc: BitVec(64)): program_eval(count_down_odd::program, 0, [n, acc]) = count_down_odd(n, acc) {
+    count_down_odd::agrees(n, acc)
+}
+theorem count_down_odd_lit(): count_down_odd(7, 0) = 7 { refl }
 
 // A loop counting up in a word, its measure the distance to the bound: the
 // decrease is `bv_omega`'s, reading `h`, with no `on ?dec1`

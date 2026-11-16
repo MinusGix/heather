@@ -1,0 +1,1224 @@
+// The search for what a function's own tests already say
+// (docs/native/optimizer-design.md §5.1), and for the test worth making at its
+// entry. Nothing here is trusted or proved: what it finds is a plan the
+// replayer checks (`function_ir_replay.hthr`) by the rules of
+// `function_ir_rules.hthr`, and a guard `function_ir_guard.hthr` checks.
+//
+// One walk of a function keeps, for each word, the range its node and its
+// operands' ranges give it, and the rule's step that derives that range
+// (`Seen::pass`). A comparison whose operands' ranges lie apart is decided:
+// the walk writes the derivations the rule reads, then the rule, and a
+// conditional on the bit is its arm (`Plan::Arm`). An arm starts from what
+// its bit says of the comparison's operands (`Seen::taking`). A loop's body
+// starts from the ranges of the inputs its passes keep (`Seen::carried`).
+// Where a load or a store indexes by a comparison's left operand, the
+// decided bit is written after the comparison as a constant, which is what
+// the lowering reads the bound from.
+//
+// A word narrowed and widened again while its range is within the narrow
+// width is a move of it (`Seen::replaced`): the widening is dropped and the
+// move written, for the pass that reads through moves to take up. A load's
+// word is a byte, which the replayer's facts say of it unasked, so the two
+// resizes after a byte load go; an or's range is its operands' added, so
+// the two after four bytes joined go as well.
+//
+// A parameter that words are compared below is a length, and the least
+// value that would decide every such comparison met is the bound to test at
+// the function's entry (`Function::guard`). The compiler asks that of a
+// function once it is inlined and tidied, which is where its tests are, and
+// puts the test on the function as written (`Function::guard_over`,
+// `Function::find_guarded` in `function_ir_optimize.hthr`).
+//
+// A range bounds a word by constants, which decides nothing of an index a
+// caller computed. For those the walk keeps orders between words
+// (`Ordered`, after Bodik, Gupta and Sarkar's ABCD, "ABCD: eliminating
+// array bounds checks on demand", PLDI 2000: an index is in bounds where a
+// path of orders leads from it to the length, and here the path is the
+// derivation the replayer checks). A bit taken gives an order between its
+// comparison's operands (`Seen::ordered_by`); a word that is another and a
+// constant added is ordered with it where an order shows the sum did not
+// wrap; and a comparison is decided where the orders known join into the
+// one it asks (`Seen::ordered`).
+//
+// Where the words compared below a length are all one word and constants
+// added (a span: the bytes of a word read at `base`, `base + 1`, …), the
+// test worth making at the entry is of the base itself: that `base` and
+// the greatest constant added do not wrap, and stay below the length
+// (`span_tests`). The words the base is computed from are computed again
+// for the test, at new ids (`cone_renamed`); the pass that reads through
+// copies then finds the body's own computation of them a repeat
+// (`Step::Again`), so what the test says of its sum is said of the body's.
+//
+// Bytes loaded from a span and joined by shifts and ors are a word, and
+// one load reads a word (docs/native/optimizer-design.md §4.1). The walk keeps,
+// for a word, that it is so many bytes of a buffer from an index, shifted
+// (`Join`): a byte load starts one, a shift moves it, and an or of two
+// that are side by side in the buffer and in the word is the longer one,
+// where the orders known say the second starts where the first ends
+// (`Seen::meeting`). However the bytes were joined, the same fact is
+// reached. Four bytes unshifted are a load of four bytes swapped: where
+// the code has none, the walk asks for one (`Asked`,
+// `Function::find_worded` puts it), and where it has, the or that
+// completes the join is written as a move of that load's word, after
+// which nothing reads the byte loads. What the walk keeps of the buffers
+// it forgets where the replayer's facts do.
+//
+// A comparison's bit stays written as a constant after it where an access
+// reads its bound from it: a load or a store indexed by the comparison's
+// left, or one of several bytes whose last byte that is. A constant an
+// earlier walk wrote for a bit this one decides again goes
+// (`Seen::replaced`), so a test nothing reads any more is left for the
+// sweep.
+//
+// A range also says what a sum is. Where the operand's range has room for
+// the constant a sum adds, the sum is the two as numbers
+// (`Seen::sum_orders`, rules 34 and 35): so the test that it wrapped is
+// decided (`Seen::ordered`), and bytes at a constant offset are side by
+// side as bytes at a word are. A difference that cannot borrow has a
+// range, and an or of decided bits is decided (`Seen::or_decided`), so the
+// test a function tested at its entry carries is decided where the
+// function is inlined into a loop whose bound gives the index its range.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_views;
+import function_ir_stage;
+import function_ir_fresh;
+import function_ir_guard;
+import function_ir_replay;
+import function_ir_rules;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import option;
+import pair;
+
+// How a word's range reaches the replayer's facts: the rule's step, and
+// the words whose ranges the rule reads.
+record How { needs: List<Nat>, step: Step }
+
+// A word that is a word and a constant added: the word, and the
+// constant's id and value.
+record Sum { of: Nat, constant: Nat, value: Nat }
+
+// An order the replayer's facts can be given, and the steps that give it:
+// none once they are written.
+record Known { order: Order, why: List<Step> }
+
+// What is known of words' order, for the comparisons no range decides.
+record Ordered {
+    sums: NatMap<Sum>,
+    known: List<Known>,
+    // The nodes that compute a word from the function's parameters alone,
+    // each after what it reads: such a word can be computed at the
+    // function's entry. A parameter's are none.
+    cones: NatMap<List<Node>>,
+}
+
+fn Ordered::none() → Ordered { Ordered(NatMap::empty(), [], NatMap::empty()) }
+
+// A test wanted at the function's entry: the word `base`, which `cone`
+// computes from the parameters, and `least` are at most the parameter
+// `length`. `uses` comparisons wait on it.
+record Span { base: Nat, cone: List<Node>, least: Nat, length: Nat, uses: Nat }
+
+// A word that is bytes of a buffer joined (`Fact::Joined`): `count` bytes
+// of `buffer` from the index `at`, which is the word `base` and the
+// constant `past` added, shifted left by `shift`. `why` are the steps that
+// give the fact: none once they are written.
+record Join { buffer: Nat, base: Nat, past: Nat, at: Nat, count: Nat, shift: Nat, why: List<Step> }
+
+// A load of four bytes the code has, swapped and widened into `word`: the
+// bytes of `buffer` from the index `at`, the first the most significant.
+record Word { buffer: Nat, at: Nat, loaded: Nat, swapped: Nat, word: Nat }
+
+// A load of four bytes the code does not have and a join would be: of
+// `buffer` at the index `at`, wanted after the byte load that writes
+// `after`, which is where every test the bytes passed is behind.
+record Asked { buffer: Nat, at: Nat, after: Nat }
+
+// What is known of the buffers as they are where the walk stands, which is
+// what the replayer's facts keep of them (`Facts::forget`): the joins by
+// the word each is, the four-byte loads by the word each stage writes, and
+// the last byte load passed. And `ends`, which is of the whole function:
+// for the index of a load or a store of several bytes, how far past it the
+// last byte is.
+record Joins { of: NatMap<Join>, loads: NatMap<Word>, swaps: NatMap<Word>, words: List<Word>, last: Option<Nat>, ends: NatMap<Nat> }
+
+fn Joins::none(ends: NatMap<Nat>) → Joins { Joins(NatMap::empty(), NatMap::empty(), NatMap::empty(), [], None, ends) }
+
+// What a function's undecided comparisons wait on. For a parameter, the
+// least value that would have every comparison met so far of a word with
+// it be one: a parameter words are compared below is a length, and a test
+// that it is long enough is the one worth making. And the spans below a
+// length that would decide the comparisons of words no range is known of.
+// `words` are the loads its joins of bytes wait on.
+record Wants { least: NatMap<Nat>, spans: List<Span>, words: List<Asked> }
+
+record Seen {
+    // The comparison that writes a bit, and the constant that writes a word.
+    made: NatMap<Node>,
+    // What is known of a word, and how.
+    range: NatMap<Range>,
+    how: NatMap<How>,
+    // The words whose range the steps written so far derive.
+    proved: NatMap<Bool>,
+    // The bits known constant.
+    bits: NatMap<Bool>,
+    // What the arms entered owe, written with the first decision after.
+    pending: List<Step>,
+    // The words a load or a store indexes by.
+    indexes: NatMap<Bool>,
+    // The parameter of the function a word is, through moves and what a
+    // loop does not change.
+    origin: NatMap<Nat>,
+    // Kept through arms and loops.
+    wants: Wants,
+    order: Ordered,
+    joins: Joins,
+}
+
+// A parameter is computed by nothing.
+fn Ordered::parameter(self order: Ordered, id: Nat) → Ordered { Ordered(order.sums, order.known, nat_map_set(order.cones, id, [])) }
+
+fn cone_writes(cone: List<Node>, id: Nat) → Bool {
+    match cone { Nil => False, Cons(node, rest) => node_output(node).id.same(id) || cone_writes(rest, id) }
+}
+
+// Two cones as one: the first, then the second's nodes it does not have.
+fn cone_join(first, second: List<Node>) → List<Node> {
+    match second {
+        Nil => first,
+        Cons(node, rest) => match cone_writes(first, node_output(node).id) { True => cone_join(first, rest), False => cone_join(first ++ [node], rest) },
+    }
+}
+
+// The cones of `ids` as one, where each has one.
+fn Ordered::cones_of(self order: Ordered, ids: List<Nat>, so_far: List<Node>) → Option<List<Node>> {
+    match ids {
+        Nil => Some(so_far),
+        Cons(id, rest) => match nat_map_get(order.cones, id) { None => None, Some(cone) => order.cones_of(rest, cone_join(so_far, cone)) },
+    }
+}
+
+// No cone longer than this is worth computing at a function's entry.
+fn cone_most() → Nat { 6 }
+
+// What a node adds: a sum of a word with a constant `made` has, and the
+// cone of the word it writes where what it reads have cones.
+fn Ordered::noting(self order: Ordered, made: NatMap<Node>, node: Node) → Ordered {
+    Ordered(
+        match node {
+            Add(w, o, l, r) => match w.same(64) {
+                False => order.sums,
+                True => match nat_map_get(made, r) {
+                    None => order.sums,
+                    Some(writer) => match writer {
+                        Const(width, _, v) => match width.same(64) { True => nat_map_set(order.sums, o, Sum(l, r, v)), False => order.sums },
+                        _ => order.sums,
+                    },
+                },
+            },
+            _ => order.sums,
+        },
+        order.known,
+        match node.pure() {
+            False => order.cones,
+            True => match order.cones_of(node.reads(), []) {
+                None => order.cones,
+                Some(before) => match before.len().leb(cone_most()) {
+                    True => nat_map_set(order.cones, node_output(node).id, before ++ [node]),
+                    False => order.cones,
+                },
+            },
+        })
+}
+
+fn Seen::start(indexes: NatMap<Bool>, ends: NatMap<Nat>) → Seen {
+    Seen(NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), [], indexes, NatMap::empty(), Wants(NatMap::empty(), [], []),
+        Ordered::none(), Joins::none(ends))
+}
+
+fn Seen::wanting(self seen: Seen, wants: Wants) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, wants, seen.order, seen.joins)
+}
+
+// `id` is the word `source` is.
+fn Seen::from(self seen: Seen, id, source: Nat) → Seen {
+    match nat_map_get(seen.origin, source) {
+        None => seen,
+        Some(parameter) => Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes,
+            nat_map_set(seen.origin, id, parameter), seen.wants, seen.order, seen.joins),
+    }
+}
+
+fn Seen::of_parameters(self seen: Seen, parameters: List<Nat>) → Seen {
+    match parameters {
+        Nil => seen,
+        Cons(parameter, rest) => Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes,
+            nat_map_set(seen.origin, parameter, parameter), seen.wants, seen.order.parameter(parameter), seen.joins).of_parameters(rest),
+    }
+}
+
+// No bound past this is worth a test at a function's entry.
+fn want_most() → Nat { 4294967296 }
+
+// A word was compared below the word `id`: if that is a parameter, the
+// comparison is one where it is at least `least`.
+fn Seen::want(self seen: Seen, id, least: Nat) → Seen {
+    match nat_map_get(seen.origin, id) {
+        None => seen,
+        Some(parameter) => match least.leb(want_most()) {
+            False => seen,
+            True => match nat_map_get(seen.wants.least, parameter) {
+                None => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words)),
+                Some(already) => match least.leb(already) {
+                    True => seen,
+                    False => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words)),
+                },
+            },
+        },
+    }
+}
+
+fn Seen::of(self seen: Seen, id: Nat) → Range { match nat_map_get(seen.range, id) { None => Range::any(), Some(range) => range } }
+
+fn flagged(flags: NatMap<Bool>, id: Nat) → Bool { match nat_map_get(flags, id) { None => False, Some(flag) => flag } }
+
+// A word's range, which `step` derives from the ranges of `needs`.
+fn Seen::learn(self seen: Seen, id: Nat, range: Range, needs: List<Nat>, step: Step) → Seen {
+    Seen(seen.made, nat_map_set(seen.range, id, range), nat_map_set(seen.how, id, How(needs, step)), seen.proved, seen.bits, seen.pending,
+        seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+// A word's range the replayer's facts hold with no step: a load's byte.
+fn Seen::known(self seen: Seen, id: Nat, range: Range) → Seen {
+    Seen(seen.made, nat_map_set(seen.range, id, range), seen.how, nat_map_set(seen.proved, id, True), seen.bits, seen.pending,
+        seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+// The node that writes `id`, for a later node's rule to read.
+fn Seen::making(self seen: Seen, id: Nat, node: Node) → Seen {
+    Seen(nat_map_set(seen.made, id, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+fn Seen::ordering(self seen: Seen, order: Ordered) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, order, seen.joins)
+}
+
+// A node passed, for what is known of order: a constant is kept for the
+// sums that add it.
+fn Seen::noted(self seen: Seen, node: Node) → Seen {
+    shared(match node { Const(w, o, _) => match w.same(64) { True => seen.making(o, node), False => seen }, _ => seen }, λ kept =>
+        kept.ordering(kept.order.noting(kept.made, node)))
+}
+
+record Explained { steps: List<Step>, proved: NatMap<Bool> }
+
+// The steps that derive the ranges of `ids` not yet derived, what each
+// reads first.
+fn explain(fuel: Nat, how: NatMap<How>, proved: NatMap<Bool>, ids: List<Nat>) → Explained {
+    match fuel {
+        Zero => Explained([], proved),
+        Succ(less) => match ids {
+            Nil => Explained([], proved),
+            Cons(id, rest) => match flagged(proved, id) {
+                True => explain(less, how, proved, rest),
+                False => match nat_map_get(how, id) {
+                    None => explain(less, how, proved, rest),
+                    Some(found) => shared(explain(less, how, proved, found.needs), λ first =>
+                        shared(explain(less, how, nat_map_set(first.proved, id, True), rest), λ later =>
+                            Explained(first.steps ++ Cons(found.step, later.steps), later.proved))),
+                },
+            },
+        },
+    }
+}
+
+// What follows a node's own step, and what is known after it.
+record Passed { after: List<Step>, seen: Seen }
+
+// A bit decided: what is owed, the derivations the rule reads, the rule,
+// and what to write into the code.
+fn Seen::decided(self seen: Seen, c: Nat, bit: Bool, needs: List<Nat>, step: Step, emit: List<Step>) → Passed {
+    shared(explain(100, seen.how, seen.proved, needs), λ why =>
+        Passed(seen.pending ++ (why.steps ++ Cons(step, emit)),
+            Seen(seen.made, seen.range, seen.how, why.proved, nat_map_set(seen.bits, c, bit), [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)))
+}
+
+// Steps owed with the next decision.
+fn Seen::owing(self seen: Seen, steps: List<Step>) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending ++ steps, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+fn Order::same(self a: Order, b: Order) → Bool { a.low.same(b.low) && (a.add.same(b.add) && (a.high.same(b.high) && a.more.same(b.more))) }
+
+// An order known that gives `wanted`.
+fn known_find(known: List<Known>, wanted: Order) → Option<Known> {
+    match known { Nil => None, Cons(first, rest) => match first.order.gives(wanted) { True => Some(first), False => known_find(rest, wanted) } }
+}
+
+// An order from `base` to `length` with room for `value` and one more:
+// what says the word `value` past `base` is below `length`.
+fn known_room(known: List<Known>, base, length, value: Nat) → Option<Known> {
+    match known {
+        Nil => None,
+        Cons(first, rest) => match first.order.low.same(base) && (first.order.high.same(length) && Succ(value + first.order.more).leb(first.order.add)) {
+            True => Some(first),
+            False => known_room(rest, base, length, value),
+        },
+    }
+}
+
+// An order's steps are written: it is known with none.
+fn known_written(known: List<Known>, order: Order) → List<Known> {
+    known.map(λ (k: Known) => match k.order.same(order) { True => Known(k.order, []), False => k })
+}
+
+fn Seen::written(self seen: Seen, order: Order) → Seen {
+    seen.ordering(Ordered(seen.order.sums, known_written(seen.order.known, order), seen.order.cones))
+}
+
+// Two orders that meet at a word, as one with what both add taken from
+// both sides (`order_join`, rule 24).
+fn Known::then(self first: Known, second: Known) → Known {
+    shared(first.order.add + second.order.add, λ up => shared(first.order.more + second.order.more, λ down =>
+        shared(match up.leb(down) { True => up, False => down }, λ both =>
+            Known(Order(first.order.low, up - both, second.order.high, down - both),
+                first.why ++ (second.why ++ [Derive(24, [first.order.low, first.order.add, first.order.high, first.order.more,
+                    second.order.add, second.order.high, second.order.more, up - both, down - both])])))))
+}
+
+// What `new` gives with each order known that ends where it starts or
+// starts where it ends.
+fn known_joined(known: List<Known>, new: Known) → List<Known> {
+    match known {
+        Nil => [],
+        Cons(first, rest) => shared(known_joined(rest, new), λ later =>
+            shared(match first.order.high.same(new.order.low) && !first.order.low.same(new.order.high) { True => Cons(first.then(new), later), False => later }, λ after =>
+                match new.order.high.same(first.order.low) && !new.order.low.same(first.order.high) { True => Cons(new.then(first), after), False => after })),
+    }
+}
+
+// No more orders than this are joined with a new one.
+fn known_most() → Nat { 24 }
+
+fn Seen::knowing(self seen: Seen, new: Known) → Seen {
+    seen.ordering(Ordered(seen.order.sums, match seen.order.known.len().leb(known_most()) {
+        True => Cons(new, known_joined(seen.order.known, new) ++ seen.order.known),
+        False => Cons(new, seen.order.known),
+    }, seen.order.cones))
+}
+
+// What a comparison's bit says of its operands' order in the arm taken
+// where it is `bit` (rules 20 and 21). Where it is clear and the left is
+// the right and a constant added, the sum did not wrap, so it is the right
+// and the constant, both ways (rules 25 and 26).
+fn Seen::ordered_by(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
+    match bit {
+        True => seen.knowing(Known(Order(l, 1, r, 0), [Derive(20, [c, l, r])])),
+        False => shared(seen.knowing(Known(Order(r, 0, l, 0), [Derive(21, [c, l, r])])), λ known => match nat_map_get(known.order.sums, l) {
+            None => known,
+            Some(sum) => match sum.of.same(r) {
+                False => known,
+                True => known.knowing(Known(Order(r, sum.value, l, 0), [Derive(21, [c, l, r]), Derive(25, [l, r, sum.constant, sum.value])]))
+                    .knowing(Known(Order(l, 0, r, sum.value), [Derive(21, [c, l, r]), Derive(26, [l, r, sum.constant, sum.value])])),
+            },
+        }),
+    }
+}
+
+// A decided bound written after its comparison, where a load or a store
+// indexes by the comparison's left: what the lowering reads.
+// So is the comparison of the last byte's index, for a load or a store of
+// several bytes: the index and how far past it that byte is.
+fn Seen::ends_at(self seen: Seen, l: Nat) → Bool {
+    match nat_map_get(seen.order.sums, l) {
+        None => False,
+        Some(sum) => match nat_map_get(seen.joins.ends, sum.of) { None => False, Some(last) => last.same(sum.value) },
+    }
+}
+
+fn Seen::bound_written(self seen: Seen, c, l: Nat) → List<Step> {
+    match flagged(seen.indexes, l) || seen.ends_at(l) { True => [Emit(Const(1, c, 1))], False => [] }
+}
+
+// An order from `base` with room for `value`: what says `base` and
+// `value` added is no more than a word, so the sum is that.
+fn known_roomy(known: List<Known>, base, value: Nat) → Option<Known> {
+    match known {
+        Nil => None,
+        Cons(first, rest) => match first.order.low.same(base) && (value + first.order.more).leb(first.order.add) {
+            True => Some(first),
+            False => known_roomy(rest, base, value),
+        },
+    }
+}
+
+record Stepped { steps: List<Step>, seen: Seen }
+
+fn Seen::proving(self seen: Seen, proved: NatMap<Bool>) → Seen {
+    Seen(seen.made, seen.range, seen.how, proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+// The steps after which the facts have that the word `at`, a word and a
+// constant added, is the two as numbers, both ways: by an order from the
+// word with room for the constant (rules 27 and 28), or by the word's
+// range with room for it below a word's top (rules 34 and 35).
+fn Seen::sum_orders(self seen: Seen, at: Nat) → Option<Stepped> {
+    match nat_map_get(seen.order.sums, at) {
+        None => None,
+        Some(sum) => match known_roomy(seen.order.known, sum.of, sum.value) {
+            Some(k) => Some(Stepped(k.why ++ [
+                Derive(27, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
+                Derive(28, [at, sum.of, sum.constant, sum.value, k.order.add, k.order.high, k.order.more]),
+            ], seen.written(k.order))),
+            None => shared(seen.of(sum.of), λ range => match (range.high + sum.value).leb(word_top()) {
+                False => None,
+                True => shared(explain(100, seen.how, seen.proved, [sum.of]), λ why => Some(Stepped(why.steps ++ [
+                    Derive(34, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
+                    Derive(35, [at, sum.of, sum.constant, sum.value, range.low, range.high]),
+                ], seen.proving(why.proved)))),
+            }),
+        },
+    }
+}
+
+// The same owed, with the two orders known.
+fn Seen::summed(self seen: Seen, at: Nat) → Option<Seen> {
+    match nat_map_get(seen.order.sums, at) {
+        None => None,
+        Some(sum) => match seen.sum_orders(at) {
+            None => None,
+            Some(stepped) => Some(stepped.seen.owing(stepped.steps).knowing(Known(Order(sum.of, sum.value, at, 0), []))
+                .knowing(Known(Order(at, 0, sum.of, sum.value), []))),
+        },
+    }
+}
+
+// A comparison an order decides: one known says its left is below its
+// right (rule 22), or its right at most its left (rule 23); or its left is
+// a word and a constant added, and an order from that word to its right
+// has room for the constant and one more (rules 28 and 24, then 22).
+fn Seen::ordered_known(self seen: Seen, c, l, r: Nat) → Option<Passed> {
+    shared(seen.bound_written(c, l), λ emit =>
+        match known_find(seen.order.known, Order(l, 1, r, 0)) {
+            Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, True, [], Derive(22, [c, l, r]), emit)),
+            None => match known_find(seen.order.known, Order(r, 0, l, 0)) {
+                Some(k) => Some(seen.written(k.order).owing(k.why).decided(c, False, [], Derive(23, [c, l, r]), [])),
+                None => match nat_map_get(seen.order.sums, l) {
+                    None => None,
+                    Some(sum) => match known_room(seen.order.known, sum.of, r, sum.value) {
+                        None => None,
+                        Some(k) => Some(seen.written(k.order).owing(k.why ++ [
+                            Derive(28, [l, sum.of, sum.constant, sum.value, k.order.add, r, k.order.more]),
+                            Derive(24, [l, 0, sum.of, sum.value, k.order.add, r, k.order.more, 1, 0]),
+                        ]).decided(c, True, [], Derive(22, [c, l, r]), emit)),
+                    },
+                },
+            },
+        })
+}
+
+// The same, and where no order known decides it: with an operand that is
+// a sum known not to wrap as the two it adds. So a sum compared with its
+// own operand, the test that it did not wrap, is decided where the
+// operand's range has room.
+fn Seen::ordered(self seen: Seen, c, l, r: Nat) → Option<Passed> {
+    match seen.ordered_known(c, l, r) {
+        Some(passed) => Some(passed),
+        None => match seen.summed(l).and_then(λ wider => wider.ordered_known(c, l, r)) {
+            Some(passed) => Some(passed),
+            None => seen.summed(r).and_then(λ wider => wider.ordered_known(c, l, r)),
+        },
+    }
+}
+
+fn spans_add(spans: List<Span>, new: Span) → List<Span> {
+    match spans {
+        Nil => [new],
+        Cons(first, rest) => match first.base.same(new.base) && first.length.same(new.length) {
+            True => Cons(Span(first.base, first.cone, match new.least.leb(first.least) { True => first.least, False => new.least }, first.length,
+                first.uses + new.uses), rest),
+            False => Cons(first, spans_add(rest, new)),
+        },
+    }
+}
+
+fn Seen::span(self seen: Seen, base, least, length: Nat) → Seen {
+    match nat_map_get(seen.order.cones, base) {
+        None => seen,
+        Some(cone) => match least.leb(want_most()) {
+            False => seen,
+            True => seen.wanting(Wants(seen.wants.least, spans_add(seen.wants.spans, Span(base, cone, least, length, 1)), seen.wants.words)),
+        },
+    }
+}
+
+// A word no range is known of was compared below the word `r`: if that
+// is a parameter and the word, or the word it is a constant past, can be
+// computed at the function's entry, the comparison is one where that word
+// and the constant and one more are at most the parameter.
+fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
+    match nat_map_get(seen.origin, r) {
+        None => seen,
+        Some(parameter) => match parameter.same(r) {
+            False => seen,
+            True => match nat_map_get(seen.order.sums, l) { Some(sum) => seen.span(sum.of, Succ(sum.value), r), None => seen.span(l, 1, r) },
+        },
+    }
+}
+
+// A comparison: decided where its operands' ranges lie apart. Where a load
+// or a store indexes by its left, the bit is written after it, which is
+// what the lowering reads (docs/native/optimizer-design.md §5.1).
+fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
+    shared(Seen(nat_map_set(seen.made, c, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins), λ noted =>
+        shared(seen.of(l), λ a => shared(seen.of(r), λ b => match Succ(a.high).leb(b.low) {
+            True => noted.decided(c, True, [l, r], Derive(7, [c, l, r, a.high, b.low]), seen.bound_written(c, l)),
+            False => match b.high.leb(a.low) {
+                True => noted.decided(c, False, [l, r], Derive(8, [c, l, r, a.low, b.high]), []),
+                False => match noted.ordered(c, l, r) {
+                    Some(passed) => passed,
+                    None => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) }),
+                },
+            },
+        })))
+}
+
+// An or of bits: decided where both are clear (rule 36) or either is set
+// (rules 37 and 38), as the guard of several bounds is where each bound is.
+fn Seen::or_decided(self seen: Seen, o, l, r: Nat) → Passed {
+    match nat_map_get(seen.bits, l) {
+        Some(left) => match left {
+            True => seen.decided(o, True, [], Derive(37, [o, l, r]), []),
+            False => match nat_map_get(seen.bits, r) {
+                Some(right) => match right {
+                    True => seen.decided(o, True, [], Derive(38, [o, l, r]), []),
+                    False => seen.decided(o, False, [], Derive(36, [o, l, r]), []),
+                },
+                None => Passed([], seen),
+            },
+        },
+        None => match nat_map_get(seen.bits, r) {
+            Some(right) => match right { True => seen.decided(o, True, [], Derive(38, [o, l, r]), []), False => Passed([], seen) },
+            None => Passed([], seen),
+        },
+    }
+}
+
+fn Seen::pass(self seen: Seen, node: Node) → Passed {
+    match node {
+        Const(w, o, v) => match w.same(64) && v.leb(word_top()) {
+            True => Passed([], seen.learn(o, Range(v, v), [], Derive(2, [o, v]))),
+            False => Passed([], seen),
+        },
+        Move(w, o, s) => match w.same(64) {
+            False => Passed([], seen),
+            True => match nat_map_get(seen.range, s) {
+                None => Passed([], seen.from(o, s)),
+                Some(a) => Passed([], seen.learn(o, a, [s], Derive(3, [o, s, a.low, a.high])).from(o, s)),
+            },
+        },
+        Add(w, o, l, r) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
+                True => Passed([], seen.learn(o, Range(a.low + b.low, a.high + b.high), [l, r], Derive(4, [o, l, r, a.low, a.high, b.low, b.high]))),
+                False => Passed([], seen),
+            })),
+        },
+        ShiftLeft(w, o, v, n) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(v), λ a => shared(Nat::pow(2, n), λ scale => match (a.high * scale).leb(word_top()) {
+                True => Passed([], seen.learn(o, Range(a.low * scale, a.high * scale), [v], Derive(5, [o, v, n, a.low, a.high]))),
+                False => Passed([], seen),
+            })),
+        },
+        Resize(from, to, o, s) => match to.same(64) && from.leb(63) {
+            True => shared(Nat::pow(2, from) - 1, λ high => Passed([], shared(seen.learn(o, Range(0, high), [], Derive(6, [o, s, from, high])), λ learned =>
+                match from.same(32) { True => learned.making(o, node), False => learned }))),
+            False => Passed([], match from.same(64) { True => seen.making(o, node), False => seen }),
+        },
+        BufferLoad(o, _, _) => Passed([], seen.known(o, Range(0, 255))),
+        BufferStore(o, _, _, _) => Passed([], seen.known(o, Range(0, 255))),
+        UnsignedLessThan(w, c, l, r) => match w.same(64) { True => seen.compared(c, l, r, node), False => Passed([], seen) },
+        Sub(w, o, l, r) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match b.high.leb(a.low) {
+                True => Passed([], seen.learn(o, Range(a.low - b.high, a.high - b.low), [l, r], Derive(39, [o, l, r, a.low, a.high, b.low, b.high]))),
+                False => Passed([], seen),
+            })),
+        },
+        BitOr(w, o, l, r) => match w.same(1) {
+            True => seen.making(o, node).or_decided(o, l, r),
+            False => match w.same(64) {
+                False => Passed([], seen),
+                True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match (a.high + b.high).leb(word_top()) {
+                    True => Passed([], seen.learn(o, Range(0, a.high + b.high), [l, r], Derive(16, [o, l, r, a.high, b.high]))),
+                    False => Passed([], seen),
+                })),
+            },
+        },
+        ByteSwap(w, o, _) => match w.same(32) { True => Passed([], seen.making(o, node)), False => Passed([], seen) },
+        BitAnd(w, o, l, r) => match w.same(64) {
+            False => Passed([], seen),
+            True => shared(seen.of(l), λ a => shared(seen.of(r), λ b => match a.high.leb(b.high) {
+                True => match a.high.same(word_top()) {
+                    True => Passed([], seen),
+                    False => Passed([], seen.learn(o, Range(0, a.high), [l], Derive(17, [o, l, r, a.high]))),
+                },
+                False => Passed([], seen.learn(o, Range(0, b.high), [r], Derive(18, [o, l, r, b.high]))),
+            })),
+        },
+        _ => Passed([], seen),
+    }
+}
+
+// A node the walk writes another for, with the steps that do: a word
+// narrowed and widened again within the narrow width is a move of the word
+// it was. The widening is dropped once the facts have its equation, the
+// rule gives the move, and the move is written.
+fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
+    match node {
+        // A bit's constant from an earlier walk, where this one decided the
+        // bit again: it is written after its comparison where an access
+        // still reads it, so the old one goes.
+        Const(w, c, v) => match w.same(1) {
+            False => None,
+            True => match nat_map_get(seen.bits, c) {
+                None => None,
+                Some(bit) => match v.same(match bit { True => 1, False => 0 }) { True => Some(Passed([Drop], seen)), False => None },
+            },
+        },
+        // A word swapped, widened, narrowed and swapped again is the word
+        // (rule 44): the second swap is a move of it, and the store that
+        // read it reads the word once the walk that reads through has
+        // been.
+        ByteSwap(w, v, h) => match w.same(32) {
+            False => None,
+            True => nat_map_get(seen.made, h).and_then(λ narrowing => match narrowing {
+                Resize(wide, narrow, _, x) => match wide.same(64) && narrow.same(32) {
+                    False => None,
+                    True => nat_map_get(seen.made, x).and_then(λ widening => match widening {
+                        Resize(half, full, _, s) => match half.same(32) && full.same(64) {
+                            False => None,
+                            True => nat_map_get(seen.made, s).and_then(λ first => match first {
+                                ByteSwap(width, _, word) => width.same(32).then(Some(Passed([Drop, Derive(44, [v, h, x, s, word]), Emit(Move(32, v, word))], seen))),
+                                _ => None,
+                            }),
+                        },
+                        _ => None,
+                    }),
+                },
+                _ => None,
+            }),
+        },
+        Resize(from, to, b, a) => match to.same(64) && from.leb(63) {
+            False => None,
+            True => match nat_map_get(seen.made, a) {
+                None => None,
+                Some(narrowing) => match narrowing {
+                    Resize(wide, narrow, _, s) => match wide.same(64) && narrow.same(from) {
+                        False => None,
+                        True => shared(seen.of(s), λ range => match Succ(range.high).leb(Nat::pow(2, from)) {
+                            False => None,
+                            True => shared(explain(100, seen.how, seen.proved, [s]), λ why =>
+                                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ [Derive(15, [b, a, s, from, range.high]), Emit(Move(64, b, s))])),
+                                    Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+                                        .learn(b, range, [s], Derive(3, [b, s, range.low, range.high])).from(b, s)))),
+                        }),
+                    },
+                    _ => None,
+                },
+            },
+        },
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bytes joined into words (docs/native/optimizer-design.md §4.1)
+
+fn Seen::joins_as(self seen: Seen, joins: Joins) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, joins)
+}
+
+// The buffers may have changed, or the replayer's facts keep nothing of
+// them past here: nor does the walk.
+fn Seen::forgetting(self seen: Seen) → Seen { seen.joins_as(Joins::none(seen.joins.ends)) }
+
+fn Seen::join_of(self seen: Seen, id: Nat) → Option<Join> { nat_map_get(seen.joins.of, id) }
+
+fn Seen::joined(self seen: Seen, id: Nat, join: Join) → Seen {
+    seen.joins_as(Joins(nat_map_set(seen.joins.of, id, join), seen.joins.loads, seen.joins.swaps, seen.joins.words, seen.joins.last, seen.joins.ends))
+}
+
+// What is owed is written.
+fn Seen::settled(self seen: Seen) → Seen {
+    Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)
+}
+
+// Two joins side by side, `hi` first in the buffer and above in the word.
+fn Join::beside(self hi: Join, lo: Join) → Bool {
+    hi.buffer.same(lo.buffer) && (hi.base.same(lo.base) && (hi.shift.same(8 * lo.count + lo.shift) && (hi.past + hi.count).same(lo.past)))
+}
+
+// The steps after which the facts have that `lo` starts where `hi` ends,
+// both ways: each index is the base and its constant, and where `hi` does
+// not start at the base the two orders meet there (rule 24).
+fn Seen::beside(self seen: Seen, hi, lo: Join) → Option<Stepped> {
+    seen.sum_orders(lo.at).and_then(λ second => match hi.past {
+        Zero => Some(second),
+        Succ(_) => second.seen.sum_orders(hi.at).and_then(λ first => Some(Stepped(second.steps ++ (first.steps ++ [
+            Derive(24, [hi.at, 0, hi.base, hi.past, lo.past, lo.at, 0, hi.count, 0]),
+            Derive(24, [lo.at, 0, hi.base, lo.past, hi.past, hi.at, 0, 0, hi.count]),
+        ]), first.seen))),
+    })
+}
+
+fn words_find(words: List<Word>, buffer, at: Nat) → Option<Word> {
+    match words {
+        Nil => None,
+        Cons(word, rest) => match word.buffer.same(buffer) && word.at.same(at) { True => Some(word), False => words_find(rest, buffer, at) },
+    }
+}
+
+// A load wanted for a join, where a byte load to put it after was passed.
+fn Seen::asking(self seen: Seen, join: Join) → Seen {
+    match seen.joins.last {
+        None => seen,
+        Some(after) => seen.wanting(Wants(seen.wants.least, seen.wants.spans, Cons(Asked(join.buffer, join.at, after), seen.wants.words))),
+    }
+}
+
+// What a node is to the joins: whether it goes, the steps after it, and
+// what is known then.
+record Joining { drop: Bool, after: List<Step>, seen: Seen }
+
+// An or of two joins side by side is the longer join (rule 31, or 32 where
+// the or has the lower one first): the steps owed, those that give the two
+// joins and their indexes' order, then the rule. Four bytes unshifted are
+// a word: where a load of it was passed the or is a move of that load's
+// word (rule 33) and goes, and where none was, one is asked for.
+fn Seen::meeting(self seen: Seen, rule, o, above, below: Nat, hi, lo: Join) → Option<Joining> {
+    seen.beside(hi, lo).map(λ orders =>
+        shared(Join(hi.buffer, hi.base, hi.past, hi.at, hi.count + lo.count, lo.shift, []), λ whole =>
+            shared(orders.seen.pending ++ (hi.why ++ (lo.why ++ (orders.steps ++
+                [Derive(rule, [o, above, below, hi.buffer, hi.at, lo.at, hi.count, lo.count, lo.shift])]))), λ steps =>
+                shared(orders.seen.settled().joined(o, whole), λ after => match whole.count.same(4) && whole.shift.same(0) {
+                    False => Joining(False, steps, after),
+                    True => match words_find(after.joins.words, whole.buffer, whole.at) {
+                        Some(word) => Joining(True, steps ++ [Derive(33, [o, word.loaded, word.swapped, word.word, whole.buffer, whole.at]),
+                            Emit(Move(64, o, word.word))], after),
+                        None => Joining(False, steps, after.asking(whole)),
+                    },
+                }))))
+}
+
+// A byte load starts a join (rule 29), at the index's base and constant
+// where the index is a sum; a shift of a join is one (rule 30); an or of
+// two may be. A load of four bytes, its swap and its widening are kept for
+// the join they are. Nothing is kept past a store.
+fn Seen::joining(self seen: Seen, node: Node) → Joining {
+    match node {
+        BufferLoad(b, f, x) => Joining(False, [], shared(seen.joined(b, match nat_map_get(seen.order.sums, x) {
+            None => Join(f, x, 0, x, 1, 0, [Derive(29, [b, f, x])]),
+            Some(sum) => Join(f, sum.of, sum.value, x, 1, 0, [Derive(29, [b, f, x])]),
+        }), λ kept => kept.joins_as(Joins(kept.joins.of, kept.joins.loads, kept.joins.swaps, kept.joins.words, Some(b), kept.joins.ends)))),
+        ShiftLeft(w, s, a, c) => match w.same(64) {
+            False => Joining(False, [], seen),
+            True => match seen.join_of(a) {
+                None => Joining(False, [], seen),
+                Some(j) => Joining(False, [], seen.joined(s, Join(j.buffer, j.base, j.past, j.at, j.count, j.shift + c,
+                    j.why ++ [Derive(30, [s, a, c, j.buffer, j.at, j.count, j.shift])]))),
+            },
+        },
+        BitOr(w, o, l, r) => match w.same(64) {
+            False => Joining(False, [], seen),
+            True => match seen.join_of(l) {
+                None => Joining(False, [], seen),
+                Some(left) => match seen.join_of(r) {
+                    None => Joining(False, [], seen),
+                    Some(right) => match (match left.beside(right) {
+                        True => seen.meeting(31, o, l, r, left, right),
+                        False => match right.beside(left) { True => seen.meeting(32, o, r, l, right, left), False => None },
+                    }) {
+                        None => Joining(False, [], seen),
+                        Some(met) => met,
+                    },
+                },
+            },
+        },
+        WideLoad(bytes, w, f, i) => match bytes.same(4) {
+            False => Joining(False, [], seen),
+            True => Joining(False, [], seen.joins_as(Joins(seen.joins.of, nat_map_set(seen.joins.loads, w, Word(f, i, w, 0, 0)), seen.joins.swaps,
+                seen.joins.words, seen.joins.last, seen.joins.ends))),
+        },
+        ByteSwap(width, s, w) => match width.same(32) {
+            False => Joining(False, [], seen),
+            True => match nat_map_get(seen.joins.loads, w) {
+                None => Joining(False, [], seen),
+                Some(word) => Joining(False, [], seen.joins_as(Joins(seen.joins.of, seen.joins.loads,
+                    nat_map_set(seen.joins.swaps, s, Word(word.buffer, word.at, word.loaded, s, 0)), seen.joins.words, seen.joins.last, seen.joins.ends))),
+            },
+        },
+        Resize(from, to, r, s) => match from.same(32) && to.same(64) {
+            False => Joining(False, [], seen),
+            True => match nat_map_get(seen.joins.swaps, s) {
+                None => Joining(False, [], seen),
+                Some(word) => Joining(False, [], seen.joins_as(Joins(seen.joins.of, seen.joins.loads, seen.joins.swaps,
+                    Cons(Word(word.buffer, word.at, word.loaded, word.swapped, r), seen.joins.words), seen.joins.last, seen.joins.ends))),
+            },
+        },
+        _ => Joining(False, [], match node.stores() { True => seen.forgetting(), False => seen }),
+    }
+}
+
+record Swept { steps: List<Step>, seen: Seen }
+
+fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
+    match nodes {
+        Nil => Swept([], seen),
+        Cons(node, rest) => match seen.replaced(node) {
+            Some(here) => shared(learn_nodes(here.seen, rest), λ later => Swept(here.after ++ later.steps, later.seen)),
+            None => shared(seen.pass(node), λ here => shared(here.seen.noted(node).joining(node), λ joined =>
+                shared(learn_nodes(joined.seen, rest), λ later =>
+                    Swept(Cons(match joined.drop { True => Drop, False => Keep }, here.after ++ (joined.after ++ later.steps)), later.seen)))),
+        },
+    }
+}
+
+// A range a rule's step derives.
+record Narrower { range: Range, step: Step }
+
+// What a comparison's bit says of its operands in the arm taken where it
+// is `bit`: each one's range, where that is narrower than what is known.
+record Narrowed { left: Option<Narrower>, right: Option<Narrower> }
+
+fn narrowing(c, l, r: Nat, bit: Bool, a, b: Range) → Narrowed {
+    match bit {
+        True => Narrowed(
+            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [c, l, r, b.high - 1]))), False => None },
+            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [c, l, r, a.low]))), False => None }),
+        False => Narrowed(
+            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [c, l, r, b.low]))), False => None },
+            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [c, l, r, a.high]))), False => None }),
+    }
+}
+
+fn narrower_set(ranges: NatMap<Range>, id: Nat, found: Option<Narrower>) → NatMap<Range> {
+    match found { None => ranges, Some(narrower) => nat_map_set(ranges, id, narrower.range) }
+}
+
+fn narrower_step(found: Option<Narrower>) → List<Step> { match found { None => [], Some(narrower) => [narrower.step] } }
+
+// The same, owed with the derivations the steps read.
+fn Seen::narrowed(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowing(c, l, r, bit, seen.of(l), seen.of(r)), λ found =>
+        Seen(seen.made, narrower_set(narrower_set(seen.range, l, found.left), r, found.right), seen.how,
+            nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
+            seen.pending ++ (why.steps ++ (narrower_step(found.left) ++ narrower_step(found.right))), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins)))
+}
+
+// Where the bit `c` is `bit`: what a comparison's bit says of its operands,
+// and a clear or's of the bits it is of (to a depth: a test of several
+// bounds is a few).
+fn Seen::taking_in(self seen: Seen, depth, c: Nat, bit: Bool) → Seen {
+    shared(Seen(seen.made, seen.range, seen.how, seen.proved, nat_map_set(seen.bits, c, bit), seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins), λ known =>
+        match nat_map_get(seen.made, c) {
+            None => known,
+            Some(node) => match node {
+                UnsignedLessThan(_, _, l, r) => known.narrowed(c, l, r, bit).ordered_by(c, l, r, bit),
+                BitOr(_, _, a, b) => match bit {
+                    True => known,
+                    False => match depth {
+                        Zero => known,
+                        Succ(less) => known.owing([Derive(13, [c, a, b]), Derive(14, [c, a, b])]).taking_in(less, a, False).taking_in(less, b, False),
+                    },
+                },
+                _ => known,
+            },
+        })
+}
+
+// In the arm taken where the bit `c` is `bit`.
+fn Seen::taking(self seen: Seen, c: Nat, bit: Bool) → Seen { seen.taking_in(8, c, bit) }
+
+fn ranged(ranges: NatMap<Range>, id: Nat) → Bool { match nat_map_get(ranges, id) { None => False, Some(_) => True } }
+
+// The inputs of a loop whose range its passes keep: those a parameter that
+// is its own next starts from.
+fn Seen::kept(self seen: Seen, inputs, parameters, next: List<Nat>) → List<Nat> {
+    match inputs {
+        Nil => [],
+        Cons(input, more) => match parameters {
+            Nil => [],
+            Cons(parameter, others) => match next {
+                Nil => [],
+                Cons(after, later) => match parameter.same(after) && ranged(seen.range, input) {
+                    True => Cons(input, seen.kept(more, others, later)),
+                    False => seen.kept(more, others, later),
+                },
+            },
+        },
+    }
+}
+
+// Those ranges as ranges of `ids`, which the replayer's facts say: of the
+// parameters as it enters the body, of the outputs after the loop.
+fn Seen::carried(self seen: Seen, inputs, parameters, next, ids: List<Nat>, into: Seen) → Seen {
+    match inputs {
+        Nil => into,
+        Cons(input, more) => match parameters {
+            Nil => into,
+            Cons(parameter, others) => match next {
+                Nil => into,
+                Cons(after, later) => match ids {
+                    Nil => into,
+                    Cons(id, further) => shared(seen.carried(more, others, later, further, into), λ rest => match parameter.same(after) {
+                        False => rest,
+                        True => shared(match nat_map_get(seen.origin, input) {
+                            None => rest.origin,
+                            Some(word) => nat_map_set(rest.origin, id, word),
+                        }, λ origin => match nat_map_get(seen.range, input) {
+                            None => Seen(rest.made, rest.range, rest.how, rest.proved, rest.bits, rest.pending, rest.indexes, origin, rest.wants, rest.order, rest.joins),
+                            Some(range) => Seen(rest.made, nat_map_set(rest.range, id, range), rest.how, nat_map_set(rest.proved, id, True),
+                                rest.bits, rest.pending, rest.indexes, origin, rest.wants, rest.order, rest.joins),
+                        }),
+                    }),
+                },
+            },
+        },
+    }
+}
+
+record Learned { plan: Plan, seen: Seen }
+
+// A plan that derives what decides a comparison, has a conditional on a
+// decided bit be its arm, and writes a decided bound after its comparison.
+fn StructuredRegion::learn(self region: StructuredRegion, seen: Seen) → Learned {
+    match region {
+        Dataflow(body) => shared(learn_nodes(seen, body.nodes), λ s => Learned(Nodes(s.steps), s.seen)),
+        Sequence(prefix, continuation) => shared(learn_nodes(seen, prefix.nodes), λ s =>
+            shared(continuation.learn(s.seen), λ c => Learned(Then(s.steps, c.plan), c.seen))),
+        Compose(prefix, continuation) => shared(prefix.learn(seen), λ a =>
+            shared(continuation.learn(a.seen), λ c => Learned(Both(a.plan, c.plan), c.seen))),
+        Conditional(_, condition, _, _, when_true, when_false) => match nat_map_get(seen.bits, condition) {
+            // The arm is the code from here on, so what the walk saw in it
+            // is seen after it, as the replayer's facts are.
+            Some(bit) => shared(match bit { True => when_true.learn(seen), False => when_false.learn(seen) }, λ arm =>
+                Learned(Arm(bit, arm.plan), arm.seen)),
+            None => shared(when_true.learn(seen.taking(condition, True)), λ yes =>
+                shared(when_false.learn(seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
+                    Learned(Arms(yes.plan, no.plan), seen.wanting(no.seen.wants).forgetting()))),
+        },
+        Call(_, _, _) => Learned(Same, seen.forgetting()),
+        Loop(inputs, _, parameters, _, body, _, next, outputs, _) => shared(seen.kept(inputs, parameters, next), λ kept =>
+            shared(explain(100, seen.how, seen.proved, kept), λ why =>
+                shared(body.learn(seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes, seen.joins.ends).wanting(seen.wants))), λ inner =>
+                    match seen.pending ++ why.steps {
+                        Nil => Learned(Body(inner.plan), seen.carried(inputs, parameters, next, outputs, seen.wanting(inner.seen.wants)).forgetting()),
+                        Cons(step, steps) => Learned(Derived(Cons(step, steps), inner.plan), seen.carried(inputs, parameters, next, outputs,
+                            Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, inner.seen.wants, seen.order, seen.joins)).forgetting()),
+                    }))),
+        Lend(_, _, _, _) => Learned(Same, seen.forgetting()),
+    }
+}
+
+fn nodes_indexes(nodes: List<Node>, found: NatMap<Bool>) → NatMap<Bool> {
+    match nodes {
+        Nil => found,
+        Cons(node, rest) => nodes_indexes(rest, match node {
+            BufferLoad(_, _, index) => nat_map_set(found, index, True),
+            BufferStore(_, _, index, _) => nat_map_set(found, index, True),
+            WideLoad(_, _, _, index) => nat_map_set(found, index, True),
+            WideStore(_, _, _, index, _) => nat_map_set(found, index, True),
+            _ => found,
+        }),
+    }
+}
+
+fn StructuredRegion::indexes(self region: StructuredRegion, found: NatMap<Bool>) → NatMap<Bool> {
+    match region {
+        Dataflow(body) => nodes_indexes(body.nodes, found),
+        Sequence(prefix, continuation) => continuation.indexes(nodes_indexes(prefix.nodes, found)),
+        Compose(prefix, continuation) => continuation.indexes(prefix.indexes(found)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.indexes(when_true.indexes(found)),
+        Call(_, _, _) => found,
+        Loop(_, _, _, _, body, _, _, _, _) => body.indexes(found),
+        Lend(_, _, _, _) => found,
+    }
+}
+
+fn nodes_ends(nodes: List<Node>, found: NatMap<Nat>) → NatMap<Nat> {
+    match nodes {
+        Nil => found,
+        Cons(node, rest) => nodes_ends(rest, match node {
+            WideLoad(bytes, _, _, index) => nat_map_set(found, index, bytes - 1),
+            WideStore(bytes, _, _, index, _) => nat_map_set(found, index, bytes - 1),
+            _ => found,
+        }),
+    }
+}
+
+fn StructuredRegion::ends(self region: StructuredRegion, found: NatMap<Nat>) → NatMap<Nat> {
+    match region {
+        Dataflow(body) => nodes_ends(body.nodes, found),
+        Sequence(prefix, continuation) => continuation.ends(nodes_ends(prefix.nodes, found)),
+        Compose(prefix, continuation) => continuation.ends(prefix.ends(found)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.ends(when_true.ends(found)),
+        Call(_, _, _) => found,
+        Loop(_, _, _, _, body, _, _, _, _) => body.ends(found),
+        Lend(_, _, _, _) => found,
+    }
+}
+
+// What a function's search starts from: the words its loads and stores
+// index by, how far each of several bytes reaches, and its parameters as
+// themselves.
+fn Function::seen(self function: Function) → Seen {
+    Seen::start(function.body.indexes(NatMap::empty()), function.body.ends(NatMap::empty())).of_parameters(function.parameters)
+}
+
+fn Function::learn_plan(self function: Function) → Plan { shared(function.body.learn(function.seen()), λ learned => learned.plan) }
+
+// The conditionals a plan replaces by an arm.
+fn Plan::decided(self plan: Plan) → Nat {
+    match plan {
+        Same => 0,
+        Nodes(_) => 0,
+        Then(_, rest) => rest.decided(),
+        Both(first, second) => first.decided() + second.decided(),
+        Arms(when_true, when_false) => when_true.decided() + when_false.decided(),
+        Arm(_, arm) => Succ(arm.decided()),
+        Body(body) => body.decided(),
+        Derived(_, body) => body.decided(),
+        Args(_) => 0,
+        Inputs(_, body) => body.decided(),
+        Flat(_, _) => 0,
+    }
+}
+
+// The nodes a plan drops or writes.
+fn steps_written(steps: List<Step>) → Nat {
+    match steps {
+        Nil => 0,
+        Cons(step, rest) => match step { Drop => Succ(steps_written(rest)), Emit(_) => Succ(steps_written(rest)), _ => steps_written(rest) },
+    }
+}
+
+fn Plan::written(self plan: Plan) → Nat {
+    match plan {
+        Same => 0,
+        Nodes(steps) => steps_written(steps),
+        Then(steps, rest) => steps_written(steps) + rest.written(),
+        Both(first, second) => first.written() + second.written(),
+        Arms(when_true, when_false) => when_true.written() + when_false.written(),
+        Arm(_, arm) => arm.written(),
+        Body(body) => body.written(),
+        Derived(steps, body) => steps_written(steps) + body.written(),
+        Args(_) => 0,
+        Inputs(_, body) => body.written(),
+        Flat(steps, _) => steps_written(steps),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What to test at a function's entry
+
+// The nodes of a test: a comparison of each parameter with a wanted bound
+// with that bound, at ids from `next`, each or'd into the bit before it.
+record Tests { nodes: List<Node>, bit: Option<Nat>, next: Nat }
+
+fn named(names: NatMap<Nat>, id: Nat) → Nat { match nat_map_get(names, id) { None => id, Some(name) => name } }
+
+// A node writing `output` and reading each id as `names` has it.
+fn Node::renamed(self node: Node, names: NatMap<Nat>, output: Nat) → Node {
+    match node {
+        Const(w, _, v) => Const(w, output, v),
+        Move(w, _, s) => Move(w, output, named(names, s)),
+        Add(w, _, l, r) => Add(w, output, named(names, l), named(names, r)),
+        Sub(w, _, l, r) => Sub(w, output, named(names, l), named(names, r)),
+        BitAnd(w, _, l, r) => BitAnd(w, output, named(names, l), named(names, r)),
+        BitOr(w, _, l, r) => BitOr(w, output, named(names, l), named(names, r)),
+        BitXor(w, _, l, r) => BitXor(w, output, named(names, l), named(names, r)),
+        ShiftLeft(w, _, v, n) => ShiftLeft(w, output, named(names, v), n),
+        LogicalShiftRight(w, _, v, n) => LogicalShiftRight(w, output, named(names, v), n),
+        RotateRight(w, _, v, n) => RotateRight(w, output, named(names, v), n),
+        ArithmeticShiftRight(w, _, v, n) => ArithmeticShiftRight(w, output, named(names, v), n),
+        UnsignedLessThan(w, _, l, r) => UnsignedLessThan(w, output, named(names, l), named(names, r)),
+        SignedLessThan(w, _, l, r) => SignedLessThan(w, output, named(names, l), named(names, r)),
+        Equal(w, _, l, r) => Equal(w, output, named(names, l), named(names, r)),
+        BufferLoad(_, f, i) => BufferLoad(output, f, named(names, i)),
+        BufferStore(_, f, i, v) => BufferStore(output, f, named(names, i), named(names, v)),
+        Resize(from, to, _, s) => Resize(from, to, output, named(names, s)),
+        SignResize(from, to, _, s) => SignResize(from, to, output, named(names, s)),
+        TableRead(w, _, n, i, es) => TableRead(w, output, n, named(names, i), es),
+        WideLoad(n, _, f, i) => WideLoad(n, output, f, named(names, i)),
+        WideStore(n, _, f, i, v) => WideStore(n, output, f, named(names, i), named(names, v)),
+        ByteSwap(w, _, s) => ByteSwap(w, output, named(names, s)),
+    }
+}
+
+// A cone's nodes at ids from `next`, each reading the ones before it by
+// their new ids.
+record Renamed { nodes: List<Node>, names: NatMap<Nat>, next: Nat }
+
+fn cone_renamed(cone: List<Node>, so_far: Renamed) → Renamed {
+    match cone {
+        Nil => so_far,
+        Cons(node, rest) => cone_renamed(rest, Renamed(so_far.nodes ++ [node.renamed(so_far.names, so_far.next)],
+            nat_map_set(so_far.names, node_output(node).id, so_far.next), Succ(so_far.next))),
+    }
+}
+
+// A span's test, where more than one comparison waits on it (a test that
+// decides one is that one moved): its cone at new ids, the word `least`
+// past its base, and two comparisons, each one where the test fails. The
+// sum below the base is where the sum wrapped; the length below the sum is
+// where the span does not fit. The body's own computation of the base is
+// then a repeat of the cone's, which the pass that reads through copies
+// writes as a move (`function_ir_tidy.hthr`).
+fn span_tests(spans: List<Span>, so_far: Tests) → Tests {
+    match spans {
+        Nil => so_far,
+        Cons(span, rest) => match span.uses.leb(1) {
+            True => span_tests(rest, so_far),
+            False => shared(cone_renamed(span.cone, Renamed([], NatMap::empty(), so_far.next)), λ cone =>
+                shared(named(cone.names, span.base), λ base => shared(cone.next, λ k =>
+                    shared(cone.nodes ++ [Const(64, k, span.least), Add(64, k + 1, base, k), UnsignedLessThan(64, k + 2, k + 1, base),
+                        UnsignedLessThan(64, k + 3, span.length, k + 1)], λ nodes => span_tests(rest, match so_far.bit {
+                        None => Tests(so_far.nodes ++ (nodes ++ [BitOr(1, k + 4, k + 2, k + 3)]), Some(k + 4), k + 5),
+                        Some(bit) => Tests(so_far.nodes ++ (nodes ++ [BitOr(1, k + 4, bit, k + 2), BitOr(1, k + 5, k + 4, k + 3)]), Some(k + 5), k + 6),
+                    }))))),
+        },
+    }
+}
+
+fn tests_of(parameters: List<Nat>, wants: NatMap<Nat>, so_far: Tests) → Tests {
+    match parameters {
+        Nil => so_far,
+        Cons(parameter, rest) => match nat_map_get(wants, parameter) {
+            None => tests_of(rest, wants, so_far),
+            Some(least) => shared(so_far.next, λ k => tests_of(rest, wants, match so_far.bit {
+                None => Tests(so_far.nodes ++ [Const(64, k, least), UnsignedLessThan(64, k + 1, parameter, k)], Some(k + 1), k + 2),
+                Some(bit) => Tests(so_far.nodes ++ [Const(64, k, least), UnsignedLessThan(64, k + 1, parameter, k), BitOr(1, k + 2, bit, k + 1)],
+                    Some(k + 2), k + 3),
+            })),
+        },
+    }
+}
+
+// The test of every bound the function's undecided comparisons wait on, if
+// there is one, at ids from `top`.
+fn Function::guard_over(self function: Function, top: Nat) → Option<Guard> {
+    shared(function.body.learn(function.seen()), λ learned =>
+        shared(span_tests(learned.seen.wants.spans, tests_of(function.parameters, learned.seen.wants.least, Tests([], None, top))), λ tests =>
+            match tests.bit { None => None, Some(bit) => Some(Guard(top, tests.nodes, bit)) }))
+}
+
+fn Function::guard(self function: Function) → Option<Guard> { function.guard_over(function.top()) }

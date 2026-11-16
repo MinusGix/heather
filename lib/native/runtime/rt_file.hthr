@@ -1,5 +1,5 @@
 // `rt` over a span it writes: computations over the file
-// (docs/native-one-compiler-design.md §2.6, U4 step 4c).
+// (docs/native/native-one-compiler-design.md §2.6, U4 step 4c).
 //
 // `rt`'s terms (`Tm`) are values: total and pure, their meaning a function
 // of their words in a world, and the spans a function is lent are part of
@@ -29,7 +29,8 @@
 // The span is **not a value of `rt`**: no computation can name it, so none
 // can read the bytes as they were before a store. A source that reflects
 // at all threads its span straight through, which is what makes the store
-// in place sound.
+// in place sound. A byte of the span as it was that a source uses after a
+// store is a value read before the store (`rt_file_reflect`'s plan).
 import logic;
 import bool;
 import nat;

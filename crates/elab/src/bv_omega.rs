@@ -1,4 +1,4 @@
-//! `bv_omega`: word arithmetic lifted to Nat (docs/bv-omega-design.md).
+//! `bv_omega`: word arithmetic lifted to Nat (docs/tactics/bv-omega-design.md).
 //!
 //! A generator, not a solver. It finds every `toNat` of a word in the goal
 //! and in the facts in scope, takes each word apart through `add`, `sub`,
@@ -42,6 +42,20 @@ pub(crate) struct Obligation {
     pub why: String,
     /// Over no atoms: a comparison of literals, which `trivial` decides.
     pub closed: bool,
+    /// For a side condition proved given hypothesis words' facts (§2): its
+    /// statement under the binders that take them, and the `λ` that does.
+    pub probe: Option<(String, String)>,
+}
+
+impl Obligation {
+    /// The side condition as its stage proves it, type and proof, for a
+    /// re-check of it alone.
+    pub fn alone(&self) -> (String, String) {
+        match &self.probe {
+            Some((statement, lambda)) => (statement.clone(), format!("{lambda}omega")),
+            None => (self.statement.clone(), "omega".into()),
+        }
+    }
 }
 
 // Generated arithmetic is spelled as qualified calls, never operators: an
@@ -310,6 +324,7 @@ impl<'a> Walk<'a> {
         }
         if let Kind::Leaf = self.nodes[index].kind {
             self.mask_bound(&w, word, &spelled)?;
+            self.zero_extend_value(word, &spelled)?;
         }
         Ok(Some(index))
     }
@@ -336,6 +351,27 @@ impl<'a> Walk<'a> {
         };
         if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
             self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
+        }
+        Ok(())
+    }
+
+    /// A word widened by zeros, `x.zero_extend(e)`, has `x`'s value: a
+    /// byte read and compared as a `u64` (`b.zero_extend(56) < 0x80`) is
+    /// the byte's own comparison. Its leaf gets that equation, and `x` is a
+    /// word of its own at its width.
+    fn zero_extend_value(&mut self, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        let Some(args) = named_args(self.elab, word, "bitvec::BitVec::zero_extend") else { return Ok(()) };
+        let [n, extra, x] = args.as_slice() else { return Ok(()) };
+        let (Ok(ns), Ok(es), Some(xs)) = (nat_term_source(self.elab, self.cx, n), nat_term_source(self.elab, self.cx, extra), self.elab.spell_term_source(self.cx, x)) else {
+            return Ok(());
+        };
+        let width = self.literal(n).map(|n| n.to_string()).unwrap_or_else(|| ns.clone());
+        if self.word_at(width, x)?.is_none() {
+            return Ok(());
+        }
+        let statement = format!("bitvec::BitVec::toNat({spelled}) = bitvec::BitVec::toNat({xs})");
+        if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+            self.bridges.push((format!("__bv_widened{}", self.bridges.len()), statement, format!("bitvec::BitVec::concat_zero_toNat({ns}, {es}, {xs})")));
         }
         Ok(())
     }
@@ -668,7 +704,7 @@ impl<'w, 'a> Emitter<'w, 'a> {
     }
 
     fn obligation(&mut self, statement: String, shown: String, why: String, closed: bool) -> usize {
-        self.obligations.push(Obligation { statement, shown, why, closed });
+        self.obligations.push(Obligation { statement, shown, why, closed, probe: None });
         self.obligations.len() - 1
     }
 
@@ -1063,7 +1099,9 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
                     return Some(WordFact { args, relation, swapped, lemma, proof });
                 }
             }
-            None
+            // A plain equation of words, `fill = 63`: their values are equal.
+            let width = word_width(elab, cx, ty, lhs)?;
+            Some(WordFact { args: vec![width, Rc::clone(lhs), Rc::clone(rhs)], relation: Relation::Eq, swapped: false, lemma: "toNat_of_eq", proof: name.to_string() })
         }
         Type::El { tm, .. } => {
             for (test, relation, lemma) in [("unsigned_lt", Relation::Lt, "unsigned_lt_prop"), ("unsigned_le", Relation::Le, "unsigned_le_prop")] {
@@ -1075,6 +1113,29 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
         }
         _ => None,
     }
+}
+
+/// The width of the words an equation `ty` relates, when they are words;
+/// `side` is one of them.
+fn word_width(elab: &Elaborator, cx: &Cx, ty: &Type, side: &Rc<Term>) -> Option<Rc<Term>> {
+    let Type::Id { ty, .. } = ty else { return None };
+    let ind = elab.display_tag_of(ty)?;
+    if !elab.lookup_inductive("bitvec::BitVec").is_some_and(|word| word.tag == ind.tag) { return None; }
+    let a = elab.spell_term_source(cx, side)?;
+    // Type spellings include instantiated codes and inline lowerings. Let
+    // the existing method inference recover the width in all those forms.
+    let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
+    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
+    let n = inferred.and_then(|(tm, _, _)| {
+        let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
+        let [width, _] = args.as_slice() else { return None };
+        // Spelled, so the width outlives the probe's goals.
+        elab.spell_term_source(cx, width).map(|_| Rc::clone(width))
+    });
+    elab.pass.warnings.borrow_mut().truncate(mark.0);
+    elab.attempt.goal_arena.rollback(mark.1);
+    n
 }
 
 /// Word equality and comparison goals use the same Nat generator through
@@ -1090,24 +1151,38 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
         let proof = format!("bitvec_omega::unsigned_of_{}({n}, {a}, {b}, __bv_result)", if yes { "true" } else { "false" });
         return Some(format!("{{ have __bv_result: ({statement}) = bv_omega; {} }}", if flipped { format!("sym({proof})") } else { proof }));
     }
-    let Type::Id { ty, lhs, rhs, .. } = expected else { return None };
-    let ind = elab.display_tag_of(ty)?;
-    if !elab.lookup_inductive("bitvec::BitVec").is_some_and(|word| word.tag == ind.tag) { return None; }
+    // The propositions `a < b` and `a <= b` at a word, and the `<=` bit
+    // equal to a constructor: the Nat order over the values, as a subgoal.
+    let three = |args: Vec<&Rc<Term>>| -> Option<Vec<String>> {
+        if args.len() != 3 { return None; }
+        args.into_iter().map(|t| elab.spell_term_source(cx, t)).collect()
+    };
+    let subgoal = |statement: String, proof: String| Some(format!("{{ have __bv_result: ({statement}) = bv_omega; {proof} }}"));
+    if let Type::El { tm, .. } = expected {
+        for (test, strict) in [("unsigned_lt", true), ("unsigned_le", false)] {
+            let Some(args) = named_args(elab, tm, &format!("bitvec::BitVec::{test}")).and_then(three) else { continue };
+            let [n, a, b] = args.as_slice() else { return None };
+            let (av, bv) = (format!("bitvec::BitVec::toNat({a})"), format!("bitvec::BitVec::toNat({b})"));
+            let statement = if strict { lt(&av, &bv) } else { le(&av, &bv) };
+            return subgoal(statement, format!("bitvec_omega::{test}_of_nat({n}, {a}, {b}, __bv_result)"));
+        }
+        return None;
+    }
+    if let Type::Id { lhs, rhs, .. } = expected {
+        for (flipped, side, flag) in [(false, lhs, rhs), (true, rhs, lhs)] {
+            let Some(args) = named_args(elab, side, "bitvec::BitVec::unsigned_le_bit").and_then(three) else { continue };
+            let Some(yes) = bool_flag(elab, cx, flag) else { continue };
+            let [n, a, b] = args.as_slice() else { return None };
+            let (av, bv) = (format!("bitvec::BitVec::toNat({a})"), format!("bitvec::BitVec::toNat({b})"));
+            let statement = if yes { le(&av, &bv) } else { lt(&bv, &av) };
+            let proof = format!("bitvec_omega::unsigned_le_of_{}({n}, {a}, {b}, __bv_result)", if yes { "true" } else { "false" });
+            return subgoal(statement, if flipped { format!("sym({proof})") } else { proof });
+        }
+    }
+    let Type::Id { lhs, rhs, .. } = expected else { return None };
+    let n = elab.spell_term_source(cx, &*word_width(elab, cx, expected, lhs)?)?;
     let a = elab.spell_term_source(cx, lhs)?;
     let b = elab.spell_term_source(cx, rhs)?;
-    // Type spellings include instantiated codes and inline lowerings. Let
-    // the existing method inference recover the width in all those forms.
-    let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
-    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
-    let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
-    let n = inferred.and_then(|(tm, _, _)| {
-        let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
-        let [width, _] = args.as_slice() else { return None };
-        elab.spell_term_source(cx, width)
-    });
-    elab.pass.warnings.borrow_mut().truncate(mark.0);
-    elab.attempt.goal_arena.rollback(mark.1);
-    let n = n?;
     for (flipped, word, other) in [(false, &a, rhs), (true, &b, lhs)] {
         if let Some(args) = named_args(elab, other, "bitvec::BitVec::ofNat")
             && let [_, c] = args.as_slice()
@@ -1165,55 +1240,70 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     // left alone when one fails.
     let mut restated: Vec<(String, Type)> = Vec::new();
     let mut optimistic = false;
-    for (name, ty) in facts_in_scope {
-        let compared = word_fact(elab, cx, &name, &ty);
-        let is_comparison = compared.is_some();
-        if !is_comparison && !is_nat_relation(elab, cx, &ty) {
-            continue;
-        }
-        let before = walk.clone();
-        if let Some(fact) = compared {
-            let [n, a, b] = fact.args.as_slice() else { continue };
-            for operand in [a, b] {
-                if let Some(i) = walk.word(n, operand)? {
-                    walk.found.push(i);
-                    comparison_value_bridge(&mut walk, i);
-                }
+    // A fact refused carefully is tried again once a later one is taken:
+    // its side conditions may follow from that one's comparison (`1 < n - i`
+    // written before `i < n`).
+    let fact_names: Vec<String> = facts_in_scope.iter().map(|(name, _)| name.clone()).collect();
+    let mut pending = facts_in_scope;
+    loop {
+        let mut refused = Vec::new();
+        let mut taken = false;
+        for (name, ty) in pending {
+            let compared = word_fact(elab, cx, &name, &ty);
+            let is_comparison = compared.is_some();
+            if !is_comparison && !is_nat_relation(elab, cx, &ty) {
+                continue;
             }
-            let ns = nat_term_source(elab, cx, n)?;
-            let av = elab.spell_term_source(cx, a).ok_or("could not spell comparison operand")?;
-            let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
-            let at = format!("bitvec::BitVec::toNat({av})");
-            let bt = format!("bitvec::BitVec::toNat({bv})");
-            let (x, y) = if fact.swapped { (&bt, &at) } else { (&at, &bt) };
-            let statement = match fact.relation {
-                Relation::Lt => lt(x, y),
-                Relation::Le => le(x, y),
-                Relation::Eq => format!("{x} = {y}"),
-                Relation::Ne => format!("logic::Not({x} = {y})"),
-            };
-            walk.bridges.push((format!("__bv_compare{}", walk.bridges.len()), statement,
-                format!("bitvec_omega::{}({ns}, {av}, {bv}, {})", fact.lemma, fact.proof)));
+            let before = walk.clone();
+            if let Some(fact) = compared {
+                let [n, a, b] = fact.args.as_slice() else { continue };
+                for operand in [a, b] {
+                    if let Some(i) = walk.word(n, operand)? {
+                        walk.found.push(i);
+                        comparison_value_bridge(&mut walk, i);
+                    }
+                }
+                let ns = nat_term_source(elab, cx, n)?;
+                let av = elab.spell_term_source(cx, a).ok_or("could not spell comparison operand")?;
+                let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
+                let at = format!("bitvec::BitVec::toNat({av})");
+                let bt = format!("bitvec::BitVec::toNat({bv})");
+                let (x, y) = if fact.swapped { (&bt, &at) } else { (&at, &bt) };
+                let statement = match fact.relation {
+                    Relation::Lt => lt(x, y),
+                    Relation::Le => le(x, y),
+                    Relation::Eq => format!("{x} = {y}"),
+                    Relation::Ne => format!("logic::Not({x} = {y})"),
+                };
+                walk.bridges.push((format!("__bv_compare{}", walk.bridges.len()), statement,
+                    format!("bitvec_omega::{}({ns}, {av}, {bv}, {})", fact.lemma, fact.proof)));
+            }
+            if !is_comparison { walk.scan_type(&ty)?; }
+            let mut found = std::mem::take(&mut walk.found);
+            // A split also needs the arithmetic value of its input.
+            found.extend((before.nodes.len()..walk.nodes.len()).filter(|&i| !walk.nodes[i].is_leaf()));
+            if !is_comparison && walk.bridges.len() == before.bridges.len() && !found.iter().any(|&n| !walk.nodes[n].is_leaf()) {
+                walk = before;
+                continue;
+            }
+            let old: HashSet<String> = plan_for(&before, &stated, &subjects).into_iter().map(|o| o.statement).collect();
+            let mut all = subjects.clone();
+            all.extend(found.iter().copied());
+            let new: Vec<Obligation> = plan_for(&walk, &stated, &all).into_iter().filter(|o| !old.contains(&o.statement)).collect();
+            optimistic |= !careful && !new.is_empty();
+            if !careful || new.iter().all(|o| holds(elab, cx, &walk, o)) {
+                subjects.extend(found);
+                taken = true;
+                if !is_comparison { restated.push((name, ty)); }
+            } else {
+                walk = before;
+                refused.push((name, ty));
+            }
         }
-        if !is_comparison { walk.scan_type(&ty)?; }
-        let mut found = std::mem::take(&mut walk.found);
-        // A split also needs the arithmetic value of its input.
-        found.extend((before.nodes.len()..walk.nodes.len()).filter(|&i| !walk.nodes[i].is_leaf()));
-        if !is_comparison && walk.bridges.len() == before.bridges.len() && !found.iter().any(|&n| !walk.nodes[n].is_leaf()) {
-            walk = before;
-            continue;
+        if !taken || refused.is_empty() {
+            break;
         }
-        let old: HashSet<String> = plan_for(&before, &stated, &subjects).into_iter().map(|o| o.statement).collect();
-        let mut all = subjects.clone();
-        all.extend(found.iter().copied());
-        let new: Vec<Obligation> = plan_for(&walk, &stated, &all).into_iter().filter(|o| !old.contains(&o.statement)).collect();
-        optimistic |= !careful && !new.is_empty();
-        if !careful || new.iter().all(|o| holds(elab, cx, &walk, o)) {
-            subjects.extend(found);
-            if !is_comparison { restated.push((name, ty)); }
-        } else {
-            walk = before;
-        }
+        pending = refused;
     }
     if walk.nodes.is_empty() {
         return Err("found no `toNat` of a word in the goal or unsigned comparison in scope; use `omega`".into());
@@ -1225,50 +1315,137 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     subjects.sort_unstable();
     subjects.dedup();
 
+    let hidden_roots = hidden_roots(&fact_names, &restated);
+
     let prelude = prelude(&walk);
+    let restated: Vec<(String, String)> = restated.iter()
+        .map(|(name, ty)| elab.spell_type_source(cx, ty).map(|spelled| (name.clone(), spelled)).ok_or("could not spell a fact in scope"))
+        .collect::<Result<_, _>>()?;
     let mut e = Emitter::new(&walk, &stated);
+    // A word a fact in scope mentions (`1 < n - i`, or a restated Nat fact)
+    // is a *hypothesis word*: that fact says something about its `toNat`,
+    // which a side condition can use only beside the word's own fact. So
+    // the side conditions are proved in stages (§2): the `k`th hypothesis
+    // word's, given the facts of the words before it, and then the rest,
+    // given every hypothesis word's fact. A stage with facts is proved over
+    // Nat variables like the goal, before any fact exists.
+    // A word built from a literal says nothing a side condition lacks: its
+    // value is the literal, given by its comparison bridge or its own fact.
+    let mentioned = |n: usize| {
+        if let Kind::Value(_, _, NatSyn::Lit(_)) = walk.nodes[n].kind {
+            return false;
+        }
+        let value = format!("bitvec::BitVec::toNat({})", walk.nodes[n].word);
+        walk.bridges.iter().any(|(_, statement, _)| statement.contains(&value)) || restated.iter().any(|(_, spelled)| spelled.contains(&value))
+    };
+    let hypothesis_words: Vec<usize> = subjects.iter().copied().filter(|&n| mentioned(n)).collect();
+    let mut stages: Vec<(Vec<usize>, std::ops::Range<usize>)> = Vec::new();
     let mut seen = HashSet::new();
+    for (k, &h) in hypothesis_words.iter().enumerate() {
+        let from = e.obligations.len();
+        e.plan(h, &mut seen);
+        stages.push((hypothesis_words[..k].to_vec(), from..e.obligations.len()));
+    }
+    let from = e.obligations.len();
     for &n in &subjects {
         e.plan(n, &mut seen);
     }
-    let mut source = format!("{{\n{prelude}\n");
-    // The goal over Nat variables for the words taken apart, proved before
-    // any fact exists: `omega` must never meet a composite word's `toNat`,
-    // where its atom fallback would reduce into the bits.
-    if !subjects.is_empty() {
-        let mut by_length = subjects.clone();
+    stages.push((hypothesis_words.clone(), from..e.obligations.len()));
+    stages.retain(|(_, range)| !range.is_empty());
+
+    // `toNat(w)` of each of `nodes` as a Nat variable `__bv_wN`, the longest
+    // spelling first so an inner word is not replaced inside an outer one.
+    let generalise = |nodes: &[usize], text: String| {
+        let mut by_length = nodes.to_vec();
         by_length.sort_by_key(|&n| std::cmp::Reverse(walk.nodes[n].word.len()));
-        let generalise = |text: String| {
-            by_length.iter().fold(text, |text, &n| {
-                text.replace(&format!("bitvec::BitVec::toNat({})", walk.nodes[n].word), &format!("__bv_w{n}"))
-            })
-        };
-        let goal = generalise(elab.spell_type_source(cx, expected).ok_or("could not spell the goal")?);
+        by_length.iter().fold(text, |text, &n| {
+            text.replace(&format!("bitvec::BitVec::toNat({})", walk.nodes[n].word), &format!("__bv_w{n}"))
+        })
+    };
+    // The binders that take `nodes`' values and facts, then every bridge and
+    // restated fact over them, and the names they bind. Rebinding a fact
+    // under its own name hides the original from the `omega` inside.
+    let binders = |e: &Emitter, nodes: &[usize]| {
         let mut binders = String::new();
         let mut names = Vec::new();
-        for &n in &subjects {
+        for &n in nodes {
             binders.push_str(&format!("(__bv_w{n}: Nat) → "));
             names.push(format!("__bv_w{n}"));
         }
-        for &n in &subjects {
+        for &n in nodes {
             let (p, q) = &e.forms[n];
             binders.push_str(&format!("(__bv_h{n}: {} = {}) → ", add(&format!("__bv_w{n}"), &e.spell(q)), e.spell(p)));
             names.push(format!("__bv_h{n}"));
         }
         for (name, statement, _) in &walk.bridges {
-            binders.push_str(&format!("({name}: {}) → ", generalise(statement.clone())));
+            binders.push_str(&format!("({name}: {}) → ", generalise(nodes, statement.clone())));
             names.push(name.clone());
         }
-        // Rebinding a fact under its own name hides the original from the
-        // `omega` inside.
-        for (name, ty) in &restated {
-            let spelled = elab.spell_type_source(cx, ty).ok_or("could not spell a fact in scope")?;
-            binders.push_str(&format!("({name}: {}) → ", generalise(spelled)));
-            names.push(name.clone());
+        // A conjunct's name is a projection path (`m.left`), which is no
+        // binder: it is bound fresh, and its root is hidden as `True` once
+        // every conjunct read from it is restated.
+        for (k, (name, spelled)) in restated.iter().enumerate() {
+            let binder = restated_binder(k, name);
+            binders.push_str(&format!("({binder}: {}) → ", generalise(nodes, spelled.clone())));
+            names.push(binder);
         }
+        for root in &hidden_roots {
+            binders.push_str(&format!("({root}: True) → "));
+            names.push(root.clone());
+        }
+        (binders, names)
+    };
+
+    let mut source = format!("{{\n{prelude}\n");
+    // The goal over Nat variables for the words taken apart, proved before
+    // any fact exists: `omega` must never meet a composite word's `toNat`,
+    // where its atom fallback would reduce into the bits.
+    if !subjects.is_empty() {
+        let goal = generalise(&subjects, elab.spell_type_source(cx, expected).ok_or("could not spell the goal")?);
+        let (binders, names) = binders(&e, &subjects);
         source.push_str(&format!("have __bv_goal: ({binders}{goal}) = λ {} => omega;\n", names.join(" ")));
     }
-    let count = bundle(&mut e, &mut source);
+    // Each stage's side conditions as a balanced conjunction; one with facts
+    // is an implication from them, applied once they exist.
+    let mut paths = vec![String::new(); e.obligations.len()];
+    let mut applications: Vec<(usize, String)> = Vec::new();
+    let mut bundles = Vec::new();
+    for (k, (given, range)) in stages.iter().enumerate() {
+        let bundle = if k == 0 { "__bv_obligations".to_string() } else { format!("__bv_obligations{k}") };
+        let parts: Vec<&Obligation> = e.obligations[range.clone()].iter().collect();
+        let (statement, proof) = balanced(&parts, range.start, &mut paths, String::new());
+        for path in &mut paths[range.clone()] {
+            *path = format!("{bundle}{path}");
+        }
+        if given.is_empty() {
+            source.push_str(&format!("have {bundle}: ({statement}) = {proof};\n"));
+        } else {
+            let (binders, names) = binders(&e, given);
+            let lambda = format!("λ {} => ", names.join(" "));
+            for o in &mut e.obligations[range.clone()] {
+                o.probe = Some((format!("{binders}{}", generalise(given, o.statement.clone())), lambda.clone()));
+            }
+            source.push_str(&format!("have __bv_stage{k}: ({binders}{}) = {lambda}{proof};\n", generalise(given, statement.clone())));
+            applications.push((k, statement));
+        }
+        bundles.push(bundle);
+    }
+    e.paths = paths;
+    for (k, statement) in applications {
+        let given = &stages[k].0;
+        let mut arguments = Vec::new();
+        for &n in given {
+            arguments.push(format!("bitvec::BitVec::toNat({})", walk.nodes[n].word));
+        }
+        for &n in given {
+            arguments.push(e.fact(n));
+        }
+        arguments.extend(walk.bridges.iter().map(|(name, _, _)| name.clone()));
+        arguments.extend(restated.iter().map(|(name, _)| name.clone()));
+        arguments.extend(hidden_roots.iter().map(|_| "trivial".to_string()));
+        let line = format!("have {}: ({statement}) = __bv_stage{k}({});", bundles[k], arguments.join(", "));
+        e.lines.push(line);
+    }
     let mut arguments = Vec::new();
     for &n in &subjects {
         arguments.push(format!("bitvec::BitVec::toNat({})", walk.nodes[n].word));
@@ -1283,13 +1460,16 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     for (name, _) in &restated {
         arguments.push(name.clone());
     }
+    for _ in &hidden_roots {
+        arguments.push("trivial".into());
+    }
     for line in &e.lines {
         source.push_str(line);
         source.push('\n');
     }
-    // The last step must not see the bundle: `omega` would split it.
-    if count > 0 {
-        source.push_str("have __bv_obligations = trivial;\n");
+    // The last step must not see the bundles: `omega` would split them.
+    for bundle in &bundles {
+        source.push_str(&format!("have {bundle} = trivial;\n"));
     }
     if subjects.is_empty() {
         source.push_str("omega\n}");
@@ -1498,4 +1678,32 @@ fn is_nat_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
         Type::Id { ty, .. } => elab.display_type(cx, ty) == "Nat",
         _ => false,
     }
+}
+
+/// The binder for the `k`th restated fact: its own name when that is an
+/// identifier, a fresh one for a conjunct's projection path (`m.left`).
+fn restated_binder(k: usize, name: &str) -> String {
+    if name.contains('.') { format!("__bv_fact{k}") } else { name.to_string() }
+}
+
+/// The roots of the restated conjuncts (`m` of `m.left`) every one of whose
+/// conjuncts is restated: hiding them keeps the original composite words
+/// from the `omega` inside, as rebinding does for a plain name.
+fn hidden_roots(fact_names: &[String], restated: &[(String, Type)]) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    for (name, _) in restated {
+        let Some((root, _)) = name.split_once('.') else { continue };
+        if roots.iter().any(|r| r == root) {
+            continue;
+        }
+        let prefix = format!("{root}.");
+        let all = fact_names
+            .iter()
+            .filter(|f| f.starts_with(&prefix))
+            .all(|f| restated.iter().any(|(r, _)| r == f));
+        if all {
+            roots.push(root.to_string());
+        }
+    }
+    roots
 }

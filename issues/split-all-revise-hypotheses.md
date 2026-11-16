@@ -4,19 +4,19 @@ status: open
 labels: [tactics,proofs,elaboration]
 area: tactics
 created: 2026-10-02
-updated: 2026-10-31
+updated: 2026-11-15
 ---
 
 When `split_all` splits a scrutinee, the motive covers only the goal. A
 hypothesis already in context that mentions the scrutinee keeps its old type
 in every branch, so a leaf sees `ih: … runs_start(cut, inside) …` beside a
 goal where `cut` is `False`. Found on 2026-10-02, in the run-count case lemma
-(docs/native-programs-read-like-programs-design.md §4.1).
+(docs/archive/native-programs-read-like-programs-design.md §4.1).
 
 The workaround is to state the premise as a binder of the goal, `(cut,
 inside: Bool) → (premise) → conclusion`. Then the Bool binders are split as
 they are introduced, and the premise is introduced afterwards at its
-simplified type (S6, docs/goal-combinators.md).
+simplified type (S6, docs/tactics/goal-combinators.md).
 
 Wanted: revert the hypotheses whose types mention the scrutinee into the
 motive, as Lean's `cases` does. Each arm then re-introduces them at the
@@ -28,4 +28,5 @@ Related: [[split-all-reduce-defined-heads]].
 ## Log
 
 - 2026-10-31: 2026-10-31: slice 2 of dependent-match-compiler refines hypotheses at a computed scrutinee in the elaborator's motive-less match, but split_all's Cases (host.rs cases_request) builds its own motive from the goal alone, so this stays open. The fix is to generalize the about-the-scrutinee locals there the way refined_by_occurrence selects them, every one (a tactic leaf may read any).
-- 2026-11-05: gardener: cites a file it shares with [[literal-classes-need-importing]] (`docs/native-programs-read-like-programs-design.md`); [[split-all-through-recursive-definitions]] (`docs/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/goal-combinators.md`).
+- 2026-11-05: gardener: cites a file it shares with [[literal-classes-need-importing]] (`docs/archive/native-programs-read-like-programs-design.md`); [[split-all-through-recursive-definitions]] (`docs/tactics/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/tactics/goal-combinators.md`).
+- 2026-11-15: A hypothesis with a test of its own (`h: is_digit(c) = True`) is now reverted at split_all's root and split as a premise; a premise binder is split before it is introduced, and a case where it reads `False = True` is closed (docs/tactics/program-proof-tactics-design.md §3 A, lib/_tests/std/tactic/split_all_tests.hthr). Left: a hypothesis with no test of its own that a later split substitutes into is still not revised.

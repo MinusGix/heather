@@ -1,5 +1,5 @@
 //! `decreases e` — termination by a `Nat` measure
-//! (issues/termination-measures.md, docs/termination-measures-design.md).
+//! (issues/termination-measures.md, docs/language/recursion/termination-measures-design.md).
 //!
 //! A declaration `fn f(x̄) -> T decreases e { body }` is elaborated as strong
 //! induction on a bound for the measure, spelled entirely at the **surface**
@@ -14,8 +14,8 @@
 //!
 //! …except that the three layers are **named**, not nested inline:
 //! `f#body` is the `Succ` arm, `f#rec` is the eliminator, and `f` applies it
-//! (`docs/decreases-unfolding-design.md` §2, which amends
-//! `docs/termination-measures-design.md` §1/§5). The lifting is what makes the
+//! (`docs/language/recursion/decreases-unfolding-design.md` §2, which amends
+//! `docs/language/recursion/termination-measures-design.md` §1/§5). The lifting is what makes the
 //! unfolding companions of that document statable; nothing else changes, since
 //! a `fn` is transparent and `f#rec(Succ k, …) ≡ f#body(k, f#rec(k), …)` is
 //! `refl`.
@@ -29,7 +29,7 @@
 //!
 //! The obligation is not spelled at the call: it is **lifted** into a
 //! declaration of its own, `f#obl_N`, over the binders its statement names
-//! (`docs/decreases-unfolding-design.md` §4). `f#body` and both unfolding
+//! (`docs/language/recursion/decreases-unfolding-design.md` §4). `f#body` and both unfolding
 //! companions then reference the same opaque `f#obl_N(…)`, so the three
 //! spellings of a self-call are identical by construction — which is what an
 //! `omega`-defaulted obligation needs, since `omega` reconstructs its
@@ -51,7 +51,8 @@ use crate::{R, err};
 /// The obligations a wrapped body owes, one per recursive call in source
 /// order: the call's span, the hole's name, the obligation rendered for a
 /// diagnostic, and — for a group site the rank rule explains —
-/// `docs/mutual-recursion-design.md` §8's sentence.
+/// `docs/language/recursion/mutual-recursion-design.md` §8's sentence.
+#[derive(Clone)]
 pub(crate) struct Obligations {
     pub(crate) sites: Vec<(Span, String, String, Option<String>)>,
 }
@@ -98,6 +99,7 @@ const H: &str = "__dec_h";
 const Z: &str = "__dec_z";
 
 /// One generated declaration and the obligations its own body owes.
+#[derive(Clone)]
 pub(crate) struct Lowered {
     pub(crate) decl: Decl,
     pub(crate) obligations: Obligations,
@@ -115,7 +117,7 @@ pub(crate) struct Family {
 
 /// Which `match`es on a computed scrutinee, with a recursive call in an arm
 /// and no written equation, the body rewrite gives the equation
-/// `__dec_meqN : e = pattern` (docs/dependent-match-compiler-design.md §4,
+/// `__dec_meqN : e = pattern` (docs/language/matching/dependent-match-compiler-design.md §4,
 /// §8). A lifted obligation is stated over the telescope this rewrite
 /// writes, not over the elaborator's context, so its arm's equation has to
 /// be a binder there. The equation stays only where an obligation reads
@@ -241,7 +243,7 @@ pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
     // as the guard it states (issues/decreases-measure-record-field-unspelled.md)
     // and `n = Succ(k)` as arithmetic. Any arm equation is a candidate; the
     // trial elaboration decides whether it is used
-    // (docs/dependent-match-compiler-design.md §8).
+    // (docs/language/matching/dependent-match-compiler-design.md §8).
     if let TyKind::Eq(..) = &ty.kind {
         return shares();
     }
@@ -440,6 +442,7 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
         obls: Vec::new(),
         found_only: true,
         found: Vec::new(),
+        known: &[],
         error: None,
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -457,7 +460,7 @@ pub(crate) fn rec_name(name: &str) -> String {
 }
 
 /// `f#grp` — a mutual group's product motive, keyed on its first member
-/// (`docs/mutual-recursion-design.md` §3).
+/// (`docs/language/recursion/mutual-recursion-design.md` §3).
 pub(crate) fn grp_name(name: &str) -> String {
     format!("{name}#grp")
 }
@@ -658,7 +661,7 @@ fn solo(decl: &Decl, name: &str, measure: &Expr) -> [Sibling; 1] {
 }
 
 /// `recv(args…)`, or `recv.snd…​.fst(args…)` where the member is reached
-/// through the product motive (`docs/mutual-recursion-design.md` §3).
+/// through the product motive (`docs/language/recursion/mutual-recursion-design.md` §3).
 fn project(recv: Expr, proj: Option<(usize, &'static str)>, args: Vec<Expr>, span: Span) -> Expr {
     let Some((snds, last)) = proj else {
         return app(recv, args, span);
@@ -713,7 +716,7 @@ pub(crate) fn deshadowed(decl: &Decl) -> Decl {
 
 /// Lower `decl`, whose body recurses under `decreases measure`, into the
 /// lifted obligations of §4 and the `f#body` / `f#rec` / `f` family (module
-/// docs, and `docs/decreases-unfolding-design.md` §2). `name` is the
+/// docs, and `docs/language/recursion/decreases-unfolding-design.md` §2). `name` is the
 /// declaration's self-name (the base name, for a member); `omega_available`
 /// says whether an obligation nobody discharges by hand may default to
 /// `omega`; `lift` is cleared to re-lower a declaration whose lifted
@@ -757,6 +760,7 @@ pub(crate) fn lower(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        known: &[],
         error: None,
     };
     let stmts: Vec<Stmt> = decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -966,7 +970,7 @@ pub(crate) fn lower(
 }
 
 /// One member of a mutual `decreases` group, as the run scan of
-/// `docs/mutual-recursion-design.md` §1 found it.
+/// `docs/language/recursion/mutual-recursion-design.md` §1 found it.
 pub(crate) struct GroupMember<'a> {
     pub(crate) decl: &'a Decl,
     /// The base name the member recurses under, as `Cx.selfref` uses it.
@@ -993,7 +997,7 @@ fn scaled(e: &Expr, n: usize, r: usize) -> Expr {
     )
 }
 
-/// The group-shape guards of `docs/mutual-recursion-design.md` §§2–4, owed
+/// The group-shape guards of `docs/language/recursion/mutual-recursion-design.md` §§2–4, owed
 /// before anything is elaborated — including before the members' measures are
 /// checked, since a measure naming a member is an unbound name at that point
 /// and "unbound" is the wrong thing to say about it.
@@ -1015,7 +1019,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                 format!(
                     "the members of a mutual `decreases` group share one recursion, so \
                      they declare the same type parameters: `{}` has <{}> and `{}` has \
-                     <{}> (docs/mutual-recursion-design.md §3)",
+                     <{}> (docs/language/recursion/mutual-recursion-design.md §3)",
                     first.name,
                     want.join(", "),
                     m.decl.name,
@@ -1033,7 +1037,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                 format!(
                     "a `decreases` measure may not call `{}`: it is a member of this \
                      mutual group, and the group's motive is stated at every member's \
-                     measure (docs/mutual-recursion-design.md §2)",
+                     measure (docs/language/recursion/mutual-recursion-design.md §2)",
                     other.self_name
                 ),
                 m.measure.span,
@@ -1047,7 +1051,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
                     "a mutual `decreases` group lifts every obligation into a \
                      declaration of its own, so `{}` cannot discharge one by statement: \
                      name the obligation instead (`on ?decN := …`, \
-                     docs/mutual-recursion-design.md §4)",
+                     docs/language/recursion/mutual-recursion-design.md §4)",
                     m.decl.name
                 ),
                 m.decl.span,
@@ -1058,7 +1062,7 @@ pub(crate) fn check_group_shape(members: &[GroupMember<'_>]) -> R<()> {
 }
 
 /// Lower a mutual group of N > 1 adjacent `decreases` declarations into the
-/// one recursion of `docs/mutual-recursion-design.md` §3: the lifted
+/// one recursion of `docs/language/recursion/mutual-recursion-design.md` §3: the lifted
 /// obligations, the product motive `f#grp`, one `g#body` per member, the
 /// shared `f#grp_rec`, and each member as a projection of it. Keyed on the
 /// first member's name.
@@ -1125,6 +1129,7 @@ pub(crate) fn lower_group(
             obls: Vec::new(),
             found_only: false,
             found: Vec::new(),
+            known: &[],
             error: None,
         };
         let stmts: Vec<Stmt> = m.decl.body.stmts.iter().map(|s| state.stmt(s)).collect();
@@ -1142,7 +1147,7 @@ pub(crate) fn lower_group(
             return err(
                 "this recursive call's obligation names a binder the generator cannot \
                  type, and a mutual group cannot fall back to stating it at the call \
-                 (docs/mutual-recursion-design.md §4): annotate the binder, or lift the \
+                 (docs/language/recursion/mutual-recursion-design.md §4): annotate the binder, or lift the \
                  call out of the pattern that introduces it",
                 site,
             );
@@ -1746,7 +1751,7 @@ struct Rewrite<'a> {
     lift: bool,
     /// Every member of the recursion this body may call, in declaration
     /// order, and which of them this body is
-    /// (`docs/mutual-recursion-design.md` §3). One entry for a singleton.
+    /// (`docs/language/recursion/mutual-recursion-design.md` §3). One entry for a singleton.
     members: &'a [Sibling],
     caller: usize,
     next: usize,
@@ -1762,7 +1767,7 @@ struct Rewrite<'a> {
     /// the expression each stands for. A `match` on one states its arms'
     /// equations about the expression, not the name: a lifted `f#obl_N`
     /// quantifies the equation without the `let`, and there the name would
-    /// be an unrelated parameter (docs/dependent-match-compiler-design.md §8).
+    /// be an unrelated parameter (docs/language/matching/dependent-match-compiler-design.md §8).
     scrut_aliases: Vec<(String, Expr)>,
     /// [`AutoEqs`]: which candidates get an equation, and the next
     /// candidate's number.
@@ -1779,6 +1784,11 @@ struct Rewrite<'a> {
     /// `found`.
     found_only: bool,
     found: Vec<Lowered>,
+    /// The body's own lifted `f#obl_N`, where this walk is a companion's:
+    /// its reference passes the binders the body's declaration quantified,
+    /// so the two spellings are one term even where the companion's walk
+    /// (its `let`s inlined) would select differently.
+    known: &'a [Lowered],
     error: Option<crate::ElabError>,
 }
 
@@ -1807,7 +1817,7 @@ impl<'a> Rewrite<'a> {
 
     /// `f(ȳ, spill…)` ↦ `ih(ȳ, proof, spill…)`, and for a group member
     /// `j(ȳ, spill…)` ↦ `ih.<proj_j>(ȳ, proof, spill…)`
-    /// (`docs/mutual-recursion-design.md` §3). Arguments were rewritten by
+    /// (`docs/language/recursion/mutual-recursion-design.md` §3). Arguments were rewritten by
     /// the caller already, so a nested self-call is handled inside out.
     fn self_call(&mut self, target: usize, call: &Expr, args: Vec<Expr>, explicit: bool) -> Expr {
         let span = call.span;
@@ -1950,7 +1960,7 @@ impl<'a> Rewrite<'a> {
         let stages = self.stages();
         let refined = stages.last().expect("stage 0 is the measure itself").clone();
         // …and the *argument's* measure refined the same way
-        // (`docs/mutual-recursion-design.md` §4): a sibling call at an
+        // (`docs/language/recursion/mutual-recursion-design.md` §4): a sibling call at an
         // unchanged argument has `at_args` mentioning the scrutinee too, and
         // the unrefined statement is then unprovable. Where `at_args` names no
         // refined variable every stage is the same expression, which is the
@@ -1993,7 +2003,7 @@ impl<'a> Rewrite<'a> {
         // What the obligation is proved by, wherever it is raised: the
         // writer's hole where an `on` names it, `omega` where the closer is
         // available, and the bare hole otherwise (reported with its
-        // statement, `docs/termination-measures-design.md` §2).
+        // statement, `docs/language/recursion/termination-measures-design.md` §2).
         let goal = match &clean {
             Some((c, args, raw)) => of_expr(app(var(if c.strict { "nat::Nat::Lt" } else { "nat::Nat::Le" }, span),
                 vec![args.clone(), raw.clone()], span)),
@@ -2159,6 +2169,21 @@ impl<'a> Rewrite<'a> {
         hint: Option<String>,
         span: Span,
     ) -> Option<Expr> {
+        let name = obl_name(&self.decl.name, site);
+        // A companion's site cites the body's declaration, over the binders
+        // it quantified, wherever each is in scope here too.
+        if let Some(known) = self.known.iter().find(|l| l.decl.name == name) {
+            let names: Vec<&str> = known.decl.params.iter().map(|p| p.name.as_str()).collect();
+            if names.iter().all(|n| self.scope.iter().any(|b| b.name == *n)) {
+                self.obls.push(Some(known.clone()));
+                let head = companion_ref(self.decl, &name, span);
+                return Some(if names.is_empty() {
+                    head
+                } else {
+                    app(head, names.iter().map(|n| var(n, span)).collect(), span)
+                });
+            }
+        }
         let mut params = Vec::new();
         let mut args = Vec::new();
         let goal = lt_ty(at_args.clone(), refined.clone(), span);
@@ -2191,7 +2216,6 @@ impl<'a> Rewrite<'a> {
             lets.extend(body.stmts);
             Block { stmts: lets, ..body }
         };
-        let name = obl_name(&self.decl.name, site);
         let decl = Decl {
             kind: DeclKind::Theorem,
             is_meta: false,
@@ -2316,7 +2340,7 @@ impl<'a> Rewrite<'a> {
 
     /// [`Self::scrut_ty`] for the scrutinee of a `match` with `arms`: a call
     /// under `When`'s constructors has the type of its test
-    /// (docs/when-design.md §4), as the `match` elaborates it.
+    /// (docs/language/when-design.md §4), as the `match` elaborates it.
     fn match_scrut_ty(&self, e: &Expr, arms: &[Arm]) -> Option<Ty> {
         match crate::tested::tested_marker(e, arms) {
             Some(marked) => self.infer_local(&marked),
@@ -2364,7 +2388,7 @@ impl<'a> Rewrite<'a> {
     }
 
     /// The same staging applied to any expression — the argument's measure as
-    /// well as the caller's (`docs/mutual-recursion-design.md` §4).
+    /// well as the caller's (`docs/language/recursion/mutual-recursion-design.md` §4).
     fn refine(&self, e: &Expr) -> Vec<Expr> {
         let mut stages = vec![e.clone()];
         for (v, pat, _) in &self.refinements {
@@ -2429,6 +2453,7 @@ impl<'a> Rewrite<'a> {
             obls: self.obls.iter().map(|_| None).collect(),
             found_only: self.found_only,
             found: Vec::new(),
+            known: self.known,
             error: None,
         }
     }
@@ -2508,7 +2533,7 @@ impl<'a> Rewrite<'a> {
                 };
                 // A call to any member of the recursion — the caller itself
                 // included — is rewritten to the shared induction hypothesis
-                // (`docs/mutual-recursion-design.md` §3); a group has no
+                // (`docs/language/recursion/mutual-recursion-design.md` §3); a group has no
                 // separate self-call route.
                 if self.found_only {
                     let mut named = named;
@@ -2806,7 +2831,7 @@ impl<'a> Rewrite<'a> {
                     format!(
                         "`{n}` is a member of this mutual `decreases` group, so it is \
                          only usable as a saturated call here \
-                         (docs/mutual-recursion-design.md §2)"
+                         (docs/language/recursion/mutual-recursion-design.md §2)"
                     ),
                     span,
                 );
@@ -2850,6 +2875,17 @@ impl<'a> Rewrite<'a> {
 
     /// A statement, **extending** the scope with what it binds (the caller
     /// truncates at the block's end).
+    /// What a written `let name: ty = expr` binds in [`Self::scope`]: its
+    /// type, from the source before recursive calls are replaced, and its
+    /// value, unless that reads the recursion. [`Respell`] binds the same
+    /// for a `let` it walks through, so an obligation it re-emits selects
+    /// the binders `f#body`'s did.
+    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr) -> Binder {
+        let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
+        let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+        Binder { name: name.to_string(), ty: inferred, value }
+    }
+
     fn stmt(&mut self, s: &Stmt) -> Stmt {
         match s {
             Stmt::Let {
@@ -2861,10 +2897,9 @@ impl<'a> Rewrite<'a> {
             } => {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
-                let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
-                let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+                let binder = self.let_binder(name, ty, expr);
                 let expr = self.expr(expr);
-                self.scope.push(Binder { name: name.clone(), ty: inferred, value });
+                self.scope.push(binder);
                 Stmt::Let {
                     name: name.clone(),
                     ty: ty.clone(),
@@ -3043,9 +3078,22 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             explicit: *explicit,
             goal_oriented: *goal_oriented,
         },
+        // A type argument can spell an expression too: an `if` on a test is a
+        // `match` on `decide_bit<test>`, whose proposition is one. Left alone,
+        // a `let`'s variable substituted away everywhere else stays free there
+        // (issues/runtime-mut-self-let-read-walk.md).
         ExprKind::TyApp { head, args } => ExprKind::TyApp {
             head: Box::new(go(head, bound)),
-            args: args.clone(),
+            args: args
+                .iter()
+                .map(|t| {
+                    let mut t = t.clone();
+                    for (p, a) in map.iter().filter(|(p, _)| !bound.iter().any(|b| b == p)) {
+                        t = subst_surface_ty(&t, p, a);
+                    }
+                    t
+                })
+                .collect(),
         },
         ExprKind::Lam { binders, body } => {
             let n = bound.len();
@@ -3122,7 +3170,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                 .collect(),
         },
         // `j` and blocks are not measure shapes, but the companions of
-        // `docs/decreases-unfolding-design.md` §4 push substitutions through
+        // `docs/language/recursion/decreases-unfolding-design.md` §4 push substitutions through
         // obligation *proofs*, which are exactly these two.
         ExprKind::J {
             proof,
@@ -3178,7 +3226,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             }))
         }
         // A record built or updated: a field path assigned in a body is the
-        // second (docs/sequencing-surface-design.md §20).
+        // second (docs/language/sequencing-surface-design.md §20).
         ExprKind::RecordUpdate { base, fields } => ExprKind::RecordUpdate {
             base: Box::new(go(base, bound)),
             fields: fields
@@ -3202,9 +3250,84 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
     Expr { kind, span }
 }
 
+/// A block's statements with each claimed method call on a mutable local
+/// (`\0mutated(x.m(a))`, [`heather_syntax::MUTATED`]) spelled as the plain
+/// `let`s it amounts to: `let p = \0mutated_value(x.m(a));` (none for a
+/// `#seq` statement), then `let x = \0mutated_after(x.m(a));`, or for a call
+/// on a field path `x.f.m(a)` (§20) `x` with that field replaced. An
+/// unclaimed candidate (`\0mutcall`) is an ordinary call. With the receiver's
+/// rebinding a `let`, [`subst`] stops at it like at any other, and the call
+/// keeps its receiver's value before it.
+///
+/// A claimed call whose receiver is no place is refused when `strict`, and
+/// left as written otherwise (the walk refuses it if it reaches it).
+pub(crate) fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<Vec<Stmt>, String> {
+    let mut out = Vec::with_capacity(stmts.len());
+    for st in stmts {
+        let Stmt::Let { name, expr, span: at, .. } = st else {
+            out.push(st.clone());
+            continue;
+        };
+        let marked = match &expr.kind {
+            ExprKind::App { head, args, .. } if args.len() == 1 => match &head.kind {
+                ExprKind::Var(n) if n == heather_syntax::MUTATED || n == heather_syntax::MUTCALL => {
+                    Some((n == heather_syntax::MUTATED, &args[0]))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let plain = |name: &str, expr: Expr| Stmt::Let { name: name.to_string(), ty: None, expr, span: *at, opaque: false };
+        match marked {
+            Some((true, call)) => {
+                // The local rebound: the receiver, or the local it is a
+                // field path of, with that field replaced (§20).
+                let hole = "#after";
+                let place = match &call.kind {
+                    ExprKind::Dot { recv, .. } => heather_syntax::place_update(recv, var(hole, span)),
+                    _ => None,
+                };
+                let Some((receiver, update)) = place else {
+                    if strict {
+                        return Err("a marked call this walk cannot read".into());
+                    }
+                    out.push(st.clone());
+                    continue;
+                };
+                let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
+                if !name.starts_with("#seq") {
+                    out.push(plain(name, part(heather_syntax::MUTATED_VALUE)));
+                }
+                let after = part(heather_syntax::MUTATED_AFTER);
+                out.push(plain(&receiver, subst(&update, &[(hole, &after)], &mut Vec::new())));
+            }
+            // An unclaimed candidate is an ordinary call.
+            Some((false, call)) => out.push(plain(name, call.clone())),
+            None => out.push(st.clone()),
+        }
+    }
+    Ok(out)
+}
+
+/// `e` with [`rebind_marked`] applied to every block in it, so that a
+/// substitution into `e` respects the rebindings its statements make.
+fn explicit_rebinds(e: &Expr) -> Expr {
+    let mut out = e.clone();
+    crate::alpha::walk_expr_mut(&mut out, &mut |x| {
+        if let ExprKind::Block(b) = &mut x.kind {
+            let span = b.span;
+            if let Ok(stmts) = rebind_marked(&b.stmts, span, false) {
+                b.stmts = stmts;
+            }
+        }
+        false
+    });
+    out
+}
+
 // -- the unfolding companions -------------------------------------------------
 //
-// `docs/decreases-unfolding-design.md` §3–§6: a congruence proof over the
+// `docs/language/recursion/decreases-unfolding-design.md` §3–§6: a congruence proof over the
 // body's own structure, with the self-call sites as its leaves, generated
 // twice — once relating the arm to itself under two induction hypotheses
 // (`f#ext`), once relating `f` to its body as written (`f_unfold`).
@@ -3345,6 +3468,11 @@ struct Respell<'a> {
     /// rewritten one (`f#body`'s spelling, with `__dec_k`/`__dec_ih`/`__dec_h`
     /// still free) and the source one. `None` at the top.
     anchors: Option<(Expr, Expr)>,
+    /// The `let`s walked through, outermost first, each value with the ones
+    /// before it substituted, and the length of the rewrite's scope after
+    /// it: substituted into what the body spells before `sigma` (§3: `let`
+    /// is zeta-transparent), unless a binder after it shadows it.
+    let_env: Vec<(String, Expr, usize)>,
 }
 
 impl Respell<'_> {
@@ -3354,7 +3482,35 @@ impl Respell<'_> {
 
     /// `σ(e)`, optionally with one more substitution appended — the motive's
     /// abstraction of the scrutinee.
+    ///
+    /// `e` is read where the body has it, so the `let`s walked through
+    /// (`let_env`) are substituted first: a `let` may shadow a parameter, so
+    /// the anchors' own arguments are [`Self::refine_ext`]'s alone.
     fn sigma_apply_ext(&self, e: &Expr, ext: Option<(&str, &Expr)>) -> Expr {
+        self.refine_ext(&self.let_apply(e), ext)
+    }
+
+    /// `e` with the `let`s it sees substituted, at once: those not shadowed
+    /// by a binder the rewrite's scope took after them (an arm's pattern or
+    /// equation, a later `let`).
+    fn let_apply(&self, e: &Expr) -> Expr {
+        let map: Vec<(&str, &Expr)> = (0..self.let_env.len())
+            .filter(|&i| self.let_visible(i))
+            .map(|i| (self.let_env[i].0.as_str(), &self.let_env[i].1))
+            .collect();
+        subst(&explicit_rebinds(e), &map, &mut Vec::new())
+    }
+
+    /// Whether `let_env[i]` is what its name means here.
+    fn let_visible(&self, i: usize) -> bool {
+        let (n, _, at) = &self.let_env[i];
+        !self.let_env[i + 1..].iter().any(|(m, _, _)| m == n)
+            && !self.rw.scope.get(*at..).is_some_and(|later| later.iter().any(|b| &b.name == n))
+    }
+
+    /// `σ(e)` for an `e` over the declaration's parameters: the enclosing
+    /// arms' patterns, and `ext`.
+    fn refine_ext(&self, e: &Expr, ext: Option<(&str, &Expr)>) -> Expr {
         let mut out = e.clone();
         for (v, pat) in &self.sigma {
             out = subst(&out, &[(v.as_str(), pat)], &mut Vec::new());
@@ -3369,12 +3525,12 @@ impl Respell<'_> {
         self.rw
             .params
             .iter()
-            .map(|p| self.sigma_apply_ext(&var(&p.name, self.span), ext))
+            .map(|p| self.refine_ext(&var(&p.name, self.span), ext))
             .collect()
     }
 
     fn measure_at(&self, ext: Option<(&str, &Expr)>) -> Expr {
-        self.sigma_apply_ext(self.rw.measure, ext)
+        self.refine_ext(self.rw.measure, ext)
     }
 
     fn cref(&self, name: &str) -> Expr {
@@ -3520,65 +3676,31 @@ impl Respell<'_> {
     /// the elaborator reads as the statement does. Dropping the statement as
     /// a `let` nothing reads would leave `x` the value before the call
     /// (issues/decreases-mut-call-statement-companions.md).
+    ///
+    /// Those rebindings are spelled as plain `let`s ([`explicit_rebinds`])
+    /// in this block and in every block below it *before* anything is
+    /// substituted: a claimed call names its receiver as a place, and a
+    /// substitution from an enclosing block (`let x = c.total();` before the
+    /// branch, which rebinds `c`) would otherwise put a value where the
+    /// place was, and reach past the statement's rebinding into the uses
+    /// after it (issues/runtime-mut-self-let-read-walk.md).
     fn inline_lets(&self, stmts: &[Stmt], result: &Expr) -> Result<Expr, String> {
-        let span = self.span;
         let mut env: Vec<(String, Expr)> = Vec::new();
         let apply = |env: &[(String, Expr)], e: &Expr| {
             let map: Vec<(&str, &Expr)> = env.iter().map(|(n, v)| (n.as_str(), v)).collect();
-            subst(e, &map, &mut Vec::new())
+            subst(&explicit_rebinds(e), &map, &mut Vec::new())
         };
-        let bind = |env: &mut Vec<(String, Expr)>, name: &str, value: Expr| match env.iter_mut().find(|(n, _)| n == name) {
-            Some(slot) => slot.1 = value,
-            None => env.push((name.to_string(), value)),
-        };
-        for st in stmts {
-            let Stmt::Let { name, expr, .. } = st else {
+        for st in rebind_marked(stmts, self.span, true)? {
+            let Stmt::Let { name, expr, .. } = &st else {
                 return Err("a destructuring or `code` binding in the body".into());
             };
             if self.has_self_call(expr) {
                 return Err("a recursive call in a `let` right-hand side".into());
             }
-            let marked = match &expr.kind {
-                ExprKind::App { head, args, .. } if args.len() == 1 => match &head.kind {
-                    ExprKind::Var(n) if n == heather_syntax::MUTATED || n == heather_syntax::MUTCALL => {
-                        Some((n == heather_syntax::MUTATED, &args[0]))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            };
-            match marked {
-                Some((true, call)) => {
-                    let ExprKind::Dot { recv, .. } = &call.kind else {
-                        return Err("a marked call this walk cannot read".into());
-                    };
-                    // The local rebound: the receiver, or the local it is a
-                    // field path of, with that field replaced (§20). The
-                    // update is written at a hole so that the call, already
-                    // read in `env`, is not read in it again.
-                    let hole = "#after";
-                    let Some((receiver, update)) = heather_syntax::place_update(recv, var(hole, span)) else {
-                        return Err("a marked call this walk cannot read".into());
-                    };
-                    let call = apply(&env, call);
-                    let part = |marker: &str| app(var(marker, span), vec![call.clone()], span);
-                    let mut at = env.clone();
-                    bind(&mut at, hole, part(heather_syntax::MUTATED_AFTER));
-                    let after = apply(&at, &update);
-                    if !name.starts_with("#seq") {
-                        bind(&mut env, name, part(heather_syntax::MUTATED_VALUE));
-                    }
-                    bind(&mut env, &receiver, after);
-                }
-                // An unclaimed candidate is an ordinary call.
-                Some((false, call)) => {
-                    let value = apply(&env, call);
-                    bind(&mut env, name, value);
-                }
-                None => {
-                    let value = apply(&env, expr);
-                    bind(&mut env, name, value);
-                }
+            let value = apply(&env, expr);
+            match env.iter_mut().find(|(n, _)| n == name) {
+                Some(slot) => slot.1 = value,
+                None => env.push((name.clone(), value)),
             }
         }
         Ok(apply(&env, result))
@@ -3604,12 +3726,56 @@ impl Respell<'_> {
             // §3: a `let` whose right-hand side holds no self-call is
             // substituted — `let` is zeta-transparent, so the two sides still
             // reduce alike.
+            //
+            // It is substituted through `let_env`, so the terms this walk builds
+            // read its value, while the walk itself goes on over the body as
+            // written, with the `let` in the rewrite's scope as `f#body` has
+            // it: a test after it, its alias and its equation are then the
+            // ones `f#body` binds, and an obligation re-emitted below selects
+            // the same hypotheses (issues/runtime-mut-self-let-read-walk.md).
+            // A claimed `mut self` call rebinds its receiver by a `let` of its
+            // own ([`rebind_marked`]); the rewrite's scope has the statement
+            // as `f#body` does.
             ExprKind::Block(b) => {
                 if !b.ons.is_empty() {
                     return Err("a nested `on` block".into());
                 }
-                let result = self.inline_lets(&b.stmts, &b.result)?;
-                self.walk(&result, at)
+                let (scope_n, env_n) = (self.rw.scope.len(), self.let_env.len());
+                let mut out = Ok(());
+                for st in &b.stmts {
+                    let Stmt::Let { name, ty, expr, .. } = st else {
+                        out = Err("a destructuring or `code` binding in the body".to_string());
+                        break;
+                    };
+                    if self.has_self_call(expr) {
+                        out = Err("a recursive call in a `let` right-hand side".to_string());
+                        break;
+                    }
+                    let plain = match rebind_marked(std::slice::from_ref(st), span, true) {
+                        Ok(plain) => plain,
+                        Err(e) => {
+                            out = Err(e);
+                            break;
+                        }
+                    };
+                    let values: Vec<(String, Expr)> = plain
+                        .iter()
+                        .filter_map(|p| match p {
+                            Stmt::Let { name, expr, .. } => Some((name.clone(), self.let_apply(expr))),
+                            _ => None,
+                        })
+                        .collect();
+                    let binder = self.rw.let_binder(name, ty, expr);
+                    self.rw.scope.push(binder);
+                    let after = self.rw.scope.len();
+                    // Each value is read before the statement's own
+                    // rebindings: `let p = value(x.m(a)); let x = after(x.m(a))`.
+                    self.let_env.extend(values.into_iter().map(|(n, v)| (n, v, after)));
+                }
+                let r = out.and_then(|()| self.walk(&b.result, at));
+                self.rw.scope.truncate(scope_n);
+                self.let_env.truncate(env_n);
+                r
             }
             ExprKind::App {
                 head,
@@ -3705,7 +3871,11 @@ impl Respell<'_> {
                 // A computed scrutinee with no equation written goes through
                 // the alias the rewrite gave it, which carries its
                 // [`AutoEqs`] equation where an obligation reads one.
-                if eqbind.is_none() && !matches!(scrut.kind, ExprKind::Var(_)) && !self.has_self_call(scrut) {
+                // A `let`'s variable is its value, so a match on it is on a
+                // computed scrutinee too.
+                let let_var = matches!(&scrut.kind, ExprKind::Var(v)
+                    if (0..self.let_env.len()).any(|i| &self.let_env[i].0 == v && self.let_visible(i)));
+                if eqbind.is_none() && (let_var || !matches!(scrut.kind, ExprKind::Var(_))) && !self.has_self_call(scrut) {
                     return self.convoy_at_anchor(e, *form, scrut, None, arms);
                 }
                 if eqbind.is_some() || !matches!(scrut.kind, ExprKind::Var(_)) {
@@ -3755,16 +3925,23 @@ impl Respell<'_> {
                 if self.rw.refining_match(scrut, &None).is_some() {
                     return Err("a `match` below another `match`'s arm on a variable the measure mentions".into());
                 }
-            } else if arms.iter().any(|a| self.rw.calls_member(&a.body)) {
-                // The rewrite numbers this candidate as it renders it.
+            } else if self.rw.scrut_ty(scrut).is_some() && arms.iter().any(|a| self.rw.calls_member(&a.body)) {
+                // The rewrite numbers this candidate as it renders it: a
+                // scrutinee it gives an alias (one whose type it can write),
+                // with an arm that recurses (`Rewrite::auto_candidate`).
                 let n = self.rw.auto_n;
                 self.rw.auto_n += 1;
                 if self.rw.auto_eqs.admits(n) {
-                    return Err(
-                        "a `match` below another `match`'s arm whose recursive call's obligation reads \
-                         the inner scrutinee's equation: bind it as `match g: …`"
-                            .into(),
-                    );
+                    // `f#body` binds the scrutinee's equation where the
+                    // source binds none (issues/measured-loop-inner-if-companions.md):
+                    // each side spells its own, `f_unfold`'s right side the
+                    // source's, without.
+                    let meq = format!("__dec_meq{n}");
+                    let eq_r = match self.mode {
+                        Mode::Ext => Some(meq.as_str()),
+                        Mode::Unfold => None,
+                    };
+                    return self.match_spelled_eqs(node, scrut, Some(&meq), eq_r, arms);
                 }
             }
         }
@@ -3787,7 +3964,22 @@ impl Respell<'_> {
     /// `refl`, obligations) are repeated around its renderings, since the
     /// motive sits outside the arm.
     fn match_spelled(&mut self, whole: &Expr, scrut: &Expr, eqbind: Option<&str>, arms: &[Arm]) -> Result<Triple, String> {
+        self.match_spelled_eqs(whole, scrut, eqbind, eqbind, arms)
+    }
+
+    /// [`Self::match_spelled`] with each side's own equation binding: the
+    /// left side's (`f#body`'s) may bind one the right side's (the source's)
+    /// does not. The proof's arms take the equation where either side does.
+    fn match_spelled_eqs(
+        &mut self,
+        whole: &Expr,
+        scrut: &Expr,
+        eq_l: Option<&str>,
+        eq_r: Option<&str>,
+        arms: &[Arm],
+    ) -> Result<Triple, String> {
         let span = self.span;
+        let eqbind = eq_l.or(eq_r);
         if self.has_self_call(scrut) {
             return Err("a recursive call in a `match` scrutinee".into());
         }
@@ -3846,12 +4038,20 @@ impl Respell<'_> {
             Some(h) => lam(&[h], body, span),
             None => body,
         };
-        // One side's match at scrutinee `at`, its convoy applied to `proof`.
-        let side = |pick: &dyn Fn(&Triple) -> Expr, at: Expr, proof: Option<Expr>| {
+        // One side's match at scrutinee `at`, its convoy applied to `proof`,
+        // binding the equation `eqbind` names.
+        let side = |pick: &dyn Fn(&Triple) -> Expr, at: Expr, proof: Option<Expr>, eqbind: Option<&str>| {
+            let proof = eqbind.and(proof);
             let arms_out: Vec<Arm> = walked.iter().map(|(a, stmts, t)| {
                 // The arm's `let`s travel with its rendering (zeta-transparent,
                 // and typed, which a bare `refl` substituted in would not be).
-                let x = if stmts.is_empty() {
+                // A side that binds no equation where the other does is the
+                // source's, which names none of them: they may read the
+                // equation it does not bind.
+                let unread = eqbind.is_none()
+                    && eq_l.or(eq_r).is_some()
+                    && !stmts.iter().any(|st| matches!(st, Stmt::Let { name, .. } if mentions_context(&pick(t), name)));
+                let x = if stmts.is_empty() || unread {
                     pick(t)
                 } else {
                     Expr {
@@ -3879,8 +4079,8 @@ impl Respell<'_> {
             match proof { Some(p) => app(m, vec![p], span), None => m }
         };
         let e_arg = eqbind.map(|_| var(&e_name, span));
-        let l = side(&|t: &Triple| t.lhs.clone(), sv.clone(), e_arg.clone());
-        let r = side(&|t: &Triple| t.rhs.clone(), sv.clone(), e_arg.clone());
+        let l = side(&|t: &Triple| t.lhs.clone(), sv.clone(), e_arg.clone(), eq_l);
+        let r = side(&|t: &Triple| t.rhs.clone(), sv.clone(), e_arg.clone(), eq_r);
         let goal = match eqbind {
             Some(_) => arrow(Some(e_name.clone()), eq_ty(c.clone(), sv.clone(), span), eq_ty(l, r, span), span),
             None => eq_ty(l, r, span),
@@ -3910,8 +4110,8 @@ impl Respell<'_> {
         };
         let refl_arg = eqbind.map(|_| refl.clone());
         Ok(Triple {
-            lhs: side(&|t: &Triple| t.lhs.clone(), c.clone(), refl_arg.clone()),
-            rhs: side(&|t: &Triple| t.rhs.clone(), c.clone(), refl_arg),
+            lhs: side(&|t: &Triple| t.lhs.clone(), c.clone(), refl_arg.clone(), eq_l),
+            rhs: side(&|t: &Triple| t.rhs.clone(), c.clone(), refl_arg, eq_r),
             proof,
         })
     }
@@ -4028,7 +4228,7 @@ impl Respell<'_> {
     }
 
     /// A `match` at the anchor whose scrutinee is computed, or which binds its
-    /// equation (docs/dependent-match-compiler-design.md §8). Neither anchor
+    /// equation (docs/language/matching/dependent-match-compiler-design.md §8). Neither anchor
     /// reduces into an arm, because the scrutinee is stuck, so both sides
     /// are spelled out as the match itself at a fresh scrutinee `s`, and the
     /// match is re-matched on `s`:
@@ -4394,6 +4594,7 @@ pub(crate) fn companions(
     omega_available: bool,
     tys: &dyn BinderTys,
     auto: &AutoEqs,
+    lifted: &[Lowered],
 ) -> Result<Vec<Lowered>, String> {
     let span = measure.span;
     // §7: `fn` only. A `theorem` is opaque, so `f(ȳ)` in the equation's
@@ -4457,6 +4658,7 @@ pub(crate) fn companions(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        known: lifted,
         error: None,
     };
     let arg_vars: Vec<Expr> = params.iter().map(|p| var(&p.name, span)).collect();
@@ -4484,6 +4686,7 @@ pub(crate) fn companions(
         fresh: 0,
         span,
         anchors: None,
+        let_env: Vec::new(),
     };
     let ext_proof = ext.walk(&source, At::Anchor)?;
     let ext_sites = std::mem::take(&mut ext.rw.sites);
@@ -4778,6 +4981,7 @@ pub(crate) fn companions(
         fresh: 0,
         span,
         anchors: None,
+        let_env: Vec::new(),
     };
     let unfold_proof = unfold.walk(&source, At::Anchor)?;
     let unfold_sites = std::mem::take(&mut unfold.rw.sites);

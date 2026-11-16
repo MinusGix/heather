@@ -1,5 +1,5 @@
 //! Branching-inductives prototype, route C, wrinkle 6.2 round
-//! (`docs/branching-inductives-choice.md` §6.2, §13 step 2): the *n-ary*
+//! (`docs/inductives/branching-inductives-choice.md` §6.2, §13 step 2): the *n-ary*
 //! `Wf`-style interface — children as a Σ-tuple, induction hypothesis as a
 //! function of a `Fin`-style index — postulated in Ψ, with the same theorem
 //! as the other two prototypes proved against it.

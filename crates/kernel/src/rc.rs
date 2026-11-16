@@ -4,9 +4,8 @@
 //! A syntax node is immutable and shared, and several questions about it are
 //! pure functions of the subtree under it that every traversal asks again:
 //! which local variables it reads, whether a weakening tail shows in its
-//! scope, which global variables it mentions (`bounds.rs`). The answers
-//! used to live in tables keyed by the node's address. A table has to be
-//! found by hashing, misses the cache that the node itself is in, forgets
+//! scope, which global variables it mentions (`bounds.rs`). Not a table
+//! keyed by the node's address: a table has to be found by hashing, misses the cache that the node itself is in, forgets
 //! what it evicts, and needs a weak reference per entry so that an address
 //! stays its node's. Here the answer is in the node: [`Head`], written at
 //! most once per question by the function that computes it and never by a

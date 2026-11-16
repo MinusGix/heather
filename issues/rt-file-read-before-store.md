@@ -1,11 +1,11 @@
 ---
 title: rt: a byte read before a store and used after it is refused by the reflector for functions that write a span
-status: open
+status: closed
 labels: [native,runtime,reflector]
 area: heather-in-heather
 milestone: [nh-library]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-15
 ---
 
 A function over a span it writes may not use, after a store, a byte it
@@ -42,3 +42,8 @@ What a swap, a reverse in place and a shift all need. Two routes:
 
 Route 1 is the smaller change to the reflector and reads nothing
 unneeded.
+
+## Log
+
+- 2026-11-15: The sort example (`examples/sort`) works around it with a shift-insert that takes its key as a word parameter; a neighbouring refusal it hit is `runtime-mut-self-let-read-walk` (filed and fixed in its own PR).
+- 2026-11-15: Done. The reflector binds a byte of an earlier state before the link that ends that state, and reads the later use as that variable (route 2, per path, so nothing is read on a path that does not use it except where one pure branch of the path's value does). Each path's links and what it ends in are in hand at its end (`rt_file_upto`): `rt_file_plan` scans the later links' operands and the end's values for `byte_within` of a state before the one they are read at (states numbered by `rt_file_state_in`, the same handle or a copy), `rt_file_hoist` binds each before its state's link (`attempt`ed: a read only a proof makes is never used, and one whose index is not known yet is left), and `rt_old_byte` reads the use by state and index from `FileKnown.olds`. Route 1 (levels, retro-inserted binders) was not taken: the walk holds index-form terms in flight (pure arms, `If` arms), which an insertion would leave stale. Still refused, with its reason: a read of the span as it was at an index only a later step computes (`read_back_late_refused`). Probes: `swap_in`, `swap`, `keep_across`, `swap_in_if` reflected and pinned by `refl` in `rt_file_reflect_tests.hthr`; `List::swap` and an insertion sort (`List::sift`, `List::sort_from`) as `runtime fn`s in `runtime_span_tests.hthr` (the sort's key read before `sift` writes and stored after). `compile-x86` certifies `sort_from`, and the native code agreed with `qsort` on 2,000 random arrays. Found on the way: [[measured-loop-inner-if-companions]].

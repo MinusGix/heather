@@ -1,4 +1,4 @@
-//! Container fields phase 2 (docs/container-fields.md §4.2): recursing into a
+//! Container fields phase 2 (docs/language/container-fields.md §4.2): recursing into a
 //! container's children. This is what makes `Rose` programmable rather than
 //! merely declarable.
 

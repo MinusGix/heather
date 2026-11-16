@@ -11,7 +11,7 @@
 //!
 //! Nothing here knows how a step came to be classified as a tree; that is
 //! the evaluator's probe (`eval/probe.rs`). Nothing here evaluates: the
-//! tree is a piece of arithmetic with a reference semantics ([`tests`]),
+//! tree is a piece of arithmetic with a reference semantics (its tests),
 //! which is what makes it the trusted part small.
 //!
 //! Increments are programs, not integers: a run over `u64::MAX` successors

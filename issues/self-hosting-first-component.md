@@ -28,4 +28,4 @@ those rounds know it is their customer.
 
 ## Log
 
-- 2026-10-31: 2026-10-31: Split by docs/compiler-milestones-proposal.md §5 into [[self-hosted-lexer]] (milestone self-lexer: streaming tokens, no heap) and [[self-hosted-compiler]] (self-compiler). Its three needs have owners there: data representation and heap go to [[native-heap-arena]], and the differential test goes to the lexer round.
+- 2026-10-31: 2026-10-31: Split by docs/native/compiler-milestones-proposal.md §5 into [[self-hosted-lexer]] (milestone self-lexer: streaming tokens, no heap) and [[self-hosted-compiler]] (self-compiler). Its three needs have owners there: data representation and heap go to [[native-heap-arena]], and the differential test goes to the lexer round.

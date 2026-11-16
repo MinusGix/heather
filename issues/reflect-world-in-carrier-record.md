@@ -9,16 +9,16 @@ updated: 2026-11-08
 ---
 
 A `runtime fn` that calls an interface-generic function at an `Io`-backed
-carrier (`greet(Buffered(io, []))`, `docs/effects-locality-design.md` §5.2)
+carrier (`greet(Buffered(io, []))`, `docs/language/effects-locality-design.md` §5.2)
 hands the reflector a world inside a record. The effectful reflector
 (`lib/native/runtime/rt_io_reflect.hthr`) refuses that: the world may never
 be stored in a record other than the `Mutated` a `mut self` method returns
-and loop state (`docs/effects-capabilities-design.md` §5, §8.3).
+and loop state (`docs/language/effects-capabilities-design.md` §5, §8.3).
 
 ## Scope
 
 - Read a carrier record as its fields, as pure `rt` already lays records
-  out (`docs/runtime-fn-setups-design.md` §16.7): the world field joins the
+  out (`docs/native/runtime-fn-setups-design.md` §16.7): the world field joins the
   `.after` chain and the other fields are ordinary variables, so a method
   that rebuilds the record (`Buffered(c.inner, c.pending ++ m)`) reflects
   as a `Let` of the new field and no copy of the world.

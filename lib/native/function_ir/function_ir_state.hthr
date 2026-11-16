@@ -1,5 +1,5 @@
 // FunctionIR's state edges evaluated (issues/native-source-bytes.md;
-// docs/native-effect-source-design.md §6): `run` is `eval` with a file of
+// docs/native/native-effect-source-design.md §6): `run` is `eval` with a file of
 // buffers threaded through the schedule, the one state a region's byte nodes
 // act on.
 //
@@ -10,7 +10,7 @@
 // pass to pass. A call is answered over the file as it is when the call is
 // made, with a word and the file its callee leaves (`Writers`), and the
 // statement after it starts from that file
-// (docs/native-one-compiler-design.md §2.6): which of its buffers a callee
+// (docs/native/native-one-compiler-design.md §2.6): which of its buffers a callee
 // sees, and what it gives back, is the caller's to say
 // (`program_writers`, function_ir_placeless).
 //
@@ -224,6 +224,7 @@ theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(),
         BitXor(_, _, _, _) => λ _ => refl,
         ShiftLeft(_, _, _, _) => λ _ => refl,
         LogicalShiftRight(_, _, _, _) => λ _ => refl,
+        RotateRight(_, _, _, _) => λ _ => refl,
         ArithmeticShiftRight(_, _, _, _) => λ _ => refl,
         UnsignedLessThan(_, _, _, _) => λ _ => refl,
         SignedLessThan(_, _, _, _) => λ _ => refl,
@@ -251,6 +252,7 @@ theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, 
         BitXor(_, _, _, _) => refl,
         ShiftLeft(_, _, _, _) => refl,
         LogicalShiftRight(_, _, _, _) => refl,
+        RotateRight(_, _, _, _) => refl,
         ArithmeticShiftRight(_, _, _, _) => refl,
         UnsignedLessThan(_, _, _, _) => refl,
         SignedLessThan(_, _, _, _) => refl,

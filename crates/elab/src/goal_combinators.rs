@@ -497,6 +497,15 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
     if out.len() > before {
         return;
     }
+    // A position that holds the search's own `found` (`clamp(clamp(x, lo,
+    // hi), lo, hi)` around `clamp(x, lo, hi)`) reaches the scrutinee through
+    // it, and the split's own pair abstracts it there. Unfolded here, the
+    // position would be replaced whole by a reduct that unfolds the call
+    // around `found` (its comparison down to the bit-level fold) and keeps
+    // `found` unabstracted inside it.
+    if !picked(&term_type(Rc::new(term.clone())), &|t| t == found).is_empty() {
+        return;
+    }
     for reduct in elab.goal_oracle().unfold(&cx.gamma, term, Unfold::StuckScrutinee) {
         if *budget == 0 {
             return;
@@ -545,6 +554,9 @@ pub(crate) enum Step {
     Intro(Expr),
     Conjoin(Expr),
     Split(StuckSplit),
+    /// Hypotheses (positions in Γ) to revert into the goal, so the split
+    /// that follows takes them apart with it.
+    Revert(Vec<usize>),
     Leaf(Type),
 }
 
@@ -567,22 +579,57 @@ fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
         return None;
     }
     let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
-    let name = cx
+    let app = |head: &str, args: Vec<Expr>| Expr {
+        kind: ExprKind::App { head: Box::new(var(head)), args, named: vec![], explicit: false, goal_oriented: false },
+        span,
+    };
+    let refuted = cx
         .names
         .iter()
         .rev()
-        .filter(|name| case_equation(name))
-        .find(|name| Inductives(elab).refuted_by_computation(cx, &var(name)))?;
-    Some(Expr {
-        kind: ExprKind::App {
-            head: Box::new(var("absurd")),
-            args: vec![var(name)],
-            named: vec![],
-            explicit: false,
-            goal_oriented: false,
-        },
+        // A premise the split restated is refuted as a case equation is:
+        // `is_digit(c) = True` in the case `c < 48` is `False = True`.
+        .filter(|name| case_equation(name) || name.starts_with("__split_all_x"))
+        .find(|name| Inductives(elab).refuted_by_computation(cx, &var(name)))
+        .map(|name| var(name))
+        .or_else(|| contradicting_cases(elab, cx, span));
+    Some(app("absurd", vec![refuted?]))
+}
+
+/// `trans(sym(h0), h1)` for two case equations on one scrutinee that name
+/// different constructors (`h0: s = False`, `h1: s = True`). A split is
+/// taken on what blocks the goal then, and a call whose test an earlier
+/// split decided can block it again at another argument (the outer `clamp`
+/// of `clamp(clamp(x, lo, hi), lo, hi)` meets `x < lo` once the inner call
+/// is `x`); the split is taken again, and the case that contradicts the
+/// earlier one is no case of the program.
+fn contradicting_cases(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
+    // The prelude's `trans` and `sym`, unless a local takes the name.
+    if ["trans", "sym"].iter().any(|name| cx.names.iter_inner().any(|n| n == *name) || cx.aliases.iter_inner().any(|a| a.name == *name)) {
+        return None;
+    }
+    let depth = cx.gamma.entries.len();
+    let equations: Vec<(&str, Rc<Term>, Rc<Term>)> = cx
+        .names
+        .iter()
+        .zip(cx.gamma.entries.iter())
+        .enumerate()
+        .filter(|(_, (name, _))| case_equation(name))
+        .filter_map(|(at, (name, entry))| match entry.ty.shift_local((depth - at) as u32) {
+            Type::Id { lhs, rhs, .. } => Some((&name[..], lhs, rhs)),
+            _ => None,
+        })
+        .collect();
+    let (newest, rest) = equations.split_last()?;
+    let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+    let app = |head: &str, args: Vec<Expr>| Expr {
+        kind: ExprKind::App { head: Box::new(var(head)), args, named: vec![], explicit: false, goal_oriented: false },
         span,
-    })
+    };
+    rest.iter()
+        .filter(|(_, lhs, rhs)| *lhs == newest.1 && *rhs != newest.2)
+        .map(|(name, _, _)| app("trans", vec![app("sym", vec![var(name)]), var(newest.0)]))
+        .find(|equation| Inductives(elab).refuted_by_computation(cx, equation))
 }
 
 /// A name no local and no global in scope has, from `base`.
@@ -602,9 +649,20 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     let whnf = elab.goal_oracle().bounded(256).whnf_type(&cx.gamma, expected);
     match whnf {
         // `(x: A) → B`: introduce `x`, and split it when `A` is finite.
-        Ok(Type::Pi { dom, .. }) => {
-            let name = fresh(elab, cx, format!("__split_all_x{}", cx.names.len()));
+        Ok(pi @ Type::Pi { .. }) => {
+            let Type::Pi { dom, .. } = &pi else { unreachable!() };
+            let dom = (**dom).clone();
             let finite = type_inductive(elab, cx, &dom).filter(|inductive| finite_inductive(inductive));
+            // A premise that is a call with tests (`is_digit(c) = True →
+            // …`) is split before it is introduced, the goal with it: each
+            // case then introduces it at what that case makes of it, which a
+            // refuted case closes (`False = True`).
+            if finite.is_none()
+                && let Some(split) = split_stuck(elab, cx, &pi, leaf, span)
+            {
+                return Step::Split(split);
+            }
+            let name = fresh(elab, cx, format!("__split_all_x{}", cx.names.len()));
             let body = match finite {
                 Some(inductive) => {
                     let local = FiniteLocal { name: name.clone(), constructors: constructors(&inductive) };
@@ -652,6 +710,9 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     // A goal reached through an introduced binder may still be spelled as
     // its code (`El(⌜Id …⌝)`); the search reads the decoded former.
     let goal = simplify_goal(elab, cx, &crate::inductive::decoded(expected));
+    if let Some(positions) = splittable_hypotheses(elab, cx, &goal, leaf, span) {
+        return Step::Revert(positions);
+    }
     match split_stuck(elab, cx, &goal, leaf, span) {
         Some(split) => Step::Split(split),
         None => match closed_by_split(elab, cx, &goal, span) {
@@ -659,6 +720,47 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
             None => Step::Leaf(goal),
         },
     }
+}
+
+/// The hypotheses a split can take apart (`h: is_digit(c) = True`), at the
+/// root of a `split_all` only: before any case is taken, while the context
+/// is the one the user wrote. Each is reverted into the goal, so the split
+/// that takes its call apart restates it in every case, as it does the goal
+/// (issues/split-all-revise-hypotheses.md), and a case that makes it
+/// `False = True` is closed. Its reintroduction is a binder the splitter
+/// introduced, so the root is not met again.
+fn splittable_hypotheses(elab: &Elaborator, cx: &Cx, goal: &Type, leaf: &Expr, span: Span) -> Option<Vec<usize>> {
+    if cx.names.iter().any(|name| name.starts_with("__split_")) {
+        return None;
+    }
+    let depth = cx.gamma.entries.len();
+    let positions: Vec<usize> = cx
+        .names
+        .iter()
+        .zip(cx.gamma.entries.iter())
+        .enumerate()
+        // A source name, not a binder a match or a desugaring made, and not
+        // shadowed by a later local: the one the leaf would read.
+        .filter(|(at, (name, _))| {
+            !name.starts_with('#') && !name.starts_with('_') && !cx.names.iter().skip(at + 1).any(|later| later == *name)
+        })
+        .filter(|(at, (_, entry))| {
+            let ty = entry.ty.shift_local((depth - at) as u32);
+            matches!(ty, Type::Id { .. }) && {
+                // As the premise of the goal it would be, the split the
+                // `Π` step takes.
+                let pi = Type::Pi {
+                    dom_level: entry.level.clone(),
+                    cod_level: Level::Zero,
+                    dom: Rc::new(ty),
+                    cod: Rc::new(goal.shift_local(1)),
+                };
+                split_stuck(elab, cx, &pi, leaf, span).is_some()
+            }
+        })
+        .map(|(at, _)| at)
+        .collect();
+    (!positions.is_empty()).then_some(positions)
 }
 
 /// `refl` for a goal the splitting itself has proved: an equation whose two
@@ -766,16 +868,7 @@ pub(crate) fn check_refl_leaf(elab: &Elaborator, cx: &Cx, leaf: &Expr, goal: &Ty
     };
     match elab.goal_oracle().convert_term(&cx.gamma, heather_kernel::layer::Layer::Prog, &lhs, &rhs, &ty, &level) {
         Err(heather_kernel::conv::ConvError::NotConvertible) => {
-            let cases: Vec<String> = cx
-                .names
-                .iter()
-                .filter(|name| case_equation(name))
-                .filter_map(|name| {
-                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.to_string()), span }).ok()?;
-                    Some(format!("`{}`", elab.display_type(cx, &ty)))
-                })
-                .collect();
-            let when = if cases.is_empty() { String::new() } else { format!(" in the case {}", cases.join(", ")) };
+            let when = case_path(elab, cx, span).map(|cases| format!(" in the case {cases}")).unwrap_or_default();
             crate::err(
                 format!(
                     "`split_all` leaves the goal `{}`{when}, which `refl` does not prove: its sides are not definitionally equal",
@@ -786,6 +879,44 @@ pub(crate) fn check_refl_leaf(elab: &Elaborator, cx: &Cx, leaf: &Expr, goal: &Ty
         }
         Ok(()) | Err(heather_kernel::conv::ConvError::OutOfFuel) => Ok(()),
     }
+}
+
+/// The cases a `split_all` leaf sits in, as the source would test them
+/// (`x < lo` taken false reads `lo <= x`), outermost first; `None` at the
+/// root. A comparison whose operands the source cannot spell, and any other
+/// scrutinee, reads as its equation.
+pub(crate) fn case_path(elab: &Elaborator, cx: &Cx, span: Span) -> Option<String> {
+    let cases: Vec<String> = cx
+        .names
+        .iter()
+        .filter(|name| case_equation(name))
+        .filter_map(|name| {
+            let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.to_string()), span }).ok()?;
+            let Type::Id { lhs, rhs, .. } = &ty else { return Some(elab.display_type(cx, &ty)) };
+            let taken = match elab.display_rough_term(cx, rhs, &[]).as_str() {
+                "True" => Some(true),
+                "False" => Some(false),
+                _ => None,
+            };
+            let spelled = comparison_args(elab, lhs).zip(taken).and_then(|((entry, args), taken)| {
+                let [_, a, b] = args.as_slice() else { return None };
+                let side = |term: &Term| match literal_word(elab, term) {
+                    Some(value) => Some(value.to_string()),
+                    None => elab.spell_term_source(cx, term),
+                };
+                let (a, b) = (side(a)?, side(b)?);
+                Some(match (entry.1, taken) {
+                    ("unsigned_true", true) => format!("{a} < {b}"),
+                    ("unsigned_true", false) => format!("{b} <= {a}"),
+                    (_, true) => format!("{a} = {b}"),
+                    (_, false) => format!("{a} ≠ {b}"),
+                })
+            });
+            Some(spelled.unwrap_or_else(|| elab.display_type(cx, &ty)))
+        })
+        .map(|case| format!("`{case}`"))
+        .collect();
+    (!cases.is_empty()).then(|| cases.join(", "))
 }
 
 /// A binder's type after the simplification the goal gets, spelled for an
@@ -966,7 +1097,7 @@ fn unfolded_by_name(elab: &Elaborator, cx: &Cx, call: &Term, unfold: &[usize]) -
 
 /// `t` with every β-redex `(λ x. b)(a)` contracted, under binders too, and
 /// nothing else reduced.
-fn beta_below(t: &Term) -> Term {
+pub(crate) fn beta_below(t: &Term) -> Term {
     match t {
         Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
             let fun = beta_below(fun);
@@ -1107,7 +1238,7 @@ pub(crate) fn simplify_goal_with(elab: &Elaborator, cx: &Cx, expected: &Type, re
 /// [`simplify_goal_with`], and every call of a definition in `unfold` (by
 /// absolute position in Ψ) unfolded where it stands, its body applied to the
 /// call's arguments: what `simp_only` does with a definition named among
-/// its laws (docs/simp-design.md §14).
+/// its laws (docs/tactics/simp-design.md §14).
 ///
 /// A term in `frozen` stays as written: a law's own term (`zeroed(R, 0,
 /// 64).hash`'s `R`, a call whose body computes), which the law could no
@@ -1336,7 +1467,14 @@ fn split_stuck(
     span: Span,
 ) -> Option<StuckSplit> {
     let mut budget = 512;
-    let found = match expected {
+    // A `Π`'s premise is searched, and the split abstracts the whole `Π`
+    // ([`next_step`]); its conclusion lives under the binder and is the
+    // next step's.
+    let searched = match expected {
+        Type::Pi { dom, .. } => &**dom,
+        _ => expected,
+    };
+    let found = match searched {
         Type::Id { lhs, rhs, .. } => stuck_scrutinee(elab, cx, lhs, &mut budget)
             .or_else(|| stuck_scrutinee(elab, cx, rhs, &mut budget)),
         Type::El { tm, .. } => stuck_scrutinee(elab, cx, tm, &mut budget),
@@ -1353,7 +1491,7 @@ fn split_stuck(
     // An equation's sides are values and may unfold; a relation such as
     // `Le(a, b)` keeps its own spelling for the leaf, so only its arguments
     // are searched.
-    match expected {
+    match searched {
         Type::Id { lhs, rhs, .. } => for term in [lhs, rhs] {
             co_occurrences(elab, cx, term, &found.original, &found.scrutinee, &mut co_budget, &mut pairs);
         },

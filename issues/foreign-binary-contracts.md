@@ -15,7 +15,7 @@ already has for its own compiler to predict what the code does and prove
 properties of it, such as that a callee respects the caller's memory and
 does not write over its stack.
 
-Survey and design sketch: `docs/foreign-binaries-survey.md`. In short:
+Survey and design sketch: `docs/surveys/foreign-binaries-survey.md`. In short:
 
 - `MachineStep` is a semantics of bytes in memory and never mentions the
   compiler, so a contract for foreign bytes is an ordinary theorem today.

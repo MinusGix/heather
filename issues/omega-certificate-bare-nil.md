@@ -10,7 +10,7 @@ updated: 2026-10-31
 `omega` fails in a `Nil` arm whose goal mentions the scrutinee's length,
 because the certificate it generates spells the refined list as a bare
 `Nil` and re-elaborates it where nothing fixes the element type. Found by
-the sequencing design's probe P2 (`docs/sequencing-surface-design.md`,
+the sequencing design's probe P2 (`docs/language/sequencing-surface-design.md`,
 appendix). Minimal repro on `3099a7d`:
 
 ```heather

@@ -53,7 +53,7 @@ found without naming `apart_sound`.
   `lib/_tests/std/tactic/set_tactic_tests.hthr` (`span_footprint_within`).
   Part 2 (endpoint relations as searched facts) stays open.
 - 2026-11-10: part 2 done; closed. Search rules (`h: … := omega`,
-  docs/facts-on-demand-design.md §3) produce the endpoint relations:
+  docs/native/facts-on-demand-design.md §3) produce the endpoint relations:
   `Span::disjoint_by_ends`/`within_by_ends` (span_set.hthr) answer a
   `s.Disjoint(t) := infer`/`s.Within(t) := infer` premise by the verdict and
   `omega` over the asker's hypotheses; `BitVec::space_distinct_by_ends`,

@@ -13,7 +13,7 @@ Whether `ir_v1` and the certifying generator over it (`lib/certgen/ir_v1.hthr`,
 source IR.
 
 Split out of [[native-one-program-logic]]'s third question: the native
-program logic (`docs/native-program-logic-design.md` §1) does not touch
+program logic (`docs/native/native-program-logic-design.md` §1) does not touch
 `ir_v1`, so the question belongs to the round that picks one source IR for
 a compiler pass written in Heather (`hih-passes`). The design's lean (§3.2):
 retire it in burn B2, once [[function-ir-verified-lowering]] compiles the

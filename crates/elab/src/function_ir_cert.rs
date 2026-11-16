@@ -260,7 +260,7 @@ impl StructuredRegion {
     }
 }
 
-/// The region restricted to the `wanted` outputs (docs/native-wc-design.md
+/// The region restricted to the `wanted` outputs (docs/archive/native-wc-design.md
 /// §4.6): each dataflow keeps the cone of what is wanted from it, a branch or
 /// producer nobody reads is dropped, and every interface narrows to what the
 /// kept computation reads, in its original order. A region that owns an

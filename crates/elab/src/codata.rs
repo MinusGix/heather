@@ -1,6 +1,6 @@
 //! Codata: a `codata` declaration lowered onto the kernel's negative `M`
-//! former (docs/codata-elaborator-design.md; the former itself is
-//! docs/kernel-coinduction-design.md's). The section numbers below are the
+//! former (docs/inductives/codata-elaborator-design.md; the former itself is
+//! docs/kernel/kernel-coinduction-design.md's). The section numbers below are the
 //! first document's.
 //!
 //! ```text
@@ -75,7 +75,7 @@ fn triv() -> Rc<Term> {
 }
 
 /// A codata term in the kernel's **checked spelling**
-/// (`docs/codata-named-signature-design.md` §5): an intro in a checking
+/// (`docs/inductives/codata-named-signature-design.md` §5): an intro in a checking
 /// position loses its annotation (`pair@`, `inl@`, `inr@`), a projection or
 /// application whose receiver infers is spelled `fst@`/`snd@`/`app@`. The
 /// lowering writes every node annotated, since that is what its readers
@@ -267,7 +267,7 @@ fn nested_guard_msg(name: &str) -> String {
          the step returns, or of constructors nested inside it (`C(…, D(…, {name}(…)))`), \
          and corecursion *up to* a function takes a friend: a global function of the \
          definition's own codata type that reads each codata argument at most one layer \
-         deep (docs/codata-elaborator-design.md §5.5, issues/codata-corecursion-up-to.md)"
+         deep (docs/inductives/codata-elaborator-design.md §5.5, issues/codata-corecursion-up-to.md)"
     )
 }
 
@@ -290,7 +290,7 @@ enum Kid {
 
 /// The components of `⟦D⟧ = M(I; i. S; i s. P; i s p. o)(j)`, scoped in `g`,
 /// with the index binder instantiated at `j` (`⟨⟩` for an unindexed
-/// declaration, docs/codata-indexed-design.md §3 for an indexed one).
+/// declaration, docs/inductives/codata-indexed-design.md §3 for an indexed one).
 pub(crate) struct MParts {
     g: LocalCtx,
     sig: Rc<MSig>,
@@ -362,7 +362,7 @@ impl MParts {
 
     /// The same declaration's parts at the index `idx`, scoped `k` binders
     /// past this one's context: a pending node is built at its child's
-    /// index, not the step's (§5.4 of docs/codata-elaborator-design.md). The
+    /// index, not the step's (§5.4 of docs/inductives/codata-elaborator-design.md). The
     /// `k` binders are placeholders, since every reader of `g` takes only
     /// its length and base (a weakening, or a named signature's unfolding).
     fn reindexed(&self, k: u32, idx: Rc<Term>) -> MParts {
@@ -407,7 +407,7 @@ impl MParts {
     }
 
     fn lf(&self) -> Level {
-        Level::join(self.lp.clone(), self.lw.clone())
+        Level::max(self.lp.clone(), self.lw.clone())
     }
 
     /// `out`'s type, `Σ(s : S). Π(p : P s). ⟦D⟧(o(j, s, p))` (the kernel's
@@ -566,7 +566,7 @@ fn position(lp: &Level, comps: &[Type], tails: &[Type], k: u32, r: usize, payloa
 /// The case tree down a position sum, the position binder `Var(0)` at depth
 /// `d0` (past the depth `comps` and `tails` are scoped at):
 /// [`MParts::kids_lam`]'s body, and the child index's (§3 of
-/// docs/codata-indexed-design.md).
+/// docs/inductives/codata-indexed-design.md).
 #[allow(clippy::too_many_arguments)]
 fn pos_cases(
     lp: &Level,
@@ -670,7 +670,7 @@ pub(crate) struct CorecSite {
     vtuple: Type,
     vtuple_level: Level,
     /// The carrier: `V` unindexed, `Σ(v : V). Id(I; g[v]; i)` indexed
-    /// (docs/codata-indexed-design.md §6).
+    /// (docs/inductives/codata-indexed-design.md §6).
     carrier: Carrier,
     /// `Σ(s : S). Π(p : P s). X(o) + ⟦D⟧(o)` at `g` — a node.
     step_ty: Type,
@@ -715,7 +715,7 @@ impl Codata<'_> {
     // -- the type (§2) ------------------------------------------------------
 
     /// `⟦D<args>⟧` for a `codata` declaration (§2), at `index` when it is
-    /// indexed (docs/codata-indexed-design.md §3; `index` scoped in `cx`).
+    /// indexed (docs/inductives/codata-indexed-design.md §3; `index` scoped in `cx`).
     pub(crate) fn lower_instance_m(
         &self,
         cx: &Cx,
@@ -743,7 +743,7 @@ impl Codata<'_> {
             }
         };
         // A declaration that named its signature is spelled with it (§2 of
-        // docs/codata-named-signature-design.md): nothing below is elaborated.
+        // docs/inductives/codata-named-signature-design.md): nothing below is elaborated.
         if let Some(sig) = self.m_sig_named(cx, ind, args, vargs, span)? {
             let lw = sig.family_level();
             return Ok((sig.at(index.map(Rc::new).unwrap_or_else(triv)), lw));
@@ -787,7 +787,7 @@ impl Codata<'_> {
                             return err(
                                 format!(
                                     "the domain of a function field of `{}` has no code, so `{}` \
-                                     cannot index its children by it (docs/codata-elaborator-design.md §2)",
+                                     cannot index its children by it (docs/inductives/codata-elaborator-design.md §2)",
                                     ctor.name, ind.name
                                 ),
                                 span,
@@ -799,7 +799,7 @@ impl Codata<'_> {
                                     format!(
                                         "the function fields of `{first}` and `{}` have domains at \
                                          different universe levels; `{}` needs one level for all of \
-                                         them (docs/codata-elaborator-design.md §2)",
+                                         them (docs/inductives/codata-elaborator-design.md §2)",
                                         ctor.name, ind.name
                                     ),
                                     span,
@@ -891,7 +891,7 @@ impl Codata<'_> {
             return Ok((sig.at(triv()), lw));
         };
         // o over (Γ, i, x : S, p : P(i, x)): a case on the label into
-        // `Π(p : P(i, z)). I`, applied to `p` (docs/codata-indexed-design.md §3).
+        // `Π(p : P(i, z)). I`, applied to `p` (docs/inductives/codata-indexed-design.md §3).
         let next = if n == 0 {
             Term::ElimEmpty {
                 level: li.clone(),
@@ -911,7 +911,7 @@ impl Codata<'_> {
                 &spine,
                 spine.root(),
                 motive,
-                &Level::join(lp.clone(), li.clone()),
+                &Level::max(lp.clone(), li.clone()),
                 var(0),
                 1,
                 &mut |bcx2, i, d, value| {
@@ -977,7 +977,7 @@ impl std::ops::DerefMut for CodataMut<'_> {
 }
 
 impl CodataMut<'_> {
-    // -- the named signature (docs/codata-named-signature-design.md) -----------
+    // -- the named signature (docs/inductives/codata-named-signature-design.md) -----------
 
     /// `D#mshape`, `D#mpos` and (indexed) `D#mnext` at declaration time: the
     /// inline signature [`Codata::lower_instance_m`] builds over
@@ -1231,7 +1231,7 @@ impl Codata<'_> {
     }
 
     /// Child `r` of constructor `i`'s written index, at a leaf of the child
-    /// index's case tree (docs/codata-indexed-design.md §3): `lam_cx` is the
+    /// index's case tree (docs/inductives/codata-indexed-design.md §3): `lam_cx` is the
     /// branch's context with the position binder pushed, `value` the branch
     /// value at depth `d` past the base, the leaf at `dd` past `lam_cx`'s
     /// branch (so `d + dd` past the base), `y` the position's payload there.
@@ -1320,7 +1320,7 @@ impl Codata<'_> {
     }
 
     /// The index type `I` of an indexed `codata` instance, in `cx`: the
-    /// telescope's right-nested `Σ` (docs/codata-indexed-design.md §3).
+    /// telescope's right-nested `Σ` (docs/inductives/codata-indexed-design.md §3).
     pub(crate) fn codata_index_ty(
         &self,
         cx: &Cx,
@@ -1338,7 +1338,7 @@ impl Codata<'_> {
                 return err(
                     format!(
                         "the index `{name}` of `{}` has a type with no code; an index type is \
-                         one the kernel can quote (docs/codata-indexed-design.md §2)",
+                         one the kernel can quote (docs/inductives/codata-indexed-design.md §2)",
                         ind.name
                     ),
                     span,
@@ -1428,7 +1428,7 @@ impl Codata<'_> {
     }
 
     /// `D<ā>(v̄, ī)` for an indexed `codata` declaration
-    /// (docs/codata-indexed-design.md §2): the value arguments, then the
+    /// (docs/inductives/codata-indexed-design.md §2): the value arguments, then the
     /// indices, in one list. `None` for every other expression.
     pub(crate) fn try_codata_indexed_ty(&self, cx: &Cx, e: &Expr, span: Span) -> R<Option<(Type, Level)>> {
         let ExprKind::App { head, args, .. } = &e.kind else {
@@ -1452,7 +1452,7 @@ impl Codata<'_> {
             return err(
                 format!(
                     "`{name}` takes {nv} value argument(s) and then {ni} index argument(s), \
-                     found {} argument(s) (docs/codata-indexed-design.md §2)",
+                     found {} argument(s) (docs/inductives/codata-indexed-design.md §2)",
                     args.len()
                 ),
                 span,
@@ -1480,7 +1480,7 @@ impl Codata<'_> {
     /// `⟦Cᵢ(ā)⟧` at the expected `⟦D⟧`: the apomorphism's `in`, every child an
     /// exit. Unindexed, `corec(…; _. Unit; _ _. ⟨ℓᵢ, λp. inr(kids p)⟩; ⟨⟩;
     /// ⟨⟩)`; indexed, the out type is the carrier and the node the seed
-    /// (docs/codata-indexed-design.md §4).
+    /// (docs/inductives/codata-indexed-design.md §4).
     pub(crate) fn build_ctor_m(
         &self,
         cx: &Cx,
@@ -1532,7 +1532,7 @@ impl Codata<'_> {
         let target = |d: u32, pos: Rc<Term>| {
             self.child_sum(&p, &unit, d, p.next_tm(d, Rc::new(label.shift_local(d)), pos))
         };
-        let tlvl = Level::join(Level::Zero, p.lw.clone());
+        let tlvl = Level::max(Level::Zero, p.lw.clone());
         let kids = p.kids_lam(2, Rc::clone(&lab2), &comps, &tails, &target, &tlvl, &mut |r, d, y, pos| {
             // `d` is past Γ; the children are scoped in Γ.
             let tree = self.kid_at(&p, &children[r], d, &label, y, &comps, &tails, r);
@@ -1586,7 +1586,7 @@ impl Codata<'_> {
         }
     }
 
-    /// The indexed `in` (docs/codata-indexed-design.md §4):
+    /// The indexed `in` (docs/inductives/codata-indexed-design.md §4):
     /// `corec(sig; i. Out(i); i x. ⟨fst x, λp. inr(snd x p)⟩; j; ⟨ℓ, kids⟩)`.
     fn ctor_m_indexed(
         &self,
@@ -1750,7 +1750,7 @@ impl Codata<'_> {
 
     /// `Π(p : P s). X(o) + ⟦D⟧(o)` over `s = Var(0)` at depth `k + 1`.
     fn step_kids_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Type::Pi {
             dom_level: p.lp.clone(),
             cod_level: kf,
@@ -1762,7 +1762,7 @@ impl Codata<'_> {
     /// `⟨label, kids⟩` at the step type `Σ(s : S). Π(p : P s). X(o) + ⟦D⟧(o)`,
     /// at depth `k`, in the kernel's `m_step_ty` levels.
     fn step_pair(&self, p: &MParts, k: u32, label: Rc<Term>, carrier: &Carrier, kids: Term) -> Term {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Term::Pair {
             fst_level: p.ls.clone(),
             snd_level: kf,
@@ -1775,7 +1775,7 @@ impl Codata<'_> {
 
     /// The step type at depth `k`.
     fn step_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         Type::Sigma {
             fst_level: p.ls.clone(),
             snd_level: kf,
@@ -1865,7 +1865,7 @@ impl Codata<'_> {
         // A child's type at depth `k` and its level: `⟦D⟧(o)` under `out`,
         // `C + ⟦D⟧` over a free carrier (unindexed).
         let kid_level = match over {
-            Some(c) => Level::join(c.level.clone(), p.lw.clone()),
+            Some(c) => Level::max(c.level.clone(), p.lw.clone()),
             None => p.lw.clone(),
         };
         let kid_ty = |k: u32, label: Rc<Term>, pos: Rc<Term>| match over {
@@ -1878,7 +1878,7 @@ impl Codata<'_> {
             dom: Rc::new(p.pos_at(k, Rc::clone(&label))),
             cod: Rc::new(kid_ty(k + 1, Rc::new(label.shift_local(1)), var(0))),
         };
-        let lf = Level::join(p.lp.clone(), kid_level.clone());
+        let lf = Level::max(p.lp.clone(), kid_level.clone());
         let o_level = match over {
             Some(c) => Self::node_level(p, c),
             None => p.lw.clone(),
@@ -1911,7 +1911,7 @@ impl Codata<'_> {
             });
         }
         let spine = self.spine(&p.shape_inline(self, span)?, &p.ls, n, span)?;
-        let lq = Level::join(lf.clone(), mlvl.clone());
+        let lq = Level::max(lf.clone(), mlvl.clone());
         // Q(v), over (Γ, o, v) at depth `k` = 2.
         let q = |k: u32, v: Rc<Term>| Type::Pi {
             dom_level: lf.clone(),
@@ -2109,7 +2109,7 @@ impl Codata<'_> {
                 format!(
                     "`{}` is corecursive and has the implicit parameter `{}`: a corecursive \
                      definition takes its parameters explicitly this round \
-                     (docs/codata-elaborator-design.md §5)",
+                     (docs/inductives/codata-elaborator-design.md §5)",
                     decl.name, q.name
                 ),
                 q.span,
@@ -2172,7 +2172,7 @@ impl Codata<'_> {
         // Unindexed, the result type may mention only the fixed parameters:
         // it is the signature of the one `corec`, which sits outside the
         // carrier. Indexed, the *index* may mention any of them (the carrier
-        // carries the equation, docs/codata-indexed-design.md §6), and the
+        // carries the equation, docs/inductives/codata-indexed-design.md §6), and the
         // signature still only the fixed ones.
         let sig_only = p.sig.at(Rc::new(Term::Zero));
         for (j, r) in rank.iter().enumerate() {
@@ -2183,14 +2183,14 @@ impl Codata<'_> {
                         format!(
                             "the result type of the corecursive `{}` has a type or value argument \
                              mentioning `{}`, which a corecursive call changes: only its index may \
-                             (docs/codata-indexed-design.md §6)",
+                             (docs/inductives/codata-indexed-design.md §6)",
                             decl.name, names[j]
                         )
                     } else {
                         format!(
                             "the result type of the corecursive `{}` mentions `{}`, which a \
                              corecursive call changes: the result type may mention only parameters \
-                             every call passes unchanged (docs/codata-elaborator-design.md §5)",
+                             every call passes unchanged (docs/inductives/codata-elaborator-design.md §5)",
                             decl.name, names[j]
                         )
                     },
@@ -2276,8 +2276,8 @@ impl Codata<'_> {
         }
         let carrier = levels.last().expect("level 0").clone();
         let step_ty = self.step_ty(&p, 0, &carrier);
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
-        let step_level = Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf.clone()));
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
+        let step_level = Level::max(p.ls.clone(), Level::max(p.lp.clone(), kf.clone()));
         let free = match free_parts {
             Some((ty, friends)) => {
                 Some(Rc::new(UpTo(self).free_arms(cx, &ind, &p, &carrier, ty, friends, &decl.name, &step_level)?))
@@ -2330,7 +2330,7 @@ impl Codata<'_> {
     /// The level of a node `F(C) = Σ(s : S). Π(p : P s). C + ⟦D⟧` over the
     /// carrier `C`.
     fn node_level(p: &MParts, carrier: &Carrier) -> Level {
-        Level::join(p.ls.clone(), Level::join(p.lp.clone(), Level::join(carrier.level.clone(), p.lw.clone())))
+        Level::max(p.ls.clone(), Level::max(p.lp.clone(), Level::max(carrier.level.clone(), p.lw.clone())))
     }
 
     /// The body's expected type and level under `site`.
@@ -2342,7 +2342,7 @@ impl Codata<'_> {
     /// context), in the body's context. Unindexed, `corec(sig; _. V; _ x.
     /// b[varying ↦ projections of x]; ⟨⟩; ⟨varying parameters⟩)`; indexed, the
     /// step moves `b` from `g` to `i` along the carrier's equation
-    /// (docs/codata-indexed-design.md §6).
+    /// (docs/inductives/codata-indexed-design.md §6).
     pub(crate) fn corec_close(&self, cx: &Cx, n_ty: usize, site: &CorecSite, b: Term, span: Span) -> R<Term> {
         let t = self.corec_close_annotated(cx, n_ty, site, b, span)?;
         Ok((*slim(&Rc::new(t), false)).clone())
@@ -2360,7 +2360,7 @@ impl Codata<'_> {
         // binders, `v` scoped there: the varying parameters are `v`'s
         // components (of `fst v` when indexed), the fixed ones the outer
         // binders. Indexed, the body is moved from `g[v]` to `i` along the
-        // seed's equation (docs/codata-indexed-design.md §6).
+        // seed's equation (docs/inductives/codata-indexed-design.md §6).
         // The body at the varying tuple `tuple`, `kk` binders past the body.
         let body_tuple = |kk: u32, tuple: Term| -> (Term, LocalSubst) {
             let mut subst = embed(&base, (n as u32) + kk);
@@ -2496,7 +2496,7 @@ impl Codata<'_> {
     fn corec_child_index(&self, cx: &Cx, p: &MParts, carrier: &Carrier, d: u32, expected: &Type, span: Span) -> Option<Rc<Term>> {
         if !p.indexed {
             let want = self.child_sum(p, carrier, d, triv());
-            let lvl = Level::join(carrier.level.clone(), p.lw.clone());
+            let lvl = Level::max(carrier.level.clone(), p.lw.clone());
             let ok = *expected == want || {
                 let head = self.whnf(cx, expected, span).ok();
                 matches!(head, Some(Type::Sum { .. })) && self.conv_types(cx, expected, &want, &lvl)
@@ -2555,7 +2555,7 @@ impl Codata<'_> {
                     format!(
                         "this call to `{}` is not guarded: a corecursive call must be a child of the \
                          constructor the definition returns — `C(…, {}(…), …)` or `C(…, λ y => {}(…), …)` \
-                         (docs/codata-elaborator-design.md §5)",
+                         (docs/inductives/codata-elaborator-design.md §5)",
                         site.selfref.written_name, site.selfref.written_name, site.selfref.written_name
                     ),
                     e.span,
@@ -2673,7 +2673,7 @@ impl Codata<'_> {
                     return err(nested_guard_msg(&site.selfref.written_name), at);
                 }
                 let d_here = p.d_of(1, Rc::clone(&idx));
-                let fn_level = Level::join(dom_level.clone(), p.lw.clone());
+                let fn_level = Level::max(dom_level.clone(), p.lw.clone());
                 let fn_ty = Type::Pi {
                     dom_level: dom_level.clone(),
                     cod_level: p.lw.clone(),
@@ -2687,7 +2687,7 @@ impl Codata<'_> {
                 };
                 return Ok(Some(Term::Lam {
                     dom_level,
-                    cod_level: Level::join(carrier.level.clone(), p.lw.clone()),
+                    cod_level: Level::max(carrier.level.clone(), p.lw.clone()),
                     dom,
                     body: Rc::new(Term::Inr {
                         lhs_level: carrier.level.clone(),
@@ -2763,7 +2763,7 @@ impl Codata<'_> {
     /// child an existing tree.
     fn observe_node(&self, p: &MParts, k: u32, carrier: &Carrier, step_level: &Level, t: Rc<Term>) -> Term {
         let o_ty = Rc::new(p.out_ty(k));
-        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        let kf = Level::max(carrier.level.clone(), p.lw.clone());
         let lab = Rc::new(p.out_fst(k + 1, var(0)));
         let child_idx = p.next_tm(k + 2, Rc::new(lab.shift_local(1)), var(0));
         let kids = Term::Lam {
@@ -2806,7 +2806,7 @@ impl Codata<'_> {
     /// ⟦D⟧` (which brings them back to [`Self::corec_check`]).
     #[allow(clippy::too_many_arguments)]
     fn corec_node(&self, cx: &Cx, p: &MParts, ind: &Inductive, carrier: &Carrier, i: usize, args: &[&Expr], span: Span) -> R<Term> {
-        let tlvl = Level::join(carrier.level.clone(), p.lw.clone());
+        let tlvl = Level::max(carrier.level.clone(), p.lw.clone());
         let child_at = |d: u32, label: Rc<Term>, pos: Rc<Term>| {
             self.child_sum(p, carrier, d, p.next_tm(d, label, pos))
         };
@@ -2905,7 +2905,7 @@ impl Codata<'_> {
         let case = Term::Case {
             lhs_level: cj.level.clone(),
             rhs_level: lw.clone(),
-            motive_level: Level::join(up.level.clone(), lw.clone()),
+            motive_level: Level::max(up.level.clone(), lw.clone()),
             lhs: Rc::new(cj.at(b + 1, &o1)),
             rhs: Rc::new(q.d_of(b + 1, Rc::clone(&o1))),
             motive: Rc::new(self.child_sum(q, &up, b + 2, Rc::clone(&o2))),
@@ -2927,7 +2927,7 @@ impl Codata<'_> {
         };
         let kids = Term::Lam {
             dom_level: q.lp.clone(),
-            cod_level: Level::join(up.level.clone(), lw),
+            cod_level: Level::max(up.level.clone(), lw),
             dom: Rc::new(q.pos_at(b, Rc::clone(&label))),
             body: Rc::new(case),
         };
@@ -2937,7 +2937,7 @@ impl Codata<'_> {
     /// A corecursive call's seed at a child of index `idx` (scoped at `cx`):
     /// the varying arguments as a carrier value, each fixed argument checked
     /// to be its own parameter. Indexed, the seed carries `refl` of the
-    /// call's index, which must be the child's (docs/codata-indexed-design.md
+    /// call's index, which must be the child's (docs/inductives/codata-indexed-design.md
     /// §6).
     #[allow(clippy::too_many_arguments)]
     fn corec_seed(
@@ -2968,7 +2968,7 @@ impl Codata<'_> {
                         format!(
                             "`{}` passes `{}` unchanged in every other corecursive call, so it is not \
                              part of the state; here the argument is something else (a shadowing \
-                             binder?). Rename the binder (docs/codata-elaborator-design.md §5)",
+                             binder?). Rename the binder (docs/inductives/codata-elaborator-design.md §5)",
                             site.selfref.written_name, site.names[j]
                         ),
                         args[j].span,
@@ -2994,7 +2994,7 @@ impl Codata<'_> {
                 format!(
                     "this call to `{}` is at `{}`, but the child it stands for is at `{}`: a \
                      corecursive call's result index must be the child's \
-                     (docs/codata-indexed-design.md §6)",
+                     (docs/inductives/codata-indexed-design.md §6)",
                     site.selfref.written_name,
                     self.display_type(cx, &call_at),
                     self.display_type(cx, &child_at)

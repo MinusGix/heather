@@ -33,4 +33,4 @@ syntactically identical inline enums in one file are one type or two
 
 ## Log
 
-- 2026-09-18: The `String` and `Char` in the sketch signature now have a home: [[string-char-spec-types]] (design: docs/string-char-design.md).
+- 2026-09-18: The `String` and `Char` in the sketch signature now have a home: [[string-char-spec-types]] (design: docs/library/string-char-design.md).

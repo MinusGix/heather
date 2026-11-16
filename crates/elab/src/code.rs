@@ -1,5 +1,5 @@
 //! Quoting a kernel type into its **code** — the `Type → Term : Ty l`
-//! direction of the Tarski universe (docs/surface-polymorphism.md §2.2).
+//! direction of the Tarski universe (docs/language/surface-polymorphism.md §2.2).
 //!
 //! The kernel already has the other direction: `El^l ⌜T⌝ ⇝ T` is a reduction
 //! (`crates/kernel/src/reduce.rs:77`), every code has a formation rule
@@ -104,7 +104,7 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             ty: Rc::new(code_of(ty)?),
         },
         // The index equation of a forded family
-        // (`docs/inductive-fording-lowering.md` §6.2): having a code is what
+        // (`docs/archive/inductive-fording-lowering.md` §6.2): having a code is what
         // lets a forded family be a *field* of another declaration.
         Type::SEq {
             level,
@@ -127,7 +127,7 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             arity: Rc::clone(arity),
         },
         // The dependent tuple and the indexed fixed point
-        // (docs/iwf-former-design.md §6): the family, index type and shapes
+        // (docs/kernel/iwf-former-design.md §6): the family, index type and shapes
         // coded under the binders they already have; the arity, output and
         // child index and the index are terms and ride across.
         Type::DVec { level, len, fam } => Term::TmDVec {
@@ -145,7 +145,7 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             child: Rc::clone(&sig.child),
             index: Rc::clone(index),
         },
-        // The coinductive former (docs/kernel-m-codes-design.md §1): the
+        // The coinductive former (docs/kernel/kernel-m-codes-design.md §1): the
         // index is part of the code, and the pieces are coded under the
         // binders they already have.
         Type::M { sig, index } => Term::TmM {

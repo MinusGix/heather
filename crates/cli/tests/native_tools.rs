@@ -1,4 +1,5 @@
-//! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, `echo` and `yes STR` over
+//! `tr a-z A-Z`, `yes`, `head -c 10` (and `head -c 4096` holding its whole
+//! input, read at offsets), `wc -l`, `echo` and `yes STR` over
 //! the command line, `cat FILE…` over open and close, and `wc [-clw]` and
 //! `head -n N` over decimal output and input, and `grep -F PATTERN` over a
 //! procedure (issues/native-compiled-procedures.md), written with the builder (`native_build`),
@@ -7,7 +8,7 @@
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
 //! issues/native-source-argv.md, issues/native-compile-other-calls.md,
 //! issues/native-decimal-io.md), tr through a word function it calls, compiled
-//! into the same file (docs/native-one-compiler-design.md), and
+//! into the same file (docs/native/native-one-compiler-design.md), and
 //! `heather reflect`'s program of that function
 //! (issues/native-build-reflected-helpers.md).
 //! None has
@@ -132,7 +133,7 @@ fn compiled_tr_runs_as_gnu_tr() {
 }
 
 /// tr with each byte through `raise_letter`, a function compiled into the
-/// same file and called (docs/native-one-compiler-design.md §2.2): the
+/// same file and called (docs/native/native-one-compiler-design.md §2.2): the
 /// same outputs as GNU's, and so as the tr above.
 #[test]
 fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
@@ -155,7 +156,7 @@ fn compiled_tr_calling_a_function_runs_as_gnu_tr() {
 
 /// tr with each read's bytes raised by `raise_span`, a function lent the
 /// buffer that stores into it and calls `raise_letter` on each byte
-/// (docs/native-one-compiler-design.md §2.6): the write after the call
+/// (docs/native/native-one-compiler-design.md §2.6): the write after the call
 /// sends what the function left, which is what GNU's sends.
 #[test]
 fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
@@ -184,18 +185,21 @@ fn compiled_tr_calling_a_function_that_rewrites_its_buffer_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The same tr as one computation over `Io` (`tr_lend_source`,
-/// lib/_tests/native/runtime/rt_io_lend_tests.hthr): a loop that reads,
-/// lends the buffer to `raise_span` (`ETm::Lend`), and writes what the
-/// function left, lowered by the proved `rt_io` lowering. A computation
-/// over `Io` has no exit, so a failed write does not end it with 1 as GNU's
-/// does; that case is not asked of it (issues/rt-io-exit-on-failed-write.md).
+/// The same tr as a `runtime fn` over `Io` (`tr_upper`,
+/// lib/_tests/native/runtime/runtime_program_tests.hthr), compiled by its
+/// path, `tr_upper::source`: a loop that reads, lends the buffer to
+/// `raise_span`, and writes what the function left, read by the reflector,
+/// lowered by the proved `rt_io` lowering, with `tr_upper::reads` stating
+/// that the `Source`'s tree reads as the function at every world. A
+/// computation over `Io` has no exit, so a failed write does not end it
+/// with 1 as GNU's does; that case is not asked of it
+/// (issues/rt-io-exit-on-failed-write.md).
 #[test]
-fn compiled_tr_lowered_from_one_io_computation_runs_as_gnu_tr() {
-    let dir = scratch("tr-lend");
+fn compiled_tr_program_over_io_runs_as_gnu_tr() {
+    let dir = scratch("tr-program");
     let binary = dir.join("tr");
-    write_program("lib/_tests/native/runtime/rt_io_lend_tests.hthr", "tr_lend_source", &binary, false);
-    let mut random = Bytes::seeded("tr-lend");
+    write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "tr_upper::source", &binary, false);
+    let mut random = Bytes::seeded("tr-program");
     let every: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 256) as u8).collect();
     let text = random.take(20000, |r| b"abcxyzABCXYZ`{@[ \n019"[(r % 21) as usize]);
     let bytes = random.take(70000, |r| r as u8);
@@ -205,6 +209,34 @@ fn compiled_tr_lowered_from_one_io_computation_runs_as_gnu_tr() {
         assert_eq!(code, Some(0), "tr exits 0 at the end of its input");
         assert_eq!(code, gnu_code, "as GNU's does");
         assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A whole input in one buffer, then a verdict: `ascii_check::source` reads
+/// standard input into its 4096-byte buffer at a growing offset, lends it
+/// to `ascii_status` (native_tool_spans, two functions linked), and exits
+/// with its word: 0 when every byte read is below 0x80, 1 when one is not,
+/// 2 when the input filled the buffer. `ascii_check::reads` states that the
+/// `Source`'s tree reads as the function at every world.
+#[test]
+fn compiled_ascii_check_reads_its_whole_input_then_answers() {
+    let dir = scratch("ascii-check");
+    let binary = dir.join("ascii");
+    write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "ascii_check::source", &binary, false);
+    let mut random = Bytes::seeded("ascii-check");
+    let text = random.take(4000, |r| b"abcxyz ABC\n019~"[(r % 15) as usize]);
+    let mut late = text.clone();
+    late[3999] = 0x80;
+    let mut early = text.clone();
+    early[0] = 0xff;
+    let full = random.take(4096, |r| (r % 128) as u8);
+    let long = random.take(9000, |r| (r % 128) as u8);
+    let bytes = random.take(3000, |r| r as u8);
+    for input in [&b""[..], b"hello, World!\n", &text, &late, &early, &full[..4095], &full, &long, &bytes] {
+        let (code, _) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let want = if input.len() >= 4096 { 2 } else if input.iter().all(|&b| b < 0x80) { 0 } else { 1 };
+        assert_eq!(code, Some(want), "the verdict on {} bytes", input.len());
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -295,6 +327,55 @@ fn compiled_head_runs_as_gnu_head() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `head -c 4096` that reads its whole input into one buffer before writing
+/// any of it, each read landing where the last one ended
+/// (`read_whole`, native_build): GNU's bytes for
+/// inputs shorter than the buffer, as long, longer, much longer than a pipe
+/// holds at once, and for an input that arrives two bytes at a time, so
+/// every read lands past the one before.
+#[test]
+fn compiled_head_holding_its_whole_input_runs_as_gnu_head() {
+    let dir = scratch("head-whole");
+    let binary = dir.join("head");
+    write_tool("head_whole_tool", &binary);
+
+    let mut random = Bytes::seeded("head-whole");
+    let short = random.take(4095, |r| r as u8);
+    let exact = random.take(4096, |r| r as u8);
+    let long = random.take(4097, |r| r as u8);
+    let huge = random.take(200000, |r| r as u8);
+    for input in [&b""[..], b"abc", &short, &exact, &long, &huge] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("head").args(["-c", "4096"]), input, Stdio::piped());
+        assert_eq!(code, Some(0), "head exits 0");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    // Reads of two bytes each, with a pause: every one lands past the last.
+    let dripped: Vec<u8> = (0..40u8).map(|i| b'a' + i % 26).collect();
+    let mut child = Command::new(&binary).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let sent = dripped.clone();
+    let writer = std::thread::spawn(move || {
+        for pair in sent.chunks(2) {
+            let _ = stdin.write_all(pair);
+            let _ = stdin.flush();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert_eq!((out.status.code(), &out.stdout[..]), (Some(0), &dripped[..]), "reads landing one after another");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// `tail -c +7` whose call is over a line of a buffer
 /// (issues/source-buffers-as-views.md): each read's bytes past those still
 /// to skip are copied by `copy_window`, which the statement lends its two
@@ -366,7 +447,7 @@ fn compiled_wc_counts_lines_as_gnu_wc() {
 /// wc -l with each read's newlines counted by `count_newlines`, a function
 /// lent the buffer: compiled into the same file by the function compiler
 /// and passed the buffer's address and capacity by the call
-/// (docs/native-one-compiler-design.md §2.3). GNU's counts, and so the
+/// (docs/native/native-one-compiler-design.md §2.3). GNU's counts, and so the
 /// counts of the wc above, whose loop is the program's own.
 #[test]
 fn compiled_wc_calling_a_function_over_its_buffer_counts_as_gnu_wc() {
@@ -705,7 +786,7 @@ fn reflected_word_program_is_current() {
 /// NUL, which GNU reads as a binary file, and a newline at least every 200
 /// bytes, inside the tool's line buffer), an unterminated last line, and
 /// patterns empty, short, long and past ASCII. Its line test is a procedure
-/// called from two sites (docs/native-procedures-design.md).
+/// called from two sites (docs/native/native-procedures-design.md).
 #[test]
 fn compiled_grep_f_runs_as_gnu_grep() {
     let dir = scratch("grep");
@@ -772,7 +853,7 @@ fn random_lines(random: &mut Bytes, count: usize, longest: u64, alphabet: &[u8],
 /// last line with no newline (which GNU writes first, as it is), lines
 /// longer than the tool's read buffer (so a line is read in parts into its
 /// arena cell), and random bytes. Its lines are a list in an arena
-/// (docs/native-heap-arena-design.md); running out of it is a defined exit,
+/// (docs/native/native-heap-arena-design.md); running out of it is a defined exit,
 /// GNU's message and status 1, which GNU's does not meet at these sizes.
 #[test]
 fn compiled_tac_runs_as_gnu_tac() {
@@ -811,7 +892,7 @@ fn compiled_tac_runs_as_gnu_tac() {
 /// unsigned, a prefix first, alike lines kept, a last line without a
 /// newline given one, over nothing, blank lines, prefixes, duplicates, bytes
 /// past ASCII and lines longer than the read buffer. Its lines are a list in
-/// an arena it never changes (docs/native-heap-arena-design.md §3);
+/// an arena it never changes (docs/native/native-heap-arena-design.md §3);
 /// running out of it exits 2 with GNU's message.
 #[test]
 fn compiled_sort_runs_as_gnu_sort() {

@@ -8,14 +8,14 @@ created: 2026-11-02
 updated: 2026-11-02
 ---
 
-docs/datarepr-design.md §1.3 (FINDING 1) settled that constructor images are
+docs/native/datarepr-design.md §1.3 (FINDING 1) settled that constructor images are
 operations: consumption is total, construction may be guarded or carry an
 outcome, and the image laws are then stated on the success arm. The v1
 `datarepr` form (`crates/elab/src/datarepr.rs`) takes only total images with
 unguarded laws (`Cons_abs`, `Cons_inv` under `inv` alone).
 
 The first repr that needs more is the arena's (`lib/native/native_arena.hthr`,
-docs/native-heap-arena-design.md §4.1): `ArenaRef::cons` is total as a
+docs/native/native-heap-arena-design.md §4.1): `ArenaRef::cons` is total as a
 function, but `inv` of its result needs the arena to be within its limit, and
 no `inv` can carry that, since consing onto any list can overflow it. Its laws
 are theorems today (`ArenaRef::cons_abs` takes the bound as a hypothesis).

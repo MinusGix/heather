@@ -27,7 +27,7 @@ about 700 calls to the theorems of lib/std/algebra/ordered_field.hthr across
 2. Rewrite the calls. A call whose hypothesis is a tactic or another
    checking-only argument (`le_trans(a, b, c, h1, linarith)`) has no type to
    read `b` from: pass it by name (`le_trans(y := b, h1, linarith)`,
-   docs/named-arguments-design.md §5).
+   docs/language/named-arguments-design.md §5).
 3. `mono` builds its class-law calls by name and position
    (lib/std/tactic/mono.hthr's `class_law(…, [1], "OrderedAddMonoid::add_le_mono_l")`,
    `PushLaws`, `mono_try_global("StrictOrder::le_of_lt")`), so its table and

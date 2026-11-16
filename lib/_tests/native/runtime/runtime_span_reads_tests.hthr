@@ -1,6 +1,6 @@
 // Probes of `runtime fn` on functions that write one span and read others
 // (lib/native/runtime/runtime_file.hthr's `FTm::Source`;
-// docs/native-library-exports-design.md §3.1, V5a): the first span is the
+// docs/native/native-library-exports-design.md §3.1, V5a): the first span is the
 // written one, each span after it comes with its length word and is only
 // read, and the generated statements are at every file, the read spans
 // being the file's after the first. Tests, not library: nothing imports

@@ -1,5 +1,5 @@
 // Cauchy reals are points of the real line
-// (docs/localic-reals-design.md §5).
+// (docs/library/localic-reals-design.md §5).
 //
 // A real lies in a rational interval when it is strictly between the ends.
 // The intervals a real lies in form a point of the localic line

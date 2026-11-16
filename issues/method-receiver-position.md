@@ -97,7 +97,7 @@ Three ways out, none free:
 
 Worth recording so nobody re-derives it. I expected receiver-first to *also*
 fix [[surface-operators]]' deferred `.cong(Wrap)` — the case
-`docs/constructor-function-values.md` §5 leaves open — on the reasoning that
+`docs/language/constructor-function-values.md` §5 leaves open — on the reasoning that
 arguments elaborate left to right, so putting the informative receiver first
 would let the constructor argument *check* against a known type instead of
 *infer* against an unsolved meta.
@@ -220,7 +220,7 @@ fills, which is a question named arguments do not answer.
 - [[generators-in-the-language]] — what removes the special-form obstacle.
 - [[elab-unifier-completeness]] — the `.cong(Wrap)` blocker this is *not*.
 - [[surface-records]] — where the inversion was first written down
-  (docs/surface-records.md §11.3).
+  (docs/language/surface-records.md §11.3).
 
 ## Log
 
@@ -238,4 +238,4 @@ fills, which is a question named arguments do not answer.
 
 (3) One test I wrote to be thorough found nothing, and is worth keeping for the reason it found nothing: a marked subject in the MIDDLE (`fn pick(a, self b, c)`) works because insertion is an insert rather than a prepend-or-append, so there was never an end-biased version to get wrong. The counting test (implicits on both sides of the self) is the one that could have failed -- subject_index filters to explicit params, and cong alone would not have caught an off-by-one that happened to cancel.
 
-Corrected while here: issues/surface-operators.md's landing note stated receiver-last with the inference justification, which was never load-bearing; docs/surface-records.md 4.1 and 11.3, and tier-0 6.3.
+Corrected while here: issues/surface-operators.md's landing note stated receiver-last with the inference justification, which was never load-bearing; docs/language/surface-records.md 4.1 and 11.3, and tier-0 6.3.

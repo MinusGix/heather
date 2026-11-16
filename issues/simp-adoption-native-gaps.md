@@ -16,7 +16,7 @@ and `words_agree` in one call, its premise discharged from a local),
 `Tm::lower_again_sound`'s `moved`. Fixed on the way: a computed
 constructor's fields (a `sup_f`'s label payload) were not contracted, so
 the computed goal was unspellable; and a definition named among the laws
-is now unfolded (docs/simp-design.md §14). Naming a matched (non-recursive)
+is now unfolded (docs/tactics/simp-design.md §14). Naming a matched (non-recursive)
 arm's children by their patterns as well was tried and reverted: it
 changed what `omega` read in `CReal::archimedean`.
 
@@ -44,7 +44,7 @@ Second pass (2026-11-12): also converted `Fun::fuel_zero_sound`,
 `Fun::fuel_pass_sound`'s four Valuation lets (side conditions by
 `discharge := omega(…)`), which needed laws inside a stuck match's arms,
 β under a function literal, an equation's step chaining as `=` at any
-carrier, and `Tm::leave_pointwise` (docs/simp-design.md §14.1).
+carrier, and `Tm::leave_pointwise` (docs/tactics/simp-design.md §14.1).
 
 Still open:
 
@@ -69,7 +69,7 @@ quarter fewer bytes; the restated `pushed`/`padded` helpers are gone) and
 of `lib/std/crypto/sha2_stream.hthr` (473 → 455), and added the per-type
 defaults `List::windows`, `Vec::entries`, `BitVec::nat`, `Stored::bytes`,
 `Part::fields` and `Valuation::reads`, each with a `simp_check` theorem.
-What simp gained on the way is docs/simp-design.md §15.
+What simp gained on the way is docs/tactics/simp-design.md §15.
 
 Still by hand, and why:
 

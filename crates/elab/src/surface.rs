@@ -47,7 +47,7 @@ pub(crate) fn operator_carrier_leaf(
         }
         let numeral = matches!(leaf.kind, ExprKind::Num(_));
         // A cast `↑e` is a leaf, and checking-only: its operand's carrier is
-        // the source, never the spine's (docs/casting-design.md §5.2).
+        // the source, never the spine's (docs/language/casting-design.md §5.2).
         if !numeral && !is_cast(leaf) && !checking_only(leaf) {
             return leaf;
         }
@@ -62,7 +62,7 @@ pub(crate) fn operator_carrier_leaf(
     }
 }
 
-/// `↑e`, a cast (docs/casting-design.md §5.2): the prefix symbol `↑` applied
+/// `↑e`, a cast (docs/language/casting-design.md §5.2): the prefix symbol `↑` applied
 /// to one operand.
 pub(crate) fn is_cast(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::App { head, args, .. }
@@ -623,7 +623,7 @@ pub(super) fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[S
 
 /// The walkers of [`count_holes`] and [`count_tactic_slots`], at module
 /// level so that the pattern compiler can ask the same question of one
-/// expression (`docs/nested-match-patterns-design.md` §10.3): a body it would
+/// expression (`docs/language/matching/nested-match-patterns-design.md` §10.3): a body it would
 /// copy into several arms must not contain a hole, since a hole is keyed by
 /// its context and cannot be elaborated twice.
 ///
@@ -873,7 +873,7 @@ fn tactic_slot_score(e: &Expr) -> u32 {
 }
 
 /// Slots a declaration's tactics may fill besides its goals: a `bv_omega`
-/// lifts its proof into one (`docs/bv-omega-design.md` §6) and every `omega`
+/// lifts its proof into one (`docs/tactics/bv-omega-design.md` §6) and every `omega`
 /// names its atom list by one (a `positivity` counts as one `omega`; a run
 /// that needs more restarts once). Reserved up front, since a slot
 /// discovered mid-body restarts the declaration; an over-count costs an
@@ -901,7 +901,7 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
     // Under `decreases`, every recursive call owes one obligation hole
     // (measure.rs); calls are counted by name, which over-counts a shadowed
     // name — an upper bound, as required. The hole itself is raised in the
-    // site's own `f#obl_N` (`docs/decreases-unfolding-design.md` §4), whose
+    // site's own `f#obl_N` (`docs/language/recursion/decreases-unfolding-design.md` §4), whose
     // count comes from the ordinary body walk above; this stays for the
     // measure preflight, which reserves against the *written* declaration.
     if decl.decreases.is_some() && decl.kind != heather_syntax::DeclKind::Axiom {

@@ -8,7 +8,7 @@ created: 2026-10-26
 updated: 2026-10-28
 ---
 
-Round 9 of `docs/native-real-programs-plan.md` (§3.7, §6). Printing a count
+Round 9 of `docs/native/native-real-programs-plan.md` (§3.7, §6). Printing a count
 needs digits, and `head -n N` needs to parse one. The ISA model has no
 multiply, divide or shift, and FunctionIR's shifts are refused at lowering
 ([[verified-lowering-instruction-coverage]]). Neither is needed. Output

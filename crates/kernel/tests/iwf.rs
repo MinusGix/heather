@@ -1,5 +1,5 @@
 //! `IWf`, `sup_i` and `elim_IWf`: step 3 of the `IWf` landing
-//! (`docs/iwf-former-design.md` §1.2, §2, §4, §5, §13; `issues/iwf-former.md`).
+//! (`docs/kernel/iwf-former-design.md` §1.2, §2, §4, §5, §13; `issues/iwf-former.md`).
 //!
 //! `IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` is `Wf` with an index: the
 //! constructor `sup_i(a; cs)` is at its output index `o[a/x]`, its `k`th child
@@ -543,7 +543,7 @@ fn a_constructor_is_at_its_output_index() {
     not_ck(&nil_ctx(), &tm_lit(), &at(&sig, nat(0)), c(0));
     // It synthesizes Tm(o[a]), not a reduced index.
     let (ty, l) = infer_term(&psi(), 0, Layer::Prog, &nil_ctx(), &tm_lit(), FUEL).expect("infers");
-    assert_eq!(l, Level::join(c(0), c(0)));
+    assert_eq!(l, Level::max(c(0), c(0)));
     let out_at = sig.out.inst_top(0, &tm_lit_label());
     assert_eq!(ty, at(&sig, out_at));
     // App(n, m, f, a) on open data: its type is the computed index

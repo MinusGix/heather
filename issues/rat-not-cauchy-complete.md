@@ -16,7 +16,7 @@ it, `Rat`, is so far only refused for lack of an instance
 State it as a `¬` theorem: no function sends every Cauchy sequence of
 rationals to a limit.
 
-Plan (docs/sequences-and-completeness.md §3):
+Plan (docs/library/sequences-and-completeness.md §3):
 
 1. `2.root_floor(n + 1)` is Cauchy at `Rat`, from `Rat::root_floor_regular`.
 2. A limit `l` has `l·l ≈ 2`. By `Converges::mul` the squares converge to

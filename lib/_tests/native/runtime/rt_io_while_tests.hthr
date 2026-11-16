@@ -1,0 +1,202 @@
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_rec;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+import linux_world_while;
+import rt_reflect;
+import rt_io_reflect;
+import rt_io_reflect_loop;
+import runtime;
+import rt_io_bridge;
+import native_tool_spans;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+fn Io::echo_all(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
+        let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+        buf := r.buf;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
+
+fn pass_body() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [2, 4, 1, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
+    ETm::Pure(Lit(Word(64), 0)))))))))
+}
+
+fn echo_all_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0)))))
+}
+
+fn echo_g() → List<Ty> { [Bytes(0)] }
+fn loop_g() → List<Ty> { [Word(64), Bytes(0)] }
+fn wd() → rt::World { ETm::plain_world() }
+
+fn EchoS() → Type { Mutated<Io, Mutated<List<BitVec(8)>, BitVec(64)>> }
+fn EchoV() → Type { rt::Env(wd().tys, loop_g()) }
+
+fn ec(z: EchoS()) → Bool { BitVec::ofNat(0).unsigned_lt_bit(z.value.value) }
+fn eb(z: EchoS()) → EchoS() {
+    let r = Io::read_into(z.after, Io::stdin(), z.value.after, BitVec::ofNat(0), BitVec::ofNat(64));
+    let w = Io::write_from(r.after, Io::stdout(), r.value.buf, BitVec::ofNat(0), r.value.result);
+    Mutated(w.after, Mutated(r.value.buf, r.value.result))
+}
+fn ek(z: EchoS()) → Partial(Mutated<Io, BitVec(64)>) { CRet(Mutated(z.after, z.value.value)) }
+
+fn ece(v: EchoV()) → Bool { ELoop::truth(wd().tys, Tm::ty(going(), wd(), loop_g()), Tm::sem(going(), wd(), loop_g(), v)) }
+fn efe(v: EchoV(), io: Io) → Mutated<Io, EchoV()> {
+    Mutated(pass_body().sem_end(wd(), [], loop_g(), v, io).after,
+        ELoop::gather(wd().tys, pass_body().ctx_end(wd(), loop_g()), pass_body().sem_end(wd(), [], loop_g(), v, io).value, loop_g(), [3, 4]))
+}
+fn erest(m: Mutated<Io, EchoV()>) → Partial(Mutated<Io, BitVec(64)>) { ELoop::Done(ETm::Pure(Var(0))).sem(wd(), [], loop_g(), m.value, m.after) }
+fn eworld(z: EchoS()) → Io { z.after }
+fn evals(z: EchoS()) → EchoV() { Pair(z.value.value, Pair(z.value.after, trivial)) }
+
+theorem echo_surface_is(io: Io, buf: List<BitVec(8)>): Io::echo_all(io, buf) = Io::surface_while(ec, eb, ek, Mutated(io, Mutated(buf, BitVec::ofNat(1)))) { refl }
+
+theorem echo_test(z: EchoS()): ece(evals(z)) = ec(z) { refl }
+theorem echo_body(z: EchoS()): efe(evals(z), eworld(z)) = Mutated(eworld(eb(z)), evals(eb(z))) { refl }
+
+fn echo_agrees() → WhileAgrees<EchoS(), EchoV(), Mutated<Io, BitVec(64)>>(ec, eb, ek, ece, efe, erest, eworld, evals) {
+    WhileAgrees(echo_test, echo_body, λ z => Eutt::refl(Events::none(), ek(z)))
+}
+
+theorem echo_lowered_is(io: Io, buf: List<BitVec(8)>):
+    echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io)
+        = CoTree::bind(Events::none(), Io::while_loop(ece, efe, Pair(BitVec::ofNat(1), Pair(buf, trivial)), io), erest) { refl }
+
+// The bridge: the surface method is the program's meaning at every world
+// and every buffer, up to silent steps.
+fn echo_bridge(io: Io, buf: List<BitVec(8)>) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::echo_all(io, buf), echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io))
+{
+    Io::while_agrees(ec, eb, ek, ece, efe, erest, eworld, evals, echo_agrees(), Mutated(io, Mutated(buf, BitVec::ofNat(1))))
+}
+
+// The reflector reads the surface method into the program written above.
+theorem echo_reflected(): True {
+    by reflects_io_loop_as(["Io::echo_all"], [], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
+}
+
+fn no_lents() → List<Lent> { [] }
+
+// The same bridge, written by the reflector.
+theorem echo_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::echo_all(io, buf), echo_all_prog().sem(wd(), [], echo_g(), Pair(buf, trivial), io))
+{
+    by io_loop_bridge("Io::echo_all", [], [], [], "wd", "no_lents")
+}
+
+// Two loops one after the other, and parameters no loop threads: the
+// bridge reads those from the environment before each loop, and the
+// second loop's bridge is the first's rest.
+fn Io::write_out_twice(io: Io, buf: List<BitVec(8)>, k: BitVec(64)) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut n: BitVec(64) = k;
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let w = io.write_from(Io::stdout(), buf, BitVec::ofNat(0), n);
+        n := BitVec::ofNat(0);
+    }
+    let mut m: BitVec(64) = k;
+    while BitVec::ofNat(0).unsigned_lt_bit(m) {
+        let w = io.write_from(Io::stdout(), buf, BitVec::ofNat(0), m);
+        m := w;
+    }
+    Pointed::ret(Mutated(io, m))
+}
+
+fn twice_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Var(0), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(),
+            ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 4, 0, 2], ETm::Let(Lit(Word(64), 0), ETm::Pure(Lit(Word(64), 0)))))),
+            [0, 5, 6],
+            ELoop::Seq(ETm::Let(Var(1), ETm::Pure(Lit(Word(64), 0))),
+                ELoop::While(going(),
+                    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 5, 0, 2], ETm::Pure(Lit(Word(64), 0))))),
+                    [0, 4, 5, 6],
+                    ELoop::Done(ETm::Pure(Var(0)))))))
+}
+
+theorem twice_reflected(): True {
+    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [], [LoopFun([Bytes(0), Word(64)], Word(64), twice_prog())])
+}
+
+theorem twice_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_prog().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
+{
+    by io_loop_bridge("Io::write_out_twice", [], [], [], "wd", "no_lents")
+}
+
+// A negative control: the bridge is checked against the statement, so a
+// program the function is not (the first loop keeps its old count) is
+// refused.
+fn twice_wrong() → ELoop {
+    ELoop::Seq(ETm::Let(Var(0), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(),
+            ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 4, 0, 2], ETm::Let(Lit(Word(64), 0), ETm::Pure(Lit(Word(64), 0)))))),
+            [3, 5, 6],
+            ELoop::Seq(ETm::Let(Var(1), ETm::Pure(Lit(Word(64), 0))),
+                ELoop::While(going(),
+                    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 5, 0, 2], ETm::Pure(Lit(Word(64), 0))))),
+                    [0, 4, 5, 6],
+                    ELoop::Done(ETm::Pure(Var(0)))))))
+}
+
+// expect-error: the tactic returned a proof of
+theorem twice_wrong_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::write_out_twice(io, buf, k), twice_wrong().sem(wd(), [], loop_g(), Pair(k, Pair(buf, trivial)), io))
+{
+    by io_loop_bridge("Io::write_out_twice", [], [], [], "wd", "no_lents")
+}
+
+// A span lent with a length that is not its buffer's own: `raise_span`
+// reads its length off its bytes, so the call is not a `Lend`.
+fn Io::tr_short(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(256));
+        let m = raise_span(r.buf, BitVec::ofNat(3), r.result, BitVec::ofNat(0));
+        let w = io.write_from(Io::stdout(), m.after, BitVec::ofNat(0), r.result);
+        buf := m.after;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+// expect-error: whose length is not its buffer's own
+theorem tr_short_refused(): True {
+    by reflects_io_loop_as(["Io::tr_short"], [], [], ["raise_span"], [])
+}

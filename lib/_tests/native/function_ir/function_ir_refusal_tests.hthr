@@ -42,9 +42,9 @@ theorem node_is_shown(): Add(width := 64, output := 2, left := 0, right := 1).sh
 theorem region_is_shown(): widened().body.shown() = "2 = resize64to32 0; 3 = sign_resize32to64 2; 4 = add64 3, 1; " { refl }
 
 // A placement the lowering takes has nothing to report.
-theorem good_placement_reports_nothing(): sum().refused(0, sum().plan(), 1, []) = "nothing: the function has code after no other" { refl }
+theorem good_placement_reports_nothing(): sum().refused(0, sum().plan(), 1, [], index_rooms()) = "nothing: the function has code after no other" { refl }
 
 // The node refused is the second, not the block: the first has code, and
 // the registers are as the first left them.
-theorem refusal_names_the_node(): widened().refused(0, widened().plan(), 1, []) =
+theorem refusal_names_the_node(): widened().refused(0, widened().plan(), 1, [], index_rooms()) =
     "the node `3 = sign_resize32to64 2`, placed in rax, where rsi holds 1; rdi holds 2 (32 bits); " { refl }

@@ -7,10 +7,10 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-`CoTree::rec` (`lib/std/itree/coitree_rec.hthr`, docs/partial-functions-design.md
+`CoTree::rec` (`lib/std/itree/coitree_rec.hthr`, docs/language/partial-functions-design.md
 §4.3) has no refinement theorem against the fuelled `Program::rec`
 (`itree.hthr`), the way `CoTree::iter` has `iter_refines`/`iter_refined`
-against `Program::iter` (`coitree_bridge.hthr`, docs/coitree-design.md §8.2).
+against `Program::iter` (`coitree_bridge.hthr`, docs/itrees/coitree-design.md §8.2).
 
 ## Scope
 
@@ -32,4 +32,4 @@ native customer of non-tail partial recursion.
 
 ## Log
 
-- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/coitree-design.md`).
+- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/itrees/coitree-design.md`).

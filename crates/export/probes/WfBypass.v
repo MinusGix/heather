@@ -1,5 +1,5 @@
 (* Heather's Wf as a Rocq inductive with the positivity and guard checks
-   bypassed (docs/export-fragment-design.md §5.1): β at an open tag holds, and
+   bypassed (docs/library/export-fragment-design.md §5.1): β at an open tag holds, and
    the property Wf exists for holds only eta-long, since Rocq has no unit eta.
    Print Assumptions names both bypasses. *)
 Set Universe Polymorphism.

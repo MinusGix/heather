@@ -8,10 +8,10 @@ created: 2026-10-31
 updated: 2026-10-31
 ---
 
-`docs/runtime-fn-setups-design.md` §7.2 (decision 6): under the default
+`docs/native/runtime-fn-setups-design.md` §7.2 (decision 6): under the default
 setup's first fragment, `Nat` is accepted only where a bound is structural
 (a literal, a `Bytes` length or index, a loop count). General `Nat`
-arithmetic at run time needs the narrowing of `docs/datarepr-design.md`
+arithmetic at run time needs the narrowing of `docs/native/datarepr-design.md`
 §2.4: a word with a checked operation, and overflow as a defined trap exit.
 
 ## Scope

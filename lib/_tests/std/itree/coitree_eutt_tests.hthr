@@ -108,7 +108,7 @@ theorem down_next_obs(E: Events): CoTree::obs(E, CoTree::bind(E, down(E, 2), λ 
     = OTau(CoTree::iter(E, λ a => down(E, a), 1)) { refl }
 
 // ---------------------------------------------------------------------------
-// Rewriting along `Eutt` (docs/equation-rewrite-design.md §11): a monad or
+// Rewriting along `Eutt` (docs/tactics/equation-rewrite-design.md §11): a monad or
 // tau law, unapplied, at the top of an `Eutt` goal and under a
 // continuation's binder, with no hand `trans`.
 fn rewrite_assoc_top<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E), u: CoTree<C>(E),
@@ -198,7 +198,7 @@ fn rewrite_in_loop(E: Events, n: Nat) →
     rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::iter(E, λ a => down(E, a), n)))
 }
 
-// Inside a constructor (docs/equation-rewrite-design.md §11.5): the walk
+// Inside a constructor (docs/tactics/equation-rewrite-design.md §11.5): the walk
 // goes into `CTau(·)`'s child and `CVis(c, ·)`'s continuation, and crosses
 // back by `Eutt::tau_respects` and `Eutt::vis_respects`.
 fn rewrite_assoc_under_tau<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →

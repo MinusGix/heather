@@ -1,5 +1,5 @@
 // Probe of an effectful `rt` computation in a program with a function that
-// writes (`rt_io_lower`; docs/native-one-compiler-design.md §2.6, U4 step
+// writes (`rt_io_lower`; docs/native/native-one-compiler-design.md §2.6, U4 step
 // 4c-4). The computation reads into its buffer and answers `raise_word` of
 // the count, a call of function 0 of `tr`'s program
 // (`raise_span::program`, native_tool_spans), whose function 1 rewrites the
@@ -55,12 +55,12 @@ import native_tool_spans;
 // Read up to 64 bytes from stdin into the buffer, and answer the count
 // through `raise_word`.
 fn Io::read_raised(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
-    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
     raise_word(r.result)
 }
 
 // Its computation: the call is of function 0 of the world.
-fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0], ETm::Pure(Call(0, [0]))))) }
+fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 1, 0], ETm::Pure(Call(0, [0]))))) }
 
 // The world: one function, `raise_word`, as `tr`'s program numbers it.
 fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }
@@ -112,7 +112,7 @@ fn read_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
         λ io => CRet(Io::read_raised(io, buf)))
 {
     read_body().lower_reads(tr_world(), [], read_g(), read_locs(), 1, read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        tr_calls(), tr_still(), tr_agrees, ETm::lents_agree_none(1, tr_calls()), perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
+        tr_calls(), tr_still(), tr_agrees, ETm::lents_agree_none(tr_calls()), perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
 // The control: the function that writes is not among the ones that leave

@@ -9,7 +9,7 @@ updated: 2026-11-08
 ---
 
 The `runtime` generator learns which types are held by their `datarepr`
-from the function's signature (`runtime_reprs`, docs/runtime-fn-setups-design.md
+from the function's signature (`runtime_reprs`, docs/native/runtime-fn-setups-design.md
 §16.13): an `i64` local inside a function whose parameters and result are
 all `u64` is refused with "`SInt` is held by its datarepr `I64`, which the
 function's signature does not name".
@@ -26,7 +26,7 @@ state, which every call site of `ty_of` would thread.
 
 ### 2026-11-08 — done (round 2 of [[sint-native-lowering]])
 
-docs/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
+docs/native/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
 types as it meets them (`rt_with_reprs`), calls pass and return a record
 held in one word (`Sig::Words` over the table, `RecInfo::back`), and each
 function keeps its own table, linking by conversion. Probes in

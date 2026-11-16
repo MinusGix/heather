@@ -76,19 +76,19 @@
 //! 2. **Every claimed no-op is verified in debug builds.** `shared_ty`/
 //!    `shared_tm` `debug_assert!` full structural equality, so a hook that
 //!    forgets to `note()` — the one dangerous mistake here — fails the test
-//!    suite (which runs in the dev profile, including the 300-seed
-//!    substitution laws) instead of silently producing a wrong term in
+//!    suite (which runs in the dev profile, including the substitution laws
+//!    over generated terms) instead of silently producing a wrong term in
 //!    release. Over-reporting is merely slow, so hooks may be conservative;
 //!    under-reporting is caught.
 //!
 //! ## Skipping closed subtrees
 //!
-//! Sharing alone still *visited* every node, building a temporary from
-//! `Rc`-cloned children only to compare the counter and drop it — ~70% of
-//! what a substitution did was walking material that could not change
-//! (issues/subst-visits-closed-subtrees.md). The **local** operations now
+//! Sharing alone still *visits* every node, building a temporary from
+//! `Rc`-cloned children only to compare the counter and drop it — most of a
+//! substitution's work is walking material that cannot change
+//! (issues/subst-visits-closed-subtrees.md). So the **local** operations
 //! skip that walk: before descending, [`sub_ty`]/[`sub_tm`] ask the mapper
-//! ([`Mapper::skip_ty`]/[`skip_tm`]) whether the subtree is provably
+//! ([`Mapper::skip_ty`]/[`Mapper::skip_tm`]) whether the subtree is provably
 //! untouchable, and `ShiftLocal`/`SubstLocal` answer from per-node
 //! free-variable bounds (`bounds.rs`: 1 + the largest free local index,
 //! plus a "contains a substitution tail" flag — tails are rewritten even
@@ -100,15 +100,15 @@
 //! traversal is a no-op on that subtree, and **debug builds verify the
 //! claim** by running the real traversal and asserting nothing changed. A
 //! binder count in `bounds.rs` that drifts from this file's dep table fails
-//! the test suite (300-seed substitution laws included) instead of silently
-//! producing a wrong term in release.
+//! the test suite instead of silently producing a wrong term in release —
+//! for the skips the suite takes (`issues/kernel-binder-count-tables.md`).
 //!
 //! The **global** operations skip on the same terms
 //! (`issues/psi-references-by-level.md`). `ShiftGlobal` and `SubstGlobal`
 //! act on free global *variables* and nothing else, a constant being named
 //! from the start of Ψ, so a subtree with no free variable at or past the
-//! operation's depth is its own image. That bound is memoized like the local
-//! one, in a table of its own, but it is not a second copy of the dep table:
+//! operation's depth is its own image. That bound is kept like the local
+//! one, in the node's head, but it is not a second copy of the dep table:
 //! it is computed by this file's generic walk under a mapper that only looks
 //! ([`GlobalBound`]). What it prunes is nearly everything those two
 //! operations are applied to outside meta-level code, since a committed
@@ -118,9 +118,9 @@
 //!
 //! A subterm reachable along two paths (a `let` alias's value used twice,
 //! `elab`'s `fan` shape in `issues/proof-let-substitution-cost.md`) is one
-//! allocation, and the traversal used to rebuild it once per path: a shared
-//! DAG of `k` links came back from a shift as a tree of `2^k` nodes, and so
-//! did everything downstream of it — the typing memo of
+//! allocation, and a traversal that rebuilds it once per path turns a
+//! shared DAG of `k` links into a tree of `2^k` nodes, and everything
+//! downstream pays for it: the typing memo of
 //! `issues/kernel-typing-memo-on-node-identity.md` cannot share what the
 //! shift has already copied apart (`issues/subst-shared-node-memo.md`).
 //!
@@ -158,10 +158,11 @@
 use crate::rc::Rc;
 
 use crate::bounds;
+use crate::rec;
 use crate::few_map::FewMap;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, CtxShape, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -232,10 +233,9 @@ impl GlobalSubst {
 /// thousands. So the tables are made at the first node recorded (a mapper
 /// is built and dropped by every call, and a call that records nothing
 /// should pay for no table), and each is a [`FewMap`]: a call that stays
-/// small allocates nothing more and is dropped by dropping its entries.
-/// (The tables were hash tables kept in a per-thread pool; emptying one
-/// cost its capacity, which was the largest call's, on every call that
-/// recorded anything: `issues/per-call-memos-pay-table-capacity.md`.)
+/// small allocates nothing more and is dropped by dropping its entries,
+/// where a pooled hash table would cost its largest call's capacity on every
+/// call (`issues/per-call-memos-pay-table-capacity.md`).
 #[derive(Default)]
 struct NodeMemo {
     tables: Option<Box<NodeTables>>,
@@ -390,7 +390,7 @@ trait Mapper {
 /// The `debug_assert!` is the load-bearing part of the design: it verifies
 /// every claimed no-op by full structural equality, in the profile the tests
 /// run in. So an under-reported change — the one dangerous mistake a mapper
-/// hook can make — fails the suite (300-seed substitution laws included)
+/// hook can make — fails the suite (the substitution laws included)
 /// rather than silently producing a wrong term in release.
 fn shared_ty<M: Mapper>(orig: &Rc<Type>, mapped: Type) -> Rc<Type> {
     debug_assert!(
@@ -475,7 +475,7 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     out
 }
 
-/// An `IWf` signature (`docs/iwf-former-design.md` §1.2): `arity` and
+/// An `IWf` signature (`docs/kernel/iwf-former-design.md` §1.2): `arity` and
 /// `out` under `x : S`, `child` under `x, i`. Shared when nothing in it
 /// changed, as [`sub_ty`]/[`sub_tm`] share a node.
 fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig> {
@@ -496,7 +496,7 @@ fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig>
     }
 }
 
-/// An `M` signature (`docs/kernel-coinduction-design.md` §1.1): `shape`
+/// An `M` signature (`docs/kernel/kernel-coinduction-design.md` §1.1): `shape`
 /// under `i`, `pos` under `i, s`, `next` under `i, s, p`. Shared when nothing
 /// in it changed, as [`sub_iwf_sig`].
 fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
@@ -520,7 +520,7 @@ fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
 thread_local! {
     /// Native depth of [`sub_tm`]: past [`crate::term::SPINE_ITERATE_AT`]
     /// a data spine is mapped by [`sub_tm_spine`]'s loop instead of one
-    /// frame per node (docs/deep-term-walks-design.md).
+    /// frame per node (docs/kernel/deep-term-walks-design.md).
     static SUB_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -632,7 +632,7 @@ fn sub_tm_settled<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths, mapped: Term, 
     out
 }
 
-/// A deep data spine mapped by a loop (docs/deep-term-walks-design.md):
+/// A deep data spine mapped by a loop (docs/kernel/deep-term-walks-design.md):
 /// down [`crate::term::spine_child`] while each node needs walking, the
 /// bottom by an ordinary [`sub_tm`] at depth zero, then back up rebuilding
 /// each node around its mapped child ([`map_spine_node`]). Every node gets
@@ -755,8 +755,8 @@ fn map_spine_node<M: Mapper>(t: &Term, m: &mut M, at: Depths, child: Rc<Term>) -
 }
 
 /// The motive/branch bundles of the code recursors, shared on the same rule.
-/// Worth their own functions rather than being inlined: `Branches` is 45
-/// terms under 45 telescopes, so sharing it unchanged is the single largest
+/// Worth their own functions rather than being inlined: `Branches` is 65
+/// terms under 65 telescopes, so sharing it unchanged is the single largest
 /// saving in the traversal.
 fn sub_motives<M: Mapper>(mo: &Rc<Motives>, m: &mut M, at: Depths) -> Rc<Motives> {
     let before = *m.changes();
@@ -1104,7 +1104,7 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             pair: sub_tm(pair, m, at),
         },
 
-        // The checked spellings (docs/intro-by-type-design.md): one type
+        // The checked spellings (docs/elaborator/intro-by-type-design.md): one type
         // annotation each and **no binder in it** — `snd_ty` bound one, `T`
         // binds none — so every walker here loses the `dep(0, 0, 1)` its
         // component sibling needs.
@@ -1358,73 +1358,11 @@ fn map_motives<M: Mapper>(mo: &Motives, m: &mut M, at: Depths) -> Motives {
 /// Branch telescopes (ch. 04); the `dep(univ, global, local)` increments
 /// must match the telescopes documented on [`Branches`].
 fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
-    Branches {
-        ty_nat: sub_tm(&b.ty_nat, m, at + dep(0, 1, 0)),
-        ty_pi: sub_tm(&b.ty_pi, m, at + dep(2, 3, 2)),
-        ty_ty: sub_tm(&b.ty_ty, m, at + dep(1, 1, 0)),
-        ty_el: sub_tm(&b.ty_el, m, at + dep(1, 2, 1)),
-        ty_id: sub_tm(&b.ty_id, m, at + dep(1, 4, 3)),
-        ty_sigma: sub_tm(&b.ty_sigma, m, at + dep(2, 3, 2)),
-        ty_unit: sub_tm(&b.ty_unit, m, at + dep(1, 1, 0)),
-        ty_empty: sub_tm(&b.ty_empty, m, at + dep(1, 1, 0)),
-        tm_var: sub_tm(&b.tm_var, m, at + dep(1, 3, 0)),
-        tm_nat: sub_tm(&b.tm_nat, m, at + dep(0, 1, 0)),
-        tm_pi: sub_tm(&b.tm_pi, m, at + dep(2, 3, 2)),
-        tm_ty: sub_tm(&b.tm_ty, m, at + dep(1, 1, 0)),
-        tm_zero: sub_tm(&b.tm_zero, m, at + dep(0, 1, 0)),
-        tm_succ: sub_tm(&b.tm_succ, m, at + dep(0, 2, 1)),
-        tm_elim_nat: sub_tm(&b.tm_elim_nat, m, at + dep(1, 5, 4)),
-        tm_lam: sub_tm(&b.tm_lam, m, at + dep(2, 4, 2)),
-        tm_app: sub_tm(&b.tm_app, m, at + dep(2, 5, 4)),
-        tm_id: sub_tm(&b.tm_id, m, at + dep(1, 4, 3)),
-        tm_refl: sub_tm(&b.tm_refl, m, at + dep(1, 3, 2)),
-        tm_j: sub_tm(&b.tm_j, m, at + dep(2, 7, 6)),
-        tm_sigma: sub_tm(&b.tm_sigma, m, at + dep(2, 3, 2)),
-        tm_pair: sub_tm(&b.tm_pair, m, at + dep(2, 5, 4)),
-        tm_fst: sub_tm(&b.tm_fst, m, at + dep(2, 4, 3)),
-        tm_snd: sub_tm(&b.tm_snd, m, at + dep(2, 4, 3)),
-        tm_unit: sub_tm(&b.tm_unit, m, at + dep(1, 1, 0)),
-        tm_empty: sub_tm(&b.tm_empty, m, at + dep(1, 1, 0)),
-        tm_triv: sub_tm(&b.tm_triv, m, at + dep(1, 1, 0)),
-        tm_elim_empty: sub_tm(&b.tm_elim_empty, m, at + dep(2, 3, 2)),
-        ty_sum: sub_tm(&b.ty_sum, m, at + dep(2, 3, 2)),
-        tm_sum: sub_tm(&b.tm_sum, m, at + dep(2, 3, 2)),
-        tm_inl: sub_tm(&b.tm_inl, m, at + dep(2, 4, 3)),
-        tm_inr: sub_tm(&b.tm_inr, m, at + dep(2, 4, 3)),
-        tm_case: sub_tm(&b.tm_case, m, at + dep(3, 7, 6)),
-        ty_w: sub_tm(&b.ty_w, m, at + dep(2, 3, 2)),
-        tm_w: sub_tm(&b.tm_w, m, at + dep(2, 3, 2)),
-        tm_sup: sub_tm(&b.tm_sup, m, at + dep(2, 5, 4)),
-        tm_elim_w: sub_tm(&b.tm_elim_w, m, at + dep(3, 6, 5)),
-        ty_vec: sub_tm(&b.ty_vec, m, at + dep(1, 3, 2)),
-        tm_vec: sub_tm(&b.tm_vec, m, at + dep(1, 3, 2)),
-        ty_fin: sub_tm(&b.ty_fin, m, at + dep(0, 2, 1)),
-        tm_fin: sub_tm(&b.tm_fin, m, at + dep(0, 2, 1)),
-        ty_wf: sub_tm(&b.ty_wf, m, at + dep(1, 3, 2)),
-        tm_wf: sub_tm(&b.tm_wf, m, at + dep(1, 3, 2)),
-        tm_supf: sub_tm(&b.tm_supf, m, at + dep(1, 5, 4)),
-        tm_elim_wf: sub_tm(&b.tm_elim_wf, m, at + dep(2, 6, 5)),
-        ty_seq: sub_tm(&b.ty_seq, m, at + dep(1, 4, 3)),
-        tm_seq: sub_tm(&b.tm_seq, m, at + dep(1, 4, 3)),
-        ty_sempty: sub_tm(&b.ty_sempty, m, at + dep(1, 1, 0)),
-        tm_sempty: sub_tm(&b.tm_sempty, m, at + dep(1, 1, 0)),
-        tm_srefl: sub_tm(&b.tm_srefl, m, at + dep(1, 3, 2)),
-        tm_elim_sempty: sub_tm(&b.tm_elim_sempty, m, at + dep(2, 3, 2)),
-        ty_squash: sub_tm(&b.ty_squash, m, at + dep(1, 2, 1)),
-        tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
-        tm_squash_in: sub_tm(&b.tm_squash_in, m, at + dep(1, 3, 2)),
-        tm_elim_squash: sub_tm(&b.tm_elim_squash, m, at + dep(2, 5, 4)),
-        ty_m: sub_tm(&b.ty_m, m, at + dep(3, 6, 5)),
-        tm_m: sub_tm(&b.tm_m, m, at + dep(3, 6, 5)),
-        tm_corec: sub_tm(&b.tm_corec, m, at + dep(4, 9, 8)),
-        tm_out: sub_tm(&b.tm_out, m, at + dep(3, 7, 6)),
-        ty_dvec: sub_tm(&b.ty_dvec, m, at + dep(1, 3, 2)),
-        tm_dvec: sub_tm(&b.tm_dvec, m, at + dep(1, 3, 2)),
-        ty_iwf: sub_tm(&b.ty_iwf, m, at + dep(2, 7, 6)),
-        tm_iwf: sub_tm(&b.tm_iwf, m, at + dep(2, 7, 6)),
-        tm_sup_i: sub_tm(&b.tm_sup_i, m, at + dep(2, 8, 7)),
-        tm_elim_iwf: sub_tm(&b.tm_elim_iwf, m, at + dep(3, 10, 9)),
-    }
+    let terms = rec::branch_terms(b);
+    rec::branches_from(std::array::from_fn(|i| {
+        let (univ, global, local) = rec::BRANCH_DEPTHS[i];
+        sub_tm(terms[i], m, at + dep(univ, global, local))
+    }))
 }
 
 fn map_ctx<M: Mapper>(c: &LocalCtx, m: &mut M, at: Depths) -> LocalCtx {
@@ -1567,7 +1505,7 @@ impl Mapper for ShiftGlobal {
 /// Rename every free global variable through a caller's map: the rescoping a
 /// module image needs when the Ψ prefix it was elaborated over is replaced by
 /// one in which its referents sit elsewhere
-/// (`docs/module-interface-cutoff-design.md` §3). The map sees and returns a
+/// (`docs/infrastructure/module-interface-cutoff-design.md` §3). The map sees and returns a
 /// free index as counted from the outside of the term, binders crossed
 /// already subtracted; `None` from it marks the result unusable rather than
 /// guessing, and the whole operation returns `None`.
@@ -1680,7 +1618,7 @@ impl GlobalBinding {
 
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
-/// telescope table rather than a term (`docs/lazy-global-offset-design.md`
+/// telescope table rather than a term (`docs/kernel/lazy-global-offset-design.md`
 /// §5); routed through the generic traversal so the 65 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
@@ -1970,7 +1908,7 @@ impl Mapper for InstTop<'_> {
 }
 
 /// Abstraction over a **term**: every occurrence of `pat` becomes the fresh
-/// innermost variable `z` (`docs/goal-motive-synthesis-design.md` §3).
+/// innermost variable `z` (`docs/elaborator/goal-motive-synthesis-design.md` §3).
 ///
 /// The inverse of [`SubstLocal`] at a singleton, and the operation a
 /// dependent motive is: `T.abstract_local(s)` is a type over `Γ, z` whose
@@ -2015,7 +1953,7 @@ struct AbstractLocal<'a> {
     /// The shared-node memo, when nothing is selected: then a node's result
     /// is a function of the node and the depths, and a goal that shares a
     /// subterm is abstracted once per depth, not once per path to it
-    /// (`docs/mengine-survey.md` §4.2). A selection numbers occurrences by
+    /// (`docs/surveys/mengine-survey.md` §4.2). A selection numbers occurrences by
     /// path, so it walks the tree.
     memo: Option<NodeMemo>,
     /// Whether every pattern mentions a variable of `Γ`. An occurrence under
@@ -2057,8 +1995,8 @@ impl Mapper for AbstractLocal<'_> {
         self.memo.as_mut()
     }
 
-    // The walk makes room for `z` as it goes ([`ShiftLocal`] by one), where
-    // it used to walk a weakened copy of the goal: one traversal and one
+    // The walk makes room for `z` as it goes ([`ShiftLocal`] by one) rather
+    // than walking a weakened copy of the goal: one traversal and one
     // result, and nothing built for the parts it can skip.
     fn local_var(&mut self, v: LocalVar, at: Depths) -> Option<Rc<Term>> {
         (v.0 >= at.local).then(|| Term::var_rc(v.0 + 1))
@@ -2444,7 +2382,7 @@ impl Type {
     /// `None` rather than the constant function, because the two answers are
     /// different *facts* and every caller so far wants to try something else
     /// before settling for the constant one
-    /// (`docs/goal-motive-synthesis-design.md` §3.2).
+    /// (`docs/elaborator/goal-motive-synthesis-design.md` §3.2).
     ///
     /// `self` is weakened into `Γ, z` first, so a `pat` occurring under `k`
     /// binders is matched against `pat` weakened by `k + 1` and the variable
@@ -2477,7 +2415,7 @@ impl Type {
     /// The generality is one caller's, and a real one: a constructor field is
     /// reached from a goal that mentions the *value*, so what abstracting the
     /// field does to that value is rebuild it around `z`
-    /// (`docs/goal-motive-synthesis-design.md` §5). The `[pat/z]` instance is
+    /// (`docs/elaborator/goal-motive-synthesis-design.md` §5). The `[pat/z]` instance is
     /// then the original only up to `rep[pat/z] ≡ pat` — for that caller,
     /// Σ/Unit-η — which is why this returns a term to be *checked* and not a
     /// proof of anything.
@@ -2566,10 +2504,11 @@ impl LocalCtx {
 }
 
 impl LocalSubst {
-    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded.
-    pub fn id(ctx: &LocalCtx) -> LocalSubst {
-        let m = ctx.entries.len() as u32;
-        let tail = match ctx.base {
+    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded. It reads
+    /// only Γ's [`CtxShape`].
+    pub fn id(ctx: impl Into<CtxShape>) -> LocalSubst {
+    let CtxShape { base, len: m } = ctx.into();
+    let tail = match base {
             CtxBase::Nil => SubstTail::Empty,
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
@@ -2627,8 +2566,8 @@ impl LocalSubst {
 /// read, by construction.
 ///
 /// It walks one node: a child that is a term or a type is asked for through
-/// the memo ([`bounds::global_bound_term`]), which answers from its table or
-/// by running this on the child, and the child's bound is read from outside
+/// the memo ([`bounds::global_bound_term`]), which answers from the child's
+/// head or by running this on the child, and the child's bound is read from outside
 /// the global binders between it and the node.
 struct GlobalBound {
     bound: u32,
@@ -2783,9 +2722,9 @@ mod tests {
     /// A substituted variable is a node the substitution already had, never
     /// a copy of one: the payload itself under no binder and wherever
     /// lifting does not change it, and one lifted node per depth otherwise.
-    /// Stated on pointers, since a copy is equal. (Each occurrence used to
-    /// get a copy of the payload's root, which lost the payload's identity,
-    /// and with it its bounds and every memo entry keyed by its address.)
+    /// Stated on pointers, since a copy is equal: a copy of the payload's
+    /// root would lose its identity, and with it its bounds and every memo
+    /// entry keyed by its address.
     #[test]
     fn a_substituted_variable_is_the_payloads_own_node() {
         crate::checks::set_skip_verification(crate::checks::SkipVerification::Full);
@@ -3044,7 +2983,7 @@ mod tests {
     }
 }
 
-// -- the quote boundary's rebuild (docs/intro-by-type-design.md §2.3) ------
+// -- the quote boundary's rebuild (docs/elaborator/intro-by-type-design.md §2.3) ------
 
 /// [`crate::typing::spell_checked_in_code`]'s second half: every checked
 /// spelling the eager checker recorded is replaced by its component form,

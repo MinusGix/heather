@@ -31,7 +31,7 @@ added, `tower_lens` with `Int::add_comm` and `List::append_nil` added,
 `neg_add_succ` with its four reversed
 (`lib/_tests/std/tactic/grind_mutation_tests.hthr`).
 
-Why it matters: the hint interface (docs/grind-design.md §9.4, §9.6;
+Why it matters: the hint interface (docs/tactics/grind-design.md §9.4, §9.6;
 [[lemma-selection-and-search]]) expects callers, people or models, to
 over-supply hints and narrow afterwards. Over-supply that exhausts fuel
 before the narrowing step defeats that.
@@ -70,7 +70,7 @@ report rather than the evaluator's fuel error, and it joins
   final `Pure`'s `J`: 2,047 nested `app@(x2; x0)` re-entries. Fixed in the
   evaluator: an elimination whose head is a variable bound to a closure waits
   on the heap frame stack (`Eval::await_bound`) instead of re-entering
-  `drive`, docs/native-depth-budget-design.md §9. The probe closes and joined
+  `drive`, docs/kernel/native-depth-budget-design.md §9. The probe closes and joined
   `grind_mutation_tests`; `long_runs` (crates/elab/tests/tactic_host.rs) runs
   3,000 requests under a bind; `a_chain_through_variable_heads_needs_no_native_depth`
   (eval_differential.rs) pins the kernel side. Found with temporary request,

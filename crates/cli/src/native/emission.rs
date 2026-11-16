@@ -121,12 +121,12 @@ pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Ve
 /// A source with procedures or functions: each procedure's way in, its
 /// body's parts and its way out, read after the exit, then the shared exit,
 /// then the functions' code (`Prog::links`) when it has any.
-struct Calls { src: String, homes: String, bodies: Vec<Body>, deep: usize, functions: Option<usize> }
+struct Calls { src: String, homes: String, bodies: Vec<Body>, deep: usize, functions: Option<usize>, count: usize }
 
 /// What `plan` takes of such a source: its spelling and its homes', its
 /// procedures' shapes (`List::procedures_shapes`), and whether it has
 /// functions.
-pub(super) struct CallsOf<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [u64], pub functions: bool }
+pub(super) struct CallsOf<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [u64], pub functions: usize }
 
 /// Procedure `index`'s reads: its way in (`Procedure::entry_code`), its
 /// body, and its way out (`Procedure::exit_code`).
@@ -182,8 +182,9 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
                 bodies.push(Body { entry, root, exit });
             }
             let deep = planner.read("deep", format!("Start.deep_exit({layout})"));
-            let functions = functions.then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {after}).unwrap_or(Start)")));
-            Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions })
+            let count = functions;
+            let functions = (count > 0).then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {after}).unwrap_or(Start)")));
+            Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions, count })
         }
     };
     let plain: Vec<String> = planner.joins.iter().map(|rest| format!("match {p}_s_{rest}().reads_known() {{ True => 0, False => 1 }}")).collect();
@@ -350,7 +351,7 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
     if start != entered || end != main { return Err(out_of_order()); }
     let calls = match &plan.calls {
         None => None,
-        Some(Calls { src, homes, bodies, deep, functions }) => {
+        Some(Calls { src, homes, bodies, deep, functions, count }) => {
             let from = writer.end(plan.exit);
             let (mut at, mut label) = (from, names);
             // Each procedure's start, end, label names before and after.
@@ -388,7 +389,8 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
                     procedure(src, i), i + 1, i + 1));
             }
             writer.theorems.push_str(&format!("theorem {p}_procedures(): {src}().procedures.procedures_code({}, {layout}, 0, {names}) = Some(Compiled({end}, {last})) {{ {p}_pl_0() }}\n\
-                theorem {p}_deep(): {end}.deep_exit({layout}).links({src}().functions, {homes}.places, {last}) = Some({p}_code()) {{ refl }}\n", writer.program(from)));
+", writer.program(from)));
+            writer.theorems.push_str(&deep_text(p, src, homes, layout, &end, last, *count));
             Some(CallsStated { main: writer.program(main), names, procedures: end, after: last })
         }
     };
@@ -694,4 +696,27 @@ impl Writer<'_> {
         self.theorems.push_str(&format!("theorem {p}_e_{id}(): {p}_s_{id}().emits({from}, {layout}, {p}_o_{id}(), {p}_kn_{id}(), {names}) = Some(Compiled({to}, {after})) {{ {proof} }}\n"));
         Ok((start, end, after))
     }
+}
+
+/// `{p}_deep`: the shared exit, then the functions linked, is the code.
+/// `Prog::links` checks the functions linkable and emits them; each check
+/// is its own declaration (`Prog::links_of`), and evaluability a function at
+/// a time (`verified::evaluable_text_over`), so the kernel's
+/// per-declaration fuel pays for the largest function and not for all of
+/// them at once.
+fn deep_text(p: &str, src: &str, homes: &str, layout: &str, end: &str, last: u64, count: usize) -> String {
+    let functions = format!("{src}().functions");
+    let exit = format!("{end}.deep_exit({layout})");
+    if count == 0 {
+        return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{ refl }}\n");
+    }
+    let evaluable = super::verified::evaluable_text_over(p, &functions, count, &format!("{functions}.map(λ (f: Function) => f.parameters.len())"));
+    format!("{evaluable}
+theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
+theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}
+theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions})).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
+theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{
+    {exit}.links_of({functions}, {homes}.places, {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
+}}
+")
 }

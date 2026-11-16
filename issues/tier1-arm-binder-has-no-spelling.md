@@ -7,9 +7,9 @@ updated: 2026-09-27
 ---
 
 Found by the [[omega-measure-at-constructor-pattern]] design pass
-(2026-09-06, docs/omega-measure-reduction-design.md §1.1 and "Filed
+(2026-09-06, docs/tactics/omega-measure-reduction-design.md §1.1 and "Filed
 separately"). Inside a `match` arm the tier-1 lowering aliases the recursive
-binder `t` to `nth^l(⟦D⟧; mᵢ; cs'; ι_t)` (docs/inductive-tier1-wf-lowering.md
+binder `t` to `nth^l(⟦D⟧; mᵢ; cs'; ι_t)` (docs/inductives/inductive-tier1-wf-lowering.md
 §6.3), which reduces to `Fst(cs')` on the arm's neutral children tuple.
 `spell_term_clean`/`spell_term_source` (`crates/elab/src/display.rs`) spell a
 `Supf` through `ctor_value` but have no case for a projection out of a neutral

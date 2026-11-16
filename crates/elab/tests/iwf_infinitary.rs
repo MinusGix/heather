@@ -1,5 +1,5 @@
 //! Acceptance for indexed families with a recursive **function** field: the
-//! `IWf` route lowered on `W` (`docs/iwf-infinitary-design.md`, §11's
+//! `IWf` route lowered on `W` (`docs/kernel/iwf-infinitary-design.md`, §11's
 //! checklist), against the four axes of `docs/testing-generated-terms.md`.
 //!
 //! Every declaration below is lowered to `Σ(t : W₀). El(ok t m)` and every
@@ -279,7 +279,7 @@ fn an_open_element_type_as_payload_and_domain() {
 
 // A mutual group with a function field: the group's one family is indexed
 // by the member sum, and the member's function child recurses at its own
-// index (docs/mutual-inductive-design.md §5's rebind, under `y`).
+// index (docs/inductives/mutual-inductive-design.md §5's rebind, under `y`).
 #[test]
 fn a_mutual_group_with_a_function_field() {
     elab(

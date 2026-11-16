@@ -32,7 +32,7 @@
 // upcasts through the tag, so every `MonoidRel` theorem applies to products
 // unchanged. The setoid `Equivalence(≈)` is reached both untagged and inside
 // the tag: the untagged copy is the canonical one, and each instance owes the
-// tag's copy agreement with it (docs/operation-indexed-classes-design.md §8).
+// tag's copy agreement with it (docs/language/classes/operation-indexed-classes-design.md §8).
 
 import logic;
 import nat;
@@ -164,7 +164,7 @@ theorem Ring::neg_mul_neg<A: Ring(≈, +, *)>(x, y: A): A.inv(x) * A.inv(y) ≈ 
 // Negation and subtraction as symbols. Inside `section<A: Ring(≈, +, *)>` an
 // operand at `A` has no designation of its own, so `-x` and `x - y` read the
 // ones at the class of the dictionary in scope (operator rung 2b,
-// docs/operators-onto-classes-design.md §4): `-x` is the group's inverse
+// docs/language/classes/operators-onto-classes-design.md §4): `-x` is the group's inverse
 // `A.inv(x)` and `x - y` is `x + A.inv(y)`, each one δ-step from what a
 // statement spelled before (issues/class-carrier-arithmetic-surface.md).
 // `OrderedAddGroup` designates the same two at an ordered group.
@@ -181,7 +181,7 @@ designation prefix - at Ring := Ring::neg
 designation - at Ring := Ring::sub
 
 // ---------------------------------------------------------------------------
-// The integers every ring has (docs/casting-design.md §5.6, §16). `Int` is
+// The integers every ring has (docs/language/casting-design.md §5.6, §16). `Int` is
 // initial among rings: `0`, `1`, `+` and negation already name a map out of
 // it, so a ring needs no `of_int` field to have its integers. `nat_cast`
 // builds them from `0` and `1` (`1` is `multiplicative.unit` itself, not
@@ -430,7 +430,7 @@ fn CommRing::with_ints() → CommRingOfInt<A>(≈, +, *) {
 // semirings is identity, and a generic theorem's `≈` reads back as `=`. The
 // monoids and the group are `algebra`'s and `int`'s identity instances, which
 // register these relational ones as their parents
-// (docs/relation-indexed-algebra-design.md), so a ring here adds only its
+// (docs/library/relation-indexed-algebra-design.md), so a ring here adds only its
 // distributivity and its zero laws.
 
 designation ≈ at Nat := RelId

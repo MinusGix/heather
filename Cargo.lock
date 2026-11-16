@@ -92,6 +92,7 @@ dependencies = [
  "heather-linked",
  "heather-numeral",
  "heather-syntax",
+ "libc",
 ]
 
 [[package]]

@@ -15,7 +15,7 @@ and `s.schedule := s.schedule.put(j, x)`: the surface had `for i in a..b`
 and `xs[i]`, but a range listed `Nat`s, an index was a `Fin`, and the
 record-function generator took neither.
 
-Built as docs/sequencing-surface-design.md §21: a range over words is a
+Built as docs/language/sequencing-surface-design.md §21: a range over words is a
 counted `decreases` recursion with its test in scope (a `mut self` method
 `T::f_loop` where the loop's state is the receiver, which the `runtime`
 generator compiles as a loop and `T::f` calls); `xs[i]` at a non-`Fin`

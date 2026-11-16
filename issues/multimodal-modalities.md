@@ -16,7 +16,7 @@ for guarded recursion.
 - DeLaM is already modal (□ over code, the layers). Guarded recursion is the
   principled road to liveness and coinductive reasoning without a
   productivity checker, and it is how Guarded Interaction Trees work
-  (`docs/2307.08514.pdf`). calf's phase distinction
+  (`docs/papers/2307.08514.pdf`). calf's phase distinction
   ([[cost-aware-semantics]]) is another modality. Adding them one at a time
   risks three hand-built modal systems.
 - MTT gives several modalities from one mode theory, with canonicity, and
@@ -25,9 +25,9 @@ for guarded recursion.
 ## Reading
 
 - Gratzer, Kavvos, Nuyts, Birkedal, *Multimodal Dependent Type Theory*,
-  LMCS 2021 — `docs/2011.15021.pdf`.
+  LMCS 2021 — `docs/papers/2011.15021.pdf`.
 - Gratzer, *Normalization for Multimodal Type Theory* (2023) —
-  `docs/2301.11842.pdf`.
+  `docs/papers/2301.11842.pdf`.
 
 ## The question to answer
 

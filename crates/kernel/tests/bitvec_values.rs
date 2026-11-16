@@ -1,11 +1,11 @@
 //! Native bitvector words: the criterion, the conversion fast path, and the
-//! run's one-step view (`docs/native-bitvector-values-design.md`, round 2).
+//! run's one-step view (`docs/kernel/native-bitvector-values-design.md`, round 2).
 //!
 //! A `Vec^l(T; n)` whose element type has exactly two canonical inhabitants
 //! with proof-irrelevant payloads is a machine word, and this file is the
 //! standing evidence that *reading it as one decides the same relation*. The
 //! shape under test is the one the elaborator actually emits for a
-//! two-constructor nullary inductive (`docs/inductive-tier0-lowering.md` §3):
+//! two-constructor nullary inductive (`docs/inductives/inductive-tier0-lowering.md` §3):
 //! a sum of `Tag_D`-prefixed field spines, so `False = inl ⟨tag, ⟨⟩⟩` and
 //! `True = inr ⟨tag, ⟨⟩⟩` with `tag` a Σ-nest of `Unit`s. `bool_like` below
 //! is that shape by construction rather than by import, so the file stays a
@@ -734,7 +734,7 @@ fn a_node_longer_than_any_chain_the_stack_holds_checks() {
     // character does. Typing, substitution and syntactic equality walk the
     // node; comparing two separately built nodes *by value* unfolds them into
     // a chain as long as the node, which conversion walks by deferring its
-    // deep tail comparisons (docs/deep-term-walks-design.md), at the full
+    // deep tail comparisons (docs/kernel/deep-term-walks-design.md), at the full
     // length: each unfolded tail is a fresh node, whose bounds the array's
     // suffix joins answer in a stride's work, so the comparison is linear in
     // the length (it was quadratic, and this was pinned at a tenth of it:

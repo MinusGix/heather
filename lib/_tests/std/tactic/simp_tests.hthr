@@ -1,4 +1,4 @@
-// Probes of `simp_only`, `simp_show` and `by simp()` (docs/simp-design.md,
+// Probes of `simp_only`, `simp_show` and `by simp()` (docs/tactics/simp-design.md,
 // issues/simp-tactic.md): a goal normalised by a pinned list of laws along
 // `=` and along a designated relation, side conditions, what is left
 // (`then :=`, `using :=`), calls at constructors computing first, every
@@ -56,7 +56,7 @@ theorem computed_left_spelled<A, B>(t: List<A>, a: A, f, g: B → A → B, z: B,
 }
 
 // A definition named among the laws is unfolded where it is called, its
-// body at the call's arguments (docs/simp-design.md §14); a law about what
+// body at the call's arguments (docs/tactics/simp-design.md §14); a law about what
 // it unfolds to then fires. A theorem's proof is opaque and is never
 // unfolded: it is a law.
 fn twice(n: Nat) → Nat { n + n }
@@ -195,7 +195,7 @@ theorem no_laws(a: Nat): a + 0 = a { simp_only() }
 // expect-error: `a` is not a law
 theorem not_a_law(a: Nat): a + 0 = a { simp_only(a) }
 
-// An instance under a λ (docs/simp-design.md §13): the equation is walked
+// An instance under a λ (docs/tactics/simp-design.md §13): the equation is walked
 // as a step of the identity relation, and the λ is crossed by its
 // consumer's pointwise evidence (`list_pointwise`), since there is no
 // function extensionality to cross it by.
@@ -261,7 +261,7 @@ theorem no_context(a, b: Regex, w: List<Nat>, h: Regex::Seq(a, b).Denotes(w)): R
 
 // ---------------------------------------------------------------------------
 // `by simp()`: the default sets of the types in the goal
-// (lib/std/tactic/simp.hthr, docs/simp-design.md §3.1).
+// (lib/std/tactic/simp.hthr, docs/tactics/simp-design.md §3.1).
 
 // A list and a number: `List::shape` and `Nat::arith`, neither named.
 theorem by_type_defaults<A>(xs, ys: List<A>): ((xs ++ Nil) ++ ys).len() + 0 = 0 + (xs.len() + ys.len()) { by simp() }
@@ -315,7 +315,7 @@ theorem defaults_follow_the_goal(a: Bool): (a && True) = (True && a) { by simp()
 
 // ---------------------------------------------------------------------------
 // `by simp_check([S, …])`: sets held to the checks of a rewrite system
-// (docs/simp-design.md §4), as far as running them shows.
+// (docs/tactics/simp-design.md §4), as far as running them shows.
 
 // Sets from different modules, checked for use together.
 theorem defaults_together(): True { by simp_check([simp_nat_arith, simp_list_shape, simp_regex_same]) }
@@ -336,7 +336,7 @@ register def simp_tests_overlap: SimpSet = simp_set("simp_tests::overlap", [name
 theorem overlapping_set(): True { by simp_check([simp_tests_overlap]) }
 
 // ---------------------------------------------------------------------------
-// Laws between statements, `P ↔ Q` (docs/simp-design.md §12): the goal
+// Laws between statements, `P ↔ Q` (docs/tactics/simp-design.md §12): the goal
 // itself, the operands of `∧`, `∨`, `↔`, `¬` and `→`, and the body of a `∀`.
 
 theorem iff_law(P, Q: Type, h: P ↔ Q, q: Q): P { simp_only(h, then := q) }

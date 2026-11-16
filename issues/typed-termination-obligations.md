@@ -66,7 +66,7 @@ and proofs still pass the kernel gate.
   match equations; computed scrutinees get a fresh internal binding. The
   calculator infers its successful parse-result locals and matches their
   fields directly. Failed recursive families use session rollback. Design
-  and acceptance coverage: `docs/typed-termination-contexts-design.md`.
+  and acceptance coverage: `docs/language/recursion/typed-termination-contexts-design.md`.
 - 2026-09-14: Full `scripts/test`: **2655 passed, 0 failed, 5 ignored**.
   The checked calculator retains all grammar/result equations and refusal
   controls after removing five `Parsed(...)` annotations and three

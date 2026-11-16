@@ -59,7 +59,7 @@ impl std::ops::Deref for Members<'_> {
 }
 
 impl Members<'_> {
-    // -- field access (docs/surface-records.md §4) ---------------------------
+    // -- field access (docs/language/surface-records.md §4) ---------------------------
 
     /// Whether `recv` is a chain of bare projections rooted at an argument
     /// slot that the current ownership probe masks (a sibling, not its
@@ -101,7 +101,7 @@ impl Members<'_> {
         span: Span,
     ) -> R<DotResolution> {
         // A **type** subject, first: `A.unit`, `G.plus(x, y)`, `Nat.zero`
-        // (docs/traits-type-projection-design.md). It is first because a type
+        // (docs/language/classes/traits-type-projection-design.md). It is first because a type
         // is not a record and has no namespace member and is not a method
         // receiver, so nothing below could have read it — every reading it
         // takes was an error before this round, and every reading it declines
@@ -163,7 +163,7 @@ impl Members<'_> {
                 // its own — the search, as data — and is better than anything
                 // this branch could say about a field. `G::AddCommMonoid.f` at
                 // a carrier with no instance is the spelling that produces one
-                // (docs/traits-type-projection-design.md §5).
+                // (docs/language/classes/traits-type-projection-design.md §5).
                 Err(e @ ElabError::Resolution { .. }) => return Err(e),
                 // A slot receiver (`·.lines`) is a projection section: the
                 // escape reaches the enclosing function-typed checking
@@ -196,7 +196,7 @@ impl Members<'_> {
             (head, false)
         };
         // Receiver dispatch through an instance
-        // (docs/traits-receiver-dispatch-design.md §3). Last, so nothing that
+        // (docs/language/classes/traits-receiver-dispatch-design.md §3). Last, so nothing that
         // resolved before this round can be reinterpreted by it: a class
         // member is only reached when the receiver's own type has no such
         // field and its namespace has no such member.
@@ -264,7 +264,7 @@ impl Members<'_> {
         // the subject is still written positionally — and when one is not,
         // the receiver has no honest position to take, so it is refused here
         // rather than silently placed one slot early
-        // (docs/named-arguments-design.md §5.4).
+        // (docs/language/named-arguments-design.md §5.4).
         let at = match cx.selfref.as_ref().filter(|self_ref| self_ref.matches(name)) {
             Some(self_ref) => self_ref.receiver_slot,
             None => {
@@ -332,7 +332,7 @@ impl Members<'_> {
 
     /// A dot call `recv.m(a)` of a `mut self` method that no statement
     /// threads: anywhere but a marked call on a `let mut` local or `mut`
-    /// parameter (docs/effects-capabilities-design.md §2.2), the call would
+    /// parameter (docs/language/effects-capabilities-design.md §2.2), the call would
     /// give the `Mutated` record where its answer was meant, with the receiver
     /// unchanged, so it is refused here rather than where the record is
     /// used. The test reads the callee's written result head, so the hot
@@ -376,7 +376,7 @@ impl Members<'_> {
     /// receiver — the answer is an ambiguity naming both, not a preference.
     /// Preferring the member would mean that adding `D::name` to a library
     /// silently reinterprets an existing `t.name(…)`, which is the one thing
-    /// the growth invariant forbids (docs/modules-design.md §4).
+    /// the growth invariant forbids (docs/language/modules-design.md §4).
     fn member_head(
         &self,
         cx: &Cx,
@@ -406,7 +406,7 @@ impl Members<'_> {
         // `R::mk()`, `Nil` — does not infer, yet its head already names its
         // owner. Asked only here, where the route above gave up, so nothing
         // that resolved before reaches it
-        // (docs/receiver-member-resolution-design.md §1).
+        // (docs/language/classes/receiver-member-resolution-design.md §1).
         let by_head = inferred.is_none();
         let Some((carrier, owner)) =
             inferred.or_else(|| self.receiver_owner_by_head(cx, recv, span))
@@ -454,7 +454,7 @@ impl Members<'_> {
             // A restricted name falls back exactly as a missing one does: the
             // receiver's namespace is not where a generated member is
             // reached, and the field route above already ran
-            // (docs/repr-access-spellings-design.md §3.2).
+            // (docs/native/repr-access-spellings-design.md §3.2).
             NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {
                 return Ok(name.to_string());
             }
@@ -597,7 +597,7 @@ impl Members<'_> {
     /// ambiguity rather than a preference.
     ///
     /// A reading is **discarded** only when it provably cannot take the
-    /// receiver (docs/receiver-member-resolution-design.md §2): a local or
+    /// receiver (docs/language/classes/receiver-member-resolution-design.md §2): a local or
     /// alias that is not a function at all, or a reading whose subject has a
     /// known outer carrier disjoint from the receiver's. That is the filter
     /// imported receiver dispatch already applies below, extended to every
@@ -807,9 +807,7 @@ impl Members<'_> {
             return Some(true);
         }
         reach.seen.push(abs);
-        let growth = self.psi.bindings.len() as u32 - abs as u32
-            + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32;
-        let mut ty = ty.shift_global(growth);
+        let mut ty = (**ty).clone();
         let mut cx = Cx::empty();
         for i in 0..args.len() {
             let Ok(Type::Pi { dom, dom_level, cod, .. }) = self.whnf(&cx, &ty, span) else {
@@ -1103,7 +1101,7 @@ impl Members<'_> {
     /// The named-argument spelling, added to an unsolved implicit of the
     /// *receiver's* callee: `R::mk().get()` in a position that pins nothing
     /// has no other fix, and `@` is the last rung of the ladder, not the
-    /// first (docs/receiver-member-resolution-design.md §0, §1). Runs on the
+    /// first (docs/language/classes/receiver-member-resolution-design.md §0, §1). Runs on the
     /// failure path of a method call only; every other error passes through.
     pub(crate) fn receiver_implicit_hint(&self, recv: &Expr, e: ElabError) -> ElabError {
         let ElabError::Elab { msg, span } = e else {
@@ -1145,7 +1143,7 @@ impl Members<'_> {
 
     /// The owner of a receiver that does not infer on its own, read off its
     /// **head** without elaborating it
-    /// (docs/receiver-member-resolution-design.md §1): a constructor names its
+    /// (docs/language/classes/receiver-member-resolution-design.md §1): a constructor names its
     /// inductive, a saturated call to a global names its declared result's
     /// carrier, and a method call names the result carrier of the member it
     /// resolves to. The owner only chooses the qualified name; whether the
@@ -1230,7 +1228,7 @@ impl Members<'_> {
     /// application, or scratch metavariable solutions escape this query.
     /// Any global, not only an imported candidate: the ambient reading a
     /// member races is filtered by the same read (§2 of
-    /// docs/receiver-member-resolution-design.md).
+    /// docs/language/classes/receiver-member-resolution-design.md).
     fn global_subject_carrier(&self, name: &str, span: Span) -> Option<ReceiverCarrier> {
         self.read_signature(
             name,
@@ -1274,9 +1272,7 @@ impl Members<'_> {
             return None;
         };
         if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 { return None; }
-        let growth = self.psi.bindings.len() as u32 - info.abs
-            + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32;
-        let mut ty = ty.shift_global(growth);
+        let mut ty = (**ty).clone();
         let mut cx = Cx::empty();
         let at = at(&info.params)?;
         for (i, p) in info.params.iter().enumerate() {

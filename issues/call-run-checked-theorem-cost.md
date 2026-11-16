@@ -14,7 +14,7 @@ From the 2026-09-13 checkpoint table (release, value-metrics, W=1, `build-x86 ex
 | `caller_native_byte` (36 items) | 4.8 | 4.0 | 34,515 | 2.6 M | |
 | `call_trace_append` | 3.8 | 2.9 | 850 | 1.8 M | |
 
-One theorem is 37 % of the gate and a third of all evaluator steps; the next family is six times smaller. It sat unremarked in the round-4 table (docs/bitvector-literal-entry-design.md §10.6: 23.68 → 23.29 s across that round, i.e. not bitvector-shaped). It is library time — paid per cold library build and replayed from the image otherwise — so it does not tax a compiled program the way the certificate families do, but 15.6 M steps for a structural induction over `List<CallInstruction>` with an `Exists`/`∧` premise chain is a pathology: the theorem is a `match` with one recursive call and a handful of projections, `j`, `trans`, `cong_fn`. Attribute before touching it (`--timings` plus the conv-miss sampler on `heather check lib/std/arch/x86_64/x86_64_call_summary.hthr`): the likely shapes are the premise record's projections `premises.proof.right.right.right` computed through per-instantiation references ([[per-instantiation-projection-boundaries]]), or `call_next`/`call_run` unfolding under the motive.
+One theorem is 37 % of the gate and a third of all evaluator steps; the next family is six times smaller. It sat unremarked in the round-4 table (docs/kernel/bitvector-literal-entry-design.md §10.6: 23.68 → 23.29 s across that round, i.e. not bitvector-shaped). It is library time — paid per cold library build and replayed from the image otherwise — so it does not tax a compiled program the way the certificate families do, but 15.6 M steps for a structural induction over `List<CallInstruction>` with an `Exists`/`∧` premise chain is a pathology: the theorem is a `match` with one recursive call and a handful of projections, `j`, `trans`, `cong_fn`. Attribute before touching it (`--timings` plus the conv-miss sampler on `heather check lib/std/arch/x86_64/x86_64_call_summary.hthr`): the likely shapes are the premise record's projections `premises.proof.right.right.right` computed through per-instantiation references ([[per-instantiation-projection-boundaries]]), or `call_next`/`call_run` unfolding under the motive.
 
 Trigger: any round that measures cold library time, or the next x86 spelling round. Related: [[x86-64-machine-model]], [[x86-calls-stack-frames]], [[function-ir-x86-proof-scaling]].
 
@@ -35,7 +35,7 @@ The standalone module closure reproduces the theorem's 15.6 M steps:
 
 The unchanged `call_trace_append` control is 2.858 s kernel / 1,782,181
 steps / 850 misses. The updated baseline's 10,041 misses agrees with the
-post-narrowing row in `docs/x86-scaling-rail-out-of-fuel-design.md`; the
+post-narrowing row in `docs/archive/x86-scaling-rail-out-of-fuel-design.md`; the
 original issue table predates that projection-boundary change.
 
 **Conversion attribution.** The baseline sampler charges 19.228 s to this
@@ -62,7 +62,7 @@ This is evidence of a large representation mismatch inside checked type-code
 terms, not merely a small number of slow equality transports. `Vec` here
 must not automatically be read as bitvector arithmetic: the recursive
 lowering uses child vectors in its `ElimWf` telescope
-(`docs/inductive-tier1-wf-lowering.md` §§6.1–6.3). The bounded trace does not
+(`docs/inductives/inductive-tier1-wf-lowering.md` §§6.1–6.3). The bounded trace does not
 identify the precise source function/type behind this pair yet.
 
 **Controlled source probe.** Replace the `let tail = recursive_call; body`
@@ -195,7 +195,7 @@ boundary work remains with its existing owner above.
 Added the total `annotation_type` API and renamed the closed-only lookup to
 `closed_type_ref`; audited and migrated its three production emission callers.
 The API contract, caller audit and child-projection finding are recorded in
-`docs/annotation-component-respell-design.md` §2.6. The focused recursive
+`docs/elaborator/annotation-component-respell-design.md` §2.6. The focused recursive
 lowering tests pass (60 passed). Full `scripts/test`: **2,626 passed, 0
 failed, 5 ignored** (189 s wall), including native summary and x86 scaling.
 `scripts/issue check` and `git diff --check` pass.
@@ -204,7 +204,7 @@ failed, 5 ignored** (189 s wall), including native summary and x86 scaling.
 ### 2026-09-14 — typed telescope boundary
 
 Added separate structural/emitted wrappers to the shared recursive telescope;
-see `docs/annotation-component-respell-design.md` §2.7 for the guarantee,
+see `docs/elaborator/annotation-component-respell-design.md` §2.7 for the guarantee,
 explicit raw-Type boundaries and the indexed-family audit. A temporary
 structural-for-emitted substitution at the actual telescope call is rejected
 by Rust (E0308), and was reverted. Focused `scripts/test -p heather-elab
@@ -218,7 +218,7 @@ x86 scaling tests. `scripts/issue check` and `git diff --check` pass.
 Added independent registry-identity assertions across payload widths, a
 persistent positive/negative compilation test of the private telescope
 wrappers, and serial evaluator-count regression fixtures. Their contracts
-and limits are in `docs/annotation-component-respell-design.md` §2.8.
+and limits are in `docs/elaborator/annotation-component-respell-design.md` §2.8.
 
 The named `Box<Payload>` match takes **46/46/46** evaluator steps at payload
 widths **2/8/32**, excluding setup. The guard allows a 2× ratio.

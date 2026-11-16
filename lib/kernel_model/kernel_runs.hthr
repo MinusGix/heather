@@ -1,4 +1,4 @@
-// Folds over runs, against the reference model (docs/kernel-model-design.md
+// Folds over runs, against the reference model (docs/kernel/kernel-model-design.md
 // §7, milestone `hih-km-runs`).
 //
 // The kernel folds over a run `Succ^c(x)` by its step's class

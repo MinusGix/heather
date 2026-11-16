@@ -1,5 +1,5 @@
 // Commutative-ring normalization by reflection (issues/ring-normalization.md,
-// docs/ring-normalization-design.md).
+// docs/tactics/ring-normalization-design.md).
 //
 // The `ring` tactic is an untrusted reifier: it reads both sides of an
 // equation at `Int` or `Nat` into a `RingExpr` over an atom list and applies
@@ -1052,7 +1052,7 @@ theorem RingExpr::hyp_add_rel(xs: List<A>, u, v: RingExpr, hu: u.eval_rel(xs) �
 }
 
 // What `ring` reads a cast of a `Nat` sum, product or successor with
-// (`Rat::ofInt(OfNat(n + n + 1))`, docs/ring-normalization-design.md §9):
+// (`Rat::ofInt(OfNat(n + n + 1))`, docs/tactics/ring-normalization-design.md §9):
 // the embedding pushed one level in. Each takes the atom list only so that
 // a caller's carrier pins `A`.
 theorem RingExpr::of_nat_add(xs: List<A>, a, b: Nat):

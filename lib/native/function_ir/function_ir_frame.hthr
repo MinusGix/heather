@@ -1,0 +1,106 @@
+// The frame rule for a compiled function's contract
+// (issues/compiled-call-frame-rule.md; the rule itself is `Stack::wrote_frame`,
+// x86_64_stack, and `Stack::wrote_in_frame`, x86_64_lending).
+//
+// What a compiled function promises of memory is its stores: for a function
+// of words, words of its own room (`Stack::CalleePost`); for a function of
+// spans, those and bytes of the buffers it may write
+// (`Stack::AnsweredOver`). These are the postconditions `Prog::Computes`
+// and `Prog::ComputesOver` state (function_ir_correct). A caller keeps
+// across the call any predicate on memory that one such store keeps, in
+// one step:
+//
+// - `Stack::callee_frame`, `Stack::answered_frame`: from the promise at
+//   the state the call returned to.
+// - `Site::callee_framed`, `Site::answered_framed`: on the contract, the
+//   predicate joining what the function is called under and what it
+//   promises. A `code.Computes(…)(origin, last)` is such a contract.
+// - `Loan::stable_buffer`: a buffer the lending does not let the call write
+//   reads its bytes, as a stable predicate. A caller's word and the code
+//   are `Loan::stable_word` and `Loan::stable_resident` (x86_64_lending).
+import function_ir;
+import function_ir_eval;
+import function_ir_writes;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_frame;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// From the promise
+
+// A function of words returned from `s` to `t`: what held of memory and is
+// stable under a store into its room holds still.
+theorem Stack::callee_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64),
+    i: Nat, s, t: MachineState<M>, post: stack.CalleePost(result)(i, s, t), {P: M → Type}, stable: stack.Stable(i, P),
+    held: P(s.memory)): P(t.memory) {
+    stack.wrote_frame(i, stable, s.memory, t.memory, post.right.right, held)
+}
+
+// A function of spans: stable under a store into its room and into a
+// buffer the lending lets it write.
+theorem Stack::answered_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending,
+    result: BitVec(64), after: Buffers(), i: Nat, s, t: MachineState<M>, post: stack.AnsweredOver(lending, result, after)(i, s, t),
+    {P: M → Type}, stable: stack.StableIn(i, lending.spans(), P), held: P(s.memory)): P(t.memory) {
+    stack.wrote_in_frame(i, lending.spans(), stable, s.memory, t.memory, post.right.right.left, held)
+}
+
+// ---------------------------------------------------------------------------
+// On the contract
+
+// A function of words keeps `frame`, which may speak of the offset it was
+// entered at: called under it, it returns with it.
+theorem Site::callee_framed<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, result: BitVec(64), returns: site.Returns(stack, entry, pre, stack.CalleePost(result)),
+    {frame: Nat → M → Type}, stable: (i: Nat) → i + 8 <= stack.size → stack.Stable(i, frame(i))):
+    site.Returns(stack, entry, λ (i: Nat) (s: MachineState<M>) => pre(i, s) ∧ frame(i, s.memory),
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.CalleePost(result)(i, s, t) ∧ frame(i, t.memory)) {
+    λ s here resident i rsp room held ret saved => {
+        let ran = returns(s, here, resident, i, rsp, room, held.left, ret, saved);
+        let done = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨done, stack.callee_frame(result, i, s, ran.witness, done, stable(i, room), held.right)⟩⟩⟩⟩⟩)
+    }
+}
+
+// A function of spans.
+theorem Site::answered_framed<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
+    pre: Nat → MachineState<M> → Type, lending: Lending, result: BitVec(64), after: Buffers(),
+    returns: site.Returns(stack, entry, pre, stack.AnsweredOver(lending, result, after)),
+    {frame: Nat → M → Type}, stable: (i: Nat) → i + 8 <= stack.size → stack.StableIn(i, lending.spans(), frame(i))):
+    site.Returns(stack, entry, λ (i: Nat) (s: MachineState<M>) => pre(i, s) ∧ frame(i, s.memory),
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.AnsweredOver(lending, result, after)(i, s, t) ∧ frame(i, t.memory)) {
+    λ s here resident i rsp room held ret saved => {
+        let ran = returns(s, here, resident, i, rsp, room, held.left, ret, saved);
+        let done = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨done, stack.answered_frame(lending, result, after, i, s, ran.witness, done, stable(i, room), held.right)⟩⟩⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A buffer the call may not write
+
+// Bytes read where buffer `b` lies, no more of them than the buffer is
+// long: stable when the lending does not let `b` be written.
+theorem Loan::stable_buffer<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    lending: Lending, self loan: Loan<M>(fetch, data, stack, top, lending.spans()), i: Nat, low: i <= top, b: Nat,
+    only_read: lending.written(b) = False, ys: List<BitVec(8)>, fits: ys.len() <= buffer_bytes(lending.buffers, b).len()):
+    stack.StableIn(i, lending.spans(), λ (m: M) => Readable(data, m, address_of(lending.addresses, b), ys)) {
+    loan.stable_reads(i, low, b, only_read, ys, fits)
+}

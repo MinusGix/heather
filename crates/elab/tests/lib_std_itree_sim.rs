@@ -1,4 +1,4 @@
-//! `lib/std/itree/itree_sim.hthr` (`docs/itree-simulation-design.md`): the
+//! `lib/std/itree/itree_sim.hthr` (`docs/itrees/itree-simulation-design.md`): the
 //! simulation's vacuity controls. The simulations themselves are
 //! `lib/_tests/std/itree/itree_sim_tests.hthr`, which the whole-library gate
 //! checks (`crates/cli/tests/library.rs`; docs/test-value-audit.md §3.4):

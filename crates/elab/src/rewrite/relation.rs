@@ -1,5 +1,5 @@
 //! `rewrite(h, e)` along a relation: setoid rewriting, built bottom-up
-//! (`docs/equation-rewrite-design.md` §9, `issues/rewrite-setoid-relations.md`).
+//! (`docs/tactics/equation-rewrite-design.md` §9, `issues/rewrite-setoid-relations.md`).
 //!
 //! `h : R(a, b)` for a homogeneous relation `R` other than `=`. Each node of
 //! the goal is rewritten once, children first: an occurrence of `a` becomes
@@ -8,7 +8,7 @@
 //! `PreservesRelation` over one), and an unchanged node gets nothing. Results
 //! are kept per node, so a goal that shares a subterm rewrites it once and the
 //! proof shares that node's step: the work and the term are linear in the goal
-//! as a DAG, not as a tree (mengine's rewriter, `docs/mengine-survey.md` §4.3).
+//! as a DAG, not as a tree (mengine's rewriter, `docs/surveys/mengine-survey.md` §4.3).
 //!
 //! The goal is a relation application `S(l, r)`, or an implication between
 //! goals. A side's step composes with `S` by `Transitive` (or `Trans` when
@@ -260,7 +260,7 @@ impl Relations<'_> {
                     // A side condition is discharged in the goal's own
                     // context: below a binder the proof would have to be
                     // found there, which is not attempted.
-                    match premise.filter(|_| side && depth == 0).and_then(|p| p(&here, &dom, &dom_level)) {
+                    match premise.filter(|_| side && depth == 0).and_then(|p| p(&here, &dom, &dom_level, false)) {
                         Some(found) => Rc::new(found),
                         None => {
                             return Err(super::Miss::Unbound {
@@ -1145,7 +1145,7 @@ impl<'a> RelationRewrite<'a> {
         // The level of `p`'s type: `R(t, t')`, or for a λ body the `Π` the
         // pointwise relation unfolds to.
         let base = rel.as_ref().map_or_else(|| self.holds.clone(), |r| r.holds.clone());
-        let holds = over.iter().rev().fold(base, |l, (_, dl)| Level::join(dl.clone(), l));
+        let holds = over.iter().rev().fold(base, |l, (_, dl)| Level::max(dl.clone(), l));
         Ok(Node::Changed {
             term: Rc::new(Term::Lam {
                 dom_level: dom_level.clone(),
@@ -1548,7 +1548,7 @@ impl<'a> RelationRewrite<'a> {
                 dom: Rc::new(dom.shift_local(j as u32)),
                 cod: Rc::new(ty),
             };
-            (ty, Level::join(dl.clone(), level))
+            (ty, Level::max(dl.clone(), level))
         })
     }
 
@@ -2071,7 +2071,7 @@ impl<'a> RelationRewrite<'a> {
                 dom: Rc::clone(&b.dom),
                 cod: Rc::new(cod),
             };
-            (pi, Level::join(b.level.clone(), cod_level))
+            (pi, Level::max(b.level.clone(), cod_level))
         });
         let goal = self.obligation(closed, closed_level, label)?;
         let d = self.depth();

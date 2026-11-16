@@ -81,7 +81,7 @@ in [[radix-numeric-literals]]. This issue doesn't need them.
   `crates/elab/tests/omega_wide_constants.rs`: every repro, `pow(2, 64)`, the
   full-width carry, three refusals at the bound, and a power past the budget
   staying an atom. The design note is in
-  docs/certifying-arithmetic-substrate-design.md §4. CLI probes with `BitVec`
+  docs/tactics/certifying-arithmetic-substrate-design.md §4. CLI probes with `BitVec`
   facts and `x.toNat() < pow(2, 64)` also check. Out of scope: constants past
   `i128` (refused with omega's overflow message), and truncated `-`, which is
   still an atom.

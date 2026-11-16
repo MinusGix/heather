@@ -54,19 +54,17 @@
 //! **What a rule passes to the next.** Not a [`Type`] but an
 //! [`ity::ITy`]: syntax, or an un-spelled *description* of a component of
 //! something that reduces to a former
-//! (`docs/intro-by-type-design.md` §3.2). Every rule but the five checked
-//! spellings produces `Syn` and behaves exactly as it did before
-//! descriptions existed; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
-//! consume `Sel`, whose point is that the component is never spelled — the
-//! object the elaborator used to write into an annotation is `3.5ⁿ` in the
-//! nesting as syntax and linear as a value graph, and the checker now names
-//! it instead of building it. A description is consumed by exactly two
+//! (`docs/elaborator/intro-by-type-design.md` §3.2). Every rule but the five checked
+//! spellings produces `Syn`; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
+//! consume `Sel`, whose point is that the component is never spelled — as
+//! syntax it is `3.5ⁿ` in the nesting and as a value graph linear, so the
+//! checker names it instead of building it. A description is consumed by exactly two
 //! operations, [`Tc::conv_ty`] and [`Tc::view`], each of which evaluates it
 //! in a **per-query** value arena and keeps nothing that outlives the query.
-//! Where a description must become syntax after all — the four λ inference
-//! arms, which wrap the body's inferred type in a `Π`-shaped former —
-//! [`Tc::materialize`] runs the rewriter, which is complete, is the answer
-//! this checker gave before, and is counted (`crate::stats`'s
+//! Where a description must become syntax after all — a rule that wraps an
+//! inferred type in a syntactic former, through [`Tc::tm_infer_syn`] (the λ
+//! inference arms) — [`Tc::materialize`] runs the rewriter, which is
+//! complete, and is counted (`crate::stats`'s
 //! `ity_materialized`).
 //!
 //! [`oracle`] is the same checker with every description spelled on
@@ -104,8 +102,8 @@
 //! - **Deterministic, so a hit may skip fuel.** Whether a lookup hits
 //!   depends only on which node and scope objects the rules pass along,
 //!   which the term's sharing decides, not on addresses or reference counts.
-//!   Every
-//!   eligible node gets an entry, chosen by its kind, and nothing is evicted.
+//!   Every eligible node gets an entry, chosen by its kind, and nothing is
+//!   evicted.
 //!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
 //!   input, at any worker count.
 //! - **Strengthened scopes** (issues/indexed-family-recursion-gate-cost.md).
@@ -116,8 +114,8 @@
 //!   interned in [`Tc::strengthened`]) instead of Γ, so the same node under
 //!   another Γ ending in the same entries is a hit. That is the shape a
 //!   case tree's inner nodes have inside a motive re-checked at every level
-//!   of a convoy: before, a family's index functions were judged once per
-//!   level and per constructor. A check keeps it only when the expected type
+//!   of a convoy, where a family's index functions would otherwise be
+//!   judged once per level and per constructor. A check keeps it only when the expected type
 //!   is syntax inside the same entries, and an inferred type only when it
 //!   is, since a description is relative to Γ's length. "Which entries" is
 //!   the node's own bounds (`bounds::term_local_use`), a function of the
@@ -140,8 +138,8 @@
 //!   sum spelled in an inductive's shape is judged at every case of every
 //!   tree over that shape, in a Γ one binder longer each time: a mutual
 //!   group's signature carries several such trees in every occurrence of the
-//!   family, and judging the shape's tails there was most of the group's
-//!   gate. Substitution shares a closed subtree (`bounds.rs`), so the node
+//!   family, and judging the shape's tails there would be most of the
+//!   group's gate. Substitution shares a closed subtree (`bounds.rs`), so the node
 //!   keeps its identity under every binder. Closedness is decided at a
 //!   node's second judgment, never its first, so one-shot types pay one
 //!   table entry and no bounds walk; the decision is a function of the
@@ -155,8 +153,8 @@
 //!   reference at the empty substitution is) is kept under the cross-head
 //!   memo's key less Γ's identity. A type spelled by its
 //!   registered code, `El(D#tycode^δ)`, against its inline lowering is the
-//!   case: a structural recursion's case tree met it once per node, each
-//!   under one more binder, and each decoded the code and walked the sum.
+//!   case: a structural recursion's case tree meets it once per node, each
+//!   under one more binder, and each would decode the code and walk the sum.
 //!   Successes only, sampled hits re-converted in debug builds.
 
 use std::cell::{Cell, RefCell};
@@ -252,7 +250,7 @@ impl From<ConvError> for TypeError {
 }
 
 /// Record how a conversion **miss** ended
-/// (`docs/instrumentation-design.md` §2). Exhausted fuel and a genuine
+/// (`docs/infrastructure/instrumentation-design.md` §2). Exhausted fuel and a genuine
 /// mismatch call for opposite responses — more budget against a better
 /// spelling — so they never share a column
 /// (`issues/generated-proof-cost-diagnostics.md`). Observational: nothing in
@@ -625,7 +623,7 @@ pub fn locate_type_refusal(
 }
 
 /// A checked spelling's former, as the eager checker viewed it: what the
-/// translation `⌊·⌋` (`docs/intro-by-type-design.md` §2.4) writes into the
+/// translation `⌊·⌋` (`docs/elaborator/intro-by-type-design.md` §2.4) writes into the
 /// component form in its place.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Spelled {
@@ -676,8 +674,7 @@ fn keep_spelled(rec: &RefCell<HashMap<(usize, u32), Option<Spelled>>>, key: (usi
     }
 }
 
-/// **The quote boundary** (`docs/intro-by-type-design.md` §2.3, amended
-/// 2026-09-22): `t : ty @ level` in `gamma` with every checked spelling
+/// **The quote boundary** (`docs/elaborator/intro-by-type-design.md` §2.3): `t : ty @ level` in `gamma` with every checked spelling
 /// translated to its component form, so it can be the payload of a `box`.
 ///
 /// A payload elaborated inside a quotation is written in the component
@@ -713,7 +710,7 @@ pub fn spell_checked_in_code(
 /// `fst@`/`snd@` as its own projections, which take the pair's type from the
 /// pair, so none of the three has annotations to write. Spelling them is
 /// what makes the passes cascade on a library proof
-/// (`docs/export-fragment-design.md` §5.6): an `app@`'s components are the
+/// (`docs/library/export-fragment-design.md` §5.6): an `app@`'s components are the
 /// callee's statement instantiated at the arguments, and a projection's are
 /// the rest of a class record, whose later field statements mention the
 /// earlier fields as `fst@`s of the record. Each instantiation carries
@@ -851,24 +848,23 @@ fn spell_checked_ty(
 }
 
 /// The **differential oracle**: the checker with its deferred types spelled
-/// the moment they are formed (`docs/intro-by-type-design.md` §3.6).
+/// the moment they are formed (`docs/elaborator/intro-by-type-design.md` §3.6).
 ///
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should — [`check_term`] and its siblings are the
 /// checker. This module exists for the same reason [`crate::conv::oracle`]
-/// does, one seam further in: stage 1b moved `typing.rs` from "the type a
-/// rule passes on is syntax" to "…is a description", and the compensating
-/// control for a weakening like that is standing mechanical evidence that
-/// the two answers agree.
+/// does, one seam further in: the type a rule passes on is a description,
+/// not syntax, and the compensating control for that is standing mechanical
+/// evidence that the two answers agree.
 ///
 /// Under [`Tc::eager`] every [`ity::ITy::Sel`] is materialized through the
 /// rewriter as soon as it would be formed, and the five `@` rules view
-/// their annotation through the rewriter too — so this *is* the checker as
-/// it stood before descriptions existed, running the same arms on the same
-/// input. `tests/typing_differential.rs` runs the pair over `wt.rs`'s
+/// their annotation through the rewriter too — so this is the checker with
+/// no descriptions at all, running the same arms on the same input.
+/// `tests/typing_differential.rs` runs the pair over `wt.rs`'s
 /// well-typed streams with the checked spellings on and requires
 /// verdict-for-verdict agreement, which is machine adequacy
-/// (`docs/nbe-conversion-design.md` §11.2) applied at the typing seam.
+/// (`docs/kernel/nbe-conversion-design.md` §11.2) applied at the typing seam.
 pub mod oracle {
     use super::*;
 
@@ -1004,7 +1000,7 @@ struct Env {
     /// Rescoped definition bodies and binding signatures for **this** Ψ
     /// (`reduce::GlobalCache`), shared by every conversion and whnf query of
     /// one gate rather than rebuilt per query
-    /// (`docs/conversion-query-arena-pooling-design.md` §3). Inherited by
+    /// (`docs/kernel/conversion-query-arena-pooling-design.md` §3). Inherited by
     /// every scope that keeps Ψ and rebuilt by the one that does not,
     /// `push_tele`.
     cache: Rc<GlobalCache>,
@@ -1013,12 +1009,11 @@ struct Env {
     univs: u32,
     /// Inside the payload of a `box`: the side condition on the two `box`
     /// rules that keeps the checked spellings out of code
-    /// (`docs/intro-by-type-design.md` §2.3), read by
+    /// (`docs/elaborator/intro-by-type-design.md` §2.3), read by
     /// [`Tc::checked_spelling_admitted`].
     ///
-    /// **Not a layer predicate**, and that is the whole of stage 2's first
-    /// stop: Heather checks *every* declaration body at `Layer::Code`
-    /// (`crates/elab/src/lib.rs` ~3637), so `layer.computes()` is false at
+    /// **Not a layer predicate**: Heather checks *every* declaration body at
+    /// `Layer::Code`, so `layer.computes()` is false at
     /// every emitter and a layer guard refuses the spellings everywhere. The
     /// recursors range over box payloads and nothing else, which is exactly
     /// what this bit names. It is sticky: nothing inside a payload returns
@@ -1121,8 +1116,6 @@ impl Env {
     }
 }
 
-/// Ψ-lookup: 0 is innermost; the result is scoped over its *prefix* of Ψ —
-/// callers shift by `v + 1`.
 /// Whether `delta` is the identity on a source of as many entries as it has
 /// terms: every entry the variable that names it (`LocalSubst::id`'s
 /// expansion). The caller holds the count to the source's.
@@ -1197,7 +1190,7 @@ struct Tc {
     /// The `var` rule's answers: an entry's type weakened past the entries
     /// after it, by the type's node and how many there are, with the node
     /// kept so that the address stays its. A variable is read many times
-    /// under one scope, and each reading walked and allocated the type
+    /// under one scope, and each reading would walk and allocate the type
     /// again; kept, the readings also share one node, which is what the
     /// memos keyed by a type's address and the reflexivity shortcut want.
     weakened: RefCell<PtrMap<(usize, u32), (Rc<Type>, Rc<Type>)>>,
@@ -1349,7 +1342,7 @@ struct ClosedConvBucket {
 /// Everything a typing rule reads from its scope besides Γ's entries: the
 /// part of [`Env`] every typing memo key ([`Scope`], [`TyScope`],
 /// [`SigScope`]) holds, so a component added here is in all three by
-/// construction ([`Env::ambient`], docs/kernel-implicit-state-review.md §3).
+/// construction ([`Env::ambient`], docs/kernel/kernel-implicit-state-review.md §3).
 ///
 /// Ψ is held by its bindings' identity, which also stands for the parts of
 /// Ψ that are not bindings. Changing the interface boundary
@@ -1543,9 +1536,8 @@ fn owned_expected(ty: ITyRef) -> ITy {
 
 /// The kernel checker's four modes (issues/kernel-checker-mode-enum.md).
 /// One value, so the arms ask a named question ([`TcMode::eager`],
-/// [`TcMode::spellings`], [`TcMode::refused_slot`]) and the twelve
-/// combinations of the four fields it replaced that no checker was built
-/// with cannot be built.
+/// [`TcMode::spellings`], [`TcMode::refused_slot`]), and a combination
+/// of settings no checker uses cannot be built.
 enum TcMode {
     /// The gate: descriptions stay lazy, every memo is used.
     Gate,
@@ -1582,13 +1574,13 @@ enum TcMode {
 
 impl TcMode {
     /// Whether descriptions are materialized at once rather than kept
-    /// lazy (**the oracle mode**, `docs/intro-by-type-design.md` §3.6).
+    /// lazy (**the oracle mode**, `docs/elaborator/intro-by-type-design.md` §3.6).
     ///
     /// Under it an [`ITy::Sel`] is spelled the moment it would be formed,
     /// and the five `@` rules view their annotation through the rewriter,
-    /// so the checker is the one that existed before descriptions did. That is what makes `tests/typing_differential.rs`
-    /// test *only* the new thing — that evaluating a description and
-    /// rewriting it agree.
+    /// so the checker keeps no description at all. That is what makes
+    /// `tests/typing_differential.rs` test *only* that evaluating a
+    /// description and rewriting it agree.
     #[inline]
     fn eager(&self) -> bool {
         matches!(self, TcMode::Oracle | TcMode::Spell { .. })
@@ -1638,7 +1630,7 @@ impl TcMode {
 
 /// How many expected types one node keeps per scope. A node checked
 /// against more distinct types than this in one scope pays from then on, as
-/// it did before the memo; the bound is a count, so which checks hit stays
+/// with no memo; the bound is a count, so which checks hit stays
 /// deterministic.
 const CHECKED_PER_SCOPE: usize = 4;
 
@@ -1801,8 +1793,8 @@ impl Tc {
         // The address of the compared type. An annotation the elaborator wrote
         // once and shared into many slots is one address seen many times; a
         // term the elaborator wrote out per occurrence is many addresses. That
-        // is the round's (a)-against-(d) question, and nothing else in the
-        // process can answer it. (A type built on the stack by the rule itself
+        // is what this trace is for: nothing else in the process can tell the
+        // two apart. (A type built on the stack by the rule itself
         // — the `Π` of the `App` rule — reuses stack addresses; those cluster
         // in one high range and the aggregator says so.)
         eprintln!(
@@ -1827,18 +1819,15 @@ impl Tc {
     }
 
     /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`, over the checker's
-    /// **descriptions** (`docs/intro-by-type-design.md` §3.3).
+    /// **descriptions** (`docs/elaborator/intro-by-type-design.md` §3.3).
     ///
     /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
-    /// it is the α-test it has always been (in the shared size of the two
-    /// sides, `syntax_eq.rs`), and two equal selections are the
-    /// same type by Determinacy. A query with a selection on either side
-    /// skips the cross-head memo — the memo's bucket key is built from a
-    /// `Type`'s outer constructor and anchor, a selection has neither, and
-    /// keeping the key exactly as it was is what makes the counters on an
-    /// `@`-free declaration identical to the unit. Such a query goes
-    /// straight to [`conv_ity_cached`], whose arena is this query's, as
-    /// `conv_type_cached`'s always was.
+    /// it is the α-test (in the shared size of the two sides,
+    /// `syntax_eq.rs`), and two equal selections are the same type by
+    /// Determinacy. A query with a selection on either side skips the
+    /// cross-head memo — the memo's bucket key is built from a `Type`'s outer
+    /// constructor and anchor, and a selection has neither — and goes
+    /// straight to [`conv_ity_cached`], whose arena is this query's.
     fn conv_ty(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
         // `Conv::ty_root` spends one unit before the same syntactic
         // reflexivity test. Preserve that exact zero-fuel boundary while
@@ -2020,7 +2009,7 @@ impl Tc {
 
     /// The miss of a query with a selection on either side: both
     /// descriptions evaluated in **one per-query arena** and compared by the
-    /// ordinary conversion arms (`docs/intro-by-type-design.md` §3.3).
+    /// ordinary conversion arms (`docs/elaborator/intro-by-type-design.md` §3.3).
     fn conv_ity(&self, env: &Env, expected: ITyRef, inferred: ITyRef, l: &Level) -> R {
         // Reached only when at least one side is a selection, so this is the
         // `@`-form path and nothing here is on the per-node constant. A side
@@ -2070,8 +2059,8 @@ impl Tc {
             .map_err(|_| TypeError::OutOfFuel)
     }
 
-    /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter, exactly as
-    /// before; a selection is spelled first, and paying for that is the
+    /// [`Tc::whnf_syn`] of a description. A `Syn` is the rewriter; a
+    /// selection is spelled first, and paying for that is the
     /// point of [`crate::stats`]'s `ity_materialized`.
     fn whnf(&self, env: &Env, t: ITyRef) -> R<Type> {
         match t.as_syn() {
@@ -2083,12 +2072,12 @@ impl Tc {
         }
     }
 
-    /// **Spell a description** (`docs/intro-by-type-design.md` §3.5): whnf
+    /// **Spell a description** (`docs/elaborator/intro-by-type-design.md` §3.5): whnf
     /// the `of` through the rewriter and take the component's syntax.
     ///
-    /// This is the current checker's answer — which is why it is complete
-    /// and why it is never silently wrong — and it is exponential exactly
-    /// where the current checker is. Its callers are the four λ inference
+    /// This is the rewriter's answer — which is why it is complete and why
+    /// it is never silently wrong — and it is exponential exactly where the
+    /// rewriter is. Its callers are the four λ inference
     /// arms, which must put a `Type` inside a `Π`/`ΠΠ`/`Πg`/`ΠU`, and the
     /// "other formers" branch of [`Tc::view`]. Unlike the value domain the
     /// rewriter is a *syntax* machine, so each step is run in the Γ its
@@ -2178,7 +2167,7 @@ impl Tc {
         })
     }
 
-    /// **The view** (`docs/intro-by-type-design.md` §3.3): the head former of
+    /// **The view** (`docs/elaborator/intro-by-type-design.md` §3.3): the head former of
     /// a description, with its components as descriptions.
     ///
     /// `value_domain` decides which machine answers, and the rule it
@@ -2187,7 +2176,7 @@ impl Tc {
     /// checking descent passes `true` only for a selection, the five `@`
     /// rules pass `true` for their annotation even though it is syntax, and
     /// the eager mode passes `false` everywhere — which is what makes it
-    /// today's checker.
+    /// the rewriter-only checker.
     ///
     /// In the value domain the head and the levels are read and **the value
     /// is discarded**; nothing the checker keeps outlives the arena. Only
@@ -2328,15 +2317,14 @@ impl Tc {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
 
-    /// The checked spellings' guard (`docs/intro-by-type-design.md` §2.3):
+    /// The checked spellings' guard (`docs/elaborator/intro-by-type-design.md` §2.3):
     /// they may appear anywhere **but** inside the payload of a `box`.
     ///
     /// A δ-unfolding cannot smuggle one in either: δ inside a box is opaque
     /// in both directions (`definitions.rs`), so a definition body that
     /// contains a checked spelling never becomes part of a payload.
     ///
-    /// Layer v refuses them as it refuses the component forms, which is the
-    /// half of stage 1a's `computing_layer` guard that survives.
+    /// Layer v refuses them as it refuses the component forms.
     fn checked_spelling_admitted(&self, env: &Env) -> R {
         self.not_var_layer(env)?;
         if env.under_box { Err(TypeError::UnderBox) } else { Ok(()) }
@@ -2387,7 +2375,7 @@ impl Tc {
     }
 
     /// An `M` signature's premises, shared by its formation rule and its two
-    /// term formers (docs/kernel-coinduction-design.md §1.1): `I @ li`,
+    /// term formers (docs/kernel/kernel-coinduction-design.md §1.1): `I @ li`,
     /// `(Γ, i : I) ⊢ S @ l`, `(Γ, i, s : S) ⊢ P @ l'`,
     /// `(Γ, i, s, p : P) ⊢ o : I`.
     fn m_sig_wf(&self, env: &Env, sig: &MSig) -> R {
@@ -2560,7 +2548,7 @@ impl Tc {
                 self.ty_check(env, dom, dom_level)?;
                 let e = env.push_entry(Rc::clone(dom), dom_level.clone());
                 self.ty_check(&e, cod, cod_level)?;
-                Ok(Level::join(dom_level.clone(), cod_level.clone()))
+                Ok(Level::max(dom_level.clone(), cod_level.clone()))
             }
             Type::Ty(l) => {
                 self.level_wf(env, l)?;
@@ -2590,7 +2578,7 @@ impl Tc {
                 self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
-            // sEq-formation (extension; docs/sprop-design.md §2.1) — Id's
+            // sEq-formation (extension; docs/kernel/sprop-design.md §2.1) — Id's
             // rule verbatim:
             // ⊢_i sEq^l(I; a; b) @ l ⟸ ⊢_i I @ l, ⊢_i a : I @ l, ⊢_i b : I @ l
             Type::SEq { level, ty, lhs, rhs } => {
@@ -2600,7 +2588,7 @@ impl Tc {
                 self.tm_check_rc(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
-            // sEmpty-formation (extension; docs/sprop-design.md §2.2):
+            // sEmpty-formation (extension; docs/kernel/sprop-design.md §2.2):
             // ⊢_i sEmpty^l @ l — premise-free like Unit/Empty.
             Type::SEmpty { level } => {
                 self.level_wf(env, level)?;
@@ -2619,7 +2607,7 @@ impl Tc {
                 self.ty_check(env, fst, fst_level)?;
                 let e = env.push_entry(Rc::clone(fst), fst_level.clone());
                 self.ty_check(&e, snd, snd_level)?;
-                Ok(Level::join(fst_level.clone(), snd_level.clone()))
+                Ok(Level::max(fst_level.clone(), snd_level.clone()))
             }
             // Unit/Empty-formation (extension beyond ch. 04):
             // ⊢_i Unit^l @ l, ⊢_i Empty^l @ l.
@@ -2627,7 +2615,7 @@ impl Tc {
             // **Level-indexed, not level-polymorphic.** `Unit^l` and
             // `Unit^{l'}` are distinct types, so a type still determines its
             // level and `ty_check` needs no special case — see its doc
-            // comment and `docs/unit-empty-level-indexing.md`.
+            // comment and `docs/kernel/unit-empty-level-indexing.md`.
             Type::Unit { level } | Type::Empty { level } => {
                 self.level_wf(env, level)?;
                 Ok(level.clone())
@@ -2640,7 +2628,7 @@ impl Tc {
                 self.level_wf(env, rhs_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                Ok(Level::join(lhs_level.clone(), rhs_level.clone()))
+                Ok(Level::max(lhs_level.clone(), rhs_level.clone()))
             }
             // W-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i W^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
@@ -2650,9 +2638,9 @@ impl Tc {
                 self.ty_check(env, shape, shape_level)?;
                 let e = env.push_entry(Rc::clone(shape), shape_level.clone());
                 self.ty_check(&e, pos, pos_level)?;
-                Ok(Level::join(shape_level.clone(), pos_level.clone()))
+                Ok(Level::max(shape_level.clone(), pos_level.clone()))
             }
-            // Vec-formation (extension; docs/wf-former-design.md §1.1):
+            // Vec-formation (extension; docs/kernel/wf-former-design.md §1.1):
             // ⊢_i Vec^l(T; k) @ l ⟸ ⊢_i T @ l, ⊢_i k : Nat @ 0. The length
             // is a term in Γ (no binder), which is what lets the tuple's
             // arity be *computed* from a shape.
@@ -2677,7 +2665,7 @@ impl Tc {
                 self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
                 Ok(level.clone())
             }
-            // DVec-formation (extension; docs/iwf-former-design.md §1.1):
+            // DVec-formation (extension; docs/kernel/iwf-former-design.md §1.1):
             // ⊢_i DVec^l(k; i. F) @ l ⟸ ⊢_i k : Nat @ 0,
             // (Γ, i : Fin k @ 0) ⊢_i F @ l. At every layer: `TmDVec` is its
             // code (design §6, §13 step 4).
@@ -2688,7 +2676,7 @@ impl Tc {
                 self.ty_check(&e_i, fam, level)?;
                 Ok(level.clone())
             }
-            // IWf-formation (extension; docs/iwf-former-design.md §1.2):
+            // IWf-formation (extension; docs/kernel/iwf-former-design.md §1.2):
             // ⊢_i IWf^{l,li}(I; x:S. n; x. o; x i. c)(m) @ l ⊔ li ⟸ the
             // signature (`iwf_sig_wf`), ⊢_i m : I @ li. At every layer:
             // `TmIWf` is its code (design §6, §13 step 4).
@@ -2697,11 +2685,11 @@ impl Tc {
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
             }
-            // M-formation (extension; docs/kernel-coinduction-design.md
+            // M-formation (extension; docs/kernel/kernel-coinduction-design.md
             // §1.1): ⊢_i M^{l,l',li}(I; i. S; i s. P; i s p. o)(j) @ l ⊔ l' ⊔
             // li ⟸ the signature (`m_sig_wf`), ⊢_i j : I @ li. Admitted at
             // every layer, as `Wf` is: `TmM` is its code
-            // (docs/kernel-m-codes-design.md §0).
+            // (docs/kernel/kernel-m-codes-design.md §0).
             Type::M { sig, index } => {
                 self.m_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
@@ -2951,12 +2939,11 @@ impl Tc {
     /// shared syntax — every rule but the checked spellings.
     ///
     /// The two wrappers exist so the rules can keep spelling their expected
-    /// type the way each already holds it; both now **construct nothing**
-    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Between them
-    /// they are 86 call sites, so what they build lands 86 times in their
-    /// callers' frames — and until the checking direction started borrowing,
-    /// this one also paid an `Arc` increment and decrement per checked
-    /// subterm.
+    /// type the way each already holds it; both **construct nothing**
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). They have many
+    /// call sites, so whatever they built would land in every caller's frame,
+    /// and an owned expected type would cost an `Arc` increment and decrement
+    /// per checked subterm.
     #[inline(always)]
     fn tm_check_rc(&self, env: &Env, t: &Rc<Term>, ty: &Rc<Type>, l: &Level) -> R {
         self.tm_check(env, t, ITyRef::Syn(ty), l)
@@ -2970,13 +2957,13 @@ impl Tc {
     }
 
     /// The checking λ — the one *checking* descent whose expected type may
-    /// be a selection (`docs/intro-by-type-design.md` §3.3): a λ checked at
+    /// be a selection (`docs/elaborator/intro-by-type-design.md` §3.3): a λ checked at
     /// `Sel { T, Fst }` because it is the first field of a `pair@`. Hence
     /// the view, and hence `Sel::Dom` / `Sel::Cod` existing at all.
     ///
     /// **Outlined deliberately, and measured**
     /// (`issues/ity-widens-the-checker-per-node-constant.md`). It is the one
-    /// arm that takes a [`TyForm`] — 200 bytes, two [`ITy`] components it
+    /// arm that takes a [`TyForm`] — a large value, two [`ITy`] components it
     /// then holds across its own recursive descent — while the arm the
     /// checker actually recurses *through*, once per term node, is the
     /// fall-through below. Left in [`Tc::tm_check_inner`] those temporaries
@@ -3003,7 +2990,7 @@ impl Tc {
         self.level_wf(env, cod_level)?;
         self.lev_eq(dom_level, &pd)?;
         self.lev_eq(cod_level, &pc)?;
-        self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
+        self.lev_eq(l, &Level::max(dom_level.clone(), cod_level.clone()))?;
         // The expected Π is presupposed well-formed, so a domain spelled as
         // its domain is a well-formed type at `pd` and needs neither the
         // judgment nor the conversion. An elaborator copies the expected
@@ -3127,14 +3114,12 @@ impl Tc {
     /// `⊢_i t : ? @ ?` — infer the canonical type and level.
     ///
     /// **`inline(always)` is load-bearing, and measured**
-    /// (`issues/ity-widens-the-checker-per-node-constant.md`). Before stage
-    /// 1b this was a tail call with its callee's own signature, so LLVM
-    /// merged the two; the `@` dispatch and the `ITy::Owned` wrap made it a
-    /// non-tail call, and it fell out of line — putting a fresh 96-byte
-    /// frame *and* two 96-byte copies of the inferred `(type, level)` on the
-    /// checker's recursion cycle, once per term node. The wrap itself is
-    /// free: `ITy` is 72 bytes, exactly `Type`'s, because the tag rides in a
-    /// niche.
+    /// (`issues/ity-widens-the-checker-per-node-constant.md`). The `@`
+    /// dispatch and the `ITy::Owned` wrap make this a non-tail call, and out
+    /// of line it would put a fresh frame *and* two copies of the inferred
+    /// `(type, level)` on the checker's recursion cycle, once per term node.
+    /// The wrap itself is free: `ITy` is exactly `Type`'s size, because the
+    /// tag rides in a niche.
     #[inline(always)]
     fn tm_infer(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
@@ -3196,7 +3181,7 @@ impl Tc {
     #[inline(always)]
     fn tm_infer_fresh(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         // The checked spellings are the only rules whose inferred type may
-        // be a *description* (`docs/intro-by-type-design.md` §3.2), so they
+        // be a *description* (`docs/elaborator/intro-by-type-design.md` §3.2), so they
         // have their own dispatch and every other rule keeps returning
         // syntax — which is the sentence "no existing rule constructs a
         // `Sel`" made true by construction rather than by review.
@@ -3241,7 +3226,7 @@ impl Tc {
         Ok((self.materialize(env, &ty)?, l))
     }
 
-    /// The five **checked spellings** (`docs/intro-by-type-design.md` §3.4)
+    /// The five **checked spellings** (`docs/elaborator/intro-by-type-design.md` §3.4)
     /// — the only inference rules whose result may be an un-spelled
     /// selection, and therefore the only ones that live outside
     /// [`Tc::tm_infer_inner`]. Keeping them here is what makes §3.2's
@@ -3250,7 +3235,7 @@ impl Tc {
     /// [`Tc::tm_infer`] wraps it.
     fn tm_infer_at(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         match &**t {
-            // -- checked spellings (extension; docs/intro-by-type-design.md)
+            // -- checked spellings (extension; docs/elaborator/intro-by-type-design.md)
             //
             // `pair@`, `inl@`, `inr@` with an annotation: one whole-type
             // annotation instead of the former's components. Each rule is
@@ -3309,12 +3294,11 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok((ity, level))
             }
-            // `fst@(p) : S` — **no annotation at all** (design §2.1,
-            // revised): the receiver infers its own type and the Σ is viewed
-            // out of that, so a projection of a `pair@` costs the pair's
-            // annotation and nothing more. This is the rule that made the
-            // first draft's `fst@(T; p)` unnecessary: `T` was always the type
-            // `p` already infers.
+            // `fst@(p) : S` — **no annotation at all** (design §2.1): the
+            // receiver infers its own type and the Σ is viewed out of that,
+            // so a projection of a `pair@` costs the pair's annotation and
+            // nothing more. An annotation `T` would be the type `p` already
+            // infers.
             Term::FstAt { pair } => {
                 if !self.mode.eager() {
                     return self.projection_at_spine(env, t);
@@ -3347,17 +3331,17 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok((snd_c.at(&env.gamma, Rc::new(fst_p)), snd_level))
             }
-            // `app@(f; a) : T[a/x]` (`docs/app-by-head-type-design.md` §3.1)
+            // `app@(f; a) : T[a/x]` (`docs/elaborator/app-by-head-type-design.md` §3.1)
             // — no annotation: the Π is the one `f` infers. Relative to
             // `app`'s rule this drops the two `ty_check`s of the annotation
             // and the conversion of `f`'s type against it; the head's
             // inference is what that rule's `tm_check` of `f` paid anyway.
             //
-            // **The fast path is today's checker.** A head whose inferred
+            // **The fast path is the `app` rule.** A head whose inferred
             // type is literally a Π — a global's statement, a local's type,
             // the previous node of a spine — returns `T[a/x]` as syntax, the
             // same `apply_local` the `app` rule returns, so what follows
-            // sees the syntax it always saw. Only a head whose type needs
+            // sees the `app` rule's syntax. Only a head whose type needs
             // reduction to show its Π (a projected record field, a
             // type-level definition) is viewed in the value domain and
             // answers a description: §3.3 of the intro design, the rewriter
@@ -3506,8 +3490,8 @@ impl Tc {
         };
         self.tm_check(env, arg, dom.as_ref(), &dom_level)?;
         // The eager mode's view is the rewriter's, so its codomain
-        // is syntax and the result is too — which is what keeps that
-        // mode today's checker on `app@`.
+        // is syntax and the result is too — which keeps that mode
+        // rewriter-only on `app@`.
         let ty = match cod {
             ITy::Syn(cod) => ITy::Owned(
                 cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
@@ -3525,7 +3509,7 @@ impl Tc {
     }
 
     /// The three **unannotated** intros in checking position (design §3.4),
-    /// the rules that make the round's win possible: the expected type is an
+    /// the rules that keep a nested constructor linear: the expected type is an
     /// [`ITy`] — for a field of an outer `pair@` a *description* and never a
     /// spelling — and the fields are checked against `Sel`s of it. Nothing
     /// here builds a type, so a constructor value nested n deep costs n
@@ -3545,7 +3529,7 @@ impl Tc {
                 let TyForm::Sigma { fst_level, snd_level, fst: fst_c, snd: snd_c } = form else {
                     return Err(TypeError::HeadMismatch);
                 };
-                self.lev_eq(l, &Level::join(fst_level.clone(), snd_level.clone()))?;
+                self.lev_eq(l, &Level::max(fst_level.clone(), snd_level.clone()))?;
                 self.tm_check(env, fst, fst_c.as_ref(), &fst_level)?;
                 let snd_at = snd_c.at(&env.gamma, Rc::clone(fst));
                 self.tm_check(env, snd, snd_at.as_ref(), &snd_level)?;
@@ -3563,7 +3547,7 @@ impl Tc {
                 let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
                     return Err(TypeError::HeadMismatch);
                 };
-                self.lev_eq(l, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+                self.lev_eq(l, &Level::max(lhs_level.clone(), rhs_level.clone()))?;
                 let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
                     (rhs, rhs_level)
                 } else {
@@ -3582,7 +3566,7 @@ impl Tc {
     /// twin of [`Tc::projection_at_spine`]. Per node, layer `j`'s type is a
     /// selection `j` deep and its view replays all `j`: a constructor value
     /// of an `n`-constructor declaration is up to `n − 1` injections deep, so
-    /// that was Θ(k²) evaluation for the `k`-th constructor
+    /// that would be Θ(k²) evaluation for the `k`-th constructor
     /// (`issues/wide-inductive-constructor-mention-cost.md`). The rules and
     /// the descriptions are the per-node ones; the eager oracle and the
     /// recording translator keep the per-node path.
@@ -3612,7 +3596,7 @@ impl Tc {
         let depth = env.gamma.entries.len() as u32;
         let mut level = l.clone();
         for (sel, (lhs_level, rhs_level)) in selections.into_iter().zip(levels) {
-            self.lev_eq(&level, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+            self.lev_eq(&level, &Level::max(lhs_level.clone(), rhs_level.clone()))?;
             level = match sel { Sel::Lhs => lhs_level, _ => rhs_level };
             expected = ITy::Sel { of: Rc::new(expected), sel, at_depth: depth };
             crate::stats::intro_at_nodes(1);
@@ -3672,7 +3656,7 @@ impl Tc {
                     &Type::Ty(cod_level.clone()),
                     &Level::succ(cod_level.clone()),
                 )?;
-                let lmax = Level::join(dom_level.clone(), cod_level.clone());
+                let lmax = Level::max(dom_level.clone(), cod_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             Term::TmTy(l) => {
@@ -3709,7 +3693,7 @@ impl Tc {
                     &Type::Ty(snd_level.clone()),
                     &Level::succ(snd_level.clone()),
                 )?;
-                let lmax = Level::join(fst_level.clone(), snd_level.clone());
+                let lmax = Level::max(fst_level.clone(), snd_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             // Encodings of Unit/Empty (extension): Unit^l, Empty^l : Ty l.
@@ -3726,7 +3710,7 @@ impl Tc {
                 self.tm_check_ty(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
-            // Encoding of sEq (extension; docs/sprop-design.md §6): mirrors
+            // Encoding of sEq (extension; docs/kernel/sprop-design.md §6): mirrors
             // TmId — sEq^l(s; t; u) : Ty l.
             Term::TmSEq { level, ty, lhs, rhs } => {
                 self.not_var_layer(env)?;
@@ -3754,7 +3738,7 @@ impl Tc {
                     &Type::Ty(rhs_level.clone()),
                     &Level::succ(rhs_level.clone()),
                 )?;
-                let lmax = Level::join(lhs_level.clone(), rhs_level.clone());
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             // Encoding of W (extension): W^{l,l'}(x:s).t : Ty (l⊔l').
@@ -3776,10 +3760,10 @@ impl Tc {
                     &Type::Ty(pos_level.clone()),
                     &Level::succ(pos_level.clone()),
                 )?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
-            // Encoding of Vec (extension; docs/wf-former-design.md §6):
+            // Encoding of Vec (extension; docs/kernel/wf-former-design.md §6):
             // Vec^l(s; k) : Ty l ⟸ s : Ty l, k : Nat. The length is a term
             // of the ambient scope, so it binds nothing.
             Term::TmVec { level, elem, len } => {
@@ -3812,11 +3796,11 @@ impl Tc {
                 self.tm_check_ty(&e, arity, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
-            // M-code (docs/kernel-m-codes-design.md §1): well-formed exactly
+            // M-code (docs/kernel/kernel-m-codes-design.md §1): well-formed exactly
             // when its decoding is a well-formed `M` signature, since `El u`
             // at `l` checks `u : Ty l`; the index is a term of the decoded
             // index type. A code at every layer but v, like every code.
-            // DVec-code (docs/iwf-former-design.md §6): DVec^l(k; i. f) : Ty l
+            // DVec-code (docs/kernel/iwf-former-design.md §6): DVec^l(k; i. f) : Ty l
             // ⟸ k : Nat, (Γ, i : Fin k) ⊢ f : Ty l. The length is a term of
             // the ambient scope, the family binds the position.
             Term::TmDVec { level, len, fam } => {
@@ -3944,7 +3928,7 @@ impl Tc {
                 ))
             }
 
-            // -- strict equality (extension; docs/sprop-design.md §3–4) -----
+            // -- strict equality (extension; docs/kernel/sprop-design.md §3–4) -----
             // srefl^l(I; a) : sEq^l(I; a; a) @ l.
             Term::SRefl { level, ty, tm } => {
                 self.not_var_layer(env)?;
@@ -4044,7 +4028,7 @@ impl Tc {
                         fst: Rc::clone(fst_ty),
                         snd: Rc::clone(snd_ty),
                     },
-                    Level::join(fst_level.clone(), snd_level.clone()),
+                    Level::max(fst_level.clone(), snd_level.clone()),
                 ))
             }
             // fst^{l,l'}(x:S.T; p) : S @ l.
@@ -4065,7 +4049,7 @@ impl Tc {
                     env,
                     pair,
                     &sigma,
-                    &Level::join(fst_level.clone(), snd_level.clone()),
+                    &Level::max(fst_level.clone(), snd_level.clone()),
                 )?;
                 Ok(((**fst_ty).clone(), fst_level.clone()))
             }
@@ -4087,7 +4071,7 @@ impl Tc {
                     env,
                     pair,
                     &sigma,
-                    &Level::join(fst_level.clone(), snd_level.clone()),
+                    &Level::max(fst_level.clone(), snd_level.clone()),
                 )?;
                 let fst_p = Term::Fst {
                     fst_level: fst_level.clone(),
@@ -4103,10 +4087,9 @@ impl Tc {
                 ))
             }
 
-
-            // -- unit and empty (extension beyond ch. 04) -------------------
+            // -- vectors, unit and empty (extension beyond ch. 04) ----------
             // [b₀, …, b_{w-1}]^l(T; z, o) : Vec^l(T; w) @ l
-            // (docs/bitvector-literal-entry-design.md §3.1). Two elements are
+            // (docs/kernel/bitvector-literal-entry-design.md §3.1). Two elements are
             // checked, not `w`: every element *is* `zero` or `one`, which is
             // what makes the literal the pair chain `vec_lit_unfold` spells
             // and lets that chain's typing be read off these premises. The
@@ -4136,7 +4119,7 @@ impl Tc {
             // of the pair chain it spells (`term::vec_items_unfold`): `T` a
             // type at `l` and every element a `T`, the chain's `snd`
             // premises being `Vec`s of the same `T`. Checked in a loop, which
-            // is the node's reason to exist: the chain recursed once per
+            // is the node's reason to exist: the chain would recurse once per
             // element. A compact spelling like `VecLit`, so refused where
             // that is.
             Term::VecItems { level, elem, items, from } => {
@@ -4163,7 +4146,7 @@ impl Tc {
             // The level annotation is load-bearing, not decoration: without
             // it `⟨⟩` inhabits `Unit^l` for every `l`, i.e. a *term* with many
             // types, which ch. 04 §Non-cumulativity says the code eliminator
-            // cannot survive (`docs/unit-empty-level-indexing.md` §2.2).
+            // cannot survive (`docs/kernel/unit-empty-level-indexing.md` §2.2).
             Term::Triv { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
@@ -4200,7 +4183,7 @@ impl Tc {
                         lhs: Rc::clone(lhs),
                         rhs: Rc::clone(rhs),
                     },
-                    Level::join(lhs_level.clone(), rhs_level.clone()),
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
                 ))
             }
             // inr^{l,l'}(A; B; b) : A +^{l,l'} B @ l⊔l'.
@@ -4218,7 +4201,7 @@ impl Tc {
                         lhs: Rc::clone(lhs),
                         rhs: Rc::clone(rhs),
                     },
-                    Level::join(lhs_level.clone(), rhs_level.clone()),
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
                 ))
             }
             // case^{l,l',l''}(z. M; A; B; x. c_l; y. c_r; t) : M[t/z] @ l''.
@@ -4239,7 +4222,7 @@ impl Tc {
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, lhs, lhs_level)?;
                 self.ty_check(env, rhs, rhs_level)?;
-                let lmax = Level::join(lhs_level.clone(), rhs_level.clone());
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
                 let sum = Type::Sum {
                     lhs_level: lhs_level.clone(),
                     rhs_level: rhs_level.clone(),
@@ -4289,7 +4272,7 @@ impl Tc {
                 let e = env.push_entry(Rc::clone(shape_ty), shape_level.clone());
                 self.ty_check(&e, pos_ty, pos_level)?;
                 self.tm_check_rc(env, label, shape_ty, shape_level)?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 let w = Type::W {
                     shape_level: shape_level.clone(),
                     pos_level: pos_level.clone(),
@@ -4309,7 +4292,7 @@ impl Tc {
                     env,
                     children,
                     &f_ty,
-                    &Level::join(pos_level.clone(), lmax.clone()),
+                    &Level::max(pos_level.clone(), lmax.clone()),
                 )?;
                 Ok((w, lmax))
             }
@@ -4331,7 +4314,7 @@ impl Tc {
                 self.ty_check(env, shape, shape_level)?;
                 let e_x = env.push_entry(Rc::clone(shape), shape_level.clone());
                 self.ty_check(&e_x, pos, pos_level)?;
-                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 let w = Type::W {
                     shape_level: shape_level.clone(),
                     pos_level: pos_level.clone(),
@@ -4351,7 +4334,7 @@ impl Tc {
                     dom: Rc::clone(pos),
                     cod: Rc::new(w.shift_local(2)),
                 };
-                let f_level = Level::join(pos_level.clone(), lmax.clone());
+                let f_level = Level::max(pos_level.clone(), lmax.clone());
                 let e_af = e_a.push_entry(Rc::new(f_ty), f_level);
                 // f y in (Γ, a, f, y : T[a/x]): f = Var 1, y = Var 0.
                 let f_y = Term::App {
@@ -4371,7 +4354,7 @@ impl Tc {
                     dom: Rc::new(pos.shift_local(1)),
                     cod: Rc::new(ih_cod),
                 };
-                let ih_level = Level::join(pos_level.clone(), motive_level.clone());
+                let ih_level = Level::max(pos_level.clone(), motive_level.clone());
                 let e_step = e_af.push_entry(Rc::new(ih_ty), ih_level);
                 // s : M[sup(a, f)/z] with sup built in (Γ, a, f), then
                 // weakened past ih.
@@ -4463,7 +4446,7 @@ impl Tc {
 
             // sup_i^{l,li}(sig; a; cs) : IWf(sig)(o[a/x]) @ l ⊔ li, with
             // cs : DVec^{l⊔li}(n[a/x]; k. IWf(sig)(c[a/x, k/i])) — the
-            // constructor is at its output index (docs/iwf-former-design.md
+            // constructor is at its output index (docs/kernel/iwf-former-design.md
             // §2). A value at a convertible index checks by conversion. A code
             // at every layer but v, as `sup_f` is (design §13 step 4).
             Term::Supi { sig, label, children } => {
@@ -4501,9 +4484,9 @@ impl Tc {
 
             // corec^{k}(sig; i. X; i x. c; j; x) : M(sig)(j) @ f, with
             // (Γ, i) ⊢ X @ k, (Γ, i, x : X) ⊢ c : m_step_ty(…)↑ and
-            // x : X[j/i] (docs/kernel-coinduction-design.md §1.3). The
+            // x : X[j/i] (docs/kernel/kernel-coinduction-design.md §1.3). The
             // carrier's level is free: one rule per k, quantifying over
-            // nothing. Admitted at c (docs/kernel-m-codes-design.md §0): a
+            // nothing. Admitted at c (docs/kernel/kernel-m-codes-design.md §0): a
             // boxed corec is inert syntax, as a boxed `supf` is.
             Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
                 self.not_var_layer(env)?;
@@ -4514,7 +4497,7 @@ impl Tc {
                 let fl = sig.family_level();
                 let step_ty = m_step_ty(sig, carrier_level, carrier).shift_local(1);
                 let e_ix = e_i.push_entry(Rc::clone(carrier), carrier_level.clone());
-                let step_level = Level::join(sig.level.clone(), Level::join(carrier_level.clone(), fl.clone()));
+                let step_level = Level::max(sig.level.clone(), Level::max(carrier_level.clone(), fl.clone()));
                 self.tm_check_ty(&e_ix, step, &step_ty, &step_level)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 self.tm_check_ty(env, seed, &carrier.inst_top(0, index), carrier_level)?;
@@ -4528,7 +4511,7 @@ impl Tc {
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 let fl = sig.family_level();
                 self.tm_check_ty(env, scrut, &sig.at(Rc::clone(index)), &fl)?;
-                Ok((m_out_ty(sig, index), Level::join(sig.level.clone(), fl)))
+                Ok((m_out_ty(sig, index), Level::max(sig.level.clone(), fl)))
             }
 
             // -- dependent functions ----------------------------------------
@@ -4551,7 +4534,7 @@ impl Tc {
                         dom: Rc::clone(dom),
                         cod,
                     },
-                    Level::join(dom_level.clone(), cod_level.clone()),
+                    Level::max(dom_level.clone(), cod_level.clone()),
                 ))
             }
             Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
@@ -4571,7 +4554,7 @@ impl Tc {
                     env,
                     fun,
                     &pi,
-                    &Level::join(dom_level.clone(), cod_level.clone()),
+                    &Level::max(dom_level.clone(), cod_level.clone()),
                 )?;
                 self.tm_check_rc(env, arg, dom, dom_level)?;
                 Ok((
@@ -4589,9 +4572,9 @@ impl Tc {
                 let e = env.push_univs(*num_vars);
                 self.level_wf(&e, level)?;
                 // §3.5: the body's inferred type has to go *inside* a
-                // syntactic former, so a selection is spelled here. On every
-                // declaration that exists today this is a `Syn` and
-                // `materialize` is `Rc::clone`; the shape that is not is a
+                // syntactic former, so a selection is spelled here. On almost
+                // every declaration this is a `Syn` and `materialize` is
+                // `Rc::clone`; the shape that is not is a
                 // layer-m metaprogram whose body infers a tower component,
                 // and it is complete rather than fast, which is the right
                 // way round for a trusted checker.
@@ -4846,11 +4829,6 @@ impl Tc {
     }
 }
 
-/// A cheap identity hint for partitioning the conversion memo. A mismatch is
-/// allowed to miss a structurally equal entry; a match is never trusted until
-/// the complete judgment has been compared. Cloning Heather syntax preserves
-/// these child `Rc`s, which distinguishes the mostly-fresh types produced by
-/// inference without recursively hashing them.
 /// The variant name of a term, for the sampler's site column.
 #[cfg(feature = "value-metrics")]
 fn term_head(t: &Term) -> &'static str {
@@ -4915,10 +4893,9 @@ fn term_head(t: &Term) -> &'static str {
         Term::BoxTm(..) => "BoxTm",
         Term::LetBoxTy { .. } => "LetBoxTy",
         Term::LetBoxTm { .. } => "LetBoxTm",
-        // The checked spellings (docs/intro-by-type-design.md). Stage 1a
-        // added the `Term` variants and missed this match; the sampler is
-        // behind `value-metrics`, which nothing in `scripts/test` builds, so
-        // nothing said so.
+        // The checked spellings (docs/elaborator/intro-by-type-design.md).
+        // This match compiles only under `value-metrics`, which nothing in
+        // `scripts/test` builds, so a variant missing here goes unreported.
         Term::PairAt { .. } => "PairAt",
         Term::InlAt { .. } => "InlAt",
         Term::InrAt { .. } => "InrAt",
@@ -5036,6 +5013,11 @@ fn first_difference_excerpt(expected: &Type, inferred: &Type) -> String {
     out
 }
 
+/// A cheap identity hint for partitioning the conversion memo. A mismatch is
+/// allowed to miss a structurally equal entry; a match is never trusted until
+/// the complete judgment has been compared. Cloning Heather syntax preserves
+/// these child `Rc`s, which distinguishes the mostly-fresh types produced by
+/// inference without recursively hashing them.
 fn type_anchor(ty: &Type) -> TypeAnchor {
     match ty {
         Type::Pi { dom, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(dom))),
@@ -5096,8 +5078,8 @@ mod memo_tests {
         }
     }
 
-    /// The tests below predate [`ITy`] and state their judgments in syntax;
-    /// wrapping at the call is the whole adaptation.
+    /// The tests below state their judgments in syntax, wrapped as an
+    /// [`ITy`] at the call.
     fn s(t: Type) -> ITy {
         ITy::Syn(Rc::new(t))
     }

@@ -11,7 +11,7 @@ updated: 2026-10-31
 `Format::round_real` (lib/std/num/float/round_real.hthr) is Ziv's search with
 fuel: it returns a float only with its `RoundsToReal` proof, and `None` when
 the tries run out. Nothing yet says enough tries always succeed. That is
-the `float-reals` statement of docs/floating-point-design.md §6: correct
+the `float-reals` statement of docs/library/floating-point-design.md §6: correct
 rounding computes from apartness from the breakpoints.
 
 Scope:
@@ -36,7 +36,7 @@ Scope:
 
 ## Log
 
-- 2026-10-31: LANDED the search's end (docs/creal-transcendental-round.md,
+- 2026-10-31: LANDED the search's end (docs/library/creal.md,
   "The search ends"). `F.Cell(x, h, k)` / `F.OffGrid(x)` state the gap against
   the half-unit grid, which holds every breakpoint of every mode. That is
   stronger than per-mode `Breakpoint`, and it needs no case split.

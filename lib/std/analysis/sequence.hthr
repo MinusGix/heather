@@ -1,6 +1,6 @@
 // Sequences over an ordered field: convergence, the Cauchy condition, the
 // algebra and order of limits, and continuity carrying limits
-// (issues/real-completeness-interfaces.md; docs/sequences-and-completeness.md).
+// (issues/real-completeness-interfaces.md; docs/library/sequences-and-completeness.md).
 //
 // Everything is stated once over a section's `K: OrderedField(≈, <, <=, +,
 // *)`, as in real_fn, so it reads at `Rat` and at `CReal` alike
@@ -28,7 +28,7 @@
 //
 // The converse of `Converges::cauchy` is the capability that separates the
 // carriers: every Cauchy sequence converges at `CReal` and not at `Rat`
-// (`CauchyComplete` below, and docs/sequences-and-completeness.md for the
+// (`CauchyComplete` below, and docs/library/sequences-and-completeness.md for the
 // other completeness notions it is kept apart from).
 
 import logic;
@@ -324,7 +324,7 @@ theorem LipschitzOn::converges(D: K → Type, f: K → K, L: K, xs: Nat → K, l
 // it back in their terms. `CReal` inhabits it (real_complete.hthr, from
 // `CReal::complete`); `Rat` does not (the rational square-root sequence of
 // 2 is Cauchy). It is one of several completeness notions kept apart on
-// purpose (docs/sequences-and-completeness.md): it asks for no supremum and
+// purpose (docs/library/sequences-and-completeness.md): it asks for no supremum and
 // no choice, since the modulus comes with the sequence.
 class CauchyComplete<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
     add as +: A → A → A, mul as *: A → A → A)

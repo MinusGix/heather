@@ -1,5 +1,5 @@
 //! Parse-level facts of local state in pure code
-//! (docs/sequencing-surface-design.md §4, §5.1): the refusals a whole file's
+//! (docs/language/sequencing-surface-design.md §4, §5.1): the refusals a whole file's
 //! parse owns, which a Heather probe cannot state (a parse error refuses the
 //! file), and that the lowering leaves no marker behind. What the lowered
 //! forms mean is probed in Heather,
@@ -138,7 +138,7 @@ fn a_while_names_its_measure_and_does_not_exit_yet() {
     parse_file("fn f(while: Nat) -> Nat { while }").unwrap_or_else(|e| panic!("{}", e.msg));
 }
 
-// A `while` with no measure (docs/sequencing-surface-design.md §18) is one
+// A `while` with no measure (docs/language/sequencing-surface-design.md §18) is one
 // `Iterate::then(init, step, rest)` call, written by the parser: no loop
 // marker for the elaborator to lift, and the body's binds lowered inside
 // the step, after the state is read.
@@ -168,7 +168,7 @@ fn a_range_is_written_only_in_a_for_header() {
 #[test]
 fn a_mut_self_method_returns_its_receiver_beside_its_result() {
     // `fn C::tick(mut self c: C, …) → R` has result `Mutated<C, R>`, and its
-    // body ends in `Mutated(c, value)` (docs/sequencing-surface-design.md §8.2).
+    // body ends in `Mutated(c, value)` (docs/language/sequencing-surface-design.md §8.2).
     let parsed = format!("{:?}", parse_file("fn C::tick(mut self c: C, n: Nat) -> Nat { c := g(c, n); n }").unwrap());
     assert!(parsed.contains("\"Mutated\""), "{parsed}");
     // A `return` in a loop leaves with the receiver as it stands there:
@@ -204,7 +204,7 @@ fn a_method_call_on_a_mutable_local_is_claimed_by_its_block() {
 #[test]
 fn a_branch_that_ends_a_block_updates_the_blocks_locals() {
     // The arms of a tail `if`/`match` are the block's last statements, so
-    // they assign its `let mut` locals (docs/sequencing-surface-design.md
+    // they assign its `let mut` locals (docs/language/sequencing-surface-design.md
     // §19.1), through an arm's own tail too.
     for src in [
         "fn f(c: Bool) -> Nat { let mut x = 1; if c { x := 2; x } else { x } }",

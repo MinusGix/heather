@@ -1,5 +1,5 @@
 //! Reading a pair, an injection or a projection **whichever spelling it is
-//! written in** (`docs/intro-by-type-design.md` §4.2).
+//! written in** (`docs/elaborator/intro-by-type-design.md` §4.2).
 //!
 //! Since stage 1 the kernel has five *checked spellings* —
 //! `pair@`/`inl@`/`inr@`/`fst@`/`snd@` — that carry the type the term was
@@ -126,7 +126,7 @@ pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
 ///
 /// A weak head reached through the checked spelling carries such redexes in
 /// its arguments: a `match` arm binds a component of an intro written bare
-/// (`docs/codata-named-signature-design.md` §5), and the arm's own `fst@`/
+/// (`docs/inductives/codata-named-signature-design.md` §5), and the arm's own `fst@`/
 /// `snd@` of that binder is what the reduct substitutes it into. The kernel
 /// infers a projection's receiver, and a bare `pair@` does not infer, so the
 /// reduct is a term the kernel refuses with `NotInferable` wherever it is
@@ -276,7 +276,7 @@ pub(crate) fn tuple_fields(
 
 /// The head and argument of either application spelling — `app` with its
 /// annotations or the checked `app@(f; a)`, whose Π is the one the head
-/// infers (`docs/app-by-head-type-design.md` §6.2). A reader that needs the
+/// infers (`docs/elaborator/app-by-head-type-design.md` §6.2). A reader that needs the
 /// Π itself has a decision to make and does not come here.
 pub(crate) fn app_of(t: &Term) -> Option<(&Rc<Term>, &Rc<Term>)> {
     match t {
@@ -329,6 +329,23 @@ pub(crate) fn beta_head(t: &Term) -> Option<Term> {
     Some(beta_head(&r).unwrap_or(r))
 }
 
+/// A `Case` on an injection, `case(inl v) { l => a; r => b }`, contracted
+/// to `a[v/x]` (and `inr` to `b`); `None` for any other term. The ι rule
+/// the kernel applies first, and a substitution only: nothing is unfolded.
+/// A reader contracts the projections of literal pairs the substitution
+/// leaves too ([`contract_projections`]): the branch is a reduct, which
+/// reads its constructor's fields off the value it was given.
+/// A motive's instance at an arm is the goal with this redex where the
+/// scrutinee stood (issues/match-arm-accepted-against-unspecialised-goal.md).
+pub(crate) fn iota_case(t: &Term) -> Option<Term> {
+    let Term::Case { case_l, case_r, scrut, .. } = t else { return None };
+    match &**scrut {
+        Term::Inl { val, .. } | Term::InlAt { val, .. } => Some(case_l.inst_top(0, val)),
+        Term::Inr { val, .. } | Term::InrAt { val, .. } => Some(case_r.inst_top(0, val)),
+        _ => None,
+    }
+}
+
 /// `ty` with its `El` term's head β-redexes contracted ([`beta_head`]);
 /// `None` when there was none. A pattern-bound proof is typed so: an
 /// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`, read raw no relation is
@@ -342,7 +359,7 @@ pub(crate) fn beta_head_ty(ty: &Type) -> Option<Type> {
 }
 
 /// An application the elaborator **constructs** from a Π it holds, outside
-/// the surface-call path (`docs/app-by-head-type-design.md` §6.1, every
+/// the surface-call path (`docs/elaborator/app-by-head-type-design.md` §6.1, every
 /// emitter switched): `app@(f; a)` unless the head is a λ, which infers only
 /// if its body does and so keeps the annotated form. The annotations are
 /// taken so a call site reads as the `app` it replaces and are dropped for

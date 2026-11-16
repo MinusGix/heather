@@ -6,7 +6,7 @@ created: 2026-08-04
 updated: 2026-08-04
 ---
 
-The kernel has had bodied globals with layer-indexed transparency since [[simulate-conversion-cost]] (2026-07-31), and user `fn`s are Ψ-referenced — but the *generator's own artifacts* are still anonymous terms inlined at every occurrence: `μ` (in the family type, twice per Σ projection, several times per arm), the tag predicates, the child projections, the per-arm eliminator instantiations. `docs/inductive-fording-lowering.md` §14.2 and §14.9 both name "a kernel `def`" as the fix; this issue is that slug.
+The kernel has had bodied globals with layer-indexed transparency since [[simulate-conversion-cost]] (2026-07-31), and user `fn`s are Ψ-referenced — but the *generator's own artifacts* are still anonymous terms inlined at every occurrence: `μ` (in the family type, twice per Σ projection, several times per arm), the tag predicates, the child projections, the per-arm eliminator instantiations. `docs/archive/inductive-fording-lowering.md` §14.2 and §14.9 both name "a kernel `def`" as the fix; this issue is that slug.
 
 ## What it owes
 
@@ -21,7 +21,7 @@ The kernel has had bodied globals with layer-indexed transparency since [[simula
 - `forded/occurrences` ~119 ms per use of a forded family.
 - `lib/certgen/ir_v1.hthr` is 98.8% kernel gate — the frontend hands the kernel a term whose size is a product where it should be a sum.
 
-Expected outcome: the three forded fits fall *below* their bands, `--check` goes red on exactly them, `--save` re-records, and the before/after table in `docs/frontend-benchmarking.md` is the round's number. The §14.9 fuel-cliff negative in `crates/elab/tests/indexed_route_2b_declared.rs` flips positive, and `forded/declared-index-tags` gains its branching row.
+Expected outcome: the three forded fits fall *below* their bands, `--check` goes red on exactly them, `--save` re-records, and the before/after table in `docs/infrastructure/frontend-benchmarking.md` is the round's number. The §14.9 fuel-cliff negative in `crates/elab/tests/indexed_route_2b_declared.rs` flips positive, and `forded/declared-index-tags` gains its branching row.
 
 ## Couplings
 

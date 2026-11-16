@@ -1,5 +1,5 @@
 //! **Differential test: the evaluator against the rewriter**
-//! (docs/nbe-conversion-design.md §§2, 11.2, 13 stage 1).
+//! (docs/kernel/nbe-conversion-design.md §§2, 11.2, 13 stage 1).
 //!
 //! `reduce.rs` is ch. 06's reduction relation transcribed rule for rule; it
 //! is the *specification*. `eval.rs` is the environment machine that will
@@ -533,7 +533,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(pred, b, gamma, d)
             }
             // A machine word is a closed prefix of a `Vec`'s Σ-chain
-            // (`docs/native-bitvector-values-design.md` §3.3), so it is
+            // (`docs/kernel/native-bitvector-values-design.md` §3.3), so it is
             // related to a `Pair` by **unpacking one bit** — the same
             // one-step view every other consumer sees. The residual is a
             // freshly built run, and the annotations are the ones the `Vec`
@@ -571,7 +571,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(snd, s2, gamma, d)
             }
 
-            // -- the checked spellings (docs/intro-by-type-design.md) -------
+            // -- the checked spellings (docs/elaborator/intro-by-type-design.md) -------
             //
             // `⊩` relates a value to the ch. 06 whnf of the term's
             // **translation** `⌊·⌋`, which for these five forms means: erase
@@ -1613,6 +1613,63 @@ fn a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued() {
     }
 }
 
+/// A withheld call stays withheld at an argument that reads a local
+/// variable from under a binder, however far out the variable is
+/// (`eval/withheld.rs`, issues/withheld-closedness-past-the-uses-mask.md).
+/// The walk reads a binder's body by its mask of used indices, which stops
+/// at `USES_BITS`: the four indices past it that the walk still read as bits
+/// were read as unused, so the function was judged closed and the call
+/// unfolded.
+#[test]
+fn a_withheld_call_at_a_function_reading_a_far_variable_stays_withheld() {
+    let nil = || LocalCtx { base: CtxBase::Nil, entries: (vec![]).into() };
+    let nat = || Rc::new(Type::Nat);
+    let arrow = || Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), cod: nat() });
+    let lam = |body: Rc<Term>| Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), body });
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+    // Ψ = w := λ f. 0 — withheld until one argument.
+    let w_ty = Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: arrow(), cod: nat() });
+    let w = Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: arrow(), body: Rc::new(Term::Zero) });
+    let mut withheld = Withheld::new();
+    withheld.insert(0, 1);
+    let psi = GlobalCtx::new(vec![GlobalBinding::defined_tm(nil(), Layer::Code, w_ty, Level::Zero, w)])
+        .withholding(Some(Rc::new(withheld)));
+    let call = |arg: Rc<Term>| {
+        Rc::new(Term::App {
+            fun: Rc::new(Term::GlobalTm {
+                var: GlobalVar::index(0),
+                subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: arrow(),
+            cod: nat(),
+            arg,
+        })
+    };
+    let gamma = LocalCtx::nil();
+    let arena = ValueArena::new();
+    let root = Env::identity(80);
+    let mut ev = Eval::new(FUEL, Defs::transparent(&psi), gamma.base, &arena);
+    // The control: a function that reads nothing is closed, and glued.
+    let v = ev.eval_tm(&call(lam(var(0))), &root).expect("one call");
+    assert!(matches!(&*v, Val::Neutral(n) if n.unfold.is_some()), "the call at a closed function is glued");
+    for (what, arg) in [
+        ("a near variable", lam(var(3))),
+        ("the last index under the mask", lam(var(59))),
+        ("an index past the mask", lam(var(61))),
+        ("the first index past the mask", lam(var(60))),
+        ("the last index the walk used to read as a bit", lam(var(63))),
+        ("a far index under two binders", lam(lam(var(70)))),
+    ] {
+        let v = ev.eval_tm(&call(arg), &root).expect("one call");
+        assert!(
+            matches!(&*v, Val::Neutral(n) if n.unfold.is_none()),
+            "the call at a function reading {what} stays withheld"
+        );
+    }
+}
+
 #[test]
 fn a_failed_thunk_is_not_poisoned() {
     heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
@@ -1669,7 +1726,7 @@ fn a_failed_thunk_is_not_poisoned() {
 /// starts, so the machines run one after another. Here each scrutinee stands
 /// for the argument thunk, so forcing it starts a machine while the enclosing
 /// one is still in its loop. That is the shape `iterate_increment` builds
-/// (docs/native-depth-budget-design.md §1).
+/// (docs/kernel/native-depth-budget-design.md §1).
 ///
 /// With `wrapped`, the scrutinee is `(λy. y) x`, an application, and each
 /// layer re-enters `drive` natively: one counted frame per layer. Without,
@@ -1723,7 +1780,7 @@ fn nested_scrutinee_value(d: u32, wrapped: bool) -> Rc<Term> {
 }
 
 /// The **depth** budget is the fuel policy applied to the other resource a
-/// reduction spends (docs/native-depth-budget-design.md): a machine that
+/// reduction spends (docs/kernel/native-depth-budget-design.md): a machine that
 /// answers under it answers what the deeper stack answers, and a machine that
 /// cannot answer says `OutOfFuel` rather than aborting the process. Fuel does
 /// not stand in for it — the budget here is exhausted with the full fuel
@@ -1756,7 +1813,7 @@ fn a_deep_value_is_refused_rather_than_overflowing_the_stack() {
 /// A chain whose every link is a *variable* head (a scrutinee, a function, a
 /// pair, `J`'s proof bound to a thunk) costs no native depth: the machine
 /// forces the variable on its own loop and the elimination waits on the heap
-/// (`Eval::await_bound`, docs/native-depth-budget-design.md §9). So the value
+/// (`Eval::await_bound`, docs/kernel/native-depth-budget-design.md §9). So the value
 /// the previous test refuses on eight frames answers there once its
 /// scrutinees are the variables themselves, and far past the bound on the
 /// full budget. That chain shape is what a tactic's proof read through a run
@@ -1819,7 +1876,7 @@ fn chain_ref(var: u32, arg: Rc<Term>) -> Rc<Term> {
 /// which the rewriter catches — rather than to nothing.
 ///
 /// That is the failure mode a lazy offset has and an eager copy cannot
-/// (`docs/lazy-global-offset-design.md` §8): the three shapes whose treatment
+/// (`docs/kernel/lazy-global-offset-design.md` §8): the three shapes whose treatment
 /// differs from the ordinary one are all here, at a depth where getting them
 /// wrong changes the answer — a `box` (whose payload is materialized at
 /// formation), a `letbox` (whose body sits under a global binder, so the

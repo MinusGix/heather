@@ -1,8 +1,9 @@
-// cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
-// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
+// cat and the tools past it (docs/native/native-real-programs-plan.md, rounds 1,
+// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N` (and over the whole
+// input held in one buffer, read at offsets), `wc -l`, `echo` and
 // `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
-// a procedure (docs/native-procedures-design.md), written with the builder
+// a procedure (docs/native/native-procedures-design.md), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles;
 // tr through a word function it calls (`native_tool_words`) and through
 // one that rewrites the buffer it is lent, and `wc -l` through a function
@@ -55,7 +56,7 @@ fn tr_upper_tool() → Tool { tr_upper(256) }
 
 // tr once more, each byte through `raise_letter` (native_tool_words): a
 // call, in the bounded loop, of a function compiled into the same file by
-// the function compiler (docs/native-one-compiler-design.md §2.2). The
+// the function compiler (docs/native/native-one-compiler-design.md §2.2). The
 // tool's program is the one `heather reflect` wrote of it.
 fn raise_bytes_called(buf: Buf, count: Val) → Calc {
     count_up(count, [], λ i => fresh(buf.at(i.get()), λ c => fresh(num(0), λ r =>
@@ -73,7 +74,7 @@ fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
 // `raise_span` (native_tool_spans), a `runtime fn` that is lent the
 // buffer, stores into it and calls `raise_word` on each byte. The write
 // after the call sends the buffer as the function left it
-// (docs/native-one-compiler-design.md §2.6; `raise_span_called` is what
+// (docs/native/native-one-compiler-design.md §2.6; `raise_span_called` is what
 // the call is in the tool's meaning).
 fn tr_upper_span(capacity: Nat) → Tool {
     program(raise_span_program(), buffer(capacity, λ buf => run(local(num(0), λ raised => each_read(stdin(), buf, λ n =>
@@ -111,6 +112,15 @@ fn head_c(count, capacity: Nat) → Tool {
 
 fn head_c10_tool() → Tool { head_c(10, 256) }
 
+// The input read whole into one buffer before anything is written, each
+// read landing where the last one ended, then written: GNU's `head -c
+// capacity`, whatever sizes the reads come in.
+fn head_whole(capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(local(num(0), λ got => read_whole(stdin(), buf, got) ++ write_all(stdout(), buf, got.get()))))
+}
+
+fn head_whole_tool() → Tool { head_whole(4096) }
+
 // ---------------------------------------------------------------------------
 // tail -c +K
 
@@ -119,7 +129,7 @@ fn head_c10_tool() → Tool { head_c(10, 256) }
 // the buffer read into: `copy_window` (native_tool_spans) copies it to the
 // same place of a second buffer, and it is written from there. The
 // statement lends its two buffers whole and the function lends the two
-// windows on to its loop (docs/native-library-exports-design.md §3.1), so
+// windows on to its loop (docs/native/native-library-exports-design.md §3.1), so
 // this is the tool whose call is over a line of a buffer; `tail` itself
 // needs no copy. A read that ends before the bytes to skip do is a line
 // that ends before it starts, which copies nothing and answers 0.
@@ -150,7 +160,7 @@ fn wc_l_tool() → Tool { wc_l(256) }
 // wc -l once more, each read's newlines counted by `count_newlines`
 // (native_tool_spans): a `runtime fn` lent the buffer, compiled into the
 // same file by the function compiler and passed the buffer's address and
-// capacity by the call (docs/native-one-compiler-design.md §2.3). The
+// capacity by the call (docs/native/native-one-compiler-design.md §2.3). The
 // function reads the bytes the read left in the program's buffer, and the
 // call's answer is the Heather function's at them
 // (`count_newlines_called`).
@@ -413,7 +423,7 @@ fn head_n_tool() → Tool { head_n(1024) }
 //
 // A line is tested and written by one procedure, `finish`, called where a
 // newline ends a line and where the input ends inside one: its code is
-// emitted once (docs/native-procedures-design.md).
+// emitted once (docs/native/native-procedures-design.md).
 fn grep_f(capacity, line_cap, pat_cap: Nat) → Tool {
     buffer(capacity, λ data => buffer(line_cap, λ line => buffer(pat_cap, λ pat => buffer_of([BitVec::ofNat(10)], λ newline =>
     depth(1, proc(2, 1, λ p =>

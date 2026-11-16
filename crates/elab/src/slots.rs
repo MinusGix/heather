@@ -1,5 +1,5 @@
 //! Elaboration **slots**: the seam between a `meta fn` template and the use
-//! site it elaborates (docs/meta-def-registration-design.md).
+//! site it elaborates (docs/metaprogramming/meta-def-registration-design.md).
 //!
 //! A slot is an elaboration site the elaborator is willing to hand over —
 //! `vec.map`, `vec.fold`, … — one per Rust schema that can have an in-language
@@ -40,7 +40,7 @@ pub(crate) enum Slot {
     /// fragment transcriber.
     CertgenTranscribe,
     /// The certifying generator's fragment *signature* checker
-    /// (docs/fn-signature-reflection-design.md §2): consumes a fn's type as
+    /// (docs/metaprogramming/fn-signature-reflection-design.md §2): consumes a fn's type as
     /// code — the pull reflection API's first datum — and answers with the
     /// fragment arity, or declines.
     CertgenCheckSig,
@@ -250,8 +250,8 @@ static SLOTS: &[SlotSpec] = &[
 ];
 
 /// An **analyzer** slot: a `meta fn` that consumes code and returns a *value*
-/// (docs/certgen-transcriber-in-language-design.md §9.1, and
-/// docs/meta-def-registration-design.md's dated extension section).
+/// (docs/archive/certgen-transcriber-in-language-design.md §9.1, and
+/// docs/metaprogramming/meta-def-registration-design.md's dated extension section).
 ///
 /// The difference from a template slot is what "having the slot's type" can
 /// mean. A template is applied to the use site's context and then to the
@@ -277,10 +277,10 @@ pub(crate) struct AnalyzerSpec {
 
 /// One slot per client (the round's scoping). User-declared analyzer slots
 /// are deferred with user-declared slots generally
-/// (docs/meta-def-registration-design.md §10).
+/// (docs/metaprogramming/meta-def-registration-design.md §10).
 ///
 /// A `TyCode(g)` parameter in an expected signature is where a slot's **pull**
-/// is visible (docs/fn-signature-reflection-design.md §1): the invoking Rust
+/// is visible (docs/metaprogramming/fn-signature-reflection-design.md §1): the invoking Rust
 /// fills it from `Elaborator::fn_type_code`, the reflection primitive, in the
 /// slot's canonical order.
 static ANALYZERS: &[AnalyzerSpec] = &[

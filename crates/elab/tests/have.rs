@@ -1,5 +1,5 @@
 //! `have x = e;` — a block binding whose value is hidden
-//! (`docs/have-design.md`).
+//! (`docs/language/have-design.md`).
 //!
 //! A `have` is the one statement that emits a kernel form, the redex
 //! `(λ x: T. rest)(v)`, so per `docs/testing-generated-terms.md` it gets all

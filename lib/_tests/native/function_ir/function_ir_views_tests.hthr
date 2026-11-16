@@ -1,5 +1,5 @@
 // Probes of a call over views (`Lend`,
-// docs/native-library-exports-design.md §3.1): the callee runs on a window
+// docs/native/native-library-exports-design.md §3.1): the callee runs on a window
 // of its caller's buffer as a buffer of its own, what it stores is put
 // back where the window lies, it cannot reach a byte outside the window, a
 // view that is not written is left as it was, two views of one buffer are

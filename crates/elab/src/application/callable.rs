@@ -61,7 +61,7 @@ impl Callables<'_> {
     /// Does a bare `name` in this context resolve to a **committed global**
     /// with a non-empty *leading implicit prefix* in its parameter list — the
     /// precondition of the bare-reference route
-    /// (docs/unifier-completeness-design.md §5.3)? Returns the prefix length.
+    /// (docs/elaborator/unifier-completeness-design.md §5.3)? Returns the prefix length.
     ///
     /// The precedence checks replicate [`Elaborator::resolve`]'s order exactly:
     /// locals, aliases and constructors keep their existing wins, `Zero`/
@@ -72,7 +72,7 @@ impl Callables<'_> {
     /// local binder's `Cx` entry or the alias's, following [`Elaborator::resolve`]'s
     /// precedence exactly (an alias bound at depth `d` shadows every binder
     /// at position `< d`), so a skeleton is consulted only for the entity the
-    /// name resolves to (docs/implicit-binders-design.md §4.1). `None` for
+    /// name resolves to (docs/language/implicit-binders-design.md §4.1). `None` for
     /// anything that is not a local or alias — a global's metadata is
     /// `ParamMeta`, not a skeleton.
     pub(crate) fn value_skel(&self, cx: &Cx, name: &str) -> Option<Rc<Skel>> {
@@ -132,7 +132,7 @@ impl Callables<'_> {
 
     /// Does a saturated call `name(a⃗)` carry an implicit parameter that **no
     /// explicit parameter's domain mentions** — a *result-only* implicit
-    /// (docs/congruence-in-inference-position-design.md §2)?
+    /// (docs/elaborator/congruence-in-inference-position-design.md §2)?
     ///
     /// This is the semantic half of [`AppUnify::is_checking_only`](crate::app_unify::AppUnify::is_checking_only)'s sentence.
     /// The syntactic members of that set are forms whose `elab_infer` arm

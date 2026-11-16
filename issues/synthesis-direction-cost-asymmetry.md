@@ -8,14 +8,14 @@ updated: 2026-08-08
 ---
 
 Found by the named-upcast round's acceptance measurement (2026-08-08,
-docs/traits-named-upcast-design.md): `bool_plus_zero`'s kernel gate costs
+docs/language/classes/traits-named-upcast-design.md): `bool_plus_zero`'s kernel gate costs
 ~2.1x `nat_plus_zero`'s at every scale measured — 7.9 s vs 2.9 s before the
 read-through fix, 0.075 s vs 0.035 s after — so the fix rescaled the
 asymmetry without touching it, which localizes it away from the upcast
 entirely.
 
 Likely owner, unconfirmed: the *direction* of layer 1's canonical parent
-synthesis (docs/traits-layer1-design.md §4.4). Nat's chain is parent-first
+synthesis (docs/language/classes/traits-layer1-design.md §4.4). Nat's chain is parent-first
 (`AddSemigroup<Nat>`/`AddMonoid<Nat>` are declared, the child fills `plus`
 by reference), Bool's is child-first (`AddCommMonoid<Bool>` is declared and
 its parents are SYNTHESIZED record literals) — one extra global for
@@ -29,7 +29,7 @@ rather than as literals. Filed per the perf discipline: trigger recorded,
 one deliberate round when picked up.
 
 ## What it assumes from elsewhere
-- **docs/traits-layer1-design.md** owns both synthesis directions. Assumed
+- **docs/language/classes/traits-layer1-design.md** owns both synthesis directions. Assumed
   here: only that they emit differently-shaped globals.
 - **[[traits]]** owns the class layer. Nothing here questions the
   canonical-value discipline itself.

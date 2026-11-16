@@ -1,5 +1,5 @@
 //! The designed access spellings of a repr and its `Impl`s
-//! (`docs/repr-access-spellings-design.md`).
+//! (`docs/native/repr-access-spellings-design.md`).
 //!
 //! What is under test is a *resolution* device over generated terms, so the
 //! axes of `docs/testing-generated-terms.md` apply and are varied here: a

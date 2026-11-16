@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile x86_64_asm_table function_ir_refusal
+// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -29,6 +29,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("bitvec_resize", include_str!("../../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("vector", include_str!("../../../../lib/std/data/vector.hthr")),
     ("bitvec_bytes", include_str!("../../../../lib/std/bitvec/bitvec_bytes.hthr")),
+    ("bitvec_rotate", include_str!("../../../../lib/std/bitvec/bitvec_rotate.hthr")),
     ("list_window", include_str!("../../../../lib/std/data/list_window.hthr")),
     ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
     ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),
@@ -61,18 +62,31 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_stack", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
     ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("x86_64_asm_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
-    ("function_ir_lower_structured", include_str!("../../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
     ("x86_64_kept", include_str!("../../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
+    ("function_ir_lower_structured", include_str!("../../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
     ("function_ir_lower_reads", include_str!("../../../../lib/native/function_ir/function_ir_lower_reads.hthr")),
     ("x86_64_lending", include_str!("../../../../lib/std/arch/x86_64/x86_64_lending.hthr")),
     ("x86_64_views", include_str!("../../../../lib/std/arch/x86_64/x86_64_views.hthr")),
     ("function_ir_lower_views", include_str!("../../../../lib/native/function_ir/function_ir_lower_views.hthr")),
     ("x86_64_stack_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
+    ("x86_64_frame", include_str!("../../../../lib/std/arch/x86_64/x86_64_frame.hthr")),
     ("function_ir_lower_calls", include_str!("../../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
+    ("function_ir_stage", include_str!("../../../../lib/native/function_ir/function_ir_stage.hthr")),
     ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
+    ("function_ir_correct", include_str!("../../../../lib/native/function_ir/function_ir_correct.hthr")),
+    ("function_ir_borrows", include_str!("../../../../lib/native/function_ir/function_ir_borrows.hthr")),
     ("x86_64_asm_table", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
-    ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),
-    ("derive", include_str!("../../../../lib/std/tactic/derive.hthr")),
+    ("function_ir_spelled", include_str!("../../../../lib/native/function_ir/function_ir_spelled.hthr")),
     ("utf8", include_str!("../../../../lib/std/text/utf8.hthr")),
     ("function_ir_refusal", include_str!("../../../../lib/native/function_ir/function_ir_refusal.hthr")),
+    ("function_ir_fresh", include_str!("../../../../lib/native/function_ir/function_ir_fresh.hthr")),
+    ("function_ir_inline", include_str!("../../../../lib/native/function_ir/function_ir_inline.hthr")),
+    ("function_ir_replay", include_str!("../../../../lib/native/function_ir/function_ir_replay.hthr")),
+    ("bitvec_ring", include_str!("../../../../lib/std/bitvec/bitvec_ring.hthr")),
+    ("function_ir_rules", include_str!("../../../../lib/native/function_ir/function_ir_rules.hthr")),
+    ("function_ir_tidy", include_str!("../../../../lib/native/function_ir/function_ir_tidy.hthr")),
+    ("function_ir_guard", include_str!("../../../../lib/native/function_ir/function_ir_guard.hthr")),
+    ("function_ir_learn", include_str!("../../../../lib/native/function_ir/function_ir_learn.hthr")),
+    ("function_ir_prune", include_str!("../../../../lib/native/function_ir/function_ir_prune.hthr")),
+    ("function_ir_optimize", include_str!("../../../../lib/native/function_ir/function_ir_optimize.hthr")),
 ];

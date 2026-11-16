@@ -11,7 +11,7 @@ Built 2026-10-30 (Minus approved item 2 of the coordinator's suite-cost
 list): unfiltered `scripts/test --pr` runs only what its diff from the
 merge base with `origin/master` can affect, through
 `scripts/affected-targets.mjs`. Design and the replay over sixty merges:
-docs/testing-architecture-design.md §2.2.1. `HEATHER_PR_AFFECTED=all` runs
+docs/infrastructure/testing-architecture-design.md §2.2.1. `HEATHER_PR_AFFECTED=all` runs
 everything; `node scripts/affected-targets.mjs --manifest M --paths a,b`
 prints what a list of files would select (M is `cargo test --workspace
 --no-run --message-format=json`'s output).

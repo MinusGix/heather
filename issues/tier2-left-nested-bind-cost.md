@@ -31,7 +31,7 @@ and runs thousands of requests.
 
 A tier-2 constructor with a function child stores the child twice:
 `⟨sup(ℓ; λy. fst(k y)), λy. snd(k y)⟩`
-(docs/inductive-tier2-w-lowering.md §6). `Tac::bind`'s `Ask` arm builds
+(docs/inductives/inductive-tier2-w-lowering.md §6). `Tac::bind`'s `Ask` arm builds
 exactly that over `k' = λx. k(x).bind(f)`, so the tree component and the
 proof component each evaluate `k(x).bind(f)` on their own: the two `k y`
 applications are different closures in different environments, and the force
@@ -65,7 +65,7 @@ interaction tree should show it too (not measured).
 
 ## Log
 
-- 2026-10-21: Mechanism confirmed and fixed (docs/inductive-tier2-w-lowering.md
+- 2026-10-21: Mechanism confirmed and fixed (docs/inductives/inductive-tier2-w-lowering.md
   §14). Counters at master: `lspin(8/10/12)` spent 127k / 502k / 2.0M
   evaluation steps, ×2 per level. Two duplications, both needed fixing:
   the constructor wrote the child into the tree and the proof separately

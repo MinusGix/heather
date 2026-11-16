@@ -10,7 +10,7 @@ updated: 2026-11-01
 ---
 
 The acceptance test that runs through every layer of
-`docs/analysis-foundations-design.md` (§13, item 0). Each layer is built in
+`docs/library/analysis-foundations-design.md` (§13, item 0). Each layer is built in
 its proper, general form in its own issue, never as the minimum this one
 result needs; this result is checked at each layer as it lands, and is
 closed by the general theorem of the last one.

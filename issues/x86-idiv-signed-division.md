@@ -11,7 +11,7 @@ updated: 2026-11-08
 `SInt::div`/`rem` on an i64 should compile to `CQO; IDIV r64` (REX.W 99,
 REX.W F7 /7), guarded at a zero divisor and at `MIN / -1`, checked end to
 end against C. The flags side is done ([[x86-undefined-flags]], round 5 of
-docs/runtime-fn-setups-design.md §16.13): IDIV can leave all six flags
+docs/native/runtime-fn-setups-design.md §16.13): IDIV can leave all six flags
 undefined (`DefinedFlags::none()`), and `Exception::DivideError` exists with
 `Instruction::faults(gprs)` wired into `Execute`. What remains:
 

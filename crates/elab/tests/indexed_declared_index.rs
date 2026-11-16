@@ -1,5 +1,5 @@
 //! Declared-index families hand prototype: §8.2 of
-//! `docs/inductive-indexed-lowering.md`, the claim that route 1 at a
+//! `docs/inductives/inductive-indexed-lowering.md`, the claim that route 1 at a
 //! *declared* index type is an instantiation of the landed `Nat` scheme, not
 //! a redesign. The scheme reads "one family branch per index constructor,
 //! `rec` at each recursive argument of the index constructor" — this file

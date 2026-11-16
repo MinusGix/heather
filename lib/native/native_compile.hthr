@@ -1,5 +1,5 @@
 // The effectful source compiled to x86-64 by a Heather function
-// (docs/native-effect-source-design.md §7.4; issues/native-effect-source-compiler.md,
+// (docs/native/native-effect-source-design.md §7.4; issues/native-effect-source-compiler.md,
 // round S3.2). `native_compile_correct` proves it once.
 //
 // Every word of the environment has a slot of eight bytes in one data
@@ -40,7 +40,7 @@
 //   the parameters, a test of the exit bit, the count less one and a JMP
 //   back; the outputs moved out at the end). A call region is a CALL of the
 //   function, compiled after the program's own code
-//   (docs/native-one-compiler-design.md §2.2).
+//   (docs/native/native-one-compiler-design.md §2.2).
 // - A byte node compares its index with its buffer's capacity (CMP and a
 //   JAE past the access), and loads or stores the byte at the buffer's
 //   address plus the index; a store then reads the byte back as a load
@@ -115,7 +115,7 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // `Layout::of` computes from the homes once: every leaf reads them several
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
-// The procedures are the table a call names (docs/native-procedures-design.md),
+// The procedures are the table a call names (docs/native/native-procedures-design.md),
 // the functions the ones a region's `Call` does.
 record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
     procedures: List<Procedure> := [], functions: List<Function> := [] }
@@ -147,8 +147,8 @@ fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(l
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
 // How many calls deeper the running activation may go
-// (docs/native-procedures-design.md §4.1). Its frame has no slot: RSP is
-// the frame between statements (docs/native-procedures-are-functions-design.md
+// (docs/native/native-procedures-design.md §4.1). Its frame has no slot: RSP is
+// the frame between statements (docs/native/native-procedures-are-functions-design.md
 // §3, step 5a).
 fn Layout::room_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
 fn Layout::room_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.room_offset()) }
@@ -158,7 +158,7 @@ fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 16 }
 // Words in and out of their slots
 
 // A word's slot is in the running frame, which RSP points at between
-// statements (docs/native-procedures-are-functions-design.md §3, step 5b):
+// statements (docs/native/native-procedures-are-functions-design.md §3, step 5b):
 // slot `id` is the word at RSP + 8·id.
 //
 // The word in `register`: loaded from its slot, RBX the slot's address, or
@@ -298,6 +298,7 @@ fn Node::read_ports(self node: Node) → List<Port> {
         BitXor(width, _, left, right) => [Port(left, width), Port(right, width)],
         ShiftLeft(width, _, value, _) => [Port(value, width)],
         LogicalShiftRight(width, _, value, _) => [Port(value, width)],
+        RotateRight(width, _, value, _) => [Port(value, width)],
         ArithmeticShiftRight(width, _, value, _) => [Port(value, width)],
         UnsignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
         SignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
@@ -440,13 +441,15 @@ fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
     then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
 }
 
-// The copy's counter and its two walks set, and its loop's label.
+// The copy's counter and its two walks set, RDI past the offset in R9,
+// and its loop's label.
 fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf)), AddRR(Rdi, R9)])).label(head)
 }
 
-// The `count` bytes in RAX copied from the scratch range to the buffer's: R8
-// counts up to RAX, RSI and RDI walk the two ranges, RDX carries each byte.
+// The `count` bytes in RAX copied from the scratch range to the buffer's
+// past the offset in R9: R8 counts up to RAX, RSI and RDI walk the two
+// ranges, RDX carries each byte.
 fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
     let set = p.copy_head(layout, buf, head);
     let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
@@ -457,16 +460,19 @@ fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Pr
 // After the read: the bytes copied in unless it failed (RAX negative), then
 // the result put in its word's home.
 fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
-    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names)))));
-    tested.copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names)))).word_from(layout, out, result, Rax)
+    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(Succ(names))))));
+    tested.copy_in(layout, buf, Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).label(Succ(Succ(Succ(Succ(names))))).word_from(layout, out, result, Rax)
 }
 
-// read(fd, scratch, min(len, capacity)); the result stored; on success the
-// bytes copied into the buffer.
-fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let clamped = then(p.known_to(layout, known, len, Rdx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rdx, R9, Succ(names));
-    let asked = then(then(clamped, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))])).known_to(layout, known, fd, Rdi), Syscall);
-    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(names))))
+// read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
+// offset kept in R9; the result stored; on success the bytes copied into
+// the buffer from the offset.
+fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let start = then(p.known_to(layout, known, at, R8), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
+    let room = then(start, Block([SubRR(R9, R8)])).known_to(layout, known, len, Rdx).clamp(Rdx, R9, Succ(Succ(names)));
+    let asking: List<Instruction> = [MovRR(R9, R8), MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))];
+    let asked = then(then(room, Block(asking)).known_to(layout, known, fd, Rdi), Syscall);
+    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(Succ(names)))))
 }
 
 // write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
@@ -515,11 +521,11 @@ fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, 
 
 fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
     match shape {
-        Reads(fd, buf, len, result) => match layout.words_fit([fd, len, result]) {
+        Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, len, result, capacity, names)),
+                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
             },
         },
         Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
@@ -551,7 +557,7 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 // RSP as the process starts, saved to the slot past the scratch range: the
 // command line is above it (`ArgvAt`). `main`'s frame is opened below it
 // (`Prog::frames_main`); `depth` calls are room left
-// (docs/native-procedures-design.md §4.1).
+// (docs/native/native-procedures-design.md §4.1).
 fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
     let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
     then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
@@ -676,6 +682,7 @@ fn Node::renamed(self node: Node, output: Nat) → Node {
         BitXor(width, _, left, right) => BitXor(width, output, left, right),
         ShiftLeft(width, _, value, amount) => ShiftLeft(width, output, value, amount),
         LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, output, value, amount),
+        RotateRight(width, _, value, amount) => RotateRight(width, output, value, amount),
         ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, output, value, amount),
         UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, output, left, right),
         SignedLessThan(width, _, left, right) => SignedLessThan(width, output, left, right),
@@ -789,7 +796,7 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
 }
 
 // ---------------------------------------------------------------------------
-// Calls (docs/native-procedures-design.md §4)
+// Calls (docs/native/native-procedures-design.md §4)
 
 // The argument and result registers, in order.
 fn call_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
@@ -884,7 +891,7 @@ fn Prog::count_up(self p: Prog, layout: Layout) → Prog {
 }
 
 // A call, of a procedure or of a function
-// (docs/native-procedures-are-functions-design.md §2.3): the arguments in
+// (docs/native/native-procedures-are-functions-design.md §2.3): the arguments in
 // their registers, after the homes of the buffers the callee is lent (two
 // registers a buffer, immediates: a file's buffers lie where the layout
 // says and are as long as their capacities); R10 carried in RBX across the
@@ -908,10 +915,10 @@ fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args
 
 fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
 
-// A call of function `callee` (docs/native-one-compiler-design.md §2.2),
+// A call of function `callee` (docs/native/native-one-compiler-design.md §2.2),
 // `out` live after it: the call, the function at label `Succ(callee)`, and
 // RAX put in the result's home. A function lent buffers is passed their
-// homes first (docs/native-one-compiler-design.md §2.3): buffer `k` of the
+// homes first (docs/native/native-one-compiler-design.md §2.3): buffer `k` of the
 // file is the `k`th it is lent. `call_lent` is the call at a count of lent
 // buffers computed once.
 fn Prog::call_lent(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat, lent: Nat) → Prog {
@@ -1155,7 +1162,7 @@ fn Prog::finish(self p: Prog) → Option<Prog> {
     match whole.laid_out() { False => None, True => Some(whole) }
 }
 
-// Procedure `index` (docs/native-procedures-design.md §4.2), checked
+// Procedure `index` (docs/native/native-procedures-design.md §4.2), checked
 // first (§4.3): its body's homes with its results live after it, its body
 // reading only its parameters, each parameter apart from what is live after
 // it, and every word it names in the file. At its label RSP is at the
@@ -1182,7 +1189,7 @@ fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(�
 fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
 
 // Its way in: the label, the depth counted, the registers it keeps pushed
-// (docs/native-procedures-are-functions-design.md steps 5b and 5c), its
+// (docs/native/native-procedures-are-functions-design.md steps 5b and 5c), its
 // frame opened below them, the arguments into the parameters' homes…
 fn Procedure::entry_code(self proc: Procedure, p: Prog, layout: Layout, index: Nat) → Prog {
     then(p.label(layout.procedure_label(index)).count_down(layout).saves(layout.kept()), Block(frame_down(layout.words)))
@@ -1223,7 +1230,7 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
 // (`program_writers`), wherever its buffers lie; and with rows of marks
 // that hold (`program_rowed`), so a function that calls over views lends
 // to write each view its callee stores through
-// (docs/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1).
 fn program_linkable(functions: List<Function>) → Bool {
     (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
 }
@@ -1232,19 +1239,45 @@ fn program_linkable(functions: List<Function>) → Bool {
 // values where `places` proposes; their inner labels from `names`. Checked
 // first (`program_linkable`). A function may store into the buffers it is
 // lent: the program lends them to write
-// (docs/native-one-compiler-design.md §2.6). Each function is emitted
+// (docs/native/native-one-compiler-design.md §2.6). Each function is emitted
 // under the count of buffers it says it is lent (`program_counts`).
 fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions)) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()) {
                 None => None,
                 Some(out) => Some(out.prog),
             },
         },
     }
+}
+
+// What `links` answers, a check at a time: each its own declaration, so a
+// certificate pays the kernel's per-declaration fuel for the largest piece
+// and not for all of them at once (`write-elf`'s `_deep`; evaluability a
+// function at a time, `program_scan_at_drop`).
+theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
+    evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions)).map(λ out => out.prog) = Some(q)):
+    p.links(functions, places, names) = Some(q)
+{
+    let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
+        Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
+            Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
+    match functions as λ fs => program_linkable(fs) = True →
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs)).map(λ out => out.prog) = Some(q) →
+        p.links(fs, places, names) = Some(q) {
+        Nil => λ _ e => e,
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) {
+                None => None, Some(out) => Some(out.prog) } }) = Some(q),
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier))) as λ r =>
+                r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
+                None => λ h => h,
+                Some(_) => λ h => h,
+            }(e)),
+    }(linkable, emitted)
 }
 
 // A source with procedures or functions: `main` naming its labels past
@@ -1494,7 +1527,7 @@ fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → 
 
 fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
     match shape {
-        Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
+        Reads(fd, buf, at, len, result) => buffer_refusal(layout, [fd, at, len, result], buf),
         Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
         Opens(path, len, result) => buffer_refusal(layout, [len, result], path),
         Closes(fd, result) => ids_refusal(layout, [fd, result]),
@@ -1599,7 +1632,7 @@ fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
         Compute(region) => region.names_after(names),
         Invoke(shape) => match shape {
-            Reads(_, _, _, _) => Succ(Succ(Succ(names))),
+            Reads(_, _, _, _, _) => Succ(Succ(Succ(Succ(names)))),
             Writes(_, _, _, _, _) => Succ(Succ(names)),
             Opens(_, _, _) => Succ(Succ(Succ(names))),
             _ => names,

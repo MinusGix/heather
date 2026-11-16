@@ -59,7 +59,7 @@ applied to arguments, in expression position, checked against a universe,
 should elaborate to the lowered type* — the same term `TyKind::OfExpr`
 produces in type position, with the value parameters substituted. Everything
 around it already exists: types are expressions ([[type-definitions]],
-docs/types-as-expressions.md), `fn`-returning-`Type` values flow through
+docs/language/types-as-expressions.md), `fn`-returning-`Type` values flow through
 higher-order positions (controls above), and the lowering-with-substitution
 is `OfExpr`'s existing job.
 
@@ -84,7 +84,7 @@ failing examples above are checking positions.
 ## Scope fence: monomorphized type parameters stay out
 
 `record Monoid<A>` type parameters are **monomorphized** per instantiation
-(docs/surface-records.md §1.1, the [[surface-polymorphism]] asymmetry):
+(docs/language/surface-records.md §1.1, the [[surface-polymorphism]] asymmetry):
 `Monoid<Nat>` and `Monoid<Bool>` are unrelated kernel types. So `Monoid` as a
 `Type -> Type` *value* is not expressible under the current polymorphism
 model and is NOT this issue — this issue is value-parameterized (and plain)
@@ -124,4 +124,4 @@ Per docs/testing-generated-terms.md discipline (vary the axes):
 
 ## Log
 
-- 2026-08-01: Landed: routing in elab_at_universe (type_former_app -> existing OfExpr lowering, committed so diagnostics re-point), plain/indexed inductives came along, plus two El-of-beta-redex reader repairs (record_of_at, unify_ty decode) the consumer forced — see docs/record-type-values.md. RefinesOn is stated generally in lib/certgen/ir_v1.hthr with NatEnv as the domain and both refinement directions re-proved through it; RefinesNat2 survives as sugar. 7 acceptance tests (record_type_values.rs), full suite green, ir_v1 check time unchanged (~41s). Follow-up filed: [[el-reader-decode-audit]].
+- 2026-08-01: Landed: routing in elab_at_universe (type_former_app -> existing OfExpr lowering, committed so diagnostics re-point), plain/indexed inductives came along, plus two El-of-beta-redex reader repairs (record_of_at, unify_ty decode) the consumer forced — see docs/language/record-type-values.md. RefinesOn is stated generally in lib/certgen/ir_v1.hthr with NatEnv as the domain and both refinement directions re-proved through it; RefinesNat2 survives as sugar. 7 acceptance tests (record_type_values.rs), full suite green, ir_v1 check time unchanged (~41s). Follow-up filed: [[el-reader-decode-audit]].

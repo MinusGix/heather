@@ -59,7 +59,7 @@ pub(super) struct DeclAttempt {
     /// Every `decide` the declaration wrote, with the decision the kernel
     /// will run. Consulted only if the gate says `NotConvertible`: the one
     /// whose decision then re-reduces to the wrong side is the refusal, and
-    /// the report names its instance (`docs/reflection-through-decide-instances-design.md` §4).
+    /// the report names its instance (`docs/tactics/reflection-through-decide-instances-design.md` §4).
     pub(super) decide_uses: RefCell<Vec<DecideUse>>,
     /// Every `trivial` emitted at an expected type its budgeted read did not
     /// reach the head of — a closed verdict left to the gate
@@ -83,7 +83,7 @@ pub(super) struct DeclAttempt {
     /// `@`-forms. The scope is there because the annotations name generated
     /// definitions, and a declaration registers its own mid-attempt
     /// (`register_gen_defs`): an entry minted before a push names every
-    /// global one too close (`docs/iwf-named-signature-design.md` §2).
+    /// global one too close (`docs/inductives/iwf-named-signature-design.md` §2).
     pub(super) children_annotations: RefCell<Vec<(Type, (usize, u32), bool, Rc<Type>, Rc<Type>)>>,
     /// The same for a `sup_f`'s shape and arity slots, keyed by the `Wf`.
     pub(super) wf_slot_annotations: RefCell<Vec<(Type, (usize, u32), (Rc<Type>, Rc<Term>))>>,
@@ -128,7 +128,7 @@ pub(super) struct DeclAttempt {
     /// every level doubled the work per level of nesting — `step_mono`'s
     /// three levels cost 8.5x its elaboration (2026-09-17).
     pub(super) motive_redundancy_probe: Cell<bool>,
-    /// The pending match equations (docs/dependent-match-compiler-design.md
+    /// The pending match equations (docs/language/matching/dependent-match-compiler-design.md
     /// §4.3): the next identity to hand out, and the identities a reader of
     /// hypotheses (`omega`, `linarith`) asked for while their match's arms
     /// elaborated without the equation.
@@ -448,7 +448,7 @@ pub(super) struct CheckNote {
     /// An implicit the argument's type disagreed about, for the message.
     pub(super) clash: Option<crate::application::SlotClash>,
     /// The head of the checked call, as written, read for the message only
-    /// if it names a `partial fn` (docs/partial-functions-design.md §4.2).
+    /// if it names a `partial fn` (docs/language/partial-functions-design.md §4.2).
     pub(super) partial: Option<String>,
 }
 

@@ -1,11 +1,11 @@
-// The Linux trace (docs/native-first-program-design.md §4, §10;
-// docs/native-syscall-failures-design.md §2): a run of a process is steps
+// The Linux trace (docs/archive/native-first-program-design.md §4, §10;
+// docs/archive/native-syscall-failures-design.md §2): a run of a process is steps
 // between syscalls, and each syscall is an event, a call of `linux_calls`
 // together with Linux's answer. This module says how a process makes each
 // call (its registers and memory), what Linux needs of it (the buffers it
 // writes are writable), and the states Linux resumes it in; `LinuxRuns`
 // reads those definitions, and so does `linux_x86_64_sim`'s `RunsAs`
-// (docs/native-program-logic-design.md §5). The rest of the model is
+// (docs/native/native-program-logic-design.md §5). The rest of the model is
 // issues/linux-syscall-trace-model.md. Syscall delivery and Linux itself are
 // environment assumptions, not theorems here.
 import linux_calls;
@@ -148,7 +148,7 @@ fn CStringAt<M>(data: ByteReadAccess<M>, memory: M, address: BitVec(64), path: L
     CStringFrom(path, λ i => data.read(memory, bitvec_nat::word_of_nat(64, address.toNat() + i)))
 }
 
-// The process's command line (docs/native-wc-command-design.md §4.1): at the
+// The process's command line (docs/archive/native-wc-command-design.md §4.1): at the
 // initial RSP, argc, then a pointer to each argument (argv[0] included), then
 // a null word, as the x86-64 psABI lays them out; each argument a C string
 // at a pointer that is not null, so the null word is the first null one.

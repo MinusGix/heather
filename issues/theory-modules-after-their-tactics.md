@@ -63,7 +63,7 @@ landing.
 ## Related
 
 [[feature-implicit-module-dependencies]], [[std-prelude-facade]];
-docs/stdlib-math-awkwardness-survey.md §4.
+docs/surveys/stdlib-math-awkwardness-survey.md §4.
 
 ## Log
 

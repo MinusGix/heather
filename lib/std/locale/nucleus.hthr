@@ -1,4 +1,4 @@
-// Nuclei and sublocales (docs/frame-locale-design.md §5).
+// Nuclei and sublocales (docs/library/frame-locale-design.md §5).
 //
 // A nucleus on a frame is a closure operator that preserves finite meets.
 // Its fixed points are a frame, the opens of a sublocale, and every quotient

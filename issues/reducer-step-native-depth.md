@@ -47,4 +47,4 @@ policy.
   The repro now reports omega's ordinary "stuck", and the `sorry` variant
   "unbound name". Every other probe's verdict matches the old binary. The full
   suite is green, and `scripts/bench --check` has all 112 comparisons within
-  thresholds. Design note: docs/native-depth-budget-design.md §7.
+  thresholds. Design note: docs/kernel/native-depth-budget-design.md §7.

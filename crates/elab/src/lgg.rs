@@ -357,7 +357,7 @@ impl Lgg<'_> {
     /// A witness pair of two dependent pairs at one `Σ`, and a position whose
     /// sides are their first (or second) components: the hole is `fst(z)`
     /// (or `snd(z)`). This is how a packed equation `⟨i, s⟩ = ⟨j, t⟩` gives
-    /// `i = j` by `cong` (docs/dependent-match-compiler-design.md §9).
+    /// `i = j` by `cong` (docs/language/matching/dependent-match-compiler-design.md §9).
     fn projection_hole(&mut self, x: &Term, y: &Term, k: u32) -> Option<Term> {
         if !self.match_witness {
             return None;
@@ -782,7 +782,7 @@ impl Lgg<'_> {
                 motive: Rc::new(self.ty(m1, m2, k + 1)?),
                 scrut: Rc::new(self.tm(t1, t2, k)?),
             }),
-            // The checked spellings (`docs/intro-by-type-design.md` §4.2):
+            // The checked spellings (`docs/elaborator/intro-by-type-design.md` §4.2):
             // one annotation to anti-unify instead of two components, and
             // no levels to require equal — structurally smaller, and more
             // often identical than two reducts. Mixed spellings fall to
@@ -791,7 +791,7 @@ impl Lgg<'_> {
             // A component form against a checked spelling of the same former
             // is **one** former written two ways — a reduct beside an emitted
             // value, the normal case since the emitters write checked
-            // spellings (`docs/intro-by-type-design.md` §4.2). Anti-unify the
+            // spellings (`docs/elaborator/intro-by-type-design.md` §4.2). Anti-unify the
             // children and keep the component side's annotations, which are
             // valid in inference and checking position alike; the kernel
             // re-checks the generalization either way.
@@ -1208,7 +1208,7 @@ impl Lgg<'_> {
                 cod: Rc::new(self.ty(c1, c2, k + 1)?),
                 arg: Rc::new(self.tm(a1, a2, k)?),
             }),
-            // `app@` (docs/app-by-head-type-design.md §6.2): no annotation to
+            // `app@` (docs/elaborator/app-by-head-type-design.md §6.2): no annotation to
             // relate, and against an `app` it is one former written two ways.
             // The generalization is `app@` — its head generalizes two heads
             // that infer, and it carries no annotation that could mention a

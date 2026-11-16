@@ -55,7 +55,7 @@ that member (`member_carrier`, over `member_of_family_ty` in
 group (`mutual_rec.rs`) forms over member declarations and rewrites a
 method call whose receiver the source places at a member (parameter, arm
 field, nested-match binder, `let`), and a qualified call by its declared
-name. docs/mutual-inductive-design.md §6 "Member declarations" says which
+name. docs/inductives/mutual-inductive-design.md §6 "Member declarations" says which
 receivers are placed. Probes: `lib/_tests/lang/mutual_member_tests.hthr`
 (unparameterised, `Tm<O>`, indexed `Even`/`Odd`, a theorem group, a mixed
 member/free group, and the refusal for an unplaced receiver).

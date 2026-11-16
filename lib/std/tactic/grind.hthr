@@ -1,6 +1,6 @@
 // `grind`: congruence closure over the goal's equations and the lemmas it
 // instantiates, with a certified proof when it closes the goal and the state
-// it built when it does not (issues/grind-port.md, docs/grind-design.md).
+// it built when it does not (issues/grind-port.md, docs/tactics/grind-design.md).
 //
 // `by grind()` proves an equation `l = r` from the equations among the goal's
 // locals; `by grind_with([e, …])` adds the equations the terms `e` prove
@@ -13,7 +13,7 @@
 // one side is read as a pattern, and each of its matches among the graph's
 // terms, up to the classes, adds the lemma at that instance, in rounds,
 // until the goal closes or no new instance turns up (e-matching,
-// docs/grind-design.md §9). Every side of a lemma that can be a pattern is
+// docs/tactics/grind-design.md §9). Every side of a lemma that can be a pattern is
 // one, and a pattern's argument may match up to a definitional step: where
 // `a + isucc(b)` meets `a + OfNat(Succ(k))`, `Defeq` finds `b := OfNat(k)`
 // among the graph's terms, and the instance comes with the edge
@@ -51,11 +51,11 @@
 // equation by the graph, any premise by a local or a hint that is no
 // equation (`Defeq`), or by the instance search (`Synth`); an instance whose
 // premise is not proved waits and is tried again after later rounds
-// (docs/grind-design.md §11).
+// (docs/tactics/grind-design.md §11).
 //
 // Not yet: case splits, constructor injectivity and disjointness,
 // disequalities, and relations other than `=`. Each is a later round of
-// docs/grind-design.md §6.
+// docs/tactics/grind-design.md §6.
 
 import logic;
 import bool;
@@ -139,7 +139,7 @@ record Fact { proof: Expr, name: String, uses: List<String>, found: List<String>
 // the graph (`by`: none for the goal's terms; the fact's name for a term a
 // fact read mentions; for a term an instance brought, the lemma, what its
 // premises cite and, closed under this, what brought the terms it matched,
-// docs/grind-design.md §9.6).
+// docs/tactics/grind-design.md §9.6).
 record GInfo { expr: Expr, whole: Bool, by: List<String> }
 
 // An atom: how it is compared, its handle, and its node.
@@ -191,7 +191,7 @@ record Interned { g: Graph, node: Nat }
 // near match may leave to `Defeq` (an application in an argument position).
 record LPat { pat: Pattern<GQ>, left: Bool, terms: List<Option<Handle>>, slack: List<Bool> }
 
-// A near match tried (docs/grind-design.md §13): the pattern, the item left
+// A near match tried (docs/tactics/grind-design.md §13): the pattern, the item left
 // and the node it met, the nodes the binders met, how many of the graph's
 // nodes were tried as the item's one free binder, and whether the item was
 // asked about with holes at its free binders (§13.4). `Defeq` reads terms,
@@ -230,14 +230,14 @@ record Node2 { a: Nat, b: Nat }
 
 // A disequality read (`h: a ≠ b`, `h: a = b → False`): its proof, its
 // name, its two sides as written and their nodes. Two members of one class
-// that a disequality separates are a contradiction (docs/grind-design.md
+// that a disequality separates are a contradiction (docs/tactics/grind-design.md
 // §14).
 record Diseq { proof: Expr, name: String, lhs: Handle, rhs: Handle, sides: Node2 }
 
 // The lemmas a proof cites.
 record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef, defn: GlobalRef, fals: GlobalRef, false_elim: GlobalRef, exfalso: GlobalRef, succ_inj: GlobalRef, congr_dep: GlobalRef }
 
-// What constructors and disequalities have given (docs/grind-design.md §14):
+// What constructors and disequalities have given (docs/tactics/grind-design.md §14):
 // the laws a proof cites, `Succ`'s reference, the goal a disjointness proves (under the binders the
 // goal opened), the disequalities read, the pairs of constructor values of
 // one class already taken apart by injectivity or asked about for
@@ -422,7 +422,7 @@ fn given_of(l: GrindLaws, f: Fact, forward: Bool) → Expr {
 // are (`congr_dep` when the argument is part of the operator), `congr`
 // otherwise. The
 // functions and arguments are passed explicitly: as holes, an equation
-// between partial applications does not unify (docs/grind-design.md §7).
+// between partial applications does not unify (docs/tactics/grind-design.md §7).
 fn cong_of(l: GrindLaws, g: Graph, from: Nat, ks: List<KidProof<Expr>>) → Expr {
     match ks {
         Nil => NatLit(0),
@@ -965,7 +965,7 @@ fn lemma_at(name: String, proof: Expr, t: Tele, b: PB, ps: List<LPat>) → Lemma
 
 // The lemma `proof : ty`, its patterns the sides that are one (`usable`):
 // both, when both are, so that an instance is found from whichever side the
-// graph holds (docs/grind-design.md §13); the binders the first leaves are
+// graph holds (docs/tactics/grind-design.md §13); the binders the first leaves are
 // its premises. `None` when neither side is a pattern.
 fn lemma_of(sc: Nat, name: String, proof: Expr, ty: Handle) → Tac<Option<Lemma>> {
     open_binders(64, ty, [], [], []).bind(λ t => sides_of(t.body).bind(λ o => match o {
@@ -1059,7 +1059,7 @@ fn read_diseq(acc: Facts, proof: Expr, name: String, ty: Handle) → Tac<Option<
 
 // Is a side's head normal form, viewed as `v`, a constructor's value (a
 // literal, `Succ(n)`), which injectivity and disjointness read and the side
-// as written may not show (docs/grind-design.md §14.4)?
+// as written may not show (docs/tactics/grind-design.md §14.4)?
 fn ctor_form(succ: Nat, v: Head) → Bool {
     match v {
         HCtor(_, _, _, _) => True,
@@ -1103,7 +1103,7 @@ fn stuck_among(g: Graph, w: Handle, ss: List<SideAt>) → Tac<Option<Nat>> {
 // `Defeq` with the stuck forms read before, and a side whose form is one of
 // theirs is joined to that side, by `grind::defn` between the two sides as
 // written (a stuck form is never a node: its spelling is no term a proof
-// may mention, docs/grind-design.md §14.4).
+// may mention, docs/tactics/grind-design.md §14.4).
 fn with_reduct(acc: Facts, h: Handle, n: Nat) → Tac<Facts> {
     view(h).bind(λ v0 => match told(v0) {
         True => pure(acc),
@@ -1541,7 +1541,7 @@ fn bump_added(lm: Lemma, def: Bool) → Lemma {
 
 // ---------------------------------------------------------------------------
 // Near matches: a lemma's instance up to a definitional step
-// (docs/grind-design.md §13, issues/grind-definitional-equalities.md).
+// (docs/tactics/grind-design.md §13, issues/grind-definitional-equalities.md).
 //
 // A near match left one item of a pattern, an application in an argument
 // position (`isucc(b)` in `a + isucc(b)`), at a node no member of whose
@@ -2020,7 +2020,7 @@ fn closed(fs: Facts) → Tac<Facts> {
 fn on_closed<A>(t: Tac<Facts>, k: Facts → Tac<A>) → Tac<A> { t.bind(k) }
 
 // ---------------------------------------------------------------------------
-// Constructors and disequalities (docs/grind-design.md §14,
+// Constructors and disequalities (docs/tactics/grind-design.md §14,
 // issues/grind-constructor-facts.md).
 //
 // A class holding two values of one constructor (`Cons(a, as)`,
@@ -2181,7 +2181,7 @@ fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, found: Lis
 // node itself otherwise. Injectivity and disjointness are asked about the
 // sides as written, which the host computes: a reduct's spelling (a
 // constructor value built through the checked spelling) is no term the
-// kernel infers (docs/grind-design.md §14.4).
+// kernel infers (docs/tactics/grind-design.md §14.4).
 fn source_of(ss: List<Node2>, n: Nat) → Nat {
     match ss { Nil => n, Cons(p, rest) => match p.a.same(n) { True => p.b, False => source_of(rest, n) } }
 }
@@ -2563,7 +2563,7 @@ fn settle(report: Bool, l: GrindLaws, fs: Facts, gt: GoalAt, why: String) → Ta
 fn on_found(t: Tac<Found>, k: Found → Tac<Expr>) → Tac<Expr> { t.bind(k) }
 
 // ---------------------------------------------------------------------------
-// Terms spelled one definition further on (docs/grind-design.md §15).
+// Terms spelled one definition further on (docs/tactics/grind-design.md §15).
 //
 // A hand `trans` chain crosses steps that only conversion sees: a call
 // unfolded to the call its definition makes (`loop_finish(…)(…)` to

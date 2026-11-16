@@ -10,7 +10,7 @@ updated: 2026-11-12
 
 Nothing says what a shift or a low mask of a word is as arithmetic on its `toNat` (2026-11-12). `lib/std/bitvec/bitvec_nat.hthr` has `toNat` of `add`, `mul`, `neg` and `sub` modulo `2^n`; the shifts and `band` have bit-level laws only (`bitvec.hthr`, `bitvec_resize.hthr`, `bitvec_rotate.hthr`).
 
-Customers: a layout computed by compiled code (`docs/layout-design.md` §4) rounds a size up to a power-of-two alignment as `n + ((0 - n) & (a - 1))`, and its agreement theorem with `Nat::round_up` is exactly these laws. The arena's cell arithmetic, the lexer's packed token word ([[scan-token-word-packing-unproved]]) and any index scaled by a shift (`(t << 2) + 64` in `sha256_block.hthr`) read the same facts, today each by `bv_decide` at closed widths or not at all.
+Customers: a layout computed by compiled code (`docs/native/layout-design.md` §4) rounds a size up to a power-of-two alignment as `n + ((0 - n) & (a - 1))`, and its agreement theorem with `Nat::round_up` is exactly these laws. The arena's cell arithmetic, the lexer's packed token word ([[scan-token-word-packing-unproved]]) and any index scaled by a shift (`(t << 2) + 64` in `sha256_block.hthr`) read the same facts, today each by `bv_decide` at closed widths or not at all.
 
 ## The laws
 
@@ -30,4 +30,4 @@ The laws are theorems in `bitvec_nat.hthr` (or a `bitvec_shift_nat.hthr` beside 
 
 ## Log
 
-- 2026-11-12: Merged to master as #588: the laws are in `lib/std/bitvec/bitvec_shift_nat.hthr` (`toNat_shift_left`, `toNat_shift_right`, `BitVec::low_mask` with `toNat_band_low_mask`, `toNat_band_complement_low_mask`, and the split `shift_right_shift_left_bor_low_mask`). The layout's run-time functions (`docs/layout-design.md` §4) are their first customer.
+- 2026-11-12: Merged to master as #588: the laws are in `lib/std/bitvec/bitvec_shift_nat.hthr` (`toNat_shift_left`, `toNat_shift_right`, `BitVec::low_mask` with `toNat_band_low_mask`, `toNat_band_complement_low_mask`, and the split `shift_right_shift_left_bor_low_mask`). The layout's run-time functions (`docs/native/layout-design.md` §4) are their first customer.

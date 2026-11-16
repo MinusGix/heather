@@ -2,7 +2,7 @@
 //! `crate::unseal` (sealed proofs opened) and `crate::withheld` (withheld
 //! definitions glued). Each keeps its own thread-local stack of frames; this
 //! module is the one protocol over it, so both close a frame the same way
-//! when a span ends early (docs/kernel-implicit-state-review.md §6).
+//! when a span ends early (docs/kernel/kernel-implicit-state-review.md §6).
 //!
 //! Observational: nothing in the kernel reads a recording, so a recording
 //! can never change an answer. Recordings nest; an inner recording's

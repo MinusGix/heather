@@ -9,7 +9,7 @@ updated: 2026-11-10
 
 The product of two presented locales is presented on pairs of basic opens,
 with each factor's axioms applied in one coordinate
-(docs/frame-locale-design.md §7 lists it as not done). With it, addition and
+(docs/library/frame-locale-design.md §7 lists it as not done). With it, addition and
 multiplication of the real line are maps of locales `R × R → R`, given on
 generators and checked on `RealAxiom`'s two constructors through `Cover::hom`
 (lib/std/locale/presentation.hthr), as `RealLine::negation` is.
@@ -25,7 +25,7 @@ generators and checked on `RealAxiom`'s two constructors through `Cover::hom`
   for negation.
 - Multiplication after addition; it is where interval arithmetic's sign cases
   enter, so consider taking the generator data from the float library's
-  interval product and its containment theorem (docs/localic-reals-design.md §7).
+  interval product and its containment theorem (docs/library/localic-reals-design.md §7).
 
 ## What it assumes from elsewhere
 

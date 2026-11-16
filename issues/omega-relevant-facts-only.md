@@ -86,5 +86,5 @@ atom-free fact, since `1 < 0` in scope refutes anything.
   unrelated contradiction is found by the fallback. A stuck goal records one
   failure. The respelling repro in [[omega-respells-atoms-without-implicits]]
   now checks, and a goal that uses the misspelled atom still fails (that
-  issue's). Design note: docs/certifying-arithmetic-substrate-design.md §1.
+  issue's). Design note: docs/tactics/certifying-arithmetic-substrate-design.md §1.
 - 2026-10-15: Follow-up: [[omega-fact-arguments]] proposes `omega(h…)`, which would also let a proof name exactly the facts omega reflects.
