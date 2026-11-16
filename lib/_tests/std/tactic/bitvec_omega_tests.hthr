@@ -381,3 +381,66 @@ theorem halving_steps_lit(): halving_steps(0, 8) = 4 { refl }
 // Negative control: at zero the half is not smaller.
 // expect-error: got stuck
 theorem shr_smaller_wrong(x: BitVec(64)): x >> 1 < x { bv_omega }
+
+// ---- `omega` reads a word's comparison bit as the comparison ----
+// (issues/omega-if-bit-word-comparison.md). An `if x < y` branch that does
+// not name its test keeps the bit's equation; `omega` reads it as the
+// comparison of the `toNat`s, as it reads the proposition, not as an atom.
+
+// Each bit, both ways, over two neutral words of an open width.
+theorem omega_lt_bit_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = True): a.toNat() + 1 <= b.toNat() { omega }
+theorem omega_lt_bit_false(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = False): b.toNat() <= a.toNat() { omega }
+theorem omega_le_bit_true(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = True): a.toNat() <= b.toNat() { omega }
+theorem omega_le_bit_false(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = False): b.toNat() < a.toNat() { omega }
+theorem omega_eq_bit_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = True): a.toNat() = b.toNat() { omega }
+theorem omega_eq_bit_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = False, k: a.toNat() <= b.toNat()): a.toNat() < b.toNat() { omega }
+// Either orientation, and the `IsTrue` form.
+theorem omega_lt_bit_flipped(n: Nat, a, b: BitVec(n), h: True = a.unsigned_lt_bit(b)): a.toNat() < b.toNat() { omega }
+theorem omega_lt_bit_is_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b).IsTrue()): a.toNat() < b.toNat() { omega }
+// The proposition at a word as the goal, from the bit.
+theorem omega_le_prop_goal(a, b: u8, h: a.unsigned_lt_bit(b) = False): BitVec::unsigned_le(b, a) { omega }
+// A branch that names neither side: the sort example's shape, the facts
+// relating the widened words to the bytes beside the test.
+theorem omega_unnamed_branch(a, b: u8): BitVec::unsigned_le(a, b) ∨ BitVec::unsigned_le(b, a) {
+    let one: (b.zero_extend(56).toNat() = b.toNat()) = BitVec::toNat_zero_extend(8, 56, b);
+    let two: (a.zero_extend(56).toNat() = a.toNat()) = BitVec::toNat_zero_extend(8, 56, a);
+    if larger: b.zero_extend(56) < a.zero_extend(56) {
+        let ba: BitVec::unsigned_le(b, a) = omega;
+        Inr(ba)
+    } else {
+        let ab: BitVec::unsigned_le(a, b) = omega;
+        Inl(ab)
+    }
+}
+// Control: the bit says `a < b`, not `b < a`.
+// expect-error: `omega` got stuck
+theorem omega_lt_bit_wrong_way(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = True): b.toNat() < a.toNat() { omega }
+
+// ---- A word whose side conditions fail is kept whole ----
+
+// A `let`-bound midpoint is read through its `let`, and its addition's
+// overflow is not visible through the shift; kept as an atom, the facts
+// that mention it are enough (issues/bv-omega-let-alias-taken-apart.md).
+theorem midpoint_kept_whole(lo, hi, n: u64, h: lo < hi, fits: hi <= n,
+    end: (lo + ((hi - lo) >> 1)) < hi): (lo + ((hi - lo) >> 1)) < n {
+    let mid = lo + ((hi - lo) >> 1);
+    let real: (mid < n) = bv_omega;
+    real
+}
+// The next word after it does not wrap: `mid + 1` is taken apart over `mid` as an atom.
+theorem midpoint_next_le(lo, hi: u64, end: (lo + ((hi - lo) >> 1)) < hi): (lo + ((hi - lo) >> 1)) + 1 <= hi {
+    let mid = lo + ((hi - lo) >> 1);
+    bv_omega
+}
+theorem midpoint_le_of_lt_next(lo, hi, j: u64, end: (lo + ((hi - lo) >> 1)) < hi,
+    before: j < (lo + ((hi - lo) >> 1)) + 1): j <= lo + ((hi - lo) >> 1) {
+    let mid = lo + ((hi - lo) >> 1);
+    let up: (j <= mid) = bv_omega;
+    up
+}
+// An open width, with the bound as a Nat fact.
+theorem kept_whole_open(n: Nat, a, b, c: BitVec(n), room: (a + (b >> 1)).toNat() < c.toNat()): (a + (b >> 1)) + 1 <= c { bv_omega }
+// Control: nothing bounds the kept word, so its successor may wrap, and
+// the refusal still names the first proof's side condition.
+// expect-error: may overflow 64 bits
+theorem kept_whole_unbounded(lo, hi: u64): (lo + ((hi - lo) >> 1)).toNat() < ((lo + ((hi - lo) >> 1)) + 1).toNat() { bv_omega }

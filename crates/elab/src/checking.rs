@@ -1023,13 +1023,14 @@ impl Checking<'_> {
                     return self.elab_check(cx, &assumed, expected, lvl);
                 }
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
-                let generate = |careful| {
-                    bv_omega::generate(self, cx, expected, careful).map_err(|detail| ElabError::Elab {
+                let generate = |careful, opaque: &std::collections::HashSet<String>| {
+                    bv_omega::generate(self, cx, expected, careful, opaque).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` got stuck: {detail}"),
                         span: e.span,
                     })
                 };
-                let mut generated = generate(false)?;
+                let mut opaque = std::collections::HashSet::new();
+                let mut generated = generate(false, &opaque)?;
                 let parse = |source: &str| {
                     omega_cert::parse_generated_expr(source).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` wrote a proof that does not parse: {detail}\n  generated: {source}"),
@@ -1045,8 +1046,58 @@ impl Checking<'_> {
                 if checked.is_err() && generated.retry {
                     self.pass.warnings.borrow_mut().truncate(mark.0);
                     self.attempt.goal_arena.rollback(mark.1);
-                    generated = generate(true)?;
+                    generated = generate(true, &opaque)?;
                     checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
+                }
+                // Each side condition alone, in the context its bundle had.
+                let side = |obligation: &bv_omega::Obligation, prelude: &str| -> Result<Result<(), ElabError>, ElabError> {
+                    let (statement, proof) = obligation.alone();
+                    let probe = parse(&format!("{{\n{prelude}\nhave __bv_side: ({statement}) = {proof};\n__bv_side\n}}"))?;
+                    let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
+                    let result = self.generated_scope(|me| me.elab_infer(cx, &probe)).map(|_| ());
+                    self.pass.warnings.borrow_mut().truncate(mark.0);
+                    self.attempt.goal_arena.rollback(mark.1);
+                    Ok(result)
+                };
+                // A word whose side conditions fail is kept as an atom, its
+                // value bounded by its range and the facts that mention it
+                // (docs/tactics/bv-omega-design.md §5.1), and the proof is
+                // written again. Each round keeps more words whole, so this
+                // ends; a refusal still diagnoses the first attempt's proof.
+                // Past the first failing side condition (the diagnosis), only
+                // those that would keep a word are probed.
+                let diagnosed = generated.clone();
+                let refused = checked.as_ref().err().cloned();
+                let mut diagnosis: Option<(usize, ElabError)> = None;
+                let mut kept = generated.clone();
+                let mut rounds = 0;
+                while checked.is_err() && rounds < bv_omega::ATOM_ROUNDS {
+                    let mut more = Vec::new();
+                    for (i, obligation) in kept.obligations.iter().enumerate() {
+                        let first = rounds == 0 && diagnosis.is_none();
+                        if !first && obligation.atoms.iter().all(|w| opaque.contains(w)) {
+                            continue;
+                        }
+                        if let Err(failure) = side(obligation, &kept.prelude)? {
+                            if first {
+                                diagnosis = Some((i, failure));
+                            }
+                            for word in &obligation.atoms {
+                                if !opaque.contains(word) && !more.contains(word) {
+                                    more.push(word.clone());
+                                }
+                            }
+                        }
+                    }
+                    rounds += 1;
+                    if more.is_empty() {
+                        break;
+                    }
+                    opaque.extend(more);
+                    self.pass.warnings.borrow_mut().truncate(mark.0);
+                    self.attempt.goal_arena.rollback(mark.1);
+                    kept = generate(true, &opaque)?;
+                    checked = self.generated_scope(|me| me.elab_check(cx, &parse(&kept.source)?, expected, lvl));
                 }
                 match checked {
                     // Lifted into a lemma of its own where the declaration
@@ -1058,21 +1109,17 @@ impl Checking<'_> {
                         .goal_arena
                         .allocate_proved(&Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
-                    Err(error) => {
+                    Err(last) => {
                         // Name the side condition that failed, not only the goal
-                        // (§5): each one alone, in the context the bundle had.
-                        for obligation in &generated.obligations {
-                            let (statement, proof) = obligation.alone();
-                            let probe = parse(&format!(
-                                "{{\n{}\nhave __bv_side: ({statement}) = {proof};\n__bv_side\n}}",
-                                generated.prelude
-                            ))?;
-                            if let Err(side) = self.generated_scope(|me| me.elab_infer(cx, &probe)) {
-                                return err(
-                                    format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{side}", obligation.why, obligation.shown),
-                                    e.span,
-                                );
-                            }
+                        // (§5).
+                        let generated = diagnosed;
+                        let error = refused.unwrap_or(last);
+                        if let Some((i, failure)) = diagnosis {
+                            let obligation = &generated.obligations[i];
+                            return err(
+                                format!("`bv_omega`: {}; `omega` could not prove `{}`:\n{failure}", obligation.why, obligation.shown),
+                                e.span,
+                            );
                         }
                         Err(ElabError::Elab {
                             msg: format!("{error}\n  generated `bv_omega` proof: {}", generated.source),

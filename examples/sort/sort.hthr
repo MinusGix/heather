@@ -133,7 +133,7 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
         let one: (b.zero_extend(56).toNat() = b.toNat()) = BitVec::toNat_zero_extend(8, 56, b);
         let two: (a.zero_extend(56).toNat() = a.toNat()) = BitVec::toNat_zero_extend(8, 56, a);
         if larger: b.zero_extend(56) < a.zero_extend(56) {
-                let ba: BitVec::unsigned_le(b, a) = bv_omega;
+                let ba: BitVec::unsigned_le(b, a) = omega;
                 let moved: (s.with_byte_within(n, j, a) = init ++ Cons(a, Cons(a, rest))) =
                     trans(write_split(ys, z, rest, n, j, a, sized, at),
                         trans(cong_fn(λ (l: List<u8>) => l ++ Cons(a, rest), cut), init.append_assoc([a], Cons(a, rest))));
@@ -153,7 +153,7 @@ theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
                     = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest := cong_fn(λ (l: List<u8>) => l.insert_ordered(BitVec::unsigned_le, b) ++ rest, sym(cut)),
                 }
         } else {
-                let ab: BitVec::unsigned_le(a, b) = bv_omega;
+                let ab: BitVec::unsigned_le(a, b) = omega;
                 let ends: (ys ++ [b] = init ++ [a, b]) = trans(cong_fn(λ (l: List<u8>) => l ++ [b], cut), init.append_assoc([a], [b]));
                 let sorted_out: (ys ++ [b]).Sorted(BitVec::unsigned_le) =
                     rewrite(ends, init.sorted_snoc(BitVec::unsigned_le, a, b, rewrite(sym(cut), sorted), ab));
