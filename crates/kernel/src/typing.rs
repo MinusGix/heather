@@ -57,16 +57,15 @@
 //! (`docs/elaborator/intro-by-type-design.md` §3.2). Every rule but the five checked
 //! spellings produces `Syn` and behaves exactly as it did before
 //! descriptions existed; `fst@`/`snd@`/`pair@`/`inl@`/`inr@` produce and
-//! consume `Sel`, whose point is that the component is never spelled — the
-//! object the elaborator used to write into an annotation is `3.5ⁿ` in the
-//! nesting as syntax and linear as a value graph, and the checker now names
-//! it instead of building it. A description is consumed by exactly two
+//! consume `Sel`, whose point is that the component is never spelled — as
+//! syntax it is `3.5ⁿ` in the nesting and as a value graph linear, so the
+//! checker names it instead of building it. A description is consumed by exactly two
 //! operations, [`Tc::conv_ty`] and [`Tc::view`], each of which evaluates it
 //! in a **per-query** value arena and keeps nothing that outlives the query.
-//! Where a description must become syntax after all — the four λ inference
-//! arms, which wrap the body's inferred type in a `Π`-shaped former —
-//! [`Tc::materialize`] runs the rewriter, which is complete, is the answer
-//! this checker gave before, and is counted (`crate::stats`'s
+//! Where a description must become syntax after all — a rule that wraps an
+//! inferred type in a syntactic former, through [`Tc::tm_infer_syn`] (the λ
+//! inference arms) — [`Tc::materialize`] runs the rewriter, which is
+//! complete, and is counted (`crate::stats`'s
 //! `ity_materialized`).
 //!
 //! [`oracle`] is the same checker with every description spelled on
@@ -676,8 +675,7 @@ fn keep_spelled(rec: &RefCell<HashMap<(usize, u32), Option<Spelled>>>, key: (usi
     }
 }
 
-/// **The quote boundary** (`docs/elaborator/intro-by-type-design.md` §2.3, amended
-/// 2026-09-22): `t : ty @ level` in `gamma` with every checked spelling
+/// **The quote boundary** (`docs/elaborator/intro-by-type-design.md` §2.3): `t : ty @ level` in `gamma` with every checked spelling
 /// translated to its component form, so it can be the payload of a `box`.
 ///
 /// A payload elaborated inside a quotation is written in the component
@@ -856,10 +854,9 @@ fn spell_checked_ty(
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should — [`check_term`] and its siblings are the
 /// checker. This module exists for the same reason [`crate::conv::oracle`]
-/// does, one seam further in: stage 1b moved `typing.rs` from "the type a
-/// rule passes on is syntax" to "…is a description", and the compensating
-/// control for a weakening like that is standing mechanical evidence that
-/// the two answers agree.
+/// does, one seam further in: the type a rule passes on is a description,
+/// not syntax, and the compensating control for that is standing mechanical
+/// evidence that the two answers agree.
 ///
 /// Under [`Tc::eager`] every [`ity::ITy::Sel`] is materialized through the
 /// rewriter as soon as it would be formed, and the five `@` rules view
@@ -1016,9 +1013,8 @@ struct Env {
     /// (`docs/elaborator/intro-by-type-design.md` §2.3), read by
     /// [`Tc::checked_spelling_admitted`].
     ///
-    /// **Not a layer predicate**, and that is the whole of stage 2's first
-    /// stop: Heather checks *every* declaration body at `Layer::Code`
-    /// (`crates/elab/src/lib.rs` ~3637), so `layer.computes()` is false at
+    /// **Not a layer predicate**: Heather checks *every* declaration body at
+    /// `Layer::Code`, so `layer.computes()` is false at
     /// every emitter and a layer guard refuses the spellings everywhere. The
     /// recursors range over box payloads and nothing else, which is exactly
     /// what this bit names. It is sticky: nothing inside a payload returns
@@ -1801,8 +1797,8 @@ impl Tc {
         // The address of the compared type. An annotation the elaborator wrote
         // once and shared into many slots is one address seen many times; a
         // term the elaborator wrote out per occurrence is many addresses. That
-        // is the round's (a)-against-(d) question, and nothing else in the
-        // process can answer it. (A type built on the stack by the rule itself
+        // is what this trace is for: nothing else in the process can tell the
+        // two apart. (A type built on the stack by the rule itself
         // — the `Π` of the `App` rule — reuses stack addresses; those cluster
         // in one high range and the aggregator says so.)
         eprintln!(
@@ -2187,7 +2183,7 @@ impl Tc {
     /// checking descent passes `true` only for a selection, the five `@`
     /// rules pass `true` for their annotation even though it is syntax, and
     /// the eager mode passes `false` everywhere — which is what makes it
-    /// today's checker.
+    /// the rewriter-only checker.
     ///
     /// In the value domain the head and the levels are read and **the value
     /// is discarded**; nothing the checker keeps outlives the arena. Only
@@ -2335,8 +2331,7 @@ impl Tc {
     /// in both directions (`definitions.rs`), so a definition body that
     /// contains a checked spelling never becomes part of a payload.
     ///
-    /// Layer v refuses them as it refuses the component forms, which is the
-    /// half of stage 1a's `computing_layer` guard that survives.
+    /// Layer v refuses them as it refuses the component forms.
     fn checked_spelling_admitted(&self, env: &Env) -> R {
         self.not_var_layer(env)?;
         if env.under_box { Err(TypeError::UnderBox) } else { Ok(()) }
@@ -3353,7 +3348,7 @@ impl Tc {
             // and the conversion of `f`'s type against it; the head's
             // inference is what that rule's `tm_check` of `f` paid anyway.
             //
-            // **The fast path is today's checker.** A head whose inferred
+            // **The fast path is the `app` rule.** A head whose inferred
             // type is literally a Π — a global's statement, a local's type,
             // the previous node of a spine — returns `T[a/x]` as syntax, the
             // same `apply_local` the `app` rule returns, so what follows
@@ -3506,8 +3501,8 @@ impl Tc {
         };
         self.tm_check(env, arg, dom.as_ref(), &dom_level)?;
         // The eager mode's view is the rewriter's, so its codomain
-        // is syntax and the result is too — which is what keeps that
-        // mode today's checker on `app@`.
+        // is syntax and the result is too — which keeps that mode
+        // rewriter-only on `app@`.
         let ty = match cod {
             ITy::Syn(cod) => ITy::Owned(
                 cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
@@ -3525,7 +3520,7 @@ impl Tc {
     }
 
     /// The three **unannotated** intros in checking position (design §3.4),
-    /// the rules that make the round's win possible: the expected type is an
+    /// the rules that keep a nested constructor linear: the expected type is an
     /// [`ITy`] — for a field of an outer `pair@` a *description* and never a
     /// spelling — and the fields are checked against `Sel`s of it. Nothing
     /// here builds a type, so a constructor value nested n deep costs n
@@ -4589,9 +4584,9 @@ impl Tc {
                 let e = env.push_univs(*num_vars);
                 self.level_wf(&e, level)?;
                 // §3.5: the body's inferred type has to go *inside* a
-                // syntactic former, so a selection is spelled here. On every
-                // declaration that exists today this is a `Syn` and
-                // `materialize` is `Rc::clone`; the shape that is not is a
+                // syntactic former, so a selection is spelled here. On almost
+                // every declaration this is a `Syn` and `materialize` is
+                // `Rc::clone`; the shape that is not is a
                 // layer-m metaprogram whose body infers a tower component,
                 // and it is complete rather than fast, which is the right
                 // way round for a trusted checker.

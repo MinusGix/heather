@@ -1,14 +1,13 @@
 //! Runtime levels for the kernel's *slow* self-checks.
 //!
-//! Some checks re-derive a claim the kernel already acted on — today, that a
-//! subtree a node's bounds let a substitution skip really was untouched
+//! Some checks re-derive a claim the kernel already acted on — so far, that
+//! a subtree a node's bounds let a substitution skip really was untouched
 //! (`subst.rs`, `sub_ty`/`sub_tm`). They exist to catch a trusted-base
 //! optimization disagreeing with the traversal it short-circuits, which no
 //! typing rule would notice: the term would simply be wrong. They are also
 //! the whole cost of the walk being skipped, paid again, so running every one
 //! of them on every skip roughly doubles substitution-heavy elaboration
-//! (2026-09-04: the Omega closure went 61 s → 138 s in the test profile,
-//! `issues/certgen-harness-cost.md`).
+//! (`issues/certgen-harness-cost.md`).
 //!
 //! The checks are compiled only under `debug_assertions`; release builds
 //! carry none of this and the level is irrelevant there. In debug builds a
@@ -101,17 +100,12 @@ pub(crate) enum Claim {
 /// ([`crate::stats::unobserved`]), and for [`Claim::Skip`] no skip taken.
 ///
 /// A check that checks inside itself costs the paths of what it checks, not
-/// the nodes, and costs them on the native stack. Until 2026-11-10 each
-/// check ran the ordinary code for the node's children, checks included: a
-/// skipped child was verified inside its parent's verification and a hit
-/// under a re-judged node was re-judged in turn. With every check on, a
-/// closed chain a hundred thousand deep overflowed the stack, the typing
-/// memo's forty-link shared chain was judged as its `2^40` paths, and the
-/// substitution counters read the checks' own walks
-/// (`issues/self-checks-nest.md`). Sampling one check in
-/// [`SAMPLE_EVERY`] hid all three, and so did the bounds memo while it
-/// answered only a node's second query: a fresh term's first traversal
-/// took no skip.
+/// the nodes, and costs them on the native stack: a skipped child verified
+/// inside its parent's verification, and a hit under a re-judged node
+/// re-judged in turn, turn a shared chain of `k` links into `2^k` paths and a
+/// deep closed chain into a stack overflow, and the substitution counters
+/// would read the checks' own walks (`issues/self-checks-nest.md`). Sampling
+/// one check in [`SAMPLE_EVERY`] hides all three, so it is not a defence.
 #[cfg(debug_assertions)]
 pub(crate) fn rederive<T>(claim: Claim, derive: impl FnOnce() -> T) -> T {
     struct Restore(u8);

@@ -446,7 +446,6 @@ impl<'e, 'v> Under<'e, 'v> {
     }
 }
 
-/// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 /// Syntactic equality **modulo level equivalence** — the quotient DeLaM
 /// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities,
 /// the paper's own example being that `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` are
@@ -458,6 +457,7 @@ fn code_eq<T: PartialEq>(a: &T, b: &T) -> bool {
     a == b
 }
 
+/// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 pub fn conv_type(
     psi: &GlobalCtx,
     gamma: &LocalCtx,
@@ -608,7 +608,7 @@ pub(crate) fn conv_local_ctx_cached_with_metrics(
 // work. The arena's lifetime is unchanged — it is built here and dropped
 // when the query returns, exactly as `conv_type_cached`'s is — which is the
 // whole point of the checker holding descriptions rather than values
-// (§3.7, and the stage-1b measurement that withdrew the migration).
+// (§3.7: an arena kept past its query keeps everything it forced).
 //
 // Neither is reached on a declaration with no `@` form: every existing rule
 // produces `ITy::Syn`, `Tc::conv_ty` routes a `Syn`-against-`Syn` query to
@@ -774,10 +774,8 @@ pub(crate) fn injection_heads_cached(
 ///
 /// Not a checking API. Nothing in the kernel calls anything here, and
 /// nothing outside a test should: the entry points above are conversion.
-/// This module exists because the trusted-base story changed when the round
-/// of `docs/kernel/nbe-conversion-design.md` landed — "ch. 06 verbatim" moved from
-/// the algorithm to the *specification*, and `reduce.rs` is now the
-/// specification. These functions are the same comparison arms instantiated
+/// It exists because "ch. 06 verbatim" is the *specification*
+/// (`reduce.rs`), not the algorithm (`docs/kernel/nbe-conversion-design.md`). These functions are the same comparison arms instantiated
 /// at [`dom::Syn`], so a test can run the two engines over one corpus and
 /// require verdict-for-verdict agreement (`tests/conv_differential.rs`,
 /// `tests/eval_differential.rs`). That standing evidence is one of the three
@@ -843,11 +841,11 @@ pub mod oracle {
 /// consulted), so it is not tracked. Extending any namespace clones — the
 /// judgments extend scopes freely and correctness beats performance here.
 ///
-/// Γ is carried **twice**, and stage 2b's log says why. The syntactic
-/// [`LocalCtx`] survives because three consumers read only its *length and
-/// base* (`rec::branch_specs`, the shared `wf_step_telescope`, the identity
-/// substitutions inside the syntax domain's [`Dom::inst_ty`]); at the value
-/// domain its entry types are fillers. The scope a *value* needs — the
+/// Γ is carried **twice**. The syntactic [`LocalCtx`] survives because three
+/// consumers read only its *length and base* (`rec::branch_specs`, the shared
+/// `wf_step_telescope`, the identity substitutions inside the syntax domain's
+/// [`Dom::inst_ty`]); at the value domain its entry types are fillers
+/// (`issues/kernel-filler-contexts.md`). The scope a *value* needs — the
 /// environment ρ of neutral variables, and each entry's type as a domain
 /// object for [`Dom::var_type`] — is [`Env<'v>::rho`] and [`Env<'v>::vtys`], which
 /// the syntax domain never reads.
@@ -876,8 +874,7 @@ struct Env<'v> {
     /// objects, innermost first: those are the ones with no syntax in
     /// `gamma`. Everything older than `vbase` is still syntax there and is
     /// read back on demand, so entering a conversion costs no work per Γ
-    /// entry (it cost O(|Γ|) allocations per query when this list was built
-    /// eagerly — `scripts/bench`, 2026-07-31).
+    /// entry (built eagerly, it would be O(|Γ|) allocations per query).
     vtys: TyEnv<'v>,
     /// The Γ-length at which `vtys` starts.
     vbase: u32,
@@ -1132,15 +1129,13 @@ struct Conv<'v, D: Dom<'v>> {
     /// conversion, so the verdict for a pair is a fact about the pair:
     /// convertible, or definitely not. Exhaustion is not a verdict and is
     /// never stored. It carries the repeated sub-comparisons a δ-lazy
-    /// comparison makes of the same closures (loading the x86 model is
-    /// ~30% slower without it); it cannot carry a lockstep unfolding, whose
+    /// comparison makes of the same closures; it cannot carry a lockstep unfolding, whose
     /// closures are fresh on every round — see the same-head arm of
     /// [`Conv::tm_w`] for that case.
     memo: VerdictMemo<D::MemoKey>,
     /// Does Ψ contain any definition at all? Decided once, because when it
-    /// does not — every program before this feature, and every fixture that
-    /// only declares — the δ-lazy stage below has nothing to find, and
-    /// paying for it cost 1.35–1.43× on the conversion benchmarks. Telescope
+    /// does not — every fixture that only declares — the δ-lazy stage below
+    /// has nothing to find, and paying for it is a visible constant. Telescope
     /// pushes never introduce definitions, so the answer cannot change while
     /// a comparison runs.
     has_defs: bool,
@@ -1365,9 +1360,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// What is skipped is the domain's copy of each node. Two large
     /// spellings of one type that differ in a few places (a definition
     /// named on one side and written out on the other) cost a walk of the
-    /// syntax and the domain's work at those places, where every node of
-    /// both used to be evaluated, allocated and viewed to be found the same
-    /// former.
+    /// syntax and the domain's work at those places, not an evaluation,
+    /// allocation and view of every node of both.
     fn lockstep(&mut self, under: &mut Under<'_, 'v>, a: Former<'_>, b: Former<'_>, codes: bool) -> R<bool> {
         match (a, b) {
             (Former::Nat, Former::Nat) => {}
@@ -1618,8 +1612,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// The δ stage and the comparison, shared by the two entries above. The
     /// weak head forms are threaded by `&mut` and never by value: a `D::Ty`
     /// is a large enum at the syntax domain, and moving the two of them once
-    /// more per node cost 1.28× on `nat/check-numeral`
-    /// (`scripts/bench --check`, 2026-07-31).
+    /// more per node is a visible constant.
     #[inline]
     fn ty_w(&mut self, env: &Env<'v>, wa: &mut D::Ty, wb: &mut D::Ty, l: &Level) -> R {
         if self.has_defs {
@@ -2181,8 +2174,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             }
         }
         // A δ-stuck **type** unfolds before the comparison is directed by it
-        // — the mirror of [`Conv::ty_w`]'s δ stage, which until 2026-08-13
-        // terms never had: `tm` whnfs its type opaquely, so two canonical
+        // — the mirror of [`Conv::ty_w`]'s δ stage. Without it, `tm` whnfs
+        // its type opaquely, so two canonical
         // values at `El (u^δ)` for a *defined* `u` fell into the
         // neutral-type arm and compared as neutrals — `NotConvertible` for
         // any literal, even two identical ones. Unreachable while defined
@@ -2396,15 +2389,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             TyView::CtxPi { .. } => self.tm_nf_ctx_pi(env, a, b, &vw),
             // η: Ψ, U : Typ_p(Δ, l) ⊢ w↑ @ U^{id_Δ} ≈ w'↑ @ U^{id_Δ} : T
             TyView::TyPi { .. } => self.tm_nf_ty_pi(env, a, b, &vw),
-            // Code compares syntactically — *modulo level equivalence*, which
-            // is the quotient ch. 05's Static Code lemma (`lem:dt:static`)
-            // takes: at layers v/c equivalence is equality, "quotient over
-            // the equivalence of universe levels", and the paper's own
-            // example is that `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` are equal *as
-            // code*. Plain `==` here would reject that pair — incompleteness
-            // against ch. 08's Convertibility theorem, not unsoundness, but a
-            // spurious error for any universe-polymorphic metaprogram.
-            // Neutrals still compare structurally.
+            // Code compares syntactically, modulo level equivalence
+            // ([`code_eq`]). Neutrals still compare structurally.
             TyView::CodeTy { .. } => self.tm_nf_code_ty(env, a, b, &vw),
             TyView::CodeTm { .. } => self.tm_nf_code_tm(env, a, b, &vw),
             TyView::Nat => return self.tm_nf_nat(env, a, b, &vw),
@@ -3034,9 +3020,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // M[inr y/z]) and then the scrutinees via tm_nee; result
             // inferred as M[scrut/z]. Fires only on a neutral scrutinee
             // (canonical inl/inr β-fired in reduce). The scrutinees stay
-            // *last*: comparing them first ran a function_ir certificate
-            // (`an_immediate_add_certifies_at_its_sign_extension`) out of
-            // fuel; this order passes it (2026-10-20).
+            // *last*: compared first, they ran a function_ir certificate out
+            // of fuel that this order checks. The theorem that showed it is
+            // gone, so nothing pins the order now.
             //
             // `A`, `B` and their levels are *not* compared: the scrutinees'
             // type `A + B` forces them (convertible neutrals infer
@@ -3535,10 +3521,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // So: compare the heads, read the Π they infer, compare the
         // arguments at *its* domain and return *its* codomain. The
         // inferred type is fully δ-reduced ([`Conv::tm_nee`]) and
-        // then driven to its head ([`Conv::delta_to_head_ty`]) —
-        // the 2026-08-27 attempt viewed it as it came, which is what
-        // refused the dependent fold/tabulate instances
-        // (issues/generated-term-oracle-controls-not-convertible.md).
+        // then driven to its head ([`Conv::delta_to_head_ty`]):
+        // viewed as it comes, it refuses the dependent fold/tabulate
+        // instances (issues/generated-term-oracle-controls-not-convertible.md).
         // The stored annotations are ignored here exactly as the
         // inferred type was before; the typing seam still checks
         // every annotation against its head's type once, at the

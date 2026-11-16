@@ -1,7 +1,7 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
 //! Judgments): the two motive scopes `G_M` and the 65 branch telescopes
-//! `G_Typ G_Trm` (13 from ch. 04 plus the Id/Σ/Unit/Empty/Sum/W extension
-//! branches of kernel-v1-extensions), each with its expected
+//! `G_Typ G_Trm` (13 from ch. 04, the rest the extension formers' —
+//! `docs/kernel/delam-extensions.md`), each with its expected
 //! (motive-instantiated) type.
 //!
 //! This is the single most error-prone part of the theory, so the tables
@@ -9,8 +9,9 @@
 //! ([`crate::conv`], comparing branches pairwise at these types) and the
 //! type checker ([`crate::typing`], checking branches against these types).
 //! They must also stay in sync with `subst.rs`'s `map_branches` depths and
-//! `reduce.rs`'s β-instantiations (checked against docs/delam/04 by review,
-//! and exercised end-to-end by the identity-recursor typing test).
+//! `reduce.rs`'s β-instantiations, which nothing checks but the
+//! identity-recursor typing test end to end
+//! (`issues/kernel-binder-count-tables.md`).
 //!
 //! Scoping convention for a telescope `(ℓ⃗; B⃗; x⃗)`: `univs` universe binders
 //! are pushed first, then the global bindings (each scoped over `L, ℓ⃗` and
@@ -613,11 +614,7 @@ fn iwf_sig_globals(coded: bool, l: &Level, li: &Level) -> Vec<GlobalBinding> {
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
 /// motive instantiations. The 13 ch. 04 branches come first in each group;
-/// `ty_id`/`ty_sigma`/`ty_unit`/`ty_empty` and `tm_id`/`tm_refl`/`tm_j`/
-/// `tm_sigma`/`tm_pair`/`tm_fst`/`tm_snd`/`tm_unit`/`tm_empty`/`tm_triv`/
-/// `tm_elim_empty` plus the sum branches `ty_sum`/`tm_sum`/`tm_inl`/`tm_inr`/
-/// `tm_case` and the W branches `ty_w`/`tm_w`/`tm_sup`/`tm_elim_w` are
-/// extensions (kernel-v1-extensions).
+/// the rest are the extension formers' (`docs/kernel/delam-extensions.md`).
 pub(crate) fn branch_specs(
     motives: &Motives,
     l1: &Level,

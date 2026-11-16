@@ -37,7 +37,8 @@
 //! in `elab` maintains anything, which is what storing the bound *at
 //! construction* would have asked of every one of them, and the whole
 //! trusted surface is this file's arithmetic (whose binder counts must
-//! mirror `subst.rs`'s dep table, the one drift hazard, see below) and the
+//! mirror `subst.rs`'s dep table, the one drift hazard, see below and
+//! `issues/kernel-binder-count-tables.md`) and the
 //! pointer's rule that a value reached mutably has its head emptied first.
 //!
 //! The first question about a node walks whatever of its subtree has no
@@ -45,19 +46,13 @@
 //! question is a read of the node the caller already holds. A node is
 //! walked once for as long as it lives.
 //!
-//! ## What it replaced
+//! ## Why not a table
 //!
-//! Until 2026-11-10 the answers were in direct-mapped tables keyed by the
-//! node's address (one pair a thread for the substitutions, one for the
-//! typing memo, one for the global namespace), each entry under a weak
-//! reference so that the address stayed its node's, and filled at a node's
-//! second query so that a term built, walked once and dropped paid a marker
-//! and not an entry. What that cost on a cold check, and why a larger table
-//! would not have recovered it, is in
-//! `issues/free-variable-bounds-in-the-node.md`. What it cost in reasoning:
-//! which subtrees a substitution skipped depended on what had been asked
-//! before and on which addresses collided, so the substitution counters
-//! were not functions of the input. Now they are.
+//! Address-keyed tables (`issues/free-variable-bounds-in-the-node.md`) cost
+//! a cold check more than a larger table recovers, and made which subtrees
+//! a substitution skipped depend on what had been asked before and on which
+//! addresses collided, so the substitution counters were not functions of
+//! the input. In the node, they are.
 //!
 //! ## How wrong bounds are caught
 //!
@@ -66,9 +61,9 @@
 //! counter uses: every skip taken on this metadata is re-verified in debug
 //! builds by running the real traversal and asserting it was a no-op
 //! (`sub_ty`/`sub_tm` in subst.rs), and the test suite runs in the dev
-//! profile — including the 300-seed substitution laws over generated terms
+//! profile — including the substitution laws over generated terms
 //! covering every variant. A binder count here that drifts from the
-//! traversal's dep table fails those tests; it cannot silently ship.
+//! traversal's dep table fails those tests on any skip they take.
 
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
