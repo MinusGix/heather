@@ -279,7 +279,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     };
     let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
-        first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: functions > 0 }))?;
+        first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: usize::try_from(functions).map_err(|_| format!("`{symbol}`'s functions did not read back"))? }))?;
     // Where the values of the functions the source calls go, from the
     // function compiler's heuristic (`plan_program`,
     // function_ir_lower_calls), spelled: a proposal the functions' lowering

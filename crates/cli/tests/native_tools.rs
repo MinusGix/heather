@@ -213,6 +213,34 @@ fn compiled_tr_program_over_io_runs_as_gnu_tr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A whole input in one buffer, then a verdict: `ascii_check::source` reads
+/// standard input into its 4096-byte buffer at a growing offset, lends it
+/// to `ascii_status` (native_tool_spans, two functions linked), and exits
+/// with its word: 0 when every byte read is below 0x80, 1 when one is not,
+/// 2 when the input filled the buffer. `ascii_check::reads` states that the
+/// `Source`'s tree reads as the function at every world.
+#[test]
+fn compiled_ascii_check_reads_its_whole_input_then_answers() {
+    let dir = scratch("ascii-check");
+    let binary = dir.join("ascii");
+    write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "ascii_check::source", &binary, false);
+    let mut random = Bytes::seeded("ascii-check");
+    let text = random.take(4000, |r| b"abcxyz ABC\n019~"[(r % 15) as usize]);
+    let mut late = text.clone();
+    late[3999] = 0x80;
+    let mut early = text.clone();
+    early[0] = 0xff;
+    let full = random.take(4096, |r| (r % 128) as u8);
+    let long = random.take(9000, |r| (r % 128) as u8);
+    let bytes = random.take(3000, |r| r as u8);
+    for input in [&b""[..], b"hello, World!\n", &text, &late, &early, &full[..4095], &full, &long, &bytes] {
+        let (code, _) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let want = if input.len() >= 4096 { 2 } else if input.iter().all(|&b| b < 0x80) { 0 } else { 1 };
+        assert_eq!(code, Some(want), "the verdict on {} bytes", input.len());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A procedure and a function in one file, the procedure's body calling the
 /// function and `main` both: 'a' and 'b' raised and summed is the status
 /// (`raised_twice_runs`).
