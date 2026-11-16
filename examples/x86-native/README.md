@@ -225,6 +225,24 @@ function 0: 6 rules used
 `t10` is the word the `or` computed; the line says what it was, what the
 rule makes it, and (in brackets) the facts the rule needed.
 
+`--explain-optimizer=all` also says where a rule was not applied though
+the nodes it states were there, which is what to read where a rule was
+expected and the code shows it was not used. A line names the node, the
+rules, and what was known of the words whose ranges they read:
+
+```console
+$ heather compile-x86 examples/binary-search/search.hthr lower_bound \
+    -o target/x86-native/lower_bound.s --explain-optimizer=all
+function 0: no rule used
+  not applied at t17 = t10 - t9: within_sub   (known: t10 within 1 ..= u64::MAX, t9 within 0 ..= 18446744073709551614)
+  not applied at t24 = t23 < t8: below_yes, below_no   (known: t23 within 0 ..= 255)
+  …
+```
+
+The ranges do not say `t9` is at most `t10`, so `within_sub` gives the
+difference no range. Every test the program really makes has such a line,
+which is why they are asked for apart.
+
 ## Per-function certificates and `build-x86`: burned
 
 Before the verified lowering, each function got a certificate generated for

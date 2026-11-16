@@ -592,9 +592,31 @@ the matcher, for the rules whose conclusion is a node.
   said as that computation, so the line reads as the statement does, and
   only the premises the line's words do not already say are listed. The
   name is the theorem's, which a `RuleEntry` carries as character codes.
-  Not built: a word by its source name, the "not applied" lines (they need
-  the matcher to say what it tried), and the page of every registered
+  Not built: a word by its source name, and the page of every registered
   rule.
+
+- **`--explain-optimizer=all` also says where a rule was not applied.** A
+  line names a node of the function kept, the rules whose nodes are the
+  ones there and that made no instance, and what was known of the words
+  whose ranges they read:
+
+  ```
+    not applied at t6 = t5.resize(64): narrow_back   (known: t4 within 0 ..= 4095)
+    not applied at t24 = t23 < t8: below_yes, below_no   (known: t23 within 0 ..= 255)
+  ```
+
+  A rule's shape is its premises that are nodes (`Matchable::shaped`,
+  `function_ir_match.hthr`): where those fit and the rule gives nothing, a
+  range or its condition kept it. The report walks the function as the
+  search does (`StructuredRegion::missing` beside `StructuredRegion::learn`,
+  in `function_ir_explain.hthr`, so a plan's proof pays nothing for it) and
+  asks at each node kept (`node_missed`). A rule that reads ranges is
+  listed only where something is known of a word it reads, and one that
+  gives a range only where every word it reads is known, so a sum of a
+  word nothing is known of has no line. It differs from §8's sketch in one
+  thing: it says what was known and not what was needed, since a rule's
+  condition is a function and has no statement to print. The lines are
+  under `=all` because every test a program really makes has one.
 
 - **A rule that decides a bit is found the same way.** A rule whose
   conclusion is that a bit is a constant (`l.below(r) = 1`, `a | b = 0`)
