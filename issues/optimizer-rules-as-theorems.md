@@ -20,3 +20,5 @@ Steps (design §10), each landing alone with the same code out of the optimizer:
 5. By demand: domains for ranges and bits, orders as a graph with a path certificate, tagged library theorems replacing composite rules, saturation, open fact forms.
 
 Checked so far: `lib/_tests/native/function_ir/function_ir_rule_words_tests.hthr` states four of today's rules as theorems about words and proves today's clauses sound from them by the moves the generator would write.
+
+Related: [[optimizer-as-refinement]], [[optimizer-search-answers-memo]].
