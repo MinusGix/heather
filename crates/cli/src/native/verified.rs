@@ -1408,7 +1408,12 @@ fn binders(parameters: &[String]) -> String {
 /// where reading them off the callees would force each callee's code
 /// (issues/compile-x86-certificate-memory.md).
 fn evaluable_text(prefix: &str, functions: usize, arities: &str) -> String {
-    let (program, table) = (format!("{prefix}_program()"), format!("{prefix}_arities()"));
+    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities)
+}
+
+/// [`evaluable_text`] of any program, spelled as `program`.
+pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str) -> String {
+    let table = format!("{prefix}_arities()");
     let mut text = format!("// How many words each function takes, the last function's first.
 fn {prefix}_arities() → List<Nat> {{ {arities} }}
 

@@ -215,3 +215,33 @@ theorem copy_window_runs(out: List<BitVec(8)>, rest: Buffers(), place, length, a
         = FTm::end_of(rest, copy_window(out, length, rest.span(0), size, from, end)) {
     copy_window::runs_over(out, rest, place, length, at, size, from, end)
 }
+
+// ---------------------------------------------------------------------------
+// A verdict on a whole input: what the program `ascii_check`
+// (lib/_tests/native/runtime/runtime_program_tests.hthr) lends its buffer
+// to once it has read standard input into it.
+
+// How many of the bytes from `i` below `count` are at or past 0x80, added
+// to `high`.
+runtime fn ascii_high(span: List<BitVec(8)>, length, count, i, high: BitVec(64)) → BitVec(64) decreases count.sub(i).toNat() {
+    match h: i.unsigned_lt_bit(count) {
+        False => high,
+        True => ascii_high(span, length, count, i.add(BitVec::ofNat(1)),
+            match span.byte_within(length, i).zero_extend(56).unsigned_lt_bit(BitVec::ofNat(128)) { True => high, False => high.add(BitVec::ofNat(1)) }),
+    }
+}
+
+// The verdict on the first `filled` bytes of the span: 0 when they are all
+// ASCII, 1 when one is not, 2 when the read failed or the input filled the
+// span (so it may have been cut short).
+runtime fn ascii_status(span: List<u8>, length, filled, failed: u64) → Mutated<List<u8>, u64> {
+    if failed = 0 {
+        if filled < length {
+            if ascii_high(span, length, filled, 0, 0) = 0 { Mutated(span, 0) } else { Mutated(span, 1) }
+        } else {
+            Mutated(span, 2)
+        }
+    } else {
+        Mutated(span, 2)
+    }
+}
