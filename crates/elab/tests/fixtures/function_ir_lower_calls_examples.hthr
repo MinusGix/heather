@@ -56,9 +56,9 @@ fn pair() → List<Function> { [add_double(), double()] }
 
 fn pair_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(64)]))
         .saving().put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring()
         .put(Block([AddRR(Rax, Rsi)]))
@@ -68,7 +68,7 @@ fn pair_program() → Prog {
 theorem pair_lowers(): lower_program(pair(), [Into(Rax), Into(Rax)]) = Some(pair_program()) { refl }
 
 // add_double's code starts where double's ends.
-theorem add_double_at(): asm_labels(pair_program())(2) = 15 { refl }
+theorem add_double_at(): asm_labels(pair_program())(2) = 7 { refl }
 
 // Each function meets its contract, resident anywhere, with any stack.
 theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
@@ -81,7 +81,7 @@ theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
 // words its body says give `result`, it returns `result` in RAX.
 theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
-    Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, 15,
+    Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, 7,
         stack.CalleePre(program_callees(pair()), program_room(pair()), 1, [a, b], result), stack.CalleePost(result)) {
     j(add_double_at(), λ entry _ => Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, entry,
             stack.CalleePre(program_callees(pair()), program_room(pair()), 1, [a, b], result), stack.CalleePost(result)),

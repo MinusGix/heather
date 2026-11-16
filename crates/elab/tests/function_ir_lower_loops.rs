@@ -51,8 +51,8 @@ fn verified_loop_lowering_checks_and_lowers_the_examples() {
 
 #[test]
 fn a_back_edge_to_the_wrong_label_is_refused() {
-    let mutant = EXAMPLES.replace(".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)\n}\n\ntheorem triangle_lowers",
-        ".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)\n}\n\ntheorem triangle_lowers");
+    let mutant = EXAMPLES.replace(".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([])).put(Ret)\n}\n\ntheorem triangle_lowers",
+        ".put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))\n        .label(4).put(Block([MovRI(Rdx, w(1))]))\n        .label(5)\n        .put(Block([MovRR(Rax, R8)])).put(Block([])).put(Ret)\n}\n\ntheorem triangle_lowers");
     assert_ne!(mutant, EXAMPLES, "the mutation site moved");
     let mut elaborator = checker();
     assert!(elaborator.elab_module_source("function_ir_lower_loops_examples", &mutant).is_err(),

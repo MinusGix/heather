@@ -31,6 +31,6 @@ The contract's room is a table `rooms: Nat → Nat`, a parameter of every progra
 Figures (`STACK:` in `crates/linked/generated/exports.rs`): every leaf that saves nothing, `sha256_t2` among them, 136 → 0; `scan_accept` 0; `scan_token` 680 → 400; `List::scan_tokens` 816 → 520; `Sha256::compress` 1,088 → 656; `Sha256::update` 1,496 → 936; `copy_window` 272 → 88.
 
 Left, not this issue's:
-- An empty frame still opens and closes with `ADD RSP, 0` (four bytes each way). Emitting no instruction for it is a branch of `frame_allocated`/`frame_freed` and the body proof's first block.
+- An empty frame still opened and closed with `ADD RSP, 0`; closed by [[function-ir-verified-leaf-frame]].
 - The statement compiler's functions (`Prog::links`) are emitted under `index_rooms()` (`136 * Succ(g)`), the bound the statements' calls are stated with; following the planned table there is a change to `Target::roomy` and `native_compile_function.hthr`'s call steps.
 

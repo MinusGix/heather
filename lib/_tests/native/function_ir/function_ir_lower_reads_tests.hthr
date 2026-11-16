@@ -73,13 +73,13 @@ theorem byte_at_past(): program_eval_over(abc(), [byte_at()], 0, [w(4096), w(3),
 // The address formed in RAX, the byte loaded over it.
 fn byte_at_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
         .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
         .label(3)
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
 }
 
 theorem byte_at_planned(): plan_program([byte_at()]) = [Folded, Into(Rax), Into(Rax)] { refl }
@@ -245,13 +245,13 @@ theorem put_at_spares(): program_stores([put_at()], 1) = False { refl }
 // byte then there loaded back, which is what the store's output names.
 fn put_at_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rdx)])).put(StoreByte(ByteStore(Rax, Rcx))).put(LoadByte(ByteLoad(Rax, Rax))).put(Jmp(3))
         .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(256))]))
         .label(3)
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
 }
 
 theorem put_at_planned(): plan_program([put_at()]) = [Folded, Into(Rax), Into(Rax)] { refl }
@@ -679,9 +679,9 @@ theorem table_present(): lower_program_lent([table()], plan_program([table()]), 
 // The index settled to its two bits in RDI, the table's address in RAX,
 // the jump over its four words, then RAX loaded from [RAX + RDI*8].
 fn table_program() → Prog {
-    table_read_prog(Start.label(1).put(Block([frame_allocate(0)])).put(Block(settle_code(Rdi, 2))),
+    table_read_prog(Start.label(1).put(Block([])).put(Block(settle_code(Rdi, 2))),
         BRax, XRdi, [10, 20, 30, 40])
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
 }
 
 theorem table_planned(): plan_program([table()]) = [Into(Rdi), Into(Rax)] { refl }
@@ -760,7 +760,7 @@ theorem be_word_short(): program_eval_over(bytes5(), [be_word()], 0, [w(4096), w
 // dropped. The planner continues past the load, from the file it leaves.
 fn be_word_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdx), AddRI8(Rax, b(3))]))
@@ -770,7 +770,7 @@ fn be_word_program() → Prog {
         .label(5).put(Jmp(3))
         .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .label(3)
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
 }
 
 theorem be_word_planned():
@@ -870,7 +870,7 @@ theorem be_put_past(a: BitVec(64)): program_run([be_put()], put5(), 0, [a, w(5),
 // doubleword stored over it. Nothing is read back.
 fn be_put_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([]))
         .put(Block([CmpRR(Rdx, Rsi)])).put(Jcc(AE, 2))
         .put(Block([MovRR(Rax, Rdx), AddRI8(Rax, b(3))]))
@@ -881,7 +881,7 @@ fn be_put_program() → Prog {
         .label(5).put(Jmp(3))
         .label(2).put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .label(3)
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
 }
 
 theorem be_put_planned():
