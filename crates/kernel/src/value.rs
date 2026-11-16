@@ -23,7 +23,7 @@
 //!   structural (design §3.5).
 //! - Variables have a two-part identity ([`Head::Var`] / [`Head::BaseVar`]):
 //!   a de Bruijn **level** into the concrete entries of Γ, and a **depth**
-//!   into the abstract prefix `g` of a [`CtxBase::Var`] context. Both are
+//!   into the abstract prefix `g` of a [`CtxBase::Var`](crate::term::CtxBase::Var) context. Both are
 //!   stable under pushing binders on the right, which is the only thing
 //!   conversion ever does (design §3.2).
 //!

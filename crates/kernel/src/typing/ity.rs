@@ -170,7 +170,7 @@ impl Eq for ITy {}
 /// three formers whose components a rule descends into, with those
 /// components as descriptions, and one catch-all.
 ///
-/// Deliberately *not* a copy of [`crate::conv::dom::TyView`]: conversion
+/// Deliberately *not* a copy of `conv::dom::TyView`: conversion
 /// views every former because it compares them, while the checker only ever
 /// asks "is this a Π / Σ / sum, and what are its parts". Everything else a
 /// rule needs to match on comes back through `Tc::whnf` as ordinary syntax.

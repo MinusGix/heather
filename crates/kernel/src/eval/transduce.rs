@@ -1060,7 +1060,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Every value of a *finitely enumerable* type — the bit criterion
     /// widened (design §4.1): `Unit` is one value, a `Sum` of enumerables
     /// the sum of theirs, a `Σ` of enumerables the product. `None` is "not
-    /// enumerable, or more than [`STATE_CAP`] values".
+    /// enumerable, or more than [`STATE_CAP`](crate::value::transducer::STATE_CAP) values".
     fn enumerate(&mut self, ty: &'v TyClo<'v>, depth: u32) -> Res<Option<Vec<EnumVal>>> {
         if depth == 0 {
             return Ok(None);

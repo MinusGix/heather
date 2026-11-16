@@ -14,7 +14,7 @@
 //! the loops that run it over a word. How a step *came* to be tabulated is
 //! the evaluator's probe (`eval/transduce.rs`); nothing in this module
 //! evaluates, and nothing in it names a library type — which is what keeps
-//! the arithmetic testable against a reference semantics ([`tests`]) and the
+//! the arithmetic testable against a reference semantics (its tests) and the
 //! trusted part small, exactly as `value/algebra.rs` is for the `Nat`
 //! classes.
 //!

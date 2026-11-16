@@ -140,7 +140,7 @@ pub(crate) struct Sig {
 /// cache paired with any other Ψ, by a caller that forgot to rebuild it, is
 /// not consulted (docs/kernel/kernel-implicit-state-review.md §4).
 pub struct GlobalCache {
-    /// The identity of the Ψ this cache is for ([`GlobalBindings`]' token).
+    /// The identity of the Ψ this cache is for ([`GlobalBindings`](crate::term::GlobalBindings)' token).
     psi: Rc<()>,
     bodies: std::cell::RefCell<Vec<Option<Rc<Term>>>>,
     sigs: std::cell::RefCell<Vec<Option<Rc<Sig>>>>,

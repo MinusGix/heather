@@ -88,7 +88,7 @@
 //! substitution's work is walking material that cannot change
 //! (issues/subst-visits-closed-subtrees.md). So the **local** operations
 //! skip that walk: before descending, [`sub_ty`]/[`sub_tm`] ask the mapper
-//! ([`Mapper::skip_ty`]/[`skip_tm`]) whether the subtree is provably
+//! ([`Mapper::skip_ty`]/[`Mapper::skip_tm`]) whether the subtree is provably
 //! untouchable, and `ShiftLocal`/`SubstLocal` answer from per-node
 //! free-variable bounds (`bounds.rs`: 1 + the largest free local index,
 //! plus a "contains a substitution tail" flag — tails are rewritten even
