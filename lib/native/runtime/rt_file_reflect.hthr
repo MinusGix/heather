@@ -692,7 +692,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 },
             },
             HMatch(_) => {
-                let m <- arms(h).bind(λ c => rt_accepted("a `match`", c));
+                let m <- rt_match("a `match`", h);
                 let t <- k.ty_of(m.scrut);
                 match t {
                     Bit => {

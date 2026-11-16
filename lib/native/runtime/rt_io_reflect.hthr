@@ -82,13 +82,19 @@ fn rt_io_answer(pos: Nat, g: Nat, c: Handle, i: Nat, d: Nat) → CallRes {
 
 // A computation read so far, the most recent step first: a pure value
 // bound, or a call.
-inductive ESeg { SLet(e: Tm), SInvoke(e: Effect, args: List<Nat>), SLend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>) }
+inductive ESeg {
+    SLet(e: Tm),
+    SInvoke(e: Effect, args: List<Nat>),
+    SLend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>),
+    SIf(cond: Tm, yes: ETm, no: ETm, parts: List<Part>),
+}
 
 fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
     segs.foldl(λ acc s => match s {
         SLet(e) => ETm::Let(e, acc),
         SInvoke(e, args) => ETm::Invoke(e, args, acc),
         SLend(f, cap, buf, args) => ETm::Lend(f, cap, buf, args, acc),
+        SIf(cond, yes, no, parts) => ETm::If(cond, yes, no, parts, acc),
     }, last)
 }
 
@@ -98,10 +104,36 @@ fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs
 
 record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
 
-// The calls of lent functions the terms `hs` need answered, innermost
-// first: a call whose operands are another's answer comes after it. A call
-// on Linux is not looked into (its answer is the call's own), nor a call
-// already made.
+// The global a type's head is, if it is one.
+fn rt_io_head(h: Handle) → Tac<Option<Nat>> {
+    view(h).bind(λ v => match v { HGlobal(g, _, _) => Tac::Pure(Some(g.id)), _ => Tac::Pure(None) })
+}
+
+// The `match` `h` reads a local of, when `h` is a read of a statement
+// `if`'s joined record: a field of a `match` whose arms end in
+// `Mutated(…)` (one local alone is the local, and a pure `if` the walk
+// reads as `Tm::If`).
+fn rt_stage_of(io: IoKnown, h: Handle) → Tac<Option<MatchInfo>> {
+    arms(h).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(m) => match m.path {
+            Nil => pure(None),
+            Cons(_, _) => rt_arm(m, 1).bind(λ yes => infer(Hd(yes)).bind(λ tc => match tc {
+                Refused(_) => pure(None),
+                Accepted(t) => rt_io_head(t).bind(λ th => match th.map(λ x => x.same(io.mutated)).unwrap_or(False) {
+                    True => pure(Some(m)),
+                    False => pure(None),
+                }),
+            })),
+        },
+    })
+}
+
+// The calls of lent functions the terms `hs` need answered, and the
+// statement `if`s whose locals they read, innermost first: a call whose
+// operands are another's answer comes after it. A call on Linux is not
+// looked into (its answer is the call's own), nor a call or an `if`
+// already made, nor an `if`'s arms (they are read as its own).
 fn rt_lend_find(fuel: Nat, io: IoKnown, hs: List<Handle>) → Tac<List<Handle>> {
     match fuel {
         Zero => rt_refuse("a term deeper than the reflector's fuel"),
@@ -116,9 +148,14 @@ fn rt_lend_find(fuel: Nat, io: IoKnown, hs: List<Handle>) → Tac<List<Handle>> 
                     HLocal(_, args) => Pair(args, False),
                     _ => Pair([], False),
                 };
+                let stage <- match v { HMatch(_) => rt_stage_of(io, h), _ => pure(None) };
                 let inner <- rt_lend_find(f, io, found.fst);
                 let made <- rt_lent_answer(io, h);
-                let here: List<Handle> = match found.snd { True => match made { Some(_) => [], None => [h] }, False => [] };
+                let made_if <- match stage { Some(m) => rt_if_made(io.ifs, m), None => pure(None) };
+                let here: List<Handle> = match found.snd {
+                    True => match made { Some(_) => [], None => [h] },
+                    False => match stage { Some(_) => match made_if { Some(_) => [], None => [h] }, None => [] },
+                };
                 let after <- rt_lend_find(f, io, rest);
                 pure(inner ++ here ++ after)
             },
@@ -161,8 +198,7 @@ fn rt_lend_call(fuel: Nat, k: Known, w: IoWalk, c: Handle) → Tac<IoWalk> {
                         let d = st.depth;
                         pure(IoWalk(RSt(Succ(Succ(d)), [], st.memo, st.handles, st.locals, st.funs),
                             Cons(SLend(fi, cap, st.index(RSt::level(rb.snd)), st.indices(rw.snd)), ESeg::lets(st.lets) ++ w.segs),
-                            IoKnown(w.io.world, w.io.methods, w.io.calls, w.io.lends,
-                                w.io.lent ++ [CallRes(w.io.lent.len(), g.id, c, None, [Pair("after", d), Pair("value", Succ(d))])])))
+                            w.io.with_lent(w.io.lent ++ [CallRes(w.io.lent.len(), g.id, c, None, [Pair("after", d), Pair("value", Succ(d))])])))
                     },
                     Nil => rt_refuse("`" ++ name ++ "` without its span's length"),
                 },
@@ -173,53 +209,248 @@ fn rt_lend_call(fuel: Nat, k: Known, w: IoWalk, c: Handle) → Tac<IoWalk> {
     })
 }
 
-fn rt_lend_each(fuel: Nat, k: Known, w: IoWalk, cs: List<Handle>) → Tac<IoWalk> {
-    match cs {
-        Nil => pure(w),
-        // A call found twice (two reads of its answer) is made once.
-        Cons(c, rest) => rt_lent_answer(w.io, c).bind(λ made => match made {
-            Some(_) => rt_lend_each(fuel, k, w, rest),
-            None => rt_lend_call(fuel, k, w, c).bind(λ w2 => rt_lend_each(fuel, k, w2, rest)),
+// What the walk is asked to read next: the calls (and `if`s) on the world
+// chain, in order (`rt_world_calls`); the lent calls and pure `if`s the
+// terms `hs` need, before them; the ones found, in order.
+inductive IoJob { JCalls(calls: List<Handle>), JNeed(hs: List<Handle>), JMake(cs: List<Handle>) }
+
+// The components of a state `Mutated(a, rest)`: how many locals `rest`
+// nests, read off the state's type (`Mutated<A, Mutated<B, C>>` is three).
+fn rt_state_count(fuel: Nat, mutated: Nat, ty: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => rt_refuse("a state nests deeper than the reflector's fuel"),
+        Succ(f) => view(ty).bind(λ v => match v {
+            HGlobal(g, _, args) => match g.id.same(mutated) {
+                True => match args.nth(1) {
+                    Some(rest) => rt_state_count(f, mutated, rest).bind(λ n => pure(Succ(n))),
+                    None => rt_refuse("a state record without its parts"),
+                },
+                False => pure(1),
+            },
+            _ => pure(1),
         }),
     }
 }
 
-// The lent calls the terms `hs` need, made in order.
-fn rt_lend_calls(fuel: Nat, k: Known, w: IoWalk, hs: List<Handle>) → Tac<IoWalk> {
-    rt_lend_find(fuel, w.io, hs).bind(λ cs => rt_lend_each(fuel, k, w, cs))
+// The types of a state's `n` components, read off its type.
+fn rt_state_types(fuel: Nat, n: Nat, ty: Handle) → Tac<List<Handle>> {
+    match n {
+        Zero => pure([]),
+        Succ(m) => match m {
+            Zero => pure([ty]),
+            Succ(_) => match fuel {
+                Zero => rt_refuse("a state nests deeper than the reflector's fuel"),
+                Succ(f) => view(ty).bind(λ v => match v {
+                    HGlobal(_, _, args) => match args {
+                        Cons(a, more) => match more {
+                            Cons(rest, _) => rt_state_types(f, m, rest).bind(λ ts => pure(Cons(a, ts))),
+                            Nil => rt_refuse("a state record's type without its rest"),
+                        },
+                        Nil => rt_refuse("a state record's type without its parts"),
+                    },
+                    _ => rt_refuse("a state whose type is not its locals' records"),
+                }),
+            },
+        },
+    }
 }
 
-// The calls in order: each one's operands as variables (bound by the lets
-// before it), then its `Invoke`, its answer recorded for what follows.
-fn rt_io_calls(fuel: Nat, k: Known, w: IoWalk, calls: List<Handle>) → Tac<IoWalk> {
-    match calls {
-        Nil => Tac::Pure(w),
-        Cons(c, rest) => view(c).bind(λ v => match v {
-            HGlobal(g, name, args) => match Known::index(w.io.methods, g.id, 0) {
-                None => rt_refuse("`" ++ name ++ "` is not a call on Linux the reflector knows"),
-                Some(i) => match args {
-                    Nil => rt_refuse("`" ++ name ++ "` without its world"),
-                    Cons(_, ops) => rt_lend_calls(fuel, k, w, ops).bind(λ w => {
-                        let kw = k.at_world(w.io);
-                        RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), w.st, ops).bind(λ r =>
-                        rt_io_capacity(kw, i, ops).bind(λ cap =>
-                        rt_io_calls(fuel, k, IoWalk(
-                            RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals, r.fst.funs),
-                            Cons(SInvoke(rt_io_effect(i, cap), r.fst.indices(r.snd)), ESeg::lets(r.fst.lets) ++ w.segs),
-                            IoKnown(w.io.world, w.io.methods, w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)], w.io.lends, w.io.lent)),
-                            rest)))
-                    }),
+// A state's components, `n` of them, from the nested records holding them.
+fn rt_state_parts(fuel: Nat, mutated: Nat, n: Nat, h: Handle) → Tac<List<Handle>> {
+    match n {
+        Zero => pure([]),
+        Succ(m) => match m {
+            Zero => pure([h]),
+            Succ(_) => match fuel {
+                Zero => rt_refuse("a state nests deeper than the reflector's fuel"),
+                Succ(f) => view(h).bind(λ v => match v {
+                    HCtor(ty, _, _, fields) => match ty.id.same(mutated) {
+                        True => match fields {
+                            Cons(a, more) => match more {
+                                Cons(rest, _) => rt_state_parts(f, mutated, m, rest).bind(λ ps => pure(Cons(a, ps))),
+                                Nil => rt_refuse("a state record without its rest"),
+                            },
+                            Nil => rt_refuse("a state record without its parts"),
+                        },
+                        False => rt_refuse("a state that is not its locals written out"),
+                    },
+                    _ => rt_refuse("a state that is not its locals written out"),
+                }),
+            },
+        },
+    }
+}
+
+// Which of a state's components is the world, by their types.
+fn rt_worlds(io: Nat, tys: List<Handle>) → Tac<List<Bool>> {
+    match tys {
+        Nil => pure([]),
+        Cons(t, rest) => rt_io_head(t).bind(λ hh => rt_worlds(io, rest).bind(λ ws => pure(Cons(hh.map(λ x => x.same(io)).unwrap_or(False), ws)))),
+    }
+}
+
+// An `if`'s arm read: its computation, where each local it leaves that is
+// not the world is at its end (an index), and the program's functions so
+// far.
+record ArmRead { etm: ETm, at: List<Nat>, funs: List<Nat> }
+
+// One arm, from the state before the `if` (`w`, its world's calls `skip`
+// long): the calls that bring the world to the arm's, after the ones before
+// the `if`; then each local it leaves as a variable. Its own result is
+// nothing (`ETm::If` reads the locals).
+fn rt_if_arm(fuel: Nat, k: Known, w: IoWalk, arm: Handle, n: Nat, worlds: List<Bool>, skip: Nat,
+    go: IoWalk → IoJob → Tac<IoWalk>) → Tac<ArmRead> {
+    let parts <- rt_state_parts(fuel, w.io.mutated, n, arm);
+    let tagged = parts.zip(worlds);
+    let world = tagged.find(λ p => p.snd).map(λ p => p.fst);
+    let vals = tagged.filter(λ p => p.snd.not()).map(λ p => p.fst);
+    let w1 <- match world {
+        None => pure(w),
+        Some(wh) => rt_world_calls(fuel, w.io, wh).bind(λ cs => go(w, JCalls(cs.drop(skip)))),
+    };
+    let w2 <- go(w1, JNeed(vals));
+    let r <- RSt::operands(λ s a => rt_go(fuel, k.at_world(w2.io), s, a, True), w2.st, vals);
+    let e = r.fst.depth;
+    pure(ArmRead(ESeg::close(ESeg::lets(r.fst.lets) ++ w2.segs, ETm::Pure(Lit(Word(64), 0))), r.snd.map(λ l => e - Succ(l)), r.fst.funs))
+}
+
+// Each local an `if` leaves: the world, or a variable at its code and its
+// place at each arm's end.
+fn rt_if_parts(k: Known, tys: List<Handle>, worlds: List<Bool>, ys: List<Nat>, ns: List<Nat>) → Tac<List<Part>> {
+    match tys {
+        Nil => pure([]),
+        Cons(t, rest) => match worlds {
+            Nil => pure([]),
+            Cons(isw, more) => match isw {
+                True => rt_if_parts(k, rest, more, ys, ns).bind(λ ps => pure(Cons(PWorld, ps))),
+                False => match ys {
+                    Nil => rt_refuse("an `if`'s arm without a local it assigns"),
+                    Cons(y, ys2) => match ns {
+                        Nil => rt_refuse("an `if`'s arm without a local it assigns"),
+                        Cons(n, ns2) => k.ty(t).bind(λ c =>
+                            rt_if_parts(k, rest, more, ys2, ns2).bind(λ ps => pure(Cons(PVar(c, y, n), ps)))),
+                    },
                 },
             },
-            _ => rt_refuse("a world that is not the capability threaded through calls"),
-        }),
+        },
     }
 }
 
-// The global a type's head is, if it is one.
-fn rt_io_head(h: Handle) → Tac<Option<Nat>> {
-    view(h).bind(λ v => match v { HGlobal(g, _, _) => Tac::Pure(Some(g.id)), _ => Tac::Pure(None) })
+// The variables the locals of an `if` are after it, from `d` on in the
+// record's order; `None` for the world.
+fn rt_if_levels(worlds: List<Bool>, d: Nat) → List<Option<Nat>> {
+    match worlds {
+        Nil => [],
+        Cons(isw, rest) => match isw { True => Cons(None, rt_if_levels(rest, d)), False => Cons(Some(d), rt_if_levels(rest, Succ(d))) },
+    }
 }
+
+// A statement `if` that assigns locals (docs/native/io-programs-design.md
+// §4.2), from `m`, a read of its joined record (a field of a `match` on
+// the test, `Arms`' `path`): the test, bound
+// as a variable; each arm read from the state before it; the locals its
+// arms assign as new variables (`IfRes`), the world among them threaded
+// on. `chained` is whether the world chain reached it (`rt_world_calls`):
+// an `if` that assigns the world is read there, never as a value's need.
+// The arms' calls, lends and `if`s stay in them.
+fn rt_if_make(fuel: Nat, k: Known, w: IoWalk, m: Handle, chained: Bool, go: IoWalk → IoJob → Tac<IoWalk>) → Tac<IoWalk> {
+    let mi <- arms(m).bind(λ c => rt_accepted("an `if` that assigns locals", c));
+    let _ <- match mi.args { Nil => pure(0), Cons(_, _) => rt_refuse("an `if h:` that assigns locals is not reflected yet") };
+    let both <- rt_bool_arms(mi);
+    let yes = both.fst;
+    let no = both.snd;
+    let sty <- infer(Hd(yes)).bind(λ c => rt_accepted("an `if`'s locals' type", c));
+    let n <- rt_state_count(fuel, w.io.mutated, sty);
+    let tys <- rt_state_types(fuel, n, sty);
+    let worlds <- rt_worlds(w.io.ty, tys);
+    let has_world = worlds.any_bit(λ b => b);
+    let _ <- match has_world.and(chained.not()) {
+        True => rt_refuse("an `if`'s locals read where the world it assigns is not threaded on"),
+        False => pure(0),
+    };
+    // The test.
+    let w1 <- go(w, JNeed([mi.scrut]));
+    let kw = k.at_world(w1.io);
+    let ct <- kw.ty_of(mi.scrut);
+    let _ <- match ct { Bit => pure(0), _ => rt_refuse("an `if` that assigns locals tests something other than a `Bool`") };
+    // The test is one `Tm`, its lets inside it, as a loop's is: a bit bound
+    // by a `Let` of the computation would live in a word, which a
+    // comparison's region does not write whole (native_structured).
+    let st0 = RSt(w1.st.depth, [], w1.st.memo, w1.st.handles, w1.st.locals, w1.st.funs);
+    let segs = ESeg::lets(w1.st.lets) ++ w1.segs;
+    let d = st0.depth;
+    let rc <- rt_go(fuel, kw, st0, mi.scrut, False);
+    let cond = RSt::wrap(rc.fst.lets, rc.snd);
+    let base = st0.with_funs(rc.fst.funs);
+    // The arms, each from the state before the `if`.
+    let skip = w1.io.calls.len();
+    let ya <- rt_if_arm(fuel, k, IoWalk(base, [], w1.io), yes, n, worlds, skip, go);
+    let na <- rt_if_arm(fuel, k, IoWalk(base.with_funs(ya.funs), [], w1.io), no, n, worlds, skip, go);
+    let parts <- rt_if_parts(kw, tys, worlds, ya.at, na.at);
+    let count = parts.filter(λ p => match p { PWorld => False, PVar(_, _, _) => True }).len();
+    let calls = match has_world { True => w1.io.calls ++ [CallRes(skip, w.io.mutated, m, None, [])], False => w1.io.calls };
+    pure(IoWalk(RSt(d + count, [], base.memo, base.handles, base.locals, na.funs),
+        Cons(SIf(cond, ya.etm, na.etm, parts), segs),
+        w1.io.with_calls(calls).with_ifs(Cons(IfRes(mi, rt_if_levels(worlds, d)), w1.io.ifs))))
+}
+
+// The walk of a computation's calls, lends and `if`s: one function, since
+// an `if`'s arms are computations of their own.
+fn rt_io_job(fuel: Nat, k: Known, w: IoWalk, job: IoJob) → Tac<IoWalk> {
+    match fuel {
+        Zero => rt_refuse("a computation longer than the reflector's fuel"),
+        Succ(f) => match job {
+            // The calls in order: each one's operands as variables (bound
+            // by the lets before it), then its `Invoke`, its answer
+            // recorded for what follows.
+            JCalls(calls) => match calls {
+                Nil => pure(w),
+                Cons(c, rest) => view(c).bind(λ v => match v {
+                    HMatch(_) => rt_if_make(f, k, w, c, True, λ w2 j => rt_io_job(f, k, w2, j)).bind(λ w2 => rt_io_job(f, k, w2, JCalls(rest))),
+                    HGlobal(g, name, args) => match Known::index(w.io.methods, g.id, 0) {
+                        None => rt_refuse("`" ++ name ++ "` is not a call on Linux the reflector knows"),
+                        Some(i) => match args {
+                            Nil => rt_refuse("`" ++ name ++ "` without its world"),
+                            Cons(_, ops) => rt_io_job(f, k, w, JNeed(ops)).bind(λ w => {
+                                let kw = k.at_world(w.io);
+                                RSt::operands(λ s a => rt_go(f, kw, s, a, True), w.st, ops).bind(λ r =>
+                                rt_io_capacity(kw, i, ops).bind(λ cap =>
+                                rt_io_job(f, k, IoWalk(
+                                    RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals, r.fst.funs),
+                                    Cons(SInvoke(rt_io_effect(i, cap), r.fst.indices(r.snd)), ESeg::lets(r.fst.lets) ++ w.segs),
+                                    w.io.with_calls(w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)])),
+                                    JCalls(rest))))
+                            }),
+                        },
+                    },
+                    _ => rt_refuse("a world that is not the capability threaded through calls"),
+                }),
+            },
+            JNeed(hs) => rt_lend_find(f, w.io, hs).bind(λ cs => rt_io_job(f, k, w, JMake(cs))),
+            // A call or `if` found twice (two reads of its answer) is made
+            // once.
+            JMake(cs) => match cs {
+                Nil => pure(w),
+                Cons(c, rest) => view(c).bind(λ v => match v {
+                    HMatch(_) => arms(c).bind(λ cm => rt_accepted("an `if` that assigns locals", cm)).bind(λ cmi => rt_if_made(w.io.ifs, cmi)).bind(λ made => match made {
+                        Some(_) => rt_io_job(f, k, w, JMake(rest)),
+                        None => rt_if_make(f, k, w, c, False, λ w2 j => rt_io_job(f, k, w2, j)).bind(λ w2 => rt_io_job(f, k, w2, JMake(rest))),
+                    }),
+                    _ => rt_lent_answer(w.io, c).bind(λ made => match made {
+                        Some(_) => rt_io_job(f, k, w, JMake(rest)),
+                        None => rt_lend_call(f, k, w, c).bind(λ w2 => rt_io_job(f, k, w2, JMake(rest))),
+                    }),
+                }),
+            },
+        },
+    }
+}
+
+// The lent calls and `if`s the terms `hs` need, made in order.
+fn rt_lend_calls(fuel: Nat, k: Known, w: IoWalk, hs: List<Handle>) → Tac<IoWalk> { rt_io_job(fuel, k, w, JNeed(hs)) }
+
+// The calls in order.
+fn rt_io_calls(fuel: Nat, k: Known, w: IoWalk, calls: List<Handle>) → Tac<IoWalk> { rt_io_job(fuel, k, w, JCalls(calls)) }
 
 record IoNames { io: Nat, mutated: Nat, methods: List<Nat> }
 
@@ -231,7 +462,7 @@ fn rt_io_reflect_fun(fuel: Nat, k: Known, names: IoNames, g: Nat) → Tac<EFun> 
         HLam(dom) => rt_io_head(dom).bind(λ dh => match dh.map(λ d => d.same(names.io)).unwrap_or(False) {
             False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
             True => open(b, "io").bind(λ oc => rt_accepted("its world", oc)).bind(λ o => {
-                let io = IoKnown(o.local.ref.id, names.methods, [], [], []);
+                let io = IoKnown(o.local.ref.id, names.methods, [], [], [], names.io, names.mutated, []);
                 rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body).bind(λ p =>
                 view(p.snd).bind(λ rv => match rv {
                     HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {
@@ -239,11 +470,12 @@ fn rt_io_reflect_fun(fuel: Nat, k: Known, names: IoNames, g: Nat) → Tac<EFun> 
                         True => match fields.rev() {
                             Cons(value, more) => match more {
                                 Cons(world, _) => rt_world_calls(fuel, io, world).bind(λ calls =>
-                                    rt_io_calls(fuel, k, IoWalk(p.fst.fst, [], io), calls).bind(λ w =>
+                                    rt_io_calls(fuel, k, IoWalk(p.fst.fst, [], io), calls).bind(λ w0 =>
+                                    rt_lend_calls(fuel, k, w0, [value]).bind(λ w =>
                                     rt_go(fuel, k.at_world(w.io), w.st, value, False).bind(λ r =>
                                     k.at_world(w.io).ty_of(value).bind(λ result =>
                                     Tac::Pure(EFun(p.fst.snd, result,
-                                        ESeg::close(ESeg::lets(r.fst.lets) ++ w.segs, ETm::Pure(r.snd)))))))),
+                                        ESeg::close(ESeg::lets(r.fst.lets) ++ w.segs, ETm::Pure(r.snd))))))))),
                                 Nil => rt_refuse("`Mutated` without its world"),
                             },
                             Nil => rt_refuse("`Mutated` without its value"),
@@ -290,6 +522,20 @@ fn Effect::same(self a: Effect, b: Effect) → Bool {
     }
 }
 
+fn Part::same(self p: Part, q: Part) → Bool {
+    match p {
+        PWorld => match q { PWorld => True, _ => False },
+        PVar(t, y, n) => match q { PVar(t2, y2, n2) => t.same(t2).and(y.same(y2)).and(n.same(n2)), _ => False },
+    }
+}
+
+fn Part::all_same(ps: List<Part>, qs: List<Part>) → Bool {
+    match ps {
+        Nil => match qs { Nil => True, Cons(_, _) => False },
+        Cons(p, rest) => match qs { Nil => False, Cons(q, more) => p.same(q).and(Part::all_same(rest, more)) },
+    }
+}
+
 fn ETm::same(self t: ETm) → ETm → Bool {
     match t {
         Pure(v) => λ u => match u { Pure(v2) => v.same(v2), _ => False },
@@ -301,6 +547,11 @@ fn ETm::same(self t: ETm) → ETm → Bool {
         Lend(f, cap, buf, args, body) => λ u => match u {
             Lend(f2, cap2, buf2, args2, body2) =>
                 f.same(f2).and(cap.same(cap2)).and(buf.same(buf2)).and(Tm::nats_same(args, args2)).and(body.same(body2)),
+            _ => False,
+        },
+        If(c, yes, no, parts, body) => λ u => match u {
+            If(c2, yes2, no2, parts2, body2) =>
+                c.same(c2).and(yes.same(yes2)).and(no.same(no2)).and(Part::all_same(parts, parts2)).and(body.same(body2)),
             _ => False,
         },
     }
@@ -319,6 +570,14 @@ fn Effect::show(self e: Effect) → String {
     }
 }
 
+fn Part::show(self p: Part) → String {
+    match p { PWorld => "PWorld", PVar(t, y, n) => "PVar(" ++ t.show() ++ ", " ++ rt_nat(y) ++ ", " ++ rt_nat(n) ++ ")" }
+}
+
+fn Part::shows(ps: List<Part>) → String {
+    match ps { Nil => "", Cons(p, rest) => match rest { Nil => p.show(), Cons(_, _) => p.show() ++ ", " ++ Part::shows(rest) } }
+}
+
 fn ETm::show(self t: ETm) → String {
     match t {
         Pure(v) => "Pure(" ++ v.show() ++ ")",
@@ -326,6 +585,8 @@ fn ETm::show(self t: ETm) → String {
         Invoke(e, args, body) => "Invoke(" ++ e.show() ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
         Lend(f, cap, buf, args, body) =>
             "Lend(" ++ rt_nat(f) ++ ", " ++ rt_nat(cap) ++ ", " ++ rt_nat(buf) ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
+        If(c, yes, no, parts, body) =>
+            "If(" ++ c.show() ++ ", " ++ yes.show() ++ ", " ++ no.show() ++ ", [" ++ Part::shows(parts) ++ "], " ++ body.show() ++ ")",
     }
 }
 

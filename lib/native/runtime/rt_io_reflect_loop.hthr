@@ -76,50 +76,6 @@ record LoopWalk { st: RSt, segs: List<ESeg>, io: IoKnown, under: LocalRef }
 
 fn rt_loop_ok<A>(what: String, c: Checked<A>) → Tac<A> { rt_accepted(what, c) }
 
-// The components of a state `Mutated(world, rest)`: how many locals `rest`
-// nests, read off the state's type (`Mutated<A, Mutated<B, C>>` is three).
-fn rt_state_count(fuel: Nat, mutated: Nat, ty: Handle) → Tac<Nat> {
-    match fuel {
-        Zero => rt_refuse("a loop's state nests deeper than the reflector's fuel"),
-        Succ(f) => view(ty).bind(λ v => match v {
-            HGlobal(g, _, args) => match g.id.same(mutated) {
-                True => match args.nth(1) {
-                    Some(rest) => rt_state_count(f, mutated, rest).bind(λ n => pure(Succ(n))),
-                    None => rt_refuse("a loop's state record without its parts"),
-                },
-                False => pure(1),
-            },
-            _ => pure(1),
-        }),
-    }
-}
-
-// A state's components, `n` of them, from the nested records holding them.
-fn rt_state_parts(fuel: Nat, mutated: Nat, n: Nat, h: Handle) → Tac<List<Handle>> {
-    match n {
-        Zero => pure([]),
-        Succ(m) => match m {
-            Zero => pure([h]),
-            Succ(_) => match fuel {
-                Zero => rt_refuse("a loop's state nests deeper than the reflector's fuel"),
-                Succ(f) => view(h).bind(λ v => match v {
-                    HCtor(ty, _, _, fields) => match ty.id.same(mutated) {
-                        True => match fields {
-                            Cons(a, more) => match more {
-                                Cons(rest, _) => rt_state_parts(f, mutated, m, rest).bind(λ ps => pure(Cons(a, ps))),
-                                Nil => rt_refuse("a loop's state record without its rest"),
-                            },
-                            Nil => rt_refuse("a loop's state record without its parts"),
-                        },
-                        False => rt_refuse("a loop's state that is not its locals written out"),
-                    },
-                    _ => rt_refuse("a loop's state that is not its locals written out"),
-                }),
-            },
-        },
-    }
-}
-
 // The world and the components of a state written out, `Mutated(w, rest)`.
 fn rt_state_split(fuel: Nat, mutated: Nat, n: Nat, h: Handle) → Tac<Pair<Handle, List<Handle>>> {
     view(h).bind(λ v => match v {
@@ -236,7 +192,7 @@ fn rt_open_state(k: Known, names: LoopNames, st: RSt, io0: IoKnown, h: Handle, t
     let xs <- rt_loop_locals(o.local.ref, tys);
     let value <- rt_state_value(names, xs);
     pure(Opened2(k.naming(Cons(FieldWhole(o.local.ref.id, "value", value), k.named)), rt_bind_locals(st, xs, levels),
-        IoKnown(o.local.ref.id, io0.methods, [], io0.lends, io0.lent), rt_last_ref(o.local.ref, xs), o.body, o.local.ref))
+        io0.at(o.local.ref.id), rt_last_ref(o.local.ref, xs), o.body, o.local.ref))
 }
 
 fn rt_types(parts: List<Handle>) → Tac<List<Handle>> {
@@ -340,7 +296,7 @@ fn rt_io_while(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, init: Handle,
     let tys <- rt_types(s.snd);
     let base_st = RSt(d, [], [], before.st.handles, before.st.locals, before.st.funs);
     let os <- rt_open_state(k, names, base_st, w1.io, step, tys, comps.snd);
-    let m <- arms(os.body).bind(λ c => rt_loop_ok("a loop's test", c));
+    let m <- rt_match("a loop's test", os.body);
     let rc <- rt_go(fuel, os.k.at_world(os.io), os.st, m.scrut, False);
     let cond = RSt::wrap(rc.fst.lets, rc.snd);
     let yes <- rt_bool_arm(m, "True");
@@ -414,7 +370,7 @@ fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat>, 
                 False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
                 True => {
                     let o <- open(b, "io").bind(λ c => rt_accepted("its world", c));
-                    let io = IoKnown(o.local.ref.id, names.io.methods, [], lends, []);
+                    let io = IoKnown(o.local.ref.id, names.io.methods, [], lends, [], names.io.io, names.io.mutated, []);
                     let p <- rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body);
                     let under = match p.fst.fst.locals { Cons(x, _) => LocalRef(x.fst), Nil => o.local.ref };
                     let r <- rt_io_eloop(fuel, k, names, LoopWalk(p.fst.fst, [], io, under), p.snd);

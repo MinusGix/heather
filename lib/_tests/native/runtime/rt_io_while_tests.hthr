@@ -74,7 +74,7 @@ fn eb(z: EchoS()) → EchoS() {
 }
 fn ek(z: EchoS()) → Partial(Mutated<Io, BitVec(64)>) { CRet(Mutated(z.after, z.value.value)) }
 
-fn ece(v: EchoV()) → Bool { ELoop::truth(wd().tys, Tm::ty(going(), wd(), loop_g()), Tm::sem(going(), wd(), loop_g(), v)) }
+fn ece(v: EchoV()) → Bool { ETm::truth(wd().tys, Tm::ty(going(), wd(), loop_g()), Tm::sem(going(), wd(), loop_g(), v)) }
 fn efe(v: EchoV(), io: Io) → Mutated<Io, EchoV()> {
     Mutated(pass_body().sem_end(wd(), [], loop_g(), v, io).after,
         ELoop::gather(wd().tys, pass_body().ctx_end(wd(), loop_g()), pass_body().sem_end(wd(), [], loop_g(), v, io).value, loop_g(), [3, 4]))
@@ -199,4 +199,43 @@ fn Io::tr_short(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)
 // expect-error: whose length is not its buffer's own
 theorem tr_short_refused(): True {
     by reflects_io_loop_as(["Io::tr_short"], [], [], ["raise_span"], [])
+}
+
+// ---------------------------------------------------------------------------
+// A loop of three locals whose pass ends in a statement `if`: a failed write
+// stops the loop and sets the status (`tr_upper`'s shape,
+// runtime_program_tests). The `if` joins `n` and `status`, a pure `If` in
+// the pass, and the loop rebinds them from it.
+fn Io::echo_stop(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    let mut status: BitVec(64) = BitVec::ofNat(0);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(0), BitVec::ofNat(64));
+        let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+        buf := r.buf;
+        n := r.result;
+        if w.signed_lt_bit(BitVec::ofNat(0)) {
+            n := BitVec::ofNat(0);
+            status := BitVec::ofNat(1);
+        }
+    }
+    Pointed::ret(Mutated(io, status))
+}
+
+fn echo_stop_pass() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [2, 5, 1, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
+        ETm::If(Tm::Let(Lit(Word(64), 0), Prim(Slt(64), [1, 0])), ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0)))), ETm::Pure(Lit(Word(64), 0)),
+            [PVar(Word(64), 1, 3), PVar(Word(64), 0, 8)], ETm::Pure(Lit(Word(64), 0))))))))))
+}
+
+fn echo_stop_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Pure(Lit(Word(64), 0)))),
+        ELoop::While(Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 2])), echo_stop_pass(), [0, 1, 6], ELoop::Done(ETm::Pure(Var(0)))))
+}
+
+theorem echo_stop_reflected(): True {
+    by reflects_io_loop_as(["Io::echo_stop"], [], [], [], [LoopFun([Bytes(0)], Word(64), echo_stop_prog())])
 }

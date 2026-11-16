@@ -1,21 +1,19 @@
 // cat and the tools past it (docs/native/native-real-programs-plan.md, rounds 1,
-// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N` (and over the whole
+// 5, 6, 7 and 9): `yes`, `head -c N` (and over the whole
 // input held in one buffer, read at offsets), `wc -l`, `echo` and
 // `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
 // `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
 // a procedure (docs/native/native-procedures-design.md), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles;
-// tr through a word function it calls (`native_tool_words`) and through
-// one that rewrites the buffer it is lent, and `wc -l` through a function
-// lent the buffer (`native_tool_spans`).
+// `wc -l` through a function lent the buffer (`native_tool_spans`). tr is a
+// `runtime fn` over `Io` now (`tr_upper`,
+// lib/_tests/native/runtime/runtime_program_tests.hthr).
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
 // source the tool lowers to).
 import native_build;
 import native_decimal;
 import native_source;
-import native_tool_words;
-import native_tool_words_program;
 import native_tool_spans;
 import list;
 import bitvec;
@@ -34,54 +32,6 @@ fn cat_tool(capacity: Nat) → Tool {
 }
 
 fn cat_tool_256() → Tool { cat_tool(256) }
-
-// ---------------------------------------------------------------------------
-// tr a-z A-Z
-
-// The buffer's first `count` bytes, each raised where it is a lower-case
-// letter: one bounded loop over the index, a region the compiler takes
-// whole (issues/native-build-loop-regions.md).
-fn raise_bytes(buf: Buf, count: Val) → Calc {
-    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c =>
-        only_if((c.get() - num(97)).below(num(26)), buf.store(i.get(), c.get() - num(32)))))
-}
-
-// Each byte read raised where it is a lower-case letter, then written.
-fn tr_upper(capacity: Nat) → Tool {
-    buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
-        compute(raise_bytes(buf, n.get())) ++ write_all(stdout(), buf, n.get()))))
-}
-
-fn tr_upper_tool() → Tool { tr_upper(256) }
-
-// tr once more, each byte through `raise_letter` (native_tool_words): a
-// call, in the bounded loop, of a function compiled into the same file by
-// the function compiler (docs/native/native-one-compiler-design.md §2.2). The
-// tool's program is the one `heather reflect` wrote of it.
-fn raise_bytes_called(buf: Buf, count: Val) → Calc {
-    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c => fresh(num(0), λ r =>
-        call(0, [c.get()], r).then(buf.store(i.get(), r.get())))))
-}
-
-fn tr_upper_called(capacity: Nat) → Tool {
-    program(raise_letter_native_program(), buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
-        compute(raise_bytes_called(buf, n.get())) ++ write_all(stdout(), buf, n.get())))))
-}
-
-fn tr_upper_called_tool() → Tool { tr_upper_called(256) }
-
-// tr a third time, the loop itself a function: each read's bytes raised by
-// `raise_span` (native_tool_spans), a `runtime fn` that is lent the
-// buffer, stores into it and calls `raise_word` on each byte. The write
-// after the call sends the buffer as the function left it
-// (docs/native/native-one-compiler-design.md §2.6; `raise_span_called` is what
-// the call is in the tool's meaning).
-fn tr_upper_span(capacity: Nat) → Tool {
-    program(raise_span_program(), buffer(capacity, λ buf => run(local(num(0), λ raised => each_read(stdin(), buf, λ n =>
-        compute(call(raise_span_entry(), [n.get(), num(0)], raised)) ++ write_all(stdout(), buf, n.get()))))))
-}
-
-fn tr_upper_span_tool() → Tool { tr_upper_span(256) }
 
 // ---------------------------------------------------------------------------
 // yes

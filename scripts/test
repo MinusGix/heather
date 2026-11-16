@@ -117,7 +117,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_cat_runs_as_cat
         --skip every_written_program_gets_its_theorem
         --skip refused_programs_name_their_reason
-        --skip compiled_tr_runs_as_gnu_tr
+        --skip compiled_tr_program_over_io_runs_as_gnu_tr
         --skip compiled_yes_runs_as_gnu_yes
         --skip compiled_wc_prints_counts_as_gnu_wc
         --skip compiled_head_takes_its_count_as_gnu_head

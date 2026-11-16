@@ -1033,7 +1033,7 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
                 },
             },
             HMatch(_) => {
-                let m <- arms(h).bind(λ c => rt_accepted("a `match`", c));
+                let m <- rt_match("a `match`", h);
                 let t <- cx.known(w).ty_of(m.scrut);
                 match t {
                     Bit => {

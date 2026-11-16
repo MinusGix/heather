@@ -466,12 +466,14 @@ pub enum HeadView {
 
 /// A `match` with its arms, as `Arms` answers it (`tactic::MatchInfo`): the
 /// scrutinee, each constructor's name and a handle to its arm as a function
-/// of the payload, and the arguments the match is applied to.
+/// of the payload, the arguments the match is applied to, and the fields
+/// read off its record, by number, the first read first.
 #[derive(Clone, Debug)]
 pub struct ArmsView {
     pub scrut: u64,
     pub arms: Vec<(String, u64)>,
     pub args: Vec<u64>,
+    pub path: Vec<u64>,
 }
 
 /// A term's application spine, as `Spine` answers it (`tactic::SpineInfo`):
@@ -862,6 +864,9 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }
                 for h in &m.args {
                     out = self.call("host_arms_arg", vec![out, self.lit(*h)])?;
+                }
+                for i in &m.path {
+                    out = self.call("host_arms_field", vec![out, self.lit(*i)])?;
                 }
                 Ok(out)
             }
@@ -2737,6 +2742,12 @@ impl Host<'_> {
     /// a λ over the payload. A `match h:` is that `Case` applied to `refl`,
     /// and the application's argument is listed. Wider matches nest `Case`s
     /// and are refused until a reader needs them.
+    ///
+    /// A field read of a `match`'s record (`(match c { … }).value.after`,
+    /// which `View` shows as the `match`, stuck on its scrutinee) is that
+    /// `match`, its arms whole, with the fields read listed by number, the
+    /// first read first (`path`): a statement `if`'s joined locals are read
+    /// so (docs/native/io-programs-design.md §4.2).
     fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
@@ -2747,8 +2758,39 @@ impl Host<'_> {
         while let Some(r) = crate::spelling::beta_head(&t) {
             t = r;
         }
-        let mut spine = Vec::new();
+        // The projections, the outermost first; a field `i` is `fst` after
+        // `i + 1` `snd`s (`DisplayCx::field_read_record`).
+        let mut projs = Vec::new();
         let mut head = &t;
+        while let Some((first, pair)) = crate::spelling::proj_of(head) {
+            projs.push(first);
+            head = pair;
+        }
+        let mut path = Vec::new();
+        let mut snds = 0u64;
+        for first in projs.iter().rev() {
+            if *first {
+                let Some(i) = snds.checked_sub(1) else { return Err(Fault::Ill("a projection of a `match` that is not a field read".into())) };
+                path.push(i);
+                snds = 0;
+            } else {
+                snds += 1;
+            }
+        }
+        if snds != 0 {
+            return Err(Fault::Ill("a projection of a `match` that is not a field read".into()));
+        }
+        // The record read may itself be a β-redex (a `match` under `on`
+        // clauses' `λ`s, its field read).
+        let reduced;
+        if let Some(mut r) = crate::spelling::beta_head(head) {
+            while let Some(r2) = crate::spelling::beta_head(&r) {
+                r = r2;
+            }
+            reduced = r;
+            head = &reduced;
+        }
+        let mut spine = Vec::new();
         while let Term::AppAt { fun, arg } = head {
             spine.push(arg);
             head = fun;
@@ -2775,7 +2817,7 @@ impl Host<'_> {
                 let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
                 args.push(run.issue_shared(at, a, aty, alevel));
             }
-            return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args });
+            return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args, path });
         }
         let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
             return Err(Fault::Ill("it is not a `match`".into()));
@@ -2796,7 +2838,7 @@ impl Host<'_> {
             let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
             args.push(run.issue_shared(at, a, aty, alevel));
         }
-        Ok(ArmsView { scrut: s, arms, args })
+        Ok(ArmsView { scrut: s, arms, args, path })
     }
 
     /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
