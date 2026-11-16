@@ -690,6 +690,25 @@ the matcher, for the rules whose conclusion is a node.
   derives each range before a step reads it, `explain` and `pending`),
   which is the statement about a whole plan.
 
+- **A set of rules is a module** (§6). `function_ir_identities.hthr` has
+  the plain identities of words as `rule theorem`s (`or_zero`, `zero_or`,
+  `zero_add`, `sub_zero`, `xor_self`, `and_zero`, `add_sub`, `sub_add`,
+  the shifts by no places). They are not among the library's placed
+  rules: a program that imports the module is compiled with them, as with
+  its own, and one that does not is as it was
+  (`examples/x86-native/rule_set.hthr`). Whether a default set is on for
+  every compilation is not decided; `own_rule.hthr`'s control would need
+  another rule than `or_zero` then.
+- **The walk keeps every node that computes a word** as what made it
+  (`Seen::computing`), and the node a rule wrote for another. Before, it
+  kept the kinds the hand-written recognisers read, so a rule whose
+  statement has two nodes fired only where the inner one was of such a
+  kind, and a rule did not read what an earlier rule had made
+  (`tangled_untangled` in `function_ir_identities_tests.hthr`: `add_sub`,
+  then `xor_self`, then `or_zero` of that zero). A node that reads or
+  writes a span is not kept: the replayer's facts have it only where it
+  stands.
+
 What is left of step 3: the rules that decide a bit from an order or give
 an order are still proposed by hand, and go with the order graph of §9.3;
 the library's strategies are not registered learners yet, a learner

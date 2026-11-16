@@ -314,11 +314,17 @@ fn Seen::ordering(self seen: Seen, order: Ordered) → Seen {
     Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, order, seen.joins, seen.tables)
 }
 
-// A node passed, for what is known of order: a constant is kept for the
-// sums that add it.
+// A node that computes a word is kept as what made it, whatever its kind:
+// a rule's statement may read any node, a program's rule included. A node
+// that reads or writes a span is not, since the replayer's facts have it
+// only where it stands.
+fn Seen::computing(self seen: Seen, node: Node) → Seen {
+    match node.pure() { True => seen.making(node_output(node).id, node), False => seen }
+}
+
+// A node passed, for a later node's rule and for what is known of order.
 fn Seen::noted(self seen: Seen, node: Node) → Seen {
-    shared(match node { Const(w, o, _) => match w.same(64) { True => seen.making(o, node), False => seen }, _ => seen }, λ kept =>
-        kept.ordering(kept.order.noting(kept.made, node)))
+    shared(seen.computing(node), λ kept => kept.ordering(kept.order.noting(kept.made, node)))
 }
 
 record Explained { steps: List<Step>, proved: NatMap<Bool> }
@@ -657,11 +663,12 @@ fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
 fn Seen::matched(self seen: Seen, node: Node) → Option<Passed> {
     seen.instance(node).and_then(λ found => match found.needs {
         Nil => shared(seen.pass(found.node), λ written =>
-            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen))),
+            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen.computing(found.node)))),
         Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
             shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)
                 .pass(found.node), λ written =>
-                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))), written.seen)))),
+                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))),
+                    written.seen.computing(found.node))))),
     })
 }
 

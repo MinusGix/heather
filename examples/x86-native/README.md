@@ -237,6 +237,18 @@ soundness and nothing of the learner. `first_masked` compiles to 39 bytes
 with the learner and 48 without; without it `--explain-optimizer=all`
 says `not applied at t10 = t6 & t9: mask_low   (known: t6 within 0 ..= 255)`.
 
+A set of rules is a module. `lib/native/function_ir/function_ir_identities.hthr`
+states the plain identities of words (`x | 0 = x`, `(a + b) - b = a`,
+`x.bxor(x) = 0` and the like), each a one-line `rule theorem`, and
+`rule_set.hthr` imports it. `tangled` compiles to 39 bytes with the import
+and 54 without, and the report shows one rule's result read by the next:
+
+```console
+  t10 = (t8 + t1) - t1 = t8   by add_sub
+  t11 = t1 ^ t1 = 0   by xor_self
+  t12 = t10 | 0 = t10   by or_zero
+```
+
 `--explain-optimizer` prints what the optimizer did with the rules, a line
 for each one used, in the rule's own words and by its name:
 

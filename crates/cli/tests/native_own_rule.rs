@@ -93,3 +93,30 @@ fn a_programs_own_learner_is_asked() {
     assert!(with_learner.len() < without_learner.len(), "{with_learner:02x?} {without_learner:02x?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A set of rules is a module (`examples/x86-native/rule_set.hthr`,
+/// docs/native/optimizer-rules-design.md §6): a program that imports
+/// `function_ir_identities` is compiled with its rules, and one rule's
+/// result is what the next reads.
+#[test]
+fn an_imported_rule_set_is_applied() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-rule-set-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = root.join("examples/x86-native/rule_set.hthr");
+    let (with_set, explained) = compile(&root, &source, "tangled", &dir.join("with.s"), "--explain-optimizer");
+    for rule in ["add_sub", "xor_self", "or_zero"] {
+        assert!(explained.lines().any(|line| line.ends_with(&format!("   by {rule}"))), "{rule}: {explained}");
+    }
+
+    // The control: the same program without the import.
+    let text = std::fs::read_to_string(&source).unwrap();
+    assert!(text.contains("import function_ir_identities;\n"));
+    let plain = dir.join("rule_set.hthr");
+    std::fs::write(&plain, text.replace("import function_ir_identities;\n", "")).unwrap();
+    let (without_set, plain_explained) = compile(&root, &plain, "tangled", &dir.join("without.s"), "--explain-optimizer");
+    assert!(!plain_explained.contains("by add_sub"), "{plain_explained}");
+    assert!(with_set.len() < without_set.len(), "{with_set:02x?} {without_set:02x?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
