@@ -88,7 +88,7 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `ctx`, `block`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -116,7 +116,7 @@ pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `ctx`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -144,7 +144,7 @@ pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `ctx`, `message`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -172,7 +172,7 @@ pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `ctx`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -200,7 +200,7 @@ pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -221,7 +221,7 @@ pub fn raise_span(text: &mut [u8], count: u64, from: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -249,7 +249,7 @@ pub fn list_raise_letters(text: &mut [u8], count: u64, from: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -277,7 +277,7 @@ pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -305,7 +305,7 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `text`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -333,7 +333,7 @@ pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the span `source`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
@@ -354,7 +354,7 @@ pub fn scan_tokens(out: &mut [u8], source: &[u8], at: u64, previous: u64) -> u64
     //   and the rest above the return address, as the C ABI passes them;
     //   the declaration's order is the table's, which the gate holds to the
     //   code's signature.
-    // - each span's two words are its address and its length (`ArgsLent`):
+    // - each span's two words are its address and its length (`Borrow::words`):
     //   its pointer and `len()`, for the spans `out`, `source`.
     // - the bytes are readable there for the whole call (`Stack::InMemory`):
     //   a slice is live, initialised memory while it is borrowed, and an
