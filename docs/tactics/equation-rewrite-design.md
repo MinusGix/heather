@@ -372,6 +372,26 @@ would refuse a left side the goal does not mention: first the local the left
 side reduces to, then the split. Both fire only where the old route refused,
 so a proof that elaborated before is untouched.
 
+**Constructor equations** (`issues/constructor-equations-in-context.md`).
+`same : Some(Out(Cons(w, p), names)) = Some(c)` has no local side, but its
+fields do. Where `subst` would refuse for that reason, an equation whose
+sides compute to applications of one constructor of a declared inductive
+(read off their values, as `absurd` reads them) is injected: each field's
+equation by `inj`, fields whose sides already convert skipped, fields of
+fields read in turn, down to the first equation with a local side. That one
+is eliminated as above, and in its case `h` is elaborated again — it reads
+the same names, now at the local's value — and injected again, until no
+field has a local side left; then `e` is checked. So `subst(same, e)`
+checks `e` with `c` as `Out(Cons(w, p), names)`, and
+`Out([a], b) = Out([x], y)` replaces both `x` and `y`. Where two
+constructors differ, at the top or under fields (or `Zero` and `Succ` at
+`Nat`), the goal is closed by `absurd` and `e` is never elaborated. A field
+whose sides are neither a local nor constructors is left in `h`, which stays
+in scope; if nothing could be substituted the refusal says so. The route
+fires only where the local and pattern-variable routes find nothing, so a
+proof that elaborated before is untouched. Not covered: `IWf`-route
+families, and injection at `Nat`'s `Succ`.
+
 What it does not do: eliminate a variable bound in the global context or a
 `let` (aliases are inlined, so `h : k = 3` with `let k = n` is `h : n = 3`
 already), or search for which equation to use. It is an elaborator entry
