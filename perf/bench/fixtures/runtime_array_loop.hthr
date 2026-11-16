@@ -1,0 +1,71 @@
+// `Sched::expand` of lib/_tests/native/runtime/runtime_held_index_tests.hthr
+// on its own, for scripts/bench-probes' `omega/sched-expand` case: a
+// `runtime fn` loop over an array, each word from the third on the sum of
+// the two before it, with three index proofs found by `bv_omega`. What the
+// case measures is the generator's found proofs: omega's reflection, and the
+// substitution reducer under its reduce-and-name step
+// (issues/small-step-reducer-on-computed-terms.md). A copy, because `--only`
+// does not reach a declaration of a module that also holds expected refusals.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import rt_held_loop;
+
+laid(endian := BigEndian) record Sched { w: [u64; 8], rounds: u64 }
+
+runtime fn Sched::expand(mut self s: Sched, j: u64) → u64
+    decreases (6 - j).toNat() {
+    if h: j < 6 {
+        let a = s.w.at(j + 1);
+        let b = s.w.at(j);
+        s.w := s.w.put(j + 2, a + b);
+        s.expand(j + 1)
+    } else {
+        s.rounds
+    }
+}
