@@ -51,7 +51,9 @@ theorem head_is_the_saves(): call_saves([Spilling(4), Into(Rax)]) = [Rsi] { refl
 theorem head_is_not_a_place(): after_saves([Spilling(4), Into(Rax)]) = [Into(Rax)] { refl }
 theorem no_head_saves_all(): call_saves([Into(Rax)]) = saved_registers() { refl }
 theorem no_head_all_places(): after_saves([Into(Rax)]) = [Into(Rax)] { refl }
-theorem every_mask_is_allowed(): saves_ok(masked(saved_registers(), 133)) = True { refl }
+theorem every_mask_is_allowed(): saves_ok(8, masked(saved_registers(), 133)) = True { refl }
+// A call saving three registers needs three of the frame's slots.
+theorem three_saves_need_three_slots(): saves_ok(2, masked(saved_registers(), 133)) = False { refl }
 
 // The file after a call: the result, what was saved, and nothing where a
 // caller-saved register was left out; a register the callee keeps is as
