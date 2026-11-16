@@ -24,7 +24,7 @@
 //! the eliminator's own **motive**, which is an annotation the calculus
 //! supplies; the output mode comes from the shape of the value the probe
 //! computed. What does not classify — an open `Fin` index, a recursion on a
-//! shift count, a state type above the cap — folds exactly as it does today.
+//! shift count, a state type above the cap — folds step by step.
 //!
 //! ### The wrapper (a correction to §4.2; design §13)
 //!
@@ -1331,7 +1331,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         // Declined — an argument that does not pack, a state that does not
         // read back. Take the ordinary outer step and replay the
         // applications on its result: exactly the path this value stood in
-        // for, and the one a fold that never classified takes today.
+        // for, and the one a fold that never classified takes.
         let Elim::ElimNat { step, .. } = &*elim else {
             unreachable!("a waiting fold stores a Nat eliminator")
         };
@@ -1478,7 +1478,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         // table is applied to it in a bounded number of native operations,
         // so the charge is per word, as the work is. It is strictly less
         // than the structural path spends on the same bits, so no verdict
-        // fuel allows today becomes a refusal; it is charged once the fold
+        // the structural path reaches becomes a refusal; it is charged once the fold
         // is known to fire, so an attempt that declines has spent nothing
         // here. A wider vector is one run per word, each charged.
         self.spend()?;

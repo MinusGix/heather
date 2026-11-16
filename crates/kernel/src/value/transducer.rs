@@ -18,7 +18,7 @@
 //! trusted part small, exactly as `value/algebra.rs` is for the `Nat`
 //! classes.
 //!
-//! Three output algebras, because the library's folds have three shapes
+//! Five output algebras, one per shape of the library's folds
 //! (design §§4.1, 5):
 //!
 //! - **cons** — one bit per step onto the recursive result: `bxor`, `add`,

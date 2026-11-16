@@ -369,7 +369,7 @@ impl<'v> Eval<'_, 'v> {
 
     /// Pack the longest common prefix of two vectors at `tail_ty`'s Σ-chain
     /// into two words (design §7). `None` is "not one bit packed", which
-    /// leaves the caller's behaviour exactly as it is today.
+    /// leaves the caller on its ordinary path.
     ///
     /// The value walk and the type walk go in lockstep: `tail_ty` is the Σ's
     /// own tail, so each further bit costs one [`Eval::vec_ty`] — which is
@@ -395,8 +395,8 @@ impl<'v> Eval<'_, 'v> {
             let Some((l_bit, l_rest)) = self.bit_step(bt, &sigma, &left)? else { break };
             let Some((r_bit, r_rest)) = self.bit_step(bt, &sigma, &right)? else { break };
             // One fuel unit per bit consumed (design §8): strictly less than
-            // the η path spent on the same bit, so no verdict fuel allowed
-            // today becomes a refusal.
+            // the η path spends on the same bit, so no verdict the η path
+            // reaches becomes a refusal.
             self.spend()?;
             left_bits |= u64::from(l_bit) << width;
             right_bits |= u64::from(r_bit) << width;
@@ -427,8 +427,7 @@ impl<'v> Eval<'_, 'v> {
         Ok(Some(BitPrefix { left_bits, right_bits, left, right, ty: out_ty }))
     }
 
-    /// A run over a closed tail, for the tests and for round 3's merging
-    /// frame: `bits` of `width` over `Triv`, at `elem`'s injections.
+    /// A run over a closed tail, for the tests: `bits` of `width` over `Triv`, at `elem`'s injections.
     #[cfg(test)]
     pub(crate) fn closed_bit_run(
         &mut self,
