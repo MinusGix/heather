@@ -68,15 +68,15 @@ theorem caller_agrees(a, b: BitVec(64)): program_eval(calls(), 1, [a, b]) = call
 // here `some_get` names it), its equation, and the theorem.
 theorem calls_present(): lower_program_planned(calls()).is_some().IsTrue() { trivial }
 fn calls_code() → Prog { lower_program_planned(calls()).get(calls_present()) }
-theorem calls_lowers(): lower_program(calls(), plan_program(calls())) = Some(calls_code()) {
+theorem calls_lowers(): lower_program_planned(calls()) = Some(calls_code()) {
     Option::some_get(lower_program_planned(calls()), calls_present())
 }
 theorem caller_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b: BitVec(64)):
     Site<M>(fetch, data, calls_code(), last, origin).Returns(stack, asm_labels(calls_code())(2),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 136 * 2 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 96 <= i,
         stack.CalleePost(caller(a, b))) {
-    compiled_returns<M>(calls(), plan_program(calls()), calls_code(), calls_lowers(), calls_evaluable(),
+    compiled_returns<M>(calls(), plan_program(calls()), program_room_planned(calls()), calls_code(), calls_lowers(), calls_evaluable(),
         fetch, data, last, origin, stack, 1, trivial, [a, b], trivial, caller(a, b), caller_agrees(a, b))
 }
 

@@ -40,8 +40,8 @@ fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
 fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
 fn Prog::saving(self p: Prog) → Prog { saved_registers().spills(p, 0) }
 fn Prog::restoring(self p: Prog) → Prog { saved_registers().reloads(p, 0) }
-fn Prog::keeping(self p: Prog, registers: List<Gpr>) → Prog { registers.spills(p, 8) }
-fn Prog::kept_back(self p: Prog, registers: List<Gpr>) → Prog { registers.reloads(p, 8) }
+fn Prog::keeping(self p: Prog, slots: Nat, registers: List<Gpr>) → Prog { registers.spills(p, slots) }
+fn Prog::kept_back(self p: Prog, slots: Nat, registers: List<Gpr>) → Prog { registers.reloads(p, slots) }
 
 // ---------------------------------------------------------------------------
 // What a function saves
@@ -60,8 +60,6 @@ theorem caller_saved_ranks_nothing(): (scratch_pool() ++ [Rsp]).map(λ register 
 theorem body_keeps_the_rest(): body_kept(2) = [Rsp, R14, R15, Rbx, Rbp] { refl }
 theorem body_keeps_all(): body_kept(0) = [Rsp, R12, R13, R14, R15, Rbx, Rbp] { refl }
 
-// The frame: eight spill slots and six for the saves, whatever the count.
-theorem frame_is_112(): frame_free() = AddRI8(Rsp, BitVec::ofNat(112)) { refl }
 
 // A placement's head says the count, and no head says none.
 theorem head_is_the_count(): placement_saves([Saving(2), Into(R13), Into(Rax)]) = 2 { refl }
@@ -90,13 +88,13 @@ fn twice_more() → Function {
 
 fn leaf_places() → List<Place> { [Saving(1), Into(R12), Into(Rax)] }
 
-// R12 stored at slot 8, above the spill slots, before the body and loaded
-// back after the result is in RAX.
+// R12 stored at slot 0, the leaf having no spill slots, before the body
+// and loaded back after the result is in RAX.
 fn leaf_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()])).keeping([R12])
+        .label(1).put(Block([frame_allocate(8)])).keeping(0, [R12])
         .put(Block([MovRR(R12, Rdi), AddRR(R12, Rsi), MovRR(Rax, R12), AddRR(Rax, Rsi)]))
-        .put(Block([])).kept_back([R12]).put(Block([frame_free()])).put(Ret)
+        .put(Block([])).kept_back(0, [R12]).put(Block([frame_free(8)])).put(Ret)
 }
 
 theorem leaf_lowers(): lower_program([twice_more()], leaf_places()) = Some(leaf_program()) { refl }
@@ -105,18 +103,18 @@ theorem leaf_lowers(): lower_program([twice_more()], leaf_places()) = Some(leaf_
 // caller finds every callee-saved register as it left it.
 theorem leaf_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, leaf_program(), last, origin).Calls(stack, program_callees([twice_more()]), program_depth([twice_more()]), 1) {
+    Site<M>(fetch, data, leaf_program(), last, origin).Calls(stack, program_callees([twice_more()]), program_room([twice_more()]), 1) {
     lower_program_correct<M>([twice_more()], leaf_places(), leaf_program(), leaf_lowers(), fetch, data, last, origin, stack)
 }
 
 // The same places with no save are refused, at the node that writes R12.
 theorem leaf_unsaved_refused(): lower_program([twice_more()], [Into(R12), Into(Rax)]) = None { refl }
-theorem leaf_unsaved_why(): twice_more().refused(0, [Into(R12), Into(Rax)], 1, []) =
+theorem leaf_unsaved_why(): twice_more().refused(0, [Into(R12), Into(Rax)], 1, [], program_room([twice_more()])) =
     "the node `2 = add64 0, 1`, placed in r12 (callee-saved, and the function saves 0), where rsi holds 1; rdi holds 0; " { refl }
 
 // A register past the count is refused as one not saved is.
 theorem leaf_past_count_refused(): lower_program([twice_more()], [Saving(1), Into(R13), Into(Rax)]) = None { refl }
-theorem leaf_past_count_why(): twice_more().refused(0, [Saving(1), Into(R13), Into(Rax)], 1, []) =
+theorem leaf_past_count_why(): twice_more().refused(0, [Saving(1), Into(R13), Into(Rax)], 1, [], program_room([twice_more()])) =
     "the node `2 = add64 0, 1`, placed in r13 (callee-saved, and the function saves 1), where rsi holds 1; rdi holds 0; " { refl }
 
 // A place in a register the count covers carries no such note when its
@@ -129,23 +127,23 @@ fn lost() → Function {
             outputs := Ports([word(3)]))),
         result := 3)
 }
-theorem saved_place_plain(): lost().refused(0, [Saving(1), Into(Rax), Into(R12)], 1, []) =
+theorem saved_place_plain(): lost().refused(0, [Saving(1), Into(Rax), Into(R12)], 1, [], program_room([lost()])) =
     "the node `3 = add64 9, 1`, placed in r12, where rax holds 2; rsi holds 1; rdi holds 0; " { refl }
 
 // And a larger count than the places use is taken: the function saves what
 // it says.
 fn leaf_two_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()])).keeping([R12, R13])
+        .label(1).put(Block([frame_allocate(16)])).keeping(0, [R12, R13])
         .put(Block([MovRR(R12, Rdi), AddRR(R12, Rsi), MovRR(Rax, R12), AddRR(Rax, Rsi)]))
-        .put(Block([])).kept_back([R12, R13]).put(Block([frame_free()])).put(Ret)
+        .put(Block([])).kept_back(0, [R12, R13]).put(Block([frame_free(16)])).put(Ret)
 }
 theorem leaf_two_lowers(): lower_program([twice_more()], [Saving(2), Into(R12), Into(Rax)]) = Some(leaf_two_program()) { refl }
 
 // The count is read at a function's head only: where a node's place is
 // read it is no place.
 theorem count_is_no_place(): lower_program([twice_more()], [Saving(1), Saving(1), Into(Rax)]) = None { refl }
-theorem count_is_no_place_why(): twice_more().refused(0, [Saving(1), Saving(1), Into(Rax)], 1, []) =
+theorem count_is_no_place_why(): twice_more().refused(0, [Saving(1), Saving(1), Into(Rax)], 1, [], program_room([twice_more()])) =
     "the node `2 = add64 0, 1`, placed in saving 1 (a count of saves, which is no node's place), where rsi holds 1; rdi holds 0; " { refl }
 
 // The planner, with registers to spare, asks for no save.
@@ -176,27 +174,35 @@ fn add_double() → Function {
 }
 
 fn pair() → List<Function> { [add_double(), double()] }
+
+// The frame: eight spill slots where the function calls and none in a
+// leaf, and a word for each save.
+theorem leaf_frame_is_its_saves(): twice_more().frame(2) = 16 { refl }
+theorem caller_frame_has_slots(): add_double().frame(1) = 72 { refl }
+theorem plain_leaf_has_no_frame(): double().frame(0) = 0 { refl }
+theorem frame_is_at_most_112(): add_double().frame(9) = 112 { refl }
+
 fn pair_places() → List<Place> { [Into(Rax), Saving(1), Into(R12), Into(Rax)] }
 
 // The callee saves nothing and writes no callee-saved register, which is
 // what the caller's R12 after the call rests on.
 fn pair_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate()]))
+        .label(1).put(Block([frame_allocate(0)]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free()])).put(Ret)
-        .label(2).put(Block([frame_allocate()])).keeping([R12])
+        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .label(2).put(Block([frame_allocate(72)])).keeping(8, [R12])
         .put(Block([MovRR(R12, Rsi)]))
         .saving().put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring()
         .put(Block([AddRR(Rax, R12)]))
-        .put(Block([])).kept_back([R12]).put(Block([frame_free()])).put(Ret)
+        .put(Block([])).kept_back(8, [R12]).put(Block([frame_free(72)])).put(Ret)
 }
 
 theorem pair_lowers(): lower_program(pair(), pair_places()) = Some(pair_program()) { refl }
 
 theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
-    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), program_depth(pair()), 2) {
+    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), program_room(pair()), 2) {
     lower_program_correct<M>(pair(), pair_places(), pair_program(), pair_lowers(), fetch, data, last, origin, stack)
 }
 
@@ -205,16 +211,16 @@ theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List
 theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
     Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, asm_labels(pair_program())(2),
-        stack.CalleePre(program_callees(pair()), program_depth(pair()), 1, [a, b], result), stack.CalleePost(result)) {
+        stack.CalleePre(program_callees(pair()), program_room(pair()), 1, [a, b], result), stack.CalleePost(result)) {
     pair_calls<M>(fetch, data, last, origin, stack)(1, Nat::le_refl(2), [a, b], result)
 }
 
 // With no save, the caller is refused where it writes R12; the callee, at
 // the same places, is not what is refused.
 theorem pair_unsaved_refused(): lower_program(pair(), [Into(Rax), Into(R12), Into(Rax)]) = None { refl }
-theorem pair_unsaved_why(): add_double().refused(1, [Into(R12), Into(Rax)], 2, []) =
+theorem pair_unsaved_why(): add_double().refused(1, [Into(R12), Into(Rax)], 2, [], program_room(pair())) =
     "the node `2 = move64 1`, placed in r12 (callee-saved, and the function saves 0), where rsi holds 1; rdi holds 0; " { refl }
-theorem pair_callee_plain(): double().refused(0, [Into(Rax)], 2, []) = "nothing: the function has code after no other" { refl }
+theorem pair_callee_plain(): double().refused(0, [Into(Rax)], 2, [], program_room(pair())) = "nothing: the function has code after no other" { refl }
 
 // The planner puts a value read after a call in a callee-saved register
 // where one is free: R12, saved once, where a caller-saved register would

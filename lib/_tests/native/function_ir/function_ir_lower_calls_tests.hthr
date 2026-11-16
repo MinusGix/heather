@@ -73,9 +73,9 @@ theorem relay_returns<M>(placement: List<Place>, program: Prog, lowered: lower_p
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     a, b, c, d, e, f, g, h: BitVec(64)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(2),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b, c, d, e, f, g, h], i, s) ∧ 136 * 2 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b, c, d, e, f, g, h], i, s) ∧ 184 <= i,
         stack.CalleePost(program_eval(eight(), 1, [a, b, c, d, e, f, g, h]))) {
-    compiled_returns<M>(eight(), placement, program, lowered, trivial, fetch, data, last, origin, stack, 1, trivial,
+    compiled_returns<M>(eight(), placement, program_room(eight()), program, lowered, trivial, fetch, data, last, origin, stack, 1, trivial,
         [a, b, c, d, e, f, g, h], trivial, program_eval(eight(), 1, [a, b, c, d, e, f, g, h]), refl)
 }
 
@@ -83,9 +83,9 @@ theorem relay_returns<M>(placement: List<Place>, program: Prog, lowered: lower_p
 theorem mix_returns<M>(placement: List<Place>, program: Prog, lowered: lower_program(eight(), placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data)):
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(3),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed([w(1), w(2)], i, s) ∧ 136 * 3 <= i,
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed([w(1), w(2)], i, s) ∧ 320 <= i,
         stack.CalleePost(w(14))) {
-    compiled_returns<M>(eight(), placement, program, lowered, trivial, fetch, data, last, origin, stack, 2, trivial,
+    compiled_returns<M>(eight(), placement, program_room(eight()), program, lowered, trivial, fetch, data, last, origin, stack, 2, trivial,
         [w(1), w(2)], trivial, w(14), eight_evaluates())
 }
 
@@ -101,8 +101,8 @@ fn nine_caller() → Function {
     Function(parameters := [0, 1], body := Call(0, [0, 1, 1, 1, 1, 1, 1, 1, 0], 2), result := 2)
 }
 theorem nine_refused(): lower_program([sum9()], plan_program([sum9()])) = None { refl }
-theorem nine_why(): sum9().refused(0, sum9().plan(), 10, []) =
+theorem nine_why(): sum9().refused(0, sum9().plan(), 10, [], index_rooms()) =
     "the function has 9 parameters, and a function takes at most eight: six in registers and two on the stack" { refl }
 theorem nine_call_refused(): lower_program([nine_caller(), sum8()], plan_program([nine_caller(), sum8()])) = None { refl }
-theorem nine_call_why(): nine_caller().refused(1, nine_caller().plan(), 3, []) =
+theorem nine_call_why(): nine_caller().refused(1, nine_caller().plan(), 3, [], index_rooms()) =
     "the call of function 0 (0, 1, 1, 1, 1, 1, 1, 1, 0): it passes 9 words, and a call passes at most eight: six in registers and two on the stack" { refl }

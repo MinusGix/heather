@@ -323,21 +323,25 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, prog: Pr
 
 // `Function::emit_lent` of function `k` after no code: what it refuses.
 // The answer does not depend on the code before a function.
-fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>) → String {
+fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat) → String {
+    let saves = placement_saves(placement);
+    let opened = function_opened(Start, k, function.loads(), function.slots(), saves);
     match function.lent.same(lent_count(counts, k)) {
         False => "the function is lent " ++ refusal_number(function.lent) ++ " buffers and the program's counts say "
             ++ refusal_number(lent_count(counts, k)),
-        True => match input_file(word_ports(function.parameters), parameter_registers()) {
-            None => "the function has " ++ refusal_number(function.parameters.len())
-                ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
-            Some(file) => match function.body.emit_calls(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
-                placement_body(placement), names, k, counts, function.homes()) {
-                None => function.body.refusal(placement_saves(placement), function_opened(Start, k, function.loads(), placement_saves(placement)), file,
-                    placement_body(placement), names, k, counts, function.homes()),
-                Some(body) => match function.closing(placement_saves(placement), body) {
-                    None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
-                        ++ body.file.shown(),
-                    Some(_) => "nothing: the function has code after no other",
+        True => match function.roomy(rooms, k, saves) {
+            False => "the function's frame of " ++ refusal_number(function.frame(saves)) ++ " bytes and its calls do not fit the room of "
+                ++ refusal_number(rooms(k)) ++ " bytes its row of the room table gives it",
+            True => match input_file(word_ports(function.parameters), parameter_registers()) {
+                None => "the function has " ++ refusal_number(function.parameters.len())
+                    ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
+                Some(file) => match function.body.emit_calls(saves, opened, file, placement_body(placement), names, k, counts, function.homes()) {
+                    None => function.body.refusal(saves, opened, file, placement_body(placement), names, k, counts, function.homes()),
+                    Some(body) => match function.closing(saves, body) {
+                        None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
+                            ++ body.file.shown(),
+                        Some(_) => "nothing: the function has code after no other",
+                    },
                 },
             },
         },
@@ -349,8 +353,8 @@ fn bytes_numbers(bytes: List<BitVec(8)>) → List<Nat> {
 }
 
 // The report as bytes, which is what the compiler's evaluator reads.
-fn Function::refusal_bytes(self function: Function, k: Nat, names: Nat, counts: List<Nat>) → List<Nat> {
-    bytes_numbers(utf8::encode(function.refused(k, function.plan(), names, counts)))
+fn Function::refusal_bytes(self function: Function, k: Nat, names: Nat, counts: List<Nat>, rooms: Nat → Nat) → List<Nat> {
+    bytes_numbers(utf8::encode(function.refused(k, function.plan(), names, counts, rooms)))
 }
 
 // The function's nodes and calls, as bytes.
