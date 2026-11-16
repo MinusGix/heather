@@ -27,9 +27,17 @@ import omega;
 import option;
 
 // x + 0 = x.
+// The clauses of the two rules the library now states as `rule theorem`s
+// (function_ir_rules), as they were written by hand.
+fn add_zero_clause(w, o, x, z: Nat) → Clause { Clause([Is(Const(w, z, 0)), Is(Add(w, o, x, z))], Is(Move(w, o, x))) }
+
+fn swap_twice_clause(v, h, x, s, w: Nat) → Clause {
+    Clause([Is(ByteSwap(32, s, w)), Is(Resize(32, 64, x, s)), Is(Resize(64, 32, h, x)), Is(ByteSwap(32, v, h))], Is(Move(32, v, w)))
+}
+
 theorem add_zero_words(w: Nat, x: BitVec(w)): x.add(BitVec::ofNat(0)) = x { BitVec::add_zero(w, x) }
 
-theorem add_zero_glue(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() {
+theorem add_zero_glue(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() {
     λ values _ held => trans(held.right.left,
         trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), add_zero_words(w, values(w, x))))
 }
@@ -55,7 +63,7 @@ theorem swap_twice_words(w: u32): w.swap_bytes().resize(64).resize(32).swap_byte
         trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
 }
 
-theorem swap_twice_glue(v, h, x, s, w: Nat): swap_twice(v, h, x, s, w).Sound() {
+theorem swap_twice_glue(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() {
     λ values _ held => {
         let first: (values(64, x) = values(32, w).swap_bytes().resize(64)) = trans(held.right.left, cong_fn(λ (z: u32) => z.resize(64), held.left));
         let second: (values(32, h) = values(32, w).swap_bytes().resize(64).resize(32)) =
@@ -75,10 +83,10 @@ theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n,
 }
 
 // The same four by the tactic.
-theorem add_zero_by(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() { by rule_sound(add_zero_words) }
+theorem add_zero_by(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() { by rule_sound(add_zero_words) }
 
 
-theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
+theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
 
 theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
 

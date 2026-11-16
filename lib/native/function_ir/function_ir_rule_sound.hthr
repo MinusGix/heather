@@ -263,15 +263,12 @@ fn rule_given(given: List<Expr>) → Tac<List<RuleHyp>> {
     }
 }
 
-// `rule_sound(theorem, given := [proofs])`: the goal `clause.Sound()` from
-// `theorem`, a statement about words whose conclusion is the clause's with
-// every defining premise written out and whose hypotheses are the clause's
-// other premises, the `by`'s locals or the proofs given.
-fn rule_sound(theorem: Expr, given: List<Expr> := []) → Tac<Expr> {
-    let backward <- lookup("function_ir_rule_sound::rule_backward").or_fail("rule_sound: ");
-    let forward <- lookup("function_ir_rule_sound::rule_forward").or_fail("rule_sound: ");
-    let equal <- lookup("function_ir_rule_sound::rule_equal").or_fail("rule_sound: ");
-    let extra <- rule_given(given);
+// The goal `clause.Sound()` with every defining premise written out, closed
+// by `close` from the valuation and the facts left.
+fn rule_sound_by(close: Expr → List<RuleHyp> → Tac<Expr>) → Tac<Expr> {
+    let backward <- lookup(name_of(rule_backward)).or_fail("rule_sound: ");
+    let forward <- lookup(name_of(rule_forward)).or_fail("rule_sound: ");
+    let equal <- lookup(name_of(rule_equal)).or_fail("rule_sound: ");
     let g <- goal();
     let sound <- whnf_or(g.target);
     let values <- open(sound, "values").or_fail("rule_sound: the goal is no clause's soundness: ");
@@ -281,7 +278,15 @@ fn rule_sound(theorem: Expr, given: List<Expr> := []) → Tac<Expr> {
     let walk = RuleWalk(backward, forward, equal, values.local.ref, held.local.ref);
     let target <- rule_spelled(8, walk, held.body);
     let premises <- rule_premises(64, walk, Local(held.local.ref));
-    let p <- rule_walk(64, walk, Cons(held.local, Cons(buffers.local, Cons(values.local, g.locals))), premises, [], target,
-        λ kept => apply(theorem, rule_assumed(kept ++ extra, kept ++ extra)));
+    let p <- rule_walk(64, walk, Cons(held.local, Cons(buffers.local, Cons(values.local, g.locals))), premises, [], target, close(Local(values.local.ref)));
     pure(Lam(values.local.ref, Lam(buffers.local.ref, Lam(held.local.ref, p))))
+}
+
+// `rule_sound(theorem, given := [proofs])`: the goal `clause.Sound()` from
+// `theorem`, a statement about words whose conclusion is the clause's with
+// every defining premise written out and whose hypotheses are the clause's
+// other premises, the `by`'s locals or the proofs given.
+fn rule_sound(theorem: Expr, given: List<Expr> := []) → Tac<Expr> {
+    let extra <- rule_given(given);
+    rule_sound_by(λ _ kept => apply(theorem, rule_assumed(kept ++ extra, kept ++ extra)))
 }

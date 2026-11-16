@@ -499,3 +499,34 @@ Minus, 2026-11-16:
 - **Open fact forms are valuable**, for stranger backends and properties.
 - Domains and the order graph: sketched further at his request (§9.1,
   §9.3), not yet ruled on. Rules found by machine: liked, later.
+
+## 12. What is built
+
+Steps 1 and the generator of step 2.
+
+- **`rule_sound`** (`lib/native/function_ir/function_ir_rule_sound.hthr`):
+  a clause's soundness from a theorem about words. It reads each premise
+  at the valuation, rewrites the rest by the equation of each node premise
+  and hands the fact premises to the theorem. `given` passes proofs of the
+  theorem's guards.
+- **`rule theorem`** (`function_ir_rule.hthr`): the theorem is published as
+  written, and beside it `name_rule: Rule`, the clause the statement stands
+  for with its guard and its soundness. Read today: binders of `Nat` and
+  `BitVec(w)`, the IR's operators (written as methods or as operators, so
+  `x + 0`), equations, `Range(a, b).Holds(x)`, orders over `toNat()`, and
+  guards through their `Decide` instance.
+- **A rule's numbers** are its binders in the order written, then the word
+  each operator writes, outermost first. A plan's `Derive` gives them in
+  that order.
+- **Ported**: `add_zero` (rule 0) and `swap_twice` (rule 44). `rules()`
+  lists `add_zero_rule` and `swap_twice_rule` in their old places.
+
+Where the build differs from the sections above, for now:
+
+| The doc writes | Built |
+|---|---|
+| `swap_twice::rule` | `swap_twice_rule`: a member cannot attach to a theorem |
+| `x.within(a, b)` | `Range(a, b).Holds(x)`, the library's existing statement |
+| `x.nat()` | `x.toNat()` |
+| `f: Buffer` and the memory facts (`Loaded`, `Joined`, `Low`, `Split`) | not read yet |
+| registered by name, plans name rules by key | not yet: a generator cannot publish a `register def`. That needs a new declaration form in the tactic host, an elaborator change |

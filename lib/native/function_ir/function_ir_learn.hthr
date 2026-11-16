@@ -707,7 +707,7 @@ fn Seen::replaced(self seen: Seen, node: Node) → Option<Passed> {
                         Resize(half, full, _, s) => match half.same(32) && full.same(64) {
                             False => None,
                             True => nat_map_get(seen.made, s).and_then(λ first => match first {
-                                ByteSwap(width, _, word) => width.same(32).then(Some(Passed([Drop, Derive(44, [v, h, x, s, word]), Emit(Move(32, v, word))], seen))),
+                                ByteSwap(width, _, word) => width.same(32).then(Some(Passed([Drop, Derive(44, [word, v, h, x, s]), Emit(Move(32, v, word))], seen))),
                                 _ => None,
                             }),
                         },

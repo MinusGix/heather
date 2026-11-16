@@ -24,7 +24,7 @@ fn sums() → List<Node> { [Const(64, 1, 0), Add(64, 2, 0, 1), Add(64, 3, 2, 1)]
 // Every node dropped once its fact is learned; `add_zero` twice, then
 // `move_move`, and the one node the facts now hold is written.
 fn sums_plan() → List<Step> {
-    [Drop, Drop, Derive(0, [64, 2, 0, 1]), Drop, Derive(0, [64, 3, 2, 1]), Derive(1, [64, 3, 2, 0]), Emit(Move(64, 3, 0))]
+    [Drop, Drop, Derive(0, [64, 0, 2, 1]), Drop, Derive(0, [64, 2, 3, 1]), Derive(1, [64, 3, 2, 0]), Emit(Move(64, 3, 0))]
 }
 
 theorem sums_replayed(): replay(rules(), Facts::none(), sums(), sums_plan()).map(λ r => r.nodes) = Some([Move(64, 3, 0)]) { refl }
@@ -34,7 +34,7 @@ theorem sums_kept(): replay(rules(), Facts::none(), sums(), []).map(λ r => r.no
 
 // A rule whose premise is not among the facts is a refusal: the sum has not
 // been passed yet.
-theorem premise_missing(): replay(rules(), Facts::none(), sums(), [Drop, Derive(0, [64, 2, 0, 1])]).map(λ r => r.nodes) = None { refl }
+theorem premise_missing(): replay(rules(), Facts::none(), sums(), [Drop, Derive(0, [64, 0, 2, 1])]).map(λ r => r.nodes) = None { refl }
 
 // So is a node that no fact gives, a rule the table does not have, and a
 // store dropped.
@@ -54,7 +54,7 @@ fn two() → List<Function> {
 }
 
 fn two_plans() → List<Plan> {
-    [Both(Nodes(sums_plan()), Same), Nodes([Drop, Drop, Derive(0, [64, 2, 0, 1]), Emit(Move(64, 2, 0))])]
+    [Both(Nodes(sums_plan()), Same), Nodes([Drop, Drop, Derive(0, [64, 0, 2, 1]), Emit(Move(64, 2, 0))])]
 }
 
 fn two_replayed() → List<Function> {

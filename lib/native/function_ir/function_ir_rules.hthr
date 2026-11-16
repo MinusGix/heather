@@ -14,6 +14,7 @@
 import function_ir;
 import function_ir_eval;
 import function_ir_replay;
+import function_ir_rule;
 import function_ir_state;
 import bitvec;
 import bitvec_bytes;
@@ -53,13 +54,8 @@ fn Rule::four(clause: Nat → Nat → Nat → Nat → Clause, sound: (a, b, c, d
 // ---------------------------------------------------------------------------
 // The rules
 
-// x + 0 is x: `o` the sum at width `w` of `x` and `z`, `z` the literal 0.
-fn add_zero(w, o, x, z: Nat) → Clause { Clause([Is(Const(w, z, 0)), Is(Add(w, o, x, z))], Is(Move(w, o, x))) }
-
-theorem add_zero_sound(w, o, x, z: Nat): add_zero(w, o, x, z).Sound() {
-    λ values _ held => trans(held.right.left,
-        trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), BitVec::add_zero(w, values(w, x))))
-}
+// x + 0 is x. Its numbers: the width, `x`, the sum, the literal 0.
+rule theorem add_zero({w: Nat}, x: BitVec(w)): x + 0 = x { BitVec::add_zero(w, x) }
 
 // A move of a move: `o` moved from `s`, `s` from `t`, at width `w`.
 fn move_move(w, o, s, t: Nat) → Clause { Clause([Is(Move(w, s, t)), Is(Move(w, o, s))], Is(Move(w, o, t))) }
@@ -73,19 +69,6 @@ theorem move_move_sound(w, o, s, t: Nat): move_move(w, o, s, t).Sound() {
 // from the node that makes it and the ranges of what it reads, and what a
 // comparison's bit says of its operands. A rule is made where its literals
 // allow it (a sum that cannot wrap), so none has a condition left to prove.
-
-// The `i`th of a rule's numbers, zero past the end.
-fn num(args: List<Nat>, i: Nat) → Nat {
-    match args { Nil => 0, Cons(a, rest) => match i { Zero => a, Succ(k) => num(rest, k) } }
-}
-
-// A rule made where `ok` of its numbers holds.
-fn Rule::when(ok: List<Nat> → Bool, clause: List<Nat> → Clause, sound: (args: List<Nat>) → ok(args) = True → clause(args).Sound()) → Rule {
-    Rule(λ args => ok(args).then(Some(clause(args))), λ args c made => {
-        let got = Bool::then_some(ok(args), Some(clause(args)), c, made);
-        j(Option::some_inj(clause(args), c, got.right), λ k _ => k.Sound(), sound(args, got.left))
-    })
-}
 
 theorem leb_below(n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound(m, Bool::is_true_of_eq(h)) }
 
@@ -752,19 +735,12 @@ theorem split_plain_sound(v, w, x0, x1, x2, x3: Nat): split_plain(v, w, x0, x1, 
 // a swap of a swap is the word: a word loaded big-endian and stored
 // big-endian is the word loaded, and the store needs neither swap.
 
-fn swap_twice(v, h, x, s, w: Nat) → Clause {
-    Clause([Is(ByteSwap(32, s, w)), Is(Resize(32, 64, x, s)), Is(Resize(64, 32, h, x)), Is(ByteSwap(32, v, h))], Is(Move(32, v, w)))
-}
-
-theorem swap_twice_sound(v, h, x, s, w: Nat): swap_twice(v, h, x, s, w).Sound() {
-    λ values buffers held => {
-        let word = values(32, w);
-        let back: (values(32, h) = values(32, s)) = trans(held.right.right.left, trans(cong_fn(λ (z: BitVec(64)) => z.resize(32), held.right.left),
-            BitVec::resize_round_trip(32, 64, Nat::leb_sound(32, 64, trivial), values(32, s))));
-        let once: (values(32, s) = word.byte_swap(4)) = trans(held.left, BitVec::swap_bytes_32(word));
-        trans(held.right.right.right.left, trans(cong_fn(λ (z: BitVec(32)) => z.swap_bytes(), trans(back, once)),
-            trans(BitVec::swap_bytes_32(word.byte_swap(4)), BitVec::byte_swap_byte_swap(4, word))))
-    }
+// Its numbers: the word, then the last swap, the narrowing, the widening
+// and the first swap.
+rule theorem swap_twice(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes() = w {
+    let back: (w.swap_bytes().resize(64).resize(32) = w.swap_bytes()) = BitVec::resize_round_trip(32, 64, Nat::leb_sound(32, 64, trivial), w.swap_bytes());
+    trans(cong_fn(λ (z: u32) => z.swap_bytes(), trans(back, BitVec::swap_bytes_32(w))),
+        trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
 }
 
 fn always(args: List<Nat>) → Bool { True }
@@ -773,7 +749,7 @@ fn always(args: List<Nat>) → Bool { True }
 // ones are added at the end.
 fn rules() → List<Rule> {
     [
-        Rule::four(add_zero, add_zero_sound),
+        add_zero_rule,
         Rule::four(move_move, move_move_sound),
         // 2
         Rule::when(λ n => num(n, 1).leb(word_top()), λ n => within_const(num(n, 0), num(n, 1)), λ n ok => within_const_sound(num(n, 0), num(n, 1), ok)),
@@ -864,7 +840,6 @@ fn rules() → List<Rule> {
         Rule::when(always, λ n => split_plain(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5)),
             λ n _ => split_plain_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4), num(n, 5))),
         // 44
-        Rule::when(always, λ n => swap_twice(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4)),
-            λ n _ => swap_twice_sound(num(n, 0), num(n, 1), num(n, 2), num(n, 3), num(n, 4))),
+        swap_twice_rule,
     ]
 }
