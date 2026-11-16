@@ -280,6 +280,13 @@ pub struct SemanticSession {
     /// ([`Self::expect_load`]): what each module still to be checked will
     /// need of the finished ones (`docs/infrastructure/module-dag-design.md` §8).
     load: Option<Load>,
+    /// The imports taken from their images and not yet replayed over their
+    /// own canonical worlds ([`Self::check_import`],
+    /// `docs/infrastructure/module-dag-design.md` §14).
+    deferred: BTreeSet<String>,
+    /// Whether [`Self::check_import`] may still defer: not once a deferred
+    /// image failed to load into a world.
+    defer: bool,
 }
 
 /// What the modules still to be checked need of the finished ones. A
@@ -363,6 +370,8 @@ impl SemanticSession {
             expectations: false,
             hit: None,
             load: None,
+            deferred: BTreeSet::new(),
+            defer: true,
         }
     }
 
@@ -570,7 +579,29 @@ impl SemanticSession {
         module: &Module,
         lint_profile: LintProfile,
     ) -> ModuleOutcome {
-        let outcome = self.check_held(elab, module, lint_profile);
+        let outcome = self.check_held(elab, module, lint_profile, false);
+        self.finished_with(&module.name);
+        outcome
+    }
+
+    /// Give the session a module that is in the load only because a module
+    /// to be checked imports it (`docs/infrastructure/module-dag-design.md` §14). When the
+    /// store has its image, the image is decoded and recorded and nothing
+    /// else: it is replayed, through the gate as any replay is, when it is
+    /// loaded into a world some checked module stands on, and never if no
+    /// such world holds it. [`Self::check`] replays it over its own
+    /// canonical world first, which it has to build, and a closure of
+    /// imports cost one such world each. So an `ok` outcome here says the
+    /// image is there, not that the module checked: a caller reports a
+    /// module it was asked about with [`Self::check`]. Anything but a plain
+    /// hit is [`Self::check`].
+    pub fn check_import(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        lint_profile: LintProfile,
+    ) -> ModuleOutcome {
+        let outcome = self.check_held(elab, module, lint_profile, true);
         self.finished_with(&module.name);
         outcome
     }
@@ -580,6 +611,7 @@ impl SemanticSession {
         elab: &mut Elaborator,
         module: &Module,
         lint_profile: LintProfile,
+        as_import: bool,
     ) -> ModuleOutcome {
         // One module scope, so the dump has a per-module row whose total covers
         // the declarations inside it plus the module-level work — parse,
@@ -636,6 +668,12 @@ impl SemanticSession {
             }
         }
 
+        if as_import && self.defer && !self.process_world && self.images_usable && !self.only.contains_key(&module.name) {
+            if let Some(outcome) = self.hit_deferred(module, lint_profile, key, &dependencies, &imports, &canon) {
+                return outcome;
+            }
+        }
+
         let start = elab.psi().bindings.len();
         let (outcome, delta, state) = if in_place {
             let (outcome, delta) = self.check_in(elab, module, lint_profile, key, source, dependencies, &canon);
@@ -644,6 +682,23 @@ impl SemanticSession {
         } else {
             let mut world = match stats::timed(stats::Timer::ImageRecheck, || self.world_before(elab, &canon)) {
                 Ok(world) => world,
+                // A deferred image would not load. Checked in order, each
+                // over its own world, they are replayed or elaborated again
+                // as a module that was never deferred is, and this module
+                // is then checked over what they came to.
+                Err(_) if canon.order.iter().any(|m| self.deferred.contains(m)) => {
+                    self.defer = false;
+                    for name in canon.order.iter() {
+                        if !self.deferred.remove(name) {
+                            continue;
+                        }
+                        let Some((import, profile)) = self.done.remove(name).and_then(|f| f.source) else {
+                            return internal_failure(&module.name, format!("the image of `{name}` did not load and its source is not held"));
+                        };
+                        self.check_held(elab, &import, profile, false);
+                    }
+                    return self.check_held(elab, module, lint_profile, as_import);
+                }
                 Err(why) => {
                     self.done.insert(module.name.clone(), Finished::failed(imports, canon, source_len));
                     return internal_failure(&module.name, why);
@@ -752,6 +807,8 @@ impl SemanticSession {
         let canon = self.done[name].canon.clone();
         let mut world = self.world_before(template, &canon)?;
         self.load_into(&mut world, name, &canon.order)?;
+        // Replayed over its own world now, as a module never deferred was.
+        self.deferred.remove(name);
         let state = world.semantic_image();
         self.done.get_mut(name).expect("finished").state = Some(state.clone());
         Ok(state)
@@ -1007,6 +1064,64 @@ impl SemanticSession {
             replayed_items: 0,
             forced_items: 0,
             expected_refusals: loaded.refusals,
+            notices,
+        })
+    }
+
+    /// An import's stored image, decoded and recorded without a replay
+    /// ([`Self::check_import`]). `None` sends the module down the canonical
+    /// path, which reports what this one saw.
+    fn hit_deferred(
+        &mut self,
+        module: &Module,
+        lint_profile: LintProfile,
+        key: ModuleCacheKey,
+        dependencies: &ModuleDependencyIdentity,
+        imports: &[String],
+        canon: &Canon,
+    ) -> Option<ModuleOutcome> {
+        let images = self.images.as_ref()?;
+        // Decoded against a prefix of the right length, as a delta decoded
+        // again from the store is ([`Self::canonical_delta`]): a load puts
+        // the world's own prefix under it before the replay compares them.
+        let psi = placeholder(self.world_len(&canon.order));
+        let loaded = stats::timed(stats::Timer::ImageDecode, || images.load(key, psi, module.src.len(), self.freshness))
+            .ok()??;
+        // An image of refusals stands for a module that was asked about,
+        // never for an import.
+        if loaded.delta.dependencies() != dependencies || loaded.refusals != 0 {
+            return None;
+        }
+        self.hits += 1;
+        let mut notices = Vec::new();
+        self.note_stale(&module.name, loaded.stale, &mut notices);
+        self.done.insert(
+            module.name.clone(),
+            Finished {
+                imports: imports.to_vec(),
+                canon: canon.clone(),
+                failed: false,
+                len: loaded.delta.binding_count(),
+                identity: loaded.interface_hash,
+                key,
+                source_len: module.src.len(),
+                registry: Some(loaded.delta.registry_part()),
+                digest: OnceLock::new(),
+                hashes: None,
+                delta: Some(Rc::new(loaded.delta)),
+                content: Some(loaded.content),
+                source: Some((Rc::new(module.clone()), lint_profile)),
+                state: None,
+            },
+        );
+        self.deferred.insert(module.name.clone());
+        Some(ModuleOutcome {
+            errors: Vec::new(),
+            warnings: loaded.warnings,
+            replayed: true,
+            replayed_items: 0,
+            forced_items: 0,
+            expected_refusals: 0,
             notices,
         })
     }
