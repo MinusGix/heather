@@ -25,6 +25,18 @@
 //!   elaborator acceptance suite keeps sweeping real term shapes.
 //! - [`SkipVerification::Off`] — never.
 //!
+//! A sampled check is also bounded by work, not only by count
+//! ([`REWALK_SHARE`]): a skip costs a constant and its check costs the term
+//! skipped, so a traversal that skips the same large closed term again and
+//! again (a `runtime fn` generator shifting its reified program) paid, at
+//! one check in sixteen, twenty times its own cost
+//! (`issues/kernel-self-check-cost-on-skipped-terms.md`). Every node an
+//! thread counts the nodes its ordinary substitutions visit and the nodes
+//! its checks walk again ([`sample_work`]), and a sampled check runs only
+//! while the second is within one part in [`REWALK_SHARE`] of the first.
+//! Which claims are checked is still a function of the claims the thread
+//! makes.
+//!
 //! A check is one derivation ([`rederive`]): nothing is checked inside it and
 //! it moves no counter, so checking every claim costs about what the claims
 //! saved, and a debug build counts what a release build counts.
@@ -47,6 +59,12 @@ pub enum SkipVerification {
 /// Under [`SkipVerification::Sampled`], the interval between verified skips.
 pub const SAMPLE_EVERY: u32 = 16;
 
+/// Under [`SkipVerification::Sampled`], the nodes an ordinary substitution
+/// visits for each node a check may walk again: the sample's substitution
+/// work stays under one part in this many of the work it samples, plus the
+/// one check that overdrew the account.
+pub const REWALK_SHARE: u64 = 16;
+
 const OFF: u8 = 0;
 const SAMPLED: u8 = 1;
 const FULL: u8 = 2;
@@ -62,6 +80,33 @@ thread_local! {
 thread_local! {
     /// Which claim this thread is deriving again, if any ([`rederive`]).
     static AGAIN: Cell<u8> = const { Cell::new(NOT_AGAIN) };
+}
+
+thread_local! {
+    /// The nodes this thread's ordinary substitutions visited, and the
+    /// nodes its checks walked again ([`visited`], [`sample_work`]).
+    static WORK: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// A substitution visited one node: the kernel's own work, or a check
+/// walking a claim again.
+#[cfg(debug_assertions)]
+#[inline]
+pub(crate) fn visited() {
+    let again = AGAIN.with(|w| w.get()) != NOT_AGAIN;
+    WORK.with(|w| {
+        let (own, checks) = w.get();
+        w.set(if again { (own, checks + 1) } else { (own + 1, checks) });
+    });
+}
+
+/// This thread's substitution work so far: the nodes its own traversals
+/// visited and the nodes its checks walked again. Under
+/// [`SkipVerification::Sampled`] the second stays within one part in
+/// [`REWALK_SHARE`] of the first, plus one check. Both are zero in a
+/// release build, which checks nothing.
+pub fn sample_work() -> (u64, u64) {
+    WORK.with(|w| w.get())
 }
 
 #[cfg(debug_assertions)]
@@ -171,10 +216,17 @@ pub(crate) fn verify_this_skip() -> bool {
     match LEVEL.load(Ordering::Relaxed) {
         OFF => false,
         FULL => true,
-        _ => SAMPLE.with(|n| {
-            let next = n.get().wrapping_add(1) % SAMPLE_EVERY;
-            n.set(next);
-            next == 0
-        }),
+        _ => {
+            let due = SAMPLE.with(|n| {
+                let next = n.get().wrapping_add(1) % SAMPLE_EVERY;
+                n.set(next);
+                next == 0
+            });
+            // Not while the checks are ahead of their share of the work.
+            due && WORK.with(|w| {
+                let (own, checks) = w.get();
+                checks.saturating_mul(REWALK_SHARE) <= own
+            })
+        }
     }
 }

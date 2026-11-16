@@ -418,6 +418,8 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if let Some(count) = M::COUNT_NODES {
         count(1);
     }
+    #[cfg(debug_assertions)]
+    crate::checks::visited();
     if !(M::VERIFY_SKIPS && crate::checks::unskipped()) && m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
         // claim in debug builds, exactly as shared_ty verifies the change
@@ -545,6 +547,8 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
     if let Some(count) = M::COUNT_NODES {
         count(1);
     }
+    #[cfg(debug_assertions)]
+    crate::checks::visited();
     // Whole-node replacement, before anything else: a mapper that matches
     // *terms* has to see a node before its children are rebuilt, and its
     // answer is by construction a change (rule 1's "over-reporting is safe"
