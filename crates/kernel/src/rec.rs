@@ -8,10 +8,10 @@
 //! live here **once** and are consumed by both the convertibility checker
 //! ([`crate::conv`], comparing branches pairwise at these types) and the
 //! type checker ([`crate::typing`], checking branches against these types).
-//! They must also stay in sync with `subst.rs`'s `map_branches` depths and
-//! `reduce.rs`'s β-instantiations, which nothing checks but the
-//! identity-recursor typing test end to end
-//! (`issues/kernel-binder-count-tables.md`).
+//! The traversals that walk branches without building telescopes read the
+//! binder counts from [`BRANCH_DEPTHS`], which a unit test holds to these
+//! telescopes. `reduce.rs`'s β-instantiations are checked only by the
+//! identity-recursor typing test, end to end.
 //!
 //! Scoping convention for a telescope `(ℓ⃗; B⃗; x⃗)`: `univs` universe binders
 //! are pushed first, then the global bindings (each scoped over `L, ℓ⃗` and
@@ -285,6 +285,81 @@ pub const BRANCH_NAMES: [&str; 65] = [
     "tm_iwf",
     "tm_sup_i",
     "tm_elim_iwf",
+];
+
+/// How many (universe, global, local) binders each branch sits under, in
+/// [`BRANCH_NAMES`] order: its telescope's `univs`, `globals.len()` and
+/// `locals.len()`. The traversals that walk a [`Branches`] without building
+/// the telescopes (`subst.rs`'s `map_branches`, `bounds.rs`'s
+/// `branches_use`) read their binder depths here, and
+/// `branch_depths_match_the_telescopes` holds the table to
+/// [`branch_specs`].
+pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 65] = [
+    (0, 1, 0), // ty_nat
+    (2, 3, 2), // ty_pi
+    (1, 1, 0), // ty_ty
+    (1, 2, 1), // ty_el
+    (1, 4, 3), // ty_id
+    (2, 3, 2), // ty_sigma
+    (1, 1, 0), // ty_unit
+    (1, 1, 0), // ty_empty
+    (1, 3, 0), // tm_var
+    (0, 1, 0), // tm_nat
+    (2, 3, 2), // tm_pi
+    (1, 1, 0), // tm_ty
+    (0, 1, 0), // tm_zero
+    (0, 2, 1), // tm_succ
+    (1, 5, 4), // tm_elim_nat
+    (2, 4, 2), // tm_lam
+    (2, 5, 4), // tm_app
+    (1, 4, 3), // tm_id
+    (1, 3, 2), // tm_refl
+    (2, 7, 6), // tm_j
+    (2, 3, 2), // tm_sigma
+    (2, 5, 4), // tm_pair
+    (2, 4, 3), // tm_fst
+    (2, 4, 3), // tm_snd
+    (1, 1, 0), // tm_unit
+    (1, 1, 0), // tm_empty
+    (1, 1, 0), // tm_triv
+    (2, 3, 2), // tm_elim_empty
+    (2, 3, 2), // ty_sum
+    (2, 3, 2), // tm_sum
+    (2, 4, 3), // tm_inl
+    (2, 4, 3), // tm_inr
+    (3, 7, 6), // tm_case
+    (2, 3, 2), // ty_w
+    (2, 3, 2), // tm_w
+    (2, 5, 4), // tm_sup
+    (3, 6, 5), // tm_elim_w
+    (1, 3, 2), // ty_vec
+    (1, 3, 2), // tm_vec
+    (0, 2, 1), // ty_fin
+    (0, 2, 1), // tm_fin
+    (1, 3, 2), // ty_wf
+    (1, 3, 2), // tm_wf
+    (1, 5, 4), // tm_supf
+    (2, 6, 5), // tm_elim_wf
+    (1, 4, 3), // ty_seq
+    (1, 4, 3), // tm_seq
+    (1, 1, 0), // ty_sempty
+    (1, 1, 0), // tm_sempty
+    (1, 3, 2), // tm_srefl
+    (2, 3, 2), // tm_elim_sempty
+    (1, 2, 1), // ty_squash
+    (1, 2, 1), // tm_squash
+    (1, 3, 2), // tm_squash_in
+    (2, 5, 4), // tm_elim_squash
+    (3, 6, 5), // ty_m
+    (3, 6, 5), // tm_m
+    (4, 9, 8), // tm_corec
+    (3, 7, 6), // tm_out
+    (1, 3, 2), // ty_dvec
+    (1, 3, 2), // tm_dvec
+    (2, 7, 6), // ty_iwf
+    (2, 7, 6), // tm_iwf
+    (2, 8, 7), // tm_sup_i
+    (3, 10, 9), // tm_elim_iwf
 ];
 
 /// The 65 branches, in [`branch_specs`] order (= `Branches` field order).
@@ -5454,6 +5529,27 @@ mod tests {
                  declared level ({:?})",
                 r.unwrap_err(),
             );
+        }
+    }
+
+    /// [`BRANCH_DEPTHS`] is each telescope's binder counts, branch by
+    /// branch: the traversals that read it (`map_branches`, `branches_use`)
+    /// then put every branch under exactly the binders it is typed under. A
+    /// drift would shift a branch's free variables by the difference, a
+    /// silently wrong substitution (issues/kernel-binder-count-tables.md).
+    /// The counts do not depend on Γ; two are tried all the same.
+    #[test]
+    fn branch_depths_match_the_telescopes() {
+        let motives = identity_motives();
+        let (l1, l2) = (Level::Zero, Level::Zero);
+        let one = LocalCtx::nil().extended(Rc::new(Type::Nat), Level::Zero);
+        for gamma in [LocalCtx::nil(), one] {
+            let specs = branch_specs(&motives, &l1, &l2, &gamma);
+            for ((spec, name), depths) in specs.iter().zip(BRANCH_NAMES).zip(BRANCH_DEPTHS) {
+                let tele = &spec.tele;
+                let counted = (tele.univs, tele.globals.len() as u32, tele.locals.len() as u32);
+                assert_eq!(counted, depths, "{name}: telescope (univs, globals, locals) against BRANCH_DEPTHS");
+            }
         }
     }
 
