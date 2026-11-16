@@ -1453,7 +1453,8 @@ Each is a PR and ends with something that runs.
       that port (`ETm::placed`, `ETm::bit_kept_sound`). *Runs:* `tr` as
       one `ELoop` over `Io` (read, `Lend` to `raise_span`, write, while
       the count is nonzero) is proved to read as its meaning, compiles
-      (`tr_lend_source`), and matches GNU tr
+      (`tr_lend_source`, since replaced by the `runtime fn tr_upper`,
+      docs/native/io-programs-design.md §3), and matches GNU tr
       (`lib/_tests/native/runtime/rt_io_lend_tests.hthr`,
       `native_tools.rs`). *Not here:* the reflector does not read a call
       of a `runtime fn` on a buffer as `Lend`, and it reads no loops yet;
