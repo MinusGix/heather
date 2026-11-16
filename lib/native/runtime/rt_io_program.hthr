@@ -16,6 +16,7 @@ import list;
 import option;
 import pair;
 import bitvec;
+import nat_map;
 import itree;
 import coitree;
 import coitree_eutt;
@@ -26,11 +27,14 @@ import linux_world_co;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_run;
+import function_ir_placeless;
 import native_source;
 import native_source_co;
 import rt;
 import rt_io;
 import rt_io_lower;
+import rt_file_loop;
 
 // After the statements: the word the value is in, as the status, or the
 // status they left with.
@@ -96,4 +100,69 @@ fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: Perform
             CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)),
             Stmt::exit_eutt(s, result, call, perform, env, tys), io),
         r(io))
+}
+
+// ---------------------------------------------------------------------------
+// A function lent the program's first buffer, from its own theorem
+
+// `k` words, one at a time.
+fn Words(k: Nat, R: Type) → Type { match k { Zero => R, Succ(m) => BitVec(64) → Words(m, R) } }
+
+// A function of `k` words on the first `k` of a list (zero past its end).
+fn Words::apply<R>(k: Nat) → Words(k, R) → List<BitVec(64)> → R {
+    match k as λ n => Words(n, R) → List<BitVec(64)> → R {
+        Zero => λ r _ => r,
+        Succ(m) => λ f ws => Words::apply(m, f(ws.head_or(BitVec::zero())), ws.tail()),
+    }
+}
+
+// A statement of every `k` words, one at a time: what a `runtime fn`'s
+// theorem over its words is.
+fn Words::All(k: Nat, P: List<BitVec(64)> → Type) → Type {
+    match k { Zero => P(Nil), Succ(m) => (w: BitVec(64)) → Words::All(m, λ (ws: List<BitVec(64)>) => P(Cons(w, ws))) }
+}
+
+// So it holds of every list of `k` words.
+fn Words::all_at(ws: List<BitVec(64)>) → (k: Nat) → (P: List<BitVec(64)> → Type) → Words::All(k, P) → ws.len() = k → P(ws) {
+    match ws {
+        Nil => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → 0 = n → P(Nil) {
+            Zero => λ P h _ => h,
+            Succ(m) => λ P h e => false_elim(Nat::zero_ne_succ(m, e)),
+        },
+        Cons(w, rest) => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → Succ(rest.len()) = n → P(Cons(w, rest)) {
+            Zero => λ P h e => false_elim(Nat::succ_ne_zero(rest.len(), e)),
+            Succ(m) => λ P h e => Words::all_at(rest, m, λ (ws: List<BitVec(64)>) => P(Cons(w, ws)), h(w), Nat::succ_inj(rest.len(), m, e)),
+        },
+    }
+}
+
+// A `runtime fn` over a span, `run(span, length, w₁, …, w_k)`, as the
+// table's entry for the program's function `entry`: lent the buffer, its
+// length the buffer's own.
+fn Lent::of_span(k: Nat, entry: Nat, run: List<BitVec(8)> → BitVec(64) → Words(k, Mutated<List<BitVec(8)>, BitVec(64)>)) → Lent {
+    Lent(k, entry, λ own ws => Words::apply(k, run(own, BitVec::ofNat(own.len())), ws))
+}
+
+// Its program agrees with the table: from what its generator proves of it
+// (`run::runs_over`: run over a file whose first buffer is the span, the
+// program's function `entry` ends as `run` does), and that it is lent one
+// buffer.
+theorem Lent::agrees_span(prog: List<Function>, k: Nat, entry: Nat, run: List<BitVec(8)> → BitVec(64) → Words(k, Mutated<List<BitVec(8)>, BitVec(64)>),
+    lent: program_lent(prog, entry) = 1,
+    runs: (span: List<BitVec(8)>) → (rest: Buffers()) → (place: BitVec(64)) → (length: BitVec(64)) →
+        Words::All(k, λ ws => program_run(prog, Cons(span, rest), entry, Cons(place, Cons(length, ws))) = FTm::end_of(rest, Words::apply(k, run(span, length), ws)))):
+    ETm::LentsAgree([Lent::of_span(k, entry, run)], program_writers(prog))
+{
+    λ f => match f {
+        Zero => λ _ own rest words len => {
+            let m = Words::apply(k, run(own, BitVec::ofNat(own.len())), words);
+            let ran: (program_run(prog, Cons(own, Nil), entry, Cons(BitVec::zero(), Cons(BitVec::ofNat(own.len()), words))) = FTm::end_of(Nil, m)) =
+                Words::all_at(words, k, λ ws => program_run(prog, Cons(own, Nil), entry, Cons(BitVec::zero(), Cons(BitVec::ofNat(own.len()), ws)))
+                    = FTm::end_of(Nil, Words::apply(k, run(own, BitVec::ofNat(own.len())), ws)), runs(own, Nil, BitVec::zero(), BitVec::ofNat(own.len())), len);
+            j(sym(lent), λ n _ => shared(program_run(prog, lent_buffers(n, Cons(own, rest)), entry, stated_homes(0, n, Cons(own, rest)) ++ words),
+                    λ (answer: Ending) => Ending(answer.word, relent(n, answer.buffers, Cons(own, rest)))) = Ending(m.value, Cons(m.after, rest)),
+                cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(own, rest))), ran))
+        },
+        Succ(_) => λ never => false_elim(never),
+    }
 }

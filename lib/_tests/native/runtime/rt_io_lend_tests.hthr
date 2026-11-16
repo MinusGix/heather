@@ -380,3 +380,43 @@ fn tr_source_reads() → Io::Reads<BitVec(64)>(tr_lend_source().tree_co([]), λ 
         λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity())),
         tr_surface_reads(List::replicate(zero_byte(), tr_capacity()), tr_lend_source().performs_co(tr_calls(), 0)))
 }
+
+// ---------------------------------------------------------------------------
+// The same theorem from the pieces a program's generator puts together:
+// the world plain, the table's entry `raise_span` itself, its agreement
+// from `raise_span::runs_over`, the bridge's buffer instantiated with its
+// world kept first.
+
+fn tr_table() → List<Lent> { [Lent::of_span(2, raise_span_entry(), raise_span)] }
+
+theorem tr_table_agrees(): ETm::LentsAgree(tr_table(), tr_calls()) {
+    Lent::agrees_span(raise_span_program(), 2, raise_span_entry(), raise_span, refl, raise_span::runs_over)
+}
+
+fn tr_plain_lowered() → ELowered { tr_prog().lower(ETm::plain_world(), tr_table(), tr_g(), tr_locs(), 1).unwrap_or(ELowered(Exit(0), 0, 0, [])) }
+
+fn tr_plain_source() → Source {
+    Source(functions := raise_span_program(), buffers := [Buffer(tr_capacity())], words := tr_plain_lowered().stmt.word_bound(),
+        main := Then(tr_plain_lowered().stmt, Exit(tr_plain_lowered().result)))
+}
+
+theorem tr_plain_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(ETm::plain_world(), tr_table(), tr_g(), Pair(buf, trivial), io))
+{
+    by io_loop_bridge("Io::tr_upper", [], [], ["raise_span"], "ETm::plain_world", "tr_table")
+}
+
+fn tr_plain_reads() → Io::Reads<BitVec(64)>(tr_plain_source().tree_co([]), λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity()))) {
+    Stmt::exit_reads(tr_plain_lowered().stmt, tr_plain_lowered().result, tr_calls(), tr_plain_source().performs_co(tr_calls(), 0),
+        tr_plain_source().start([]), RecInfo::none, λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity())),
+        Io::reads_back(CoTree::map(Events::linux(), tr_plain_lowered().stmt.denote_co(tr_calls(), tr_plain_source().performs_co(tr_calls(), 0))(tr_plain_source().start([])),
+                λ flow => flow.read_back(Word(64), RecInfo::none, tr_plain_lowered().result)),
+            λ io => tr_prog().sem(ETm::plain_world(), tr_table(), tr_g(), Pair(List::replicate(zero_byte(), tr_capacity()), trivial), io),
+            λ io => Io::tr_upper(io, List::replicate(zero_byte(), tr_capacity())),
+            ELoop::lower_reads(tr_prog(), ETm::plain_world(), tr_table(), tr_g(), tr_locs(), 1, tr_plain_lowered(), refl, tr_calls(),
+                λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(tr_calls(), held)),
+                tr_table_agrees(), tr_plain_source().performs_co(tr_calls(), 0), tr_plain_source().start([]),
+                Pair(List::replicate(zero_byte(), tr_capacity()), trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial),
+            Io::at_each(λ io buf => Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(ETm::plain_world(), tr_table(), tr_g(), Pair(buf, trivial), io)),
+                tr_plain_bridged(), List::replicate(zero_byte(), tr_capacity()))))
+}
