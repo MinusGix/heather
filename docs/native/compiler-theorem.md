@@ -248,6 +248,7 @@ is kept as it is (`HEATHER_OPTIMIZE=off` turns the optimizer off).
 | The readable statements | `lib/native/function_ir/function_ir_correct.hthr` |
 | The compiler's theorem as certificates cite it | `lib/native/function_ir/function_ir_compile.hthr` (`compiled_returns`, `compiled_returns_written`, `compiled_returns_marked`, `compiled_returns_unlent`) |
 | The lowering and its proof | `lib/native/function_ir/function_ir_lower*.hthr` |
+| What a caller keeps across a call (the frame rule) | `Stack::wrote_frame` in `lib/std/arch/x86_64/x86_64_stack.hthr`, `Stack::wrote_in_frame` in `x86_64_lending.hthr`; over the contract, `lib/native/function_ir/function_ir_frame.hthr` |
 | The contract's controls | `lib/_tests/native/function_ir/function_ir_compile_tests.hthr` |
 | The certificate's generator | `crates/cli/src/native/verified.rs` |
 | The machine model | `lib/std/arch/x86_64/`, `docs/native/x86-64-execution-boundary.md` |

@@ -891,6 +891,20 @@ fn Stack::Saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stac
     }
 }
 
+// The slots are stable under a word stored below `from`, when they lie at
+// or above it: what a body keeps of its saved registers across its own
+// stores and its callees' (`Stack::wrote_frame`).
+theorem Stack::stable_saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from, d: Nat,
+    gprs: Gprs, registers: List<Gpr>): (k: Nat) → from <= d + 8 * k → d + 8 * (k + registers.len()) <= stack.size →
+    stack.Stable(from, λ (m: M) => stack.Saved(d, registers, k, gprs, m)) {
+    match registers {
+        Nil => λ k _ _ memory own below word held => trivial,
+        Cons(register, rest) => λ k above room =>
+            stack.stable_and(from, stack.stable_word(from, d + 8 * k, above, { omega }, Some(read_gpr(register, gprs))),
+                stack.stable_saved(from, d, gprs, rest, Succ(k), { omega }, { omega })),
+    }
+}
+
 // The registers' words restored over `gprs` from `saved`, in order.
 fn restore(registers: List<Gpr>, saved, gprs: Gprs) → Gprs {
     match registers {

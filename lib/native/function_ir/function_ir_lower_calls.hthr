@@ -69,6 +69,7 @@ import x86_64_layout;
 import x86_64_store;
 import x86_64_stack;
 import x86_64_lending;
+import x86_64_frame;
 import x86_64_views;
 import x86_64_kept;
 import x86_64_asm;
@@ -686,15 +687,22 @@ theorem Stack::in_memory_lent<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     }
 }
 
-// And the file is still the one in memory after them.
+// The file in memory is stable under a word stored below `top`,
+theorem Stack::stable_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), i: Nat, low: i <= top, now: Buffers()):
+    stack.Stable(i, λ (m: M) => stack.InMemory(lending, now, m)) {
+    λ memory k below word held b => {
+        let same = held(b).left;
+        let fits: (buffer_bytes(now, b).len() <= buffer_bytes(lending.buffers, b).len()) = omega(same);
+        ⟨same, loan.own_reads(memory, k, omega(below, low), word, b, buffer_bytes(now, b), fits, held(b).right)⟩
+    }
+}
+
+// so it is still the one in memory after a call's own stores.
 theorem Stack::in_memory_wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
     lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), i: Nat, low: i <= top, now: Buffers(), before, after: M,
     wrote: stack.Wrote(i, before, after), held: stack.InMemory(lending, now, before)): stack.InMemory(lending, now, after) {
-    λ b => {
-        let same = held(b).left;
-        let fits: (buffer_bytes(now, b).len() <= buffer_bytes(lending.buffers, b).len()) = omega(same);
-        ⟨same, loan.wrote_reads(i, low, b, buffer_bytes(now, b), fits, before, after, wrote, held(b).right)⟩
-    }
+    stack.wrote_frame(i, stack.stable_in_memory(top, lending, loan, i, low, now), before, after, wrote, held)
 }
 
 // What a body has done to memory since it started at `entry`, its frame at
@@ -865,18 +873,6 @@ fn Stack::Framed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
 fn Stack::Trailed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saves: Nat, lending: Lending, d: Nat,
     s0: MachineState<M>, now: Buffers(), s: MachineState<M>) → Type {
     Kept(body_kept(saves), s0.gprs, s.gprs) ∧ stack.Trail(lending, d, s0.memory, now, s.memory)
-}
-
-// Words a callee leaves from `d` up to `top` keep the slots there.
-theorem Stack::saved_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, top: Nat,
-    gprs: Gprs, before, after: M, unchanged: stack.UnchangedTo(d, top, before, after), registers: List<Gpr>):
-    (k: Nat) → d + 8 * (k + registers.len()) <= top → stack.Saved(d, registers, k, gprs, before) → stack.Saved(d, registers, k, gprs, after) {
-    match registers {
-        Nil => λ k _ _ => trivial,
-        Cons(register, rest) => λ k room saved =>
-            ⟨trans(unchanged(d + 8 * k, { omega }, { omega }), saved.left),
-             stack.saved_unchanged(d, top, gprs, before, after, unchanged, rest, Succ(k), { omega }, saved.right)⟩,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3879,12 +3875,11 @@ theorem call_step<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>, l
                 stack.wrote_in_deeper(c - 8, d, { omega }, spans, u.memory, t.memory, handed.left);
             let wrote: stack.WroteIn(d, spans, x.memory, t.memory) = stack.wrote_in_trans(d, spans, x.memory, u.memory, t.memory,
                 stack.wrote_in_own(d, spans, x.memory, u.memory, pushed.right.left), callee_wrote);
-            let unchanged = loan.unchanged(d, x.memory, t.memory, wrote);
             let kept_u: Kept(callee_kept(), x.gprs, t.gprs) = returned.right.left;
             ⟨trans(rsp_t, at_c), ⟨returned.left, ⟨kept_trans(callee_kept(), g0, x.gprs, t.gprs, held.right.right.left, kept_u),
               ⟨⟨stack.wrote_in_trans(d + 64, spans, s0.memory, u.memory, t.memory, pushed.right.right.left.left,
                     stack.wrote_in_deeper(d, d + 64, { omega }, spans, u.memory, t.memory, callee_wrote)), handed.right⟩,
-               stack.saved_unchanged(d, top, g0, x.memory, t.memory, unchanged, saved, 0, slots,
+               stack.wrote_in_frame(d, spans, loan.stable_saved(d, d, g0, saved, 0, { omega }, slots), x.memory, t.memory, wrote,
                     held.right.right.right.right)⟩⟩⟩⟩
         })
 }
@@ -3982,8 +3977,7 @@ theorem call_stages<M>(saved: List<Gpr>, eight: saved.len() <= 8, site: Site<M>,
         λ memory i above high word held => {
             let inside: (i + 8 <= d) = { omega };
             ⟨stack.trail_store(top, lending, loan, d, under, s0.memory, now, memory, held.left, i, { omega }, word),
-             stack.saved_unchanged(d, stack.size, g0, memory, stack.writes.store(memory, stack.at(i), word_bytes(word)),
-                stack.store_below(memory, i, d, { omega }, inside, word), saved, 0, { omega }, held.right)⟩
+             stack.stable_saved(d, d, g0, saved, 0, { omega }, { omega })(memory, i, inside, word, held.right)⟩
         }, within);
     let agree = stack.lowered_agree(d, count, few, deep, g0, rsp_g0);
     let lowered_file: staged.Represents(values, g1) = staged.represents_agree(values, g1, write_gpr(Rsp, stack.at(low), g0), agree,
@@ -5594,19 +5588,6 @@ theorem Stack::entered_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
      stack.in_memory_wrote(top, lending, loan, d + 112, under, now, memory, stored, own, entered.right)⟩
 }
 
-// Words left from `from` up to `top` keep the slots there.
-theorem Stack::saved_above<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, from, top: Nat,
-    gprs: Gprs, before, after: M, unchanged: stack.UnchangedTo(from, top, before, after), registers: List<Gpr>):
-    (k: Nat) → from <= d + 8 * k → d + 8 * (k + registers.len()) <= top → stack.Saved(d, registers, k, gprs, before) →
-    stack.Saved(d, registers, k, gprs, after) {
-    match registers {
-        Nil => λ k _ _ _ => trivial,
-        Cons(register, rest) => λ k above room saved =>
-            ⟨trans(unchanged(d + 8 * k, above, { omega }), saved.left),
-             stack.saved_above(d, from, top, gprs, before, after, unchanged, rest, Succ(k), { omega }, { omega }, saved.right)⟩,
-    }
-}
-
 // How many of a function's parameters its entry loads from the stack.
 fn Function::loads(self function: Function) → Nat { function.parameters.drop(6).len() }
 
@@ -5736,8 +5717,8 @@ fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
 // `function_enters` runs the entry to the state the saves end in;
 // `function_runs_saved` runs the body and the result's moves from there; and
 // `function_closes` loads the saves back from the slots the body's own
-// stores and its callees' left (`Loan::unchanged`: they lie above the eight
-// a call spills into) and frees the frame.
+// stores and its callees' left (`Loan::stable_saved`: they lie above the
+// eight a call spills into) and frees the frame.
 theorem function_closes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), inner: Prog, code: List<Instruction>,
     within: function_closed(inner, code, saves).Within(site.program), s0: MachineState<M>, d: Nat, fits: d + 112 <= stack.size,
@@ -5762,8 +5743,8 @@ theorem function_closes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
         j(sym(at1.left), λ g _ => read_gpr(Rsp, g) = stack.at(d), read_gpr_after_write(Rsp, stack.at(d), s0.gprs));
     let rsp_x2: (read_gpr(Rsp, x2.gprs) = stack.at(d)) = trans(at2.right.left.left, rsp_x1);
     let saved2: stack.Saved(d, function_saves(saves), 8, g1, x2.memory) =
-        stack.saved_above(d, d + 64, top, g1, x1.memory, x2.memory, loan.unchanged(d + 64, x1.memory, x2.memory, at2.right.right.left),
-            function_saves(saves), 8, { omega }, sizes_top.right, at1.right.right);
+        stack.wrote_in_frame(d + 64, spans, loan.stable_saved(d + 64, d, g1, function_saves(saves), 8, { omega }, sizes_top.right),
+            x1.memory, x2.memory, at2.right.right.left, at1.right.right);
     let memory2: stack.Entered(lending, d, s0.memory, after, x2.memory) =
         ⟨stack.wrote_in_trans(d + 112, spans, s0.memory, x1.memory, x2.memory, at1.right.left.left,
             stack.wrote_in_deeper(d + 64, d + 112, { omega }, spans, x1.memory, x2.memory, at2.right.right.left)), at2.right.right.right⟩;

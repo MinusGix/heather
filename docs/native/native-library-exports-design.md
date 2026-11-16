@@ -582,7 +582,7 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     the function does not save is refused as it was. The contract is the
     one a caller already had: `function_runs` proves `Kept(callee_kept())`
     from the body's own invariant and the loads (`saves_restored`), the
-    save slots being above the body's trail (`Stack::saved_above`). After
+    save slots being above the body's trail (`Loan::stable_saved`). After
     a call the body's invariant is rebuilt from the callee's contract
     (`body_kept_of`), so a value in a saved register is read after the
     call with no store of its own. The planner takes a callee-saved
