@@ -538,9 +538,9 @@ What a statement can say, as built:
 | A binder `n: Nat` | A literal |
 | A binder `x: BitVec(w)` | A word, by its id |
 | A binder `f: BufferNow` | A buffer, by its number, with the bytes it has where the rule is used |
-| `+`, `-`, `&`, `\|`, `⊕`, `<<`, `>>` or the methods, the shifts by a literal, `rotr`, `swap_bytes`, `resize`, a literal, `BitVec::ofBool` of a comparison | The node of that operator, its output the next number |
+| `+`, `-`, `&`, `\|`, `⊕`, `<<`, `>>` or the methods, the shifts by a literal, `rotr`, `swap_bytes`, `resize`, a literal, `l.below(r)` (and `BitVec::ofBool` of a comparison's bit) | The node of that operator, its output the next number |
 | `x = y` for two bound words | `Is(Move(w, x, y))` |
-| `Range(a, b).Holds(x)` | `Within(x, a, b)` |
+| `x.within(a, b)` | `Within(x, a, b)` |
 | `x.toNat() + m <= y.toNat() + n` | `AtMost(x, m, y, n)` |
 | `x = f.byte(i)` | `Loaded(BufferLoad(x, f, i))` |
 | `x = f.word(i)` | `Loaded(WideLoad(4, x, f, i))` |
@@ -554,7 +554,6 @@ Where the build differs from the sections above, for now:
 | The doc writes | Built |
 |---|---|
 | `swap_twice::rule` | `swap_twice_rule`: a member cannot attach to a theorem |
-| `x.within(a, b)` | `Range(a, b).Holds(x)`, the library's existing statement |
 | `x.nat()` | `x.toNat()` |
 | `f: Buffer` | `f: BufferNow`: `Buffer` is the source language's buffer declaration |
 | registered by name, plans name rules by key | not yet: a generator cannot publish a `register def`. That needs a new declaration form in the tactic host, an elaborator change |

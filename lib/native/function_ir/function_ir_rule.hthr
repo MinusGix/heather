@@ -18,7 +18,7 @@
 //   - a hypothesis that mentions no word is a guard, decided through its
 //     `Decide` instance where the rule is applied;
 //   - a hypothesis that mentions one is a fact premise: a range
-//     (`Range(a, b).Holds(x)`), an order (`x.toNat() + m <= y.toNat() + n`)
+//     (`x.within(a, b)`), an order (`x.toNat() + m <= y.toNat() + n`)
 //     or an equation whose left side is a term and whose right is one
 //     operator, a literal or a word;
 //   - a binder of `BufferNow` is a buffer, by its number, as its bytes
@@ -56,6 +56,15 @@ fn Rule::when(ok: List<Nat> → Bool, clause: List<Nat> → Clause, sound: (args
         j(Option::some_inj(clause(args), c, got.right), λ k _ => k.Sound(), sound(args, got.left))
     })
 }
+
+// ---------------------------------------------------------------------------
+// What a rule theorem says of words
+
+// A word is between two numbers (`Fact::Within`).
+fn BitVec::within(self x: u64, low, high: Nat) → Type { Range(low, high).Holds(x) }
+
+// The bit of an unsigned comparison: one where `l` is below `r`.
+fn BitVec::below({w: Nat}, self l: BitVec(w), r: BitVec(w)) → BitVec(1) { BitVec::ofBool(l.unsigned_lt_bit(r)) }
 
 // ---------------------------------------------------------------------------
 // What a rule theorem says of memory
@@ -145,6 +154,7 @@ record RuleOps {
     unsigned_lt: GlobalRef, signed_lt: GlobalRef, eq_bit: GlobalRef,
     range_holds: GlobalRef, nat_le: GlobalRef, nat_add: GlobalRef,
     buffer: GlobalRef, buffer_at: GlobalRef, byte: GlobalRef, word: GlobalRef, join: GlobalRef, low_of: GlobalRef, quarters: GlobalRef,
+    within: GlobalRef, below: GlobalRef,
 }
 
 fn rule_ops() → Tac<RuleOps> {
@@ -177,8 +187,10 @@ fn rule_ops() → Tac<RuleOps> {
     let join <- rule_ref(name_of(BufferNow::join));
     let low_of <- rule_ref(name_of(BitVec::low_of));
     let quarters <- rule_ref(name_of(BitVec::quarters));
+    let within <- rule_ref(name_of(BitVec::within));
+    let below <- rule_ref(name_of(BitVec::below));
     pure(RuleOps(marker, number, add, sub, band, bor, bxor, shift_left, shift_right, arithmetic_shift_right, rotr, swap_bytes, resize, of_nat, to_nat,
-        of_bool, unsigned_lt, signed_lt, eq_bit, range_holds, nat_le, nat_add, buffer, buffer_at, byte, word, join, low_of, quarters))
+        of_bool, unsigned_lt, signed_lt, eq_bit, range_holds, nat_le, nat_add, buffer, buffer_at, byte, word, join, low_of, quarters, within, below))
 }
 
 // What is being read: the operators, the constructors of nodes and facts,
@@ -267,7 +279,13 @@ fn rule_root(cx: RuleCx, term: RuleRead → Handle → Tac<RuleTerm>, read: Rule
             },
             False => match args {
                 Nil => rule_not_ir(t),
-                Cons(a, more) => match cx.ops.binary(g) {
+                Cons(a, more) => match rule_same(g, cx.ops.below) {
+                  True => match more {
+                    Cons(b, _) => term(read, a).bind(λ x => term(x.read, b).bind(λ y =>
+                        cx.node("UnsignedLessThan", [x.width, o, x.id, y.id]).bind(λ node => pure(RuleNode(y.read, node, NatLit(1)))))),
+                    Nil => rule_not_ir(t),
+                  },
+                  False => match cx.ops.binary(g) {
                     Some(name) => match more {
                         Cons(b, _) => term(read, a).bind(λ x => term(x.read, b).bind(λ y =>
                             cx.node(name, [x.width, o, x.id, y.id]).bind(λ node => pure(RuleNode(y.read, node, x.width))))),
@@ -321,6 +339,7 @@ fn rule_root(cx: RuleCx, term: RuleRead → Handle → Tac<RuleTerm>, read: Rule
                         },
                     },
                 },
+            },
             },
         },
         _ => rule_not_ir(t),
@@ -452,7 +471,7 @@ record RuleSide { term: RuleTerm, add: Expr }
 
 fn rule_not_fact<A>(h: Handle) → Tac<A> {
     fail("rule: a hypothesis or the conclusion mentions a word and is not a fact the optimizer keeps", [At(Hd(h), Tried("the statement",
-        "the facts are a range `Range(a, b).Holds(x)`, an order `x.toNat() + m <= y.toNat() + n`, and an equation between a term and one operator, a literal or a word"))])
+        "the facts are a range `x.within(a, b)`, an order `x.toNat() + m <= y.toNat() + n`, and an equation between a term and one operator, a literal or a word"))])
 }
 
 fn rule_side(cx: RuleCx, read: RuleRead, t: Handle, whole: Handle) → Tac<RuleSide> {
@@ -566,7 +585,12 @@ fn rule_fact(cx: RuleCx, read: RuleRead, h: Handle) → Tac<RuleFact> {
             None => rule_root(cx, λ k t => rule_term(64, cx, k, t), x.read, r, x.id).bind(λ root =>
                 cx.fact("Is", [root.node]).bind(λ is => pure(RuleFact(root.read, is)))),
         })),
-        HGlobal(g, _, args) => match rule_same(g, cx.ops.low_of) {
+        HGlobal(g, _, args) => match rule_same(g, cx.ops.within) {
+          True => rule_terms(cx, read, args.take(1)).bind(λ ts => match ts.ids {
+            Cons(x, _) => cx.fact("Within", [x, rule_nth(args, 1), rule_nth(args, 2)]).bind(λ within => pure(RuleFact(ts.read, within))),
+            Nil => rule_not_fact(h),
+          }),
+          False => match rule_same(g, cx.ops.low_of) {
           True => rule_terms(cx, read, args.take(2)).bind(λ ts => match ts.ids {
             Cons(x, more) => match more {
                 Cons(w, _) => cx.fact("Low", [x, w, rule_nth(args, 2)]).bind(λ low => pure(RuleFact(ts.read, low))),
@@ -606,6 +630,7 @@ fn rule_fact(cx: RuleCx, read: RuleRead, h: Handle) → Tac<RuleFact> {
                 },
             },
         },
+          },
           },
         },
         _ => rule_not_fact(h),

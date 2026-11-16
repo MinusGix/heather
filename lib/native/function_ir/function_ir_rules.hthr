@@ -52,18 +52,17 @@ rule theorem move_move({w: Nat}, t, s, o: BitVec(w), first: s = t, second: o = s
 theorem leb_below(n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound(m, Bool::is_true_of_eq(h)) }
 
 // A constant is within itself.
-rule theorem within_const(v: Nat, fits: v <= word_top()): Range(v, v).Holds(BitVec::ofNat(v, n := 64)) {
+rule theorem within_const(v: Nat, fits: v <= word_top()): BitVec::ofNat(v, n := 64).within(v, v) {
     j(sym(BitVec::toNat_ofNat(64, v, fits)), λ n _ => (v <= n) ∧ (n <= v), ⟨v.le_refl(), v.le_refl()⟩)
 }
 
 // A copy is within what it copies.
-rule theorem within_move(s, o: u64, a, b: Nat, copy: o = s, in: Range(a, b).Holds(s)): Range(a, b).Holds(o) {
+rule theorem within_move(s, o: u64, a, b: Nat, copy: o = s, in: s.within(a, b)): o.within(a, b) {
     j(sym(copy), λ w _ => Range(a, b).Holds(w), in)
 }
 
 // A sum that cannot wrap is within the sums of its parts' bounds.
-rule theorem within_add(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), right: Range(c, d).Holds(r), fits: b + d <= word_top()):
-    Range(a + c, b + d).Holds(l.add(r)) {
+rule theorem within_add(l, r: u64, a, b, c, d: Nat, left: l.within(a, b), right: r.within(c, d), fits: b + d <= word_top()): (l + r).within(a + c, b + d) {
     let high: (l.toNat() + r.toNat() <= b + d) = Nat::add_le_mono(l.toNat(), b, r.toNat(), d, left.right, right.right);
     let sum: (l.add(r).toNat() = l.toNat() + r.toNat()) = trans(BitVec::toNat_add_mod(64, l, r),
         (l.toNat() + r.toNat()).mod_of_lt(Nat::pow(2, 64), Nat::le_trans(l.toNat() + r.toNat(), b + d, word_top(), high, fits)));
@@ -71,16 +70,15 @@ rule theorem within_add(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), 
 }
 
 // A difference that cannot borrow is within its parts' bounds, crossed.
-rule theorem within_sub(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), right: Range(c, d).Holds(r), fits: d <= a):
-    Range(a - d, b - c).Holds(l.sub(r)) {
+rule theorem within_sub(l, r: u64, a, b, c, d: Nat, left: l.within(a, b), right: r.within(c, d), fits: d <= a): (l - r).within(a - d, b - c) {
     let under: (r.toNat() <= l.toNat()) = omega(left.left, right.right, fits);
     j(sym(toNat_sub(64, l, r, under)), λ n _ => (a - d <= n) ∧ (n <= b - c),
         ⟨omega(left.left, right.right, fits), omega(left.right, right.left, under)⟩)
 }
 
 // A left shift that loses no bit is within its operand's bounds, shifted.
-rule theorem within_shift(x: u64, n, a, b: Nat, in: Range(a, b).Holds(x), fits: b * Nat::pow(2, n) <= word_top()):
-    Range(a * Nat::pow(2, n), b * Nat::pow(2, n)).Holds(x.shift_left(n)) {
+rule theorem within_shift(x: u64, n, a, b: Nat, in: x.within(a, b), fits: b * Nat::pow(2, n) <= word_top()):
+    (x << n).within(a * Nat::pow(2, n), b * Nat::pow(2, n)) {
     let high: (x.toNat() * Nat::pow(2, n) <= b * Nat::pow(2, n)) = Nat::mul_le_mono_r(Nat::pow(2, n), x.toNat(), b, in.right);
     j(sym(BitVec::toNat_shift_left(64, x, n, Nat::le_trans(x.toNat() * Nat::pow(2, n), b * Nat::pow(2, n), word_top(), high, fits))),
         λ m _ => (a * Nat::pow(2, n) <= m) ∧ (m <= b * Nat::pow(2, n)), ⟨Nat::mul_le_mono_r(Nat::pow(2, n), a, x.toNat(), in.left), high⟩)
@@ -88,31 +86,31 @@ rule theorem within_shift(x: u64, n, a, b: Nat, in: Range(a, b).Holds(x), fits: 
 
 // A word made from a narrower value is below that width's power: `high`
 // is any number that power is at most one more than.
-rule theorem within_narrow(from: Nat, s: BitVec(from), high: Nat, fits: Nat::pow(2, from) <= Succ(high)): Range(0, high).Holds(s.resize(64)) {
+rule theorem within_narrow(from: Nat, s: BitVec(from), high: Nat, fits: Nat::pow(2, from) <= Succ(high)): s.resize(64).within(0, high) {
     ⟨trivial, Nat::le_trans(s.resize(64).toNat(), s.toNat(), high, BitVec::toNat_ofNat_le(64, s.toNat()),
         Nat::le_trans(Succ(s.toNat()), Nat::pow(2, from), Succ(high), BitVec::toNat_lt_pow(from, s), fits))⟩
 }
 
 // A word narrowed and widened again is itself where it was within the
 // narrow width: the two resizes are a move.
-rule theorem narrow_back(s: u64, from, high: Nat, small: Range(0, high).Holds(s), fits: Succ(high) <= Nat::pow(2, from)): s.resize(from).resize(64) = s {
+rule theorem narrow_back(s: u64, from, high: Nat, small: s.within(0, high), fits: Succ(high) <= Nat::pow(2, from)): s.resize(from).resize(64) = s {
     let below: (s.toNat() < Nat::pow(2, from)) = Nat::le_trans(Succ(s.toNat()), Succ(high), Nat::pow(2, from), small.right, fits);
     trans(cong_fn(λ (n: Nat) => BitVec::ofNat(n, n := 64), BitVec::toNat_ofNat(from, s.toNat(), below)), BitVec::ofNat_toNat(64, s))
 }
 
 // An or is at most its operands added, which is exact where they share no
 // bit: bytes joined by shifts stay within the word they make.
-rule theorem within_or(l, r: u64, a, b: Nat, left: Range(0, a).Holds(l), right: Range(0, b).Holds(r)): Range(0, a + b).Holds(l.bor(r)) {
+rule theorem within_or(l, r: u64, a, b: Nat, left: l.within(0, a), right: r.within(0, b)): (l | r).within(0, a + b) {
     ⟨trivial, Nat::le_trans(l.bor(r).toNat(), l.toNat() + r.toNat(), a + b, BitVec::toNat_bor_le_add(64, l, r),
         Nat::add_le_mono(l.toNat(), a, r.toNat(), b, left.right, right.right))⟩
 }
 
 // An and is at most either operand.
-rule theorem within_and(l, r: u64, a: Nat, left: Range(0, a).Holds(l)): Range(0, a).Holds(l.band(r)) {
+rule theorem within_and(l, r: u64, a: Nat, left: l.within(0, a)): (l & r).within(0, a) {
     ⟨trivial, Nat::le_trans(l.band(r).toNat(), l.toNat(), a, BitVec::toNat_band_le_left(64, l, r), left.right)⟩
 }
 
-rule theorem within_and_right(l, r: u64, b: Nat, right: Range(0, b).Holds(r)): Range(0, b).Holds(l.band(r)) {
+rule theorem within_and_right(l, r: u64, b: Nat, right: r.within(0, b)): (l & r).within(0, b) {
     ⟨trivial, Nat::le_trans(l.band(r).toNat(), r.toNat(), b, BitVec::toNat_band_le_right(64, l, r), right.right)⟩
 }
 
@@ -142,41 +140,35 @@ theorem bit_of_above(l, r: u64, ge: r.toNat() <= l.toNat()): BitVec::ofBool(l.un
 }
 
 // A comparison of a word below another's least value is one.
-rule theorem below_yes(l, r: u64, a, b: Nat, left: Range(0, a).Holds(l), right: Range(b, word_top()).Holds(r), apart: Succ(a) <= b):
-    BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1) {
+rule theorem below_yes(l, r: u64, a, b: Nat, left: l.within(0, a), right: r.within(b, word_top()), apart: a < b): l.below(r) = 1 {
     bit_of_below(l, r, Nat::le_trans(Succ(l.toNat()), b, r.toNat(), Nat::le_trans(Succ(l.toNat()), Succ(a), b, left.right, apart), right.left))
 }
 
 // A comparison of a word at least another's greatest value is zero.
-rule theorem below_no(l, r: u64, a, b: Nat, left: Range(a, word_top()).Holds(l), right: Range(0, b).Holds(r), apart: b <= a):
-    BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(0) {
+rule theorem below_no(l, r: u64, a, b: Nat, left: l.within(a, word_top()), right: r.within(0, b), apart: b <= a): l.below(r) = 0 {
     bit_of_above(l, r, Nat::le_trans(r.toNat(), b, l.toNat(), right.right, Nat::le_trans(b, a, l.toNat(), apart, left.left)))
 }
 
 // Where a comparison's bit is one, its left is below its right's bound,
 // and its right above its left's.
-rule theorem below_left(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, Succ(b)).Holds(r)):
-    Range(0, b).Holds(l) {
+rule theorem below_left(l, r: u64, b: Nat, below: l.below(r) = 1, right: r.within(0, Succ(b))): l.within(0, b) {
     let bit: (l.unsigned_lt_bit(r) = True) = trans(sym(BitVec::head_bit_ofBool(l.unsigned_lt_bit(r))),
         trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), below), BitVec::head_bit_ofBool(True)));
     let lt: (l.toNat() < r.toNat()) = BitVec::borrow_sub_bit_true_iff(64, l, r).mp(bit);
     ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
 }
 
-rule theorem below_right(l, r: u64, a: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), left: Range(a, word_top()).Holds(l)):
-    Range(Succ(a), word_top()).Holds(r) {
+rule theorem below_right(l, r: u64, a: Nat, below: l.below(r) = 1, left: l.within(a, word_top())): r.within(Succ(a), word_top()) {
     ⟨Nat::le_trans(Succ(a), Succ(l.toNat()), r.toNat(), left.left, below_of_bit(l, r, below)), Range::any_holds(r).right⟩
 }
 
 // Where it is zero, its left is at least its right's least value, and
 // its right at most its left's greatest.
-rule theorem above_left(l, r: u64, a: Nat, clear: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(0), right: Range(a, word_top()).Holds(r)):
-    Range(a, word_top()).Holds(l) {
+rule theorem above_left(l, r: u64, a: Nat, clear: l.below(r) = 0, right: r.within(a, word_top())): l.within(a, word_top()) {
     ⟨Nat::le_trans(a, r.toNat(), l.toNat(), right.left, above_of_bit(l, r, clear)), Range::any_holds(l).right⟩
 }
 
-rule theorem above_right(l, r: u64, b: Nat, clear: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(0), left: Range(0, b).Holds(l)):
-    Range(0, b).Holds(r) {
+rule theorem above_right(l, r: u64, b: Nat, clear: l.below(r) = 0, left: l.within(0, b)): r.within(0, b) {
     ⟨trivial, Nat::le_trans(r.toNat(), l.toNat(), b, above_of_bit(l, r, clear), left.right)⟩
 }
 
@@ -201,9 +193,9 @@ theorem or_clear(x, y: BitVec(1), clear: x.bor(y) = BitVec::ofNat(0)): (x = BitV
         trans(trans(BitVec::one_bit_eq_ofBool(y), cong_fn(λ (h: Bool) => BitVec::ofBool(h), bits.right)), bit_clear())⟩
 }
 
-rule theorem or_clear_left(a, b: BitVec(1), clear: a.bor(b) = BitVec::ofNat(0)): a = BitVec::ofNat(0) { or_clear(a, b, clear).left }
+rule theorem or_clear_left(a, b: BitVec(1), clear: a | b = 0): a = 0 { or_clear(a, b, clear).left }
 
-rule theorem or_clear_right(a, b: BitVec(1), clear: a.bor(b) = BitVec::ofNat(0)): b = BitVec::ofNat(0) { or_clear(a, b, clear).right }
+rule theorem or_clear_right(a, b: BitVec(1), clear: a | b = 0): b = 0 { or_clear(a, b, clear).right }
 
 // The other way: an or of two clear bits is clear, and an or with a set
 // bit is set. A test of several bounds is decided where each of them is.
@@ -224,13 +216,13 @@ theorem or_of_set_bit_right(x, y: BitVec(1), set: y = BitVec::ofNat(1)): x.bor(y
         j(sym(BitVec::one_bit_eq_ofBool(x)), λ w _ => w.bor(BitVec::ofNat(1, n := 1)) = BitVec::ofNat(1, n := 1), bool_or_set(x.head_bit())))
 }
 
-rule theorem or_of_clear(a, b: BitVec(1), left: a = BitVec::ofNat(0), right: b = BitVec::ofNat(0)): a.bor(b) = BitVec::ofNat(0) {
+rule theorem or_of_clear(a, b: BitVec(1), left: a = 0, right: b = 0): a | b = 0 {
     or_of_clear_bits(a, b, left, right)
 }
 
-rule theorem or_of_set(a, b: BitVec(1), set: a = BitVec::ofNat(1)): a.bor(b) = BitVec::ofNat(1) { or_of_set_bit(a, b, set) }
+rule theorem or_of_set(a, b: BitVec(1), set: a = 1): a | b = 1 { or_of_set_bit(a, b, set) }
 
-rule theorem or_of_set_right(a, b: BitVec(1), set: b = BitVec::ofNat(1)): a.bor(b) = BitVec::ofNat(1) { or_of_set_bit_right(a, b, set) }
+rule theorem or_of_set_right(a, b: BitVec(1), set: b = 1): a | b = 1 { or_of_set_bit_right(a, b, set) }
 
 // ---------------------------------------------------------------------------
 // Orders: a word and a number at most another word and a number, where no
@@ -246,22 +238,22 @@ theorem order_joined(x, y, z, m, n, p, q, u, v: Nat, first: x + m <= y + n, seco
     omega(first, second, slack)
 }
 
-rule theorem order_set(l, r: u64, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1)): l.toNat() + 1 <= r.toNat() + 0 {
+rule theorem order_set(l, r: u64, below: l.below(r) = 1): l.toNat() + 1 <= r.toNat() + 0 {
     let lt = below_of_bit(l, r, below);
     omega(lt)
 }
 
-rule theorem order_clear(l, r: u64, clear: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(0)): r.toNat() + 0 <= l.toNat() + 0 {
+rule theorem order_clear(l, r: u64, clear: l.below(r) = 0): r.toNat() + 0 <= l.toNat() + 0 {
     let ge = above_of_bit(l, r, clear);
     omega(ge)
 }
 
 // A comparison of two words in order is decided.
-rule theorem ordered_below(l, r: u64, order: l.toNat() + 1 <= r.toNat() + 0): BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1) {
+rule theorem ordered_below(l, r: u64, order: l.toNat() + 1 <= r.toNat() + 0): l.below(r) = 1 {
     bit_of_below(l, r, omega(order))
 }
 
-rule theorem ordered_not_below(l, r: u64, order: r.toNat() + 0 <= l.toNat() + 0): BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(0) {
+rule theorem ordered_not_below(l, r: u64, order: r.toNat() + 0 <= l.toNat() + 0): l.below(r) = 0 {
     bit_of_above(l, r, omega(order))
 }
 
@@ -299,14 +291,14 @@ theorem sum_is_tested(i: u64, v: Nat, fits: v <= word_top(), kept: i.toNat() + 0
     trans(is, sum_kept(i.toNat(), v, Nat::pow(2, 64), BitVec::toNat_lt_pow(64, i), fits, above))
 }
 
-rule theorem sum_tested_low(i: u64, v: Nat, kept: i.toNat() + 0 <= i.add(BitVec::ofNat(v)).toNat() + 0, fits: v <= word_top()):
-    i.toNat() + v <= i.add(BitVec::ofNat(v)).toNat() + 0 {
+rule theorem sum_tested_low(i: u64, v: Nat, kept: i.toNat() + 0 <= (i + BitVec::ofNat(v)).toNat() + 0, fits: v <= word_top()):
+    i.toNat() + v <= (i + BitVec::ofNat(v)).toNat() + 0 {
     let is = sum_is_tested(i, v, fits, kept);
     omega(is)
 }
 
-rule theorem sum_tested_high(i: u64, v: Nat, kept: i.toNat() + 0 <= i.add(BitVec::ofNat(v)).toNat() + 0, fits: v <= word_top()):
-    i.add(BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
+rule theorem sum_tested_high(i: u64, v: Nat, kept: i.toNat() + 0 <= (i + BitVec::ofNat(v)).toNat() + 0, fits: v <= word_top()):
+    (i + BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
     let is = sum_is_tested(i, v, fits, kept);
     omega(is)
 }
@@ -322,13 +314,13 @@ theorem sum_is_roomed(i, x: u64, v, m, n: Nat, room: i.toNat() + m <= x.toNat() 
 }
 
 rule theorem sum_roomed_low(i, x: u64, v, m, n: Nat, room: i.toNat() + m <= x.toNat() + n, least: v + n <= m):
-    i.toNat() + v <= i.add(BitVec::ofNat(v)).toNat() + 0 {
+    i.toNat() + v <= (i + BitVec::ofNat(v)).toNat() + 0 {
     let is = sum_is_roomed(i, x, v, m, n, room, least);
     omega(is)
 }
 
 rule theorem sum_roomed_high(i, x: u64, v, m, n: Nat, room: i.toNat() + m <= x.toNat() + n, least: v + n <= m):
-    i.add(BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
+    (i + BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
     let is = sum_is_roomed(i, x, v, m, n, room, least);
     omega(is)
 }
@@ -341,14 +333,12 @@ theorem sum_is_within(i: u64, v, a, b: Nat, range: Range(a, b).Holds(i), fits: b
     trans(sum_number(i, v, sum_part(i.toNat(), v, Nat::pow(2, 64), under)), (i.toNat() + v).mod_of_lt(Nat::pow(2, 64), under))
 }
 
-rule theorem sum_within_low(i: u64, v, a, b: Nat, range: Range(a, b).Holds(i), fits: b + v <= word_top()):
-    i.toNat() + v <= i.add(BitVec::ofNat(v)).toNat() + 0 {
+rule theorem sum_within_low(i: u64, v, a, b: Nat, range: i.within(a, b), fits: b + v <= word_top()): i.toNat() + v <= (i + BitVec::ofNat(v)).toNat() + 0 {
     let is = sum_is_within(i, v, a, b, range, fits);
     omega(is)
 }
 
-rule theorem sum_within_high(i: u64, v, a, b: Nat, range: Range(a, b).Holds(i), fits: b + v <= word_top()):
-    i.add(BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
+rule theorem sum_within_high(i: u64, v, a, b: Nat, range: i.within(a, b), fits: b + v <= word_top()): (i + BitVec::ofNat(v)).toNat() + 0 <= i.toNat() + v {
     let is = sum_is_within(i, v, a, b, range, fits);
     omega(is)
 }
@@ -370,11 +360,11 @@ rule theorem load_again(f: BufferNow, i, a, b: u64, first: a = f.byte(i), second
 // reads, swapped. However the bytes were joined, the rules meet at the
 // same fact.
 
-rule theorem join_byte(f: BufferNow, i, b: u64, loaded: b = f.byte(i)): b = f.join(i, 1).shift_left(0) {
+rule theorem join_byte(f: BufferNow, i, b: u64, loaded: b = f.byte(i)): b = f.join(i, 1) << 0 {
     trans(loaded, sym(buffer_join_one(f.all, f.number, i.toNat())))
 }
 
-rule theorem join_shift(f: BufferNow, i, a: u64, n, sh, c: Nat, joined: a = f.join(i, n).shift_left(sh)): a.shift_left(c) = f.join(i, n).shift_left(sh + c) {
+rule theorem join_shift(f: BufferNow, i, a: u64, n, sh, c: Nat, joined: a = f.join(i, n) << sh): a << c = f.join(i, n) << (sh + c) {
     trans(cong_fn(λ (z: u64) => z.shift_left(c), joined), sym(f.join(i, n).shift_left_add(sh, c)))
 }
 
@@ -392,22 +382,22 @@ theorem joins_meet(buffers: Buffers(), f, x, y, n, m, sh: Nat, after: x + n <= y
                 cong_fn(λ (z: BitVec(64)) => z.shift_left(sh), sym(buffer_join_split(buffers, f, x, n, m))))))
 }
 
-rule theorem join_or(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n).shift_left(8 * m + sh), second: b = f.join(j, m).shift_left(sh),
-    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): a.bor(b) = f.join(i, n + m).shift_left(sh) {
+rule theorem join_or(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n) << (8 * m + sh), second: b = f.join(j, m) << sh,
+    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): a | b = f.join(i, n + m) << sh {
     trans(cong_fn(λ (z: u64) => z.bor(b), first), trans(cong_fn(λ (z: u64) => f.join(i, n).shift_left(8 * m + sh).bor(z), second),
         joins_meet(f.all, f.number, i.toNat(), j.toNat(), n, m, sh, after, before)))
 }
 
 // The same with the or's operands the other way round.
-rule theorem join_or_right(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n).shift_left(8 * m + sh), second: b = f.join(j, m).shift_left(sh),
-    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): b.bor(a) = f.join(i, n + m).shift_left(sh) {
+rule theorem join_or_right(f: BufferNow, i, j, a, b: u64, n, m, sh: Nat, first: a = f.join(i, n) << (8 * m + sh), second: b = f.join(j, m) << sh,
+    after: i.toNat() + n <= j.toNat() + 0, before: j.toNat() + 0 <= i.toNat() + n): b | a = f.join(i, n + m) << sh {
     trans(BitVec::bor_comm(64, b, a), trans(cong_fn(λ (z: u64) => z.bor(b), first), trans(cong_fn(λ (z: u64) => f.join(i, n).shift_left(8 * m + sh).bor(z), second),
         joins_meet(f.all, f.number, i.toNat(), j.toNat(), n, m, sh, after, before))))
 }
 
 // Four bytes joined and unshifted are what one four-byte load reads at
 // the same index, swapped and widened: the word is that one's.
-rule theorem join_word(f: BufferNow, i, o: u64, w: u32, r: u64, joined: o = f.join(i, 4).shift_left(0), loaded: w = f.word(i),
+rule theorem join_word(f: BufferNow, i, o: u64, w: u32, r: u64, joined: o = f.join(i, 4) << 0, loaded: w = f.word(i),
     widened: r = w.swap_bytes().resize(64)): o = r {
     trans(joined, trans(buffer_join_four(f.all, f.number, i.toNat()),
         sym(trans(widened, cong_fn(λ (z: u32) => BitVec::ofNat(z.swap_bytes().toNat(), n := 64), loaded)))))
@@ -429,7 +419,7 @@ rule theorem low_narrowed(a: u64): a.resize(8).resize(64).low_of(a, 0) {
     trans(sym(BitVec::resize_truncate(8, 56, a.resize(8).resize(64))), trans(back, BitVec::resize_truncate(8, 56, a)))
 }
 
-rule theorem low_shifted(x, w: u64, c, sh: Nat, low: x.low_of(w.shift_right(c), sh)): x.low_of(w, c + sh) {
+rule theorem low_shifted(x, w: u64, c, sh: Nat, low: x.low_of(w >> c, sh)): x.low_of(w, c + sh) {
     trans(low, cong_fn(λ (z: u64) => low_byte(z), sym(w.shift_right_add(c, sh))))
 }
 
