@@ -1,6 +1,6 @@
 //! Whole programs through `compile-x86`'s verified lowering: a function and
 //! the functions it calls, compiled by `lower_program` and certified by
-//! `compiled_returns`, linked against C references and run. The call
+//! `compiled_computes`, linked against C references and run. The call
 //! examples the per-function path built as executables before burn B2 are
 //! here too (docs/native/native-program-logic-design.md §3.2).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -219,7 +219,7 @@ fn execute(group: &str, cases: &[Case], claims: &[&str]) {
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(String::from_utf8_lossy(&result.stdout).contains("certified program bytes"), "{file} took the verified lowering");
         let certificate = std::fs::read_to_string(dir.join(format!("{file}.certificate.hthr"))).unwrap();
-        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>("].iter().chain(claims) {
+        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_computes<M>("].iter().chain(claims) {
             assert!(certificate.contains(claim), "{file}: missing {claim}");
         }
         let driver = dir.join(format!("{file}.c"));
@@ -274,7 +274,9 @@ fn eight_words_are_called_from_rust() {
     let text = std::fs::read_to_string(&assembly).unwrap();
     assert!(text.contains("# signature: eight(word, word, word, word, word, word, word, word) -> word"), "{text}");
     let certificate = std::fs::read_to_string(dir.join("eight.certificate.hthr")).unwrap();
-    assert!(certificate.contains("stack.Passed([a0, a1, a2, a3, a4, a5, a6, a7], i, s)"), "the contract passes eight words");
+    // `Prog::Computes` at the eight words: its `Stack::Passed` is the contract's.
+    assert!(certificate.contains("_code().Computes(machine, ") && certificate.contains(", [a0, a1, a2, a3, a4, a5, a6, a7], "),
+        "the contract passes eight words");
     let driver = dir.join("driver.rs");
     std::fs::write(&driver, r#"
 std::arch::global_asm!(include_str!("eight.s"), options(att_syntax));

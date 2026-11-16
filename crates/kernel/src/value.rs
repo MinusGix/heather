@@ -368,6 +368,10 @@ pub struct ValueArena<'v> {
     /// The key's addresses are kept alive by the arena's closures, as for
     /// `transducers`'.
     fold_classes: RefCell<PtrMap<CloId, Rc<algebra::FoldClass>>>,
+    /// How many fold probes are running, one inside another
+    /// (`eval/probe.rs`): each takes the block of reserved levels at its
+    /// depth, so no probe reads another's variables as its own.
+    probe_depth: Cell<u32>,
     /// Closed closures' values, by [`TmClo::closed_ident`]
     /// ([`ValueArena::memo_closed`]); kept, like a closure's own memo, for
     /// the query, and alive by the same argument as `transducers`' keys.
@@ -896,6 +900,7 @@ impl<'v> ValueArena<'v> {
             #[cfg(feature = "value-metrics")]
             forced: (Cell::new(0), Cell::new(0)),
             fold_classes: RefCell::new(PtrMap::default()),
+            probe_depth: Cell::new(0),
             closed_values: RefCell::new(PtrMap::default()),
             closed_formers: RefCell::new(PtrMap::default()),
             bit_types: RefCell::new(PtrMap::default()),
@@ -930,6 +935,7 @@ impl<'v> ValueArena<'v> {
                 #[cfg(feature = "value-metrics")]
                 forced: (Cell::new(0), Cell::new(0)),
                 fold_classes: RefCell::new(PtrMap::default()),
+                probe_depth: Cell::new(0),
                 closed_values: RefCell::new(PtrMap::default()),
                 closed_formers: RefCell::new(PtrMap::default()),
                 bit_types: RefCell::new(PtrMap::default()),
@@ -1120,6 +1126,15 @@ impl<'v> ValueArena<'v> {
 
     pub fn cache_fold_class(&self, step: &'v TmClo<'v>, class: Rc<algebra::FoldClass>) {
         self.fold_classes.borrow_mut().insert(step.ident_under(2), class);
+    }
+
+    /// The depth of the probe running now; `0` outside every probe.
+    pub(crate) fn probe_depth(&self) -> u32 {
+        self.probe_depth.get()
+    }
+
+    pub(crate) fn set_probe_depth(&self, depth: u32) {
+        self.probe_depth.set(depth);
     }
 
     /// The decided bit criterion for `elem`, if it has been decided; the

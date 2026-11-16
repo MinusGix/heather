@@ -71,3 +71,15 @@ theorem climbs_through_far(): climbs_through(4000, Counter(0, 1)) = True { refl 
 // two each way, where a walk down both took a step a successor.
 theorem eq_dec_long(): (match Nat::eq_dec(1000000, 1000000) { Inl(_) => True, Inr(_) => False }) = True { refl }
 theorem eq_dec_long_differ(): (match Nat::eq_dec(1000000, 1000001) { Inl(_) => True, Inr(_) => False }) = False { refl }
+
+// A fold whose step runs another fold over a run, that one's step reading
+// the outer step's `ih` (`issues/fold-probe-nested-probe-variable-collision.md`).
+// Each probe has variables of its own: when the inner probe read the outer
+// `ih` as its own, `outer(3)` computed to 0 and `False` followed.
+fn const2(a: Nat, b: Nat) → Nat { a }
+fn inner(o: Nat, n: Nat) → Nat { match n { Zero => Zero, Succ(k) => const2(o, inner(o, k)) } }
+fn outer(n: Nat) → Nat { match n { Zero => 7, Succ(k) => inner(outer(k), 5) } }
+
+theorem outer_three(): outer(3) = 7 { refl }
+// expect-error(kernel): the kernel rejected `outer_three_zero`: NotConvertible
+theorem outer_three_zero(): outer(3) = 0 { refl }

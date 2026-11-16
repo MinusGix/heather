@@ -41,11 +41,11 @@ pub(super) struct Compiled {
 const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower", "function_ir_lower_structured",
     "function_ir_lower_calls", "function_ir_compile", "x86_64", "x86_64_block", "x86_64_fetch", "x86_64_data_read",
     "x86_64_fetched_code", "x86_64_stack", "x86_64_asm", "x86_64_asm_runs", "x86_64_asm_table", "x86_64_stack_runs", "bitvec", "bool", "list",
-    "logic", "nat", "option"];
+    "logic", "nat", "option", "function_ir_correct"];
 
 /// What a program that is lent buffers needs besides: that it stores into
 /// none, and the laws its buffers are lent under.
-const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending"];
+const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state"];
 
 /// And what one that stores into them needs: the run of a program over a
 /// file, and the ending the generator states it with.
@@ -1143,37 +1143,36 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
         // `keeps`, `keeps_code`). What it promises is the run's ending: the
         // function's word, and the function's span where `span` was.
         text.push_str(&format!("
-// Called at its label with the span's address and its words in RDI, RSI,
-// … and past the sixth on the stack above the return address at RSP
-// (`Stack::Passed`), {room} bytes of stack below it, the file
-// in memory with `span` its first buffer (`Stack::LentOver`), the code
-// returns the source function's word in RAX, keeps the callee-saved
-// registers and RSP, stores only into its own room below that address and
-// into the bytes of the buffers `{prefix}_marks` marks (`Stack::WroteIn`), and
-// leaves the file with the function's span where `span` was and the rest as
-// it was (`Stack::AnsweredOver`): resident anywhere, whatever follows it, at
-// any file lying anywhere the stack does not reach.
+// The code computes the source function over its span
+// (`Prog::ComputesOver`, function_ir_correct): called at its label with the
+// span's address and its words in RDI, RSI, … and past the sixth on the
+// stack above the return address (`Stack::Passed`), {room} bytes of stack
+// below it, the file in memory with `span` its first buffer
+// (`Stack::LentOver`), it returns the source function's word in RAX, keeps
+// the callee-saved registers and RSP, stores only into its own room below
+// that address and into the bytes of the buffers `{prefix}_marks` marks
+// (`Stack::WroteIn`), and leaves the file with the function's span where
+// `span` was and the rest as it was (`Stack::AnsweredOver`): on every
+// machine, loaded anywhere, at any file lying anywhere the stack does not
+// reach.
 fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{
     Lending::writing({prefix}_counts(), addresses, now, {prefix}_marks())
 }}
 
-theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
-    loan: Loan<M>(fetch, data, stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
-    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed({list}, i, s) ∧ 136 * {label} <= i) ∧
-            stack.LentOver({prefix}_lending(addresses, Cons(span, rest)), top, {f}, {list}, Cons(span, rest))(i, s),
-        stack.AnsweredOver({prefix}_lending(addresses, Cons(span, rest)), {call}.value, Cons({call}.after, rest))) {{
-    {returns}
+theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: Buffers(),
+    loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, Cons(span, rest)).spans()){comma}{typed}):
+    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, Cons(span, rest)), {f}, {list}, Cons(span, rest),
+        Ending(word := {call}.value, buffers := Cons({call}.after, rest))) {{
+    λ origin last => {returns}
 }}
-", label = f + 1, room = 136 * (f + 1), returns = if program.tables.is_some() {
+", room = 136 * (f + 1), returns = if program.tables.is_some() {
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
             format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
-        {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), fetch, data, last, origin, stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
+        {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
         {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         } else {
             format!("Ending::returns_written{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
-        {prefix}_lowers(), {prefix}_evaluable(), {stem}_within(), fetch, data, last, origin, stack, top, Cons(span, rest), loan, {f}, trivial,{keeps}
+        {prefix}_lowers(), {prefix}_evaluable(), {stem}_within(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), loan, {f}, trivial,{keeps}
         {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         }));
     } else if lent {
@@ -1183,46 +1182,41 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
         // span's address and length the words passed for it, the call
         // entered below `top`, and the file readable in memory.
         text.push_str(&format!("
-// Called at its label with each span's address and length and its words in
-// RDI, RSI, … and past the sixth on the stack above the return address at
-// RSP (`Stack::Passed`), {room} bytes of stack below it,
-// the spans readable in memory (`Stack::LentOver`), the code returns the
-// source function's value at the spans in RAX, keeps the callee-saved
-// registers and RSP, stores only into its own room below that address, and
-// leaves the spans as they were (`Stack::AnsweredOver`): resident anywhere,
-// whatever follows it, at any file lying anywhere the stack does not reach.
+// The code computes the source function over its spans
+// (`Prog::ComputesOver`, function_ir_correct): called at its label with
+// each span's address and length and its words in RDI, RSI, … and past the
+// sixth on the stack above the return address (`Stack::Passed`), {room}
+// bytes of stack below it, the spans readable in memory (`Stack::LentOver`),
+// it returns the source function's value at the spans in RAX, keeps the
+// callee-saved registers and RSP, stores only into its own room below that
+// address, and leaves the spans as they were (`Stack::AnsweredOver`): on
+// every machine, loaded anywhere, at any file lying anywhere the stack does
+// not reach.
 fn {prefix}_lending(addresses: List<BitVec(64)>, now: Buffers()) → Lending {{ Lending::reading({prefix}_counts(), addresses, now) }}
 
-theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
-    loan: Loan<M>(fetch, data, stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
-    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => (stack.Passed({list}, i, s) ∧ 136 * {label} <= i) ∧
-            stack.LentOver({prefix}_lending(addresses, now), top, {f}, {list}, now)(i, s),
-        stack.AnsweredOver({prefix}_lending(addresses, now), {call}, now)) {{
-    compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(), {prefix}_lowers(),
-        {prefix}_evaluable(), {quiet}, fetch, data, last, origin, stack, top, loan, {f}, trivial,{keeps} {list}, trivial, now, {call},
-        {prefix}_agrees(now{comma}{arguments}))
+theorem {prefix}_returns<M>(machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, now: Buffers(),
+    loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, {prefix}_lending(addresses, now).spans()){comma}{typed}):
+    {prefix}_code().ComputesOver(machine, top, {prefix}_lending(addresses, now), {f}, {list}, now,
+        Ending(word := {call}, buffers := now)) {{
+    λ origin last => compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_lending(addresses, now), {prefix}_code(),
+        {prefix}_lowers(), {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, top, loan, {f}, trivial,{keeps}
+        {list}, trivial, now, {call}, {prefix}_agrees(now{comma}{arguments}))
 }}
-", label = f + 1, room = 136 * (f + 1), arguments = parameters.join(", "), keeps = keeps(f)));
+", room = 136 * (f + 1), arguments = parameters.join(", "), keeps = keeps(f)));
     } else {
         text.push_str(&format!("
-// Called at its label with its arguments in RDI, RSI, … and past the sixth
-// on the stack above the return address at RSP (`Stack::Passed`), {room}
-// bytes of stack below it, the code returns the source
+// The code computes the source function (`Prog::Computes`,
+// function_ir_correct): called at its label with its arguments in RDI,
+// RSI, … and past the sixth on the stack above the return address
+// (`Stack::Passed`), {room} bytes of stack below it, it returns the source
 // function's value in RAX, keeps the callee-saved registers and RSP, and
 // leaves memory as it was but for stores into its own room below that
-// address (`Stack::Wrote`): resident anywhere, whatever follows it, with
-// any stack meeting the `Stack` laws.
-theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data){comma}{typed}):
-    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed({list}, i, s) ∧ 136 * {label} <= i,
-        stack.CalleePost({call})) {{
-    compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        fetch, data, last, origin, stack, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
+// address (`Stack::Wrote`): on every machine, loaded anywhere.
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {list}, {call}) {{
+    compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+        machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
-", label = f + 1, room = 136 * (f + 1), arguments = parameters.join(", ")));
+", room = 136 * (f + 1), arguments = parameters.join(", ")));
     }
     // The program's other exported functions, each at its own label: a
     // function of words, lent nothing, so its contract is the plain one
@@ -1238,27 +1232,25 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
         let arguments = parameters.join(", ");
         let proved = if lent {
             format!("compiled_returns_unlent{through}<M>({programs}, {prefix}_placement(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
-        {prefix}_evaluable(), {quiet}, fetch, data, last, origin, stack, {g}, trivial,{keeps} refl, {list}, trivial, {call}({arguments}),
-        {symbol}_native_agrees({arguments}))", keeps = keeps(g))
+        {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial,{keeps} refl, {list}, trivial,
+        {call}({arguments}), {symbol}_native_agrees({arguments}))", keeps = keeps(g))
         } else {
             format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        fetch, data, last, origin, stack, {g}, trivial, {list}, trivial, {call}({arguments}), {symbol}_native_agrees({arguments}))")
+        machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial, {list}, trivial, {call}({arguments}),
+        {symbol}_native_agrees({arguments}))")
         };
         text.push_str(&format!("
 theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} {{ refl }}
 
-// `{symbol}` is the program's function {g}, exported at its own label. Called
-// there with its arguments in RDI, RSI, … and past the sixth on the stack
-// above the return address at RSP (`Stack::Passed`), {room} bytes of stack
-// below it, the code returns `{call}`'s value in RAX, keeps
-// the callee-saved registers and RSP, and leaves memory as it was but for
-// stores into its own room below that address (`Stack::Wrote`).
-theorem {symbol}_native_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data){comma}{typed}):
-    Site<M>(fetch, data, {prefix}_code(), last, origin).Returns(stack, asm_labels({prefix}_code())({label}),
-        λ (i: Nat) (s: MachineState<M>) => stack.Passed({list}, i, s) ∧ 136 * {label} <= i,
-        stack.CalleePost({call}({arguments}))) {{
-    {proved}
+// `{symbol}` is the program's function {g}, exported at its own label, and
+// computes `{call}` (`Prog::Computes`): called there with its arguments in
+// RDI, RSI, … and past the sixth on the stack above the return address
+// (`Stack::Passed`), {room} bytes of stack below it, the code returns
+// `{call}`'s value in RAX, keeps the callee-saved registers and RSP, and
+// leaves memory as it was but for stores into its own room below that
+// address (`Stack::Wrote`).
+theorem {symbol}_native_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {g}, {list}, {call}({arguments})) {{
+    λ origin last => {proved}
 }}
 ", label = g + 1, room = 136 * (g + 1)));
     }
