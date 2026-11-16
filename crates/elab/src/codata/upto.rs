@@ -72,7 +72,7 @@ fn call_parts(e: &Expr) -> Option<(&str, &[Ty], Vec<&Expr>)> {
 }
 
 fn join(a: &Level, b: &Level) -> Level {
-    Level::join(a.clone(), b.clone())
+    Level::max(a.clone(), b.clone())
 }
 
 fn pi(dom_level: &Level, cod_level: &Level, dom: Type, cod: Type) -> Type {
@@ -123,7 +123,7 @@ fn sum_case(
     branch: &dyn Fn(usize, u32, Rc<Term>) -> Term,
 ) -> Term {
     fn tail_level(levels: &[Level], j: usize) -> Level {
-        levels[j..].iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()))
+        levels[j..].iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()))
     }
     fn tail(part: Part<'_>, levels: &[Level], j: usize, k: u32) -> Type {
         if j + 1 == levels.len() {
@@ -189,7 +189,7 @@ fn sum_case(
 /// `v` injected as summand `j` of the right-nested sum (at depth `k`).
 fn sum_inj(part: Part<'_>, levels: &[Level], j: usize, k: u32, v: Rc<Term>) -> Rc<Term> {
     let n = levels.len();
-    let tail_level = |r: usize| levels[r..].iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()));
+    let tail_level = |r: usize| levels[r..].iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()));
     let tail = |r: usize| -> Type {
         let mut t = part(n - 1, k);
         for q in (r..n - 1).rev() {
@@ -1260,14 +1260,14 @@ impl UpTo<'_> {
         }
         // Every position lives at one level, so the positions' case tree is
         // a family of codes at one universe.
-        let lp = lp_parts.iter().fold(Level::Zero, |acc, l| Level::join(acc, l.clone()));
+        let lp = lp_parts.iter().fold(Level::Zero, |acc, l| Level::max(acc, l.clone()));
         if lp_parts.iter().any(|l| !l.equiv(&lp)) {
             return err(
                 "corecursion up to a friend needs every function argument's domain (and the codata's positions, beside nested constructors) at one universe level this round",
                 span,
             );
         }
-        let ls = sums.iter().fold(Level::Zero, |acc, (_, l)| Level::join(acc, l.clone()));
+        let ls = sums.iter().fold(Level::Zero, |acc, (_, l)| Level::max(acc, l.clone()));
         let lk = join(&li, &lp);
         let lw0 = join(&ls, &lp);
         let level = if indexed { join(&lw0, &lk) } else { lw0 };

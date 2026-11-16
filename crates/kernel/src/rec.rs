@@ -4835,7 +4835,7 @@ pub(crate) fn branch_specs(
     let tm_corec = {
         let (l, lp, li, k) = (lvar(3), lvar(2), lvar(1), lvar(0));
         let gt = gt(4, 9);
-        let step_level = |sig: &crate::term::MSig| Level::join(sig.level.clone(), Level::join(k.clone(), sig.family_level()));
+        let step_level = |sig: &crate::term::MSig| Level::max(sig.level.clone(), Level::max(k.clone(), sig.family_level()));
         let mut globals = m_sig_globals(false, &l, &lp, &li);
         // U_X, prefix (g, I, S, P, o): o = 0.
         let v0 = m_view(false, 0, &l, &lp, &li);
@@ -4978,7 +4978,7 @@ pub(crate) fn branch_specs(
             ty: Rc::new(inst_tm_motive(
                 m_tm,
                 (3, 7, 6),
-                Level::join(l.clone(), family),
+                Level::max(l.clone(), family),
                 v.g.clone(),
                 m_out_ty(&v.sig, &j),
                 Term::BoxTm(Rc::new(code)),

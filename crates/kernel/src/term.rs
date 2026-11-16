@@ -3353,7 +3353,7 @@ pub struct IWfSig {
 impl IWfSig {
     /// The family's level, `l ⊔ li` (design §1.2).
     pub fn family_level(&self) -> Level {
-        Level::join(self.level.clone(), self.idx_level.clone())
+        Level::max(self.level.clone(), self.idx_level.clone())
     }
 
 }
@@ -3517,7 +3517,7 @@ pub struct MSig {
 impl MSig {
     /// The family's level, `l ⊔ l' ⊔ li` (design §1.1).
     pub fn family_level(&self) -> Level {
-        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+        Level::max(Level::max(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 
     /// `S[j/i]`, in Γ for `j` in Γ.
@@ -3636,7 +3636,7 @@ pub fn m_out_ty(sig: &Rc<MSig>, j: &Term) -> Type {
 /// ```
 pub fn m_step_ty(sig: &Rc<MSig>, carrier_level: &Level, carrier: &Type) -> Type {
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // In (Γ, i, s, p): the child's index, its seed's type and its tree type.
     let o = sig.next.as_ref();
     let child_seed = carrier.inst_top(3, o);
@@ -3683,7 +3683,7 @@ pub fn m_out_corec(
 ) -> Term {
     let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
     let f = sig.family_level();
-    let kf = Level::join(carrier_level.clone(), f.clone());
+    let kf = Level::max(carrier_level.clone(), f.clone());
     // The step's type at j, in Γ: Σ(s : S[j]). Π(p : P[j, s]). X[o] + M(o).
     let Type::Sigma { snd: step_snd, .. } = m_step_ty(sig, carrier_level, carrier).inst_top(0, j) else {
         unreachable!("m_step_ty builds a Σ")

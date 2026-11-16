@@ -90,7 +90,7 @@ impl IwfConfusion<'_> {
             FamForm::W(sig) => {
                 let mut c3 = mcx.clone();
                 c3.push("#a".into(), sig.shape.shift_local(2), sig.ls.clone());
-                c3.push("#f".into(), sig.kids_ty(3, &var(0)), Level::join(sig.lp.clone(), sig.lw.clone()));
+                c3.push("#f".into(), sig.kids_ty(3, &var(0)), Level::max(sig.lp.clone(), sig.lw.clone()));
                 c3.push(
                     "#ih".into(),
                     Type::Pi {
@@ -99,7 +99,7 @@ impl IwfConfusion<'_> {
                         dom: Rc::new(sig.pos_at(4, &var(1))),
                         cod: Rc::new(motive.shift_local(3)),
                     },
-                    Level::join(sig.lp.clone(), mlvl.clone()),
+                    Level::max(sig.lp.clone(), mlvl.clone()),
                 );
                 let step = self.const_case_tree(&c3, spine, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, spine.root(), 5, span)?;
                 Ok(Term::ElimW {

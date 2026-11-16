@@ -2650,7 +2650,7 @@ impl GeneratedDefs<'_> {
         let ty = Type::clone(&entry.stmt);
         let level = match &ty {
             Type::Ty(level) => Level::succ(level.clone()),
-            Type::Pi { dom_level, cod_level, .. } => Level::join(dom_level.clone(), cod_level.clone()),
+            Type::Pi { dom_level, cod_level, .. } => Level::max(dom_level.clone(), cod_level.clone()),
             _ => return None,
         };
         Some((head, ty, level))

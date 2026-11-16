@@ -47,7 +47,7 @@ fn app(fun: Term, arg: Term) -> Term {
 }
 
 fn join(a: &Level, b: &Level) -> Level {
-    Level::join(a.clone(), b.clone())
+    Level::max(a.clone(), b.clone())
 }
 
 fn pi(dom_level: &Level, cod_level: &Level, dom: Type, cod: Type) -> Type {

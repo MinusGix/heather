@@ -2945,7 +2945,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             ) => {
                 self.tm(env, a1, a2, shape, level)?;
                 let cs_ty = D::iwf_children(self, env, w, a1)?;
-                let fl = Level::join((*level).clone(), (*idx_level).clone());
+                let fl = Level::max((*level).clone(), (*idx_level).clone());
                 self.tm(env, c1, c2, &cs_ty, &fl)
             }
             (TmView::Supi { .. }, _) | (_, TmView::Supi { .. }) => Err(NC),
@@ -2968,9 +2968,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_i = D::push_entry(env, &sig.idx, sig.idx_level);
                 self.ty(&e_i, c1, c2, k1)?;
                 let step_ty = D::m_step_ty(self, env, g1, k1, c1)?;
-                let step_level = Level::join(
+                let step_level = Level::max(
                     (*g1.level).clone(),
-                    Level::join((*k1).clone(), g1.family_level()),
+                    Level::max((*k1).clone(), g1.family_level()),
                 );
                 let e_ix = D::push_entry(&e_i, c1, k1);
                 self.tm(&e_ix, t1, t2, &step_ty, &step_level)?;
@@ -3419,7 +3419,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             child: c1,
         };
         let (mot, cs_ty, ih_ty, step_ty) = D::iwf_telescope(self, env, &sig, ml1, m1)?;
-        let fl = Level::join((*l1).clone(), (*li1).clone());
+        let fl = Level::max((*l1).clone(), (*li1).clone());
         // M in (Γ, j : I, z : IWf(…)(j)).
         let e_j = D::push_entry(env, x1, li1);
         let e_jz = D::push_entry(&e_j, &mot, &fl);
@@ -3444,7 +3444,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         };
         self.tm_nee_c(env, n1, n2)?; // inferred M: forced, not read
         let ty = D::m_out_ty(self, env, g1, i1)?;
-        Ok((ty, Level::join((*g1.level).clone(), g1.family_level())))
+        Ok((ty, Level::max((*g1.level).clone(), g1.family_level())))
     }
 
     /// [`Conv::tm_ne`] at two `J` neutrals.

@@ -2154,9 +2154,9 @@ impl<'v> Val<'v> {
     /// (design §3.2, route 1): a `Pair` whose `fst` is a bit value and whose
     /// `snd` already is a run is one bit wider, up to [`BIT_RUN_WIDTH_CAP`],
     /// above which the outer pair stays structural over a run tail.
-    /// Called only by the tests, against [`Val::bit_run_unpack`]
-    /// (`issues/kernel-vestigial-apis.md`).
-    pub fn bit_run_cons(
+    /// The tests' builder, checked against [`Val::bit_run_unpack`].
+    #[cfg(test)]
+    pub(crate) fn bit_run_cons(
         level: &Level,
         ty: &'v BitTy<'v>,
         bit: bool,

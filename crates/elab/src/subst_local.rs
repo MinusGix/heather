@@ -207,7 +207,7 @@ impl LocalSubsts<'_> {
                 dom: Rc::new(dom),
                 cod: Rc::new(motive),
             };
-            motive_level = Level::join(dom_level, motive_level);
+            motive_level = Level::max(dom_level, motive_level);
         }
         let psi = self.goal_psi();
         typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.policy.fuel).map_err(|_| {

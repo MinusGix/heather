@@ -2893,9 +2893,9 @@ pub(crate) fn beta_elim_tm(
             let di = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
             let dix = extend(&di, Rc::clone(carrier), carrier_level.clone());
             let step_ty = m_step_ty(sig, carrier_level, carrier).shift_local(1);
-            let step_level = Level::join(
+            let step_level = Level::max(
                 sig.level.clone(),
-                Level::join(carrier_level.clone(), sig.family_level()),
+                Level::max(carrier_level.clone(), sig.family_level()),
             );
             locals.push(rec.elim_ty(carrier_level.clone(), di, Rc::clone(carrier)));
             locals.push(rec.elim_tm(step_level, dix, Rc::new(step_ty), Rc::clone(step)));

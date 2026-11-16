@@ -722,7 +722,7 @@ impl Simps<'_> {
                 };
                 let transport = |motive: Type| Term::J {
                     ty_level: level.clone(),
-                    motive_level: Level::join(lvl.clone(), lvl.clone()),
+                    motive_level: Level::max(lvl.clone(), lvl.clone()),
                     ty: Rc::clone(ty),
                     lhs: Rc::clone(lhs),
                     motive: Rc::new(motive),

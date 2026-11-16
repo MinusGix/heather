@@ -543,7 +543,7 @@ fn a_constructor_is_at_its_output_index() {
     not_ck(&nil_ctx(), &tm_lit(), &at(&sig, nat(0)), c(0));
     // It synthesizes Tm(o[a]), not a reduced index.
     let (ty, l) = infer_term(&psi(), 0, Layer::Prog, &nil_ctx(), &tm_lit(), FUEL).expect("infers");
-    assert_eq!(l, Level::join(c(0), c(0)));
+    assert_eq!(l, Level::max(c(0), c(0)));
     let out_at = sig.out.inst_top(0, &tm_lit_label());
     assert_eq!(ty, at(&sig, out_at));
     // App(n, m, f, a) on open data: its type is the computed index

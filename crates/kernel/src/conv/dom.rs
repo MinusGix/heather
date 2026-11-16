@@ -411,7 +411,7 @@ pub(super) struct MSigC<'a, 'v, D: Dom<'v>> {
 impl<'v, D: Dom<'v>> MSigC<'_, 'v, D> {
     /// The family's level, `l ⊔ l' ⊔ li`.
     pub(super) fn family_level(&self) -> Level {
-        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+        Level::max(Level::max(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
     }
 }
 
