@@ -85,6 +85,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),
     ("function_ir_rule_sound", include_str!("../../../../lib/native/function_ir/function_ir_rule_sound.hthr")),
     ("function_ir_rule", include_str!("../../../../lib/native/function_ir/function_ir_rule.hthr")),
+    ("function_ir_match", include_str!("../../../../lib/native/function_ir/function_ir_match.hthr")),
     ("bitvec_ring", include_str!("../../../../lib/std/bitvec/bitvec_ring.hthr")),
     ("function_ir_rules", include_str!("../../../../lib/native/function_ir/function_ir_rules.hthr")),
     ("function_ir_tidy", include_str!("../../../../lib/native/function_ir/function_ir_tidy.hthr")),

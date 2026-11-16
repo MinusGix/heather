@@ -502,7 +502,8 @@ Minus, 2026-11-16:
 
 ## 12. What is built
 
-Steps 1 and 2, except registration by name.
+Steps 1 and 2, except registration by name, and the first part of step 3:
+the matcher, for the rules whose conclusion is a node.
 
 - **`rule_sound`** (`lib/native/function_ir/function_ir_rule_sound.hthr`):
   a clause's soundness from a theorem about words. It reads each premise
@@ -530,6 +531,28 @@ Steps 1 and 2, except registration by name.
   Porting a rule reordered its numbers, so every plan that names it
   changed with it. That is the cost step 3 removes: the matcher finds the
   numbers from the statement.
+
+- **The matcher** (`function_ir_match.hthr`): a `rule theorem` also
+  publishes `name_pattern: RulePattern`, the shape of its clause: each
+  premise's kind, and which of its numbers are the rule's own and which
+  are computed (a literal, a sum). `Matchable::found_at` starts from the
+  premise that writes what the conclusion writes, follows each operand to
+  the node the walk passed for it, reads each range premise from the
+  ranges known, makes the rule's clause at the numbers found (which runs
+  the guard) and proposes the instance only where every premise is a node
+  passed or a range known. `Seen::matched` in `learn` writes the plan:
+  the node dropped, the ranges read derived, the rule, and the node the
+  conclusion gives written in its place.
+- **`matchable()`** in `function_ir_rules.hthr` lists the rules the search
+  applies this way: `add_zero`, `narrow_back` and `swap_twice`. The last
+  two were recognisers written by hand in `Seen::replaced` and are gone;
+  their plans are the same. `add_zero` had no recogniser: it fires now
+  because it is stated and listed.
+
+What is left of step 3: the matcher reads a rule whose conclusion is a
+node, with node and range premises. A rule that concludes a range or an
+order (most of `Seen::pass`) is still proposed by hand there, the
+strategies are not registered learners yet, and "Accepted" is not proved.
 
 What a statement can say, as built:
 

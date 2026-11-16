@@ -103,6 +103,32 @@ fn rule_of_clause(x: Clause) → Clause { x }
 fn rule_of_numbers(x: List<Nat>) → List<Nat> { x }
 fn rule_of_bool(x: Bool) → Bool { x }
 
+// ---------------------------------------------------------------------------
+// The shape of a rule's clause, for finding where it applies
+// (function_ir_match)
+
+// One number of a node or a fact of the clause: the rule's number `k`, or
+// something computed from them (a literal, a sum).
+inductive PatternSlot { Numbered(k: Nat), Computed }
+
+// One fact of the clause: a node by its constructor's place in `Node`,
+// which of its numbers is its output, and its numbers; a range; or a fact
+// of another form.
+inductive PatternFact {
+    Makes(kind: Nat, output: Nat, slots: List<PatternSlot>),
+    Ranges(x: PatternSlot, low: PatternSlot, high: PatternSlot),
+    Unread,
+}
+
+// How many numbers the rule takes, and its clause's shape.
+record RulePattern { arity: Nat, premises: List<PatternFact>, conclusion: PatternFact }
+
+fn rule_of_slot(x: PatternSlot) → PatternSlot { x }
+fn rule_of_slots(x: List<PatternSlot>) → List<PatternSlot> { x }
+fn rule_of_shape(x: PatternFact) → PatternFact { x }
+fn rule_of_shapes(x: List<PatternFact>) → List<PatternFact> { x }
+fn rule_of_pattern(x: RulePattern) → RulePattern { x }
+
 // A guard's bit and what it proves, with the dictionary written.
 fn rule_bit(P: Type, d: Decide<P>) → Bool { d.bit }
 theorem rule_holds(P: Type, d: Decide<P>, e: rule_bit(P, d) = True): P { d.reflects.left(e) }
@@ -814,6 +840,131 @@ fn rule_guards_hold(holds, both, left, right: GlobalRef, yes: Expr, guards: List
 fn rule_exprs(hs: List<Handle>) → List<Expr> { match hs { Nil => [], Cons(h, rest) => Cons(Hd(h), rule_exprs(rest)) } }
 
 // ---------------------------------------------------------------------------
+// The clause's shape
+
+// The constructors a shape is written with.
+record RuleShapes {
+    numbered: Expr, computed: Expr, no_slots: Expr, slot_then: Expr,
+    makes: Expr, ranges: Expr, unread: Expr, no_shapes: Expr, shape_then: Expr, pattern: Expr,
+}
+
+fn rule_shapes() → Tac<RuleShapes> {
+    let slot <- rule_ctors(name_of(rule_of_slot));
+    let slots <- rule_ctors(name_of(rule_of_slots));
+    let shape <- rule_ctors(name_of(rule_of_shape));
+    let shapes <- rule_ctors(name_of(rule_of_shapes));
+    let patterns <- rule_ctors(name_of(rule_of_pattern));
+    let numbered <- rule_ctor(slot, "Numbered");
+    let computed <- rule_ctor(slot, "Computed");
+    let no_slots <- rule_ctor(slots, "Nil");
+    let slot_then <- rule_ctor(slots, "Cons");
+    let makes <- rule_ctor(shape, "Makes");
+    let ranges <- rule_ctor(shape, "Ranges");
+    let unread <- rule_ctor(shape, "Unread");
+    let no_shapes <- rule_ctor(shapes, "Nil");
+    let shape_then <- rule_ctor(shapes, "Cons");
+    let pattern <- rule_ctor(patterns, "RulePattern");
+    pure(RuleShapes(numbered, computed, no_slots, slot_then, makes, ranges, unread, no_shapes, shape_then, pattern))
+}
+
+// A number of the clause as a slot: the rule's own where it is written
+// `num(numbers, k)`.
+fn rule_slot(cx: RuleCx, to: RuleShapes, e: Expr) → Tac<Expr> {
+    match e {
+        App(f, k) => match f {
+            App(g, _) => match g {
+                Global(r) => match rule_same(r, cx.ops.num) {
+                    True => match k { NatLit(i) => pure(App(to.numbered, NatLit(i))), _ => pure(to.computed) },
+                    False => pure(to.computed),
+                },
+                _ => pure(to.computed),
+            },
+            _ => pure(to.computed),
+        },
+        Hd(h) => view(h).bind(λ v => match v {
+            HGlobal(g, _, args) => match rule_same(g, cx.ops.num) {
+                False => pure(to.computed),
+                True => match args {
+                    Cons(_, more) => match more {
+                        Cons(k, _) => view(k).bind(λ kv => match kv { HLit(i) => pure(App(to.numbered, NatLit(i))), _ => pure(to.computed) }),
+                        Nil => pure(to.computed),
+                    },
+                    Nil => pure(to.computed),
+                },
+            },
+            _ => pure(to.computed),
+        }),
+        _ => pure(to.computed),
+    }
+}
+
+fn rule_slots(cx: RuleCx, to: RuleShapes, es: List<Expr>) → Tac<List<Expr>> {
+    match es {
+        Nil => pure([]),
+        Cons(e, rest) => rule_slot(cx, to, e).bind(λ slot => rule_slots(cx, to, rest).bind(λ more => pure(Cons(slot, more)))),
+    }
+}
+
+// A constructor applied, as the generator wrote it: which, and to what.
+record RuleBuilt { place: Nat, ctor: CtorInfo, args: List<Expr> }
+
+fn rule_ctor_built(cs: List<CtorInfo>, h: Handle, place: Nat, args: List<Expr>) → Option<RuleBuilt> {
+    match cs {
+        Nil => None,
+        Cons(c, rest) => match c.ctor {
+            None => rule_ctor_built(rest, h, Succ(place), args),
+            Some(k) => match k.id.same(h.id) { True => Some(RuleBuilt(place, c, args)), False => rule_ctor_built(rest, h, Succ(place), args) },
+        },
+    }
+}
+
+fn rule_built(cs: List<CtorInfo>, e: Expr, args: List<Expr>) → Option<RuleBuilt> {
+    match e {
+        App(f, a) => rule_built(cs, f, Cons(a, args)),
+        Hd(h) => rule_ctor_built(cs, h, 0, args),
+        _ => None,
+    }
+}
+
+fn rule_output_place(fields: List<FieldInfo>, place: Nat) → Option<Nat> {
+    match fields {
+        Nil => None,
+        Cons(field, rest) => match rule_same_name(field.name, "output") { True => Some(place), False => rule_output_place(rest, Succ(place)) },
+    }
+}
+
+// The shape of one fact of the clause.
+fn rule_shape(cx: RuleCx, to: RuleShapes, fact: Expr) → Tac<Expr> {
+    match rule_built(cx.facts, fact, []) {
+        None => pure(to.unread),
+        Some(built) => match rule_same_name(built.ctor.name, "Within") {
+            True => rule_slots(cx, to, built.args).bind(λ slots => pure(rule_apps(to.ranges, slots))),
+            False => match rule_same_name(built.ctor.name, "Is") {
+                False => pure(to.unread),
+                True => match built.args {
+                    Nil => pure(to.unread),
+                    Cons(node, _) => match rule_built(cx.nodes, node, []) {
+                        None => pure(to.unread),
+                        Some(made) => match rule_output_place(made.ctor.fields, 0) {
+                            None => pure(to.unread),
+                            Some(output) => rule_slots(cx, to, made.args).bind(λ slots =>
+                                pure(rule_apps(to.makes, [NatLit(made.place), NatLit(output), rule_list(to.no_slots, to.slot_then, slots)]))),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn rule_shapes_of(cx: RuleCx, to: RuleShapes, facts: List<Expr>) → Tac<List<Expr>> {
+    match facts {
+        Nil => pure([]),
+        Cons(fact, rest) => rule_shape(cx, to, fact).bind(λ shape => rule_shapes_of(cx, to, rest).bind(λ more => pure(Cons(shape, more)))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The generator
 
 // `rule theorem name(…): statement { proof }` publishes `name_rule`.
@@ -856,5 +1007,10 @@ fn rule(name: String) → Tac<List<Decl>> {
             rule_assumed(kept ++ guarded, kept ++ guarded))));
     let made = rule_apps(Global(when), [Lam(numbers.ref, bits), Lam(numbers.ref, clause), Lam(numbers.ref, Lam(ok.ref, proof))]);
     let ty <- infer(made).or_fail("rule: the rule made: ");
-    pure([Decl(AsValue, name ++ "_rule", [], Hd(ty), made)])
+    let to <- rule_shapes();
+    let premises <- rule_shapes_of(cx, to, concluded.read.premises);
+    let conclusion <- rule_shape(cx, to, concluded.fact);
+    let pattern = rule_apps(to.pattern, [NatLit(concluded.read.next), rule_list(to.no_shapes, to.shape_then, premises), conclusion]);
+    let shaped <- infer(pattern).or_fail("rule: the clause's shape: ");
+    pure([Decl(AsValue, name ++ "_rule", [], Hd(ty), made), Decl(AsValue, name ++ "_pattern", [], Hd(shaped), pattern)])
 }
