@@ -534,6 +534,28 @@ fn Target::EmitsRun(self t: Target, s: Stmt, call: Writers(), perform: Performs(
         s.emits(p, t.layout(), out, known, names) = Some(c) → c.prog.Within(t.program) → s.checks(t.homes, out).IsTrue() → t.RunsK(s, known, call, perform, out, p, c.prog)
 }
 
+// What follows a `Then`'s first part: the rest and then `k`, or the exit.
+fn Stmt::and_then(self rest: Stmt, call: Writers(), perform: Performs(), n: Nat, k: Flow → ITree<BitVec(64)>(Events::linux()), flow: Flow) →
+    ITree<BitVec(64)>(Events::linux()) {
+    ITree::bind(Events::linux(), match flow as λ _ => ITree<Flow>(Events::linux()) {
+        Onward(after) => rest.denote(call, perform, n, after),
+        Exited(status) => Ret(Exited(status)),
+    }, k)
+}
+
+// The first part run into `rest.and_then(k)` is the sequence run into `k`:
+// the step the three lemmas below share.
+theorem Target::then_at(self t: Target, {first, rest: Stmt}, {call: Writers()}, {perform: Performs()}, {n: Nat}, {env: Env},
+    {k: Flow → ITree<BitVec(64)>(Events::linux())}, {at: Nat}, {live: List<Nat>},
+    goes: t.At(at, live, ITree::bind(Events::linux(), first.denote(call, perform, n, env), rest.and_then(call, perform, n, k)), env)):
+    t.At(at, live, ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
+    let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
+        Onward(after) => rest.denote(call, perform, n, after),
+        Exited(status) => Ret(Exited(status)),
+    };
+    t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k), goes)
+}
+
 // A `Then` whose parts run with nothing known: the first part, then the
 // rest.
 theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), perform: Performs(),
@@ -556,13 +578,8 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
                 ih_first(p, rest.live_in(t.homes, out), Nil, names, c1, one, w_first, ok.left));
             let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
             λ n env k exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
-                    run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
+                let k2 = rest.and_then(call, perform, n, k);
+                t.then_at(run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
     })(refl, emitted)
@@ -593,13 +610,8 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), p
             let run_first = ih_first(p, rest.live_in(t.homes, out), known, names, c1, one, w_first, ok.left);
             let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
             λ n env k knows exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
-                    run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
+                let k2 = rest.and_then(call, perform, n, k);
+                t.then_at(run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
     })(refl, emitted)
@@ -634,17 +646,13 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
             let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
             let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, two, within, ok.right);
             λ n env k exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
+                let k2 = rest.and_then(call, perform, n, k);
                 let after = env.computes(nodes);
                 let knows = j(pair.left, λ l _ => after.Knows(l), env.computes_knows(nodes));
-                t.at_similar(ITree::bind_assoc(Events::linux(), leaf.denote(call, perform, n, env), h, k),
-                    t.at_sub(t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), guard.left,
-                            run_rest(n, after, k, knows, exits, next)),
-                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), guard.right)))
+                let run_leaf: t.At(prog_len(p), nodes_live_in(nodes, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env) =
+                    t.at_sub(t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), guard.left, run_rest(n, after, k, knows, exits, next)),
+                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), guard.right));
+                t.then_at(run_leaf)
             }
         },
     })(refl, emitted)
