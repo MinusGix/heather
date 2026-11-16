@@ -1051,6 +1051,11 @@ pub enum ExprKind {
     /// reusing the collection-literal lowering; at another carrier it
     /// resolves `StringLiteral`.
     Str(String),
+    /// `b"…"` — a byte-string literal, carrying its bytes (each an ASCII
+    /// character of the string, docs/native/io-programs-design.md §5 D3).
+    /// It is the vector literal `[u8; n]` of those bytes, or the list
+    /// literal of them at `List<u8>`.
+    ByteStr(Vec<u8>),
     /// `·` / `·₀` / `·₁₂` — an anonymous argument slot
     /// (issues/argument-slot-sections.md). `None` is an unindexed slot;
     /// `Some(n)` is the explicitly zero-based slot `n`. Checking-position

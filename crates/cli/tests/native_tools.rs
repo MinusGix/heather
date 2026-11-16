@@ -166,6 +166,31 @@ fn compiled_ascii_check_reads_its_whole_input_then_answers() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Byte strings a program writes (`b"…"`, docs/native/io-programs-design.md
+/// §5 D3): `ascii_say::source` is `ascii_check` that also says its verdict,
+/// `b"ascii\n"` or `b"not ascii\n"` by an `if`. Each string is read as one
+/// more buffer parameter and is a buffer of the `Source` that starts as its
+/// bytes, so `ascii_say::reads` is the program at no argument for them.
+#[test]
+fn compiled_program_writes_its_byte_strings() {
+    let dir = scratch("ascii-say");
+    let binary = dir.join("ascii_say");
+    write_program("lib/_tests/native/runtime/runtime_program_tests.hthr", "ascii_say::source", &binary, false);
+    let mut random = Bytes::seeded("ascii-say");
+    let text = random.take(3000, |r| b"abcxyz ABC\n019~"[(r % 15) as usize]);
+    let mut late = text.clone();
+    late[2999] = 0x80;
+    let full = random.take(4096, |r| (r % 128) as u8);
+    for input in [&b""[..], b"hello, World!\n", &text, &late, &full] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let want = if input.len() >= 4096 { 2 } else if input.iter().all(|&b| b < 0x80) { 0 } else { 1 };
+        assert_eq!(code, Some(want), "the verdict on {} bytes", input.len());
+        let said: &[u8] = if want == 0 { b"ascii\n" } else { b"not ascii\n" };
+        assert_eq!(out, said, "what it says of {} bytes", input.len());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A procedure and a function in one file, the procedure's body calling the
 /// function and `main` both: 'a' and 'b' raised and summed is the status
 /// (`raised_twice_runs`).

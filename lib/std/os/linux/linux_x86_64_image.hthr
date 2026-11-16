@@ -362,12 +362,16 @@ theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), fi
 // The process's stack (issues/io-image-process-stack.md)
 
 // Linux maps a process's stack high in the user half and starts RSP in it,
-// the command line at RSP and above (`ArgvAt`). Below RSP, exec maps at
-// least 128 KiB (fs/exec.c, `setup_arg_pages`'s `stack_expand`, inside the
-// default stack limit) and the kernel grows the rest on demand. A process
-// relies on a fixed `depth` of that, no more than the 128 KiB exec maps
-// before the program runs, and never on the growth: what a fault would map
-// is not mapped when the run reads it.
+// the command line at RSP and above (`ArgvAt`). A process relies on a fixed
+// `depth` of stack below RSP, at most 128 KiB. That those bytes are data is
+// the environment's assumption, and it leans on the kernel growing the
+// stack: exec reserves 128 KiB below the argument strings (fs/exec.c,
+// `setup_arg_pages`'s `stack_expand`), then lays argc, the argv and envp
+// pointers and auxv below the strings, inside that reserve, so what is
+// mapped below the entry RSP is 128 KiB less those tables (a few hundred
+// bytes less on a small environment, almost nothing left with twenty
+// thousand variables) and the rest is mapped by the fault of its first
+// touch, up to RLIMIT_STACK (issues/io-stack-below-rsp-not-mapped.md).
 fn io_stack_limit() → Nat { 0x20000 }
 
 // Where the stack of `depth` bytes below `top` sits: above the segment,

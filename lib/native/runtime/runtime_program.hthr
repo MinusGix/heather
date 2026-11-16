@@ -79,6 +79,18 @@ theorem Program::below(n: Nat): LocsBelow(Program::locs(n), 1) {
 
 fn Program::buffers(caps: List<Nat>) → List<Buffer> { caps.map(λ c => Buffer(c)) }
 
+// A byte string the program writes (`b"…"`, docs/native/io-programs-design.md
+// §5 D3): a buffer of its own length that starts as its bytes. The reading
+// takes it as a parameter after the function's own, so it is the buffer
+// after theirs, and nothing but the bytes it starts with is new.
+fn Program::constant(bs: List<BitVec(8)>) → Buffer { Buffer(bs.len(), bs) }
+
+// The buffers of a program: a zeroed one per buffer parameter, then one
+// per byte string, holding it.
+fn Program::all_buffers(caps: List<Nat>, consts: List<List<BitVec(8)>>) → List<Buffer> {
+    Program::buffers(caps) ++ consts.map(λ bs => Program::constant(bs))
+}
+
 // The reading lowered at the plain world, its parameters where
 // `Program::locs` puts them.
 fn Program::lowered(p: ELoop, ls: List<Lent>, g: List<Ty>) → ELowered {
@@ -91,8 +103,8 @@ fn Program::result(p: ELoop, ls: List<Lent>, g: List<Ty>) → Nat { Program::low
 // What `write-elf` compiles: the lent functions' program, a buffer per
 // parameter, the lowered statements, then an exit with the word the value
 // is in.
-fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>) → Source {
-    Source(functions := functions, buffers := Program::buffers(caps), words := Program::lowered(p, ls, g).stmt.word_bound(),
+fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<List<BitVec(8)>>) → Source {
+    Source(functions := functions, buffers := Program::all_buffers(caps, consts), words := Program::lowered(p, ls, g).stmt.word_bound(),
         main := Then(Program::lowered(p, ls, g).stmt, Exit(Program::lowered(p, ls, g).result)))
 }
 
@@ -109,25 +121,26 @@ fn Program::no_args() → List<List<BitVec(8)>> { [] }
 fn Program::no_functions() → List<Function> { [] }
 fn Program::no_lents() → List<Lent> { [] }
 fn Program::one_lent(l: Lent) → List<Lent> { [l] }
+fn Program::push(x: List<BitVec(8)>, xs: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { Cons(x, xs) }
 
 // The lowering's theorem at the program's `Source`, joined to a bridge: the
 // statements' tree, the value read back from its word, reads as `f`.
-fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>,
+fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Function>, caps: List<Nat>, consts: List<List<BitVec(8)>>,
     lowered: p.lower(ETm::plain_world(), ls, g, Program::locs(g.len()), 1) = Some(Program::lowered(p, ls, g)),
     lents: ETm::LentsAgree(ls, program_writers(functions)), vals: rt::Env(ETm::plain_world().tys, g),
-    held: LocsHold(ETm::plain_world().tys, Program::source(p, ls, g, functions, caps).start([]), g, Program::locs(g.len()), vals),
+    held: LocsHold(ETm::plain_world().tys, Program::source(p, ls, g, functions, caps, consts).start([]), g, Program::locs(g.len()), vals),
     f: Io → Partial(Mutated<Io, p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>),
     bridge: (io: Io) → Eutt<Mutated<Io, p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>>(Events::none(), f(io),
         p.sem(ETm::plain_world(), ls, g, vals, io))) →
     Io::Reads<p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>(CoTree::map(Events::linux(),
             Program::lowered(p, ls, g).stmt.denote_co(program_writers(functions),
-                Program::source(p, ls, g, functions, caps).performs_co(program_writers(functions), 0))(Program::source(p, ls, g, functions, caps).start([])),
+                Program::source(p, ls, g, functions, caps, consts).performs_co(program_writers(functions), 0))(Program::source(p, ls, g, functions, caps, consts).start([])),
             λ flow => flow.read_back(p.ty(ETm::plain_world(), g), ETm::plain_world().tys, Program::lowered(p, ls, g).result)),
         f)
 {
     let w = ETm::plain_world();
     let call = program_writers(functions);
-    let src = Program::source(p, ls, g, functions, caps);
+    let src = Program::source(p, ls, g, functions, caps, consts);
     Io::reads_back(CoTree::map(Events::linux(), Program::lowered(p, ls, g).stmt.denote_co(call, src.performs_co(call, 0))(src.start([])),
             λ flow => flow.read_back(p.ty(w, g), w.tys, Program::lowered(p, ls, g).result)),
         λ io => p.sem(w, ls, g, vals, io), f,
@@ -304,7 +317,12 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let opened <- open(ft, "io").or_fail("`" ++ name ++ "`: its world: ");
     let buffer <- program_id("runtime_program", "ByteBuffer");
     let caps <- program_caps(name, buffer, 64, opened.body);
-    let _ <- match caps.len().same(r.read.params.len()) { True => pure(0), False => program_refused(name, "a parameter after the world is a buffer") };
+    let _ <- match (caps.len() + r.consts.len()).same(r.read.params.len()) { True => pure(0), False => program_refused(name, "a parameter after the world is a buffer") };
+    // The byte strings it writes, as written, the first found first.
+    let consts <- bridge_consts(<- io_quoting(), r.consts);
+    let push <- program_global("runtime_program", "Program::push");
+    let no_consts <- program_global("runtime_program", "Program::no_args");
+    let constsE = consts.rev().foldl(λ acc c => ap(push, [c, acc]), no_consts);
     let q <- io_quoting();
     let nm <- bridge_names();
     let pl <- program_lent(name, lends);
@@ -317,12 +335,14 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let bridge <- runtime_held(bridge_e, "`" ++ name ++ "` as its reading's meaning");
     let bridge_t <- infer(bridge).or_fail("`" ++ name ++ "`'s bridge: ");
     let source_of <- program_global("runtime_program", "Program::source");
-    let source <- runtime_held(ap(source_of, [eloop, lents, gE, pl.functions, capsE]), "`" ++ name ++ "`'s Source");
+    let source <- runtime_held(ap(source_of, [eloop, lents, gE, pl.functions, capsE, constsE]), "`" ++ name ++ "`'s Source");
     // The all-zero buffers, the first parameter's first.
     let replicate <- program_global("list", "List::replicate");
     let zero <- program_global("native_source", "zero_byte");
     let zeros = caps.map(λ c => ap(replicate, [Blank, zero, NatLit(c)]));
-    let vals = bridge_pairs(nm, zeros.rev());
+    // The reading's parameters: the buffers, then the byte strings.
+    let inits = zeros ++ consts;
+    let vals = bridge_pairs(nm, inits.rev());
     // The statement: the Source's tree reads as `f` from those buffers.
     let io_s <- assume(Hd(<- runtime_held_type("linux_world", "Io")), "io", None).or_fail("`" ++ name ++ "`: a world: ");
     let surface = Lam(io_s.ref, ap(Global(f), Cons(Local(io_s.ref), zeros)));
@@ -341,10 +361,10 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let start_e <- program_global("native_source", "Source::start");
     let env_e = ap(start_e, [source, no_args]);
     // The innermost link is the first parameter, in buffer 0.
-    let held = List::range(caps.len()).foldl(λ acc i => ap(held_cons, [tys_e, env_e, Blank, NatLit(i), runtime_at(zeros, i), Blank, Blank,
+    let held = List::range(inits.len()).foldl(λ acc i => ap(held_cons, [tys_e, env_e, Blank, NatLit(i), runtime_at(inits, i), Blank, Blank,
         ap(rfl, [Blank, Blank]), acc]), ap(held_nil, [tys_e, env_e]));
     let program_reads <- program_global("runtime_program", "Program::reads");
-    let inner = ap(program_reads, [eloop, lents, gE, pl.functions, capsE, ap(rfl, [Blank, Blank]), pl.agrees, vals, held, surface, bridged]);
+    let inner = ap(program_reads, [eloop, lents, gE, pl.functions, capsE, constsE, ap(rfl, [Blank, Blank]), pl.agrees, vals, held, surface, bridged]);
     let stmt <- program_global("runtime_program", "Program::stmt");
     let result <- program_global("runtime_program", "Program::result");
     let writers <- program_global("function_ir_placeless", "program_writers");

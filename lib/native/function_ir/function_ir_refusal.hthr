@@ -58,7 +58,7 @@ fn Gpr::shown(self register: Gpr) → String {
 }
 
 fn Place::shown(self place: Place) → String {
-    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count), Spilling(mask) => "spilling " ++ refusal_number(mask) }
+    match place { Into(register) => register.shown(), Folded => "folded", Saving(count) => "saving " ++ refusal_number(count), CallSlots(count) => refusal_number(count) ++ " call slots", Spilling(mask) => "spilling " ++ refusal_number(mask) }
 }
 
 // What is wrong with a place whatever the node: a callee-saved register
@@ -75,6 +75,7 @@ fn Place::unsaved(self place: Place, saves: Nat) → String {
         },
         Folded => "",
         Saving(_) => " (a count of saves, which is no node's place)",
+        CallSlots(_) => " (a count of call slots, which is no node's place)",
         Spilling(_) => " (what a call saves, which is no node's place)",
     }
 }
@@ -183,27 +184,32 @@ fn leaf_refusal(saves: Nat, prog: Prog, file: File, before, rest: List<Node>, pl
 }
 
 // `File::emit_call`, saying which of its tests refuses.
-fn File::call_refusal(self file: File, callee: Nat, arguments: List<Nat>, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
+fn File::call_refusal(self file: File, slots: Nat, placement: List<Place>, callee: Nat, arguments: List<Nat>, bound: Nat, counts: List<Nat>,
+    homes: List<Lent>) → String {
     let call = "the call of function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "): ";
     let staged = file.write(Rsp, None);
     let order = staged.call_moves(arguments.take(6));
-    match Succ(callee).leb(bound) {
-        False => call ++ "the callee is not below this function",
-        True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
-            False => call ++ "its leading arguments are not the homes of the buffers the callee is lent",
-            True => match arguments.drop(6).len().leb(2) {
-                False => call ++ "it passes " ++ refusal_number(arguments.len()) ++ " words, and a call passes at most eight: six in registers and two on the stack",
-                True => match staged.sources(arguments.drop(6)) {
-                    None => call ++ "a word past the sixth is in no register, where " ++ staged.shown(),
-                    Some(sources) => match sources.len().same(arguments.drop(6).len()) && staged.outputs_check(word_ports(arguments.drop(6)), sources) {
-                        False => call ++ "the words past the sixth are not in the registers found for them, where " ++ staged.shown(),
-                        True => match staged.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
-                            None => call ++ "an argument is in no register, where " ++ staged.shown(),
-                            Some(moves) => match moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()) {
-                                False => call ++ "the moves do not leave the arguments in their registers, where " ++ staged.shown(),
-                                True => match leaves_all(moves.code, callee_saved()) {
-                                    False => call ++ "a move writes a callee-saved register",
-                                    True => call ++ "no test of the call refuses",
+    match saves_ok(slots, call_saves(placement)) {
+        False => call ++ "it saves " ++ refusal_number(call_saves(placement).len()) ++ " registers around it, and the frame has "
+            ++ refusal_number(slots) ++ " slots for them",
+        True => match Succ(callee).leb(bound) {
+            False => call ++ "the callee is not below this function",
+            True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
+                False => call ++ "its leading arguments are not the homes of the buffers the callee is lent",
+                True => match arguments.drop(6).len().leb(2) {
+                    False => call ++ "it passes " ++ refusal_number(arguments.len()) ++ " words, and a call passes at most eight: six in registers and two on the stack",
+                    True => match staged.sources(arguments.drop(6)) {
+                        None => call ++ "a word past the sixth is in no register, where " ++ staged.shown(),
+                        Some(sources) => match sources.len().same(arguments.drop(6).len()) && staged.outputs_check(word_ports(arguments.drop(6)), sources) {
+                            False => call ++ "the words past the sixth are not in the registers found for them, where " ++ staged.shown(),
+                            True => match staged.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
+                                None => call ++ "an argument is in no register, where " ++ staged.shown(),
+                                Some(moves) => match moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()) {
+                                    False => call ++ "the moves do not leave the arguments in their registers, where " ++ staged.shown(),
+                                    True => match leaves_all(moves.code, callee_saved()) {
+                                        False => call ++ "a move writes a callee-saved register",
+                                        True => call ++ "no test of the call refuses",
+                                    },
                                 },
                             },
                         },
@@ -238,7 +244,7 @@ fn views_refusal(views: List<View>, file: File, homes: List<Lent>) → String {
 }
 
 // `File::emit_lend`, saying which of its tests refuses.
-fn File::lend_refusal(self file: File, saves: Nat, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
+fn File::lend_refusal(self file: File, saves: Nat, slots: Nat, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
     let call = "the call of function " ++ refusal_number(callee) ++ " over views (" ++ views_shown(views) ++ "): ";
     match emit_leaf(saves, prog, file, views_nodes(views), placement, names, homes) {
@@ -251,7 +257,7 @@ fn File::lend_refusal(self file: File, saves: Nat, prog: Prog, views: List<View>
                     False => call ++ "a view to write shares its buffer with another view",
                     True => match Succ(callee).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
                         True => call ++ "the callee is lent more buffers than the call has views",
-                        False => call ++ first.file.call_refusal(callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
+                        False => call ++ first.file.call_refusal(slots, first.placement, callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
                     },
                 },
             },
@@ -275,42 +281,42 @@ fn Emitted::close_refusal(self pass: Emitted, registers: LoopRegisters, count, e
 }
 
 // `StructuredRegion::emit_calls`, answering the way to what it refuses.
-fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
+fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: Nat, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
     counts: List<Nat>, homes: List<Lent>) → String {
     match region {
         Dataflow(body) => leaf_refusal(saves, prog, file, [], body.nodes, placement, names, homes),
         Sequence(prefix, continuation) => match emit_leaf(saves, prog, file, prefix.nodes, placement, names, homes) {
             None => leaf_refusal(saves, prog, file, [], prefix.nodes, placement, names, homes),
-            Some(first) => continuation.refusal(saves, first.prog, first.file, first.placement, first.names, bound, counts, homes),
+            Some(first) => continuation.refusal(saves, slots, first.prog, first.file, first.placement, first.names, bound, counts, homes),
         },
-        Compose(prefix, continuation) => match prefix.emit_calls(saves, prog, file, placement, names, bound, counts, homes) {
-            None => prefix.refusal(saves, prog, file, placement, names, bound, counts, homes),
-            Some(first) => continuation.refusal(saves, first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
+        Compose(prefix, continuation) => match prefix.emit_calls(saves, slots, prog, file, placement, names, bound, counts, homes) {
+            None => prefix.refusal(saves, slots, prog, file, placement, names, bound, counts, homes),
+            Some(first) => continuation.refusal(saves, slots, first.prog, first.file, first.placement, first.names, bound, counts, prefix.lends(homes)),
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => "the branch on " ++ refusal_number(condition) ++ ": its bit is in no register, where " ++ file.shown(),
-            Some(tested) => match when_true.emit_calls(saves, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
+            Some(tested) => match when_true.emit_calls(saves, slots, prog.branched(tested.test, Succ(names)), file.know(Truth(condition)), placement,
                 Succ(Succ(names)), bound, counts, homes) {
-                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(saves, prog.branched(tested.test, Succ(names)),
+                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(saves, slots, prog.branched(tested.test, Succ(names)),
                     file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
-                Some(yes) => match when_false.emit_calls(saves, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
+                Some(yes) => match when_false.emit_calls(saves, slots, yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names,
                     bound, counts, homes) {
-                    None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(saves,
+                    None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(saves, slots,
                         yes.prog.else_label(Succ(names), Succ(Succ(names))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes),
                     Some(no) => "where the arms of the branch on " ++ refusal_number(condition) ++ " meet: after the true arm "
                         ++ yes.file.shown() ++ "and after the false arm " ++ no.file.shown(),
                 },
             },
         },
-        Lend(views, callee, arguments, _) => file.lend_refusal(saves, prog, views, callee, arguments, placement, names, bound, counts, homes),
-        Call(callee, arguments, _) => file.call_refusal(callee, arguments, bound, counts, homes),
+        Lend(views, callee, arguments, _) => file.lend_refusal(saves, slots, prog, views, callee, arguments, placement, names, bound, counts, homes),
+        Call(callee, arguments, _) => file.call_refusal(slots, placement, callee, arguments, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(saves, inputs, limit, parameters, count, placement) {
                 None => "the entry of a loop: its bound " ++ refusal_number(limit) ++ " or an input (" ++ refusal_numbers(inputs)
                     ++ ") is in no register, or its registers are not apart, where " ++ file.shown(),
-                Some(entry) => match body.emit_calls(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                Some(entry) => match body.emit_calls(saves, slots, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
                     Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
-                    None => "in a loop's pass, " ++ body.refusal(saves, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    None => "in a loop's pass, " ++ body.refusal(saves, slots, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
                         Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
                     Some(pass) => match pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names) {
                         None => pass.close_refusal(entry.registers, count, exit, next),
@@ -325,19 +331,20 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, prog: Pr
 // The answer does not depend on the code before a function.
 fn Function::refused(self function: Function, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat) → String {
     let saves = placement_saves(placement);
-    let opened = function_opened(Start, k, function.loads(), function.slots(), saves);
+    let asked = placement_slots(placement);
+    let opened = function_opened(Start, k, function.loads(), function.slots(asked), saves);
     match function.lent.same(lent_count(counts, k)) {
         False => "the function is lent " ++ refusal_number(function.lent) ++ " buffers and the program's counts say "
             ++ refusal_number(lent_count(counts, k)),
-        True => match function.roomy(rooms, k, saves) {
-            False => "the function's frame of " ++ refusal_number(function.frame(saves)) ++ " bytes and its calls do not fit the room of "
+        True => match function.roomy(rooms, k, asked, saves) {
+            False => "the function's frame of " ++ refusal_number(function.frame(asked, saves)) ++ " bytes and its calls do not fit the room of "
                 ++ refusal_number(rooms(k)) ++ " bytes its row of the room table gives it",
             True => match input_file(word_ports(function.parameters), parameter_registers()) {
                 None => "the function has " ++ refusal_number(function.parameters.len())
                     ++ " parameters, and a function takes at most eight: six in registers and two on the stack",
-                Some(file) => match function.body.emit_calls(saves, opened, file, placement_body(placement), names, k, counts, function.homes()) {
-                    None => function.body.refusal(saves, opened, file, placement_body(placement), names, k, counts, function.homes()),
-                    Some(body) => match function.closing(saves, body) {
+                Some(file) => match function.body.emit_calls(saves, function.slots(asked), opened, file, placement_body(placement), names, k, counts, function.homes()) {
+                    None => function.body.refusal(saves, function.slots(asked), opened, file, placement_body(placement), names, k, counts, function.homes()),
+                    Some(body) => match function.closing(asked, saves, body) {
                         None => "the function's end: its result " ++ refusal_number(function.result) ++ " is in no register, where "
                             ++ body.file.shown(),
                         Some(_) => "nothing: the function has code after no other",

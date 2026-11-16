@@ -97,12 +97,19 @@ fn LinuxCmd::Answers(self c: LinuxCmd<Nat>) → c.Resp() → Type {
     }
 }
 
+// The descriptor a call's word names. Linux takes a descriptor argument as a
+// 32-bit `unsigned int` (`SYSCALL_DEFINE3(write, unsigned int, fd, …)`), so
+// the register's upper half is not read: a write to the word 2^32 + 1 is a
+// write to descriptor 1 (issues/linux-descriptor-upper-half.md).
+fn descriptor(word: BitVec(64)) → BitVec(32) { word.take_low(32, 32) }
+
 // What a call sent to `fd`, and what it read from it: the first `count` of a
-// write's bytes, and a read's bytes.
+// write's bytes, and a read's bytes. A call is to `fd` when its word names
+// the descriptor `fd` does.
 fn LinuxCmd::sent<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
     match c {
         ReadCmd(_, _) => λ _ => Nil,
-        WriteCmd(to, bytes) => λ (r: WriteResult) => match to.eq_dec(fd) {
+        WriteCmd(to, bytes) => λ (r: WriteResult) => match descriptor(to).eq_dec(descriptor(fd)) {
             Inl(_) => match r { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil },
             Inr(_) => Nil,
         },
@@ -113,7 +120,7 @@ fn LinuxCmd::sent<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() →
 }
 fn LinuxCmd::received<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
     match c {
-        ReadCmd(from, _) => λ (r: ReadResult) => match from.eq_dec(fd) {
+        ReadCmd(from, _) => λ (r: ReadResult) => match descriptor(from).eq_dec(descriptor(fd)) {
             Inl(_) => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => Nil },
             Inr(_) => Nil,
         },

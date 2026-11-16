@@ -235,7 +235,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
-fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, Spilling(mask) => 32 + mask }} }}
+fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask }} }}
 fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
 ");
     let mut fork = elab.fork();
@@ -287,7 +287,8 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let places = if functions == 0 { None } else {
         let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
             16 => Ok("Folded".to_string()),
-            n if n >= 32 => Ok(format!("Spilling({})", n - 32)),
+            n if n >= 33 => Ok(format!("Spilling({})", n - 33)),
+            n if n >= 24 => Ok(format!("CallSlots({})", n - 24)),
             n if n >= 17 => Ok(format!("Saving({})", n - 17)),
             n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
         }).collect::<Result<Vec<_>, String>>()?;
@@ -511,9 +512,9 @@ theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = S
         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
 }}
 
-theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {{
-    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65536,
-        j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
+theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {{
+    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65535,
+        j(sym({p}_length()), λ n _ => 232 + n <= 65535, Nat::leb_sound(232 + {length}, 65535, trivial)))
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`

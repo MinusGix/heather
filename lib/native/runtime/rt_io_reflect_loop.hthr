@@ -356,7 +356,57 @@ fn rt_io_eloop(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, t: Handle) �
 // An effectful function with loops read, with what the bridge needs: the
 // world and the parameters as the locals it opened them at (the most
 // recent first), and the body under them.
-record LoopOpened { read: LoopFun, proof: LoopProof, io: LocalRef, params: List<LocalRef>, surface: Handle }
+//
+// `consts` are the bytes of the byte strings the body writes (`b"…"`),
+// each read as one more parameter after the function's own
+// (`Known::consts`), the first found the first.
+record LoopOpened { read: LoopFun, proof: LoopProof, io: LocalRef, params: List<LocalRef>, surface: Handle, consts: List<List<Nat>> := [] }
+
+// The codes of the byte strings' parameters.
+fn rt_const_tys(k: Known, hs: List<Handle>) → Tac<List<Ty>> {
+    match hs { Nil => pure([]), Cons(h, rest) => k.ty_of(h).bind(λ t => rt_const_tys(k, rest).bind(λ ts => pure(Cons(t, ts)))) }
+}
+
+// The byte strings a body writes, each once, in the order first met
+// (docs/native/io-programs-design.md §5 D3): every closed list of byte
+// literals of more than none, by its bytes and a handle to it. The walk
+// is the generator's `program_lends_in`'s.
+fn rt_const_scan(fuel: Nat, k: Known, st: RSt, hs: List<Handle>, found: List<Pair<List<Nat>, Handle>>) → Tac<List<Pair<List<Nat>, Handle>>> {
+    match fuel {
+        Zero => pure(found),
+        Succ(fl) => match hs {
+            Nil => pure(found),
+            Cons(h, rest) => {
+                let v <- view(h);
+                let here: Pair<List<Handle>, List<Pair<List<Nat>, Handle>>> <- match v {
+                    HCtor(ty, _, _, fields) => match ty.id.same(k.list) {
+                        True => rt_const_bytes(4096, k, st, h).bind(λ c => match c {
+                            Some(bs) => match bs {
+                                Nil => pure(Pair([], found)),
+                                Cons(_, _) => match Known::const_level(found.map(λ p => Pair(p.fst, 0)), bs) {
+                                    Some(_) => pure(Pair([], found)),
+                                    None => pure(Pair([], found ++ [Pair(bs, h)])),
+                                },
+                            },
+                            None => pure(Pair(fields, found)),
+                        }),
+                        False => pure(Pair(fields, found)),
+                    },
+                    HGlobal(_, _, args) => pure(Pair(args, found)),
+                    HLam(_) => open(h, "x").bind(λ c => match c { Accepted(o) => pure(Pair([o.body], found)), Refused(_) => pure(Pair([], found)) }),
+                    HMatch(s) => arms(h).bind(λ c => match c {
+                        Accepted(m) => pure(Pair(Cons(m.scrut, m.args ++ m.arms.map(λ a => a.body)), found)),
+                        Refused(_) => pure(Pair([s], found)),
+                    }),
+                    HLocal(_, args) => pure(Pair(args, found)),
+                    HField(of, _, args) => pure(Pair(Cons(of, args), found)),
+                    _ => pure(Pair([], found)),
+                };
+                rt_const_scan(fl, k, st, here.fst ++ rest, here.snd)
+            },
+        },
+    }
+}
 
 // An effectful function with loops: its first parameter the world, the
 // rest data.
@@ -373,8 +423,16 @@ fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat>, 
                     let io = IoKnown(o.local.ref.id, names.io.methods, [], lends, [], names.io.io, names.io.mutated, []);
                     let p <- rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body);
                     let under = match p.fst.fst.locals { Cons(x, _) => LocalRef(x.fst), Nil => o.local.ref };
-                    let r <- rt_io_eloop(fuel, k, names, LoopWalk(p.fst.fst, [], io, under), p.snd);
-                    pure(LoopOpened(LoopFun(p.fst.snd, r.ty, r.prog), r.proof, o.local.ref, p.fst.fst.locals.map(λ x => LocalRef(x.fst)), p.snd))
+                    // The byte strings, as parameters after the function's own.
+                    let st0 = p.fst.fst;
+                    let found <- rt_const_scan(1048576, k.at_world(io), st0, [p.snd], []);
+                    let levels = List::range(found.len()).map(λ i => st0.depth + i);
+                    let const_tys <- rt_const_tys(k.at_world(io), found.map(λ c => c.snd));
+                    let kc = k.with_consts(found.map(λ c => c.fst).zip(levels));
+                    let st = RSt(st0.depth + found.len(), st0.lets, st0.memo, st0.handles, st0.locals, st0.funs);
+                    let r <- rt_io_eloop(fuel, kc, names, LoopWalk(st, [], io, under), p.snd);
+                    pure(LoopOpened(LoopFun(p.fst.snd ++ const_tys, r.ty, r.prog), r.proof, o.local.ref, p.fst.fst.locals.map(λ x => LocalRef(x.fst)), p.snd,
+                        found.map(λ c => c.fst)))
                 },
             }
         },
