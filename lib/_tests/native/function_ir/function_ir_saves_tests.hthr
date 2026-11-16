@@ -60,7 +60,6 @@ theorem caller_saved_ranks_nothing(): (scratch_pool() ++ [Rsp]).map(λ register 
 theorem body_keeps_the_rest(): body_kept(2) = [Rsp, R14, R15, Rbx, Rbp] { refl }
 theorem body_keeps_all(): body_kept(0) = [Rsp, R12, R13, R14, R15, Rbx, Rbp] { refl }
 
-
 // A placement's head says the count, and no head says none.
 theorem head_is_the_count(): placement_saves([Saving(2), Into(R13), Into(Rax)]) = 2 { refl }
 theorem head_is_not_a_place(): placement_body([Saving(2), Into(R13), Into(Rax)]) = [Into(R13), Into(Rax)] { refl }

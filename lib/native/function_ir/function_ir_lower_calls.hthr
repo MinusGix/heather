@@ -5780,7 +5780,6 @@ theorem saves_spare(saves: Nat): function_saves(saves).spare(Rsp).IsTrue() {
         Zero => trivial, Succ(e) => match e { Zero => trivial, Succ(f) => match f { Zero => trivial, Succ(_) => trivial } } } } } }
 }
 
-
 theorem saves_fit(slots, saves, d, size: Nat, few: slots <= 8, fits: d + frame_size(slots, saves) <= size):
     (slots + function_saves(saves).len() <= 16) ∧ (d + 8 * (slots + function_saves(saves).len()) <= size) {
     let six = saves_len(saves);
