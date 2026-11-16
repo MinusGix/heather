@@ -156,3 +156,24 @@ theorem below_zero_untold(): below_left_entry.at_test(9).told_at(UnsignedLessTha
 // A literal in a node is read as itself: a rule about 64-bit words is not
 // tried further at a 32-bit node.
 theorem narrow_compare_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(32, 4, 1, 2), taken()) = None { refl }
+
+// A learner's proposal is a rule and numbers, and is an instance only
+// where the rule's clause at them is what the walk has: here one that
+// proposes `add_zero` at every add, with the add's own numbers.
+fn adds_zero() → Learner {
+    Learner(λ _ at => match at { Add(w, o, l, r) => Some(Proposed(add_zero_entry, [w, l, o, r])), _ => None })
+}
+
+theorem proposal_found(): proposed_among([adds_zero()], library(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) =
+    Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }
+
+// The same proposal where the constant is one: the clause's premise is not
+// what was passed, so a learner that proposes too much is not believed.
+theorem proposal_unfounded(): proposed_among([adds_zero()], library(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 1)), no_ranges(), no_bits())) = None { refl }
+
+// A rule the table does not have has no place to name.
+theorem proposal_unplaced(): proposed_among([adds_zero()], [], Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) = None { refl }
+
+// The next learner is asked where one proposes nothing that holds.
+theorem proposal_next(): proposed_among([Learner(λ _ _ => None), adds_zero()], library(), Add(64, 7, 5, 6),
+    Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) = Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }

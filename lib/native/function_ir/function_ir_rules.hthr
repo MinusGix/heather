@@ -589,7 +589,7 @@ fn testing() → List<Matchable> {
 // listed; and of those, the ones the search applies by matching: a rule
 // that concludes a node rewrites, one that concludes a range gives ranges
 // or says what a test gives.
-record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Matchable>, testing: List<Matchable> }
+record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Matchable>, testing: List<Matchable>, placed: List<RuleEntry>, learners: List<Learner> }
 
 fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     match entries {
@@ -646,8 +646,8 @@ fn entries_placed(entries: List<RuleEntry>) → List<RuleEntry> { library() ++ e
 // The rules a plan's steps index where `entries` are registered.
 fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rules(entries_added(entries)) }
 
-fn Tables::of(entries: List<RuleEntry>) → Tables {
+fn Tables::of(entries: List<RuleEntry>, learners: List<Learner>) → Tables {
     shared(entries_added(entries), λ added => shared(rules(), λ library => shared(library.len(), λ first =>
         Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first),
-            testing() ++ entries_testing(added, first)))))
+            testing() ++ entries_testing(added, first), entries_placed(entries), learners))))
 }

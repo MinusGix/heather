@@ -452,3 +452,56 @@ fn Matchable::shaped(self m: Matchable, at: Node, had: Walked) → Option<List<N
         premises_shaped(nodes, nodes, at, had, nat_map_set(NatMap::empty(), k, node_output(at).id)).and_then(λ found =>
             Some(premises_ranged(m.pattern.premises, found)))))
 }
+
+// ---------------------------------------------------------------------------
+// Learners (docs/native/optimizer-rules-design.md §7)
+
+// What a learner proposes at a node: a rule, and its numbers there.
+record Proposed { rule: RuleEntry, numbers: List<Nat> }
+
+// A learner finds an instance of a rule where the matcher cannot read
+// one off the rule's statement: a number only the rule's condition or a
+// computed constant states is one. It is given what the walk has and the
+// node it is at. A program registers one (`register def … : Learner`) and
+// the search asks it at every node no rule's statement rewrote. It is
+// outside what is trusted, as the search is: its proposal is the rule's
+// own clause at its numbers, checked against the walk as the matcher's
+// instances are and then by the replayer.
+record Learner { pass: Walked → Node → Option<Proposed> }
+
+fn codes_same(a, b: List<Nat>) → Bool {
+    match a {
+        Nil => match b { Nil => True, Cons(_, _) => False },
+        Cons(x, more) => match b { Nil => False, Cons(y, rest) => x.same(y) && codes_same(more, rest) },
+    }
+}
+
+// The place in the table of the rule named `name`, from the place `place`.
+fn entries_place(table: List<RuleEntry>, name: List<Nat>, place: Nat) → Option<Nat> {
+    match table {
+        Nil => None,
+        Cons(entry, rest) => match codes_same(entry.name, name) { True => Some(place), False => entries_place(rest, name, Succ(place)) },
+    }
+}
+
+// The instance a proposal is, where the table has its rule, the rule
+// makes a clause at the numbers that writes another node for the one
+// read, and the walk has the premises.
+fn Proposed::instance(self proposed: Proposed, table: List<RuleEntry>, at: Node, had: Walked) → Option<Matched> {
+    entries_place(table, proposed.rule.name, 0).and_then(λ place => proposed.rule.rule.make(proposed.numbers).and_then(λ clause => match clause.conclusion {
+        Is(node) => (node_output(node).id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
+            Some(Matched(place, proposed.numbers, node, facts_ranged(clause.premises)))),
+        _ => None,
+    }))
+}
+
+// The first learner's proposal that is an instance.
+fn proposed_among(learners: List<Learner>, table: List<RuleEntry>, at: Node, had: Walked) → Option<Matched> {
+    match learners {
+        Nil => None,
+        Cons(learner, rest) => match learner.pass(had, at).and_then(λ proposed => proposed.instance(table, at, had)) {
+            Some(found) => Some(found),
+            None => proposed_among(rest, table, at, had),
+        },
+    }
+}

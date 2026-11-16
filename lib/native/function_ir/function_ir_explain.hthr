@@ -403,6 +403,6 @@ fn StructuredRegion::missing(self region: StructuredRegion, names: List<RuleEntr
 
 // The rules not applied in a function, a line for each node one fits: what
 // to read where a rule was expected and the code shows it was not used.
-fn Function::not_applied(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → List<Nat> {
-    function.body.missing(entries_placed(entries), function.seen(Tables::of(entries))).said([])
+fn Function::not_applied(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → List<Nat> {
+    function.body.missing(entries_placed(entries), function.seen(Tables::of(entries, learners))).said([])
 }
