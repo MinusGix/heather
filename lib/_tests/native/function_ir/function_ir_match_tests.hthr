@@ -48,7 +48,7 @@ theorem swap_twice_found(): matched_among(matchable(), ByteSwap(32, 1, 2), swapp
 theorem swap_wide_not_found(): matched_among(matchable(), ByteSwap(64, 1, 2), swapped(), no_ranges()) = None { refl }
 
 // A rule whose conclusion is no node is not one the matcher applies.
-theorem range_rule_not_matched(): matched_among([Matchable(4, within_add_rule, within_add_pattern)], Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }
+theorem range_rule_not_matched(): matched_among([within_add_entry.at(4)], Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Rules that give a range

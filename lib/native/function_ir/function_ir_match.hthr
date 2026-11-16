@@ -206,6 +206,8 @@ fn facts_ranged(facts: List<Fact>) → List<Nat> {
 // A rule the matcher reads: its place in the table, and its shape.
 record Matchable { place: Nat, rule: Rule, pattern: RulePattern }
 
+fn RuleEntry::at(self entry: RuleEntry, place: Nat) → Matchable { Matchable(place, entry.rule, entry.pattern) }
+
 // A rule's instance at a node: its numbers, the node its conclusion gives
 // for the one read, and the words whose ranges it needs derived first.
 record Matched { place: Nat, numbers: List<Nat>, node: Node, needs: List<Nat> }
