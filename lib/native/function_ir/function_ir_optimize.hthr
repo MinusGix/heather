@@ -450,9 +450,9 @@ fn Node::shifted_right(self node: Node) → Option<Shifted> {
 fn byte_of(made: NatMap<Node>, x: Nat) → Option<StoredByte> {
     nat_map_get(made, x).and_then(λ n => n.widened_byte()).and_then(λ b =>
         nat_map_get(made, b).and_then(λ n => n.narrowed_byte()).and_then(λ a =>
-            shared(Know(40, [x, b, a]), λ low => match nat_map_get(made, a).and_then(λ n => n.shifted_right()) {
+            shared(Know(40, [a, x, b]), λ low => match nat_map_get(made, a).and_then(λ n => n.shifted_right()) {
                 None => Some(StoredByte(a, 0, [low])),
-                Some(s) => Some(StoredByte(s.word, s.by, [low, Know(41, [x, a, s.word, s.by, 0])])),
+                Some(s) => Some(StoredByte(s.word, s.by, [low, Know(41, [x, s.word, s.by, 0, a])])),
             })))
 }
 
@@ -481,10 +481,10 @@ record StoreGroup { at: Nat, last: Nat, buffer: Nat, word: Nat, swapped: Bool, f
 // the tests of the first three against the length: each order below the
 // length, then the next sum's two orders from it.
 fn row_why(i0, len, c0, c1, c2, i1, i2, i3, k1, k2, k3: Nat) → List<Late> {
-    [Know(20, [c0, i0, len]),
-     Know(27, [i1, i0, k1, 1, 1, len, 0]), Know(28, [i1, i0, k1, 1, 1, len, 0]), Know(20, [c1, i1, len]), Know(24, [i0, 1, i1, 0, 1, len, 0, 2, 0]),
-     Know(27, [i2, i0, k2, 2, 2, len, 0]), Know(28, [i2, i0, k2, 2, 2, len, 0]), Know(20, [c2, i2, len]), Know(24, [i0, 2, i2, 0, 1, len, 0, 3, 0]),
-     Know(27, [i3, i0, k3, 3, 3, len, 0]), Know(28, [i3, i0, k3, 3, 3, len, 0])]
+    [Know(20, [i0, len, c0]),
+     Know(27, [i0, len, 1, 1, 0, i1, k1]), Know(28, [i0, len, 1, 1, 0, i1, k1]), Know(20, [i1, len, c1]), Know(24, [i0, i1, len, 1, 0, 1, 0, 2, 0]),
+     Know(27, [i0, len, 2, 2, 0, i2, k2]), Know(28, [i0, len, 2, 2, 0, i2, k2]), Know(20, [i2, len, c2]), Know(24, [i0, i2, len, 2, 0, 1, 0, 3, 0]),
+     Know(27, [i0, len, 3, 3, 0, i3, k3]), Know(28, [i0, len, 3, 3, 0, i3, k3])]
 }
 
 // The shifts of the four bytes, from the highest or from the lowest.
@@ -657,8 +657,8 @@ fn StoreGroup::paying(self group: StoreGroup, nodes: List<Node>) → Option<Payi
 
 fn StoreGroup::split(self group: StoreGroup, paying: Paying) → Late {
     match group.swapped {
-        True => Know(42, [paying.value, paying.half, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
-        False => Know(43, [paying.value, group.word, group.first.value, group.second.value, group.third.value, group.fourth.value]),
+        True => Know(42, [group.word, group.first.value, group.second.value, group.third.value, group.fourth.value, paying.value, paying.half]),
+        False => Know(43, [group.word, group.first.value, group.second.value, group.third.value, group.fourth.value, paying.value]),
     }
 }
 

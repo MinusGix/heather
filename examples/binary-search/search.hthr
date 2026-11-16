@@ -104,12 +104,6 @@ fn Ascending(s: List<u8>, n: u64) → Type {
 fn Below(s: List<u8>, n, key, r: u64) → Type { (j: u64) → j < r → s.byte_within(n, j).zero_extend(56) < key }
 fn Above(s: List<u8>, n, key, r: u64) → Type { (j: u64) → r <= j → j < n → ¬(s.byte_within(n, j).zero_extend(56) < key) }
 
-// Below the next word is at most this one, when the next does not wrap.
-theorem le_of_lt_next(j, m, hi: u64, room: m < hi, before: j < m + 1): j <= m { bv_omega }
-
-// The word after one below `hi` is at most `hi`: it does not wrap.
-theorem next_le(m, hi: u64, room: m < hi): m + 1 <= hi { bv_omega }
-
 // The loop keeps both sides: what lies below `lo` is below `key`, what lies
 // from `hi` on is not, and the answer stays in the range.
 theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s, n), order: lo <= hi, fits: hi <= n,
@@ -121,14 +115,14 @@ theorem lower_bound_in_splits(s: List<u8>, n, key, lo, hi: u64, asc: Ascending(s
         let mid = lo + ((hi - lo) >> 1);
         let start: (lo <= mid) = midpoint_from(lo, hi, h);
         let end: (mid < hi) = midpoint_below(lo, hi, h);
-        let real: (mid < n) = omega;
+        let real: (mid < n) = bv_omega;
         if less: s.byte_within(n, mid).zero_extend(56) < key {
             let smaller = right_smaller(lo, hi, h);
             let below2: Below(s, n, key, mid + 1) = λ j before => {
-                let up = asc(j, mid, le_of_lt_next(j, mid, hi, end, before), real);
+                let up = asc(j, mid, bv_omega, real);
                 bv_omega
             };
-            let ih = lower_bound_in_splits(s, n, key, mid + 1, hi, asc, next_le(mid, hi, end), fits, below2, above);
+            let ih = lower_bound_in_splits(s, n, key, mid + 1, hi, asc, bv_omega, fits, below2, above);
             let step: (lower_bound_in(s, n, key, lo, hi) = lower_bound_in(s, n, key, mid + 1, hi)) = simp_only(lower_bound_in, discharge := bv_omega);
             rewrite(step, ih)
         } else {

@@ -126,10 +126,11 @@ call is the call at `mid + 1`.
 The theorems are checked with the rest of the file:
 `heather check examples/binary-search/search.hthr`.
 
-Two range lemmas, `next_le` and `le_of_lt_next`, are kept apart from the
-invariant. In its context `bv_omega` reads `mid` through its `let`, and then
-cannot show that the midpoint's addition does not overflow, where `mid` as a
-plain word would do (`issues/bv-omega-let-alias-taken-apart.md`).
+The range facts about `mid` (`mid < n`, `mid + 1 <= hi`, `j <= mid`) are
+each one `bv_omega` in the invariant's context. `bv_omega` reads `mid`
+through its `let` and cannot see through the shift that its addition does
+not overflow; it then keeps `mid` whole, a number bounded by the facts that
+mention it (`docs/tactics/bv-omega-design.md` §5.1).
 
 ## What the proof does not cover
 

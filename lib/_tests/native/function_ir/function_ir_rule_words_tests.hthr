@@ -1,0 +1,135 @@
+// Probes for docs/native/optimizer-rules-design.md: a rule of the optimizer
+// stated as a theorem about words, with no node, id or valuation in it, and
+// the clause's soundness (function_ir_rules) got from it by the same three
+// moves each time: read the words at the valuation, rewrite the conclusion
+// by the equation of each node premise, hand the fact premises to the
+// theorem. What a `rule` generator would write is the second theorem of
+// each pair.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import function_ir_rules;
+import function_ir_rule_sound;
+import tactic;
+import function_ir_state;
+import bitvec;
+import bitvec_bytes;
+import bitvec_nat;
+import bitvec_resize;
+import bitvec_ring;
+import bitvec_shift_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+
+// The clauses of rules the library now states as `rule theorem`s
+// (function_ir_rules), as they were written by hand.
+fn add_zero_clause(w, o, x, z: Nat) → Clause { Clause([Is(Const(w, z, 0)), Is(Add(w, o, x, z))], Is(Move(w, o, x))) }
+
+fn swap_twice_clause(v, h, x, s, w: Nat) → Clause {
+    Clause([Is(ByteSwap(32, s, w)), Is(Resize(32, 64, x, s)), Is(Resize(64, 32, h, x)), Is(ByteSwap(32, v, h))], Is(Move(32, v, w)))
+}
+
+fn within_add_clause(o, l, r, a, b, c, d: Nat) → Clause {
+    Clause([Is(Add(64, o, l, r)), Within(l, a, b), Within(r, c, d)], Within(o, a + c, b + d))
+}
+
+fn below_left_clause(c, l, r, b: Nat) → Clause {
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, Succ(b))], Within(l, 0, b))
+}
+
+fn join_shift_clause(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }
+
+fn join_or_clause(o, a, b, f, i, j, n, m, sh: Nat) → Clause {
+    Clause([Joined(a, f, i, n, 8 * m + sh), Joined(b, f, j, m, sh), AtMost(i, n, j, 0), AtMost(j, 0, i, n), Is(BitOr(64, o, a, b))], Joined(o, f, i, n + m, sh))
+}
+
+fn load_again_clause(b, a, f, i: Nat) → Clause { Clause([Loaded(BufferLoad(a, f, i)), Loaded(BufferLoad(b, f, i))], Is(Move(64, b, a))) }
+
+fn order_join_clause(a, m, b, n, p, c, q, u, v: Nat) → Clause { Clause([AtMost(a, m, b, n), AtMost(b, p, c, q)], AtMost(a, u, c, v)) }
+
+// x + 0 = x.
+theorem add_zero_words(w: Nat, x: BitVec(w)): x.add(BitVec::ofNat(0)) = x { BitVec::add_zero(w, x) }
+
+theorem add_zero_glue(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() {
+    λ values _ held => trans(held.right.left,
+        trans(cong_fn<BitVec(w), BitVec(w)>(λ k => values(w, x).add(k), held.left), add_zero_words(w, values(w, x))))
+}
+
+// l in a..=b, r in c..=d, b + d a word: l + r in a + c ..= b + d.
+theorem within_add_words(l, r: u64, a, b, c, d: Nat, left: Range(a, b).Holds(l), right: Range(c, d).Holds(r), fits: b + d <= word_top()):
+    Range(a + c, b + d).Holds(l.add(r)) {
+    let high: (l.toNat() + r.toNat() <= b + d) = Nat::add_le_mono(l.toNat(), b, r.toNat(), d, left.right, right.right);
+    let sum: (l.add(r).toNat() = l.toNat() + r.toNat()) = trans(BitVec::toNat_add_mod(64, l, r),
+        (l.toNat() + r.toNat()).mod_of_lt(Nat::pow(2, 64), Nat::le_trans(l.toNat() + r.toNat(), b + d, word_top(), high, fits)));
+    j(sym(sum), λ n _ => (a + c <= n) ∧ (n <= b + d), ⟨Nat::add_le_mono(a, l.toNat(), c, r.toNat(), left.left, right.left), high⟩)
+}
+
+theorem within_add_glue(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add_clause(o, l, r, a, b, c, d).Sound() {
+    λ values _ held => j(sym(held.left), λ w _ => Range(a + c, b + d).Holds(w),
+        within_add_words(values(64, l), values(64, r), a, b, c, d, held.right.left, held.right.right.left, leb_below(b + d, word_top(), fits)))
+}
+
+// Swapping a word's bytes, widening, narrowing and swapping again is the word.
+theorem swap_twice_words(w: u32): w.swap_bytes().resize(64).resize(32).swap_bytes() = w {
+    let back: (w.swap_bytes().resize(64).resize(32) = w.swap_bytes()) = BitVec::resize_round_trip(32, 64, Nat::leb_sound(32, 64, trivial), w.swap_bytes());
+    trans(cong_fn(λ (z: u32) => z.swap_bytes(), trans(back, BitVec::swap_bytes_32(w))),
+        trans(BitVec::swap_bytes_32(w.byte_swap(4)), BitVec::byte_swap_byte_swap(4, w)))
+}
+
+theorem swap_twice_glue(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() {
+    λ values _ held => {
+        let first: (values(64, x) = values(32, w).swap_bytes().resize(64)) = trans(held.right.left, cong_fn(λ (z: u32) => z.resize(64), held.left));
+        let second: (values(32, h) = values(32, w).swap_bytes().resize(64).resize(32)) =
+            trans(held.right.right.left, cong_fn(λ (z: u64) => z.resize(32), first));
+        trans(held.right.right.right.left, trans(cong_fn(λ (z: u32) => z.swap_bytes(), second), swap_twice_words(values(32, w))))
+    }
+}
+
+// A word that is bytes of a buffer joined and shifted, shifted further.
+theorem join_shift_words(joined: u64, sh, c: Nat): joined.shift_left(sh).shift_left(c) = joined.shift_left(sh + c) {
+    sym(joined.shift_left_add(sh, c))
+}
+
+theorem join_shift_glue(s, a, c, f, i, n, sh: Nat): join_shift_clause(s, a, c, f, i, n, sh).Sound() {
+    λ values buffers held => trans(held.right.left, trans(cong_fn(λ (z: u64) => z.shift_left(c), held.left),
+        join_shift_words(buffer_join(buffers, f, values(64, i).toNat(), n), sh, c)))
+}
+
+// The same four by the tactic.
+theorem add_zero_by(w, o, x, z: Nat): add_zero_clause(w, o, x, z).Sound() { by rule_sound(add_zero_words) }
+
+theorem swap_twice_by(v, h, x, s, w: Nat): swap_twice_clause(v, h, x, s, w).Sound() { by rule_sound(swap_twice_words) }
+
+theorem join_shift_by(s, a, c, f, i, n, sh: Nat): join_shift_clause(s, a, c, f, i, n, sh).Sound() { by rule_sound(join_shift_words) }
+
+theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = True): within_add_clause(o, l, r, a, b, c, d).Sound() {
+    by rule_sound(within_add_words, given := [leb_below(b + d, word_top(), fits)])
+}
+
+// A bit known and a range: two premises about one word, the second no
+// longer a definition once the first is written out.
+theorem below_left_words(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, Succ(b)).Holds(r)):
+    Range(0, b).Holds(l) {
+    let bit: (l.unsigned_lt_bit(r) = True) = trans(sym(BitVec::head_bit_ofBool(l.unsigned_lt_bit(r))),
+        trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), below), BitVec::head_bit_ofBool(True)));
+    let lt: (l.toNat() < r.toNat()) = BitVec::borrow_sub_bit_true_iff(64, l, r).mp(bit);
+    ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
+}
+
+theorem below_left_by(c, l, r, b: Nat): below_left_clause(c, l, r, b).Sound() { by rule_sound(below_left_words) }
+
+// No node at all: the library's own lemma about numbers is the rule.
+theorem order_join_by(a, m, b, n, p, c, q, u, v: Nat, slack: (u + (n + q)).leb(v + (m + p)) = True): order_join_clause(a, m, b, n, p, c, q, u, v).Sound() {
+    by rule_sound(order_joined, given := [leb_below(u + (n + q), v + (m + p), slack)])
+}
+
+// Two joins, two orders and an or: the lemma about buffers is the rule.
+theorem join_or_by(o, a, b, f, i, j, n, m, sh: Nat): join_or_clause(o, a, b, f, i, j, n, m, sh).Sound() { by rule_sound(joins_meet) }
+
+// Two loads of one byte: nothing is left to prove.
+theorem load_again_by(b, a, f, i: Nat): load_again_clause(b, a, f, i).Sound() { by rule_sound(rfl) }
