@@ -85,11 +85,11 @@ rule theorem within_shift(x: u64, n, a, b: Nat, in: x.within(a, b), fits: b * Na
         λ m _ => (a * Nat::pow(2, n) <= m) ∧ (m <= b * Nat::pow(2, n)), ⟨Nat::mul_le_mono_r(Nat::pow(2, n), a, x.toNat(), in.left), high⟩)
 }
 
-// A word made from a narrower value is below that width's power: `high`
-// is any number that power is at most one more than.
-rule theorem within_narrow(from: Nat, s: BitVec(from), high: Nat, fits: Nat::pow(2, from) <= Succ(high)): s.resize(64).within(0, high) {
-    ⟨trivial, Nat::le_trans(s.resize(64).toNat(), s.toNat(), high, BitVec::toNat_ofNat_le(64, s.toNat()),
-        Nat::le_trans(Succ(s.toNat()), Nat::pow(2, from), Succ(high), BitVec::toNat_lt_pow(from, s), fits))⟩
+// A word made from a narrower value is below that width's power.
+rule theorem within_narrow(from: Nat, s: BitVec(from)): s.resize(64).within(0, Nat::pow(2, from) - 1) {
+    let below: (Succ(s.toNat()) <= Nat::pow(2, from)) = BitVec::toNat_lt_pow(from, s);
+    let under: (s.toNat() <= Nat::pow(2, from) - 1) = omega(below);
+    ⟨trivial, Nat::le_trans(s.resize(64).toNat(), s.toNat(), Nat::pow(2, from) - 1, BitVec::toNat_ofNat_le(64, s.toNat()), under)⟩
 }
 
 // A word narrowed and widened again is itself where it was within the
@@ -545,4 +545,21 @@ fn rules() → List<Rule> {
 // gives. One is added here and nothing else is written for it.
 fn matchable() → List<Matchable> {
     [Matchable(0, add_zero_rule, add_zero_pattern), Matchable(15, narrow_back_rule, narrow_back_pattern), Matchable(44, swap_twice_rule, swap_twice_pattern)]
+}
+
+// The rules that give the range of the word a node writes, read the same
+// way: each is tried where a node is passed, and the narrowest range found
+// is the word's.
+fn ranging() → List<Matchable> {
+    [
+        Matchable(2, within_const_rule, within_const_pattern),
+        Matchable(3, within_move_rule, within_move_pattern),
+        Matchable(4, within_add_rule, within_add_pattern),
+        Matchable(5, within_shift_rule, within_shift_pattern),
+        Matchable(6, within_narrow_rule, within_narrow_pattern),
+        Matchable(16, within_or_rule, within_or_pattern),
+        Matchable(17, within_and_rule, within_and_pattern),
+        Matchable(18, within_and_right_rule, within_and_right_pattern),
+        Matchable(39, within_sub_rule, within_sub_pattern),
+    ]
 }

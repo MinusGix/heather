@@ -549,10 +549,19 @@ the matcher, for the rules whose conclusion is a node.
   their plans are the same. `add_zero` had no recogniser: it fires now
   because it is stated and listed.
 
-What is left of step 3: the matcher reads a rule whose conclusion is a
-node, with node and range premises. A rule that concludes a range or an
-order (most of `Seen::pass`) is still proposed by hand there, the
+- **`ranging()`** lists the nine rules that give the range of the word a
+  node writes (`within_const`, `_move`, `_add`, `_shift`, `_narrow`, `_or`,
+  `_and`, `_and_right`, `_sub`). `Seen::bounding` tries them at each node
+  passed and keeps the narrowest range found, the first of equals; the
+  arms of `Seen::pass` that named those rules by place are gone. For that
+  `within_narrow` states its bound (`Nat::pow(2, from) - 1`) and no longer
+  takes it as a number with a guard: a number only a guard constrains is
+  one the matcher cannot find.
+
+What is left of step 3: the rules that decide a bit or give an order, and
+the ones a branch's test gives in an arm, are still proposed by hand; the
 strategies are not registered learners yet, and "Accepted" is not proved.
+Both tables are lists written by hand until a rule registers itself.
 
 What a statement can say, as built:
 

@@ -160,20 +160,22 @@ fn numbers_found(found: NatMap<Nat>, from, count: Nat) → Option<List<Nat>> {
     }
 }
 
-// The rule's numbers where its premises are read from the node `at`, which
-// writes what the conclusion writes.
-fn RulePattern::numbers(self pattern: RulePattern, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<List<Nat>> {
-    match pattern.conclusion {
-        Makes(_, output, slots) => match slots.nth(output) {
-            None => None,
-            Some(slot) => match slot {
-                Computed => None,
-                Numbered(k) => premises_rounds(pattern.premises, pattern.premises, at, made, range, nat_map_set(NatMap::empty(), k, node_output(at).id))
-                    .and_then(λ found => numbers_found(found, 0, pattern.arity)),
-            },
-        },
-        _ => None,
+// The number of the rule that is the word a fact is about: a node's
+// output, a range's word.
+fn PatternFact::about(self fact: PatternFact) → Option<Nat> {
+    match fact {
+        Makes(_, output, slots) => slots.nth(output).and_then(λ slot => match slot { Computed => None, Numbered(k) => Some(k) }),
+        Ranges(x, _, _) => match x { Computed => None, Numbered(k) => Some(k) },
+        Unread => None,
     }
+}
+
+// The rule's numbers where its premises are read from the node `at`, which
+// writes the word the conclusion is about.
+fn RulePattern::numbers(self pattern: RulePattern, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<List<Nat>> {
+    pattern.conclusion.about().and_then(λ k =>
+        premises_rounds(pattern.premises, pattern.premises, at, made, range, nat_map_set(NatMap::empty(), k, node_output(at).id))
+            .and_then(λ found => numbers_found(found, 0, pattern.arity)))
 }
 
 // ---------------------------------------------------------------------------
@@ -220,5 +222,36 @@ fn matched_among(table: List<Matchable>, at: Node, made: NatMap<Node>, range: Na
     match table {
         Nil => None,
         Cons(m, rest) => match m.found_at(at, made, range) { Some(found) => Some(found), None => matched_among(rest, at, made, range) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rules that give a range
+
+// A rule's instance that gives the range of the word a node writes.
+record Ranged { place: Nat, numbers: List<Nat>, range: Range, needs: List<Nat> }
+
+fn Matchable::ranged_at(self m: Matchable, at: Node, made: NatMap<Node>, range: NatMap<Range>) → Option<Ranged> {
+    m.pattern.numbers(at, made, range).and_then(λ numbers => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
+        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(clause.premises, at, made, range)).then(
+            Some(Ranged(m.place, numbers, Range(low, high), facts_ranged(clause.premises)))),
+        _ => None,
+    }))
+}
+
+fn Range::narrower(self a: Range, b: Range) → Bool { a.inside(b) && !b.inside(a) }
+
+// The narrowest range a rule of the table gives, the first of equals, and
+// none where no rule says more than that the word is a word.
+fn ranged_among(table: List<Matchable>, at: Node, made: NatMap<Node>, range: NatMap<Range>, best: Option<Ranged>) → Option<Ranged> {
+    match table {
+        Nil => best,
+        Cons(m, rest) => match m.ranged_at(at, made, range) {
+            None => ranged_among(rest, at, made, range, best),
+            Some(found) => match found.range.narrower(match best { None => Range::any(), Some(had) => had.range }) {
+                True => ranged_among(rest, at, made, range, Some(found)),
+                False => ranged_among(rest, at, made, range, best),
+            },
+        },
     }
 }
