@@ -123,6 +123,73 @@ theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, 
 }
 
 // ---------------------------------------------------------------------------
+// A function at every argument list (issues/compiled-function-implements.md)
+
+// A source function of `n` words, curried: what `clamp` is at `n = 3`.
+fn Words(n: Nat) → Type {
+    match n { Zero => BitVec(64), Succ(m) => BitVec(64) → Words(m) }
+}
+
+// `spec` applied to a list of words, a word at a time; a missing word is
+// zero, an extra one is ignored (an `n`-word function is only stated at
+// lists of length `n`).
+fn apply_words(n: Nat) → Words(n) → List<BitVec(64)> → BitVec(64) {
+    match n {
+        Zero => λ spec _ => spec,
+        Succ(m) => λ spec words => match words {
+            Nil => apply_words(m, spec(BitVec::zero()), []),
+            Cons(first, rest) => apply_words(m, spec(first), rest),
+        },
+    }
+}
+
+// What holds of every list of `n` words holds of `Spread(n, …)`: the
+// converse of `spread` (function_ir_compile).
+theorem spread_intro(n: Nat): (P: List<BitVec(64)> → Type) → ((words: List<BitVec(64)>) → words.len() = n → P(words)) → Spread(n, P) {
+    match n {
+        Zero => λ P all => all([], refl),
+        Succ(m) => λ P all => λ (a: BitVec(64)) =>
+            spread_intro(m, λ (ws: List<BitVec(64)>) => P(Cons(a, ws)),
+                λ ws same => all(Cons(a, ws), cong_fn(λ (k: Nat) => Succ(k), same))),
+    }
+}
+
+// Function `f` of `code` implements `spec`, a function of `n` words: at
+// every `n` words, it computes what `spec` gives them. Unfolded it is
+// `(a0: BitVec(64)) → … → code.Computes(machine, f, [a0, …], spec(a0, …))`.
+fn Prog::Implements<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n)) → Type {
+    Spread(n, λ (words: List<BitVec(64)>) => code.Computes(machine, f, words, apply_words(n, spec, words)))
+}
+
+// What implementing gives at a list of words.
+theorem Prog::implements_at<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n),
+    implements: code.Implements(machine, f, n, spec), words: List<BitVec(64)>, length: words.len() = n):
+    code.Computes(machine, f, words, apply_words(n, spec, words)) {
+    spread(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, ws, apply_words(n, spec, ws)), implements, words, length)
+}
+
+// And what gives it: computing `spec` at every list of `n` words.
+theorem Prog::implements_of<M>(self code: Prog, machine: Machine<M>, f: Nat, n: Nat, spec: Words(n),
+    computes: (words: List<BitVec(64)>) → words.len() = n → code.Computes(machine, f, words, apply_words(n, spec, words))):
+    code.Implements(machine, f, n, spec) {
+    spread_intro(n, λ (ws: List<BitVec(64)>) => code.Computes(machine, f, ws, apply_words(n, spec, ws)), computes)
+}
+
+// The compiler's theorem a function at a time: a program whose function
+// `f` of `n` words evaluates to `spec` (`agrees`, what a `runtime fn`'s
+// `f::agrees` gives) compiles to code that implements `spec`.
+theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>, code: Prog,
+    lowered: lower_program(functions, placement) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
+    machine: Machine<M>, f: Nat, defined: f < functions.len(), n: Nat, arity: arity_fits(program_arity(functions, f), n).IsTrue(),
+    spec: Words(n), agrees: (words: List<BitVec(64)>) → words.len() = n → program_eval(functions, f, words) = apply_words(n, spec, words)):
+    code.Implements(machine, f, n, spec) {
+    code.implements_of(machine, f, n, spec, λ words length =>
+        compiled_computes<M>(functions, placement, code, lowered, evaluable, machine, f, defined, words,
+            j(sym(length), λ k _ => arity_fits(program_arity(functions, f), k).IsTrue(), arity),
+            apply_words(n, spec, words), agrees(words, length)))
+}
+
+// ---------------------------------------------------------------------------
 // Functions of a span
 
 // The same for a function its caller lends byte spans to, as Rust does with
@@ -167,4 +234,36 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
     compiled_returns_written<M>(functions, placement, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
         machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
         program_run(functions, before, f, arguments), refl)
+}
+
+// ---------------------------------------------------------------------------
+// Words as spans lent nothing (issues/words-as-unlent-spans.md)
+
+// A function of words computes over no file: `Prog::Computes` is
+// `Prog::ComputesOver` at `Lending::none()` and the empty file, entered
+// anywhere on the stack. The two contracts are one.
+theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    computes: code.Computes(machine, f, arguments, answer), top: Nat):
+    code.ComputesOver(machine, top, Lending::none(), f, arguments, [], Ending(word := answer, buffers := [])) {
+    λ origin last s at resident i rsp room held ret saved => {
+        let ran = computes(origin, last, s, at, resident, i, rsp, room, held.left, ret, saved);
+        let post = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨post.left, ⟨post.right.left,
+                ⟨machine.stack.wrote_in_own(i, Lending::none().spans(), s.memory, ran.witness.memory, post.right.right),
+                    machine.stack.in_memory_none(ran.witness.memory)⟩⟩⟩⟩⟩⟩⟩)
+    }
+}
+
+// And back, entered below the stack's top.
+theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    over: code.ComputesOver(machine, machine.stack.size, Lending::none(), f, arguments, [], Ending(word := answer, buffers := []))):
+    code.Computes(machine, f, arguments, answer) {
+    λ origin last s at resident i rsp room held ret saved => {
+        let ran = over(origin, last, s, at, resident, i, rsp, room, ⟨held, ⟨trivial, ⟨room, machine.stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
+        let post = ran.proof.right.right.right.right;
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
+            ⟨post.left, ⟨post.right.left,
+                machine.stack.wrote_in_none(i, Lending::none().spans(), λ b => refl, s.memory, ran.witness.memory, post.right.right.left)⟩⟩⟩⟩⟩⟩)
+    }
 }

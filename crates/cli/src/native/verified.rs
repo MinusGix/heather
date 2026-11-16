@@ -1256,7 +1256,14 @@ theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().
     compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
-", room = 136 * (f + 1), arguments = parameters.join(", ")));
+
+// The same at every argument list: the code implements the source function
+// (`Prog::Implements`).
+theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {f}, {arity}, {spec}) {{
+    {binders}{prefix}_returns<M>(machine{comma}{arguments})
+}}
+", room = 136 * (f + 1), arguments = parameters.join(", "), arity = parameters.len(), spec = curried(call, &parameters),
+            binders = binders(&parameters)));
     }
     // The program's other exported functions, each at its own label: a
     // function of words, lent nothing, so its contract is the plain one
@@ -1292,9 +1299,32 @@ theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} 
 theorem {symbol}_native_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {g}, {list}, {call}({arguments})) {{
     λ origin last => {proved}
 }}
-", label = g + 1, room = 136 * (g + 1)));
+
+theorem {symbol}_native_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {g}, {arity}, {spec}) {{
+    {binders}{symbol}_native_returns<M>(machine{comma}{arguments})
+}}
+", label = g + 1, room = 136 * (g + 1), arity = parameters.len(), spec = curried(&format!("{call}({arguments})"), &parameters),
+            binders = binders(&parameters)));
     }
     Ok(Compiled { text, bytes, entry, entries })
+}
+
+/// The source function as a value of `Words(n)` (function_ir_correct), from
+/// its call at the words `parameters`: the function's name when the call is
+/// that name applied to them, and the call under a binder for each word
+/// otherwise.
+fn curried(call: &str, parameters: &[String]) -> String {
+    if parameters.is_empty() { return format!("({call})"); }
+    let applied = format!("({})", parameters.join(", "));
+    match call.strip_suffix(&applied) {
+        Some(name) if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ':') => name.to_string(),
+        _ => format!("(λ {} => {call})", parameters.iter().map(|p| format!("({p}: BitVec(64))")).collect::<Vec<_>>().join(" ")),
+    }
+}
+
+/// A binder for each word, before a term at them.
+fn binders(parameters: &[String]) -> String {
+    if parameters.is_empty() { String::new() } else { format!("λ {} => ", parameters.join(" ")) }
 }
 
 /// `{prefix}_evaluable`: the program's functions evaluable, checked by
