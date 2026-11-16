@@ -40,11 +40,10 @@ On the model, the six non-recursive cases of `emits_extends` need no arm for a r
   constructors (`Tested::known`), so `induct`'s default leaf closes a refused
   test's case. `split_all` substitutes through the equations its splits
   leave (`injected_hypothesis`, `docs/tactics/goal-combinators.md`). Probes:
-  `lib/_tests/std/tactic/constructor_equation_tests.hthr`. In
-  `native_compile_correct.hthr` 23 of the 25 `j(some_inj(…), motive, …)`
-  transports are now `subst(same, …)`; the two left are a transport applied
-  to arguments and a `sym` of one. Left for the "Done when": the 41
-  `λ none => absurd(none)` arms, which go when those proofs are by `induct`
-  (induct-through-result-matches). The
+  `lib/_tests/std/tactic/constructor_equation_tests.hthr`. Left for the
+  "Done when": `native_compile_correct.hthr` in the new forms (its
+  `subst(Option::some_inj(x, c, same), e)` become `subst(same, e)` in the
+  cleanup thread's branch), and the `λ none => absurd(none)` arms, which go
+  when those proofs are by `induct` (induct-through-result-matches). The
   leaf's context report still lists the shadowed binders a split re-bound
   (induct-case-goal-report's subject).
