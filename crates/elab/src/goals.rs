@@ -746,7 +746,19 @@ impl GoalArena {
                     let shadowed = names[i + 1..].contains(name)
                         || aliases.iter().any(|a| a.name == *name && a.depth > i);
                     if !name.starts_with('#') && !shadowed {
-                        context.push((name.to_string(), display(&goal.cx.prefix(i), &entry.ty)));
+                        let mut shown = display(&goal.cx.prefix(i), &entry.ty);
+                        // A hypothesis an enclosing match refined is usable
+                        // at its type as written too, which is said here or
+                        // nowhere (docs/language/matching/arm-readings-design.md).
+                        if let Some(from) = crate::readings::Readings::written_position(&goal.cx, i)
+                            && let Some(outer) = goal.cx.gamma.entries.get(from)
+                        {
+                            let written = display(&goal.cx.prefix(from), &outer.ty);
+                            if written != shown {
+                                shown = format!("{shown}   (or as written: {written})");
+                            }
+                        }
+                        context.push((name.to_string(), shown));
                     }
                 }
                 for (k, alias) in aliases.iter().enumerate() {

@@ -1,8 +1,8 @@
 # A hypothesis has two readings in an arm
 
 Design for `issues/match-eqbind-generalizes-passed-hypotheses.md`
-(2026-11-17). **Status: proposed; stage 1 prototyped on this branch (§6).** It changes how case
-splits elaborate, so it is Minus's to decide; §9 lists the decisions.
+(2026-11-17). **Status: adopted (Minus, 2026-11-17: stage 1, then stage
+2). Stage 1 is built (§6); stage 2 (§5) is not.**
 
 It replaces two syntactic exceptions in `generalize::select_refined`:
 
@@ -242,6 +242,31 @@ reason: "`same` is read as written here: this match cannot refine it,
 because abstracting `fits(w)` leaves `h: z = True` where `fits(w) = True`
 is expected". That is the issue's third "done when".
 
+**As built.** Three things are said, each where the reader is looking:
+
+- A use that neither reading fits names both: "this has type `Some(Cons(w,
+  p)) = Some(c)`, but `… = None` is expected here; in this arm `same` is
+  also `emits(Leaf(w), p) = Some(c)` (with the match's test as written),
+  which is not what is expected here either" (`Readings::refusal_note`,
+  read by the mismatch note's probe, so it costs nothing on a declaration
+  that checks).
+- A hypothesis read through a call whose abstraction is ill-formed
+  (`matching::hypothesis_through_calls` answers `NotRead::IllFormed`) is
+  recorded as `ReadingKind::Kept`, and an arm's refusal at a use of it
+  ends "the match around this could not read `same` at its case, because
+  taking the match's test out of its type leaves something ill-typed, so
+  `same` has its type as written here". This holds at a plain `match` as
+  well. It does not print the ill-typed motive: the sentence says which
+  hypothesis and which match, not which subterm.
+- A goal left open in an arm lists a refined hypothesis as `same :
+  Some(Cons(w, p)) = Some(c)   (or as written: emits(Leaf(w), p) =
+  Some(c))`, and a match with a hole in an arm keeps every hypothesis it
+  refined, since what fills the hole may want any of them.
+
+Not covered: a hypothesis left as written for a reason other than an
+ill-formed abstraction (its type is stuck on something other than the
+test, §4.7's `kept_or`) gets no note.
+
 ### 3.6 The same rule for every match
 
 Nothing in §3.1 and §3.2 needs `h`. A plain `match e` and a match on a
@@ -356,7 +381,8 @@ equation cannot be named by an arm; the prototype says so in
 `select_refined`.
 
 **Prototype** (this branch, `crates/elab/src/readings.rs`): §3.1 to §3.4
-as written, both exceptions deleted, without §3.5's messages. `Cx::readings`
+as written, both exceptions deleted, with §3.5's messages as its "As
+built" paragraph describes. `Cx::readings`
 records each refined copy's outer binder and the equation's name; the
 checking form and the application engine's inferred-argument branch ask
 it; a match with an equation is lowered a second time when a hypothesis
@@ -395,6 +421,13 @@ it generalized was never used refined.
 - With §3.4 in: the whole library re-elaborates with no proof changed
   (the same one inherited failure), and `scripts/test --pr` has one
   failure, the library gate on that same file.
+- Merged with master after `cases h` (#748) landed there: master's
+  `passed_beside`, `takes_equation_about` and `Refined::explain` are
+  removed, master's probe `beside_told` (one arm passes the hypothesis
+  beside the equation, another needs it refined), which pinned the
+  refusal, checks, and `cases h` needed no change: it emits an ordinary
+  `match e: test`. Every library file re-elaborates and the PR lane is
+  green; master had fixed the inherited failure by then.
 
 ## 7. What it costs, and what could go wrong
 
@@ -449,6 +482,10 @@ it generalized was never used refined.
 
 ## 9. Decisions for Minus
 
+Decided 2026-11-17: adopt the rule, stage 1 then stage 2 (items 1 and 4).
+Items 2 and 3 are built as proposed; item 5 holds for `cases h` already
+and is open for `split_all`.
+
 1. **The rule of §0** as the surface contract for case splits, replacing
    both exceptions.
 2. **Refined in inference position** (§3.2). The alternative, written in
@@ -473,5 +510,10 @@ it generalized was never used refined.
    messages. Whole-library sweep.
 2. Use-based selection (§3.4) and the per-hypothesis refusal note (§3.5).
 3. Display of both readings.
+
+   Slices 1 to 3 are built. Left from them: the spill and deferred
+   argument branches of the application engine do not ask the readings
+   (only the declared-spine inferred-argument branch does), and §3.4's
+   second lowering is not applied at a plain `match` (its "As built").
 4. Stage 2 (§5), with its sweep; then delete the proofs' remaining
    hand transports where the sweep's review lint finds them.

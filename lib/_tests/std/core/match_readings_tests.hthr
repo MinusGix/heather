@@ -82,8 +82,29 @@ theorem nested(a, b: Nat, ok: both(a, b) = True, k0: both(a, b) = True → Nat, 
     }
 }
 
-// A use neither reading fits is refused at the use.
-// expect-error: is expected here
+// A use neither reading fits is refused at the use, naming both.
+// expect-error: in this arm `same` is also `emits(Leaf(w), p) = Some(c)` (with the match's test as written)
 theorem neither(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: Leaf(w).emits(p) = None → Nat): Nat {
     match fit: fits(w) { False => 0, True => k(same) }
+}
+
+// A goal left open in an arm lists a refined hypothesis with its type as
+// written beside it.
+// expect-error: same : Some(Cons(w, p)) = Some(c)   (or as written: emits(Leaf(w), p) = Some(c))
+theorem shown_both(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c)): c = Cons(w, p) {
+    match fit: fits(w) { False => absurd(same), True => ?there }
+}
+
+// A hypothesis the match cannot refine says so where an arm wanted it at
+// its case: abstracting `fits(w)` from `guarded(w)`'s unfolding leaves
+// `on_fit(w, h)` with `h: z = True`.
+fn on_fit(w: Nat, h: fits(w) = True) → Nat { w }
+fn on_miss(w: Nat, h: fits(w) = False) → Nat { 0 }
+fn guarded(w: Nat) → Option<Nat> {
+    match fits(w) { False => None, True => Some(pick(fits(w), λ h => on_fit(w, h), λ h => on_miss(w, h))) }
+}
+
+// expect-error: the match around this could not read `same` at its case
+theorem cannot_refine(w, c: Nat, same: guarded(w) = Some(c)): Nat {
+    match fit: fits(w) { False => absurd(same), True => 0 }
 }

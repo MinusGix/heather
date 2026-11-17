@@ -11,7 +11,8 @@
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
-use heather_syntax::{Expr, ExprKind};
+use heather_syntax::{Expr, ExprKind, Span};
+use crate::diagnostics::ElabError;
 use crate::{Cx, Elaborator};
 
 /// What a name an arm binds can also be read as.
@@ -21,6 +22,10 @@ pub(crate) enum ReadingKind {
     /// The equation of a `match h:`: `refl` where both sides are the
     /// constructor.
     Equation,
+    /// A hypothesis at this position that the match would have refined and
+    /// could not: the motive that abstracts the test from its type is
+    /// ill-formed, so it has its type as written only (design §3.5).
+    Kept(usize),
 }
 
 /// One name with a second reading: the first binder called `name` at or
@@ -53,10 +58,22 @@ impl Readings<'_> {
     fn at<'a>(cx: &'a Cx, position: usize) -> Option<&'a Reading> {
         let name = cx.names.iter().nth(position)?;
         cx.readings.iter_inner().map(|r| &**r).find(|r| {
+            if let ReadingKind::Kept(q) = r.kind {
+                return q == position;
+            }
             r.name == name
                 && cx.names.iter().enumerate().skip(r.after).filter(|(_, n)| *n == name).nth(r.nth).map(|(i, _)| i)
                     == Some(position)
         })
+    }
+
+    /// The outer binder the copy at `position` refines, if it is one: its
+    /// reading as written (for a goal report, design §7 "Display").
+    pub(crate) fn written_position(cx: &Cx, position: usize) -> Option<usize> {
+        match Self::at(cx, position) {
+            Some(Reading { kind: ReadingKind::Written(from), .. }) => Some(*from),
+            _ => None,
+        }
     }
 
     /// The other readings of a use of a name that elaborated to `term`,
@@ -147,6 +164,97 @@ impl Readings<'_> {
         }
     }
 
+    /// A use of `name` at `span` resolved to the binder at `position`:
+    /// remembered if the name has another reading, for [`Self::refusal_note`].
+    pub(crate) fn note_use_at(&self, cx: &Cx, name: &str, position: usize, span: Span) {
+        Self::note_use(cx, position);
+        if cx.readings.is_empty() || Self::at(cx, position).is_none() {
+            return;
+        }
+        let kept = match Self::at(cx, position) {
+            Some(Reading { kind: ReadingKind::Kept(_), .. }) => {
+                let ty = cx.gamma.entries.get(position).and_then(|entry| self.0.display_type_clean(&cx.prefix(position), &entry.ty));
+                Some(format!(
+                    "; the match around this could not read `{name}` at its case, because taking the match's test out of \
+                     its type leaves something ill-typed, so `{name}` has its type as written here{}",
+                    ty.map(|t| format!(", `{t}`")).unwrap_or_default(),
+                ))
+            }
+            _ => None,
+        };
+        let mut uses = self.0.attempt.reading_uses.borrow_mut();
+        if !uses.iter().any(|(at, _, _)| *at == span) {
+            uses.push((span, name.to_string(), kept));
+        }
+    }
+
+    /// What a refused use at `span`, of type `got`, adds to its message
+    /// when the name used has another reading in this arm: that reading,
+    /// which was tried and does not fit either (design §3.5). Empty when
+    /// the span is no such use, or the other reading does not spell.
+    pub(crate) fn refusal_note(&self, cx: &Cx, span: Span, got: &Type) -> String {
+        let Some(name) = self.0.attempt.reading_uses.borrow().iter().find(|(at, _, _)| *at == span).map(|(_, n, _)| n.clone()) else {
+            return String::new();
+        };
+        if let Some(note) = self.kept_note(span) {
+            return note;
+        }
+        let Some(position) = Self::binder(cx, &name) else { return String::new() };
+        let len = cx.names.len();
+        let term = Term::Var(LocalVar((len - 1 - position) as u32));
+        let mut others = self.written(cx, &term);
+        let equation = self.equation(cx, &term);
+        if let Some(entry) = cx.gamma.entries.get(position) {
+            others.push((term.clone(), entry.ty.shift_local((len - position) as u32)));
+        }
+        let shown = self.0.display_type_clean(cx, got);
+        let mut spelled: Vec<String> = Vec::new();
+        for (_, ty) in others.iter().chain(equation.iter()) {
+            if let Some(s) = self.0.display_type_clean(cx, ty)
+                && Some(&s) != shown.as_ref()
+                && !spelled.contains(&s)
+            {
+                spelled.push(s);
+            }
+        }
+        if spelled.is_empty() {
+            return String::new();
+        }
+        let what = if equation.is_some() { "at its case, by `refl`" } else { "with the match's test as written" };
+        format!(
+            "; in this arm `{name}` is also {} ({what}), which is not what is expected here either",
+            spelled.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(" and "),
+        )
+    }
+
+    /// Records that the match at `cx` could not refine the hypotheses at
+    /// `kept`.
+    pub(crate) fn register_kept(cx: &mut Cx, kept: &[usize]) {
+        let after = cx.names.len();
+        for &q in kept {
+            let Some(name) = cx.names.iter().nth(q).map(str::to_string) else { continue };
+            cx.readings.push(Rc::new(Reading { name, after, nth: 0, kind: ReadingKind::Kept(q), uses: Default::default() }));
+        }
+    }
+
+    /// Why the name used at `span` has only its type as written, if a
+    /// match around it tried to refine it and could not.
+    fn kept_note(&self, span: Span) -> Option<String> {
+        self.0.attempt.reading_uses.borrow().iter().find(|(at, _, _)| *at == span).and_then(|(_, _, kept)| kept.clone())
+    }
+
+    /// An arm's refusal at a use of a hypothesis the match could not
+    /// refine, saying so (design §3.5).
+    pub(crate) fn explain(&self, error: ElabError) -> ElabError {
+        match error {
+            ElabError::Elab { msg, span } if !msg.contains("could not read `") => match self.kept_note(span) {
+                Some(note) => ElabError::Elab { msg: format!("{msg}{note}"), span },
+                None => ElabError::Elab { msg, span },
+            },
+            other => other,
+        }
+    }
+
     /// A use that elaborated to `term` was given another reading.
     pub(crate) fn note_replaced(cx: &Cx, term: &Term) {
         let Term::Var(LocalVar(index)) = term else { return };
@@ -205,6 +313,7 @@ impl Readings<'_> {
                     equation = true;
                     position
                 }
+                ReadingKind::Kept(_) => return None,
             };
             let Type::Pi { dom_level, cod_level, dom, cod } = self.0.whnf(cx, &ty, e.span).ok()? else { return None };
             if !self.0.conv_types(cx, &type_at(at)?, &dom, &dom_level) {

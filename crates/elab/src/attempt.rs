@@ -48,6 +48,13 @@ pub(super) struct DeclAttempt {
     /// member whose receiver type the value missed — `BitVec::is_nl` at a
     /// `BitVec(16)` (issues/width-specific-method-on-other-width.md).
     pub(super) member_receivers: RefCell<Vec<(Span, String)>>,
+    /// Uses of a name an enclosing match gave two readings, by span. Read
+    /// only by the probe of a [`CheckNote`] at that span, to say what the
+    /// name's other reading is (docs/language/matching/arm-readings-design.md
+    /// §3.5). A fact of the source, so a probe's entries stand. The third
+    /// part is the reason the name has only its type as written there, when
+    /// a match around the use tried to refine it and could not.
+    pub(super) reading_uses: RefCell<Vec<(Span, String, Option<String>)>>,
     /// Written `refl`s whose two sides are not syntactically equal, in the
     /// order they were met — [`Self::check_notes`]' counterpart, deferred for
     /// its reason and probed the same way. Unlike a checking mismatch this
@@ -179,6 +186,7 @@ impl DeclAttempt {
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
         self.member_receivers.get_mut().clear();
+        self.reading_uses.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.trivial_uses.get_mut().clear();
@@ -213,6 +221,7 @@ impl DeclAttempt {
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
         self.member_receivers.get_mut().clear();
+        self.reading_uses.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.trivial_uses.get_mut().clear();
@@ -233,6 +242,7 @@ impl DeclAttempt {
             check_notes,
             unmarked_receivers,
             member_receivers,
+            reading_uses: _,
             refl_notes,
             decide_uses,
             trivial_uses,
@@ -304,6 +314,7 @@ impl DeclAttempt {
             check_notes,
             unmarked_receivers,
             member_receivers,
+            reading_uses: _,
             refl_notes,
             decide_uses,
             trivial_uses,

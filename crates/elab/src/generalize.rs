@@ -221,6 +221,7 @@ impl Generalize<'_> {
         Refined {
             positions: self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind),
             retyped: Vec::new(),
+            kept: Vec::new(),
         }
     }
 
@@ -260,6 +261,7 @@ impl Generalize<'_> {
         let named = arm_names(arms);
         let mut about: Vec<usize> = Vec::new();
         let mut retyped: Vec<(usize, Type)> = Vec::new();
+        let mut kept: Vec<usize> = Vec::new();
         for q in first..m {
             if contains(q) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
                 about.push(q);
@@ -273,19 +275,23 @@ impl Generalize<'_> {
             }
             let entry = cx.gamma.entries.get(q).expect("a binder of the context");
             let ty = entry.ty.shift_local((m - q) as u32);
-            if let Some(read) = crate::matching::hypothesis_through_calls(
+            match crate::matching::hypothesis_through_calls(
                 self.0, cx, &ty, scrutinee, scrutinee_type, scrutinee_level, span,
             ) {
-                about.push(q);
-                retyped.push((q, read));
+                Ok(read) => {
+                    about.push(q);
+                    retyped.push((q, read));
+                }
+                Err(crate::matching::NotRead::IllFormed) => kept.push(q),
+                Err(crate::matching::NotRead::NotAbout) => {}
             }
         }
         if about.is_empty() {
-            return Refined::default();
+            return Refined { kept, ..Refined::default() };
         }
         let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind);
         retyped.retain(|(q, _)| positions.contains(q));
-        Refined { positions, retyped }
+        Refined { positions, retyped, kept }
     }
 
     /// Of the binders `about` the scrutinee, what an arm names or the goal
@@ -481,6 +487,16 @@ pub(crate) fn arms_call_self(cx: &Cx, arms: &[Arm]) -> bool {
     calls
 }
 
+/// Whether an arm leaves a hole: what will fill it may use any hypothesis
+/// at its case, so the match keeps them all refined for the goal report.
+pub(crate) fn arms_have_hole(arms: &[Arm]) -> bool {
+    let mut hole = false;
+    for arm in arms {
+        walk_expr(&arm.body, &mut |e| hole |= matches!(e.kind, ExprKind::Hole(_)));
+    }
+    hole
+}
+
 /// What a `match` refines: the binders it generalizes, ascending, and those
 /// of them it reads at another spelling of their type
 /// ([`Generalize::refined_hypotheses`]).
@@ -488,6 +504,9 @@ pub(crate) fn arms_call_self(cx: &Cx, arms: &[Arm]) -> bool {
 pub(crate) struct Refined {
     pub(crate) positions: Vec<usize>,
     pub(crate) retyped: Vec<(usize, Type)>,
+    /// Hypotheses an arm names that are about the scrutinee through a call
+    /// and that the match cannot refine: the abstraction is ill-formed.
+    pub(crate) kept: Vec<usize>,
 }
 
 /// Every name an arm's body mentions as a variable.

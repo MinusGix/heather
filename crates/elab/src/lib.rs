@@ -3163,7 +3163,7 @@ impl Elaborator {
         let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
             (Some(pos), Some(a)) if a.depth <= pos => {
-                readings::Readings::note_use(cx, pos);
+                readings::Readings(self).note_use_at(cx, name, pos, span);
                 return Ok(self.local(cx, pos));
             }
             (_, Some(a)) => {
@@ -3174,7 +3174,7 @@ impl Elaborator {
                 return Ok((term, ty, a.level.clone()));
             }
             (Some(pos), None) => {
-                readings::Readings::note_use(cx, pos);
+                readings::Readings(self).note_use_at(cx, name, pos, span);
                 return Ok(self.local(cx, pos));
             }
             (None, None) => {}
