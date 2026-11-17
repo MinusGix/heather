@@ -540,7 +540,7 @@ theorem List::take_update<A>(self xs: List<A>): (n, i: Nat) → (f: A → A) →
 }
 
 // An update at a prefix's end is the element after the prefix before it.
-theorem List::take_update_snoc<A>(self xs: List<A>): (i: Nat) → (b: A) → i < xs.len() → xs.update(i, λ _ => b).take(i + 1) = xs.take(i) ++ [b] {
+theorem List::take_update_snoc<A>(self xs: List<A>): (i: Nat) → (b: A) → i < xs.len() → xs.update(i, λ _ => b).take(Succ(i)) = xs.take(i) ++ [b] {
     match xs {
         Nil => λ i b no => false_elim(no),
         Cons(h, t) => λ i => match i {
