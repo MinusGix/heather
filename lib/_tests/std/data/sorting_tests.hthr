@@ -4,7 +4,7 @@
 // an antisymmetric order (the negative control: a key order with a tie has
 // two). Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import sorting; import perm; import order; import relation_props; import list; import nat; import pair; import bool; import logic;
+import sorting; import perm; import order; import relation_props; import list; import nat; import pair; import bool; import logic; import bitvec; import bitvec_order;
 
 theorem nat_sort(): List::insertion_sort(Nat::Le, [3, 1, 2, 1]) = [1, 1, 2, 3] { refl }
 
@@ -83,3 +83,19 @@ theorem steps_not_by_index():
     ¬((i, k: Nat) → (a, b: Nat) → i < k → [0, 1, 2].nth(i) = Some(a) → [0, 1, 2].nth(k) = Some(b) → Next(a, b)) {
     λ all => Nat::zero_ne_succ(0, Nat::succ_inj(0, 1, all(0, 2, 0, 2, trivial, refl, refl)))
 }
+
+// The order as an operator section, `(<=)` (issues/parenthesized-operator-symbols.md):
+// the bare symbol resolves by the carrier its position asks for, so at a
+// list of naturals it is `Nat::Le` and at bytes it is `BitVec::unsigned_le`.
+fn sort_nat(xs: List<Nat>) → List<Nat> { xs.insertion_sort((<=)) }
+theorem sort_nat_closed(): sort_nat([3, 1, 2, 1]) = [1, 1, 2, 3] { refl }
+theorem sort_nat_section(xs: List<Nat>): xs.insertion_sort((<=)) = xs.insertion_sort(Nat::Le) { refl }
+theorem sort_bytes_section(xs: List<u8>): xs.SortedPerm((<=), xs.insertion_sort((<=))) {
+    xs.insertion_sort_correct(BitVec::unsigned_le)
+}
+theorem sorted_bytes_section(xs, out: List<u8>, h: xs.SortedPerm((<=), out)): xs.SortedPerm(BitVec::unsigned_le, out) { h }
+
+// Placed before the list, the symbol has no carrier yet (the receiver
+// spelling above gives it one), the same as the unparenthesised `<=`.
+// expect-error: is not pinned here
+theorem sort_section_first(): List::insertion_sort((<=), [3, 1, 2, 1]) = [1, 1, 2, 3] { refl }

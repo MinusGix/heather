@@ -6296,6 +6296,21 @@ impl Parser {
             }
             TokKind::LParen => {
                 let open = self.bump().span;
+                // `(<=)`: an operator section, the bare symbol as a value
+                // anywhere an expression stands (issues/parenthesized-operator-symbols.md).
+                // It is the node `f(<=, x)` already gives a lone symbol between
+                // delimiters, so it resolves by the same designation ladder:
+                // `s.SortedPerm((<=), out)` at `BitVec(64)` is
+                // `BitVec::unsigned_le`. An infix token cannot begin an
+                // expression, so `(` symbol `)` has no other reading.
+                if let Some(sym) = Self::op_symbol(self.peek())
+                    && matches!(self.nth(1), TokKind::RParen)
+                {
+                    self.bump();
+                    let close = self.bump().span;
+                    let span = open.join(close);
+                    return Ok(Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity: OpFixity::Infix }, span });
+                }
                 // Parenthesising is the escape hatch for a record literal in
                 // scrutinee position **and for the comparison rung**, so both
                 // restrictions must lift here. The `no_eq` half is what makes
@@ -8443,6 +8458,29 @@ mod tests {
             &args[0].kind,
             ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "||"
         ));
+    }
+
+    #[test]
+    fn a_parenthesised_symbol_is_the_bare_symbol_anywhere() {
+        // `(<=)` is the node `f(<=, x)` gives the lone symbol, in any
+        // expression position: a call's argument, a receiver call's.
+        let k = body("f(x, (<=))");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        let k = body("xs.SortedPerm((<=), ys)");
+        let ExprKind::Dot { args: Some(args), .. } = &k else { panic!("expected a receiver call, got {k:?}") };
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        // Every infix symbol reads this way, `-` as subtraction.
+        for sym in ["+", "-", "*", "<", "&&", "||", "++", "^", "≈"] {
+            let k = body(&format!("({sym})"));
+            assert!(
+                matches!(&k, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == sym),
+                "({sym}) gave {k:?}"
+            );
+        }
+        // A symbol with an operand is no section: `(-x)` is still negation.
+        let k = body("(-x)");
+        assert!(matches!(&k, ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. })));
     }
 
     #[test]
