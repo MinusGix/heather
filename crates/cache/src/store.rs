@@ -356,7 +356,7 @@ impl Store {
             None
         };
         // Several processes may share one cache directory (the native test
-        // binaries run side by side against `target/native-test-images`, and
+        // binaries run side by side against `target/cli-check-images`, and
         // several checkouts may share one through `HEATHER_CACHE_DIR`), so
         // the file on disk can have gained entries — and other kernels'
         // sections — since this run loaded it. Union this kernel's in rather

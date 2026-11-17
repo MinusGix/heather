@@ -157,7 +157,6 @@ elif [[ "${1:-}" == --pr ]]; then
       done < <(awk '/#\[test\]/ { t = 1; next }
                     t && match($0, /fn [a-z_0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3); t = 0 }' \
                  crates/cli/tests/native*.rs)
-      native_gates_skipped=true
       echo "pr lane: nothing the native certificate gates check changed since $(git rev-parse --short "$base"); running only $native_smoke of them (HEATHER_PR_NATIVE=all runs every one)"
     else
       echo "pr lane: native certificate gates run, since the round touches $(echo $touched | tr ' ' ',')"
@@ -289,16 +288,6 @@ parser_warmup() {
   done
 }
 
-# One test of the heather binary's native module, alone in a bounded process.
-native_bin_warmup() {
-  (
-    ulimit -v 6291456
-    ulimit -t 300
-    RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
-      cargo test "${CARGO_FLAGS[@]}" -p heather-cli --bin heather "native::tests::$1" -- --exact --format terse
-  )
-}
-
 # The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
 # library gate, the showcase gate and native_cat.rs/native_tools.rs/native_utf8.rs's
 # `write-elf` share. Every module is keyed by its own closure
@@ -321,31 +310,18 @@ cli_images_warmup() {
   ) || echo "cli image warmup did not finish; the library gate reports why"
 }
 
-# The x86-native examples and the modules they import beyond the bundled
-# library: the `runtime fn` generator's closure (rt, rt_lower, runtime, …),
-# which every example marked `runtime fn` imports
-# (issues/runtime-generator-imports.md). The tests' `compile-x86` children
-# share one store, so over a cold one a test's first child built that
-# closure, then its example (the generator runs for every function), then
-# its certificate, all under its one rail: branches' first child cost 328
-# CPU-s on a cloud box against 43 for the next, the 2026-11-06 master red
-# (issues/master-red-2026-11-06.md). Built here first, only what has no
-# image (`warm-native --unbuilt` reads the headers, so a warm store costs
-# one quick probe): the shared imports one module per process
-# (`--through`), each replaying the ones before it, then each example in a
-# process of its own, three at a time. Each process holds one module, the
-# largest (branches) about half the rail.
-#
-# The modules `crates/linked` exports from (`EXPORTS.tsv`'s first column)
-# are built the same way, a module per process: `native_linked.rs` runs a
-# `compile-x86` per export over this store, and an export whose closure is
-# several generator-heavy modules (SHA-256's stream over the context's
-# functions) would otherwise build them all under one child's rail.
-native_closure_warmup() {
-  local heather module unbuilt store="$STORE_ROOT/native-test-images"
-  local examples=(examples/x86-native/*.hthr) roots=()
-  local exported
-  mapfile -t exported < <(grep -v '^#' crates/linked/generated/EXPORTS.tsv | cut -f1 | sort -u)
+# The native tests' store is the gate's (`native_test_images` in
+# crates/cli/src/showcase.rs): `compile-x86` checks its bundled library as
+# the loader checks the same files, so the gate's images are its images
+# (issues/native-tests-share-the-gate-store.md). An unfiltered run needs no
+# warm-up for them: the runner holds them until the gate's build step has
+# built lib/native's, lib/_tests/native's and lib/lang/lexer's closures
+# (`PREREQUISITES` in run-test-targets.mjs), which it builds first, four at
+# a time. A focused run builds just those closures the same way, each
+# module in a build worker under its own rails; what is left to a test's
+# `compile-x86` child is its own example.
+native_warmup() {
+  local heather stale=()
   heather=$(node --input-type=module -e '
     import { readFileSync } from "node:fs";
     import { binaryOf } from "./scripts/run-test-targets.mjs";
@@ -354,33 +330,13 @@ native_closure_warmup() {
     echo "native warmup: no heather binary in the build; the native tests build their modules themselves"
     return 0
   fi
-  unbuilt=$("$heather" warm-native "${examples[@]}" "${exported[@]}" --unbuilt --cache-dir "$store") || return 0
-  for module in $unbuilt; do
-    if [[ -f "examples/x86-native/$module.hthr" ]]; then
-      roots+=("examples/x86-native/$module.hthr")
-      continue
-    fi
-    (
-      ulimit -v 6291456
-      ulimit -t 300
-      HEATHER_KERNEL_WORKERS=1 "$heather" warm-native "${examples[@]}" "${exported[@]}" \
-        --through "$module" --cache-dir "$store" > /dev/null
-    ) || { echo "native warmup stopped at \`$module\`; the native tests report why"; return 0; }
-  done
-  (( ${#roots[@]} )) || return 0
-  printf '%s\n' "${roots[@]}" | xargs -P 3 -I{} bash -c '
-    ( ulimit -v 6291456; ulimit -t 300
-      HEATHER_KERNEL_WORKERS=1 "$0" warm-native "$1" --cache-dir "$2" > /dev/null ) ||
-      echo "native warmup: $1 did not check; its test reports why"' "$heather" {} "$store"
-}
-
-native_warmup() {
-  # Native certificates use a separate SemanticSession cache. Populate its
-  # exact-build prefix before a child spends its budget on the generated
-  # certificate; replay still kernel-checks every cached declaration.
-  native_bin_warmup the_bundled_library_checks
-  # Only when the native gates run: the pr lane's smoke reads another store.
-  [[ -n "${native_gates_skipped:-}" ]] || native_closure_warmup
+  [[ "${HEATHER_SEMANTIC_IMAGES:-}" == accept-stale ]] && stale=(--accept-stale-images)
+  (
+    ulimit -v 6291456
+    ulimit -t 300
+    HEATHER_KERNEL_WORKERS=1 "$heather" check --cache --cache-dir "$STORE_ROOT/cli-check-images" "${stale[@]}" \
+      --build-jobs 3 --build-only lib/native lib/_tests/native lib/lang/lexer > /dev/null
+  ) || echo "native warmup did not finish; the native tests report why"
 }
 
 if (( $# == 0 )); then
@@ -391,11 +347,8 @@ if (( $# == 0 )); then
   selected semantic_x86_warmup && semantic_warmup semantic_x86_warmup
   selected semantic_omega_warmup && semantic_warmup semantic_omega_warmup
   if selected semantic_parser_warmup; then parser_warmup; fi
-  # The fast lane skips every native certificate gate, so it has no prefix
-  # to warm; the warmup alone is ~150 CPU-s.
-  if [[ "$TEST_LANE" != fast ]]; then
-    selected heather native native_program native_branches native_linked && native_warmup
-  fi
+  # The native tests' prefix is the library gate's build step, which the
+  # runner starts first (native_warmup's comment).
 else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup

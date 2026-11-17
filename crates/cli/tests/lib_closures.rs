@@ -44,8 +44,9 @@ fn hthr_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The loader's closure of `roots`, less the closure of `minus`, without the
-/// common prelude the loader adds to modules outside its own closure.
-fn closure(lib: &Path, files: &[PathBuf], roots: &[&str], minus: &[&str]) -> Vec<(String, PathBuf)> {
+/// common prelude the loader adds to modules outside its own closure unless
+/// `common` (a list marked `as-loaded`).
+fn closure(lib: &Path, files: &[PathBuf], roots: &[&str], minus: &[&str], common: bool) -> Vec<(String, PathBuf)> {
     let path_of = |name: &str| -> PathBuf {
         let hits: Vec<&PathBuf> = files.iter().filter(|p| p.file_stem().is_some_and(|s| s == name)).collect();
         assert_eq!(hits.len(), 1, "module `{name}` names {} files under lib/", hits.len());
@@ -62,7 +63,7 @@ fn closure(lib: &Path, files: &[PathBuf], roots: &[&str], minus: &[&str]) -> Vec
     let skip: Vec<String> = load(minus).into_iter().map(|m| m.name).collect();
     load(roots)
         .into_iter()
-        .filter(|m| m.name != heather_elab::COMMON_MODULE && !skip.contains(&m.name))
+        .filter(|m| (common || m.name != heather_elab::COMMON_MODULE) && !skip.contains(&m.name))
         .map(|m| (m.name, m.path))
         .collect()
 }
@@ -86,12 +87,13 @@ fn marked_lists_are_the_loaders_closures() {
         for (i, line) in lines.iter().enumerate() {
             let Some(spec) = line.trim().strip_prefix("// lib-closure:") else { continue };
             marked += 1;
-            let words: Vec<&str> = spec.split_whitespace().collect();
+            let as_loaded = spec.split_whitespace().any(|w| w == "as-loaded");
+            let words: Vec<&str> = spec.split_whitespace().filter(|w| *w != "as-loaded").collect();
             let (roots, minus) = match words.iter().position(|w| *w == "minus") {
                 Some(k) => (&words[..k], &words[k + 1..]),
                 None => (&words[..], &[][..]),
             };
-            let want = closure(&lib, &lib_files, roots, minus);
+            let want = closure(&lib, &lib_files, roots, minus, as_loaded);
             // The entries: `("name", include_str!("rel")),`, one a line.
             let mut have = Vec::new();
             for entry in lines[i + 2..].iter().take_while(|l| l.trim() != "];") {
@@ -99,6 +101,12 @@ fn marked_lists_are_the_loaders_closures() {
                 let name = entry.split('"').nth(1).unwrap_or_default().to_string();
                 let rel = entry.split("include_str!(\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default();
                 let path = file.parent().unwrap().join(rel).canonicalize().ok();
+                // An `as-loaded` entry also names its file from the repo
+                // root, which must be the file it includes.
+                if as_loaded {
+                    let at = entry.split('"').nth(3).unwrap_or_default();
+                    assert_eq!(root.join(at).canonicalize().ok(), path, "{}:{}: `{name}` names {at}", file.display(), i + 1);
+                }
                 have.push((name, path));
             }
             let want: Vec<(String, Option<PathBuf>)> =

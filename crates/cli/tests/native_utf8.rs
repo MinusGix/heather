@@ -113,7 +113,7 @@ fn utf8_validator_agrees_with_rust() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/utf8/utf8_check.hthr", "utf8_valid_up_to", "-o"])
-        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .arg(&assembly).args(heather_cli::showcase::native_image_args())
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let binary = output.join("utf8check");
