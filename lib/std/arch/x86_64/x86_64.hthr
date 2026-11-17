@@ -126,6 +126,19 @@ fn write_gpr(register: Gpr, value: BitVec(64), registers: Gprs) → Gprs {
     )
 }
 
+// A register read after a write: the value written at the register written,
+// what the file held at every other.
+theorem read_gpr_write(register, query: Gpr, value: BitVec(64), registers: Gprs):
+    read_gpr(query, write_gpr(register, value, registers)) = register.written(query, value, read_gpr(query, registers))
+{
+    match query {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl,
+        Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl,
+        R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 fn gpr_location(register: Gpr) → Location<Gprs, BitVec(64)> {
     Location<Gprs, BitVec(64)>(
         read := λ (registers: Gprs) => read_gpr(register, registers),

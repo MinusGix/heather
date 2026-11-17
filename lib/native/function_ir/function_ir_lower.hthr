@@ -222,12 +222,14 @@ theorem File::represents_write(self file: File, values: Valuation(), gprs: Gprs,
 {
     ⟨λ query => j(sym(file.write_at(register, slot, query)),
         λ now _ => SlotRep(values, now, read_gpr(query, write_gpr(register, word, gprs))),
-        match register.same(query) as λ b =>
-            SlotRep(values, match b { False => file.at(query), True => slot },
-                match b { False => gprs.at(query), True => word }) {
-            False => before.left(query),
-            True => written,
-        }), before.right⟩
+        j(sym(read_gpr_write(register, query, word, gprs)),
+            λ now _ => SlotRep(values, match register.same(query) { False => file.at(query), True => slot }, now),
+            match register.same(query) as λ b =>
+                SlotRep(values, match b { False => file.at(query), True => slot },
+                    match b { False => read_gpr(query, gprs), True => word }) {
+                False => before.left(query),
+                True => written,
+            })), before.right⟩
 }
 
 theorem File::represents_know(self file: File, values: Valuation(), gprs: Gprs, known: Known,

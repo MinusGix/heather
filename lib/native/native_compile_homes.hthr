@@ -76,7 +76,8 @@ theorem Bool::false_of_not(b: Bool, no: (!b).IsTrue()): b = False { not_true_fal
 // A register other than the one written reads as it did.
 theorem read_gpr_other(register, query: Gpr, value: BitVec(64), g: Gprs, differ: register.same(query) = False):
     read_gpr(query, write_gpr(register, value, g)) = read_gpr(query, g) {
-    j(sym(differ), λ b _ => (match b { False => g.at(query), True => value }) = g.at(query), refl)
+    trans(read_gpr_write(register, query, value, g),
+        j(sym(differ), λ b _ => (match b { False => read_gpr(query, g), True => value }) = read_gpr(query, g), refl))
 }
 
 // A register absent from a list is apart from its head, and from the rest.
