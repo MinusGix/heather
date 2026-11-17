@@ -1,0 +1,41 @@
+// Probes of the normalizer (lib/std/tactic/bv_normalize.hthr): what a
+// chain becomes, and an identity it leaves to the solver.
+import logic;
+import bool;
+import nat;
+import list;
+import bitblast;
+import bv_normalize;
+
+fn x8() → BVExpr { BVar(0, 8) }
+fn y8() → BVExpr { BVar(8, 8) }
+fn z8() → BVExpr { BVar(16, 8) }
+
+// A sum in any grouping and order is one expression.
+theorem assoc_is_true(): BVPred::norm(PEq(8, BAdd(BAdd(x8(), y8()), z8()), BAdd(z8(), BAdd(y8(), x8())))) = PConst(True) { refl }
+
+// A difference is a sum with a negated operand, which cancels its
+// operand.
+theorem sub_add_cancels(): BVExpr::norm(BAdd(BSub(x8(), y8()), y8())) = x8() { refl }
+theorem sub_self(): BVExpr::norm(BSub(x8(), x8())) = BConst(0) { refl }
+
+// Constants sort first and fold.
+theorem constants_fold(): BVExpr::norm(BAdd(BAdd(x8(), BConst(2)), BConst(3))) = BAdd(BConst(5), x8()) { refl }
+theorem unit_dropped(): BVExpr::norm(BMul(BConst(1), x8())) = x8() { refl }
+
+// Exclusive or cancels, and and or are idempotent.
+theorem xor_cancels(): BVExpr::norm(BXor(BXor(x8(), y8()), x8())) = y8() { refl }
+theorem and_idem(): BVExpr::norm(BAnd(x8(), BAnd(y8(), x8()))) = BAnd(x8(), y8()) { refl }
+theorem or_idem(): BVExpr::norm(BOr(y8(), y8())) = y8() { refl }
+
+// Double complements and negations cancel.
+theorem double_not(): BVExpr::norm(BNot(BNot(x8()))) = x8() { refl }
+theorem double_neg(): BVExpr::norm(BNeg(BNeg(x8()))) = x8() { refl }
+
+// Not every identity: `x * 3` and `x + x + x` stay apart, for the solver.
+theorem mul_not_sum(): BVPred::norm(PEq(8, BMul(x8(), BConst(3)), BAdd(BAdd(x8(), x8()), x8()))) = PEq(8, BMul(BConst(3), x8()), BAdd(BAdd(x8(), x8()), x8())) { refl }
+
+// The normalized predicate means the predicate, at any input.
+theorem means(bits: Nat → Bool): BVPred::norm(PEq(8, BAdd(x8(), y8()), BAdd(y8(), x8()))).eval(bits) = PEq(8, BAdd(x8(), y8()), BAdd(y8(), x8())).eval(bits) {
+    BVPred::norm_eval(PEq(8, BAdd(x8(), y8()), BAdd(y8(), x8())), bits)
+}
