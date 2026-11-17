@@ -285,6 +285,7 @@ impl Elaborator {
             annotations: false,
             rough: None,
             numerals: std::cell::OnceCell::new(),
+            fields: RefCell::new(Vec::new()),
         }
     }
 }
@@ -432,6 +433,10 @@ struct Speller<'a> {
     /// [`Elaborator::numeral_templates`], read the first time the walk meets
     /// a term that could be a numeral.
     numerals: std::cell::OnceCell<Vec<Term>>,
+    /// The fields of an arm the walk is inside of a `match` it printed
+    /// ([`Self::enum_match`]): the walk depth they were bound at, the
+    /// projection out of the arm's payload there, and the name printed.
+    fields: RefCell<Vec<(usize, Term, String)>>,
 }
 
 impl Speller<'_> {
@@ -485,6 +490,14 @@ impl Speller<'_> {
     /// spelling here comes back to `t`.
     fn alias(&self, t: &Term) -> Option<String> {
         let names = self.names.borrow();
+        // A field of a printed `match` arm, innermost first.
+        if let Some(name) = self.fields.borrow().iter().rev().find_map(|(depth, term, name)| {
+            let later = names.len().checked_sub(*depth)?;
+            (shifted_projection(term, later as u32, t) && !names.iter_inner().take(later).any(|n| n == name))
+                .then(|| name.clone())
+        }) {
+            return Some(name);
+        }
         // Innermost first, so the aliases bound after `a` are the ones
         // already passed.
         let mut later_aliases: Vec<&str> = Vec::new();
@@ -1138,7 +1151,12 @@ impl Speller<'_> {
         let Term::Case { lhs, scrut, .. } = t else { return None };
         let ind = self.el.display_tag_of(lhs)?;
         let n = ind.ctors.len();
-        if n < 2 || ind.ctors.iter().any(|c| c.fields.len() != 0) {
+        // Constructors with fields are read for a reader only: an arm names
+        // them, and the source flavour would have to re-elaborate that.
+        let fielded = ind.ctors.iter().any(|c| !c.fields.is_empty());
+        if n < 2 || (fielded && (self.qualified || self.rough.is_some() || ind.recursive || ind.infinitary() || ind.codata))
+            || ind.ctors.iter().any(|c| c.kind.iter().any(|k| !matches!(k, crate::inductive::FieldKind::Payload)))
+        {
             return None;
         }
         // A convoy over more than two constructors would chain its
@@ -1146,7 +1164,7 @@ impl Speller<'_> {
         if eq.is_some() && n != 2 {
             return None;
         }
-        let mut arms: Vec<String> = Vec::with_capacity(n);
+        let mut arms: Vec<(String, String)> = Vec::with_capacity(n);
         let mut entered = 0;
         let mut cur = t;
         let shown = (|| {
@@ -1157,9 +1175,9 @@ impl Speller<'_> {
                 if k > 0 && !matches!(&**s, Term::Var(LocalVar(0))) {
                     return None;
                 }
-                arms.push(self.enum_arm(lhs, lhs_level, case_l, eq, d)?);
+                arms.push(self.enum_arm(&ind.ctors[k], lhs, lhs_level, case_l, eq, d)?);
                 if k + 2 == n {
-                    arms.push(self.enum_arm(rhs, rhs_level, case_r, eq, d)?);
+                    arms.push(self.enum_arm(&ind.ctors[k + 1], rhs, rhs_level, case_r, eq, d)?);
                 } else {
                     // The rest of the constructors, under the right
                     // summand's binder, which nothing in an arm reads.
@@ -1182,19 +1200,46 @@ impl Speller<'_> {
         };
         if self.standard(&ind, "bool", "Bool") {
             // `inductive Bool { False, True }`: the right arm is `True`'s.
-            return Some(format!("if {head} {{ {} }} else {{ {} }}", arms[1], arms[0]));
+            return Some(format!("if {head} {{ {} }} else {{ {} }}", arms[1].1, arms[0].1));
         }
-        let shown: Vec<String> =
-            ind.ctors.iter().zip(&arms).map(|(c, a)| format!("{} => {a}", c.name)).collect();
+        let shown: Vec<String> = arms.iter().map(|(pattern, a)| format!("{pattern} => {a}")).collect();
         Some(format!("match {head} {{ {} }}", shown.join(", ")))
     }
 
-    /// One arm of [`Self::enum_match`]: `body` under the summand's binder
-    /// (the constructor's empty payload, which it does not read), and under
-    /// the equation's `λ` when there is one.
-    fn enum_arm(&self, summand: &Type, level: &crate::Level, body: &Term, eq: Option<&str>, d: u32) -> Option<String> {
-        let payload = self.fresh();
+    /// One arm of [`Self::enum_match`]: its pattern, and `body` under the
+    /// summand's binder (the constructor's payload), and under the
+    /// equation's `λ` when there is one. A field is printed by a name the
+    /// arm binds, which a projection out of the payload reads as.
+    fn enum_arm(&self, ctor: &crate::inductive::Ctor, summand: &Type, level: &crate::Level, body: &Term, eq: Option<&str>, d: u32) -> Option<(String, String)> {
+        let payload = if ctor.fields.is_empty() { self.fresh() } else { self.fresh_from(&["payload"]) };
         self.enter(&payload, summand, level);
+        let depth = self.names.borrow().len();
+        let bound = self.fields.borrow().len();
+        let mut pattern = ctor.name.clone();
+        if !ctor.fields.is_empty() {
+            let span = heather_syntax::Span { start: 0, end: 0 };
+            let value = Rc::new(Term::Var(LocalVar(0)));
+            let mut names = Vec::with_capacity(ctor.fields.len());
+            for (p, (field, _)) in ctor.fields.iter().enumerate() {
+                let here = self.here().into_owned();
+                let Ok((proj, _, _)) = Inductives(self.el).projection(&here, summand, &value, p, span) else {
+                    self.fields.borrow_mut().truncate(bound);
+                    self.leave();
+                    return None;
+                };
+                let base = field.clone().unwrap_or_else(|| "x".into());
+                let taken = |c: &str| names.iter().any(|n: &String| n == c) || self.fields.borrow().iter().any(|(_, _, n)| n == c);
+                let mut name = self.fresh_from(&[base.as_str()]);
+                let mut k = 1;
+                while taken(&name) {
+                    k += 1;
+                    name = format!("{base}{k}");
+                }
+                self.fields.borrow_mut().push((depth, (*proj).clone(), name.clone()));
+                names.push(name);
+            }
+            pattern = format!("{}({})", ctor.name, names.join(", "));
+        }
         let shown = match (eq, body) {
             (None, body) => Some(self.tm(body, d + 1)),
             (Some(h), Term::Lam { dom, dom_level, body, .. }) => {
@@ -1205,8 +1250,9 @@ impl Speller<'_> {
             }
             (Some(_), _) => None,
         };
+        self.fields.borrow_mut().truncate(bound);
         self.leave();
-        shown
+        Some((pattern, shown?))
     }
 
     /// [`Self::fresh`] with the caller's own preferences first.

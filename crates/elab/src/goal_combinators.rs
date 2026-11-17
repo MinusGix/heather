@@ -373,17 +373,33 @@ fn lifted(reduct: &Term, found: &Blocked) -> Option<Rc<Term>> {
 /// a neutral of a finite type the source can spell (`s.inside`, a Bool
 /// local). A comparison is never unfolded: its bit-level fold is not the
 /// goal's case analysis.
-fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) -> Option<Blocked> {
+fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32, deep: bool) -> Option<Blocked> {
     if *budget == 0 {
         return None;
     }
     *budget -= 1;
     let (_, args) = crate::spelling::app_spine(term);
+    // `split_all` looks in a call's arguments first; `cases h` looks in its
+    // unfolding first, where the callee's own tests are, and spends no
+    // budget unfolding arguments (`t.layout()`) it would not split on
+    // (issues/cases-on-hypothesis-tactic.md).
+    if !deep {
+        if let Some(found) = stuck_by_unfolding(elab, cx, term, budget, deep) {
+            return Some(found);
+        }
+        return args.iter().find_map(|arg| stuck_scrutinee(elab, cx, arg, budget, deep));
+    }
     for arg in args {
-        if let Some(found) = stuck_scrutinee(elab, cx, arg, budget) {
+        if let Some(found) = stuck_scrutinee(elab, cx, arg, budget, deep) {
             return Some(found);
         }
     }
+    stuck_by_unfolding(elab, cx, term, budget, deep)
+}
+
+/// [`stuck_scrutinee`] past the arguments: `term` itself and what it
+/// unfolds to.
+fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32, deep: bool) -> Option<Blocked> {
     // A blocker below a word operation was already sought in its
     // arguments. Unfolding the operation itself (`toNat`, `add`, a
     // comparison) only exposes its bit-level fold, which is not the goal's
@@ -393,7 +409,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         return None;
     }
     if let Term::Succ(inner) = term {
-        return stuck_scrutinee(elab, cx, inner, budget);
+        return stuck_scrutinee(elab, cx, inner, budget, deep);
     }
     let oracle = elab.goal_oracle();
     for reduct in std::iter::once(term.clone()).chain(oracle.unfold(&cx.gamma, term, Unfold::StuckScrutinee)) {
@@ -412,9 +428,12 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
             Term::ElimNat { scrut, .. } => (scrut, None),
             // A call the definition unfolded to: what blocks it may be in
             // its arguments (`fold(step, rest, step(count, byte))`).
+            // `cases h` keeps unfolding the callee rather than searching
+            // what it was applied to (above).
+            _ if reduct != *term && !deep => continue,
             _ if reduct != *term => {
                 for arg in crate::spelling::app_spine(&reduct).1 {
-                    if let Some(found) = stuck_scrutinee(elab, cx, arg, budget) {
+                    if let Some(found) = stuck_scrutinee(elab, cx, arg, budget, deep) {
                         let replacement = lifted(&reduct, &found)?;
                         return Some(Blocked { original: term.clone(), replacement, ..found });
                     }
@@ -428,7 +447,11 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         // comparison is cased on at each operand it actually has. Cased on
         // first, the inner split would then decide it, leaving one of its
         // cases a goal no run reaches.
-        if let Some(found) = stuck_scrutinee(elab, cx, scrut, budget) {
+        // `cases h` (`deep` false) takes the test the callee wrote, the
+        // stage call as its body spells it, not what that call is stuck on
+        // in turn, when it has a spelling to split on
+        // (issues/cases-on-hypothesis-tactic.md).
+        if (deep || elab.spell_term_source(cx, scrut).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
             return Some(Blocked { original: term.clone(), replacement: lifted(&reduct, &found)?, ..found });
         }
         if let Some(inductive) = &domain
@@ -528,7 +551,7 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
     // the search's own blocker for this position, when it is the same
     // comparison once settled.
     let mut search = 128;
-    if let Some(blocked) = stuck_scrutinee(elab, cx, term, &mut search)
+    if let Some(blocked) = stuck_scrutinee(elab, cx, term, &mut search, true)
         && *blocked.scrutinee == *scrut
     {
         out.push((blocked.original, (*blocked.replacement).clone()));
@@ -658,7 +681,7 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
             // case then introduces it at what that case makes of it, which a
             // refuted case closes (`False = True`).
             if finite.is_none()
-                && let Some(split) = split_stuck(elab, cx, &pi, leaf, span)
+                && let Some(split) = split_stuck(elab, cx, &pi, leaf, span, true)
             {
                 return Step::Split(split);
             }
@@ -710,16 +733,52 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     // A goal reached through an introduced binder may still be spelled as
     // its code (`El(⌜Id …⌝)`); the search reads the decoded former.
     let goal = simplify_goal(elab, cx, &crate::inductive::decoded(expected));
+    if let Some(injected) = injected_hypothesis(elab, cx, leaf, span) {
+        return Step::Intro(injected);
+    }
     if let Some(positions) = splittable_hypotheses(elab, cx, &goal, leaf, span) {
         return Step::Revert(positions);
     }
-    match split_stuck(elab, cx, &goal, leaf, span) {
+    match split_stuck(elab, cx, &goal, leaf, span, true) {
         Some(split) => Step::Split(split),
         None => match closed_by_split(elab, cx, &goal, span) {
             Some(refl) => Step::Closed(refl),
             None => Step::Leaf(goal),
         },
     }
+}
+
+/// `subst(h, …)` for the innermost hypothesis `h` a split introduced that
+/// equates two applications of one constructor with a local in a field
+/// (`Some(Out(Cons(w, p), names)) = Some(c)`), or whose fields clash: the
+/// injection is done and the local replaced before the leaf reads the goal,
+/// so the leaf is written at `c`'s value rather than handed an equation it
+/// would have to take apart (issues/constructor-equations-in-context.md).
+/// The hypothesis is read again in the case and has nothing left to give,
+/// so this does not recur on it.
+fn injected_hypothesis(elab: &Elaborator, cx: &Cx, leaf: &Expr, span: Span) -> Option<Expr> {
+    if elab.shadowed(cx, "subst") || cx.names.iter_inner().any(|name| name == "subst") {
+        return None;
+    }
+    let found = cx.names.iter().enumerate().rev().find(|(at, name)| {
+        name.starts_with("__split_all_x")
+            && !cx.names.iter().skip(at + 1).any(|later| later == *name)
+            && elab.resolve_reading(cx, name, span).is_ok_and(|(term, ty, _)| {
+                matches!(ty, Type::Id { .. })
+                    && crate::subst_local::LocalSubsts(elab).injected(cx, term, &ty, span, true, 0).is_some()
+            })
+    })?;
+    let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+    Some(Expr {
+        kind: ExprKind::App {
+            head: Box::new(var("subst")),
+            args: vec![var(found.1), continuation(leaf, span)],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    })
 }
 
 /// The hypotheses a split can take apart (`h: is_digit(c) = True`), at the
@@ -755,7 +814,7 @@ fn splittable_hypotheses(elab: &Elaborator, cx: &Cx, goal: &Type, leaf: &Expr, s
                     dom: Rc::new(ty),
                     cod: Rc::new(goal.shift_local(1)),
                 };
-                split_stuck(elab, cx, &pi, leaf, span).is_some()
+                split_stuck(elab, cx, &pi, leaf, span, true).is_some()
             }
         })
         .map(|(at, _)| at)
@@ -1459,12 +1518,13 @@ pub(crate) fn simplify_goal_unfolding(elab: &Elaborator, cx: &Cx, expected: &Typ
     output
 }
 
-fn split_stuck(
+pub(crate) fn split_stuck(
     elab: &Elaborator,
     cx: &Cx,
     expected: &Type,
     leaf: &Expr,
     span: Span,
+    deep: bool,
 ) -> Option<StuckSplit> {
     let mut budget = 512;
     // A `Π`'s premise is searched, and the split abstracts the whole `Π`
@@ -1475,9 +1535,9 @@ fn split_stuck(
         _ => expected,
     };
     let found = match searched {
-        Type::Id { lhs, rhs, .. } => stuck_scrutinee(elab, cx, lhs, &mut budget)
-            .or_else(|| stuck_scrutinee(elab, cx, rhs, &mut budget)),
-        Type::El { tm, .. } => stuck_scrutinee(elab, cx, tm, &mut budget),
+        Type::Id { lhs, rhs, .. } => stuck_scrutinee(elab, cx, lhs, &mut budget, deep)
+            .or_else(|| stuck_scrutinee(elab, cx, rhs, &mut budget, deep)),
+        Type::El { tm, .. } => stuck_scrutinee(elab, cx, tm, &mut budget, deep),
         _ => None,
     };
     let found = found?;

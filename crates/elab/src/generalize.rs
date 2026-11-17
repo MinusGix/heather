@@ -182,11 +182,13 @@ impl Generalize<'_> {
         &self,
         cx: &Cx,
         arms: &[Arm],
-        scrutinee: &Term,
+        scrutinee: (&Term, &Type, &Level),
         dec: Option<usize>,
         expected: &Type,
-        convoy: bool,
-    ) -> Vec<usize> {
+        eqbind: Option<&str>,
+        span: Span,
+    ) -> Refined {
+        let (scrutinee, scrutinee_type, scrutinee_level) = scrutinee;
         let m = cx.gamma.entries.len();
         // A computed scrutinee is abstracted the same way, by syntactic
         // occurrence (docs/language/matching/dependent-match-compiler-design.md §5): a binder
@@ -194,7 +196,7 @@ impl Generalize<'_> {
         // local the term mentions can be, since the motive abstracts the term
         // as it stands in `cx`.
         let Term::Var(LocalVar(index)) = scrutinee else {
-            return self.refined_by_occurrence(cx, arms, scrutinee, expected, convoy);
+            return self.refined_by_occurrence(cx, arms, (scrutinee, scrutinee_type, scrutinee_level), expected, eqbind, span);
         };
         let x = m - 1 - *index as usize;
         if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
@@ -205,7 +207,7 @@ impl Generalize<'_> {
                 });
             }
             if calls {
-                return Vec::new();
+                return Refined::default();
             }
         }
         // Every binder whose type is about the scrutinee, directly or through
@@ -216,40 +218,103 @@ impl Generalize<'_> {
                 about.push(q);
             }
         }
-        self.select_refined(cx, arms, expected, about, convoy.then_some(scrutinee))
+        Refined {
+            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None)), eqbind),
+            retyped: Vec::new(),
+            beside: Vec::new(),
+        }
     }
 
-    /// [`Self::refined_hypotheses`] at a computed scrutinee.
-    fn refined_by_occurrence(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term, expected: &Type, convoy: bool) -> Vec<usize> {
+    /// [`Self::refined_hypotheses`] at a computed scrutinee. A binder an arm
+    /// names whose type does not contain the term is still about it when the
+    /// type, reduced, is stuck on it through a call
+    /// (issues/case-split-refines-hypotheses-under-calls.md): it is refined
+    /// at that reading, which `retyped` carries.
+    fn refined_by_occurrence(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrutinee: (&Term, &Type, &Level),
+        expected: &Type,
+        eqbind: Option<&str>,
+        span: Span,
+    ) -> Refined {
+        let (scrutinee, scrutinee_type, scrutinee_level) = scrutinee;
         let m = cx.gamma.entries.len();
         let wrapped = Type::El { level: Level::Zero, tm: Rc::new(scrutinee.clone()) };
         let first = (0..m)
             .rev()
             .find(|&p| wrapped.abstract_local(&Term::Var(LocalVar((m - 1 - p) as u32))).is_some())
             .map_or(0, |p| p + 1);
+        // A record's type is about the scrutinee where its arguments are,
+        // not where a field's type happens to spell it, as the motive reads
+        // the goal (`matching::synthesize_motive`,
+        // issues/named-match-third-level-kernel-rejects.md).
         let contains = |q: usize| {
             cx.gamma.entries.get(q).is_some_and(|entry| {
-                entry.ty.shift_local((m - q) as u32).abstract_local(scrutinee).is_some()
+                let ty = entry.ty.shift_local((m - q) as u32);
+                ty.abstract_local(scrutinee).is_some()
+                    && crate::matching::MotiveSynthesisElab::fold_declarations(self.0, cx, &ty)
+                        .is_none_or(|folded| folded.abstract_local(scrutinee).is_some())
             })
         };
+        let named = arm_names(arms);
         let mut about: Vec<usize> = Vec::new();
+        let mut retyped: Vec<(usize, Type)> = Vec::new();
         for q in first..m {
             if contains(q) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
                 about.push(q);
+                continue;
+            }
+            // Only what an arm names is read reduced: it is all the
+            // selection below could keep, and the reading costs a reduction
+            // and a conversion per stuck position.
+            if machinery(cx, q) || !named.iter().any(|n| n == &cx.names[q]) {
+                continue;
+            }
+            let entry = cx.gamma.entries.get(q).expect("a binder of the context");
+            let ty = entry.ty.shift_local((m - q) as u32);
+            if let Some(read) = crate::matching::hypothesis_through_calls(
+                self.0, cx, &ty, scrutinee, scrutinee_type, scrutinee_level, span,
+            ) {
+                about.push(q);
+                retyped.push((q, read));
             }
         }
         if about.is_empty() {
-            return about;
+            return Refined::default();
         }
-        self.select_refined(cx, arms, expected, about, convoy.then_some(scrutinee))
+        let beside: Vec<String> = eqbind.map_or_else(Vec::new, |h| {
+            let passed = passed_beside(arms, h);
+            about.iter().map(|&q| cx.names[q].to_string()).filter(|n| passed.contains(n)).collect()
+        });
+        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind);
+        retyped.retain(|(q, _)| positions.contains(q));
+        Refined { positions, retyped, beside }
     }
 
     /// Of the binders `about` the scrutinee, what an arm names or the goal
     /// mentions, closed under what their types need. Under `match h:`
     /// (`convoy`, the scrutinee scoped in `cx`), a binder an arm names that
     /// takes an equation about the scrutinee is left as written: it is what
-    /// the arm passes `h` to, and `h` is about the scrutinee as written.
-    fn select_refined(&self, cx: &Cx, arms: &[Arm], expected: &Type, about: Vec<usize>, convoy: Option<&Term>) -> Vec<usize> {
+    /// the arm passes `h` to, and `h` is about the scrutinee as written. At a
+    /// computed scrutinee (`convoy`'s name of `h`), so is one an arm passes
+    /// beside `h` in one call, `InSlot => t.goes_slot(…, slot, within, …)`:
+    /// the callee states the two about the test as written, which is what
+    /// passing the evidence along is for
+    /// (issues/case-split-refines-hypotheses-under-calls.md). A hypothesis
+    /// named like the equation `eqbind` is not refined for its name: the
+    /// arms' mention of that name is the equation, which a refined copy of
+    /// the hypothesis would shadow.
+    fn select_refined(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        expected: &Type,
+        about: Vec<usize>,
+        convoy: Option<(&Term, Option<&str>)>,
+        eqbind: Option<&str>,
+    ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
         // Of those, what an arm names or the goal mentions. A `match` is also
@@ -258,28 +323,24 @@ impl Generalize<'_> {
         // restates, and a hypothesis nothing reads would change that term
         // while refining nothing. One the goal mentions must go with the
         // goal, whose motive abstracts the scrutinee under it.
-        let mut named: Vec<String> = Vec::new();
-        for arm in arms {
-            walk_expr(&arm.body, &mut |e| {
-                if let ExprKind::Var(name) = &e.kind {
-                    named.push(name.clone());
-                }
-            });
-        }
+        let named = arm_names(arms);
+        let beside = convoy.and_then(|(_, h)| h).map_or_else(Vec::new, |h| passed_beside(arms, h));
         let takes_h = |q: usize| {
-            convoy.is_some_and(|scrutinee| {
+            convoy.is_some_and(|(scrutinee, _)| {
                 cx.gamma.entries.get(q).is_some_and(|entry| {
                     takes_equation_about(&entry.ty.shift_local((m - q) as u32), scrutinee)
                 })
-            })
+            }) || beside.iter().any(|n| n == &cx.names[q])
         };
-        let machinery = |q: usize| cx.names[q].starts_with('#') || cx.names[q].starts_with("__");
+        let machinery = |q: usize| machinery(cx, q);
         let mut refined: Vec<usize> = about
             .iter()
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && ((named.iter().any(|n| n == &cx.names[q]) && !takes_h(q))
+                    && ((named.iter().any(|n| n == &cx.names[q])
+                        && eqbind.is_none_or(|h| h != &cx.names[q])
+                        && !takes_h(q))
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
@@ -314,6 +375,20 @@ impl Generalize<'_> {
         expected: &Type,
         level: &Level,
     ) -> (Type, Level) {
+        self.generalize_retyped(cx, positions, &[], expected, level)
+    }
+
+    /// [`Self::generalize_expected`], with the binders in `retyped` given
+    /// the type beside them (scoped in `cx`, and converting to their own)
+    /// in place of the one they were bound at.
+    pub(crate) fn generalize_retyped(
+        &self,
+        cx: &Cx,
+        positions: &[usize],
+        retyped: &[(usize, Type)],
+        expected: &Type,
+        level: &Level,
+    ) -> (Type, Level) {
         let m = cx.gamma.entries.len();
         let g = positions.len();
         let mut ty = expected.apply_local(&rename(&cx.gamma, positions, g));
@@ -321,10 +396,11 @@ impl Generalize<'_> {
         for i in (0..g).rev() {
             let p = positions[i];
             let entry = cx.gamma.entries.get(p).expect("a parameter position");
-            let dom = entry
-                .ty
-                .shift_local((m - p) as u32)
-                .apply_local(&rename(&cx.gamma, positions, i));
+            let dom = match retyped.iter().find(|(q, _)| *q == p) {
+                Some((_, ty)) => ty.clone(),
+                None => entry.ty.shift_local((m - p) as u32),
+            }
+            .apply_local(&rename(&cx.gamma, positions, i));
             let dom_level = entry.level.clone();
             ty = Type::Pi {
                 dom_level: dom_level.clone(),
@@ -408,6 +484,89 @@ impl Generalize<'_> {
         }
         term
     }
+}
+
+/// What a `match` refines: the binders it generalizes, ascending, and those
+/// of them it reads at another spelling of their type
+/// ([`Generalize::refined_hypotheses`]).
+#[derive(Default)]
+pub(crate) struct Refined {
+    pub(crate) positions: Vec<usize>,
+    pub(crate) retyped: Vec<(usize, Type)>,
+    /// The binders about the scrutinee that an arm names and the match
+    /// leaves as written only because an arm passes them beside `h`
+    /// ([`Generalize::select_refined`]): what a refusal inside the match
+    /// says, since the arm that needed one refined is not the arm that
+    /// passed it.
+    pub(crate) beside: Vec<String>,
+}
+
+impl Refined {
+    /// `error` with the binders left as written beside `h` named, when it is
+    /// a refusal the elaborator made inside the match.
+    pub(crate) fn explain(&self, h: &str, error: crate::ElabError) -> crate::ElabError {
+        let crate::ElabError::Elab { msg, span } = error else {
+            return error;
+        };
+        if self.beside.is_empty() {
+            return crate::ElabError::Elab { msg, span };
+        }
+        let names: Vec<String> = self.beside.iter().map(|n| format!("`{n}`")).collect();
+        let (verb, it) = if names.len() == 1 { ("is", "it") } else { ("are", "them") };
+        crate::ElabError::Elab {
+            msg: format!(
+                "{msg}\nnote: {} {verb} read as written in every arm of this `match {h}:`, not at the arm's case, because an arm passes {it} beside `{h}` in one call. Where an arm needs {it} at its case, keep {it} out of that call: bind what the call takes first (`let fact = {};`)",
+                names.join(", "),
+                self.beside[0],
+            ),
+            span,
+        }
+    }
+}
+
+/// Every name an arm's body mentions as a variable.
+fn arm_names(arms: &[Arm]) -> Vec<String> {
+    let mut named: Vec<String> = Vec::new();
+    for arm in arms {
+        walk_expr(&arm.body, &mut |e| {
+            if let ExprKind::Var(name) = &e.kind {
+                named.push(name.clone());
+            }
+        });
+    }
+    named
+}
+
+/// The names an arm passes as arguments of one call beside `h`, the
+/// equation of a `match h:` (a method call's receiver is not one of them).
+fn passed_beside(arms: &[Arm], h: &str) -> Vec<String> {
+    let mut beside: Vec<String> = Vec::new();
+    for arm in arms {
+        walk_expr(&arm.body, &mut |e| {
+            let (args, named) = match &e.kind {
+                ExprKind::App { args, named, .. } => (args, named),
+                ExprKind::Dot { args: Some(args), named, .. } => (args, named),
+                _ => return,
+            };
+            let names: Vec<&str> = args
+                .iter()
+                .chain(named.iter().map(|arg| &arg.expr))
+                .filter_map(|arg| match &arg.kind {
+                    ExprKind::Var(name) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if names.contains(&h) {
+                beside.extend(names.into_iter().filter(|&n| n != h).map(str::to_string));
+            }
+        });
+    }
+    beside
+}
+
+/// A hidden `#` binder or a reserved `__` one: the machinery's, never refined.
+fn machinery(cx: &Cx, q: usize) -> bool {
+    cx.names[q].starts_with('#') || cx.names[q].starts_with("__")
 }
 
 /// Every variable a pattern binds, however deep.

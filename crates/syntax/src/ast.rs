@@ -937,6 +937,70 @@ pub const SPLIT_ALL_GOALS: &str = "\0split-all-goals";
 pub const INDUCT_ALL_GOALS: &str = "\0induct-all-goals";
 pub const INDUCT_CASES: &str = "\0induct-cases";
 
+/// Parser-generated head for `cases h as e1, e2(x, y);` (arguments: the
+/// hypothesis, the rest of the block). The names the user gave for the
+/// splits still to take ride in the head itself, after the prefix, so that
+/// no generated argument stands beside `h` in a call
+/// (`docs/elaborator/goal-motive-synthesis-design.md` §4.7). Unspellable,
+/// as [`SPLIT_ALL_GOALS`] is (issues/cases-on-hypothesis-tactic.md).
+pub const CASES_HYPOTHESIS: &str = "\0cases-hypothesis";
+
+/// One name of `cases h as …`: the equation of one split, and the names of
+/// its surviving constructor's fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CasesName {
+    pub equation: String,
+    pub fields: Vec<String>,
+}
+
+/// The head of a `cases` step with `names` still to give, after a split on
+/// the tests fingerprinted `last` (`None` at the root): `\0cases-hypothesis`,
+/// `\u{3}` when the names bound the splits (`cases h as …` takes as many
+/// splits as it names), `\u{1}last`, then `\u{2}eq:f,g` per name.
+pub fn cases_head(names: &[CasesName], bounded: bool, last: Option<&str>) -> String {
+    let mut head = CASES_HYPOTHESIS.to_string();
+    if bounded {
+        head.push('\u{3}');
+    }
+    if let Some(last) = last {
+        head.push('\u{1}');
+        head.push_str(last);
+    }
+    for name in names {
+        head.push('\u{2}');
+        head.push_str(&name.equation);
+        head.push(':');
+        head.push_str(&name.fields.join(","));
+    }
+    head
+}
+
+/// The inverse of [`cases_head`]: the names, whether they bound the splits,
+/// and the last fingerprint; `None` for any other head.
+pub fn cases_of_head(head: &str) -> Option<(Vec<CasesName>, bool, Option<String>)> {
+    let rest = head.strip_prefix(CASES_HYPOTHESIS)?;
+    let (bounded, rest) = match rest.strip_prefix('\u{3}') {
+        Some(rest) => (true, rest),
+        None => (false, rest),
+    };
+    let mut parts = rest.split('\u{2}');
+    let first = parts.next().unwrap_or("");
+    let last = first.strip_prefix('\u{1}').map(str::to_string);
+    if last.is_none() && !first.is_empty() {
+        return None;
+    }
+    let names = parts
+        .map(|part| {
+            let (equation, fields) = part.split_once(':').unwrap_or((part, ""));
+            CasesName {
+                equation: equation.to_string(),
+                fields: fields.split(',').filter(|f| !f.is_empty()).map(str::to_string).collect(),
+            }
+        })
+        .collect();
+    Some((names, bounded, last))
+}
+
 impl Expr {
     /// `f(a, b)` with a *name* at the head — the shape every name-keyed
     /// special form wants (`absurd`, `inj`, constructors, `Succ`, a self-call,
@@ -1051,6 +1115,11 @@ pub enum ExprKind {
     /// reusing the collection-literal lowering; at another carrier it
     /// resolves `StringLiteral`.
     Str(String),
+    /// `b"…"` — a byte-string literal, carrying its bytes (each an ASCII
+    /// character of the string, docs/native/io-programs-design.md §5 D3).
+    /// It is the vector literal `[u8; n]` of those bytes, or the list
+    /// literal of them at `List<u8>`.
+    ByteStr(Vec<u8>),
     /// `·` / `·₀` / `·₁₂` — an anonymous argument slot
     /// (issues/argument-slot-sections.md). `None` is an unindexed slot;
     /// `Some(n)` is the explicitly zero-based slot `n`. Checking-position

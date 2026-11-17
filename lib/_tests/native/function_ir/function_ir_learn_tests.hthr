@@ -295,6 +295,18 @@ fn sum8() → Function {
 theorem sum8_kept(): sum8().learn_plan().written() = 0 { refl }
 
 // ---------------------------------------------------------------------------
+// A rule the search has only by its statement
+
+// `add_zero` is stated in function_ir_rules and listed in `matchable()`;
+// nothing in the search names it. A word and zero added is a move of the
+// word, and one added to a byte still an add.
+fn plus_zero() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, 1) }
+
+fn plus_zero_moved() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Move(64, 4, 2), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, 1) }
+
+theorem plus_zero_made(): replay_function(rules(), plus_zero(), plus_zero().learn_plan()) = Some(plus_zero_moved()) { refl }
+
+// ---------------------------------------------------------------------------
 // The search: a span at an index the caller computed
 
 // Two bytes of a span at `base + i * 4` added, or zero where either is

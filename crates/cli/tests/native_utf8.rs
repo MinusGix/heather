@@ -139,12 +139,20 @@ fn utf8_program_exits_as_rust_decides() {
     let output = root.join(format!("target/native-utf8-program-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
     let binary = output.join("utf8check");
-    let result = Command::new(env!("CARGO_BIN_EXE_heather"))
-        .current_dir(&root)
+    // Through the library gate's image store, as native_tools' programs are:
+    // the runner starts this target once the gate has built lib/native's
+    // closure (`PREREQUISITES`, scripts/run-test-targets.mjs), so this child
+    // builds only the example's own two modules. Over a cold store of its own
+    // it built the whole runtime closure first, at the rail.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
+    cmd.current_dir(&root)
         .args(["write-elf", "examples/utf8/utf8check.hthr", "-o"])
-        .arg(&binary).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
-        .output().unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        .arg(&binary).arg("--cache-dir").arg(heather_cli::showcase::cli_check_images());
+    if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
+        cmd.arg("--accept-stale-images");
+    }
+    let result = cmd.output().unwrap();
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     let mut cases = boundary_cases();
     cases.extend(random_cases(400));
     cases.push("\u{20ac}".repeat(21845).into_bytes());

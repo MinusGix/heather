@@ -30,6 +30,7 @@ use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Expr, ExprKind, Item, NamedArg, Span, parse_file};
+use heather_syntax::ast::TyKind;
 
 use super::relation::{Plan, Polarity, RelationRewrite, Relations};
 use super::statement::{Leaf, StatementOutcome, StatementStep, Statements};
@@ -195,10 +196,10 @@ impl Simps<'_> {
 
     /// The generated branch equations of the definition at Ψ position
     /// `abs`, each as a reference to its minted global and its designed
-    /// spelling (`f::False::True`): every path of `True`/`False` and of the
-    /// first test's constructor arms that names one, to the depth a body of
-    /// nested tests reaches. With them, whether the definition is measured
-    /// (`decreases`).
+    /// spelling (`f::False::True`): every path of arms through the body's
+    /// tests that names one, at any depth, in the order they should be
+    /// tried (`branch_equations::test_paths`). With them, whether the
+    /// definition is measured (`decreases`).
     fn branch_equation_names(&self, abs: usize, span: Span) -> (Vec<(Expr, String)>, bool) {
         let Some(key) = self.names.global_name_at(abs as u32).map(str::to_string) else { return (Vec::new(), false) };
         let decl = match key.split_once("::") {
@@ -208,31 +209,49 @@ impl Simps<'_> {
         .cloned();
         // A measured definition is registered as its lowering (a call of
         // its `#rec`), which says nothing of its tests: it is known by its
-        // `f_unfold`, and its equations by their minted names alone.
+        // `f_unfold`.
         let measured = self.names.global(&crate::measure::unfold_name(&key)).is_some();
         if !measured && decl.as_ref().is_some_and(|decl| !crate::branch_equations::candidate(decl)) {
             return (Vec::new(), false);
         }
-        let mut first: Vec<String> = vec!["True".into(), "False".into()];
-        if let Some(decl) = &decl {
-            for name in crate::branch_equations::head_names(decl) {
-                if let Some(arm) = name.rsplit("::").next()
-                    && !first.iter().any(|a| a == arm)
-                {
-                    first.push(arm.to_string());
+        let designed = |segments: &[&str]| crate::branch_equations::designed_name(key.split_once("::").map_or(key.as_str(), |(_, name)| name), segments);
+        // The body's own tests say where an equation may be: every path of
+        // arms through them, at any depth. A measured definition's body is
+        // read off its `f_unfold`, `f(x̄) = body`.
+        let body = if measured {
+            let unfold = crate::measure::unfold_name(&key);
+            match unfold.split_once("::") {
+                Some((module, name)) => self.names.surface_decl_in(module, name),
+                None => self.names.surface_decl(&unfold),
+            }
+            .and_then(|decl| match &decl.result.kind {
+                TyKind::Eq(_, body) => Some((**body).clone()),
+                _ => None,
+            })
+        } else {
+            decl.map(|decl| Expr { kind: ExprKind::Block(Box::new(decl.body)), span })
+        };
+        if let Some(body) = &body {
+            let mut found = Vec::new();
+            for path in crate::branch_equations::test_paths(body) {
+                let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+                let minted = crate::branch_equations::minted_name(&key, &segments);
+                if self.names.global(&minted).is_some() {
+                    found.push((Expr { kind: ExprKind::Var(minted), span }, designed(&segments)));
                 }
             }
+            return (found, measured);
         }
+        // No body to read (registered without its surface): every path of
+        // `True`/`False` below one that names no equation, six tests deep,
+        // as a blind search doubles at each test.
         let mut found = Vec::new();
-        let mut paths: Vec<Vec<String>> = first.into_iter().map(|arm| vec![arm]).collect();
+        let mut paths: Vec<Vec<String>> = vec![vec!["True".into()], vec!["False".into()]];
         while let Some(path) = paths.pop() {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             let minted = crate::branch_equations::minted_name(&key, &segments);
             if self.names.global(&minted).is_some() {
-                found.push((
-                    Expr { kind: ExprKind::Var(minted), span },
-                    crate::branch_equations::designed_name(key.split_once("::").map_or(key.as_str(), |(_, name)| name), &segments),
-                ));
+                found.push((Expr { kind: ExprKind::Var(minted), span }, designed(&segments)));
             } else if path.len() < 6 {
                 for arm in ["True", "False"] {
                     let mut deeper = path.clone();
@@ -497,15 +516,41 @@ impl Simps<'_> {
         // searching for a contradiction) would otherwise fail again at each.
         // Only at the call's own context: under a binder another subterm at
         // the same depth may bind other locals.
-        let discharged: std::cell::RefCell<Vec<(Type, Level, Option<Term>)>> = std::cell::RefCell::new(Vec::new());
+        //
+        // A condition whose complement is already discharged is not tried:
+        // the two arms of one test ask `P` and `¬P` (`clamp::True` and
+        // `clamp::False`), at most one holds, and a discharger that fails
+        // (`bv_omega` searching for a contradiction) costs several times one
+        // that succeeds.
+        let discharged: std::cell::RefCell<Vec<(Type, Option<Type>, Level, Option<Term>)>> = std::cell::RefCell::new(Vec::new());
         let premise = |at: &Cx, ty: &Type, level: &Level, _dependent: bool| {
             let top = at.gamma.len() == cx.gamma.len();
-            if top && let Some((_, _, known)) = discharged.borrow().iter().find(|(t, l, _)| t == ty && l == level) {
-                return known.clone();
+            let negated = if top { crate::omega_cert::negated_domain(self.0, at, ty) } else { None };
+            if top {
+                let known = discharged.borrow();
+                if let Some((_, _, _, found)) = known.iter().find(|(t, _, l, _)| t == ty && l == level) {
+                    return found.clone();
+                }
+                let complement = known.iter().any(|(t, not, l, found)| {
+                    found.is_some()
+                        && (negated.as_ref().is_some_and(|n| self.conv_types(at, n, t, l))
+                            || not.as_ref().is_some_and(|n| self.conv_types(at, n, ty, level)))
+                });
+                if complement {
+                    return None;
+                }
+            }
+            // `¬P` where `P` is a hypothesis: the discharger would only
+            // search for the contradiction.
+            if discharge.is_some() && negated.as_ref().is_some_and(|p| self.discharge(at, p, level, None).is_some()) {
+                if top {
+                    discharged.borrow_mut().push((ty.clone(), negated, level.clone(), None));
+                }
+                return None;
             }
             let found = self.discharge(at, ty, level, discharge);
             if top {
-                discharged.borrow_mut().push((ty.clone(), level.clone(), found.clone()));
+                discharged.borrow_mut().push((ty.clone(), negated, level.clone(), found.clone()));
             }
             found
         };
@@ -535,6 +580,15 @@ impl Simps<'_> {
         'steps: loop {
             if run.steps.len() >= BUDGET {
                 run.exhausted = true;
+                return Ok(run);
+            }
+            // Sides that already meet need nothing computed: a law fired
+            // there before computing would only move both
+            // (issues/simp-only-deep-branch-equations.md, where each
+            // branch's side conditions were asked again at the met goal).
+            if let Some(span) = closing
+                && self.met(cx, &run.end, span)
+            {
                 return Ok(run);
             }
             // Calls at constructors compute (`simp(Seq(a, b))` is
@@ -618,7 +672,11 @@ impl Simps<'_> {
     /// written?
     fn met(&self, cx: &Cx, ty: &Type, span: Span) -> bool {
         match ty {
-            Type::Id { lhs, rhs, .. } => lhs == rhs,
+            // A branch equation's leaf keeps the `let`s before its tests,
+            // so the side it rewrote can be the other side under a β-redex.
+            Type::Id { lhs, rhs, .. } => {
+                lhs == rhs || crate::goal_combinators::beta_below(lhs) == crate::goal_combinators::beta_below(rhs)
+            }
             _ => {
                 Relation::of_type(self.0, cx, ty, span).is_some_and(|rel| rel.left == rel.right)
                     || Statements(self.0).iff_sides(cx, ty).is_some_and(|[(l, _), (r, _)]| l == r)
@@ -914,7 +972,14 @@ impl Simps<'_> {
         match attempt {
             Ok(proof) if self.checks(cx, &proof, ty, level) => Some(proof),
             _ => {
+                // A discharger that failed for want of a goal slot (an
+                // `omega`'s atom list) asks for a restart with more; the
+                // rollback forgets the request, so it is made again after
+                // it, and the declaration restarts rather than reporting a
+                // side condition nothing discharged.
+                let wanted = self.attempt.goal_arena.requested_base();
                 self.attempt.restore(mark);
+                self.attempt.goal_arena.request_base(wanted);
                 None
             }
         }

@@ -1,0 +1,245 @@
+// Probes of a case split refining the hypotheses in scope
+// (docs/elaborator/goal-motive-synthesis-design.md §4.7,
+// issues/case-split-refines-hypotheses-under-calls.md): a hypothesis that
+// reaches the test only through a call's unfolding is refined as the goal
+// is (§4.5), and `match h: test` refines what the plain `match test` does.
+// Tests, not library: nothing imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import bool; import nat; import list; import option;
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+
+inductive Shape { Leaf(w: Nat), Pair(a: Nat, b: Nat), Skip }
+
+fn Shape::emits(self s: Shape, p: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Leaf(w) => match fits(w) { False => None, True => Some(Cons(w, p)) },
+        Pair(a, b) => match fits(a) {
+            False => None,
+            True => match fits(b) { False => None, True => Some(Cons(a, Cons(b, p))) },
+        },
+        Skip => Some(p),
+    }
+}
+
+// The test is under the call in the hypothesis: the `False` arm sees
+// `None = Some(c)`.
+theorem leaf_emits(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c)): c = Cons(w, p) {
+    match fits(w) {
+        False => absurd(same),
+        True => sym(Option::some_inj(Cons(w, p), c, same)),
+    }
+}
+
+// The same under `match h:`, with the equation unused.
+theorem leaf_emits_named(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c)): c = Cons(w, p) {
+    match fit: fits(w) {
+        False => absurd(same),
+        True => sym(Option::some_inj(Cons(w, p), c, same)),
+    }
+}
+
+// And with it used beside the refined hypothesis.
+theorem leaf_fits(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Nat): Nat {
+    match fit: fits(w) {
+        False => absurd(same),
+        True => k(fit),
+    }
+}
+
+// The test written in the hypothesis, under `match h:`: refined as the plain
+// form refines it.
+theorem written_named(w: Nat, p, c: List<Nat>, same: (match fits(w) { False => None, True => Some(Cons(w, p)) }) = Some(c)): c = Cons(w, p) {
+    match fit: fits(w) {
+        False => absurd(same),
+        True => sym(Option::some_inj(Cons(w, p), c, same)),
+    }
+}
+
+// Nested: the second test is met in the first's `True` arm, under the
+// refined hypothesis.
+theorem pair_emits(a, b: Nat, p, c: List<Nat>, same: Pair(a, b).emits(p) = Some(c)): c = Cons(a, Cons(b, p)) {
+    match fits(a) {
+        False => absurd(same),
+        True => match fits(b) {
+            False => absurd(same),
+            True => sym(Option::some_inj(Cons(a, Cons(b, p)), c, same)),
+        },
+    }
+}
+
+// The goal and a hypothesis both reach the test through calls: both are
+// refined.
+fn width(s: Shape) → Nat { match s { Leaf(w) => match fits(w) { False => 0, True => 1 }, Pair(_, _) => 2, Skip => 0 } }
+
+theorem leaf_width(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c)): width(Leaf(w)) = 1 {
+    match fits(w) {
+        False => absurd(same),
+        True => refl,
+    }
+}
+
+// A literal test computes: nothing is stuck, and the hypothesis is read as
+// it is.
+theorem leaf_literal(p, c: List<Nat>, same: Leaf(3).emits(p) = Some(c)): c = Cons(3, p) {
+    sym(Option::some_inj(Cons(3, p), c, same))
+}
+
+// An open element type.
+fn pick_some<A>(n: Nat, a: A) → Option<A> { match n.leb(3) { True => Some(a), False => None } }
+
+theorem pick_some_is<A>(n: Nat, a, x: A, same: pick_some(n, a) = Some(x)): a = x {
+    match h: n.leb(3) {
+        False => absurd(same),
+        True => Option::some_inj(a, x, same),
+    }
+}
+
+// A hypothesis that takes an equation about the test is what `h` is passed
+// to, and stays as written.
+theorem passed_h(w: Nat, k: fits(w) = False → Nat): Nat {
+    match h: fits(w) { False => k(h), True => 0 }
+}
+
+// One passed beside `h` in a call stays as written too: the callee states
+// both about the test as written.
+theorem passed_beside(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → Nat): Nat {
+    match fit: fits(w) { False => 0, True => k(fit, same) }
+}
+
+// The limit: a hypothesis whose type is stuck on something other than the
+// test (`k.leb(…)` waits on `k`, not on `sel`'s test, as §4.5 says of the
+// goal) is not refined, and the arm that needs it refined is refused.
+fn sel(w: Nat) → Nat { match fits(w) { False => 0, True => 9 } }
+
+// expect-error: is expected here
+theorem arg_not_waited(w, k: Nat, same: k.leb(sel(w)) = True): fits(w) = False → k.leb(0) = True {
+    match fits(w) {
+        False => λ _ => same,
+        True => λ e => absurd(e),
+    }
+}
+
+// A record in the goal is abstracted at its arguments, never inside its
+// fields (docs/elaborator/goal-motive-synthesis-design.md §4.8,
+// issues/named-match-third-level-kernel-rejects.md): `Ran(n, out)` states
+// what `first(n)` returned, and in an arm of `match one: first(n)` it is
+// still `Ran(n, out)`, built from `one` as written.
+fn first(n: Nat) → Option<Nat> { match n.leb(3) { True => Some(n + 1), False => None } }
+fn second(n: Nat) → Option<Nat> { match n.leb(5) { True => Some(n + 2), False => None } }
+fn third(n: Nat) → Option<Nat> { match n.leb(7) { True => Some(n + 3), False => None } }
+
+fn staged(n: Nat) → Option<Nat> {
+    match first(n) {
+        None => None,
+        Some(a) => match second(a) {
+            None => None,
+            Some(b) => match third(b) {
+                None => None,
+                Some(c) => match fits(c) { False => None, True => Some(c) },
+            },
+        },
+    }
+}
+
+record Staged(n: Nat, out: Nat) {
+    a: Nat,
+    one: first(n) = Some(a),
+    b: Nat,
+    two: second(a) = Some(b),
+    three: third(b) = Some(out),
+}
+
+// Three named splits over one equation, each stage's equation a field.
+theorem staged_parts(n, out: Nat, ran: staged(n) = Some(out)): Staged(n, out) {
+    match one: first(n) {
+        None => absurd(ran),
+        Some(a) => match two: second(a) {
+            None => absurd(ran),
+            Some(b) => match three: third(b) {
+                None => absurd(ran),
+                Some(c) => match fits(c) {
+                    False => absurd(ran),
+                    True => {
+                        let same: (Some(c) = Some(out)) = ran;
+                        Staged(a, one, b, two, subst(same, three))
+                    },
+                },
+            },
+        },
+    }
+}
+
+record Found(n: Nat) { a: Nat, one: first(n) = Some(a) }
+
+// No hypothesis refined, and the arm's value stated at the record.
+theorem found_or(n: Nat, other: Found(n)): Found(n) {
+    match one: first(n) {
+        None => other,
+        Some(a) => { let r: Found(n) = Found(a, one); r },
+    }
+}
+
+// The plain form: the record is the record there too, so the field takes
+// the equation and not `refl`.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem found_plain(n: Nat, other: Found(n)): Found(n) {
+    match first(n) {
+        None => other,
+        Some(a) => Found(a, refl),
+    }
+}
+
+// A hypothesis at the record goes with the goal, as written.
+theorem found_kept(n: Nat, given: Found(n)): Found(n) {
+    match first(n) {
+        None => given,
+        Some(_) => given,
+    }
+}
+
+// A test in a record's argument is abstracted, as in any other position.
+record Holds(o: Option<Nat>) { is: o = o }
+
+theorem holds_at(n: Nat): Holds(first(n)) {
+    match first(n) {
+        None => Holds(refl),
+        Some(a) => { let r: Holds(Some(a)) = Holds(refl); r },
+    }
+}
+
+// An open element type.
+fn keep<A>(n: Nat, a: A) → Option<A> { match n.leb(3) { True => Some(a), False => None } }
+record Kept<A>(n: Nat, a: A) { x: A, is: keep(n, a) = Some(x) }
+
+theorem kept_or<A>(n: Nat, a: A, other: Kept<A>(n, a)): Kept<A>(n, a) {
+    match is: keep(n, a) {
+        None => other,
+        Some(x) => Kept(x, is),
+    }
+}
+
+// The limit: a record that does not use one of its parameters is not
+// recovered from its fields, so the motive still reads inside it and the
+// arm's value at the record as written is refused.
+record Loose(n: Nat, unused: Nat) { a: Nat, one: first(n) = Some(a) }
+
+// expect-error: they differ in something the display does not show
+theorem loose_or(n, k: Nat, other: Loose(n, k)): Loose(n, k) {
+    match one: first(n) {
+        None => other,
+        Some(a) => { let r: Loose(n, k) = Loose(a, one); r },
+    }
+}
+
+// A hypothesis an arm passes beside the equation is read as written in
+// every arm, and the arm that needed it at its case is told so.
+fn taken(n, a, out: Nat, one: first(n) = Some(a), ran: staged(n) = Some(out)) → Nat { a }
+
+// expect-error: because an arm passes it beside `one` in one call
+theorem beside_told(n, out: Nat, ran: staged(n) = Some(out)): Nat {
+    match one: first(n) {
+        None => absurd(ran),
+        Some(a) => taken(n, a, out, one, ran),
+    }
+}

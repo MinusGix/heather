@@ -144,8 +144,8 @@ theorem List::assoc_get_row<K: DecEq, V>(self xs: List<Pair<K, V>>, k: K, v: V):
         Nil => λ h => Option::none_ne_some(v, h, False),
         Cons(row, t) => λ h => match K.eq_dec(k, row.fst) {
             Inl(hit) => Inl(j(sym(hit), λ w _ => Pair(w, v) = row,
-                cong_fn(λ (x: V) => Pair(row.fst, x), sym(Option::some_inj(row.snd, v, trans(sym(t.assoc_get_hit(row, k, hit)), h)))))),
-            Inr(miss) => Inr(t.assoc_get_row(k, v, trans(sym(t.assoc_get_miss(row, k, miss)), h))),
+                cong_fn(λ (x: V) => Pair(row.fst, x), sym(Option::some_inj(row.snd, v, h))))),
+            Inr(_) => Inr(t.assoc_get_row(k, v, h)),
         },
     }
 }

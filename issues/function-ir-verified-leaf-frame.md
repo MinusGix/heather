@@ -1,11 +1,11 @@
 ---
 title: Give a leaf function no stack frame in the verified lowering
-status: open
+status: closed
 labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-24
-updated: 2026-11-12
+updated: 2026-11-16
 ---
 
 Every function `lower_program` emits opens a 64-byte frame
@@ -28,3 +28,4 @@ whole size gap on `examples/x86-native/branches.hthr`'s leaf examples.
 ## Log
 
 - 2026-11-12: The frame is 112 bytes since a function may save callee-saved registers ([[function-ir-values-in-kept-registers]]), still one constant for every function. [[function-frame-sized-by-use]] is the general form of this issue: a leaf with no saves is its smallest case, and the contract's stack bound follows from the same table.
+- 2026-11-16: Done: a function whose frame is empty (a leaf that saves nothing) emits no instruction to open or close it. `frame_opening`/`frame_closing` are empty for size 0, the opened and closed states move RSP through `moved_rsp` (the registers as they were for an empty frame), and `prologue_moves`/`epilogue_moves` split on the frame's word count. Every such leaf in `crates/linked/generated` is 8 bytes shorter (`sha256_t2` 108 → 100).

@@ -60,7 +60,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{allocator, check_file, emission, labels, lowered, parts, symbol_ok, verified, write_new};
+use super::{allocator, check_file, emission, labels, lowered, parts, refuse_assumptions, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -235,7 +235,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
-fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, Spilling(mask) => 32 + mask }} }}
+fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask, Short(name) => 289 + name }} }}
 fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
 ");
     let mut fork = elab.fork();
@@ -287,7 +287,9 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let places = if functions == 0 { None } else {
         let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
             16 => Ok("Folded".to_string()),
-            n if n >= 32 => Ok(format!("Spilling({})", n - 32)),
+            n if n >= 289 => Ok(format!("Short({})", n - 289)),
+            n if n >= 33 => Ok(format!("Spilling({})", n - 33)),
+            n if n >= 24 => Ok(format!("CallSlots({})", n - 24)),
             n if n >= 17 => Ok(format!("Saving({})", n - 17)),
             n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
         }).collect::<Result<Vec<_>, String>>()?;
@@ -511,9 +513,9 @@ theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = S
         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
 }}
 
-theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {{
-    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65536,
-        j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
+theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {{
+    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65535,
+        j(sym({p}_length()), λ n _ => 232 + n <= 65535, Nat::leb_sound(232 + {length}, 65535, trivial)))
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
@@ -524,7 +526,7 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + 144 * {src}().functions.len()) + 8 * ({src}().words + 1) <= depth, args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + program_calls_room({src}().functions)) + 8 * ({src}().words + 1) <= depth, args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
@@ -556,6 +558,7 @@ theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, dept
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     checked?;
+    refuse_assumptions(&elab, &format!("{p}_certificate"), &unchecked)?;
     write_new(&certificate, text.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     write_executable(&output, &file)?;

@@ -89,7 +89,8 @@ The gaps, each a section below:
 4. **A read lands at its buffer's start** (`CallShape::Reads`,
    `Effect::Reads`), so no program can read all of its input into one
    buffer (§4.1).
-5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2).
+5. **A branch whose arms call Linux** (`EIf`) is not modelled (§4.2; built
+   since, as `ETm::If`).
 6. **No constant bytes** to write: a program cannot print `"valid\n"`
    except by storing it a byte at a time (§4.3).
 
@@ -296,8 +297,8 @@ clash). What differs from the table above:
   `f::source`'s tree.
 - `tr`: `runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256))` is the
   gate's tr. The hand `ELoop` in `rt_io_lend_tests` stays as the
-  reflector's pin and the lowering's probes; the builder tr stays until a
-  program can exit 1 on a failed write (issues/rt-io-exit-on-failed-write.md).
+  reflector's pin and the lowering's probes. The builder tr stayed until a
+  program could exit 1 on a failed write; round 5 (§4.2) removed it.
 
 **As built (round 4, 2026-11-16): a whole input, then a verdict.** The
 validator's shape is a loop that reads standard input into one buffer at a
@@ -321,10 +322,17 @@ same program over `utf8_valid_from`).
   `compile-x86`'s is, then placeless, rowed, and the emitted functions), so
   a program that links a validator's eight functions fits the kernel's
   per-declaration fuel.
-- The span functions live in a module that imports `runtime` and the
-  program in one that imports `runtime_program`: a generated `Compile`
-  instance names its class unqualified, and a module that imports both
-  generators has two `runtime`s.
+- A module of programs imports `runtime_program` and what its own text
+  spells, nothing of the generators' (since 2026-11-16): `bitvec` (`u8`,
+  `u64`), `itree` (a `while`'s `Iterate`), `coitree` (`Partial`),
+  `linux_world` (`Io`), `rt` (`byte_within`), `rt_io` (`read_into`). The
+  generators name what they state by key, `name_of(X)` where they can see
+  `X` and `"module::X"` otherwise, and a generated instance cites its class
+  by key (`runtime::Compile`, `runtime_file::CompileSpan`), so each needs
+  its module only in the program's import closure; `runtime_program`
+  imports `runtime_file`, so span functions can sit beside the program.
+  Before, a generated name resolved where the program was, and a program
+  imported the generators' whole vocabulary (about forty modules).
 
 ## 4. Three nodes a real program needs
 
@@ -348,24 +356,52 @@ This is a compiler change (in the native layer, not the kernel), every
 existing program passing `at = 0`, and its byte output for them is the
 same plus one `ADD` or none (an immediate 0 is folded).
 
-### 4.2 A branch whose arms call Linux: `EIf`
+### 4.2 A branch whose arms call Linux: `ETm::If` (built)
 
 A pass that writes only sometimes (`grep`, an error message on a failed
-read) needs `EIf(c, a, b)` over `ETm`. Design §8.4 names the obstacle: a
-statement `if` with calls in its arms joins per variable (`imperative.rs`),
-so the elaborated body projects `io` and each other local out of the
-branch's tuple, and an `EIf` meaning that branches over the whole
-`Mutated` needs a commuting conversion to agree by `refl`. Proposed: the
-reflector reads the per-variable join, and the pin goes through one
-equation proved once (`if c then (a.1, a.2) else (b.1, b.2)` is
-`(if c then a else b).1, …`, which is `refl` per projection on a neutral
-`c` only when the kernel has the commuting conversion; otherwise it is a
-`Bool` case split, one lemma). The lowering is a `Branch` on the flag,
-both arms ending with each variable at the same place, as a loop's pass
-does with its moves back.
+read), or a loop that stops on a failed write (`tr_upper`), needs a branch
+over `ETm`. A statement `if` elaborates (`imperative.rs`'s `join`) to one
+record of the locals its arms assign, the world among them, in the order
+they are first assigned: `#stage = match decide_bit(c) { True =>
+Mutated(io₁, Mutated(k₁, s₁)), False => … }`, every later read a field of
+it (`#stage.value.after`); one local alone is the local.
 
-None of the programs in §0 or the demo thread's three needs it (each
-computes its answer in pure code and writes once), so it comes after them.
+**The node** (`lib/native/runtime/rt_io.hthr`):
+`If(cond: Tm, yes: ETm, no: ETm, parts: List<Part>, body: ETm)`, a `Part`
+being `PWorld` or `PVar(t, y, n)`, a local of code `t` at index `y` at the
+end of the `yes` arm and `n` at the end of the `no` arm. Each arm runs to
+its end from the state before the `if`; its own result is not read. The
+meaning builds the same record, `Part::branch` (one `match` on the test's
+truth) of `Part::state` of each arm's end, and runs `body` with each
+`PVar` a new variable (`Part::push`, in the record's order) and the world
+`Part::world` of it. That is the surface's own shape, so the pin
+`meaning = f` is `refl` at a neutral test: no commuting conversion and no
+lemma was needed, against what this section first proposed. The
+variables before the `if` are untouched; the locals it assigns are new.
+
+**The lowering** (`rt_io_lower.hthr`, `ETm::lower_if`): the test into a
+flag; `Branch` on it, each arm its statements and then the moves
+(`Loc::moves`, the loop's) that bring each `PVar` word to one fresh word
+past both arms' (`ETm::join_lower`); a byte buffer stays where both arms
+leave it, else it is gone; a variable from before the `if` keeps its place
+where both arms leave it there (`Loc::meet`). It is proved in
+`ETm::lower_sound` (`ETm::lower_if_sound`): each arm by the induction
+hypothesis (`ETm::arm_sound`), the moves by `Loc::moves_sound`, and the
+join's places by `ETm::join_sound`. An `if` that does not assign the world
+lowers only when neither arm calls (`ETm::silent`).
+
+**The reflector** (`rt_io_reflect`, `rt_reflect`): the host's `Arms`
+answers a field read of a `match`'s record as that `match`, its arms
+whole, with the fields read (`MatchInfo::path`). A world that is such a
+read is on the world chain after the calls both arms' worlds start with
+(`rt_world_calls`), and the walk makes the `if` there (`rt_if_make`); a
+read of a local of an `if` that does not assign the world is made when a
+term first needs it, as a lent call is (`rt_lend_find`). The arms are read
+from the state before the `if`, under one local (`rt_bool_arms`), and each
+local after it is the variable `IfRes` names. The calls before an `if` are
+the run both arms start with, so an `if` whose two arms begin with the same
+call reads that call as before it, and the pin then refuses the program.
+`if h:` that assigns locals is refused for now.
 
 ### 4.3 Constant bytes
 
@@ -373,6 +409,42 @@ A `Source`'s buffer can start with bytes (`yes`'s line, `Buffer`'s
 initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
+
+**The surface (built, 2026-11-16).** `b"valid\n"` is one token, `ByteStr`,
+from its `b` (`b` alone or `b "x"` is what it was), cut the same by the
+Rust lexer (`lex_byte_string`) and Heather's own scanner
+(`lib/lang/lexer/lexer_scan.hthr`, `step_byte_string`). Its bytes are its
+characters, each ASCII, since a non-ASCII character is refused rather than
+read as its UTF-8 encoding (the message spells its bytes as escapes); the
+escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`) but
+`\u{…}`, which names a scalar value and not a byte, and `\xHH`, exactly
+two hexadecimal digits, for any byte (`b"\xC3\xA9"`). A string or
+character literal has no `\x`. It elaborates (`Literals::elab_byte_string_*`)
+to the collection literal of its numerals at `[u8; n]`, or at
+`List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
+exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
+`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it.
+
+**The native half (built, 2026-11-16): a byte string is one more buffer
+parameter.** D2's move, applied by the reflector: before reading a program,
+`rt_const_scan` finds every closed list of byte literals in its body (each
+once, by its bytes, in the order the walk meets them), and the reading
+takes each as a parameter after the function's own (`Known::consts`, its
+level; `rt_const_bytes` reads a `Cons` spine at a byte buffer as that
+parameter, where it used to refuse it as a `Cons` onto a buffer). So
+nothing below the reflector is new: the lowering places the parameter in
+a buffer like any other (`Program::locs`), and its theorem is unchanged.
+The generator gives the `Source` one buffer per string after the
+parameters' (`Program::all_buffers`: `Program::constant(bs)`, of its own
+length, `initial := bs`), states `f::reads` at no argument for the strings,
+and proves the reading's environment holds each, `rt_bytes([…])` of its
+bytes, by `refl` at `Source::start` (`Program::held_cons`), as it does for
+the zeroed buffers; the bridge's environment holds the same terms
+(`bridge_consts`), which convert with the literal in the body. A string the
+program reads into is then a buffer the read overwrites, as a parameter
+is, and the lowering forgets it there, so "never written" needs no check
+of its own. `ascii_say` in `runtime_program_tests` says its verdict with
+two strings by an `if`, and `native_tools.rs` holds its output.
 
 ## 5. Decisions (Minus, 2026-11-15)
 
@@ -420,6 +492,23 @@ argument" in their own proofs; it is a lemma about the reflected
 `ELoop` (substituting a variable's initial value), proved once, not
 per program.
 
+**As built (2026-11-16): a zeroed local is read like a byte string.** A
+local `let mut buf: List<u8> = List::replicate(0, n);` at a numeral `n`
+is one more parameter of the reading after the function's own, as a byte
+string is (`rt_const_scan` records it as `ConstInit::Zeros(n)`, one buffer
+per local even where two start alike, in the order the body makes them).
+The `Source` holds it as `Program::zeroed(n)`, a zeroed buffer of that
+capacity, and `f::reads` is stated with no argument for it, its
+environment holding `List::replicate(zero_byte(), n)` by `refl` at
+`Source::start`. So the general abstraction lemma above was not needed:
+the reading never holds the local's value, only a variable for it, and
+the parameter form and the local form read alike
+(`ascii_local::eloop = ascii_check::eloop` by `refl`,
+`lib/_tests/native/runtime/runtime_program_tests.hthr`). A local that
+starts as other bytes is refused, naming a byte string as the spelling:
+the data segment starts a program's own buffer zeroed.
+`examples/utf8/utf8check.hthr`'s `main` makes its buffer this way.
+
 **D3. Constant bytes.** Agreed: byte-string literals `b"valid\n"` of
 type `[u8; 6]`; a literal reaching a write is a constant buffer of the
 `Source` (initial bytes in the data segment, never written). After the
@@ -449,6 +538,15 @@ it, so it can run in another thread at the same time.
    unchanged.
 4. **The demos**: UTF-8 validator first (demo thread), each one program and
    one binary.
-5. (P) **`EIf`** (§4.2), then D3's literals (§4.3), then the rest of
+5. (P) **`EIf`** (§4.2, built: `tr_upper` exits 1 on a failed write, its
+   gate holds it to GNU tr on `/dev/full`, and the builder `tr`s are
+   gone), then D3's literals (§4.3), then the rest of
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).
+6. **After the UTF-8 program (2026-11-16, Minus's order).** Generated
+   declarations resolve outside the program's own imports (§3, built);
+   then D2's local buffers (§5, built). Filed for
+   later: printing (`issues/io-program-prints-output.md`), the sort and binary-search
+   demos as programs (`issues/io-program-demo-mains.md`), and the
+   whole-program theorem over the read loop and exit
+   (`issues/io-program-whole-theorem.md`).

@@ -72,7 +72,7 @@ fn triangle_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(
 
 fn triangle_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRI32(Rax, BitVec::ofNat(0))]))
         .put(Block([MovRR(Rcx, Rdi), MovRR(R8, Rax)]))
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
@@ -82,7 +82,7 @@ fn triangle_program() → Prog {
         .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
         .label(4).put(Block([MovRI(Rdx, w(1))]))
         .label(5)
-        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([MovRR(Rax, R8)])).put(Block([])).put(Ret)
 }
 
 theorem triangle_lowers(): lower_program([triangle()], triangle_placement()) = Some(triangle_program()) { refl }
@@ -132,7 +132,7 @@ fn gcd_placement() → List<Place> { [Into(Rax), Into(R8), Into(R9), Into(Rcx), 
 
 fn gcd_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)]))
         .put(Block([MovRR(Rcx, Rax), MovRR(R8, Rdi), MovRR(R9, Rsi)]))
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
@@ -146,7 +146,7 @@ fn gcd_program() → Prog {
         .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
         .label(4).put(Block([MovRI(Rdx, w(1))]))
         .label(5)
-        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([MovRR(Rax, R8)])).put(Block([])).put(Ret)
 }
 
 theorem gcd_lowers(): lower_program([gcd()], gcd_placement()) = Some(gcd_program()) { refl }
@@ -190,9 +190,9 @@ fn scale_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(Rdx
 
 fn scaled_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(64)]))
         .put(Block([MovRR(Rcx, Rsi), MovRR(R8, Rdi)]))
         .label(3).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 5))

@@ -57,3 +57,29 @@ theorem lex_first_differs(): List::Lex(Nat::Le, [1, 9], [2]) { And(trivial, λ h
 
 // Lists of lists sort by the instances `Lex` gets from its element order.
 theorem nested_sort(): List::insertion_sort(List::Lex(Nat::Le), [[2], [1, 5], [], [1]]) = [[], [1], [1, 5], [2]] { refl }
+
+// ---------------------------------------------------------------------------
+// Sorted by index (`sorted_nth`, `sorted_of_nth`, `sorted_iff_nth`).
+
+// At an open list: the first element is below every later one.
+theorem head_below_by_index(xs: List<Nat>, s: xs.Sorted(Nat::Le), k: Nat, a, b: Nat, pos: 0 < k,
+    first: xs.nth(0) = Some(a), later: xs.nth(k) = Some(b)): a <= b {
+    xs.sorted_nth(Nat::Le, s, 0, k, a, b, pos, first, later)
+}
+
+// Both ways at an open list, in a checking position.
+theorem sorted_round_trip(xs: List<Nat>, s: xs.Sorted(Nat::Le)): xs.Sorted(Nat::Le) {
+    xs.sorted_iff_nth(Nat::Le).mpr(xs.sorted_iff_nth(Nat::Le).mp(s))
+}
+
+// The index form reads past neighbours, so it needs the order's
+// transitivity: along "one more", [0, 1, 2] is sorted, yet 0 is not one
+// below 2. The negative control for `sorted_nth`'s preorder.
+fn Next(a, b: Nat) → Type { Succ(a) = b }
+
+theorem steps_sorted(): [0, 1, 2].Sorted(Next) { And(refl, And(refl, And(trivial, trivial))) }
+
+theorem steps_not_by_index():
+    ¬((i, k: Nat) → (a, b: Nat) → i < k → [0, 1, 2].nth(i) = Some(a) → [0, 1, 2].nth(k) = Some(b) → Next(a, b)) {
+    λ all => Nat::zero_ne_succ(0, Nat::succ_inj(0, 1, all(0, 2, 0, 2, trivial, refl, refl)))
+}

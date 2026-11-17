@@ -67,6 +67,33 @@ fn argument() -> X { g("text") }
           (string))))))
 
 ==================
+Byte strings
+==================
+
+fn bare() -> X { b"valid\n\xC3\xa9" }
+fn argument() -> X { g(b"", b) }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (byte_string)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (byte_string)
+          (identifier))))))
+
+==================
 Setoid calc chains
 ==================
 

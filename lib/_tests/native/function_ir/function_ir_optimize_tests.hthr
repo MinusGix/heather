@@ -15,6 +15,7 @@ import function_ir_stage;
 import function_ir_fresh;
 import function_ir_inline;
 import function_ir_replay;
+import function_ir_rule;
 import function_ir_rules;
 import function_ir_tidy;
 import function_ir_guard;
@@ -109,7 +110,7 @@ theorem seven_joined_0(): move_stage().many().rewrite([xor()], seven(), [Inl(sev
 }
 
 theorem seven_staged(): optimize_stage().rewrite([xor()], seven(), seven_passes()) = Some(seven_made()) {
-    optimize_made([xor()], seven(), seven(), seven_made(), None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())], seven_tested(),
+    optimize_made([xor()], seven(), seven(), seven_made(), None, [Inl(seven_inlines()), Inr(seven_copies()), Inr(seven_dead())], registered(RuleEntry), seven_tested(),
         seven_joined_0())
 }
 

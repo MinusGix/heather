@@ -1,0 +1,75 @@
+// What a plan did, said in the rules' words (function_ir_explain): a
+// rule's line at chosen numbers, by evaluation, and a whole plan's.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_explain;
+import function_ir_learn;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import function_ir_spelled;
+import bool; import list; import nat; import option; import string;
+
+// The line of the library's rule at the place `k`.
+fn line(k: Nat, numbers: List<Nat>) → String { spelled_text(rule_said(library(), k, numbers, [])) }
+
+// A rewrite: the word, what computes it (a premise, read through, with the
+// constant in its place) and what the rule makes it.
+theorem add_zero_line(): line(0, [64, 0, 2, 1]) = "  t2 = t0 + 0 = t0   by add_zero\n" { refl }
+
+theorem narrow_back_line(): line(15, [1, 8, 255, 2, 3]) = "  t2 = t1.resize(8).resize(64) = t1   by narrow_back   (t1 within 0 ..= 255)\n" { refl }
+
+// A range, with the ranges it stands on listed.
+theorem within_add_line(): line(4, [1, 2, 0, 255, 0, 255, 3]) =
+    "  t3 = t1 + t2 within 0 ..= 510   by within_add   (t1 within 0 ..= 255, t2 within 0 ..= 255)\n" { refl }
+
+// A test decided, by ranges and by an order; the largest word by name.
+theorem below_yes_line(): line(7, [1, 2, 3, 9, 4]) = "  t4 = t1 < t2 = 1   by below_yes   (t1 within 0 ..= 3, t2 within 9 ..= u64::MAX)\n" { refl }
+
+theorem ordered_below_line(): line(22, [1, 2, 3]) = "  t3 = t1 < t2 = 1   by ordered_below   (t1 + 1 <= t2)\n" { refl }
+
+theorem order_join_line(): line(24, [1, 2, 3, 1, 0, 0, 0, 1, 0]) = "  t1 + 1 <= t3   by order_join   (t1 + 1 <= t2, t2 <= t3)\n" { refl }
+
+// Facts of the spans as they are where the replay stands.
+theorem load_again_line(): line(19, [0, 1, 2, 3]) = "  t3 = t2   by load_again   (t2 = span0.byte(t1) here, t3 = span0.byte(t1) here)\n" { refl }
+
+// A plan the replayer would refuse still says what is missing: a place
+// the table has no rule at, and numbers a rule's guard refuses.
+theorem no_rule_line(): line(99, []) = "  no rule at place 99\n" { refl }
+
+theorem guarded_line(): line(4, [1, 2, 0, 18446744073709551615, 0, 255, 3]) =
+    "  within_add makes no clause at [1, 2, 0, 18446744073709551615, 0, 255, 3]\n" { refl }
+
+// A whole plan: what the search over a function found, said. The plan is
+// the one `function_ir_learn_tests` replays.
+fn plus_zero() → Function { Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)], Ports([]))), 6, 1) }
+
+fn plus_zero_said() → String { spelled_text(plan_explained(plus_zero().learn_plan())) }
+
+theorem plus_zero_explained(): plus_zero_said() = "  t4 = t2 + 0 = t2   by add_zero\n" { refl }
+
+// The rules not applied: a rule whose nodes are the ones at a node and
+// that a range kept from it is named there, with what was known. Here a
+// word within twelve bits narrowed to a byte and widened is no move, and
+// a comparison of it with a word nothing is known of is not decided.
+fn wide_narrowed() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 4095), BitAnd(64, 4, 2, 3), Resize(64, 8, 5, 4), Resize(8, 64, 6, 5),
+        UnsignedLessThan(64, 7, 4, 1)], Ports([]))), 6, 1)
+}
+
+fn wide_narrowed_said() → String { spelled_text(wide_narrowed().not_applied()) }
+
+theorem wide_narrowed_not_applied(): wide_narrowed_said() =
+    "  not applied at t6 = t5.resize(64): narrow_back   (known: t4 within 0 ..= 4095)\n  not applied at t7 = t4 < t1: below_yes, below_no   (known: t4 within 0 ..= 4095)\n" { refl }
+
+// A rule that gives a range says nothing where a word it reads is one
+// nothing is known of: the sum of such a word and a constant has no line.
+theorem plus_zero_not_applied(): spelled_text(plus_zero().not_applied()) = "" { refl }
+
+// A sum that could wrap has one: both its parts are known, and the rule's
+// condition is what fails. A word a constant made is said as the constant.
+fn sum_wraps() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 18446744073709551615), Const(64, 4, 1), Add(64, 5, 3, 4)], Ports([]))), 5, 1)
+}
+
+theorem sum_wraps_not_applied(): spelled_text(sum_wraps().not_applied()) = "  not applied at t5 = 18446744073709551615 + 1: within_add\n" { refl }

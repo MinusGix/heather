@@ -1235,18 +1235,41 @@ fn program_linkable(functions: List<Function>) → Bool {
     (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
 }
 
+// The stack a program's calls of its functions ask below the caller: the
+// largest room of `program_room` and the CALL's return address; none
+// where there is no function. A program lowered with any placement is
+// checked against that table, which no placement exceeds, so the bound
+// needs nothing of the placement.
+fn program_calls_room(functions: List<Function>) → Nat {
+    match functions { Nil => 0, Cons(_, _) => rooms_top(program_rooms(functions)) + 8 }
+}
+
+theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ(f) <= functions.len()):
+    program_room(functions)(f) + 8 <= program_calls_room(functions) {
+    let below: (program_room(functions)(f) <= rooms_top(program_rooms(functions))) = rooms_at_top(program_rooms(functions), f);
+    (match functions as λ fs => Succ(f) <= fs.len() → program_room(fs)(f) <= rooms_top(program_rooms(fs)) →
+        program_room(fs)(f) + 8 <= program_calls_room(fs) {
+        Nil => λ none _ => false_elim(nothing_below_zero(f, none)),
+        Cons(last, earlier) => λ _ under => {
+            let unfold: (program_calls_room(Cons(last, earlier)) = rooms_top(program_rooms(Cons(last, earlier))) + 8) = refl;
+            omega(under, unfold)
+        },
+    })(called, below)
+}
+
 // The functions the regions call, after the program's own code `p`, their
 // values where `places` proposes; their inner labels from `names`. Checked
 // first (`program_linkable`). A function may store into the buffers it is
 // lent: the program lends them to write
 // (docs/native/native-one-compiler-design.md §2.6). Each function is emitted
-// under the count of buffers it says it is lent (`program_counts`).
+// under the count of buffers it says it is lent (`program_counts`) and the
+// room table no placement exceeds (`program_room`).
 fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)) {
                 None => None,
                 Some(out) => Some(out.prog),
             },
@@ -1260,19 +1283,19 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
 // function at a time, `program_scan_at_drop`).
 theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
     evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
-    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), index_rooms()).map(λ out => out.prog) = Some(q)):
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)).map(λ out => out.prog) = Some(q)):
     p.links(functions, places, names) = Some(q)
 {
     let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
         Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
             Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
     match functions as λ fs => program_linkable(fs) = True →
-        emit_functions_after_lent(p, fs, places, names, program_counts(fs), index_rooms()).map(λ out => out.prog) = Some(q) →
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs), program_room(fs)).map(λ out => out.prog) = Some(q) →
         p.links(fs, places, names) = Some(q) {
         Nil => λ _ e => e,
-        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), index_rooms()) {
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) {
                 None => None, Some(out) => Some(out.prog) } }) = Some(q),
-            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), index_rooms()) as λ r =>
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) as λ r =>
                 r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
                 None => λ h => h,
                 Some(_) => λ h => h,

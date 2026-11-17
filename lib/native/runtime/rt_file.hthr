@@ -68,6 +68,80 @@ fn List::put_within(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: Bi
 }
 
 // ---------------------------------------------------------------------------
+// Reads over writes, under one length word: the laws a proof about code
+// that stores into its span rewrites by (`simp_only(…)`, as
+// examples/sort does). Each holds whatever the word says, except the read
+// where the write was, which needs the index inside both the word and the
+// span. Writes apart commute, oriented with the lower index inside, so a
+// run of stores has one normal form.
+
+// A write keeps the span's length.
+theorem List::len_with_byte_within(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)):
+    xs.with_byte_within(length, i, v).len() = xs.len() {
+    match i.unsigned_lt_bit(length) as λ b => (match b { False => xs, True => xs.with_byte(i, v) }).len() = xs.len() {
+        False => refl,
+        True => xs.len_update(i.toNat(), λ _ => v),
+    }
+}
+
+// Read where it was written: what was written.
+theorem List::byte_within_with_byte_within_same(self xs: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8),
+    inside: i.toNat() < length.toNat(), held: i.toNat() < xs.len()):
+    xs.with_byte_within(length, i, v).byte_within(length, i) = v {
+    trans(cong_fn(λ (s: List<BitVec(8)>) => s.byte_within(length, i), xs.with_byte_within_inside(length, i, v, inside)),
+        trans(xs.with_byte(i, v).byte_within_inside(length, i, inside),
+            cong_fn(λ (o: Option<BitVec(8)>) => o.unwrap_or(BitVec::ofNat(0)), xs.nth_update_set(i.toNat(), v, held))))
+}
+
+// Read elsewhere: the span's own byte.
+theorem List::byte_within_with_byte_within_other(self xs: List<BitVec(8)>, length, i, x: BitVec(64), v: BitVec(8),
+    apart: i.toNat() ≠ x.toNat()):
+    xs.with_byte_within(length, i, v).byte_within(length, x) = xs.byte_within(length, x) {
+    match i.unsigned_lt_bit(length) as λ b =>
+        (match b { False => xs, True => xs.with_byte(i, v) }).byte_within(length, x) = xs.byte_within(length, x) {
+        False => refl,
+        True => match x.unsigned_lt_bit(length) as λ c =>
+            (match c { False => BitVec::ofNat(0), True => xs.with_byte(i, v).byte_at(x) })
+                = (match c { False => BitVec::ofNat(0), True => xs.byte_at(x) }) {
+            False => refl,
+            True => cong_fn(λ (o: Option<BitVec(8)>) => o.unwrap_or(BitVec::ofNat(0)),
+                xs.nth_update_other(i.toNat(), λ _ => v, x.toNat(), λ same => apart(sym(same)))),
+        },
+    }
+}
+
+// A write over a write at one index: the second.
+theorem List::with_byte_within_twice(self xs: List<BitVec(8)>, length, i: BitVec(64), v, w: BitVec(8)):
+    xs.with_byte_within(length, i, v).with_byte_within(length, i, w) = xs.with_byte_within(length, i, w) {
+    match i.unsigned_lt_bit(length) as λ b =>
+        (match b { False => (match b { False => xs, True => xs.with_byte(i, v) }),
+                   True => (match b { False => xs, True => xs.with_byte(i, v) }).with_byte(i, w) })
+            = (match b { False => xs, True => xs.with_byte(i, w) }) {
+        False => refl,
+        True => xs.update_update_same(i.toNat(), λ _ => v, λ _ => w),
+    }
+}
+
+// Writes at two indices commute; as a law, the lower index goes inside.
+theorem List::with_byte_within_apart(self xs: List<BitVec(8)>, length, i, x: BitVec(64), v, w: BitVec(8),
+    below: x.toNat() < i.toNat()):
+    xs.with_byte_within(length, i, v).with_byte_within(length, x, w) = xs.with_byte_within(length, x, w).with_byte_within(length, i, v) {
+    match i.unsigned_lt_bit(length) as λ a =>
+        (match x.unsigned_lt_bit(length) {
+            False => (match a { False => xs, True => xs.with_byte(i, v) }),
+            True => (match a { False => xs, True => xs.with_byte(i, v) }).with_byte(x, w) })
+            = (match a { False => xs.with_byte_within(length, x, w), True => xs.with_byte_within(length, x, w).with_byte(i, v) }) {
+        False => refl,
+        True => match x.unsigned_lt_bit(length) as λ c =>
+            (match c { False => xs.with_byte(i, v), True => xs.with_byte(i, v).with_byte(x, w) })
+                = (match c { False => xs, True => xs.with_byte(x, w) }).with_byte(i, v) {
+            False => refl,
+            True => xs.update_update_apart(i.toNat(), x.toNat(), λ _ => v, λ _ => w, λ same => Nat::ne_of_lt(x.toNat(), i.toNat(), below, sym(same))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Views
 
 // A window of one of the function's spans, as a `Lend` hands it to its

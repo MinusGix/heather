@@ -27,7 +27,7 @@ const PREC = {
 
 // Words that introduce a special form only before their fixed follower
 // (`contextual_identifier` below); elsewhere they are names.
-const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with'];
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'cases'];
 
 module.exports = grammar({
   name: 'heather',
@@ -298,13 +298,13 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
       // A statement body ends in a statement and has no result
       // (docs/language/sequencing-surface-design.md §4).
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
         choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
           'break', 'continue', seq('return', field('value', $._expression))), '}'),
     ),
@@ -346,6 +346,16 @@ module.exports = grammar({
     named_destructure_field: $ => seq(
       field('field', $.identifier), ':=', field('name', $.identifier),
     ),
+    // `cases h;` / `cases h as e1, e2(x, y);`: take the hypothesis apart
+    // along the tests of the call it states; the rest of the block is every
+    // case that survives (docs/tactics/goal-combinators.md, `cases h`).
+    cases_statement: $ => seq(
+      'cases', field('hypothesis', $.identifier),
+      optional(seq('as', commaSep1($.cases_name))), ';',
+    ),
+    cases_name: $ => seq(
+      field('equation', $.identifier), optional(seq('(', commaSep1(field('field', $.identifier)), ')')),
+    ),
     split_statement: $ => seq(
       'split', optional(seq(field('equation', $.identifier), ':')),
       field('value', $._expression), optional(seq('as', field('motive', $._expression))), ';',
@@ -369,7 +379,7 @@ module.exports = grammar({
       // A head position is where a match scrutinee lives, so the contextual
       // words have to be ordinary names here too — `match code { … }` is an
       // ordinary match on a variable named `code`.
-      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.hole, $.argument_slot,
+      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.byte_string, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
@@ -426,6 +436,7 @@ module.exports = grammar({
       $.number,
       $.character,
       $.string,
+      $.byte_string,
       $.hole,
       $.universe,
       $.vector_type,
@@ -528,6 +539,7 @@ module.exports = grammar({
       $.number,
       $.character,
       $.string,
+      $.byte_string,
       $.hole,
       $.argument_slot,
       $.universe,
@@ -771,6 +783,10 @@ module.exports = grammar({
     // the compiler. Tokens keep spaces and comment markers inside literals.
     character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
     string: _ => token(seq('"', repeat(choice(/[^"\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
+    // `b"…"`: a byte string (docs/native/io-programs-design.md §5 D3), one
+    // token to the compiler too: ASCII characters, a string's escapes but
+    // `\u{…}`, and `\xHH` for any byte.
+    byte_string: _ => token(seq('b"', repeat(choice(/[\x00-\x09\x0b\x0c\x0e-\x21\x23-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\x[0-9A-Fa-f]{2}/)), '"')),
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),
     argument_slot: _ => token(/·[₀₁₂₃₄₅₆₇₈₉]*/),
     comment: _ => token(seq('//', /[^\n]*/)),

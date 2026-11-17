@@ -27,6 +27,7 @@ import function_ir_writes;
 import function_ir_lower;
 import function_ir_lower_calls;
 import x86_64_asm;
+import omega;
 
 fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
@@ -230,3 +231,71 @@ fn one_pure() → World { World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair
 fn calls_pure() → FFun { FFun([Word(64), Word(64), Word(64)], Word(64), Pure(Call(0, [0]))) }
 theorem pure_call_lowers(): calls_pure().lower(one_pure(), [], 1).is_some() = True { refl }
 theorem pure_call_refused(): calls_pure().lower(one_pure(), [], 0) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Reads over writes, as `simp_only` laws over an open span (neutral
+// indices and bytes, the length word only a variable): a read past two
+// stores, a run of stores put in index order, the length kept. Then what
+// each premise is for.
+
+theorem read_past_two_stores(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u: BitVec(8),
+    inside: i.toNat() < n.toNat(), held: i.toNat() < xs.len(), apart: i.toNat() ≠ x.toNat()):
+    xs.with_byte_within(n, i, v).with_byte_within(n, x, u).byte_within(n, i) = v
+{
+    simp_only(List::byte_within_with_byte_within_other, List::byte_within_with_byte_within_same, discharge := omega)
+}
+
+// The read elsewhere is the span's own, whatever the length word says.
+theorem read_elsewhere(xs: List<BitVec(8)>, n, i, x: BitVec(64), v: BitVec(8), apart: i.toNat() ≠ x.toNat()):
+    xs.with_byte_within(n, i, v).byte_within(n, x) = xs.byte_within(n, x)
+{
+    simp_only(List::byte_within_with_byte_within_other)
+}
+
+// Two stores apart go in index order, the lower inside; a store over a
+// store at one index is the second.
+theorem stores_in_order(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u: BitVec(8), below: x.toNat() < i.toNat()):
+    xs.with_byte_within(n, i, v).with_byte_within(n, x, u) = xs.with_byte_within(n, x, u).with_byte_within(n, i, v)
+{
+    simp_only(List::with_byte_within_apart)
+}
+
+theorem store_over_store(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u, t: BitVec(8)):
+    xs.with_byte_within(n, x, u).with_byte_within(n, i, v).with_byte_within(n, i, t) = xs.with_byte_within(n, x, u).with_byte_within(n, i, t)
+{
+    simp_only(List::with_byte_within_twice)
+}
+
+theorem stores_keep_length(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u: BitVec(8)):
+    xs.with_byte_within(n, i, v).with_byte_within(n, x, u).len() = xs.len()
+{
+    simp_only(List::len_with_byte_within)
+}
+
+// In a checking position: the law's result is what a later step is handed.
+theorem read_back_checked(xs: List<BitVec(8)>, n, i: BitVec(64), v: BitVec(8),
+    inside: i.toNat() < n.toNat(), held: i.toNat() < xs.len()):
+    xs.with_byte_within(n, i, v).byte_within(n, i).toNat() = v.toNat()
+{
+    let read: (xs.with_byte_within(n, i, v).byte_within(n, i) = v) = simp_only(List::byte_within_with_byte_within_same);
+    cong_fn(λ (c: BitVec(8)) => c.toNat(), read)
+}
+
+// The read where the write was needs the index inside the span, not only
+// under the word: a span shorter than its word is not written, and reads 0.
+theorem short_span_reads_zero(): List::with_byte_within([], w(1), w(0), b(9)).byte_within(w(1), w(0)) = b(0) { refl }
+
+// expect-error: `List::byte_within_with_byte_within_same`: its side condition `toNat(i) < len(xs)` is not a hypothesis here, and nothing discharged it
+theorem read_back_unheld(xs: List<BitVec(8)>, n, i: BitVec(64), v: BitVec(8), inside: i.toNat() < n.toNat()):
+    xs.with_byte_within(n, i, v).byte_within(n, i) = v
+{
+    simp_only(List::byte_within_with_byte_within_same)
+}
+
+// Two writes at one index do not commute: the oriented law needs them apart.
+// expect-error: `List::with_byte_within_apart`: its side condition `toNat(x) < toNat(i)` is not a hypothesis here, and nothing discharged it
+theorem stores_unordered(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u: BitVec(8)):
+    xs.with_byte_within(n, i, v).with_byte_within(n, x, u) = xs.with_byte_within(n, x, u).with_byte_within(n, i, v)
+{
+    simp_only(List::with_byte_within_apart)
+}

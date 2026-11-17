@@ -579,6 +579,74 @@ theorem List::update_append_r<A>(self xs, ys: List<A>, i: Nat, f: A → A): (xs 
     }
 }
 
+// A list split at an index, read and written there, as laws: the index is
+// named by the prefix's length, so `simp_only` meets it at whatever term
+// the context says the length is (`at`, a local or a discharged premise),
+// and the rest's first element then computes.
+theorem List::nth_append_at<A>(self xs, ys: List<A>, i: Nat, at: xs.len() = i): (xs ++ ys).nth(i) = ys.nth(0) {
+    match xs {
+        Nil => j(at, λ k _ => ys.nth(k) = ys.nth(0), refl),
+        Cons(_, t) => match i {
+            Zero => absurd(at),
+            Succ(k) => t.nth_append_at(ys, k, Nat::succ_inj(t.len(), k, at)),
+        },
+    }
+}
+
+theorem List::update_append_at<A>(self xs, ys: List<A>, i: Nat, f: A → A, at: xs.len() = i): (xs ++ ys).update(i, f) = xs ++ ys.update(0, f) {
+    match xs {
+        Nil => j(at, λ k _ => ys.update(k, f) = ys.update(0, f), refl),
+        Cons(h, t) => match i {
+            Zero => absurd(at),
+            Succ(k) => List::cong_cons(h, t.update_append_at(ys, k, f, Nat::succ_inj(t.len(), k, at))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reads over writes, at an element: what is read where it was written is
+// what was written, an element apart from it is the list's own, and a
+// write over a write at one element is the second. Two writes apart
+// commute; oriented by index, the lower one inside, so a run of them has
+// one order as `simp_only`'s normal form.
+
+theorem List::nth_update_set<A>(self xs: List<A>, i: Nat, v: A, held: i < xs.len()): xs.update(i, λ _ => v).nth(i) = Some(v) {
+    match xs {
+        Nil => false_elim(held),
+        Cons(_, t) => match i {
+            Zero => refl,
+            Succ(k) => t.nth_update_set(k, v, held),
+        },
+    }
+}
+
+theorem List::update_update_same<A>(self xs: List<A>, i: Nat, f, g: A → A): xs.update(i, f).update(i, g) = xs.update(i, λ a => g(f(a))) {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match i {
+            Zero => refl,
+            Succ(k) => List::cong_cons(h, t.update_update_same(k, f, g)),
+        },
+    }
+}
+
+theorem List::update_update_apart<A>(self xs: List<A>, i, k: Nat, f, g: A → A, apart: i ≠ k):
+    xs.update(i, f).update(k, g) = xs.update(k, g).update(i, f) {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match i {
+            Zero => match k {
+                Zero => false_elim(apart(refl)),
+                Succ(_) => refl,
+            },
+            Succ(m) => match k {
+                Zero => refl,
+                Succ(l) => List::cong_cons(h, t.update_update_apart(m, l, f, g, λ same => apart(cong_fn(λ (n: Nat) => Succ(n), same)))),
+            },
+        },
+    }
+}
+
 // The last element split off a nonempty list.
 theorem List::split_last<A>(self xs: List<A>, k: Nat, pad: A, at: xs.len() = Succ(k)): xs = xs.take(k) ++ [xs.nth(k).unwrap_or(pad)] {
     match xs {

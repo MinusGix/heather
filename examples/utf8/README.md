@@ -35,8 +35,8 @@ printf 'ab\xed\xa0\x80cd' | target/utf8/utf8valid; echo $?           # 1
 `utf8check.hthr`'s `main` is the whole program:
 
 ```text
-runtime fn main(mut io: Io, buf: ByteBuffer(65536)) → Partial(Mutated<Io, u64>) {
-    let mut buf = buf;
+runtime fn main(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut buf: List<u8> = List::replicate(0, 65536);
     let mut filled: u64 = 0;
     let mut going: u64 = 1;
     let mut failed: u64 = 0;
@@ -63,7 +63,9 @@ that the executable is the compile of `main::source`, the program the
 generator made of `main`. Two theorems say what that program does:
 
 - `main::reads`: the source's behaviour, read against any world (any input,
-  any outcome of each read), is `main` itself, started from a zeroed buffer;
+  any outcome of each read), is `main` itself. Its buffer is a local the
+  program makes zeroed, which the source holds as a buffer of its data
+  segment;
 - `utf8_status_answers`: after a read that did not fail and left room,
   `utf8_status` answers 0 exactly when the bytes read are UTF-8
   (`utf8::is_utf8(span.take(filled))`).

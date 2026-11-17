@@ -669,16 +669,6 @@ theorem four_at(s: List<u8>, n, i: u64, b, c1, c2, c3: u8, read0: s.byte_within(
     }
 }
 
-// The lead byte's tests, as the loop's equations state them.
-theorem lead_below(s: List<u8>, n, i: u64, b: u8, read: s.byte_within(n, i) = b, k: u64, t: decide_bit<b.zero_extend(56) < k>() = True):
-    s.byte_within(n, i).zero_extend(56) < k {
-    rewrite(read, decide_bit_true<b.zero_extend(56) < k>(t))
-}
-theorem lead_not_below(s: List<u8>, n, i: u64, b: u8, read: s.byte_within(n, i) = b, k: u64, t: decide_bit<b.zero_extend(56) < k>() = False):
-    ¬(s.byte_within(n, i).zero_extend(56) < k) {
-    rewrite(read, decide_bit_false<b.zero_extend(56) < k>(t))
-}
-
 theorem valid_window_decides(s: List<u8>, n, i, left: u64, w: List<u8>, m: u64, wide: w.len() = m.toNat(), here: i.toNat() + left.toNat() = m.toNat(),
     reads: (x: u64) → x.toNat() < m.toNat() → s.byte_within(n, x) = at(w, x.toNat())):
     utf8_valid_from(s, n, i, left).eq_bit(m) = utf8::is_utf8(w.drop(i.toNat())) decreases left.toNat() {
@@ -766,17 +756,19 @@ theorem valid_window_decides(s: List<u8>, n, i, left: u64, w: List<u8>, m: u64, 
                                     match ok: utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, tail))).holds() {
                                         False => {
                                             let z: (decide_bit<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>() = True) = trans(three_decides(b, c1, c2, tail), cong_fn(λ (x: Bool) => !x, ok));
+                                            let bad: (utf8_three_at(s, n, i) = 0) = rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_true<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z));
                                             calc {
-                                                utf8_valid_from(s, n, i, left).eq_bit(m) = False := rewrite(utf8_valid_from::True::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_true<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), stops),
+                                                utf8_valid_from(s, n, i, left).eq_bit(m) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                                                 = utf8::is_utf8(w.drop(k)) := rewrite(rest0, rest1, rest2, valid_three(b, c1, c2, tail, class), ok, refl),
                                             }
                                         },
                                         True => {
                                             let z: (decide_bit<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>() = False) = trans(three_decides(b, c1, c2, tail), cong_fn(λ (x: Bool) => !x, ok));
+                                            let good: ¬(utf8_three_at(s, n, i) = 0) = rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_false<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z));
                                             let skip: ((i + 3).toNat() = k + 3) = bv_omega;
                                             let ih = valid_window_decides(s, n, i + 3, left - 3, w, m, wide, bv_omega, reads);
                                             calc {
-                                                utf8_valid_from(s, n, i, left).eq_bit(m) = utf8_valid_from(s, n, i + 3, left - 3).eq_bit(m) := rewrite(utf8_valid_from::True::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_below(s, n, i, b, read0, 0xF0, t4), decide_bit_true<2 < left>(g), rewrite(three_at(s, n, i, b, c1, c2, read0, read1, read2), decide_bit_false<utf8_three(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56)) = 0>(z))), refl),
+                                                utf8_valid_from(s, n, i, left).eq_bit(m) = utf8_valid_from(s, n, i + 3, left - 3).eq_bit(m) := simp_only(utf8_valid_from, discharge := bv_omega),
                                                 = utf8::is_utf8(tail) := rewrite(sym(skip), ih),
                                                 = utf8::is_utf8(w.drop(k)) := rewrite(rest0, rest1, rest2, valid_three(b, c1, c2, tail, class), ok, refl),
                                             }
@@ -815,17 +807,19 @@ theorem valid_window_decides(s: List<u8>, n, i, left: u64, w: List<u8>, m: u64, 
                                         match ok: utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, tail)))).holds() {
                                             False => {
                                                 let z: (decide_bit<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>() = True) = trans(four_decides(b, c1, c2, c3, tail), cong_fn(λ (x: Bool) => !x, ok));
+                                                let bad: (utf8_four_at(s, n, i) = 0) = rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_true<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z));
                                                 calc {
-                                                    utf8_valid_from(s, n, i, left).eq_bit(m) = False := rewrite(utf8_valid_from::True::False::False::False::False::True::True::True(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_true<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), stops),
+                                                    utf8_valid_from(s, n, i, left).eq_bit(m) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                                                     = utf8::is_utf8(w.drop(k)) := rewrite(rest0, rest1, rest2, rest3, valid_four(b, c1, c2, c3, tail, class), ok, refl),
                                                 }
                                             },
                                             True => {
                                                 let z: (decide_bit<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>() = False) = trans(four_decides(b, c1, c2, c3, tail), cong_fn(λ (x: Bool) => !x, ok));
+                                                let good: ¬(utf8_four_at(s, n, i) = 0) = rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_false<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z));
                                                 let skip: ((i + 4).toNat() = k + 4) = bv_omega;
                                                 let ih = valid_window_decides(s, n, i + 4, left - 4, w, m, wide, bv_omega, reads);
                                                 calc {
-                                                    utf8_valid_from(s, n, i, left).eq_bit(m) = utf8_valid_from(s, n, i + 4, left - 4).eq_bit(m) := rewrite(utf8_valid_from::True::False::False::False::False::True::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_true<3 < left>(g), rewrite(four_at(s, n, i, b, c1, c2, c3, read0, read1, read2, read3), decide_bit_false<utf8_four(b.zero_extend(56), c1.zero_extend(56), c2.zero_extend(56), c3.zero_extend(56)) = 0>(z))), refl),
+                                                    utf8_valid_from(s, n, i, left).eq_bit(m) = utf8_valid_from(s, n, i + 4, left - 4).eq_bit(m) := simp_only(utf8_valid_from, discharge := bv_omega),
                                                     = utf8::is_utf8(tail) := rewrite(sym(skip), ih),
                                                     = utf8::is_utf8(w.drop(k)) := rewrite(rest0, rest1, rest2, rest3, valid_four(b, c1, c2, c3, tail, class), ok, refl),
                                                 }
@@ -836,7 +830,7 @@ theorem valid_window_decides(s: List<u8>, n, i, left: u64, w: List<u8>, m: u64, 
                                         let short: ¬(3 < left.toNat()) = decide_bit_false<3 < left>(g);
                                         let length = w.len_drop(k + 1);
                                         calc {
-                                            utf8_valid_from(s, n, i, left).eq_bit(m) = False := rewrite(utf8_valid_from::True::False::False::False::False::True::False(s, n, i, left, inside, lead_not_below(s, n, i, b, read0, 0x80, t1), lead_not_below(s, n, i, b, read0, 0xC0, t2), lead_not_below(s, n, i, b, read0, 0xE0, t3), lead_not_below(s, n, i, b, read0, 0xF0, t4), lead_below(s, n, i, b, read0, 0xF8, t5), decide_bit_false<3 < left>(g)), stops),
+                                            utf8_valid_from(s, n, i, left).eq_bit(m) = False := simp_only(utf8_valid_from, stops, discharge := bv_omega),
                                             = utf8::is_utf8(w.drop(k)) := rewrite(rest0, valid_cut_four(b, w.drop(k + 1), class, omega), refl),
                                         }
                                     },

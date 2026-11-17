@@ -1,0 +1,30 @@
+// "Accepted" used at a rule (lib/native/function_ir/function_ir_accepted.hthr):
+// the theorem is one for every rule, so a rule's own statement of it is
+// the general one at that rule, with nothing about the rule proved.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_accepted;
+import function_ir_match;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import bool; import list; import logic; import nat; import nat_map; import option;
+
+// Wherever `narrow_back` is found at a node, by its statement, the
+// replayer takes its step in any table that has it at its place.
+theorem narrow_back_accepted(table: List<Rule>, at: Node, had: Walked, facts: Facts, found: Matched, among: Among(had, at, facts),
+    placed: table.nth(15) = Some(narrow_back_entry.rule), h: narrow_back_entry.at(15).found_at(at, had) = Some(found)):
+    Exists<Facts>(λ after => facts.derive(table, found.place, found.numbers) = Some(after)) {
+    narrow_back_entry.at(15).found_accepted(table, at, had, facts, found, among, placed, h)
+}
+
+// The library's table has it there.
+theorem narrow_back_placed(): rules().nth(15) = Some(narrow_back_entry.rule) { refl }
+
+// A learner's proposal of it, the same.
+theorem narrow_back_proposal_accepted(numbers: List<Nat>, at: Node, had: Walked, facts: Facts, found: Matched, among: Among(had, at, facts),
+    h: Proposed(narrow_back_entry, numbers).instance(library(), at, had) = Some(found)):
+    Exists<Facts>(λ after => facts.derive(rules(), found.place, found.numbers) = Some(after)) {
+    Proposed(narrow_back_entry, numbers).accepted(library(), rules(), at, had, facts, found, among,
+        λ place found_at => j(Option::some_inj(15, place, found_at), λ p _ => rules().nth(p) = Some(narrow_back_entry.rule), refl), h)
+}

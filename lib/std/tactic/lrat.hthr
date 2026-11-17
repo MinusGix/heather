@@ -1,0 +1,392 @@
+// A checker for LRAT refutations (Cruz-Filipe, Heule, Hunt, Kaufmann,
+// Schneider-Kamp, CADE 2017, `docs/papers/1612.02353.pdf`), run by the
+// kernel: an untrusted SAT solver refutes a formula, and `check` replays its
+// proof. Each added clause is checked by reverse unit propagation along the
+// hints the proof names, so the checker never searches.
+//
+// Literals are numbers: variable `v` is `2v` and its negation `2v + 1`, so
+// a literal's variable is its `half` and its sign its `low_bit`, both of
+// which the kernel evaluates on numerals directly. Clauses are looked up by
+// id in a `NatMap`, a step per bit of the id. A deletion is never needed for
+// soundness (a clause kept is still implied), so the proof format has none.
+//
+// `refuted` is what a refutation proves: every valuation makes some clause
+// false. A proof too long for one evaluation is checked in stages (`adds`,
+// `add_all`, `adds_sound`, at the end of the file); `scripts/lrat-probes`
+// writes staged probes, and issues/lrat-certified-bitvector-decision.md
+// records what the cost is made of.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import nat_map;
+
+// ---------------------------------------------------------------------------
+// Literals and partial assignments.
+
+fn lit_var(l: Nat) → Nat { l.half() }
+fn lit_negative(l: Nat) → Bool { match l.low_bit() { Zero => False, Succ(_) => True } }
+
+// A partial assignment `a: NatMap<Bool>` gives some variables a value.
+// What a literal is under it: `None` while its variable is unassigned.
+fn lit_value(l: Nat, o: Option<Bool>) → Option<Bool> {
+    match o {
+        None => None,
+        Some(v) => Some(v.xor(lit_negative(l))),
+    }
+}
+fn lit_under(l: Nat, a: NatMap<Bool>) → Option<Bool> { lit_value(l, nat_map_get(a, lit_var(l))) }
+
+// `a` with `l` made true, or made false.
+fn make_true(l: Nat, a: NatMap<Bool>) → NatMap<Bool> { nat_map_set(a, lit_var(l), !lit_negative(l)) }
+fn make_false(l: Nat, a: NatMap<Bool>) → NatMap<Bool> { nat_map_set(a, lit_var(l), lit_negative(l)) }
+
+// Every literal of a clause made false.
+fn falsify(c: List<Nat>, a: NatMap<Bool>) → NatMap<Bool> {
+    match c {
+        Nil => a,
+        Cons(l, rest) => falsify(rest, make_false(l, a)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One hint: under `a` the hinted clause is false (a conflict), or has one
+// literal left (a unit), or the hint is wrong.
+
+inductive Hinted { HConflict, HUnit(l: Nat), HWrong }
+
+// `found` is the unassigned literal seen so far.
+fn hinted(d: List<Nat>, a: NatMap<Bool>, found: Option<Nat>) → Hinted {
+    match d {
+        Nil => match found {
+            None => HConflict,
+            Some(l) => HUnit(l),
+        },
+        Cons(l, rest) => match lit_under(l, a) {
+            Some(True) => HWrong,
+            Some(False) => hinted(rest, a, found),
+            None => match found {
+                None => hinted(rest, a, Some(l)),
+                Some(_) => HWrong,
+            },
+        },
+    }
+}
+
+// Reverse unit propagation along `hints`: each hinted clause is a unit,
+// whose literal is then made true, until one is a conflict.
+fn rup(f: NatMap<List<Nat>>, a: NatMap<Bool>, hints: List<Nat>) → Bool {
+    match hints {
+        Nil => False,
+        Cons(h, rest) => match nat_map_get(f, h) {
+            None => False,
+            Some(d) => match hinted(d, a, None) {
+                HConflict => True,
+                HUnit(l) => rup(f, make_true(l, a), rest),
+                HWrong => False,
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proofs.
+
+// A clause added under an id, with the ids of the clauses that make it
+// follow by unit propagation.
+inductive Step { Add(id: Nat, clause: List<Nat>, hints: List<Nat>) }
+
+// The formula, clauses numbered from 1.
+fn formula_from(cs: List<List<Nat>>, k: Nat, f: NatMap<List<Nat>>) → NatMap<List<Nat>> {
+    match cs {
+        Nil => f,
+        Cons(c, rest) => formula_from(rest, Succ(k), nat_map_set(f, k, c)),
+    }
+}
+fn formula_of(cs: List<List<Nat>>) → NatMap<List<Nat>> { formula_from(cs, 1, MEmpty) }
+
+// Whether the steps derive the empty clause, each checked as it is added.
+fn check(f: NatMap<List<Nat>>, steps: List<Step>) → Bool {
+    match steps {
+        Nil => False,
+        Cons(s, rest) => match s {
+            Add(id, c, hints) => match rup(f, falsify(c, MEmpty), hints) {
+                False => False,
+                True => match c {
+                    Nil => True,
+                    Cons(_, _) => check(nat_map_set(f, id, c), rest),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Why `check` is sound: a valuation that makes every clause of `f` true
+// makes every clause a step adds true, so none makes `f` true once the empty
+// clause is added.
+
+// A valuation gives every variable a value.
+fn lit_true(l: Nat, v: Nat → Bool) → Bool { v(lit_var(l)).xor(lit_negative(l)) }
+
+fn clause_true(c: List<Nat>, v: Nat → Bool) → Bool {
+    match c {
+        Nil => False,
+        Cons(l, rest) => lit_true(l, v) || clause_true(rest, v),
+    }
+}
+
+// Every clause of `f` is true under `v`.
+fn Holds(f: NatMap<List<Nat>>, v: Nat → Bool) → Type {
+    (id: Nat) → (c: List<Nat>) → nat_map_get(f, id) = Some(c) → clause_true(c, v) = True
+}
+
+// The partial assignment `a` is what `v` says wherever `a` says anything.
+fn Agrees(a: NatMap<Bool>, v: Nat → Bool) → Type {
+    (x: Nat) → (b: Bool) → nat_map_get(a, x) = Some(b) → v(x) = b
+}
+
+theorem agrees_empty(v: Nat → Bool): Agrees(MEmpty, v) {
+    λ x b got => Option::none_ne_some(b, got, v(x) = b)
+}
+
+theorem agrees_set(a: NatMap<Bool>, v: Nat → Bool, x: Nat, b: Bool, ag: Agrees(a, v), vx: v(x) = b): Agrees(nat_map_set(a, x, b), v) {
+    λ y c got => match x.eq_dec(y) {
+        Inl(same) => {
+            let at_x: (nat_map_get(nat_map_set(a, x, b), x) = Some(c)) = j(sym(same), λ z _ => nat_map_get(nat_map_set(a, x, b), z) = Some(c), got);
+            let bc: (b = c) = Option::some_inj(b, c, trans(sym(nat_map_get_set_same(a, x, b)), at_x));
+            j(same, λ z _ => v(z) = c, trans(vx, bc))
+        },
+        Inr(other) => ag(y, c, trans(sym(nat_map_get_set_other(a, x, b, y, other)), got)),
+    }
+}
+
+// A literal's value under `a` is its value under `v`.
+theorem under_agrees(l: Nat, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), t: Bool, got: lit_under(l, a) = Some(t)): lit_true(l, v) = t {
+    match e: nat_map_get(a, lit_var(l)) {
+        None => Option::none_ne_some(t, got, lit_true(l, v) = t),
+        Some(b) => trans(cong_fn(λ (x: Bool) => x.xor(lit_negative(l)), ag(lit_var(l), b, e)), Option::some_inj(b.xor(lit_negative(l)), t, got)),
+    }
+}
+
+// Making a literal true or false, where `v` agrees, keeps the agreement.
+theorem make_true_agrees(l: Nat, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), t: lit_true(l, v) = True): Agrees(make_true(l, a), v) {
+    agrees_set(a, v, lit_var(l), !lit_negative(l), ag, v(lit_var(l)).xor_true_value(lit_negative(l), t))
+}
+theorem make_false_agrees(l: Nat, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), t: lit_true(l, v) = False): Agrees(make_false(l, a), v) {
+    agrees_set(a, v, lit_var(l), lit_negative(l), ag, v(lit_var(l)).xor_false_value(lit_negative(l), t))
+}
+
+// Falsifying a clause `v` makes false keeps the agreement.
+theorem falsify_agrees(c: List<Nat>, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), no: clause_true(c, v) = False): Agrees(falsify(c, a), v) {
+    match c {
+        Nil => ag,
+        Cons(l, rest) => {
+            let parts = lit_true(l, v).or_false_parts(clause_true(rest, v), no);
+            falsify_agrees(rest, make_false(l, a), v, make_false_agrees(l, a, v, ag, parts.left), parts.right)
+        },
+    }
+}
+
+theorem or_drop_false_head(x, y, z: Bool, hx: x = False): (x || y) || z = True → y || z = True {
+    j(sym(hx), λ w _ => (w || y) || z = True → y || z = True, λ t => t)
+}
+theorem or_rotate(x, y: Bool): (x || y) || False = True → y || x = True {
+    match x {
+        False => match y { False => λ t => absurd(t), True => λ _ => refl },
+        True => match y { False => λ _ => refl, True => λ _ => refl },
+    }
+}
+
+// The literal a unit answer names.
+fn unit_lit(h: Hinted, otherwise: Nat) → Nat {
+    match h {
+        HUnit(l) => l,
+        HConflict => otherwise,
+        HWrong => otherwise,
+    }
+}
+
+// Whether the literal found so far is true under `v`.
+fn found_true(found: Option<Nat>, v: Nat → Bool) → Bool {
+    match found {
+        None => False,
+        Some(k) => lit_true(k, v),
+    }
+}
+
+// With a literal already found, the hint is never a conflict.
+theorem hinted_found_not_conflict(d: List<Nat>, a: NatMap<Bool>, k: Nat): hinted(d, a, Some(k)) = HConflict → False {
+    match d {
+        Nil => λ h => absurd(h),
+        Cons(l, rest) => match e: lit_under(l, a) {
+            None => λ h => absurd(h),
+            Some(True) => λ h => absurd(h),
+            Some(False) => λ h => hinted_found_not_conflict(rest, a, k, h),
+        },
+    }
+}
+
+// A conflict: every literal of the clause is false under `v`.
+theorem hinted_conflict_sound(d: List<Nat>, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v)): hinted(d, a, None) = HConflict → clause_true(d, v) = False {
+    match d {
+        Nil => λ _ => refl,
+        Cons(l, rest) => match e: lit_under(l, a) {
+            None => λ h => false_elim(hinted_found_not_conflict(rest, a, l, h)),
+            Some(True) => λ h => absurd(h),
+            Some(False) => λ h => lit_true(l, v).or_false_of(clause_true(rest, v), under_agrees(l, a, v, ag, False, e), hinted_conflict_sound(rest, a, v, ag, h)),
+        },
+    }
+}
+
+// A unit: if the clause, or the literal found so far, is true under `v`,
+// the unit's literal is.
+theorem hinted_unit_sound(d: List<Nat>, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), found: Option<Nat>, l: Nat): hinted(d, a, found) = HUnit(l) → clause_true(d, v) || found_true(found, v) = True → lit_true(l, v) = True {
+    match d {
+        Nil => match found {
+            None => λ h _ => absurd(h),
+            Some(k) => λ h t => {
+                let kl: (k = l) = cong_fn(λ (x: Hinted) => unit_lit(x, k), h);
+                j(kl, λ z _ => lit_true(z, v) = True, t)
+            },
+        },
+        Cons(m, rest) => match e: lit_under(m, a) {
+            None => match found {
+                None => λ h t => hinted_unit_sound(rest, a, v, ag, Some(m), l, h, or_rotate(lit_true(m, v), clause_true(rest, v), t)),
+                Some(_) => λ h _ => absurd(h),
+            },
+            Some(True) => λ h _ => absurd(h),
+            Some(False) => λ h t => hinted_unit_sound(rest, a, v, ag, found, l, h, or_drop_false_head(lit_true(m, v), clause_true(rest, v), found_true(found, v), under_agrees(m, a, v, ag, False, e), t)),
+        },
+    }
+}
+
+// Adding a clause `v` makes true keeps every clause true.
+theorem holds_set(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), id: Nat, c: List<Nat>, ct: clause_true(c, v) = True): Holds(nat_map_set(f, id, c), v) {
+    λ i d got => match id.eq_dec(i) {
+        Inl(same) => {
+            let at_id: (nat_map_get(nat_map_set(f, id, c), id) = Some(d)) = j(sym(same), λ z _ => nat_map_get(nat_map_set(f, id, c), z) = Some(d), got);
+            let cd: (c = d) = Option::some_inj(c, d, trans(sym(nat_map_get_set_same(f, id, c)), at_id));
+            j(cd, λ z _ => clause_true(z, v) = True, ct)
+        },
+        Inr(other) => hf(i, d, trans(sym(nat_map_get_set_other(f, id, c, i, other)), got)),
+    }
+}
+
+// Reverse unit propagation from an assignment `v` agrees with, over clauses
+// `v` makes true, never reaches a conflict.
+theorem rup_sound(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), hints: List<Nat>, a: NatMap<Bool>, ag: Agrees(a, v)): rup(f, a, hints) = True → False {
+    match hints {
+        Nil => λ t => absurd(t),
+        Cons(id, rest) => match e: nat_map_get(f, id) {
+            None => λ t => absurd(t),
+            Some(d) => {
+                let dt: (clause_true(d, v) = True) = hf(id, d, e);
+                match eh: hinted(d, a, None) {
+                    HConflict => λ _ => absurd(trans(sym(dt), hinted_conflict_sound(d, a, v, ag, eh))),
+                    HUnit(l) => λ t => {
+                        let prem: (clause_true(d, v) || False = True) = j(sym(dt), λ w _ => w || False = True, refl);
+                        let lt: (lit_true(l, v) = True) = hinted_unit_sound(d, a, v, ag, None, l, eh, prem);
+                        rup_sound(f, v, hf, rest, make_true(l, a), make_true_agrees(l, a, v, ag, lt), t)
+                    },
+                    HWrong => λ t => absurd(t),
+                }
+            },
+        },
+    }
+}
+
+// No valuation makes every clause of `f` true once `check` accepts.
+theorem check_sound(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), steps: List<Step>): check(f, steps) = True → False {
+    match steps {
+        Nil => λ t => absurd(t),
+        Cons(s, rest) => match s {
+            Add(id, c, hints) => match c {
+                // The empty clause: `rup` never derives it from clauses `v` makes true.
+                Nil => match e: rup(f, MEmpty, hints) {
+                    False => λ t => absurd(t),
+                    True => λ _ => rup_sound(f, v, hf, hints, MEmpty, agrees_empty(v), e),
+                },
+                Cons(l, ls) => match e: rup(f, falsify(Cons(l, ls), MEmpty), hints) {
+                    False => λ t => absurd(t),
+                    True => match ec: clause_true(Cons(l, ls), v) {
+                        False => λ _ => rup_sound(f, v, hf, hints, falsify(Cons(l, ls), MEmpty), falsify_agrees(Cons(l, ls), MEmpty, v, agrees_empty(v), ec), e),
+                        True => λ t => check_sound(nat_map_set(f, id, Cons(l, ls)), v, holds_set(f, v, hf, id, Cons(l, ls), ec), rest, t),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// Every clause of a list is true under `v`.
+fn all_true(cs: List<List<Nat>>, v: Nat → Bool) → Bool {
+    match cs {
+        Nil => True,
+        Cons(c, rest) => clause_true(c, v) && all_true(rest, v),
+    }
+}
+
+theorem holds_formula_from(cs: List<List<Nat>>, v: Nat → Bool, k: Nat, f: NatMap<List<Nat>>, hf: Holds(f, v), all: all_true(cs, v) = True): Holds(formula_from(cs, k, f), v) {
+    match cs {
+        Nil => hf,
+        Cons(c, rest) => {
+            let parts = clause_true(c, v).and_true_parts(all_true(rest, v), all);
+            holds_formula_from(rest, v, Succ(k), nat_map_set(f, k, c), holds_set(f, v, hf, k, c, parts.left), parts.right)
+        },
+    }
+}
+
+theorem holds_empty(v: Nat → Bool): Holds(MEmpty, v) {
+    λ id c got => Option::none_ne_some(c, got, clause_true(c, v) = True)
+}
+
+// The theorem a refutation proves: once `check` accepts, every valuation
+// makes some clause of the formula false.
+theorem refuted(cs: List<List<Nat>>, steps: List<Step>, ok: check(formula_of(cs), steps) = True, v: Nat → Bool): all_true(cs, v) = False {
+    match e: all_true(cs, v) {
+        False => refl,
+        True => false_elim(check_sound(formula_of(cs), v, holds_formula_from(cs, v, 1, MEmpty, holds_empty(v), e), steps, ok)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Staged checking. A proof too long for one evaluation is cut into chunks:
+// each chunk's clauses are checked by a theorem of their own (`adds`, by
+// `refl`), over the formula the chunks before it built (`add_all`), and the
+// last chunk derives the empty clause (`check`). `adds_sound` carries the
+// valuation's agreement across a chunk.
+
+fn adds(f: NatMap<List<Nat>>, steps: List<Step>) → Bool {
+    match steps {
+        Nil => True,
+        Cons(s, rest) => match s {
+            Add(id, c, hints) => rup(f, falsify(c, MEmpty), hints) && adds(nat_map_set(f, id, c), rest),
+        },
+    }
+}
+
+fn add_all(f: NatMap<List<Nat>>, steps: List<Step>) → NatMap<List<Nat>> {
+    match steps {
+        Nil => f,
+        Cons(s, rest) => match s {
+            Add(id, c, _) => add_all(nat_map_set(f, id, c), rest),
+        },
+    }
+}
+
+theorem adds_sound(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), steps: List<Step>, ok: adds(f, steps) = True): Holds(add_all(f, steps), v) {
+    match steps {
+        Nil => hf,
+        Cons(s, rest) => match s {
+            Add(id, c, hints) => {
+                let parts = rup(f, falsify(c, MEmpty), hints).and_true_parts(adds(nat_map_set(f, id, c), rest), ok);
+                match ec: clause_true(c, v) {
+                    False => false_elim(rup_sound(f, v, hf, hints, falsify(c, MEmpty), falsify_agrees(c, MEmpty, v, agrees_empty(v), ec), parts.left)),
+                    True => adds_sound(nat_map_set(f, id, c), v, holds_set(f, v, hf, id, c, ec), rest, parts.right),
+                }
+            },
+        },
+    }
+}

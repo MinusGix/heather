@@ -484,10 +484,11 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     Ok(())
 }
 
-/// What the optimizer needs besides: its stage, the plans' types, and the
-/// search.
-const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rules", "function_ir_tidy",
-    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
+/// What the optimizer needs besides: its stage, the plans' types, the
+/// search, and the standard set of rules (`function_ir_identities`), which
+/// is so registered in every compilation beside the program's own.
+const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
+    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "function_ir_identities", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
 /// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
@@ -594,7 +595,12 @@ fn spelled_text(spelling: &[u64]) -> Option<String> {
 /// each, a group a round.
 const STORES_MOST: usize = 8;
 
-fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize]) -> Result<Optimized, String> {
+/// What `--explain-optimizer` asks for: nothing, the rules used, or also
+/// the rules not applied where their nodes fit (`=all`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Explain { No, Used, All }
+
+fn optimize(elab: &Elaborator, answers: &Answers, prefix: &str, probe: &str, imports: &str, definitions: &str, m: usize, roots: &[usize], explain: Explain) -> Result<Optimized, String> {
     let mut fork = Reading::new(elab, answers);
     let source = format!("{probe}_opt_source");
     fork.define(&source, definitions);
@@ -615,6 +621,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 }}
 "));
     let mut modules = vec![source, placed];
+    // `HEATHER_OPTIMIZE_TRACE=1`: what each search found and each test of a
+    // function made answered, so a stage that was declined is seen.
+    let trace = std::env::var_os("HEATHER_OPTIMIZE_TRACE").is_some();
     let (mut stated, mut statements) = (String::new(), String::new());
     let mut placements = Vec::with_capacity(m);
     for k in 0..m {
@@ -628,7 +637,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False => [0] }} }}
 ", uses(modules));
             fork.define(&module, &text);
-            Ok(read(fork, &module, item)? == [1])
+            let yes = read(fork, &module, item)? == [1];
+            if trace { eprintln!("optimize: function {k} `{question}`: {}", if yes { "yes" } else { "no" }); }
+            Ok(yes)
         };
         // The stages `searches` name, in turn from the function `from`: each
         // search is asked of the function the one before it made, and what
@@ -647,6 +658,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
                 fork.define(&find, &text);
                 let unread = || format!("function {k}'s `{search}` did not read back");
                 let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
+                if trace { eprintln!("optimize: function {k} `{search}` ({tag}{at}): {}", if found == "None" { "nothing" } else { "a plan" }); }
                 if found == "None" { continue; }
                 let (plan, function) = match found.split_once('\n') {
                     Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
@@ -678,7 +690,12 @@ fn {name}() → Function {{
 fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {function}.plan()) }}
 ", uses(modules));
             fork.define(&module, &text);
-            match read(fork, &module, &item)?.split_first() {
+            let answer = read(fork, &module, &item)?;
+            if trace {
+                eprintln!("optimize: function {k} lowering `{item}`: {}", if answer.first() == Some(&1) { "placed" } else { "refused" });
+                if answer.first() != Some(&1) && let Some(last) = made.last() { eprintln!("optimize: refused: {}", last.function); }
+            }
+            match answer.split_first() {
                 Some((0, [])) => Ok(None),
                 Some((1, places)) => Ok(Some(places.to_vec())),
                 _ => Err(format!("`{prefix}_opt_{item}` did not read back")),
@@ -688,6 +705,11 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         let mut placement = None;
         let wanted = format!("{earlier}, Wanted::usual()");
         let replay = |search: &str| (Stage::Replay, search.to_string());
+        // The walks search (`spellings := 8`, `Seen::searched`): at a node
+        // they follow the rules through up to eight other spellings of its
+        // word and of each word it reads, and write the cheapest. The
+        // library's own plan tests walk without it, so what their proofs
+        // cost does not move.
         // With no test: inlined and tidied, within the search's room or
         // not at all.
         let mut tidied = run(&mut fork, &mut modules, "t", &original, None,
@@ -701,7 +723,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             let last = tested[0].function.clone();
             tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
                 &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_copied_past()"), replay("find_swept_past()"),
-                    replay("find_learned_past()"), replay("find_copied_past()"), replay("find_swept_past()")])?);
+                    replay("find_learned_past(spellings := 8)"), replay("find_copied_past()"), replay("find_swept_past()")])?);
             if fits(&mut fork, &modules, &tested, "tested_")? && let Some(places) = lowers(&mut fork, &modules, &tested, "tested_")? {
                 made = tested;
                 placement = Some(places);
@@ -712,7 +734,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         if made.is_empty() {
             let mut learned = tidied.clone();
             learned.extend(run(&mut fork, &mut modules, "l", &named(&tidied), tidied.last().map(|last| last.function.clone()),
-                &[replay("find_learned()")])?);
+                &[replay("find_learned(spellings := 8)")])?);
             if learned.len() > tidied.len() {
                 let last = learned.last().map(|last| last.function.clone());
                 learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
@@ -740,8 +762,8 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                 worded.extend(put);
                 let last = worded.last().map(|last| last.function.clone());
                 worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
-                    &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
-                        replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
+                    &[replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
+                        replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
                     made = worded;
                     placement = Some(places);
@@ -773,7 +795,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             if stored.len() > made.len() {
                 let last = stored.last().map(|last| last.function.clone());
                 stored.extend(run(&mut fork, &mut modules, "z", &named(&stored), last,
-                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")),
+                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")),
                         replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &stored, "stored_")? {
                     made = stored;
@@ -782,6 +804,39 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             }
         }
         placements.push(placement);
+        // What the replays kept did, in the rules' words
+        // (`function_ir_explain`): a read of each plan, a line for each
+        // rule it used; a fact two replays derive is said once.
+        if explain != Explain::No {
+            let mut lines: Vec<String> = Vec::new();
+            for (at, staged) in made.iter().enumerate().filter(|(_, staged)| staged.stage == Stage::Replay) {
+                let item = format!("said_{k}_{at}");
+                let module = format!("{probe}_opt_{item}");
+                let text = format!("{imports}import function_ir_explain;\n{}
+fn {prefix}_opt_{item}() → List<Nat> {{ plan_explained({}) }}
+", uses(&modules), staged.plan);
+                fork.define(&module, &text);
+                let said = spelled_text(&read(&mut fork, &module, &item)?).ok_or_else(|| format!("function {k}'s explanation did not read back"))?;
+                for line in said.lines() {
+                    if !lines.iter().any(|known| known == line) { lines.push(line.to_string()); }
+                }
+            }
+            println!("function {k}: {}", match lines.len() { 0 => "no rule used".to_string(), 1 => "1 rule used".to_string(), n => format!("{n} rules used") });
+            for line in &lines { println!("{line}"); }
+            // And what was not: the rules whose nodes fit a node of the
+            // function kept and that a range or their condition kept from
+            // it (`Function::not_applied`), a read of its own.
+            if explain == Explain::All {
+                let item = format!("missed_{k}");
+                let module = format!("{probe}_opt_{item}");
+                let text = format!("{imports}import function_ir_explain;\n{}
+fn {prefix}_opt_{item}() → List<Nat> {{ {}.not_applied() }}
+", uses(&modules), named(&made));
+                fork.define(&module, &text);
+                let missed = spelled_text(&read(&mut fork, &module, &item)?).ok_or_else(|| format!("function {k}'s rules not applied did not read back"))?;
+                for line in missed.lines() { println!("{line}"); }
+            }
+        }
         // The function after the test and after each move, by name.
         let tested_name = made.iter().find(|staged| staged.stage == Stage::Guard).map_or(original.clone(), |staged| format!("{}()", staged.name));
         let moves: Vec<&Staged> = made.iter().filter(|staged| staged.stage != Stage::Guard).collect();
@@ -852,7 +907,7 @@ fn {prefix}_opt_fn{k}() → Function {{ {last_made} }}
 ", rest(0)));
             statements.push_str(&format!("
 theorem {prefix}_opt_made_{k}(): optimize_stage().rewrite({earlier}, {original}, {prefix}_opt_plan_{k}()) = Some({prefix}_opt_fn{k}()) {{
-    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {},
+    optimize_made({earlier}, {original}, {tested_name}, {last_made}, {prefix}_opt_plan_{k}_g(), {}, registered(RuleEntry),
         {prefix}_opt_made_{k}_g(), {joined})
 }}
 ", rest(0)));
@@ -918,7 +973,7 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
     Ok(Optimized { definitions: stated, statements, placements })
 }
 
-pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
+pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: Explain) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
     for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
@@ -932,7 +987,7 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let stem = lowered_stem(prefix, program.optimize);
     let (definitions, rewriting, placed) = if program.optimize {
         let roots: Vec<usize> = std::iter::once(f).chain(program.entries.iter().map(|entry| entry.index)).collect();
-        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots)?;
+        let made = optimize(elab, answers, prefix, &probe, &imports, &definitions, m, &roots, explain)?;
         (format!("{definitions}{}", made.definitions), made.statements, made.placements)
     } else { (definitions, String::new(), vec![None; m]) };
     // A function's emission after `prog`: under the program's counts of
@@ -958,6 +1013,10 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
     match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
 }}
+// And their lengths.
+fn {prefix}_top_lens(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
+    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, _, item) => {prefix}_top_lens(before, j, Cons(asm_len(item), after)) }} }}
+}}
 "));
     let mut fork = Reading::new(elab, answers);
     let first = format!("{definitions}{plans}");
@@ -965,25 +1024,35 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
     let mut placement = Vec::new();
-    // What each function's placement asks it to save (`placement_saves`),
-    // which its frame is sized by.
-    let mut saves = Vec::new();
+    // Where each function's placement starts in it.
+    let mut starts_at = Vec::with_capacity(m);
+    // What each function's placement asks it to save (`placement_saves`)
+    // and how many call slots it asks for (`placement_slots`, eight with no
+    // head), which its frame is sized by.
+    let (mut saves, mut slots) = (Vec::new(), Vec::new());
     for k in 0..m {
         // The optimizer's question already planned a function it kept.
         let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
-        saves.push(match planned.first() { Some(&n) if (17..32).contains(&n) => n - 17, _ => 0 });
+        starts_at.push(placement.len());
+        // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
+        let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
+        saves.push(saving.unwrap_or(0));
+        slots.push(planned.get(usize::from(saving.is_some())).filter(|&&n| (24..33).contains(&n)).map_or(8, |&n| n - 24));
         for n in planned {
             placement.push(match n {
                 16 => "Folded".to_string(),
-                // What a call saves, a mask, and a function's count of
+                // A label whose jumps are short, what a call saves (a
+                // mask), a function's count of call slots and its count of
                 // saves (`Place::number`).
-                n if n >= 32 => format!("Spilling({})", n - 32),
+                n if n >= 289 => format!("Short({})", n - 289),
+                n if n >= 33 => format!("Spilling({})", n - 33),
+                n if n >= 24 => format!("CallSlots({})", n - 24),
                 n if n >= 17 => format!("Saving({})", n - 17),
                 n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
             });
         }
     }
-    let rest = |left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
+    let rest = |placement: &[String], left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
     // The room table the code is lowered under: each function's frame as
     // its placement sizes it, and its callees' rooms below
     // (`program_rooms_by`). The lowering checks it a function at a time
@@ -991,8 +1060,8 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     let reading_rooms = format!("{probe}_rooms");
     let numbers = |values: &[u64]| values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
     fork.define(&reading_rooms, &format!("{imports}import {probe};
-fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f)) }}
-", numbers(&saves)));
+fn {prefix}_rooms_read() → List<Nat> {{ program_rooms_by({stem}_program(), λ (f: Nat) => rooms_at([{}], f), λ (f: Nat) => rooms_at([{}], f)) }}
+", numbers(&slots), numbers(&saves)));
     let table_rooms = read(&mut fork, &reading_rooms, "rooms_read")?;
     if table_rooms.len() != m { return Err("the program's room table did not read back".into()); }
     let room = |function: usize| table_rooms[function];
@@ -1004,7 +1073,7 @@ fn {prefix}_rooms() → Nat → Nat {{ λ (f: Nat) => rooms_at([{}], f) }}
 ", numbers(&table_rooms));
     // Function `k`'s code and what the placement has left after it, as the
     // certificate states them and as the next function's read starts from.
-    let stated = |k: usize, items: &[(u64, String)], left: usize| {
+    let stated = |placement: &[String], k: usize, items: &[(u64, String)], left: usize| {
         let mut code = if k == 0 { "Start".to_string() } else { format!("{prefix}_code_{}()", k - 1) };
         for (name, item) in items { code = format!("At({code},\n    {name}, {item})"); }
         format!("
@@ -1013,7 +1082,7 @@ fn {prefix}_code_{k}() → Prog {{
 }}
 
 fn {prefix}_rest_{k}() → List<Place> {{ {} }}
-", rest(left))
+", rest(placement, left))
     };
     let mut items: Vec<(u64, String)> = Vec::new();
     // (items so far, places left, next label) after each function.
@@ -1025,9 +1094,9 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
     for k in 0..m {
         let (taken, left, names) = after.last().copied().unwrap_or((0, placement.len(), m as u64));
         let before = if k == 0 {
-            format!("fn {prefix}_placement() → List<Place> {{ {} }}\n", rest(placement.len()))
+            format!("fn {prefix}_placement() → List<Place> {{ {} }}\n", rest(&placement, placement.len()))
         } else {
-            stated(k - 1, &items[after.get(k.wrapping_sub(2)).map_or(0, |step| step.0)..taken], left)
+            stated(&placement, k - 1, &items[after.get(k.wrapping_sub(2)).map_or(0, |step| step.0)..taken], left)
         };
         let (prog, places) = if k == 0 { ("Start".to_string(), format!("{prefix}_placement()")) } else { (format!("{prefix}_code_{}()", k - 1), format!("{prefix}_rest_{}()", k - 1)) };
         let step = format!("{probe}_{k}");
@@ -1035,7 +1104,8 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
 fn {prefix}_read_{k}() → List<Nat> {{
     match {emitted} {{
         None => [],
-        Some(e) => Cons(prog_depth(e.prog), Cons(e.placement.len(), Cons(e.names, {prefix}_top(e.prog, prog_depth(e.prog) - {taken}, [])))),
+        Some(e) => Cons(prog_depth(e.prog), Cons(e.placement.len(), Cons(e.names,
+            {prefix}_top_lens(e.prog, prog_depth(e.prog) - {taken}, {prefix}_top(e.prog, prog_depth(e.prog) - {taken}, []))))),
     }}
 }}
 ", uses(&modules), emitted = emit(&prog, k, &places, names));
@@ -1061,8 +1131,29 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
                     at.map_or(String::new(), |at| format!(", at {at}")),
                     nodes.map_or(String::new(), |nodes| format!("\n  the function's nodes, values by their ids: {nodes}"))));
             },
-            [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
-                let read = read_items(&numbers[3..])?;
+            [count, places, names, ..] if count as usize >= taken && places as usize <= left && numbers.len() >= 3 + count as usize - taken => {
+                let new = count as usize - taken;
+                let lens = &numbers[3..3 + new];
+                let mut read = read_items(&numbers[3 + new..])?;
+                if read.len() != new { return Err(format!("function {k}'s emission did not read back")); }
+                // Its jumps in the two-byte form where they reach: the
+                // placement asks for them (`Short` after its head), and the
+                // code is stated with them, which the certificate's
+                // emission of that placement checks.
+                let short = super::labels::relax(&read, lens);
+                if !short.is_empty() {
+                    for (_, item) in read.iter_mut() {
+                        let near = item.starts_with("Jcc(") || item.starts_with("Jmp(");
+                        if near && super::labels::jump(item).is_some_and(|(to, _)| short.contains(&to)) { *item = super::labels::shortened(item); }
+                    }
+                    let start = starts_at[k];
+                    let head = placement[start..].iter().take(2).take_while(|place| place.starts_with("Saving(") || place.starts_with("CallSlots(")).count();
+                    let at = start + head;
+                    for (i, to) in short.iter().enumerate() { placement.insert(at + i, format!("Short({to})")); }
+                    for later in starts_at.iter_mut().skip(k + 1) { *later += short.len(); }
+                    // The places left after each earlier function grew by them.
+                    for step in after.iter_mut() { step.1 += short.len(); }
+                }
                 // The contract's ground for needing no stack alignment and
                 // touching no state the model lacks: a function's code
                 // calls only compiled code (docs/native/native-library-exports-design.md
@@ -1089,7 +1180,7 @@ fn {prefix}_shown() → List<Nat> {{ {stem}_fn{k}().shown_bytes() }}
     let closing = format!("{probe}_code");
     let text = format!("{imports}{}{}
 fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
-", uses(&modules), stated(last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
+", uses(&modules), stated(&placement, last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
     fork.define(&closing, &text);
     modules.push(closing.clone());
     let lens = read(&mut fork, &closing, "lens")?;
@@ -1143,7 +1234,7 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
     text.push_str(&format!("
 // The placement the heuristic chose; the theorem holds for any.
 fn {prefix}_placement() → List<Place> {{ {} }}
-{rooms_definition}", rest(placement.len())));
+{rooms_definition}", rest(&placement, placement.len())));
     // The literal: `{prefix}_at_{c}` its first `c` items at each cut, and
     // each function's code the cut it ends at.
     text.push_str(&super::emission::code(prefix, &items, &cuts));
@@ -1153,7 +1244,7 @@ fn {prefix}_placement() → List<Place> {{ {} }}
 fn {prefix}_code_{k}() → Prog {{ {prefix}_at_{count}() }}
 
 fn {prefix}_rest_{k}() → List<Place> {{ {} }}
-", rest(left)));
+", rest(&placement, left)));
         let earlier = if k == 0 { "Nil".to_string() } else { format!("{stem}_first_{}()", k - 1) };
         let (started, functions, next) = if lent {
             (if k == 0 { format!("emit_functions_lent_start({prefix}_placement(), {m}, {prefix}_counts(), {prefix}_rooms())") } else { format!("{prefix}_emitted_{}()", k - 1) },
@@ -1736,6 +1827,8 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
             10 => format!("LoadByte(ByteLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
             11 => format!("StoreByte(ByteStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
             12 => "Syscall".to_string(),
+            14 => format!("JccShort({}, {})", CONDITIONS.get(take()? as usize).ok_or_else(bad)?, take()?),
+            15 => format!("JmpShort({})", take()?),
             // A piece: its length and its bytes, stated as they are. Its
             // measure is a verdict (x86_64_asm), `True` at a literal's
             // bytes, so the literal is the lowering's piece whichever

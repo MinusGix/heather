@@ -43,9 +43,10 @@ sees them.
 
 ## Not covered
 
-- A case analysis over a type whose constructors carry fields (`Option`,
-  a payload variant): its arms read the payload through projections the
-  display cannot name yet, so it falls back as before.
+- ~~A case analysis over a type whose constructors carry fields~~: read
+  since 2026-11-16 (issues/induct-case-goal-report.md), for a reader only,
+  on a non-recursive type; each arm names its fields after the
+  declaration's.
 - A convoy over more than two constructors (its equation is threaded
   through the inner cases' motives).
 - `unsigned_lt_bit(i, ofNat(8))` is how a `u64` comparison's bit and a

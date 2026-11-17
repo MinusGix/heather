@@ -174,12 +174,13 @@ fn add_double() → Function {
 
 fn pair() → List<Function> { [add_double(), double()] }
 
-// The frame: eight spill slots where the function calls and none in a
-// leaf, and a word for each save.
-theorem leaf_frame_is_its_saves(): twice_more().frame(2) = 16 { refl }
-theorem caller_frame_has_slots(): add_double().frame(1) = 72 { refl }
-theorem plain_leaf_has_no_frame(): double().frame(0) = 0 { refl }
-theorem frame_is_at_most_112(): add_double().frame(9) = 112 { refl }
+// The frame: the call slots asked for (at most eight) where the function
+// calls and none in a leaf, and a word for each save.
+theorem leaf_frame_is_its_saves(): twice_more().frame(8, 2) = 16 { refl }
+theorem caller_frame_has_slots(): add_double().frame(8, 1) = 72 { refl }
+theorem caller_frame_asked_one(): add_double().frame(1, 1) = 16 { refl }
+theorem plain_leaf_has_no_frame(): double().frame(8, 0) = 0 { refl }
+theorem frame_is_at_most_112(): add_double().frame(9, 9) = 112 { refl }
 
 fn pair_places() → List<Place> { [Into(Rax), Saving(1), Into(R12), Into(Rax)] }
 
@@ -187,9 +188,9 @@ fn pair_places() → List<Place> { [Into(Rax), Saving(1), Into(R12), Into(Rax)] 
 // what the caller's R12 after the call rests on.
 fn pair_program() → Prog {
     Start
-        .label(1).put(Block([frame_allocate(0)]))
+        .label(1).put(Block([]))
         .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
-        .put(Block([])).put(Block([frame_free(0)])).put(Ret)
+        .put(Block([])).put(Block([])).put(Ret)
         .label(2).put(Block([frame_allocate(72)])).keeping(8, [R12])
         .put(Block([MovRR(R12, Rsi)]))
         .saving().put(Block([])).put(Block([])).put(CallTo(1)).put(Block([])).restoring()
@@ -223,6 +224,7 @@ theorem pair_callee_plain(): double().refused(0, [Into(Rax)], 2, [], program_roo
 
 // The planner puts a value read after a call in a callee-saved register
 // where one is free: R12, saved once, where a caller-saved register would
-// be stored and loaded round the call. The call then saves nothing.
-theorem planner_keeps_across_call(): add_double().plan() = [Saving(1), Into(R12), Spilling(0), Into(Rax)] { refl }
+// be stored and loaded round the call. The call then saves nothing, and
+// the function asks for no call slots: its frame is R12's one word.
+theorem planner_keeps_across_call(): add_double().plan() = [Saving(1), CallSlots(0), Into(R12), Spilling(0), Into(Rax)] { refl }
 theorem planner_keeps_lowers(): lower_program(pair(), plan_program(pair())).is_some() = True { refl }

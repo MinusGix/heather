@@ -6,7 +6,7 @@
 // an argument, and the negative controls the step refuses. Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import omega; import list;
+import logic; import bool; import nat; import omega; import list; import option; import result;
 
 // ---- A `decreases` function: one Bool test, a fixed bound ----
 
@@ -120,6 +120,179 @@ theorem loop_count_len<A>(xs: List<A>): loop_count(xs) = xs.len() {
         }, 0, refl)
 }
 
+// ---- A decrease proved by hand, an arm naming the test, arms left out ----
+
+// `omega` cannot read `half`, so the decrease is the function's own `on`
+// clause, and the principle reuses it rather than proving it again.
+theorem half_below(x: Nat, h: 0 < x): x.half() < x { let d = x.half_add_le(); omega }
+fn halves(x, acc: Nat) → Nat decreases x {
+    if h: 0 < x { halves(x.half(), acc + 1) } else { acc }
+    on ?dec1 := { half_below(x, h) };
+}
+
+theorem halves_grows(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc); all_goals { omega }
+}
+
+// The same decrease proved in the `on` clause itself, by a search over a
+// `let`: the search names no binder, so the lifted obligation takes the
+// facts in scope about the goal (`h`) for it to read, and the function gets
+// its equations and principle (issues/decreases-on-block-let-no-unfold.md).
+fn halves_let(x, acc: Nat) → Nat decreases x {
+    if h: 0 < x { halves_let(x.half(), acc + 1) } else { acc }
+    on ?dec1 := { let d = x.half_add_le(); omega };
+}
+theorem halves_let_grows(x, acc: Nat): acc <= halves_let(x, acc) {
+    induct halves_let(x, acc); all_goals { omega }
+}
+theorem halves_let_zero(acc: Nat): halves_let(0, acc) = acc {
+    halves_let::False(0, acc, omega)
+}
+
+// An arm sees the test under the name the function gave it.
+theorem halves_named(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) {
+        True => { let pos: (0 < x) = h; let next = ih; omega },
+        False => omega,
+    }
+}
+
+// A case with no arm is closed by `known`: here the IH, or `omega` over it.
+theorem halves_default(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) {}
+}
+theorem halves_some_arms(x, acc: Nat): acc <= halves(x, acc) {
+    induct halves(x, acc) { False => omega }
+}
+// A premise of the IH is discharged in a case with no arm, as under
+// `all_goals`.
+theorem up_default(i, n, acc: Nat, below: i <= n): up(i, n, acc) + i = acc + n {
+    induct up(i, n, acc) {}
+}
+
+// ---- A pipeline of partial steps: a `match` on a call's result ----
+// (issues/induct-through-result-matches.md) Each arm of the `match` is a
+// case, binding the arm's fields and `h: first.run(out) = Some(mid)`, and a
+// recursive call under the arm (`rest.run(mid)`) has its IH beside the one
+// at the matched call.
+
+inductive Prog { Emit(w: Nat), Then(first: Prog, rest: Prog), Both(left: Prog, right: Prog), Stop }
+
+fn Prog::run(self s: Prog, out: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Emit(w) => if w < 8 { Some(Cons(w, out)) } else { None },
+        Then(first, rest) => match first.run(out) {
+            None => None,
+            Some(mid) => rest.run(mid),
+        },
+        // Nested: the second call reads the first's result.
+        Both(left, right) => match left.run(out) {
+            None => None,
+            Some(l) => match right.run(l) {
+                None => None,
+                Some(r) => Some(Cons(0, r)),
+            },
+        },
+        Stop => None,
+    }
+}
+
+theorem run_grows(s: Prog, out, got: List<Nat>, e: s.run(out) = Some(got)): out.len() <= got.len() {
+    induct Prog::run(s, out) {
+        Emit::True => { let same: (Cons(w, out) = got) = Option::some_inj(Cons(w, out), got, e); j(same, λ l _ => out.len() <= l.len(), omega) },
+        Emit::False => absurd(e),
+        Then::None => absurd(e),
+        Then::Some => { let a = ih(mid, h); let b = ih2(got, e); omega },
+        Both::None => absurd(e),
+        Both::Some::None => absurd(e),
+        Both::Some::Some => {
+            let a = ih(l, h);
+            let b = ih2(r, h2);
+            let same: (Cons(0, r) = got) = Option::some_inj(Cons(0, r), got, e);
+            j(same, λ x _ => out.len() <= x.len(), omega)
+        },
+        Stop => absurd(e),
+    }
+}
+
+// The equations come with the principle: `Then::Some` is the sequence
+// step a proof about one statement cites.
+theorem run_then(first, rest: Prog, out, mid: List<Nat>, h: first.run(out) = Some(mid)): Prog::Then(first, rest).run(out) = rest.run(mid) {
+    Prog::run::Then::Some(Prog::Then(first, rest), out, first, rest, refl, mid, h)
+}
+
+// `match h:` names the equation: the case binds it under that name.
+fn Prog::depth(self s: Prog, fuel: Nat) → Option<Nat> {
+    match s {
+        Then(first, rest) => match got: first.depth(fuel) {
+            None => None,
+            Some(k) => rest.depth(k),
+        },
+        Emit(_) => Some(fuel),
+        Both(left, _) => left.depth(fuel),
+        Stop => Some(0),
+    }
+}
+theorem depth_named(s: Prog, fuel, k: Nat, e: s.depth(fuel) = Some(k)): Nat {
+    induct Prog::depth(s, fuel) {
+        Then::Some => { let seen: (first.depth(fuel) = Some(k2)) = got; 0 },
+        Then::None => 0,
+        Emit => 0,
+        Both => 0,
+        Stop => 0,
+    }
+}
+
+// A measured recursion through a result: the call under the arm reads the
+// arm's field, and its IH is there.
+fn half_even(n: Nat) → Option<Nat> { if n.half() + n.half() = n { Some(n.half()) } else { None } }
+fn halving(n, acc: Nat) → Option<Nat> decreases n {
+    if h: 0 < n {
+        match half_even(n) { None => None, Some(k) => halving(n - 1, acc + k) }
+    } else {
+        Some(acc)
+    }
+    on ?dec1 := { let pos = h; omega };
+}
+theorem halving_grows(n, acc, r: Nat, e: halving(n, acc) = Some(r)): acc <= r {
+    induct halving(n, acc) {
+        True::Some => { let more = ih(r, e); omega },
+        True::None => absurd(e),
+        False => { let same: (acc = r) = Option::some_inj(acc, r, e); omega },
+    }
+}
+
+// A postfix `?` reads as the `match` it lowers to: a case per outcome, and
+// the call after the first `?` is outright in its case, with its IH.
+fn Prog::count(self s: Prog) → Result<Nat, Nat> {
+    match s {
+        Then(first, rest) => {
+            let a = first.count()?;
+            let b = rest.count()?;
+            Ok(a + b)
+        },
+        Emit(_) => Ok(1),
+        Both(left, _) => left.count(),
+        Stop => Err(0),
+    }
+}
+theorem count_pos(s: Prog, n: Nat, e: s.count() = Ok(n)): 1 <= n {
+    induct Prog::count(s) {
+        Then::Ok::Ok => { let a = ih(value, h); let b = ih2(value2, h2); let same: (value + value2 = n) = j(e, λ r _ => value + value2 = r.unwrap_or(0), refl); omega },
+        Then::Err => absurd(e),
+        Then::Ok::Err => absurd(e),
+        Emit => { let same: (1 = n) = j(e, λ r _ => 1 = r.unwrap_or(0), refl); omega },
+        Both => ih(n, e),
+        Stop => absurd(e),
+    }
+}
+
+// The cases are the arms of the `match`, not the `match` as one case.
+// expect-error: has the cases
+theorem run_old_case(s: Prog, out, got: List<Nat>, e: s.run(out) = Some(got)): out.len() <= got.len() {
+    induct Prog::run(s, out) { Then => omega }
+}
+
 // ---- Negative controls ----
 
 fn plain(n: Nat) → Nat { n + 1 }
@@ -145,4 +318,10 @@ theorem induct_leaf_fails(i, n, acc: Nat): up(i, n, acc) = acc {
 // asked for.
 theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
     induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+}
+
+// A case with no arm that `known` cannot close names the case.
+// expect-error: no arm for the case `True`
+theorem halves_default_fails(x, acc: Nat): halves(x, acc) = acc {
+    induct halves(x, acc) {}
 }

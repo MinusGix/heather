@@ -1,0 +1,52 @@
+// Byte strings `b"…"` (docs/native/io-programs-design.md §5 D3): the
+// vector `[u8; n]` of the string's characters, one byte each, or the list
+// of them where a `List<u8>` is expected. Pinned by `refl` against the
+// numerals and character literals a reader would write instead, in
+// inference and checking position, before an open list, at the escapes and
+// past the length where a literal becomes one kernel node; the last probes
+// are the negative controls (a refusal of the lexer, a character past
+// ASCII or a short `\x`, refuses the whole file, so those are the Rust
+// lexer's tests). Tests, not library: nothing outside lib/_tests
+// imports this module.
+import list; import bitvec; import byte;
+
+// Inference: `[u8; 6]`, its length the string's.
+def valid = b"valid\n";
+fn valid_vector() → [u8; 6] { valid }
+theorem valid_is_numerals(): valid_vector() = [118, 97, 108, 105, 100, 10] { refl }
+theorem valid_is_characters(): valid_vector() = ['v', 'a', 'l', 'i', 'd', '\n'] { refl }
+
+// Checking at a list: the same bytes as a `List<u8>`.
+fn valid_list() → List<u8> { b"valid\n" }
+theorem valid_list_is_numerals(): valid_list() = [118, 97, 108, 105, 100, 10] { refl }
+theorem valid_list_length(): valid_list().len() = 6 { refl }
+
+// After an open byte, as the tail of a list whose element type the head
+// decides.
+theorem after_open(x: u8): Cons(x, b"ab") = [x, 'a', 'b'] { refl }
+
+// The escapes a string has but `\u{…}`, each one byte, and `\xHH` for
+// any byte, past ASCII too, in either case.
+fn escapes() → List<u8> { b"\t\r\\\"\'\0\x7f" }
+theorem escapes_are(): escapes() = [9, 13, 92, 34, 39, 0, 127] { refl }
+fn high() → [u8; 4] { b"\xff\x80\xC3\xa9" }
+theorem high_is_numerals(): high() = [0xFF, 0x80, 0xC3, 0xA9] { refl }
+theorem hex_is_the_character(): b"\x41\x0a" = b"A\n" { refl }
+
+// The empty byte string, and `b` as an ordinary name beside one.
+fn nothing() → [u8; 0] { b"" }
+fn named_b(b: u8) → List<u8> { Cons(b, b"") }
+theorem named_b_is(): named_b(1) = [1] { refl }
+
+// Long enough that the literal is one kernel node, not a spine.
+fn long() → List<u8> { b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+theorem long_length(): long().len() = 300 { refl }
+
+// The negative controls: a length that is not the string's, an element
+// type that is not a byte, and a byte that is not the one written.
+// expect-error: this has type `[u8; 3]`, but `[u8; 2]` is expected here
+fn too_short() → [u8; 2] { b"abc" }
+// expect-error: this has type `List<u8>`, but `List<Nat>` is expected here
+fn not_bytes() → List<Nat> { b"abc" }
+// expect-error(kernel): NotConvertible
+theorem upper_is_not_lower(): valid_list() = b"Valid\n" { refl }

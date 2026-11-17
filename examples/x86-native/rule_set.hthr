@@ -1,0 +1,44 @@
+// A program compiled with the standard set of rules.
+//
+// A set of optimizer rules is a module: `function_ir_identities` states the
+// plain identities of words, each a `rule theorem`
+// (docs/native/optimizer-rules-design.md §6), and `compile-x86` registers
+// it in every compilation, beside the library's placed rules and the
+// program's own. Nothing here names it.
+//
+//     heather compile-x86 examples/x86-native/rule_set.hthr tangled -o rule_set.s --explain-optimizer
+//
+// The byte is returned as it is: the add, the subtraction, the xor and
+// the or are gone, each by a rule the report names. The sum is written
+// with the length first, which `add_sub`, `(a + b) - b = a`, does not fit
+// as it stands: the search follows `add_comm` to the spelling it fits.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_replay;
+import function_ir_rule;
+import runtime;
+
+// The first byte of a span, the long way round: the length added and
+// taken away, and a word xored with itself joined in.
+runtime fn tangled(s: List<u8>, n: u64) → u64 {
+    if h: 0 < n {
+        ((n + s.byte_within(n, 0).zero_extend(56)) - n) | n.bxor(n)
+    } else {
+        0
+    }
+}

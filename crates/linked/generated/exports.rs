@@ -41,11 +41,11 @@ linked!("scan_tokens.s");
 // (the crate's comment): nothing a caller passes can make the call
 // misbehave, and the unproved part is the platform's, not the callee's.
 unsafe extern "sysv64" {
-    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
+    /// `sha512_t1` of `lib/native/crypto/sha512_round.hthr`. STACK: 80 bytes.
     pub safe fn sha512_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
+    /// `sha512_t2` of `lib/native/crypto/sha512_round.hthr`. STACK: 56 bytes.
     pub safe fn sha512_t2(a: u64, b: u64, c: u64) -> u64;
-    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 96 bytes.
+    /// `sha512_next` of `lib/native/crypto/sha512_round.hthr`. STACK: 56 bytes.
     pub safe fn sha512_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
     /// `sha256_t1` of `lib/native/crypto/sha256_round.hthr`. STACK: 0 bytes.
     pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
@@ -53,7 +53,7 @@ unsafe extern "sysv64" {
     pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
     /// `sha256_next` of `lib/native/crypto/sha256_round.hthr`. STACK: 0 bytes.
     pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 176 bytes.
+    /// `scan_step` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 64 bytes.
     pub safe fn scan_step(state: u64, byte: u64) -> u64;
     /// `scan_accept` of `lib/lang/lexer/lexer_scan.hthr`, a function of `scan_token`'s program. STACK: 0 bytes.
     pub safe fn scan_accept(state: u64) -> u64;
@@ -81,7 +81,7 @@ mod raw {
     }
 }
 
-/// `Sha256::compress` of `lib/native/crypto/sha256_one_block.hthr`. STACK: 656 bytes.
+/// `Sha256::compress` of `lib/native/crypto/sha256_one_block.hthr`. STACK: 352 bytes.
 pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_compress_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -109,7 +109,7 @@ pub fn sha256_compress(ctx: &mut [u8], block: &[u8]) -> u64 {
     unsafe { raw::sha256_compress(ctx.as_mut_ptr(), ctx.len() as u64, block.as_ptr(), block.len() as u64) }
 }
 
-/// `Sha256::init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 224 bytes.
+/// `Sha256::init` of `lib/native/crypto/sha256_stream.hthr`. STACK: 168 bytes.
 pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_init_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -137,7 +137,7 @@ pub fn sha256_init(ctx: &mut [u8]) -> u64 {
     unsafe { raw::sha256_init(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
-/// `Sha256::update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 936 bytes.
+/// `Sha256::update` of `lib/native/crypto/sha256_stream.hthr`. STACK: 552 bytes.
 pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     // SAFETY (the premises of `sha256_update_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -165,7 +165,7 @@ pub fn sha256_update(ctx: &mut [u8], message: &[u8]) -> u64 {
     unsafe { raw::sha256_update(ctx.as_mut_ptr(), ctx.len() as u64, message.as_ptr(), message.len() as u64) }
 }
 
-/// `Sha256::finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 920 bytes.
+/// `Sha256::finish` of `lib/native/crypto/sha256_stream.hthr`. STACK: 488 bytes.
 pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     // SAFETY (the premises of `sha256_finish_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -193,7 +193,7 @@ pub fn sha256_finish(ctx: &mut [u8]) -> u64 {
     unsafe { raw::sha256_finish(ctx.as_mut_ptr(), ctx.len() as u64) }
 }
 
-/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 88 bytes.
+/// `count_newlines` of `lib/native/native_tool_spans.hthr`. STACK: 24 bytes.
 pub fn count_newlines(text: &[u8], count: u64) -> u64 {
     // SAFETY (the premises of `count_newlines_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -298,7 +298,7 @@ pub fn copy_span(out: &mut [u8], text: &[u8], count: u64, from: u64) -> u64 {
     unsafe { raw::copy_span(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, count, from) }
 }
 
-/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 88 bytes.
+/// `copy_window` of `lib/native/native_tool_spans.hthr`. STACK: 24 bytes.
 pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     // SAFETY (the premises of `copy_window_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -326,7 +326,7 @@ pub fn copy_window(out: &mut [u8], text: &[u8], from: u64, end: u64) -> u64 {
     unsafe { raw::copy_window(out.as_mut_ptr(), out.len() as u64, text.as_ptr(), text.len() as u64, from, end) }
 }
 
-/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 400 bytes.
+/// `scan_token` of `lib/lang/lexer/lexer_span.hthr`. STACK: 184 bytes.
 pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_token_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers
@@ -347,7 +347,7 @@ pub fn scan_token(source: &[u8], at: u64, previous: u64) -> u64 {
     unsafe { raw::scan_token(source.as_ptr(), source.len() as u64, at, previous) }
 }
 
-/// `List::scan_tokens` of `lib/lang/lexer/lexer_records.hthr`. STACK: 520 bytes.
+/// `List::scan_tokens` of `lib/lang/lexer/lexer_records.hthr`. STACK: 384 bytes.
 pub fn scan_tokens(out: &mut [u8], source: &[u8], at: u64, previous: u64) -> u64 {
     // SAFETY (the premises of `scan_tokens_native_returns`, in order):
     // - the arguments are passed (`Stack::Passed`): six in their registers

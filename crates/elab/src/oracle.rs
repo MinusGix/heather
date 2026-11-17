@@ -24,6 +24,20 @@ use crate::spelling;
 /// past this budget the input itself is the answer.
 const STUCK_SPELLING_STEPS: u64 = 64;
 
+/// Steps the small-step reducer may spend, for a caller that can do without
+/// the answer, on the spelling of a *canonical* head the value machine found
+/// and the readback declined (an annotated pair, so every record; a
+/// literal). See [`SemanticOracle::whnf_term_probing`].
+///
+/// The value machine reaches such a head in as many steps as the
+/// computation has, with words compared as words. The reducer reaches it
+/// by rewriting the term, each step re-walking and rebuilding every blocked
+/// scrutinee above its redex, and a word comparison one bit at a time: a
+/// head the machine has after a few thousand steps can be past the
+/// reducer's whole fuel, which it then spends, seconds of it, to answer
+/// `OutOfFuel` (issues/small-step-reducer-on-computed-terms.md).
+const DECLINED_SPELLING_STEPS: u64 = 4096;
+
 /// A kernel world used for semantic elaboration decisions.
 #[derive(Clone)]
 pub(crate) struct SemanticOracle {
@@ -148,6 +162,23 @@ impl SemanticOracle {
     /// here after the type probe, so a stuck encoding has to be as cheap as
     /// the stuck type was.
     pub(crate) fn whnf_term(&self, gamma: &LocalCtx, term: &Term) -> Result<Term, OutOfFuel> {
+        self.whnf_term_spelling(gamma, term, self.fuel)
+    }
+
+    /// [`Self::whnf_term`] for a caller that reads the reduct's shape and
+    /// carries on without it when there is none (motive exposure:
+    /// `matching::expose`). The value probe keeps the oracle's fuel; what is
+    /// bounded is the reducer's spelling of a canonical head the readback
+    /// declined, by [`DECLINED_SPELLING_STEPS`]. Such a caller was already
+    /// answered `OutOfFuel` for a head the reducer could not reach, after
+    /// the reducer had spent all its fuel finding that out.
+    pub(crate) fn whnf_term_probing(&self, gamma: &LocalCtx, term: &Term) -> Result<Term, OutOfFuel> {
+        self.whnf_term_spelling(gamma, term, self.fuel.min(DECLINED_SPELLING_STEPS))
+    }
+
+    /// [`Self::whnf_term`], with the reducer's budget for a canonical head
+    /// the readback declined.
+    fn whnf_term_spelling(&self, gamma: &LocalCtx, term: &Term, declined: u64) -> Result<Term, OutOfFuel> {
         let _phase = crate::stats::guard(crate::stats::Timer::ElabWhnf);
         let defs = Defs::transparent(&self.world);
         if term_head_may_compute(term) {
@@ -184,6 +215,9 @@ impl SemanticOracle {
                 return Ok(reduce::whnf_term_delta(term, gamma, defs, budget)
                     .unwrap_or_else(|OutOfFuel| term.clone()));
             }
+            // A canonical head the readback declined: the reducer spells
+            // it, within what this caller gave it.
+            return reduce::whnf_term_delta(term, gamma, defs, declined);
         }
         reduce::whnf_term_delta(term, gamma, defs, self.fuel)
     }

@@ -509,6 +509,58 @@ theorem List::perm_iff_occurrences<A: DecEq>(self xs, ys: List<A>):
 }
 
 // ---------------------------------------------------------------------------
+// Writes by index. A list with `v` written over its `x` is, with `x` put
+// back in front, the list with `v` in front: as a permutation, and so as
+// counts. Two writes that swap two elements leave a permutation, which is
+// what an in-place sort's exchange is.
+
+theorem List::perm_update<A>(self xs: List<A>, i: Nat, x, v: A, at: xs.nth(i) = Some(x)):
+    Perm(Cons(x, xs.update(i, λ _ => v)), Cons(v, xs))
+{
+    match xs {
+        Nil => absurd(at),
+        Cons(h, t) => match i {
+            Zero => j(Option::some_inj(h, x, at), λ c _ => Perm(Cons(c, Cons(v, t)), Cons(v, Cons(h, t))), t.perm_swap(h, v)),
+            Succ(k) => {
+                let u = t.update(k, λ _ => v);
+                Cons(x, Cons(h, u)).perm_trans(Cons(h, Cons(x, u)), Cons(v, Cons(h, t)), u.perm_swap(x, h),
+                    Cons(h, Cons(x, u)).perm_trans(Cons(h, Cons(v, t)), Cons(v, Cons(h, t)),
+                        Cons(x, u).perm_cons(h, Cons(v, t), t.perm_update(k, x, v, at)), t.perm_swap(h, v)))
+            },
+        },
+    }
+}
+
+theorem List::occurrences_update<A: DecEq>(a: A, self xs: List<A>, i: Nat, x, v: A, at: xs.nth(i) = Some(x)):
+    Cons(x, xs.update(i, λ _ => v)).occurrences(a) = Cons(v, xs).occurrences(a)
+{
+    Cons(x, xs.update(i, λ _ => v)).perm_occurrences(a, Cons(v, xs), xs.perm_update(i, x, v, at))
+}
+
+theorem List::perm_swap_at<A>(self xs: List<A>, i, k: Nat, x, y: A, at_i: xs.nth(i) = Some(x), at_k: xs.nth(k) = Some(y)):
+    Perm(xs, xs.update(i, λ _ => y).update(k, λ _ => x))
+{
+    let ys = xs.update(i, λ _ => y);
+    let zs = ys.update(k, λ _ => x);
+    match Nat::eq_dec(i, k) {
+        // An element swapped with itself: both writes put back what is there.
+        Inl(same) => {
+            let at_k_i: (xs.nth(i) = Some(y)) = j(sym(same), λ m _ => xs.nth(m) = Some(y), at_k);
+            let xy: (x = y) = Option::some_inj(x, y, trans(sym(at_i), at_k_i));
+            let kept: (ys = xs) = j(xy, λ c _ => xs.update(i, λ _ => c) = xs, xs.update_nth_self(i, x, at_i));
+            let back: (zs = xs) = trans(cong_fn(λ (l: List<A>) => l.update(k, λ _ => x), kept), xs.update_nth_self(k, x, j(same, λ m _ => xs.nth(m) = Some(x), at_i)));
+            j(sym(back), λ l _ => Perm(xs, l), xs.perm_refl())
+        },
+        Inr(apart) => {
+            let still: (ys.nth(k) = Some(y)) = trans(xs.nth_update_other(i, λ _ => y, k, λ e => apart(sym(e))), at_k);
+            let both: Perm(Cons(y, zs), Cons(y, xs)) =
+                Cons(y, zs).perm_trans(Cons(x, ys), Cons(y, xs), ys.perm_update(k, y, x, still), xs.perm_update(i, x, y, at_i));
+            zs.perm_sym(xs, zs.perm_cons_inv(y, xs, both))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Duplicate-free lists: counting without deciding equality. What a finite
 // type's cardinality stands on (lib/std/data/fintype_card.hthr).
 

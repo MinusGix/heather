@@ -80,6 +80,7 @@ pub(crate) fn rename_expr(e: &mut Expr, from: &str, to: &str) {
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
+        | ExprKind::ByteStr(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
@@ -355,6 +356,7 @@ impl Deshadow {
             | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
+            | ExprKind::ByteStr(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl
@@ -460,6 +462,7 @@ pub(crate) fn walk_expr_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr) -> bool) 
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
+        | ExprKind::ByteStr(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl

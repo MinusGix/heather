@@ -20,8 +20,10 @@
 // lent buffers as the function left them (`Target::based_left`). RAX then
 // goes to the result's home.
 //
-// Room: each activation keeps 144 bytes a function below its frame
-// (`Target::roomy`), and function `f` asks 136 a level and the CALL a word.
+// Room: each activation keeps `program_calls_room` below its frame
+// (`Target::roomy`): the largest room of the table the functions are
+// emitted under (`program_room`, every function saving the six registers
+// it may) and the CALL's word.
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
@@ -97,10 +99,9 @@ theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) →
     match ids {
         Nil => λ i _ never => false_elim(never),
         Cons(id, rest) => λ i fit m => {
-            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
             match m {
-                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
-                Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
+                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, known)),
+                Inr(later) => layout.words_fit_mem(rest, i, known, later),
             }
         },
     }
@@ -136,7 +137,7 @@ fn Target::lending(self t: Target, held: Buffers(), count: Nat) → Lending {
 // buffers it is lent in memory, and each of them as long as its capacity.
 fn Target::CalledWith(self t: Target, held: Buffers(), f: Nat, words: List<BitVec(64)>) → Nat → MachineState<X86Memory(t.r.profile)> → Type {
     λ i s => t.stack.Passed(t.passed_homes(program_lent(t.functions, f)) ++ words, i, s) ∧
-        (136 * Succ(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
+        (program_room(t.functions)(f) <= i ∧ (t.stack.InMemory(t.lending(held, program_lent(t.functions, f)), lent_buffers(program_lent(t.functions, f), held),
                 s.memory) ∧
             ((b: Nat) → b < program_lent(t.functions, f) → buffer_bytes(held, b).len() = t.layout().capacity(b))))
 }
@@ -372,7 +373,7 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
         ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(t.functions), f), b).IsTrue() → written(b) = True) →
         Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, top,
             Lending(program_counts(t.functions), addresses, buffers, written).spans()) →
-        t.site().CallsOver(t.stack, program_effects(t.functions), index_rooms(), t.functions.len(),
+        t.site().CallsOver(t.stack, program_effects(t.functions), program_room(t.functions), t.functions.len(),
             Lending(program_counts(t.functions), addresses, buffers, written), top)): t.Answered(program_writers(t.functions)) {
     λ held f below words fits s0 at0 resident i0 rsp room called0 ret saved => {
         let sized = called0.right.right.right;
@@ -421,14 +422,14 @@ theorem Prog::links_grows(self base: Prog, places: List<Place>, names: Nat, prog
             let fs = Cons(last, earlier);
             (match program_linkable(fs) as λ b => (match b as λ _ => Option<Prog> {
                     False => None,
-                    True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) { None => None, Some(out) => Some(out.prog) },
+                    True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), program_room(fs)) { None => None, Some(out) => Some(out.prog) },
                 }) = Some(program) → base.Within(program) {
                 False => λ none => absurd(none),
-                True => (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) as λ o => Grows(base, o) →
+                True => (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), program_room(fs)) as λ o => Grows(base, o) →
                         (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) → base.Within(program) {
                     None => λ _ none => absurd(none),
                     Some(out) => λ grown same => j(Option::some_inj(out.prog, program, same), λ x _ => base.Within(x), grown),
-                })(emit_functions_after_lent_grows(base, places, names, program_counts(fs), index_rooms(), fs)),
+                })(emit_functions_after_lent_grows(base, places, names, program_counts(fs), program_room(fs), fs)),
             })
         },
     }
@@ -447,7 +448,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(functions), f), b).IsTrue() → written(b) = True) →
             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(functions), addresses, buffers, written).spans()) →
-            site.CallsOver(stack, program_effects(functions), index_rooms(), functions.len(),
+            site.CallsOver(stack, program_effects(functions), program_room(functions), functions.len(),
                 Lending(program_counts(functions), addresses, buffers, written), top)) {
     match functions {
         Nil => λ _ => ⟨trivial,
@@ -458,28 +459,28 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                     program_linkable(fs) = b →
                     (match b as λ _ => Option<Prog> {
                         False => None,
-                        True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) { None => None, Some(out) => Some(out.prog) },
+                        True => match emit_functions_after_lent(base, fs, places, names, program_counts(fs), program_room(fs)) { None => None, Some(out) => Some(out.prog) },
                     }) = Some(program) →
                     program_linkable(fs).IsTrue() ∧
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                            site.CallsOver(stack, program_effects(fs), index_rooms(), Succ(earlier.len()),
+                            site.CallsOver(stack, program_effects(fs), program_room(fs), Succ(earlier.len()),
                                 Lending(program_counts(fs), addresses, buffers, written), top)) {
                 False => λ _ none => absurd(none),
                 True => λ checked => {
                     let both: program_linkable(fs).IsTrue() = j(sym(checked), λ b _ => b.IsTrue(), trivial);
-                    (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), index_rooms()) as λ o =>
+                    (match emit_functions_after_lent(base, fs, places, names, program_counts(fs), program_room(fs)) as λ o =>
                         ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                             ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                             Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                            MayCallOver<M>(site, stack, top, index_rooms(), Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
+                            MayCallOver<M>(site, stack, top, program_room(fs), Lending(program_counts(fs), addresses, buffers, written), fs, o)) →
                         (match o as λ _ => Option<Prog> { None => None, Some(out) => Some(out.prog) }) = Some(program) →
                         program_linkable(fs).IsTrue() ∧
                             ((addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
                                 ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(fs), f), b).IsTrue() → written(b) = True) →
                                 Loan<M>(site.fetch, site.data, stack, top, Lending(program_counts(fs), addresses, buffers, written).spans()) →
-                                site.CallsOver(stack, program_effects(fs), index_rooms(), Succ(earlier.len()),
+                                site.CallsOver(stack, program_effects(fs), program_room(fs), Succ(earlier.len()),
                                     Lending(program_counts(fs), addresses, buffers, written), top)) {
                         None => λ _ none => absurd(none),
                         Some(out) => λ may same => ⟨both,
@@ -488,8 +489,8 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, names: Nat, p
                     })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls_needs<M>(site, laid, stack, top,
                         Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
                         λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(fs), f), b),
-                        program_rowed_needs(fs, Bool::is_true_and(program_evaluable(fs) && program_placeless(fs), program_rowed(fs), both).right),
-                        index_rooms(), allowed))
+                        program_rowed_needs(fs, Bool::both(both).right),
+                        program_room(fs), allowed))
                 },
             })(refl)
         },
@@ -952,9 +953,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
     // The homes into their registers and R10 into RBX.
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ env.InRegisters(g, arguments, regs);
     let carry = t.goes_block(passes_to, 0, block, w_carried, tree, pre4, did);
-    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(prog_len(passes_to), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => pre4(execute_block_normal(block, s)),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), carry, λ s h => {
+    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(carry, λ s h => {
             let u = execute_block_normal(block, s);
             let c = t.homes_carried(s, words, lent, small, h.right);
             let held_u: t.Held(live, env, u.gprs, u.memory) = j(sym(c.left), λ m _ => t.Held(live, env, u.gprs, m),
@@ -997,7 +996,8 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let a = call(env.buffers, f, words);
         let i0 = t.index - 8;
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
-        let room_f: (136 * Succ(f) <= i0) = omega(t.roomy, below);
+        let callee_room = program_calls_room_above(t.functions, f, below);
+        let room_f: (program_room(t.functions)(f) <= i0) = omega(t.roomy, callee_room);
         let bare = pre.left;
         let v = bare.left.witness;
         let based = bare.left.proof;
@@ -1041,27 +1041,20 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         let region = Call(callee, arguments, result);
         let live = live_before(arguments, result, out);
         let k = program_lent(t.functions, callee);
-        let f1 = Bool::is_true_and(Succ(callee).leb(layout.functions.len()), arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()) &&
-            ((arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()))), fit);
-        let f2 = Bool::is_true_and(arity_fits(program_arity(layout.functions, callee), 2 * k + arguments.len()),
-            (arguments.len() + 2 * k).leb(6) && (layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len())), f1.right);
-        let f3 = Bool::is_true_and((arguments.len() + 2 * k).leb(6), layout.words_fit(Cons(result, arguments)) && k.leb(layout.capacities.len()), f2.right);
-        let f4 = Bool::is_true_and(layout.words_fit(Cons(result, arguments)), k.leb(layout.capacities.len()), f3.right);
-        let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), f1.left);
-        let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, f3.left);
+        let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), known);
+        let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, known);
         let small: (k <= 3) = omega(few);
-        let has: (k <= t.caps.len()) = Nat::leb_sound(k, t.caps.len(), f4.right);
-        let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, f4.left, m);
+        let has: (k <= t.caps.len()) = Nat::leb_sound(k, t.caps.len(), known);
+        let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, known, m);
         let words = env.words_at(arguments);
         let answer = call(env.buffers, callee, words);
         let left = Env(env.words, answer.buffers, env.args);
         let words_len: (words.len() = arguments.len()) = env.words_at_len(arguments);
         let arity: arity_fits(program_arity(t.functions, callee), 2 * k + words.len()).IsTrue() =
-            j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), f2.left);
+            j(sym(words_len), λ n _ => arity_fits(program_arity(t.functions, callee), 2 * k + n).IsTrue(), known);
         let mean_eq: (region.meaning(call, env) = left.set_word(result, answer.word)) = env.call_meaning(call, callee, arguments, result);
         let back = p.calls(layout, Succ(callee), k, arguments);
-        let w_back: back.Within(t.program) = back.within_trans(back.word_from(layout, out, result, Rax), t.program,
-            back.within_word_from(layout, out, result, Rax), within);
+        let w_back: back.Within(t.program) = Prog::within_trans(back.within_word_from(layout, out, result, Rax), within);
         // RAX to the result's home.
         let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
@@ -1069,10 +1062,6 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
             t.function_performs(call, answers, callee, below), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
-            λ _ => t.goes_weaken(prog_len(back), tree,
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧
-                    (left.set_word(result, read_gpr(Rax, s.gprs)) = region.meaning(call, env)),
-                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, left, s.gprs, s.memory) ∧ s.gprs.Holding(result_registers(), [answer.word]),
-                taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
+            λ _ => t.goes_weaken(taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
     }
 }

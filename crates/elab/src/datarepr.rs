@@ -1552,6 +1552,7 @@ pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>)
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
+        | ExprKind::ByteStr(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl

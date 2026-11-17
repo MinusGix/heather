@@ -1,6 +1,6 @@
 ---
 title: A computation over Io ends with status 1 when a write fails
-status: open
+status: closed
 labels: [native,effects,runtime]
 area: heather-in-heather
 milestone: [nh-effects]
@@ -28,3 +28,7 @@ leaves the `/dev/full` case out, which the builder's tr passes.
 
 `tr_upper::source` exits 1 on a full stdout as GNU's does, under the
 soundness theorem; then the builder's tr can go.
+
+## Log
+
+- 2026-11-16: 2026-11-16: Done on branch claude/project-thread-qk0g33. No exit node was needed: a statement `if` over Io (`ETm::If`, docs/native/io-programs-design.md §4.2) lets `tr_upper` stop its loop on a failed write and answer status 1, which the program's exit already carries. Lowered to `Branch` with per-arm moves under `ETm::lower_sound`; reflected through `Arms`' new `path`. The gate checks /dev/full (exit 1, as GNU's); the builder trs and their gates are deleted.

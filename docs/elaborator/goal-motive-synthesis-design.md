@@ -261,6 +261,129 @@ refusal says what the arm is asked to prove: ``but `Some(row.snd) =
 Some(row.snd)` is expected here``. Both are pinned in
 `lib/_tests/std/core/match_motive_checked_tests.hthr`.
 
+### 4.7 The hypotheses read as the goal is
+
+`issues/case-split-refines-hypotheses-under-calls.md`, 2026-11-16. A case
+split refines the hypotheses it generalizes with the goal
+(`Generalize::refined_hypotheses`), and until this section it found them
+by syntactic occurrence only (`dependent-match-compiler-design.md` §5.1),
+and not at all under `match h:` on a computed scrutinee. So a hypothesis
+that says what a call returned, `same: Leaf(w).emits(p, n) = Some(c)`, was
+not refined by `match fits(w)`, though its left side is a case on that
+test once `emits` unfolds; and `match fit: fits(w)` did not refine even a
+hypothesis that writes the test. The proofs worked around both by taking
+the hypothesis as an arrow of a written motive that restated the callee's
+body, applied to `(refl, same)` at the end.
+
+**What is read.** At a computed scrutinee, a binder an arm names whose type
+does not contain the term is read as §4.3 reads the goal
+(`matching::hypothesis_through_calls`): its type to weak head normal form,
+each side of the equation reduced, the positions they are stuck on
+collected, and those that convert to the scrutinee abstracted in the
+reduced type with the scrutinee as written beside them (`with_scrutinee`).
+The abstraction is type-checked at `z` (§4.6's rule), and the binder is
+generalized at the reduced type instantiated back at the scrutinee, which
+converts to its own. The goal is spelled the same way, at the motive it
+gets alone, so that the syntactic rung, which now finds the scrutinee in
+the hypothesis, does not stop short of a goal only a later rung reached.
+The combined motive is checked once more, and if it is ill-formed the
+match refines what it did before.
+
+**Only an equation about one call's value.** The reading is restricted to
+an equation one side of which is stuck and the other a value. The first
+sweep read every type below its binders (§4.5's depth) and broke proofs
+of another kind: a proposition about a call, `within:
+p.word_from(…).Within(t.program)`, is what the lemmas about that call
+take with the call as written (`p.word_from_slot(…)` rewrites it), and
+unfolding it out from under them is never what the proof wants. An
+equation between two computations is not about one call's value either.
+
+**Under `match h:`.** The match refines what the plain form refines, with
+two exceptions, both what `h` is passed to or with: a hypothesis that
+takes an equation about the scrutinee (as before, `False => g(h)`), and at
+a computed scrutinee one an arm passes as an argument of one call beside
+`h`, `InSlot => t.goes_word_to_slot(…, slot, within, …)`: the callee
+states the two about the test as written, which is what passing the
+evidence along is for (`generalize::passed_beside`). A variable scrutinee
+keeps its earlier rule.
+
+**What it changes.** Proofs that transported a hypothesis by hand where
+the match now refines it: `j(s, λ b _ => (!b && rest.spare(query)) = True,
+spare)` is now `spare` where `spare` is refuted alone, and
+`trans(sym(h), @cong(…, same))` is now `h`. They were rewritten to the
+shorter form (`function_ir_lower_calls`, `bitvec_omega`); as with §4.5,
+only re-elaborating the library finds them. A proof that passes the
+hypothesis beside `h` (`trans(e, h)`, `j(s, …, spare)`) is unchanged.
+
+**What it does not reach.**
+
+- A call the elaborator's reduction cannot take through: inside a
+  structural recursion's arm, `emits(Invoke(shape), …)` is stuck on the
+  arm's hidden children binder, so `Stmt::emits_runs` states its call arms
+  as a lemma over `p.call(…)` (`Target::call_runs`), where the shape is a
+  variable of a non-recursive type.
+- A value let-bound in the callee and read in two places,
+  `Region::paired`'s `known` (`let known = body.nodes.leaves_known()`,
+  then `before` from it and `True => known`): a split on
+  `leaves_known()` meets it only inside other calls' arguments after
+  reduction, which is no stuck position, so `carried` is not refined and
+  that proof keeps its written motive for the inner split.
+- `split_all`'s `Cases` builds its own motive (`host.rs`), as §5.1 of the
+  match compiler's design says; `split-all-revise-hypotheses` stays open.
+
+### 4.8 A record is abstracted at its arguments
+
+`issues/named-match-third-level-kernel-rejects.md`, 2026-11-17. A record
+with value parameters is, in the goal, its lowering: `Found(n)` with a
+field `one: first(n) = Some(a)` is `Σ(a: Nat). first(n) = Some(a)`, and the
+`Σ` does not say it is `Found(n)`. Every rung read it as any other type, so
+`match one: first(n)` abstracted the test *inside the field's type*, and
+the `Some(a)` arm was to build `Σ(a′). Some(a) = Some(a′)`. That type
+displays as `Found` and is the lowering of no `Found(…)`: an arm that
+builds the record from `one`, or states its value at `Found(n)`, has a
+value of another type, and the refusal (the kernel's, since the elaborator
+compares nothing at a `let`'s annotation) could not show the difference.
+`Source::calls_built`, three named splits whose equations are the fields
+of the record it returns, is the proof that met it.
+
+A record's type is about the test where its **arguments** are. So at a
+computed scrutinee the goal is read with each declaration's lowering
+spelled as its reference, `El(D#tycode_fn ā)`
+(`MotiveSynthesisElab::fold_declarations`, the respelling of
+`docs/inductives/per-instantiation-type-codes-design.md` §4.1, which
+recovers `ā` by matching the lowering against the declaration's and proves
+it by lowering again), every rung runs on that spelling, the exposed goal
+of §4.3 is spelled so too, and the motive found is spelled back
+(`unfold_declarations`). A test in an argument is abstracted as before:
+`Holds(first(n))` is `Holds(Some(a))` in the arm. The binders a match
+refines by occurrence are read the same way
+(`Generalize::refined_by_occurrence`), so a hypothesis at the record goes
+with the goal.
+
+**A variable scrutinee is not respelled.** A variable occurs in a lowering
+only where an argument put it, so abstracting inside is abstracting the
+argument, and `match n` pays nothing for this section.
+
+**It changes what an arm is given.** Where the test was written in a
+record's field, an arm used to face the field at its constructor and could
+close it by `refl`; it now faces the record as written and passes the
+equation (`match h:`). Found by re-elaborating the library, as §4.5 says a
+change to this ladder must be.
+
+**What it does not reach.** A record that does not use one of its
+parameters: the unused argument is not in the lowering, the respelling
+declines, and the motive reads inside as before
+(`loose_or` in `lib/_tests/std/core/match_refines_through_calls_tests.hthr`
+pins the refusal).
+
+**A hypothesis left as written is said so.** §4.7 leaves a hypothesis an
+arm passes beside `h` as written in *every* arm, so `None =>
+absurd(compiled)` was refused because another arm wrote `subst(compiled,
+linked)`, and the refusal named neither. A refusal the elaborator makes
+inside a `match h:` now carries a note naming the hypotheses left as
+written for that reason and the way out, binding what the call takes
+first (`Refined::explain`).
+
 ## 5. Mechanism B: rebuilding the value around `z`
 
 `field_rewrap` reads a scrutinee as a constructor field and says what

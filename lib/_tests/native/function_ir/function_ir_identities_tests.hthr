@@ -1,0 +1,49 @@
+// The identities as a set of rules (lib/native/function_ir/function_ir_identities.hthr):
+// a module that imports them searches and replays with them, by the
+// registry alone. Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_identities;
+import function_ir_learn;
+import function_ir_optimize;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import bool; import list; import nat; import option;
+
+// `((x + y) - y) | (x ^ x)`: the sum taken back is `x`, the xor is zero,
+// and then the or with that zero is `x` again, which is found on the walk
+// after the first, since a rule reads what the walk has made.
+fn tangled() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Sub(64, 4, 3, 2), BitXor(64, 5, 1, 1), BitOr(64, 6, 4, 5)], Ports([]))), 6, 1)
+}
+
+fn untangled() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), tangled(), tangled().learn_plan()) }
+
+theorem tangled_untangled(): untangled() =
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Move(64, 4, 1), Const(64, 5, 0), Move(64, 6, 4)], Ports([]))), 6, 1)) { refl }
+
+// Bits. `t7 = t6 | t5` where `t5` is clear fits `or_zero`, but a bit's
+// move has no code in the lowering, so the or stays; and `t8 = t5 | t5`
+// fits it too, but a rule decides that bit, which the walk keeps over a
+// move it would know less of.
+fn bits() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 5), Const(64, 4, 9), UnsignedLessThan(64, 5, 4, 3), UnsignedLessThan(64, 6, 1, 2),
+        BitOr(1, 7, 6, 5), BitOr(1, 8, 5, 5)], Ports([]))), 1, 1)
+}
+
+fn bits_learned() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), bits(), bits().learn_plan()) }
+
+theorem bits_kept(): bits_learned() = Some(bits()) { refl }
+
+// A search through a word's other spellings. `(y + x) - y` fits no rule
+// as written, and the plain walk leaves it; with the search `add_comm`
+// spells the sum the other way round and `add_sub` fits. `0 & x` is zero by
+// `and_comm` and `and_zero`, at the node itself.
+fn turned() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Sub(64, 4, 3, 2), Const(64, 5, 0), BitAnd(64, 6, 5, 4)], Ports([]))), 6, 1)
+}
+
+theorem turned_left(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan()) = Some(turned()) { refl }
+
+theorem turned_searched(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan(spellings := 8)) =
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Move(64, 4, 1), Const(64, 5, 0), Const(64, 6, 0)], Ports([]))), 6, 1)) { refl }

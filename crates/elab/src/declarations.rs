@@ -113,7 +113,21 @@ impl DeclarationsMut<'_> {
         let self_name = base_name(&decl.name).to_string();
         let warn_mark = self.pass.warnings.borrow().len();
         let mut why = String::new();
-        for reading in [branch_equations::Reading::Proposition, branch_equations::Reading::Bool] {
+        // A reading through matches on results (`branch_equations::
+        // Walk::result_arms`) that the checker refuses is tried again
+        // without them, so a function keeps the equations it had; the
+        // refusal is recorded under the names only that reading has.
+        let mut refused_results: Option<(Vec<String>, String)> = None;
+        let attempts = [
+            (branch_equations::Reading::Proposition, true),
+            (branch_equations::Reading::Proposition, false),
+            (branch_equations::Reading::Bool, true),
+            (branch_equations::Reading::Bool, false),
+        ];
+        for (reading, with_results) in attempts {
+            if !with_results && refused_results.as_ref().is_none_or(|(_, r)| r.is_empty()) {
+                continue;
+            }
             let fields = |ty: &Ty, ctor: &str| -> Option<Vec<(Option<String>, Ty)>> {
                 let base = ctor.rsplit("::").next().unwrap_or(ctor);
                 let nat = |span| Ty { kind: TyKind::Nat, span };
@@ -138,8 +152,21 @@ impl DeclarationsMut<'_> {
                 let at: Vec<(String, Ty)> = ind.params.iter().cloned().zip(args.iter().cloned()).collect();
                 Some(ctor.fields.iter().map(|(n, t)| (n.clone(), measure::instantiate_ty(t, &at))).collect())
             };
-            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, recursion) {
+            // A matched term that is not a parameter (a call's result) is
+            // typed by the elaborator over the binders on the way, the
+            // answer spelled and checked (`infer_local`).
+            let elab: &Elaborator = self.0;
+            let results = |e: &Expr, known: &[(String, Ty)]| -> Option<Ty> {
+                let scope: Vec<measure::Binder> = known.iter().map(|(n, t)| measure::Binder { name: n.clone(), ty: Some(t.clone()), value: None }).collect();
+                measure::BinderTys::infer_local(elab, decl, &[], &scope, e)
+            };
+            let results: Option<branch_equations::ScrutTypes<'_>> = if with_results { Some(&results) } else { None };
+            let equations = match branch_equations::branch_equations(decl, &self_name, reading, &fields, results, recursion) {
                 Ok(e) => e,
+                // Read without the results there is nothing to read: the
+                // refusal of the reading with them is the one to report,
+                // and the next reading may still read them.
+                Err(_) if !with_results && refused_results.take().is_some() => continue,
                 Err(e) => {
                     why = e;
                     break;
@@ -154,17 +181,32 @@ impl DeclarationsMut<'_> {
                 Ok(())
             });
             self.pass.warnings.borrow_mut().truncate(warn_mark);
+            let read_results = equations.iter().any(|eq| eq.path.iter().any(|s| matches!(s.test, branch_equations::PathTest::Result { .. })));
             match built {
                 Ok(()) => {
                     if designate {
                         self.designate_equations(&equations);
                     }
+                    if let Some((names, why)) = refused_results.take() {
+                        for name in names.into_iter().filter(|n| !equations.iter().any(|eq| &eq.designed == n)) {
+                            self.pass.unfold_refusals.borrow_mut().insert(name, why.clone());
+                        }
+                    }
                     return Some(equations);
+                }
+                Err(e) if read_results => {
+                    refused_results = Some((equations.iter().map(|eq| eq.designed.clone()).collect(), e.to_string()));
+                    if why.is_empty() {
+                        why = e.to_string();
+                    }
                 }
                 // The proposition reading's refusal is the one to report: the
                 // `Bool` reading is a fallback for conditions that are not one.
                 Err(e) if why.is_empty() => why = e.to_string(),
                 Err(_) => {}
+            }
+            if !with_results {
+                refused_results = None;
             }
         }
         for name in branch_equations::head_names(decl) {
@@ -219,13 +261,23 @@ impl DeclarationsMut<'_> {
                     }
                     _ => None,
                 },
-                // `f::induct`, or a branch equation `f::True`, `f::Cons`:
-                // a structural recursion's are built with its principle.
+                // `f::induct`, or a branch equation `f::True`, `f::Cons`,
+                // `f::Seq::Some` (every arm on the path is capitalized): a
+                // structural recursion's are built with its principle.
                 ExprKind::Var(n) => n.rsplit_once("::")
                     .filter(|(_, last)| *last == "induct" || last.starts_with(char::is_uppercase))
                     .map(|(f, last)| {
                         if last == "induct" && !asked.iter().any(|a| a == f) {
                             asked.push(f.to_string());
+                        }
+                        let mut f = f;
+                        if last != "induct" {
+                            while let Some((g, arm)) = f.rsplit_once("::")
+                                && arm.starts_with(char::is_uppercase)
+                                && g.rsplit("::").next().is_some_and(|s| !s.starts_with(char::is_uppercase))
+                            {
+                                f = g;
+                            }
                         }
                         f.to_string()
                     }),
@@ -968,7 +1020,7 @@ impl DeclarationsMut<'_> {
         if lifted && companions {
             match measure::companions(decl, &self_name, &measure, omega_available, self.0, &auto, &family.obligations) {
                 Err(why) => {
-                    self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
+                    self.pass.unfold_refusals.borrow_mut().insert(unfold.clone(), why);
                 }
                 Ok(parts) => {
                     let mut built = true;
@@ -976,7 +1028,7 @@ impl DeclarationsMut<'_> {
                         if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
                             self.pass.unfold_refusals
                                 .borrow_mut()
-                                .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                                .insert(unfold.clone(), format!("the generated `{}` was refused ({e})", part.decl.name));
                             built = false;
                             break;
                         }
@@ -1005,6 +1057,20 @@ impl DeclarationsMut<'_> {
                             self.elab_recursion_equations(decl, branch_equations::Recursion::Measure);
                         }
                     }
+                }
+            }
+        }
+        // Without `f_unfold` there are no branch equations and no
+        // `f::induct` either, since both are proved from it: a reference to
+        // one reports why `f_unfold` was not built, not that `f` is not a
+        // recursion (issues/decreases-on-block-let-no-unfold.md).
+        if companions && decl.kind == DeclKind::Fn {
+            let refused = self.pass.unfold_refusals.borrow().get(&unfold).cloned();
+            if let Some(why) = refused {
+                let why = format!("its unfolding `{unfold}` was not built: {why}");
+                let mut refusals = self.pass.unfold_refusals.borrow_mut();
+                for name in branch_equations::head_names(decl).into_iter().chain([format!("{}::induct", decl.name)]) {
+                    refusals.entry(name).or_insert_with(|| why.clone());
                 }
             }
         }

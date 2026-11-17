@@ -40,6 +40,16 @@ in scope wins. The registration is a module event
 (`DeltaEvent::Registered { ty, global }`), so it is in module images, in the
 registry digest that early cutoff compares, and in the slice-replay prefix.
 
+**A generator registers what it publishes** with the declaration form
+`AsRegistered(ty)` (`lib/std/tactic/tactic.hthr`): the member is a value,
+as `AsValue`, entered under the type named `ty` as `register def` enters
+one. It is elaborated as `register def name: ty = body;`, so the checks
+are the same (a record or inductive with no parameters, registered once),
+and the body the generator built is compared with that type. A prefix
+generator can so put what it derives from a declaration into a table its
+readers collect: `rule theorem` is the intended first client
+(`docs/native/optimizer-rules-design.md` §6).
+
 **`registered(T)`** is the `List<T>` of every value registered at `T` whose
 module is in the current module's import closure, in canonical (global-key)
 order: the order does not depend on how imports are arranged. Each element

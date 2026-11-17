@@ -1,0 +1,73 @@
+// The plain identities of words, as optimizer rules
+// (docs/native/optimizer-rules-design.md §6): a set of rules is a module,
+// and a program that imports this one compiles with them, as it does with
+// its own. Each is a theorem about words under the `rule` prefix, which
+// reads the statement as what the optimizer may do and proves that sound
+// from the theorem; the search finds where a statement fits.
+//
+// They are not among the library's placed rules (`library()`,
+// function_ir_rules): nothing here is named by place, and a compilation
+// that does not import the module is as it was.
+import function_ir;
+import function_ir_eval;
+import function_ir_match;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_state;
+import nat_map;
+import bitvec;
+import bitvec_bytes;
+import bitvec_nat;
+import bitvec_resize;
+import bitvec_ring;
+import bitvec_shift_nat;
+import bitvec_signed;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+import vector;
+
+// A zero joined in is nothing joined in.
+rule theorem or_zero({w: Nat}, x: BitVec(w)): x | 0 = x { trans(cong_fn(λ (z: BitVec(w)) => x | z, BitVec::ofNat_zero(w)), BitVec::bor_zero_r(w, x)) }
+
+rule theorem zero_or({w: Nat}, x: BitVec(w)): 0 | x = x { trans(cong_fn(λ (z: BitVec(w)) => z | x, BitVec::ofNat_zero(w)), BitVec::bor_zero_l(w, x)) }
+
+// A zero added or taken away changes nothing. (`x + 0` is the library's
+// `add_zero`.)
+rule theorem zero_add({w: Nat}, x: BitVec(w)): 0 + x = x { BitVec::zero_add(w, x) }
+
+rule theorem sub_zero({w: Nat}, x: BitVec(w)): x - 0 = x { trans(cong_fn(λ (z: BitVec(w)) => x - z, BitVec::ofNat_zero(w)), BitVec::sub_zero(w, x)) }
+
+// A word xored with itself is zero, and so is a word masked by zero.
+rule theorem xor_self({w: Nat}, x: BitVec(w)): x.bxor(x) = 0 { trans(BitVec::xor_self(w, x), sym(BitVec::ofNat_zero(w))) }
+
+rule theorem and_zero({w: Nat}, x: BitVec(w)): x & 0 = 0 {
+    trans(cong_fn(λ (z: BitVec(w)) => x & z, BitVec::ofNat_zero(w)), trans(BitVec::band_zero_r(w, x), sym(BitVec::ofNat_zero(w))))
+}
+
+// What was added taken away again, and what was taken away added again.
+rule theorem add_sub({w: Nat}, a, b: BitVec(w)): (a + b) - b = a { BitVec::add_sub_cancel(w, a, b) }
+
+rule theorem sub_add({w: Nat}, a, b: BitVec(w)): (a - b) + b = a { BitVec::sub_add_cancel(w, a, b) }
+
+// A shift by no places.
+rule theorem shift_left_none({w: Nat}, x: BitVec(w)): x << 0 = x { refl }
+
+rule theorem shift_right_none({w: Nat}, x: BitVec(w)): x >> 0 = x { refl }
+
+// The operands of a sum, a mask, a join and an xor either way round. No
+// walk writes one of these for a node, since it gains nothing
+// (`Node::turned`): a search through a word's other spellings follows them
+// to the rules that fit the other way round (`Seen::searched`,
+// function_ir_learn), so `add_sub` is found at `(b + a) - b` and `or_zero`
+// at `0 | x`.
+rule theorem add_comm({w: Nat}, a, b: BitVec(w)): a + b = b + a { BitVec::add_comm(w, a, b) }
+
+rule theorem and_comm({w: Nat}, a, b: BitVec(w)): a & b = b & a { BitVec::band_comm(w, a, b) }
+
+rule theorem or_comm({w: Nat}, a, b: BitVec(w)): a | b = b | a { BitVec::bor_comm(w, a, b) }
+
+rule theorem xor_comm({w: Nat}, a, b: BitVec(w)): a.bxor(b) = b.bxor(a) { BitVec::bxor_comm(w, a, b) }

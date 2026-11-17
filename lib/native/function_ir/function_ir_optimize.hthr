@@ -25,10 +25,12 @@ import function_ir_stage;
 import function_ir_fresh;
 import function_ir_inline;
 import function_ir_replay;
+import function_ir_rule;
 import function_ir_rules;
 import function_ir_tidy;
 import function_ir_guard;
 import function_ir_learn;
+import function_ir_match;
 import function_ir_prune;
 import function_ir_spelled;
 import x86_64_asm;
@@ -65,17 +67,20 @@ fn passes(guard: Option<Guard>, moves: List<Or<Inlines, Plan>>) → Passes() { P
 fn no_passes() → Passes() { passes(None, []) }
 
 // One move: code put in, or the replayer.
-fn move_stage() → Stage<Or<Inlines, Plan>> { inline_stage().or(replay_stage(rules())) }
+// The rules a replay may use are the library's and those registered where
+// the stage is named: `entries` is read where the call is, so a program's
+// certificate states its plans over the rules its own modules declare.
+fn move_stage(entries: List<RuleEntry> := registered(RuleEntry)) → Stage<Or<Inlines, Plan>> { inline_stage().or(replay_stage(rules_with(entries))) }
 
-fn optimize_stage() → Stage<Passes()> { guard_stage().maybe().then(move_stage().many()) }
+fn optimize_stage(entries: List<RuleEntry> := registered(RuleEntry)) → Stage<Passes()> { guard_stage().maybe().then(move_stage(entries := entries).many()) }
 
 // What the test makes and the moves make of that, the stages make of the
 // function. The moves' statement is itself joined from one a move
 // (`Stage::many_made`).
 theorem optimize_made(callees: List<Function>, f0, f1, f2: Function, guard: Option<Guard>, moves: List<Or<Inlines, Plan>>,
-    m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1), m2: move_stage().many().rewrite(callees, f1, moves) = Some(f2)):
-    optimize_stage().rewrite(callees, f0, passes(guard, moves)) = Some(f2) {
-    guard_stage().maybe().then_made(move_stage().many(), callees, f0, f1, f2, guard, moves, m1, m2)
+    entries: List<RuleEntry>, m1: guard_stage().maybe().rewrite(callees, f0, guard) = Some(f1),
+    m2: move_stage(entries := entries).many().rewrite(callees, f1, moves) = Some(f2)): optimize_stage(entries := entries).rewrite(callees, f0, passes(guard, moves)) = Some(f2) {
+    guard_stage().maybe().then_made(move_stage(entries := entries).many(), callees, f0, f1, f2, guard, moves, m1, m2)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,15 +215,15 @@ fn Function::find_inlined_past(self function: Function, callees: List<Function>,
     function.find_inlines(callees, Inlines(function.top(), function.body.inline_all(callees, inline_small(wanted.small)).past_test()))
 }
 
-fn Function::find_replayed(self function: Function, plan: Plan) → Option<Found> {
-    replay_function(rules(), function, plan).map(λ made => Found(plan.spelled(), made))
+fn Function::find_replayed(self function: Function, plan: Plan, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+    replay_function(rules_with(entries), function, plan).map(λ made => Found(plan.spelled(), made))
 }
 
 // Every node, call and loop reading through the copies before it.
-fn Function::find_copied(self function: Function) → Option<Found> { function.find_replayed(function.copy_plan()) }
+fn Function::find_copied(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> { function.find_replayed(function.copy_plan(), entries := entries) }
 
 // What nothing reads dropped.
-fn Function::find_swept(self function: Function) → Option<Found> { function.find_replayed(function.dead_plan()) }
+fn Function::find_swept(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> { function.find_replayed(function.dead_plan(), entries := entries) }
 
 // A plan of a function under a test at its entry that leaves the arm where
 // the test fails as it is: that arm is the function as it was written,
@@ -229,8 +234,12 @@ fn Plan::plain_kept(self plan: Plan) → Plan {
 
 // The same two of a function under a test at its entry, in the arm past
 // the test alone.
-fn Function::find_copied_past(self function: Function) → Option<Found> { function.find_replayed(function.copy_plan().plain_kept()) }
-fn Function::find_swept_past(self function: Function) → Option<Found> { function.find_replayed(function.dead_plan().plain_kept()) }
+fn Function::find_copied_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+    function.find_replayed(function.copy_plan().plain_kept(), entries := entries)
+}
+fn Function::find_swept_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+    function.find_replayed(function.dead_plan().plain_kept(), entries := entries)
+}
 
 // The arm past a guard's test, in the plan of a function so tested.
 fn Plan::past_test(self plan: Plan) → Plan {
@@ -244,8 +253,8 @@ fn nodes_compare(nodes: List<Node>) → Nat {
 
 // The function reading through its copies and repeats, where that plan is
 // taken: what a test's words are to the body's is known after it.
-fn Function::copied(self function: Function) → Function {
-    match replay_function(rules(), function, function.copy_plan()) { None => function, Some(made) => made }
+fn Function::copied(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Function {
+    match replay_function(rules_with(entries), function, function.copy_plan()) { None => function, Some(made) => made }
 }
 
 // `plain` under a test at its entry. The function asked is `plain` as the
@@ -255,11 +264,11 @@ fn Function::copied(self function: Function) → Function {
 // decides without one, by at least the comparisons the test makes. Not in
 // a function small enough to be inlined: whoever it is inlined into tests
 // for it.
-fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted) → Option<Found> {
+fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
     match tidied.body.size().leb(wanted.small) {
         True => None,
-        False => tidied.guard_over(plain.top().max(tidied.top())).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
-            match (tidied.learn_plan().decided() + nodes_compare(guard.nodes)).leb(tested.copied().learn_plan().past_test().decided()) {
+        False => tidied.guard_over(plain.top().max(tidied.top()), entries := entries, learners := learners).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
+            match (tidied.learn_plan(entries := entries, learners := learners).decided() + nodes_compare(guard.nodes)).leb(tested.copied(entries := entries).learn_plan(entries := entries, learners := learners).past_test().decided()) {
                 True => guard_function(plain, guard).map(λ made => Found(guard.spelled(), made)),
                 False => None,
             })),
@@ -269,14 +278,17 @@ fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted
 // The function with the conditionals its own tests decide replaced by
 // their arms and the narrowings its ranges make moves written as moves,
 // where there is one of either.
-fn Function::find_learned(self function: Function) → Option<Found> {
-    shared(function.learn_plan(), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan) })
+fn Function::find_learned(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
-fn Function::find_learned_past(self function: Function) → Option<Found> {
-    shared(function.learn_plan().plain_kept(), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan) })
+fn Function::find_learned_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings).plain_kept(), λ plan =>
+        match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 
 // The loads asked for after the byte load `after`, each a leaf of its own
@@ -343,10 +355,10 @@ fn StructuredRegion::byte_loads(self region: StructuredRegion) → Nat {
 
 // The loads a function's joins of bytes wait on (`Seen::meeting`): none
 // without four byte loads to join, which is known without a walk.
-fn Function::asked(self function: Function) → List<Asked> {
+fn Function::asked(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → List<Asked> {
     match function.body.byte_loads().leb(3) {
         True => [],
-        False => shared(function.body.learn(function.seen()), λ learned => learned.seen.wants.words),
+        False => shared(function.body.learn(function.seen(Tables::of(entries, learners))), λ learned => learned.seen.wants.words),
     }
 }
 
@@ -354,14 +366,14 @@ fn Function::asked(self function: Function) → List<Asked> {
 // joined into a word, for the walk to find the join a move of
 // (`find_learned`). Nothing reads the load until then, and the sweep takes
 // it back where no walk does.
-fn Function::find_worded(self function: Function, callees: List<Function>) → Option<Found> {
-    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(), function.top()).sites))
+fn Function::find_worded(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries, learners := learners), function.top()).sites))
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
-fn Function::find_worded_past(self function: Function, callees: List<Function>) → Option<Found> {
-    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(), function.top()).sites.past_test()))
+fn Function::find_worded_past(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries, learners := learners), function.top()).sites.past_test()))
 }
 
 // ---------------------------------------------------------------------------
@@ -698,12 +710,12 @@ fn StructuredRegion::stores_paid(self region: StructuredRegion) → PaidPlan {
 }
 
 // The four stores paid as one, where `find_stores` put their load.
-fn Function::find_paid(self function: Function) → Option<Found> {
-    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan), False => None })
+fn Function::find_paid(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan, entries := entries), False => None })
 }
 
-fn Function::find_paid_past(self function: Function) → Option<Found> {
-    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan.plain_kept()), False => None })
+fn Function::find_paid_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+    shared(function.body.stores_paid(), λ paid => match paid.found { True => function.find_replayed(paid.plan.plain_kept(), entries := entries), False => None })
 }
 
 // Whether the lowering takes a function with the planner's placement, as

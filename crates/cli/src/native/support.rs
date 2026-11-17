@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize
+// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize function_ir_explain function_ir_identities
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -85,6 +85,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),
     ("function_ir_rule_sound", include_str!("../../../../lib/native/function_ir/function_ir_rule_sound.hthr")),
     ("function_ir_rule", include_str!("../../../../lib/native/function_ir/function_ir_rule.hthr")),
+    ("function_ir_match", include_str!("../../../../lib/native/function_ir/function_ir_match.hthr")),
     ("bitvec_ring", include_str!("../../../../lib/std/bitvec/bitvec_ring.hthr")),
     ("function_ir_rules", include_str!("../../../../lib/native/function_ir/function_ir_rules.hthr")),
     ("function_ir_tidy", include_str!("../../../../lib/native/function_ir/function_ir_tidy.hthr")),
@@ -92,4 +93,6 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_learn", include_str!("../../../../lib/native/function_ir/function_ir_learn.hthr")),
     ("function_ir_prune", include_str!("../../../../lib/native/function_ir/function_ir_prune.hthr")),
     ("function_ir_optimize", include_str!("../../../../lib/native/function_ir/function_ir_optimize.hthr")),
+    ("function_ir_explain", include_str!("../../../../lib/native/function_ir/function_ir_explain.hthr")),
+    ("function_ir_identities", include_str!("../../../../lib/native/function_ir/function_ir_identities.hthr")),
 ];

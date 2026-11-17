@@ -23,6 +23,7 @@ use heather_kernel::typing;
 use heather_syntax::{Expr, NamedArg, Span};
 
 use crate::context::Alias;
+use crate::inductive::Inductives;
 use crate::{Cx, ElabError, Elaborator, R};
 
 /// Local substitution's part of the elaborator.
@@ -59,20 +60,76 @@ impl LocalSubsts<'_> {
             return fail(format!("`subst` takes no named arguments, and not `{} :=`", arg.name), arg.name_span);
         }
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
-        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &proof_ty, h.span)? else {
+        let case = |ccx: &Cx, g: &Type| self.elab_check(ccx, body, g, lvl);
+        self.subst_from(cx, h, proof, &proof_ty, goal, lvl, &case, 0)
+    }
+
+    /// `subst` along `proof : proof_ty`, which `h` elaborated to in `cx`,
+    /// with `case` elaborating the goal where the variable is replaced.
+    #[allow(clippy::too_many_arguments)]
+    fn subst_from(
+        &self,
+        cx: &Cx,
+        h: &Expr,
+        proof: Term,
+        proof_ty: &Type,
+        goal: &Type,
+        lvl: &Level,
+        case: &dyn Fn(&Cx, &Type) -> R<Term>,
+        rounds: u32,
+    ) -> R<Term> {
+        let fail = |msg: String, span: Span| Err(ElabError::Elab { msg, span });
+        let Type::Id { lhs, rhs, .. } = self.whnf(cx, proof_ty, h.span)? else {
             return fail(
                 format!(
                     "`subst` eliminates a variable along an equation `x = t`, and this proof is \
                      of `{}`",
-                    self.display_type(cx, &proof_ty)
+                    self.display_type(cx, proof_ty)
                 ),
                 h.span,
             );
         };
+        if let Some(term) = self.along(cx, proof.clone(), proof_ty, h.span, goal, lvl, case)? {
+            return Ok(term);
+        }
+        // Two constructor applications: injected down to an equation with a
+        // local side, which is substituted, and `h` read again where it is
+        // (issues/constructor-equations-in-context.md); a clash closes the goal.
+        if let Some(term) = self.inject(cx, h, proof, proof_ty, goal, lvl, case, rounds)? {
+            return Ok(term);
+        }
+        // A pattern variable is a projection of the matched value: take the
+        // value apart into locals, and eliminate there
+        // (issues/pattern-variables-not-rewritable.md).
+        if let Some(split) =
+            self.split_projection(cx, &rhs, goal, h.span).or_else(|| self.split_projection(cx, &lhs, goal, h.span))
+        {
+            let (proof, proof_ty, _) = self.elab_infer(&split.cx, h)?;
+            let term = self.subst_from(&split.cx, h, proof, &proof_ty, &split.goal, lvl, case, rounds)?;
+            return Ok(split.close(&term));
+        }
+        let shown = |t: &Term| self.spell_term_clean(cx, t).unwrap_or_else(|| "?".into());
+        fail(
+            format!(
+                "`subst`: neither side of `{} = {}` is a local variable the other side \
+                 does not mention, nor are they constructor applications whose fields \
+                 have one\n  hint: `rewrite(h, e)` rewrites a goal along an \
+                 equation between terms",
+                shown(&lhs),
+                shown(&rhs)
+            ),
+            h.span,
+        )
+    }
+
+    /// The local `x` of `x = t` or `t = x` (the right side first, as Lean's
+    /// `subst` reads `h : a = b`) that the other side does not mention, a
+    /// side that only reduces to a local — a pattern variable re-bound by a
+    /// split below — counting as that local: its position, the other side,
+    /// and whether the local is on the right.
+    fn local_side(&self, cx: &Cx, lhs: &Rc<Term>, rhs: &Rc<Term>, span: Span) -> Option<(usize, Rc<Term>, bool)> {
         let n = cx.names.len();
         let gamma = &cx.gamma;
-        // The side that is a local not occurring in the other: the right one
-        // first, as Lean's `subst` reads `h : a = b`.
         let local = |side: &Term, other: &Term| match side {
             Term::Var(v) if (v.0 as usize) < n => {
                 let pos = n - 1 - v.0 as usize;
@@ -80,38 +137,41 @@ impl LocalSubsts<'_> {
             }
             _ => None,
         };
-        let (pos_x, t, var_on_right) = match (local(&rhs, &lhs), local(&lhs, &rhs)) {
-            (Some(p), _) => (p, lhs, true),
-            (None, Some(p)) => (p, rhs, false),
-            // A side that only reduces to a local — a pattern variable
-            // re-bound by a split below — is that local.
-            (None, None) if let Some(p) = self.reduces_to_local(cx, &rhs, h.span)
-                .filter(|&p| !mentions(gamma, &lhs, &marked(n, &[p]))) => (p, lhs, true),
-            (None, None) if let Some(p) = self.reduces_to_local(cx, &lhs, h.span)
-                .filter(|&p| !mentions(gamma, &rhs, &marked(n, &[p]))) => (p, rhs, false),
+        match (local(rhs, lhs), local(lhs, rhs)) {
+            (Some(p), _) => Some((p, Rc::clone(lhs), true)),
+            (None, Some(p)) => Some((p, Rc::clone(rhs), false)),
             (None, None) => {
-                // A pattern variable is a projection of the matched value:
-                // take the value apart into locals, and eliminate there
-                // (issues/pattern-variables-not-rewritable.md).
-                if let Some(split) = self
-                    .split_projection(cx, &rhs, goal, h.span)
-                    .or_else(|| self.split_projection(cx, &lhs, goal, h.span))
-                {
-                    let term = self.elab_subst(&split.cx, args, named, &split.goal, lvl, span)?;
-                    return Ok(split.close(&term));
+                if let Some(p) = self.reduces_to_local(cx, rhs, span).filter(|&p| !mentions(gamma, lhs, &marked(n, &[p]))) {
+                    return Some((p, Rc::clone(lhs), true));
                 }
-                let shown = |t: &Term| self.spell_term_clean(cx, t).unwrap_or_else(|| "?".into());
-                return fail(
-                    format!(
-                        "`subst`: neither side of `{} = {}` is a local variable the other side \
-                         does not mention\n  hint: `rewrite(h, e)` rewrites a goal along an \
-                         equation between terms",
-                        shown(&lhs),
-                        shown(&rhs)
-                    ),
-                    h.span,
-                );
+                self.reduces_to_local(cx, lhs, span)
+                    .filter(|&p| !mentions(gamma, rhs, &marked(n, &[p])))
+                    .map(|p| (p, Rc::clone(rhs), false))
             }
+        }
+    }
+
+    /// `subst` along `proof : proof_ty` when a side of it is a local; `None`
+    /// when neither is.
+    #[allow(clippy::too_many_arguments)]
+    fn along(
+        &self,
+        cx: &Cx,
+        proof: Term,
+        proof_ty: &Type,
+        h_span: Span,
+        goal: &Type,
+        lvl: &Level,
+        case: &dyn Fn(&Cx, &Type) -> R<Term>,
+    ) -> R<Option<Term>> {
+        let fail = |msg: String, span: Span| Err(ElabError::Elab { msg, span });
+        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, proof_ty, h_span)? else {
+            return Ok(None);
+        };
+        let n = cx.names.len();
+        let gamma = &cx.gamma;
+        let Some((pos_x, t, var_on_right)) = self.local_side(cx, &lhs, &rhs, h_span) else {
+            return Ok(None);
         };
         let x_name = &cx.names[pos_x];
         // `h` itself, when it is a local: it is eliminated along with `x`
@@ -145,7 +205,7 @@ impl LocalSubsts<'_> {
                      cannot be replaced by it",
                     self.spell_term_clean(cx, &t).unwrap_or_else(|| "the other side".into())
                 ),
-                h.span,
+                h_span,
             );
         }
         // `h : x = t` would be eliminated as `sym(q)`, which is not `h` again
@@ -216,7 +276,7 @@ impl LocalSubsts<'_> {
                     "`subst`: generalising the goal over `{x_name}` and the locals that depend on it \
                      does not leave a type\n  hint: write the motive by hand with `j`"
                 ),
-                span: h.span,
+                span: h_span,
             }
         })?;
 
@@ -300,7 +360,7 @@ impl LocalSubsts<'_> {
             });
         }
         ccx.aliases.extend(aliases.into_iter().map(Rc::new));
-        let mut case = self.elab_check(&ccx, body, &cur, lvl)?;
+        let mut case = case(&ccx, &cur)?;
         for (dom_level, cod_level, dom) in lams.into_iter().rev() {
             case = Term::Lam { dom_level, cod_level, dom, body: Rc::new(case) };
         }
@@ -347,7 +407,106 @@ impl LocalSubsts<'_> {
             result_ty = cod.inst_top(0, &arg);
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
-        Ok(term)
+        Ok(Some(term))
+    }
+}
+
+/// What [`LocalSubsts::injected`] found under an equation between
+/// constructor applications: a field equation (proof and type, in the same
+/// context) that is a clash of two constructors, or one with a local side.
+pub(crate) enum Injected {
+    Clash(Term, Type),
+    Local(Term, Type),
+}
+
+/// How deep [`LocalSubsts::injected`] reads fields of fields, and how many
+/// locals one `subst` replaces through an equation of constructors.
+const INJECT_DEPTH: u32 = 8;
+const INJECT_ROUNDS: u32 = 64;
+
+impl LocalSubsts<'_> {
+    /// `subst` along an equation between two constructor applications: a
+    /// clash closes the goal by `absurd`; otherwise the first field equation
+    /// with a local side is substituted, and in the case `h` is read again,
+    /// its fields now saying the local's value, until no field has a local
+    /// side left. `None` when the first step finds nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn inject(
+        &self,
+        cx: &Cx,
+        h: &Expr,
+        proof: Term,
+        proof_ty: &Type,
+        goal: &Type,
+        lvl: &Level,
+        case: &dyn Fn(&Cx, &Type) -> R<Term>,
+        rounds: u32,
+    ) -> R<Option<Term>> {
+        if rounds >= INJECT_ROUNDS {
+            return Ok(None);
+        }
+        match self.injected(cx, proof, proof_ty, h.span, true, 0) {
+            None => Ok(None),
+            Some(Injected::Clash(p, ty)) => Inductives(self).absurd_of_term(cx, p, &ty, goal, lvl, h.span).map(Some),
+            Some(Injected::Local(p, ty)) => {
+                let again = |ccx: &Cx, g: &Type| -> R<Term> {
+                    // `h` elaborated in `cx`; where it is, it reads the same
+                    // names, re-bound at the local's value.
+                    let Ok((p2, t2, _)) = self.elab_infer(ccx, h) else {
+                        return case(ccx, g);
+                    };
+                    match self.inject(ccx, h, p2, &t2, g, lvl, case, rounds + 1)? {
+                        Some(term) => Ok(term),
+                        None => case(ccx, g),
+                    }
+                };
+                self.along(cx, p, &ty, h.span, goal, lvl, &again)
+            }
+        }
+    }
+
+    /// The first clash, or (with `locals`) field equation with a local
+    /// side, under `proof : proof_ty` read as an equation between two
+    /// applications of one constructor: each field's equation by `inj`,
+    /// fields whose sides are already equal skipped, fields of fields read
+    /// in turn. A local side at the top is not looked for: that is plain
+    /// `subst`.
+    pub(crate) fn injected(&self, cx: &Cx, proof: Term, proof_ty: &Type, span: Span, locals: bool, depth: u32) -> Option<Injected> {
+        if depth > INJECT_DEPTH || self.under_quotation() {
+            return None;
+        }
+        let Ok(Type::Id { ty, lhs, rhs, .. }) = self.whnf(cx, proof_ty, span) else { return None };
+        if locals && depth > 0 && self.local_side(cx, &lhs, &rhs, span).is_some() {
+            return Some(Injected::Local(proof, proof_ty.clone()));
+        }
+        // At `Nat`, a clash of `Zero` and `Succ`; nothing is injected there.
+        if matches!(self.whnf(cx, &ty, span), Ok(Type::Nat)) {
+            let clash = self.probe(|| {
+                Inductives(self)
+                    .absurd_of_term(cx, proof.clone(), proof_ty, &Type::Unit { level: Level::Zero }, &Level::Zero, span)
+                    .is_ok()
+            });
+            return clash.then(|| Injected::Clash(proof, proof_ty.clone()));
+        }
+        let (i, j, arity) = Inductives(self).equation_ctors(cx, proof_ty, span)?;
+        if i != j {
+            return Some(Injected::Clash(proof, proof_ty.clone()));
+        }
+        for k in 0..arity {
+            let Ok((pk, tk, _)) = self.probe(|| Inductives(self).inj_of_term(cx, k, proof.clone(), proof_ty, span)) else {
+                continue;
+            };
+            if let Type::Id { level, ty, lhs, rhs } = &tk
+                && (lhs == rhs
+                    || self.goal_oracle().convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level).is_ok())
+            {
+                continue;
+            }
+            if let Some(found) = self.injected(cx, pk, &tk, span, locals, depth + 1) {
+                return Some(found);
+            }
+        }
+        None
     }
 }
 
