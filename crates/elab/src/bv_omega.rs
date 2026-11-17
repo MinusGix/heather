@@ -276,7 +276,11 @@ impl<'a> Walk<'a> {
 
         let shape = if self.opaque.contains(&spelled) {
             Shape::Leaf
-        } else if self.stated.contains(&spelled) { self.known(word).unwrap_or(Shape::Leaf) } else { self.shape(word) };
+        } else if self.stated.contains(&spelled) {
+            self.known(word).or_else(|| self.alias(word)).unwrap_or(Shape::Leaf)
+        } else {
+            self.shape(word)
+        };
         let split = match &shape { Shape::Split(n, m, x, low) => Some((n.clone(), m.clone(), x.clone(), *low)), _ => None };
         let kind = match shape {
             Shape::Add(a, b) => match (self.word_at(w.clone(), &a)?, self.word_at(w.clone(), &b)?) {
@@ -461,6 +465,17 @@ impl<'a> Walk<'a> {
                 self.known(&Rc::new(reduct))
             })
             .unwrap_or(Shape::Leaf)
+    }
+
+    /// A stated word that is another spelling of a local (§ [`Shape::Alias`]):
+    /// a fact about `s.len()` is a fact about `n`.
+    fn alias(&self, word: &Rc<Term>) -> Option<Shape> {
+        if !matches!(crate::spelling::app_spine(word).0, Term::GlobalTm { .. }) {
+            return None;
+        }
+        self.elab.goal_oracle().unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| {
+            matches!(reduct, Term::Var(_)).then(|| Shape::Alias(Rc::new(reduct)))
+        })
     }
 
     fn known(&self, word: &Rc<Term>) -> Option<Shape> {

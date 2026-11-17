@@ -81,13 +81,12 @@ impl Checking<'_> {
     /// condition passed on (`inside := inside`) stays as it is.
     /// An arithmetic search for a condition `∥P∥` where squashed facts
     /// `h: ∥A∥` are in scope (a loop's invariant, a caller's found
-    /// condition): `squash_bind(h, λ __unsq_h => search)`, so the search
-    /// runs with each fact released as `__unsq_h: A`. A squash is released
-    /// here only into the proof of a squash, which is what the goal is.
-    /// `None` where there is nothing to release, or the expression is not
-    /// such a search (a block of `let`s ending in one counts, as a lifted
-    /// found proof's body is).
-    fn unpack_squashed_facts(&self, cx: &Cx, e: &Expr, expected: &Type) -> Option<Expr> {
+    /// condition): the search runs with each fact released, as
+    /// `elim_squash(h, x. search)` with `x: A` in scope, which is allowed
+    /// because what it proves is itself a squash. `None` where there is no
+    /// fact to release, or the expression is not such a search (a block of
+    /// `let`s ending in one counts, as a lifted found proof's body is).
+    fn release_squashed_facts(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> Option<R<Term>> {
         const ARITHMETIC: [&str; 4] = ["omega", "bv_omega", "linarith", "nlinarith"];
         fn is_search(e: &Expr) -> bool {
             match &e.kind {
@@ -96,55 +95,45 @@ impl Checking<'_> {
                 _ => false,
             }
         }
-        if !is_search(e) || self.key_of("logic::squash_bind").is_none() {
+        if !is_search(e) {
             return None;
         }
         let span = e.span;
-        let Ok(Type::Squash { ty: goal, .. }) = self.whnf(cx, expected, span) else { return None };
+        let Ok(Type::Squash { level: dst_level, ty: goal }) = self.whnf(cx, expected, span) else { return None };
+        // The first fact not yet released (`__unsq_h` names its release).
         let mut seen = std::collections::HashSet::new();
-        // Each fact with its payload spelled: `squash_bind`'s type
-        // arguments are given, since nothing else fixes the lambda's.
-        let mut squashed = Vec::new();
-        for name in cx.names.iter() {
+        let found = cx.names.iter().rev().find_map(|name| {
             if name.starts_with('#') || name.starts_with("__unsq_") || !seen.insert(name.clone()) {
-                continue;
+                return None;
             }
-            if cx.names.iter().any(|n| n == &format!("__unsq_{name}")) {
-                continue;
+            let released = format!("__unsq_{name}");
+            if cx.names.iter().any(|n| *n == released) {
+                return None;
             }
-            let Ok((_, ty, _)) = self.resolve_reading(cx, name, span) else { continue };
-            if let Ok(Type::Squash { ty: payload, .. }) = self.whnf(cx, &ty, span)
-                && let Some(spelled) = self.spell_type_source(cx, &payload)
-            {
-                squashed.push((name.clone(), spelled));
+            let (term, ty, _) = self.resolve_reading(cx, name, span).ok()?;
+            match self.whnf(cx, &ty, span).ok()? {
+                Type::Squash { level, ty: payload } => Some((released, term, level, payload)),
+                _ => None,
             }
-        }
-        if squashed.is_empty() {
-            return None;
-        }
-        // A goal reading a store's found proof spells through its alias
-        // (`s.put(…).len()` is `n`), as `bv_omega` reads it.
-        let goal = crate::bv_omega::aliased_goal(self, cx, &goal).unwrap_or_else(|| (*goal).clone());
-        let goal = self.spell_type_source(cx, &goal)?;
-        let mut source = "__unsq_search".to_string();
-        for (name, payload) in squashed.iter().rev() {
-            source = format!("logic::squash_bind<{payload}, {goal}>({name}, λ __unsq_{name} => {source})");
-        }
-        let mut out = crate::omega_cert::parse_generated_expr(&source).ok()?;
-        fn plant(x: &mut Expr, e: &Expr) {
-            if matches!(&x.kind, ExprKind::Var(v) if v == "__unsq_search") {
-                *x = e.clone();
-                return;
-            }
-            match &mut x.kind {
-                ExprKind::App { args, .. } => args.iter_mut().for_each(|a| plant(a, e)),
-                ExprKind::Lam { body, .. } => plant(body, e),
-                ExprKind::Block(b) => plant(&mut b.result, e),
-                _ => {}
-            }
-        }
-        plant(&mut out, e);
-        Some(out)
+        });
+        let (released, scrut, src_level, payload) = found?;
+        // Read through a call that steps to a local where it does not spell
+        // (`s.len()` is `n`), as `bv_omega` reads a goal.
+        let payload = match crate::bv_omega::aliased_goal(self, cx, &payload) {
+            Some(read) => Rc::new(read),
+            None => payload,
+        };
+        let mut inner = cx.clone();
+        inner.push(released, (*payload).clone(), src_level.clone());
+        let shifted = expected.shift_local(1);
+        Some(self.elab_check(&inner, e, &shifted, lvl).map(|case| Term::ElimSquash {
+            src_level,
+            dst_level,
+            src_ty: payload,
+            motive: Rc::new(goal.shift_local(1)),
+            case: Rc::new(case),
+            scrut: Rc::new(scrut),
+        }))
     }
 
     fn check_condition_squashed(&self, cx: &Cx, e: &Expr, prop: &Rc<Type>, level: &Level) -> R<Option<Term>> {
@@ -426,8 +415,8 @@ impl Checking<'_> {
                 capture_slots,
             );
         }
-        if let Some(unpacked) = self.unpack_squashed_facts(cx, e, expected) {
-            return self.elab_check_skel_slots(cx, &unpacked, expected, lvl, hint, skel, capture_slots);
+        if let Some(released) = self.release_squashed_facts(cx, e, expected, lvl) {
+            return released;
         }
         if let Type::Squash { level, ty } = expected
             && let Some(payload) = self.check_condition_squashed(cx, e, ty, level)?
@@ -1211,7 +1200,6 @@ impl Checking<'_> {
                 if self.key_of("bitvec_omega::add_form").is_none() {
                     return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
                 }
-                if std::env::var("HEATHER_DEBUG_BVO").is_ok() { eprintln!("BVO at {:?}: {} | names {:?}\n{}", e.span, self.display_type(cx, expected), cx.names.iter().filter(|n| n.contains("inv") || n.contains("unsq")).collect::<Vec<_>>(), std::backtrace::Backtrace::force_capture().to_string().lines().filter(|l| l.contains("heather_elab::")).take(25).collect::<Vec<_>>().join("\n")); }
                 // A negated word fact (`¬(x < lo)`, `x = y → False`), such as
                 // a branch equation's side condition: assume it and refute
                 // the assumption, which the inner call reads as a fact in

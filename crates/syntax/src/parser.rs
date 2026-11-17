@@ -465,6 +465,40 @@ fn is_imperative_statement(s: &Stmt) -> bool {
                 || (args.is_empty() && (n == crate::imperative::BREAK || n == crate::imperative::CONTINUE)))))
 }
 
+/// The binding power just above `&&` and `||`: an operand read at it holds
+/// neither.
+const BOOL_CHAIN_BP: u8 = 5;
+
+/// An operand of `&&`/`||` as a `Bool`: a relation (`a < b`, `a ≠ b`) is
+/// its decision `decide_bit<a < b>()`; anything else is as written.
+fn decided(e: Expr) -> Expr {
+    let relation = match &e.kind {
+        ExprKind::App { head, args, .. } => match &head.kind {
+            ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } => args.len() == 2 && matches!(symbol.as_str(), "<" | "<=" | "≈"),
+            ExprKind::Var(n) => n == "Not" && args.len() == 1 && matches!(args[0].kind, ExprKind::Eq(..)),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !relation {
+        return e;
+    }
+    let span = e.span;
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(Expr {
+                kind: ExprKind::TyApp { head: Box::new(Expr { kind: ExprKind::Var("decide_bit".into()), span }), args: vec![expr_as_ty(&e)] },
+                span,
+            }),
+            args: vec![],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
+}
+
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr {
@@ -5115,7 +5149,7 @@ impl Parser {
             }
             TokKind::Ne => {
                 let op = self.bump().span;
-                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let rhs = self.with_eq(true, |p| p.expr_bp(BOOL_CHAIN_BP))?;
                 let eq_span = lhs.span.join(rhs.span);
                 let eq = Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span: eq_span };
                 let head = Expr { kind: ExprKind::Var("Not".to_string()), span: op };
@@ -5137,7 +5171,7 @@ impl Parser {
                     _ => "<",
                 };
                 self.bump();
-                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let rhs = self.with_eq(true, |p| p.expr_bp(BOOL_CHAIN_BP))?;
                 let span = lhs.span.join(rhs.span);
                 op_call(sym, OpFixity::Infix, vec![lhs, rhs], span)
             }
@@ -5230,13 +5264,50 @@ impl Parser {
                 span,
             });
         }
-        let lhs = self.expr_bp(0)?;
-        let relation = matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne);
-        if self.no_eq && !(self.annotation_rel && relation) {
-            Ok(lhs)
-        } else {
-            self.comparison(lhs)
+        if self.no_eq {
+            let lhs = self.expr_bp(0)?;
+            let relation = matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne);
+            return if self.annotation_rel && relation { self.comparison(lhs) } else { Ok(lhs) };
         }
+        // `&&` and `||` sit between the relations and `=`: `0 < j && key < b`
+        // is the conjunction of two tests, as in Rust, while `x && True = x`
+        // is still `(x && True) = x`.
+        let lhs = self.bool_chain(0)?;
+        self.comparison(lhs)
+    }
+
+    /// `r₁ && r₂ || …` over relation operands ([`Self::relation_operand`]),
+    /// `&&` binding tighter than `||`, both left-associative. A relation
+    /// among the operands is read as its decision, `decide_bit<r>()`, since
+    /// `&&` combines `Bool`s.
+    fn bool_chain(&mut self, min_bp: u8) -> R<Expr> {
+        let mut lhs = self.relation_operand()?;
+        loop {
+            let (sym, l_bp, r_bp) = match self.peek() {
+                TokKind::PipePipe => ("||", 1, 2),
+                TokKind::AmpAmp => ("&&", 3, 4),
+                _ => break,
+            };
+            if l_bp < min_bp {
+                break;
+            }
+            self.bump();
+            let rhs = self.bool_chain(r_bp)?;
+            let span = lhs.span.join(rhs.span);
+            lhs = op_call(sym, OpFixity::Infix, vec![decided(lhs), decided(rhs)], span);
+        }
+        Ok(lhs)
+    }
+
+    /// An operand of `&&`/`||`: an arithmetic expression, or a relation
+    /// (`<`, `<=`, `≈`, `≠`) between two (the `=` rung is looser, read by
+    /// [`Self::comparison`] after the chain).
+    fn relation_operand(&mut self) -> R<Expr> {
+        let lhs = self.expr_bp(BOOL_CHAIN_BP)?;
+        if matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne) {
+            return self.comparison(lhs);
+        }
+        Ok(lhs)
     }
 
     /// `∀ x: A, P` and `∃ x: A, P` — one binder group, then the body, which

@@ -795,16 +795,56 @@ impl Lift<'_> {
                 .chain(facts.iter().map(|_| var("bv_omega", at)))
                 .collect()
         };
+        // At the recursion, each invariant fact is a `let` of its own at the
+        // end of the body, proved once there and passed by name: a search
+        // left in the call's arguments runs again at each of the call's
+        // elaborations.
+        let next_facts: Vec<String> = (0..facts.len()).map(|k| format!("__inv_next{}_{k}", self.next_if)).collect();
+        let recur_args = |at: Span| -> Vec<Expr> {
+            captures
+                .iter()
+                .map(|(n, _)| var(n, at))
+                .chain(std::iter::once(var(o, at)))
+                .chain(next_facts.iter().map(|f| var(f, at)))
+                .collect()
+        };
         let mut again = body.clone();
         let end = again.result.span;
-        *again.result = marked(heather_syntax::MUTATED_WHOLE, dot(args(end), end), end);
+        *again.result = marked(heather_syntax::MUTATED_WHOLE, dot(recur_args(end), end), end);
         // The body's claimed method calls on the receiver rebind it as plain
         // `let`s, and every rebinding gets a fresh name (SSA): the
         // condition's equation, which reads the receiver the method is
         // called with, then names no binder the body shadows.
         again.stmts = measure::rebind_marked(&again.stmts, end, false).map_err(|m| crate::ElabError::Elab { msg: m, span })?;
         let telescope: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        let bound_at: Vec<(usize, String)> = again
+            .stmts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, st)| match st {
+                Stmt::Let { name, .. } if name == &r.name || name == o => Some((i, name.clone())),
+                _ => None,
+            })
+            .collect();
         crate::alpha::ssa(&mut again, &telescope);
+        // The state's names at the end of the body, after SSA.
+        let mut latest: Vec<(String, String)> = vec![(r.name.clone(), r.name.clone()), (o.to_string(), o.to_string())];
+        for (i, was) in bound_at {
+            if let Stmt::Let { name, .. } = &again.stmts[i]
+                && let Some(entry) = latest.iter_mut().find(|(w, _)| *w == was)
+            {
+                entry.1 = name.clone();
+            }
+        }
+        for (fact, next) in facts.iter().zip(&next_facts) {
+            let ty = latest.iter().fold(fact.ty.clone(), |t, (was, now)| {
+                if was == now { t } else { measure::subst_surface_ty(&t, was, &var(now, end)) }
+            });
+            let inner = match &ty.kind { TyKind::Squash(p) => (**p).clone(), _ => ty.clone() };
+            let head = Expr { kind: ExprKind::TyApp { head: Box::new(var("bitvec_omega::found_fact", end)), args: vec![inner] }, span: end };
+            let found = call(head, vec![], end);
+            again.stmts.push(Stmt::Let { name: next.clone(), ty: Some(ty), expr: found, span: end, opaque: false });
+        }
         let done = || call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), var(o, span)], span);
         let branch = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);
         let result = Ty { kind: TyKind::Named { name: heather_syntax::MUTATED_RECORD.into(), args: vec![r.ty.clone(), o_ty] }, span };
@@ -835,7 +875,27 @@ impl Lift<'_> {
     /// for the tests after it and for the body.
     fn tested(&mut self, cond: &Expr, then: Expr, otherwise: &dyn Fn() -> Expr, span: Span) -> Expr {
         let mut out = then;
-        for test in tests_of(cond).into_iter().rev() {
+        for mut test in tests_of(cond).into_iter().rev() {
+            // An element read in the test (`key < s[j - 1]`) is bound by a
+            // `let` just before it: in the proposition it would be part of
+            // a type, whose found proof every copy of that type searches
+            // for again.
+            let mut reads = Vec::new();
+            if let ExprKind::App { head, .. } = &mut test.kind
+                && let ExprKind::TyApp { args: tys, .. } = &mut head.kind
+                && let [Ty { kind: TyKind::OfExpr(prop), .. }] = tys.as_mut_slice()
+            {
+                crate::alpha::walk_expr_mut(prop, &mut |x| {
+                    if !matches!(x.kind, ExprKind::Index { .. }) {
+                        return false;
+                    }
+                    self.next_if += 1;
+                    let name = format!("__while_read{}", self.next_if);
+                    let read = std::mem::replace(x, var(&name, x.span));
+                    reads.push(Stmt::Let { name, ty: None, expr: read, span, opaque: false });
+                    true
+                });
+            }
             self.next_if += 1;
             out = Expr {
                 kind: ExprKind::Match {
@@ -851,6 +911,9 @@ impl Lift<'_> {
                 },
                 span,
             };
+            if !reads.is_empty() {
+                out = Expr { kind: ExprKind::Block(Box::new(Block { stmts: reads, result: Box::new(out), ons: vec![], span })), span };
+            }
         }
         out
     }
@@ -1218,6 +1281,15 @@ fn tests_of(cond: &Expr) -> Vec<Expr> {
         && matches!(&bit.kind, ExprKind::Var(n) if n == "decide_bit")
         && let [t] = tys.as_slice()
     {
+        // `a && b` (a `Bool`, its relations already decided): each operand
+        // its own test, the first `&&` operand first.
+        if let TyKind::OfExpr(inner) = &t.kind
+            && let ExprKind::App { head: op, args: sides, .. } = &inner.kind
+            && matches!(&op.kind, ExprKind::OpSymbol { symbol, .. } if symbol == "&&")
+            && sides.len() == 2
+        {
+            return sides.iter().flat_map(|side| tests_of(side)).collect();
+        }
         let parts = conjuncts(t);
         if parts.len() > 1 {
             return parts
