@@ -203,6 +203,7 @@ mod iwf_w;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
+mod hypothesis_cases;
 mod goals;
 pub mod host;
 mod indexed;
@@ -1203,6 +1204,19 @@ impl matching::MotiveSynthesisElab for Elaborator {
         inner.push("__motive_z".to_string(), scrutinee_type.clone(), scrutinee_level.clone());
         let oracle = self.goal_oracle();
         typing::infer_type(oracle.world(), 0, Layer::Prog, &inner.gamma, motive, self.policy.fuel).is_ok()
+    }
+
+    fn fold_declarations(&self, cx: &Cx, ty: &Type) -> Option<Type> {
+        // The fold reads through constructor values; no other reader of
+        // the instance matcher does (`Holes::constructor_values`).
+        let outer = self.attempt.folding_for_motive.replace(true);
+        let folded = crate::gendefs::GeneratedDefs(self).respell_ty_deep(cx, ty, 0);
+        self.attempt.folding_for_motive.set(outer);
+        folded
+    }
+
+    fn unfold_declarations(&self, ty: &Type) -> Option<Type> {
+        crate::gendefs::GeneratedDefs(self).unspell_ty_deep(ty)
     }
 }
 

@@ -255,7 +255,7 @@ covers the CALLs as it covers the jumps.
   §4, Theorem 3), by induction on the depth instead of Löb.
 - **`native_compile_correct`** gains the stack: a `Stack` of the profile
   above the region, its top at RSP, the command line above it at RDI, and
-  at least `Source::stack_room` bytes deep. Entry code in front of the
+  at least `Source::need` bytes deep. Entry code in front of the
   program provides it (`Source::runs_after`, native_compile_elf): the
   system's stack, whose room below the entry RSP is then a premise of the
   ELF theorem (`LinuxStart`), or the program's own in its data segment

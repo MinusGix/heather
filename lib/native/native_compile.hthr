@@ -14,7 +14,7 @@
 // puts what it writes in the word's home, where the word is live after it
 // (`Prog::word_to`, `word_from`); RBX carries a slot's address, or a home
 // register's word, on the way. The homes and each loop's set come with the
-// compile (`Source::compile(low, homes)`), which checks them first
+// compile (`Source::compile(low, homes, bodies)`), which checks them first
 // (`Source::allocation_ok`), so an allocator is never trusted.
 //
 // - A `Compute` leaf is first optimised by the FunctionIR pass
@@ -116,20 +116,32 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
 // The procedures are the table a call names (docs/native/native-procedures-design.md),
-// the functions the ones a region's `Call` does.
-record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
-    procedures: List<Procedure> := [], functions: List<Function> := [] }
+// the functions the ones a region's `Call` does. `bodies` is each
+// procedure's own placement: the layout is the running body's, and
+// `Layout::body` is the one a procedure's code is compiled with.
+record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
+    procedures: List<Procedure> := [], functions: List<Function> := [], bodies: List<Frame> := [],
+    // The procedures the running body may call: a call of another is
+    // refused (`Layout::call_fits`), so the stack an activation needs
+    // below it is the deepest of these (`List::reach`).
+    callees: List<Nat> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees)
 }
 
 fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees)
 }
 
-// Word `id` has a slot.
-fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
+fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees)
+}
+
+// Word `id`'s slot is in the frame; a word in a register needs none.
+fn Layout::word_fits(self layout: Layout, id: Nat) → Bool {
+    match layout.homes.home(id) { InSlot(k) => Succ(k).leb(layout.words), InReg(_) => True }
+}
 
 fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
     match ids { Nil => True, Cons(id, rest) => layout.word_fits(id) && layout.words_fit(rest) }
@@ -137,12 +149,12 @@ fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
 
 fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
 fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
-fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.words + layout.capacities.take(buf).total() }
+fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.reserved + layout.capacities.take(buf).total() }
 fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
 // A buffer's capacity: none where the file has no such buffer.
 fn Layout::capacity(self layout: Layout, buf: Nat) → Nat { match layout.capacities.nth(buf) { None => 0, Some(cap) => cap } }
 fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
-fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layout.capacities.total() }
+fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.reserved + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
@@ -159,13 +171,14 @@ fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 16 }
 
 // A word's slot is in the running frame, which RSP points at between
 // statements (docs/native/native-procedures-are-functions-design.md §3, step 5b):
-// slot `id` is the word at RSP + 8·id.
+// slot `k` is the word at RSP + 8·k, and a word's slot is its home's
+// (`InSlot(k)`).
 //
 // The word in `register`: loaded from its slot, RBX the slot's address, or
 // moved from its home register through RBX, so RBX is written either way.
 fn Prog::word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
     match layout.homes.home(id) {
-        InSlot => then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Load(WordLoad(register, Rbx))),
+        InSlot(slot) => then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * slot)), AddRR(Rbx, Rsp)])), Load(WordLoad(register, Rbx))),
         InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
     }
 }
@@ -219,9 +232,9 @@ fn Prog::bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
     then(p.word_to(layout, id, register), Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]))
 }
 
-// `register` stored to the word's slot.
-fn Prog::word_store(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
-    then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Store(WordStore(Rbx, register)))
+// `register` stored to slot `slot` of the frame.
+fn Prog::word_store(self p: Prog, layout: Layout, slot: Nat, register: Gpr) → Prog {
+    then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * slot)), AddRR(Rbx, Rsp)])), Store(WordStore(Rbx, register)))
 }
 
 // `register` put in the word's home, where the word is live after (`out`).
@@ -229,7 +242,7 @@ fn Prog::word_from(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, regist
     match out.holds(id) {
         False => p,
         True => match layout.homes.home(id) {
-            InSlot => p.word_store(layout, id, register),
+            InSlot(slot) => p.word_store(layout, slot, register),
             InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
         },
     }
@@ -343,7 +356,49 @@ fn register_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, R
 fn Homes::leaf_pool(self homes: Homes) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !homes.uses(register)) }
 
 // A layout with its pools computed from its homes.
-fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout(low, words, capacities, homes, homes.leaf_pool(), homes.registers()) }
+// A layout whose data region keeps `reserved` words' room before the
+// buffers, for an activation of `words` words with `homes`: the region is
+// the program's, the same under every activation, and the words and their
+// homes are the running activation's
+// (docs/native/native-procedure-frames-design.md §2.3).
+fn Layout::placed(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers())
+}
+// The layout of a program's first activation: the region keeps its words' room.
+fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout::placed(low, words, words, capacities, homes) }
+
+// The procedures a statement performs, one entry a call.
+fn Stmt::performed(self s: Stmt) → List<Nat> {
+    match s {
+        Then(first, rest) => first.performed() ++ rest.performed(),
+        Branch(_, yes, no) => yes.performed() ++ no.performed(),
+        Repeat(body, _) => body.performed(),
+        Perform(index, _, _) => [index],
+        Compute(_) => [],
+        Invoke(_) => [],
+        Exit(_) => [],
+        Arg(_, _, _) => [],
+    }
+}
+
+// The procedures procedure `index`'s body performs.
+fn List::performed_by(self procedures: List<Procedure>, index: Nat) → List<Nat> {
+    match procedures.nth(index) { None => [], Some(proc) => proc.body.performed() }
+}
+
+// A layout with its tables: the procedures, the functions, the
+// procedures' placements and the running body's callees.
+fn Layout::tabled(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes, procedures: List<Procedure>, functions: List<Function>,
+    bodies: List<Frame>, callees: List<Nat>) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies, callees)
+}
+
+// The layout procedure `index`'s code is compiled with: the same region,
+// tables and placements, and the procedure's own frame and homes.
+fn Layout::body(self layout: Layout, index: Nat) → Layout {
+    Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places, layout.homes.rooms),
+        layout.procedures, layout.functions, layout.bodies, layout.procedures.performed_by(index))
+}
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
 theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
     Layout::of(low, words, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
@@ -959,7 +1014,7 @@ fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, resu
         None => False,
         Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
             (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-            layout.homes.moves_apart(out, results))))),
+            (layout.homes.moves_apart(out, results) && layout.callees.holds(index)))))),
     }
 }
 
@@ -1134,8 +1189,8 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout {
-    Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures).with_functions(src.functions)
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Layout {
+    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies, src.main.performed())
 }
 
 // A word of the frame set to RAX, where the file has the word: a word past
@@ -1144,7 +1199,10 @@ fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout {
 fn Prog::zeroes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
     match ids {
         Nil => p,
-        Cons(id, rest) => (match layout.word_fits(id) { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest),
+        Cons(id, rest) => (match layout.homes.home(id) {
+            InSlot(slot) => match Succ(slot).leb(layout.words) { False => p, True => p.word_store(layout, slot, Rax) },
+            InReg(_) => p,
+        }).zeroes(layout, rest),
     }
 }
 
@@ -1154,6 +1212,11 @@ fn Prog::zeroes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
 // stack is not assumed zero.
 fn Prog::frames_main(self p: Prog, layout: Layout, live: List<Nat>) → Prog {
     then(p, Block(frame_down(layout.words) ++ [MovRI(Rax, BitVec::ofNat(0))])).zeroes(layout, live)
+}
+
+fn Source::entry(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Prog {
+    Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), src.main.live_in(homes, []))
+        .inits(src.layout(low, homes, bodies), src.buffers, 0)
 }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
@@ -1175,17 +1238,59 @@ fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
     match proc.body.checked(layout.homes, proc.results) {
         None => False,
         Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
-            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
+            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && (proc.results.len().leb(6) &&
+            (layout.homes.fits() && layout.words.leb(layout.reserved)))))),
     }
 }
 
 // What a procedure keeps for its caller, which is what a function keeps
 // (System V's callee-saved registers): RBX, which carries R10 across every
-// call, and of RBP and R12 to R15 those a word lives in. R10 it may write,
-// as a function may.
+// call, and RBP and R12 to R15. Those it pins (`Homes::pinned`) it never
+// writes, so it saves the rest: the ones a word lives in and the ones its
+// leaves compute in. R10 it may write, as a function may.
 fn kept_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp] }
-fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => homes.uses(register))) }
+fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => !homes.pinned(register))) }
 fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
+
+// ---------------------------------------------------------------------------
+// The stack a program needs (docs/native/native-procedure-frames-design.md §2.5)
+
+// What one activation of a procedure takes of the stack: its frame, the
+// registers it saves and its return address.
+fn Frame::level(self frame: Frame, places: List<Place>) → Nat { (8 * frame.words + 8 * frame.homes(places, []).kept().len()) + 8 }
+
+// A row's entry for a procedure: nothing where the row has none.
+fn List::deep_at(self row: List<Nat>, index: Nat) → Nat { match row.nth(index) { None => 0, Some(deep) => deep } }
+
+// The most a call of one of `callees` takes: the callee's level, and below
+// it what `row` says the callee's own calls take.
+fn List::deepest(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, row: List<Nat>) → Nat {
+    match callees {
+        Nil => 0,
+        Cons(callee, rest) => Nat::max(bodies.frame(callee).level(places) + row.deep_at(callee), rest.deepest(bodies, places, row)),
+    }
+}
+
+// For each procedure, the most its calls take with `d` levels of room
+// left: a row from the row before it, so the table costs the depth times
+// the call sites and not a walk of every chain of calls.
+fn List::deep_row(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → List<Nat> {
+    match d {
+        Zero => [],
+        Succ(k) => {
+            let row = procedures.deep_row(bodies, places, k);
+            procedures.map(λ (proc: Procedure) => proc.body.performed().deepest(bodies, places, row))
+        },
+    }
+}
+
+// The stack the calls of a body take below its frame, the body calling
+// `callees` with `d` levels of room: none with no room (a call then leaves
+// in the callee's entry), else the deepest of its callees with one level
+// less.
+fn List::reach(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → Nat {
+    match d { Zero => 0, Succ(k) => callees.deepest(bodies, places, procedures.deep_row(bodies, places, k)) }
+}
 
 // Its way in: the label, the depth counted, the registers it keeps pushed
 // (docs/native/native-procedures-are-functions-design.md steps 5b and 5c), its
@@ -1211,11 +1316,12 @@ fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: 
     }
 }
 
-// The procedures from `index` on, each after the last.
+// The procedures from `index` on, each after the last and each under its
+// own layout (`Layout::body`).
 fn List::procedures_code(self procs: List<Procedure>, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
     match procs {
         Nil => Some(Compiled(p, names)),
-        Cons(proc, rest) => match proc.code(p, layout, index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
+        Cons(proc, rest) => match proc.code(p, layout.body(index), index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
     }
 }
 
@@ -1234,26 +1340,41 @@ fn program_linkable(functions: List<Function>) → Bool {
     (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
 }
 
-// The stack a program's calls of its functions ask below the caller: the
-// largest room of `program_room` and the CALL's return address; none
-// where there is no function. A program lowered with any placement is
-// checked against that table, which no placement exceeds, so the bound
-// needs nothing of the placement.
-fn program_calls_room(functions: List<Function>) → Nat {
-    match functions { Nil => 0, Cons(_, _) => rooms_top(program_rooms(functions)) + 8 }
+// The stack a program's calls of its functions ask below the caller,
+// under the room table `rooms` the functions are emitted with: the table's
+// largest room and the CALL's return address; none where there is no
+// function. The table is a choice the function compiler checks a function
+// at a time (`Function::roomy`), so any the functions link under bounds
+// their calls.
+fn table_room(rooms: List<Nat>) → Nat → Nat { λ (f: Nat) => rooms_at(rooms, f) }
+fn table_calls_room(functions: List<Function>, rooms: List<Nat>) → Nat {
+    match functions { Nil => 0, Cons(_, _) => rooms_top(rooms) + 8 }
 }
 
-theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ(f) <= functions.len()):
-    program_room(functions)(f) + 8 <= program_calls_room(functions) {
-    let below: (program_room(functions)(f) <= rooms_top(program_rooms(functions))) = rooms_at_top(program_rooms(functions), f);
-    (match functions as λ fs => Succ(f) <= fs.len() → program_room(fs)(f) <= rooms_top(program_rooms(fs)) →
-        program_room(fs)(f) + 8 <= program_calls_room(fs) {
-        Nil => λ none _ => false_elim(nothing_below_zero(f, none)),
-        Cons(last, earlier) => λ _ under => {
-            let unfold: (program_calls_room(Cons(last, earlier)) = rooms_top(program_rooms(Cons(last, earlier))) + 8) = refl;
-            omega(under, unfold)
+// The table the homes choose (`Homes.rooms`), or with none chosen the one
+// no placement exceeds; and what a call of a function takes under it.
+fn Homes::room_table(self homes: Homes, functions: List<Function>) → List<Nat> {
+    match homes.rooms { Nil => program_rooms(functions), Cons(_, _) => homes.rooms }
+}
+fn Homes::calls_room(self homes: Homes, functions: List<Function>) → Nat { table_calls_room(functions, homes.room_table(functions)) }
+
+// What a program needs of its stack: `main`'s frame and its saved RSP's
+// word, the deepest its calls go, the room of a function a region calls,
+// and one return address more.
+fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
+    (src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1)
+}
+
+theorem table_calls_room_above(functions: List<Function>, rooms: List<Nat>, f: Nat, called: Succ(f) <= functions.len()):
+    table_room(rooms)(f) + 8 <= table_calls_room(functions, rooms) {
+    let below: (table_room(rooms)(f) <= rooms_top(rooms)) = rooms_at_top(rooms, f);
+    (match functions as λ fs => Succ(f) <= fs.len() → table_room(rooms)(f) + 8 <= table_calls_room(fs, rooms) {
+        Nil => λ none => false_elim(nothing_below_zero(f, none)),
+        Cons(last, earlier) => λ _ => {
+            let unfold: (table_calls_room(Cons(last, earlier), rooms) = rooms_top(rooms) + 8) = refl;
+            omega(below, unfold)
         },
-    })(called, below)
+    })(called)
 }
 
 // The functions the regions call, after the program's own code `p`, their
@@ -1262,13 +1383,13 @@ theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ
 // lent: the program lends them to write
 // (docs/native/native-one-compiler-design.md §2.6). Each function is emitted
 // under the count of buffers it says it is lent (`program_counts`) and the
-// room table no placement exceeds (`program_room`).
-fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
+// room table `rooms` (`Homes::room_table`).
+fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, rooms: List<Nat>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)) {
                 None => None,
                 Some(out) => Some(out.prog),
             },
@@ -1280,21 +1401,21 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
 // certificate pays the kernel's per-declaration fuel for the largest piece
 // and not for all of them at once (`write-elf`'s `_deep`; evaluability a
 // function at a time, `program_scan_at_drop`).
-theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
+theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, rooms: List<Nat>, names: Nat, q: Prog,
     evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
-    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)).map(λ out => out.prog) = Some(q)):
-    p.links(functions, places, names) = Some(q)
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)).map(λ out => out.prog) = Some(q)):
+    p.links(functions, places, rooms, names) = Some(q)
 {
     let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
         Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
             Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
     match functions as λ fs => program_linkable(fs) = True →
-        emit_functions_after_lent(p, fs, places, names, program_counts(fs), program_room(fs)).map(λ out => out.prog) = Some(q) →
-        p.links(fs, places, names) = Some(q) {
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs), table_room(rooms)).map(λ out => out.prog) = Some(q) →
+        p.links(fs, places, rooms, names) = Some(q) {
         Nil => λ _ e => e,
-        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) {
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), table_room(rooms)) {
                 None => None, Some(out) => Some(out.prog) } }) = Some(q),
-            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) as λ r =>
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), table_room(rooms)) as λ r =>
                 r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
                 None => λ h => h,
                 Some(_) => λ h => h,
@@ -1302,30 +1423,17 @@ theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Pla
     }(linkable, emitted)
 }
 
-// The stack a source's program needs: `main`'s frame; a frame, a return
-// address and the registers a callee keeps for each call of `src.depth`; the
-// room its functions' table asks; and a word for the return address of a
-// call past the depth. Whatever provides the stack provides this much.
-fn Source::stack_room(self src: Source) → Nat {
-    (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1)
-}
-
-fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), src.main.live_in(homes, []))
-        .inits(src.layout(low, homes), src.buffers, 0)
-}
-
 // A source with procedures or functions: `main` naming its labels past
 // theirs and the shared exit's, then exit 0, each procedure, the shared
 // exit, and the functions.
-fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
-    let layout = src.layout(low, homes);
-    match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Option<Prog> {
+    let layout = src.layout(low, homes, bodies);
+    match src.main.emit(src.entry(low, homes, bodies), layout, [], layout.deep_label()) {
         None => None,
         Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
                 layout, 0, c.names) {
             None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                 None => None,
                 Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
             },
@@ -1333,15 +1441,15 @@ fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Op
     }
 }
 
-fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
+fn Source::compile(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Option<Prog> {
     match src.allocation_ok(homes) {
         False => None,
         True => match src.procedures {
             Nil => match src.functions {
-                Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-                Cons(_, _) => src.compile_calls(low, homes),
+                Nil => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
+                Cons(_, _) => src.compile_calls(low, homes, bodies),
             },
-            Cons(_, _) => src.compile_calls(low, homes),
+            Cons(_, _) => src.compile_calls(low, homes, bodies),
         },
     }
 }
@@ -1371,7 +1479,7 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //      the registers no word lives in)
 //   2  a leaf's nodes are not in evaluation order
 //   3  a leaf writes one of its own inputs
-//   4  a word past the slots (the word, the slots)
+//   4  a word whose slot is past the frame's (the word, the frame's words)
 //   5  an input neither a word nor a bit (its width)
 //   6  S4's lowering refused the leaf
 //   7  a call the compiler does not make (4 stat of a path, 5 stat of a
@@ -1600,25 +1708,77 @@ fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → Compile
 fn List::procedures_refusal(self procs: List<Procedure>, layout: Layout, index: Nat) → List<Nat> {
     match procs {
         Nil => [],
-        Cons(proc, rest) => match proc.code(Start, layout, index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
+        Cons(proc, rest) => match proc.code(Start, layout.body(index), index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
     }
 }
 
-fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat> {
-    match src.main.scan(src.layout(low, homes), [], 1) {
+fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → List<Nat> {
+    match src.main.scan(src.layout(low, homes, bodies), [], 1) {
         Refused(why) => why,
         Passed(_) => match src.allocation_ok(homes) {
             False => [0, 5, 12, 0, 0],
-            True => match src.procedures.procedures_refusal(src.layout(low, homes), 0) {
+            True => match src.procedures.procedures_refusal(src.layout(low, homes, bodies), 0) {
                 Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
-                Nil => match Start.links(src.functions, homes.places, 0) {
+                Nil => match Start.links(src.functions, homes.places, homes.room_table(src.functions), 0) {
                     None => [0, 5, 17, 0, 0],
-                    Some(_) => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+                    Some(_) => match src.compile(low, homes, bodies) { None => [0, 5, 9, 0, 0], Some(_) => [] },
                 },
             },
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The procedures' placements
+
+// Whether every leaf of the procedure's body has the registers it needs
+// under the frame: the scan's verdict, over the frame's own layout.
+fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
+    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([], []), src.procedures, src.functions, [], proc.body.performed()),
+            proc.results, 1) {
+        Passed(_) => True,
+        Refused(_) => False,
+    }
+}
+
+// RBP and R12 to R15 where no word of the frame lives, as homes.
+fn Frame::spare(self frame: Frame) → List<Home> {
+    [InReg(0), InReg(1), InReg(2), InReg(3), InReg(4)].filter(λ (home: Home) => match home {
+        InSlot(_) => False,
+        InReg(k) => !frame.of.homes_use(home_register(k)),
+    })
+}
+
+// The frame pinning as many of `spare` as its leaves leave free, from the
+// first: a pinned register is neither saved nor a leaf's, so a procedure
+// saves only the registers its words live in and the ones its largest leaf
+// needs past the caller-saved ones
+// (docs/native/native-procedure-frames-design.md §2.4).
+fn Frame::pinning(self frame: Frame, src: Source, proc: Procedure, spare: List<Home>, count: Nat) → Frame {
+    match count {
+        Zero => frame,
+        Succ(fewer) => {
+            let pinned = Frame(frame.of, frame.loops, spare.take(count), frame.words);
+            match pinned.scans(src, proc) { True => pinned, False => frame.pinning(src, proc, spare, fewer) }
+        },
+    }
+}
+
+fn List::pinned_for(self frames: List<Frame>, src: Source, procs: List<Procedure>) → List<Frame> {
+    match frames {
+        Nil => [],
+        Cons(frame, rest) => match procs {
+            Nil => [],
+            Cons(proc, more) => Cons(frame.pinning(src, proc, frame.spare(), frame.spare().len()), rest.pinned_for(src, more)),
+        },
+    }
+}
+
+// The placements `write-elf` compiles a source's procedures with: each
+// body coloured alone (`Greedy::frame`), pinning what its leaves do not
+// need. A proposal, as the homes are: the compile checks each procedure
+// under its own (`Procedure::fits`).
+fn Source::bodies(self src: Source) → List<Frame> { Greedy::standard().frames(src).pinned_for(src, src.procedures) }
 
 // ---------------------------------------------------------------------------
 // Reading a program back a part at a time (`heather write-elf`)

@@ -31,7 +31,7 @@ clobber sets. §8 lists them.
 ## 2. Homes
 
 ```text
-inductive Home { InSlot, InReg(k: Nat) }
+inductive Home { InSlot(k: Nat), InReg(k: Nat) }  // a slot by its index since native-procedure-frames-design.md §6.6
 fn home_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp, R10] }
 record Homes { of: List<Home>, loops: List<List<Nat>> }
 ```

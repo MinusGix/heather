@@ -46,8 +46,10 @@ import set_tactic;
 // ---------------------------------------------------------------------------
 // Homes
 
-// A word's home: its slot, or register `k` of the pool.
-inductive Home { InSlot, InReg(k: Nat) }
+// A word's home: slot `k` of the running frame, the stack word at
+// RSP + 8·k, or register `k` of the pool
+// (docs/native/native-procedure-frames-design.md §2.2, §6.6).
+inductive Home { InSlot(k: Nat), InReg(k: Nat) }
 
 // The registers a word may live in: none of them is a statement's scratch,
 // the leaf's address register RBX, or one Linux's SYSCALL clobbers.
@@ -56,11 +58,15 @@ fn home_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp, R10] }
 fn home_register(k: Nat) → Gpr { match home_pool().nth(k) { None => R12, Some(r) => r } }
 
 fn Home::is_register(self home: Home, k: Nat) → Bool {
-    match home { InSlot => False, InReg(j) => j.same(k) }
+    match home { InSlot(_) => False, InReg(j) => j.same(k) }
+}
+
+fn Home::is_slot(self home: Home, k: Nat) → Bool {
+    match home { InSlot(j) => j.same(k), InReg(_) => False }
 }
 
 fn Home::in_pool(self home: Home) → Bool {
-    match home { InSlot => True, InReg(k) => Succ(k).leb(home_pool().len()) }
+    match home { InSlot(_) => True, InReg(k) => Succ(k).leb(home_pool().len()) }
 }
 
 // Each word's home, by id (past the list, its slot), and each loop's set:
@@ -70,14 +76,36 @@ fn Home::in_pool(self home: Home) → Bool {
 // `places` is the registers of the values of the functions the program
 // calls (`lower_program`'s placement), a proposal like the rest: the
 // function compiler checks what it is given.
-record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [] }
+// `pins` names registers of the pool the body leaves alone though no word
+// of its own lives there (`Homes::pinned`): a callee's caller may have a
+// word in one, so the callee neither takes it for a leaf nor saves it
+// (docs/native/native-procedure-frames-design.md §2.4).
+// `rooms` is the room table the functions are emitted under, function
+// `f`'s room at entry `f`: a choice the function compiler checks
+// (`Function::roomy`), from which the stack a call of a function needs is
+// read. Empty, the table no placement exceeds is used (`Homes::room_table`).
+record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [], pins: List<Home> := [], rooms: List<Nat> := [] }
+
+// A procedure's placement: its body's words' homes and loop sets, the
+// registers it pins, and how many words its frame has. Each body has its
+// own, so a body pays for the registers and the slots it uses and not for
+// another's (docs/native/native-procedure-frames-design.md §2.2). One a list
+// does not reach has no word.
+record Frame { of: List<Home>, loops: List<List<Nat>>, pins: List<Home>, words: Nat }
+
+fn List::frame(self bodies: List<Frame>, index: Nat) → Frame {
+    match bodies.nth(index) { None => Frame([], [], [], 0), Some(frame) => frame }
+}
+
+// The frame's homes, with the functions' values where the program has them.
+fn Frame::homes(self frame: Frame, places: List<Place>, rooms: List<Nat>) → Homes { Homes(frame.of, frame.loops, places, frame.pins, rooms) }
 
 fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
     match homes.loops.nth(again) { None => [], Some(set) => set }
 }
 
 fn Homes::home(self homes: Homes, id: Nat) → Home {
-    match homes.of.nth(id) { None => InSlot, Some(home) => home }
+    match homes.of.nth(id) { None => InSlot(id), Some(home) => home }
 }
 
 // Every register home is in the pool.
@@ -85,17 +113,46 @@ fn List::homes_fit(self of: List<Home>) → Bool {
     match of { Nil => True, Cons(home, rest) => home.in_pool() && rest.homes_fit() }
 }
 
-fn Homes::fits(self homes: Homes) → Bool { homes.of.homes_fit() }
+// No listed word is in slot `k`.
+fn List::slot_free(self of: List<Home>, k: Nat) → Bool {
+    match of { Nil => True, Cons(home, rest) => !home.is_slot(k) && rest.slot_free(k) }
+}
+
+// No two listed words share a slot, and every listed slot is below `len`,
+// the list's length: a word past the list is in the slot of its own id
+// (`Homes::home`), which is then no listed word's.
+fn List::slots_apart(self of: List<Home>, len: Nat) → Bool {
+    match of {
+        Nil => True,
+        Cons(home, rest) => (match home { InSlot(k) => Succ(k).leb(len) && rest.slot_free(k), InReg(_) => True }) && rest.slots_apart(len),
+    }
+}
+
+// Every register home is in the pool, and no two words share a slot.
+fn Homes::fits(self homes: Homes) → Bool { homes.of.homes_fit() && homes.of.slots_apart(homes.of.len()) }
 
 // Whether some word lives in `register`.
 fn List::homes_use(self of: List<Home>, register: Gpr) → Bool {
     match of {
         Nil => False,
-        Cons(home, rest) => match home { InSlot => rest.homes_use(register), InReg(k) => home_register(k).same(register) || rest.homes_use(register) },
+        Cons(home, rest) => match home { InSlot(_) => rest.homes_use(register), InReg(k) => home_register(k).same(register) || rest.homes_use(register) },
     }
 }
 
-fn Homes::uses(self homes: Homes, register: Gpr) → Bool { homes.of.homes_use(register) }
+// Whether a word lives in `register`…
+fn Homes::lives(self homes: Homes, register: Gpr) → Bool { homes.of.homes_use(register) }
+
+// …or the body is to leave it as it found it: a register a callee keeps
+// that the homes pin and no word lives in. R10 is not one: a callee may
+// write it, and a caller carries it across a call itself.
+fn Homes::pinned(self homes: Homes, register: Gpr) → Bool {
+    !homes.lives(register) && (homes.pins.homes_use(register) && !register.same(R10))
+}
+
+// Whether the body's code is to keep `register` between statements: a
+// word lives in it, or it is pinned. Every other register is a leaf's
+// scratch.
+fn Homes::uses(self homes: Homes, register: Gpr) → Bool { homes.lives(register) || homes.pinned(register) }
 
 // The registers some word lives in.
 fn Homes::registers(self homes: Homes) → List<Gpr> { home_pool().filter(λ (register: Gpr) => homes.uses(register)) }
@@ -174,7 +231,7 @@ fn Homes::misses(self homes: Homes, id, k: Nat, out: List<Nat>) → Bool {
 
 fn Homes::apart(self homes: Homes, id: Nat, out: List<Nat>) → Bool {
     match homes.home(id) {
-        InSlot => True,
+        InSlot(_) => True,
         InReg(k) => homes.misses(id, k, out),
     }
 }
@@ -196,7 +253,7 @@ fn Homes::nodes_apart(self homes: Homes, nodes: List<Node>, out: List<Nat>) → 
 fn Homes::slotted(self homes: Homes, ids: List<Nat>) → Bool {
     match ids {
         Nil => True,
-        Cons(id, rest) => match homes.home(id) { InSlot => homes.slotted(rest), InReg(_) => False },
+        Cons(id, rest) => match homes.home(id) { InSlot(_) => homes.slotted(rest), InReg(_) => False },
     }
 }
 
@@ -581,26 +638,21 @@ fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fue
 // The same homes with `places` for the values of the functions the regions
 // call (`Prog::links`, native_compile): a proposal like the homes, checked
 // by the functions' lowering.
-fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places) }
+fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places, homes.pins, homes.rooms) }
+fn Homes::roomed(self homes: Homes, rooms: List<Nat>) → Homes { Homes(homes.of, homes.loops, homes.places, homes.pins, rooms) }
 
-// Every procedure's body passes the check, from its results, and its
-// parameters are apart from what is live as it starts: its entry writes
-// them there, and `Procedure::fits` refuses the procedure otherwise.
-fn List::bodies_check(self procs: List<Procedure>, homes: Homes) → Bool {
-    match procs {
-        Nil => True,
-        Cons(proc, rest) => match proc.body.checked(homes, proc.results) {
-            None => False,
-            Some(live) => homes.all_apart(proc.params, live) && rest.bodies_check(homes),
-        },
-    }
+// A procedure's body passes the check under `homes`, from its results, and
+// its parameters are apart from what is live as it starts: its entry
+// writes them there, and `Procedure::fits` refuses the procedure otherwise.
+fn Procedure::checks_under(self proc: Procedure, homes: Homes) → Bool {
+    match proc.body.checked(homes, proc.results) { None => False, Some(live) => homes.all_apart(proc.params, live) }
 }
 
-// `homes` when the check passes them, `main` and every procedure's body,
-// else `fallback`: a heuristic made complete by a complete fallback
-// (`Homes::or_else_ok`).
+// `homes` when the check passes them, else `fallback`: a heuristic made
+// complete by a complete fallback (`Homes::or_else_ok`). They are `main`'s:
+// each procedure has its own (`Greedy::frame`).
 fn Homes::or_else(self homes: Homes, src: Source, fallback: Homes) → Homes {
-    match src.allocation_ok(homes) { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }
+    match src.allocation_ok(homes) { True => homes, False => fallback }
 }
 
 // Every word in its slot.
@@ -805,22 +857,68 @@ fn Homes::registers_of(self homes: Homes, row: List<Bool>, rows: List<List<Bool>
         Cons(other, rest) => match row.flag(at) || other.flag(id) {
             False => homes.registers_of(row, rest, id, Succ(at)),
             True => match homes.home(at) {
-                InSlot => homes.registers_of(row, rest, id, Succ(at)),
+                InSlot(_) => homes.registers_of(row, rest, id, Succ(at)),
                 InReg(k) => Cons(k, homes.registers_of(row, rest, id, Succ(at))),
             },
         },
     }
 }
 
-// The first register from `k` not in `used`, or the slot.
-fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
+// The first register from `k` not in `used`, or word `id`'s own slot.
+fn List::first_free(self used: List<Nat>, id, k, left: Nat) → Home {
     match left {
-        Zero => InSlot,
-        Succ(more) => match used.holds(k) { False => InReg(k), True => used.first_free(Succ(k), more) },
+        Zero => InSlot(id),
+        Succ(more) => match used.holds(k) { False => InReg(k), True => used.first_free(id, Succ(k), more) },
     }
 }
 
-fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places) }
+// Word `id`'s home set, the words before it that the list did not reach
+// each in the slot of its own id (`at` is the list's first word).
+fn List::home_put(self of: List<Home>, id: Nat, home: Home, at: Nat) → List<Home> {
+    match id {
+        Zero => match of { Nil => [home], Cons(_, rest) => Cons(home, rest) },
+        Succ(k) => match of { Nil => Cons(InSlot(at), List::home_put(Nil, k, home, Succ(at))), Cons(h, rest) => Cons(h, rest.home_put(k, home, Succ(at))) },
+    }
+}
+
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.home_put(id, home, 0), homes.loops, homes.places, homes.pins, homes.rooms) }
+
+// Of a frame's `left` words from word `at`, how many are in slots and
+// among `used`: the slots the frame needs.
+fn List::slots_used(self of: List<Home>, used: List<Nat>, at, left: Nat) → Nat {
+    match left {
+        Zero => 0,
+        Succ(more) => {
+            let rest = match of { Nil => List::slots_used(Nil, used, Succ(at), more), Cons(_, tail) => tail.slots_used(used, Succ(at), more) };
+            match of.nth(0) {
+                Some(InReg(_)) => rest,
+                _ => match used.holds(at) { False => rest, True => Succ(rest) },
+            }
+        },
+    }
+}
+
+// The homes of a frame's `left` words from word `at`, a word in a register
+// keeping it and the slots numbered again: a slotted word among `used` has
+// the next slot from `next`, in the words' order, and one the body never
+// names has one from `spare`, past them all. A frame then has one slot
+// for each word that needs one, and a word no statement names costs it
+// nothing.
+fn List::packed(self of: List<Home>, used: List<Nat>, at, left, next, spare: Nat) → List<Home> {
+    match left {
+        Zero => [],
+        Succ(more) => {
+            let tail: List<Home> = match of { Nil => [], Cons(_, rest) => rest };
+            match of.nth(0) {
+                Some(InReg(k)) => Cons(InReg(k), tail.packed(used, Succ(at), more, next, spare)),
+                _ => match used.holds(at) {
+                    True => Cons(InSlot(next), tail.packed(used, Succ(at), more, Succ(next), spare)),
+                    False => Cons(InSlot(spare), tail.packed(used, Succ(at), more, next, Succ(spare))),
+                },
+            }
+        },
+    }
+}
 
 // Each word in turn, heaviest first, given the first register none of its
 // neighbours has, or its slot; a word live at the start keeps its slot.
@@ -829,7 +927,7 @@ fn List::colour(self order: List<Nat>, entry: List<Nat>, graph: List<List<Bool>>
         Nil => homes,
         Cons(id, rest) => match entry.holds(id) {
             True => rest.colour(entry, graph, homes),
-            False => rest.colour(entry, graph, homes.set(id, homes.registers_of(graph.row(id), graph, id, 0).first_free(0, home_pool().len()))),
+            False => rest.colour(entry, graph, homes.set(id, homes.registers_of(graph.row(id), graph, id, 0).first_free(id, 0, home_pool().len()))),
         },
     }
 }
@@ -844,42 +942,73 @@ record Greedy { loop_weight: Nat }
 // The weight write-elf's homes are coloured with.
 fn Greedy::standard() → Greedy { Greedy(7) }
 
-// Each procedure's body's interference and weights after `main`'s: the
-// words are the source's, so a body's two words that interfere get two
-// registers as `main`'s do. A procedure's entry writes its parameters with
-// what is live as its body starts, so they interfere there: no statement
-// of the body writes a parameter it only reads, and without this two such
-// parameters got one register and the procedure was refused.
-fn List::bodies_graph(self procs: List<Procedure>, homes: Homes, of: List<List<Bool>>) → List<List<Bool>> {
-    match procs {
-        Nil => of,
-        Cons(proc, rest) => {
-            let body = proc.body.graph(homes, proc.results, of);
-            rest.bodies_graph(homes, body.of.all_written(proc.params, body.live))
-        },
-    }
-}
-fn List::bodies_weights(self procs: List<Procedure>, loop_weight: Nat, weights: List<Nat>) → List<Nat> {
-    match procs { Nil => weights, Cons(proc, rest) => rest.bodies_weights(loop_weight, proc.body.weights(loop_weight, 1, weights)) }
-}
-
+// `main`'s words coloured: a procedure's body has its own homes
+// (`Greedy::frame`), so its words neither interfere with `main`'s nor weigh
+// against them.
 fn Greedy::colouring(self g: Greedy, src: Source) → Homes {
     let slots = Homes::slots(src);
     let graph = src.main.graph(slots, [], []);
-    let of = src.procedures.bodies_graph(slots, graph.of);
     // A row for every word the source declares, so `registers_of` meets
     // each word a row may flag.
-    let rows = of.put(src.words - 1, of.row(src.words - 1), []);
-    src.procedures.bodies_weights(g.loop_weight, src.main.weights(g.loop_weight, 1, [])).heaviest().colour(graph.live, rows, slots)
+    let rows = graph.of.put(src.words - 1, graph.of.row(src.words - 1), []);
+    src.main.weights(g.loop_weight, 1, []).heaviest().colour(graph.live, rows, slots)
 }
+
+// How many words a procedure's frame has: one past the greatest id its
+// parameters, results and body name.
+fn Procedure::named(self proc: Procedure) → Nat { (proc.params ++ (proc.results ++ proc.body.words())).bound() }
+
+// One procedure's body coloured alone, under the source's loop sets: its
+// own interference and weights, so two bodies' words share registers. A
+// procedure's entry writes its parameters with what is live as its body
+// starts, so they interfere there: no statement of the body writes a
+// parameter it only reads, and without this two such parameters got one
+// register and the procedure was refused. A colouring the check refuses
+// gives way to every word in its slot, as `main`'s does. No register is
+// pinned here: that takes the leaves' needs (`Source::bodies`,
+// native_compile).
+fn Greedy::frame(self g: Greedy, loops: List<List<Nat>>, proc: Procedure) → Frame {
+    let slots = Homes([], loops);
+    let body = proc.body.graph(slots, proc.results, []);
+    let of = body.of.all_written(proc.params, body.live);
+    let words = proc.named();
+    let rows = of.put(words - 1, of.row(words - 1), []);
+    let coloured = proc.body.weights(g.loop_weight, 1, []).heaviest().colour([], rows, slots);
+    // One slot for each word the body names that the colouring left in
+    // one, numbered in the words' order; the frame is that many words.
+    let used = proc.params ++ (proc.results ++ proc.body.words());
+    let slots_used = coloured.of.slots_used(used, 0, words);
+    let packed = coloured.of.packed(used, 0, words, 0, slots_used);
+    match proc.checks_under(Homes(packed, loops)) { True => Frame(packed, loops, [], slots_used), False => Frame([], loops, [], words) }
+}
+
+fn List::frames_by(self procs: List<Procedure>, g: Greedy, loops: List<List<Nat>>) → List<Frame> {
+    match procs { Nil => [], Cons(proc, rest) => Cons(g.frame(loops, proc), rest.frames_by(g, loops)) }
+}
+
+// Every word of every procedure in its slot, and nothing pinned.
+fn List::frames_slotted(self procs: List<Procedure>, loops: List<List<Nat>>) → List<Frame> {
+    match procs { Nil => [], Cons(proc, rest) => Cons(Frame([], loops, [], proc.named()), rest.frames_slotted(loops)) }
+}
+fn SpillAll::frames(self a: SpillAll, src: Source) → List<Frame> { src.procedures.frames_slotted(Homes::slots(src).loops) }
+
+// Every procedure's frame, each body coloured alone.
+fn Greedy::frames(self g: Greedy, src: Source) → List<Frame> { src.procedures.frames_by(g, Homes::slots(src).loops) }
 
 fn Greedy::assign(self g: Greedy, src: Source) → Homes { g.colouring(src).or_else(src, Homes::slots(src)) }
 
 // Homes as numbers, for `write-elf` to read and spell (untrusted, like
-// every read): how many words have a home, each home (0 the slot, `k + 1`
-// register `k`), then each loop's set, its length first.
+// every read): how many words have a home, each home (0 the word's own
+// slot, as `main`'s are, `k + 1` register `k`), then each loop's set, its
+// length first.
 fn List::homes_spelled(self of: List<Home>) → List<Nat> {
-    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot => 0, InReg(k) => Succ(k) }, rest.homes_spelled()) }
+    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot(_) => 0, InReg(k) => Succ(k) }, rest.homes_spelled()) }
+}
+
+// A frame's homes, each slot with its number: `2k` slot `k`, `2k + 1`
+// register `k`.
+fn List::homes_numbered(self of: List<Home>) → List<Nat> {
+    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot(k) => 2 * k, InReg(k) => Succ(2 * k) }, rest.homes_numbered()) }
 }
 
 fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
@@ -887,6 +1016,17 @@ fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
 }
 
 fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.of.homes_spelled() ++ homes.loops.sets_spelled()) }
+
+// The procedures' frames as numbers: each its words, its homes (their
+// count first) and its pins (their count first). Their loop sets are the
+// source's, which `Homes::spelled` gives.
+fn List::frames_spelled(self frames: List<Frame>) → List<Nat> {
+    match frames {
+        Nil => [],
+        Cons(frame, rest) => Cons(frame.words, Cons(frame.of.len(), frame.of.homes_numbered() ++
+            Cons(frame.pins.len(), frame.pins.homes_spelled() ++ rest.frames_spelled()))),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The instances: neither is ever refused
@@ -1272,11 +1412,8 @@ theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTru
 theorem Homes::or_else_ok(self homes: Homes, src: Source, fallback: Homes, ok: src.allocation_ok(fallback).IsTrue()):
     src.allocation_ok(homes.or_else(src, fallback)).IsTrue() {
     (match src.allocation_ok(homes) as λ b => src.allocation_ok(homes) = b →
-            src.allocation_ok(match b { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }).IsTrue() {
-        True => λ passed => match src.procedures.bodies_check(homes) {
-            True => j(sym(passed), λ b _ => b.IsTrue(), trivial),
-            False => ok,
-        },
+            src.allocation_ok(match b { True => homes, False => fallback }).IsTrue() {
+        True => λ passed => j(sym(passed), λ b _ => b.IsTrue(), trivial),
         False => λ _ => ok,
     })(refl)
 }

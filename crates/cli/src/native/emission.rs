@@ -143,6 +143,9 @@ fn tree_of(shape: &[u64], first: Option<u64>) -> Result<Shape, String> {
     Ok(tree)
 }
 
+/// The name of procedure `index`'s layout (`elf::frames_literal` defines it).
+pub(super) fn body_layout(p: &str, index: usize) -> String { format!("{p}_layout_b{index}()") }
+
 /// Procedure `index` of the source `src` spells.
 fn procedure(src: &str, index: usize) -> String { format!("{src}().procedures.procedure_or({index})") }
 
@@ -158,7 +161,7 @@ fn procedure(src: &str, index: usize) -> String { format!("{src}().procedures.pr
 pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64], first: u64, calls: Option<CallsOf<'_>>) -> Result<Plan, String> {
     let tree = tree_of(shape, Some(first))?;
     let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\nfn {p}_kn_0() → List<Fact> {{ [] }}\n");
-    let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1, joins: Vec::new() };
+    let mut planner = Planner { p, layout: layout.to_string(), text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1, joins: Vec::new() };
     planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
     let exit = planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
@@ -176,14 +179,19 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
                 let id = planner.parts;
                 planner.parts += 1;
                 planner.text.push_str(&format!("fn {p}_s_{id}() → Stmt {{ {proc_}.body }}\nfn {p}_o_{id}() → List<Nat> {{ {proc_}.results }}\nfn {p}_kn_{id}() → List<Fact> {{ [] }}\n"));
-                let entry = planner.read("in", format!("{proc_}.entry_code(Start, {layout}, {index})"));
+                // Each procedure under its own layout (`Layout::body`), a
+                // literal the certificate holds to the computed one.
+                let body_layout = body_layout(p, index);
+                planner.layout = body_layout.clone();
+                let entry = planner.read("in", format!("{proc_}.entry_code(Start, {body_layout}, {index})"));
                 let root = planner.part(&tree, id)?;
-                let exit = planner.read("out", format!("{proc_}.exit_code(Start, {layout})"));
+                let exit = planner.read("out", format!("{proc_}.exit_code(Start, {body_layout})"));
+                planner.layout = layout.to_string();
                 bodies.push(Body { entry, root, exit });
             }
             let deep = planner.read("deep", format!("Start.deep_exit({layout})"));
             let count = functions;
-            let functions = (count > 0).then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {after}).unwrap_or(Start)")));
+            let functions = (count > 0).then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {homes}.room_table({src}().functions), {after}).unwrap_or(Start)")));
             Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions, count })
         }
     };
@@ -192,7 +200,7 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
     Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root, exit, calls, joins: planner.joins })
 }
 
-struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize, joins: Vec<usize> }
+struct Planner<'a> { p: &'a str, layout: String, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize, joins: Vec<usize> }
 
 impl Planner<'_> {
     /// The items around parts, of the program `program` spells.
@@ -220,7 +228,7 @@ impl Planner<'_> {
     }
 
     fn part(&mut self, shape: &Shape, id: usize) -> Result<Part, String> {
-        let (p, layout, names) = (self.p, self.layout, shape.names);
+        let (p, layout, names) = (self.p, self.layout.clone(), shape.names);
         if shape.leaves <= LEAVES {
             let read = self.push("part", true, format!("{p}_s_{id}().emission_reading({layout}, {p}_o_{id}(), {p}_kn_{id}(), {names})"),
                 format!("{p}_s_{id}().emits(Start, {layout}, {p}_o_{id}(), {p}_kn_{id}(), {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
@@ -313,7 +321,7 @@ pub(super) struct Span { program: String, pub start: usize, pub count: usize, pu
 /// A literal source's buffers (`lowered::Buffers`), for stating the entry's
 /// stores of their initial bytes a definition of them at a time: the
 /// source, the homes, and each buffer's capacity and initial length.
-pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [(u64, usize)] }
+pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub frames: &'a str, pub shapes: &'a [(u64, usize)] }
 
 /// `readings` are `plan`'s reads, read. With `inits`, the entry is stated
 /// from its parts (`Inits::state`); without, by one `refl` over the set
@@ -333,7 +341,7 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
         .map(|line| format!("{line}\n")).collect();
     if plain.len() != plan.joins.len() { return Err(out_of_order()); }
     let plain: BTreeSet<usize> = plan.joins.iter().zip(plain).filter(|&(_, &flag)| flag == 1).map(|(&rest, _)| rest).collect();
-    let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts, plain: &plain, checked: false };
+    let mut writer = Writer { p, layout: layout.to_string(), readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts, plain: &plain, checked: false };
     // The allocation's check first: the entry reads the set it found
     // before `main` (`{p}_ck_0`), and the main statement's joins cite its
     // verdicts.
@@ -343,8 +351,8 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
     match inits {
         Some(inits) => inits.state(&mut writer, entered, &live)?,
         None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{\n    \
-            {src}().entry_at({LOW}, {homes}, {live}, {}, {p}_ck_0(), refl)\n}}\n", writer.program(entered), writer.program(entered),
-            src = checks.src, homes = checks.homes, LOW = super::elf::LOW)),
+            {src}().entry_at({LOW}, {homes}, {frames}, {live}, {}, {p}_ck_0(), refl)\n}}\n", writer.program(entered), writer.program(entered),
+            src = checks.src, homes = checks.homes, frames = checks.frames, LOW = super::elf::LOW)),
     }
     let (start, end, names) = writer.part(&plan.root)?;
     writer.checked = false;
@@ -359,18 +367,23 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, plain: &[u64
             for (i, body) in bodies.iter().enumerate() {
                 if writer.starts[body.entry] != at { return Err(out_of_order()); }
                 let entered = writer.end(body.entry);
+                let lb = body_layout(p, i);
+                writer.layout = lb.clone();
                 let (start, end, after) = writer.part(&body.root)?;
+                writer.layout = layout.to_string();
                 if start != entered || writer.starts[body.exit] != end { return Err(out_of_order()); }
                 if body.root.names() != label { return Err(miscounted()); }
                 let out = writer.end(body.exit);
                 writer.cuts.extend([at, entered, out]);
                 let proc_ = procedure(src, i);
                 let (a, e, b, o) = (writer.program(at), writer.program(entered), writer.program(end), writer.program(out));
-                writer.theorems.push_str(&format!("theorem {p}_pf_{i}(): {proc_}.fits({layout}) = True {{ refl }}\n\
-                    theorem {p}_pe_{i}(): {proc_}.entry_code({a}, {layout}, {i}) = {e} {{ refl }}\n\
-                    theorem {p}_px_{i}(): {proc_}.exit_code({b}, {layout}) = {o} {{ refl }}\n\
-                    theorem {p}_pk_{i}(): {proc_}.code({a}, {layout}, {i}, {label}) = Some(Compiled({o}, {after})) {{\n    \
-                    Procedure::code_of({proc_}, {a}, {e}, {b}, {o}, {layout}, {i}, {label}, {after}, {p}_pf_{i}(), {p}_pe_{i}(), {p}_e_{}(), {p}_px_{i}())\n}}\n",
+                writer.theorems.push_str(&format!("theorem {p}_pf_{i}(): {proc_}.fits({lb}) = True {{ refl }}\n\
+                    theorem {p}_pe_{i}(): {proc_}.entry_code({a}, {lb}, {i}) = {e} {{ refl }}\n\
+                    theorem {p}_px_{i}(): {proc_}.exit_code({b}, {lb}) = {o} {{ refl }}\n\
+                    theorem {p}_pkb_{i}(): {proc_}.code({a}, {lb}, {i}, {label}) = Some(Compiled({o}, {after})) {{\n    \
+                    Procedure::code_of({proc_}, {a}, {e}, {b}, {o}, {lb}, {i}, {label}, {after}, {p}_pf_{i}(), {p}_pe_{i}(), {p}_e_{}(), {p}_px_{i}())\n}}\n\
+                    theorem {p}_pk_{i}(): {proc_}.code({a}, {layout}.body({i}), {i}, {label}) = Some(Compiled({o}, {after})) {{\n    \
+                    j({p}_layout_b{i}_is(), λ l _ => {proc_}.code({a}, l, {i}, {label}) = Some(Compiled({o}, {after})), {p}_pkb_{i}())\n}}\n",
                     body.root.id()));
                 spans.push((at, out, label, after));
                 (at, label) = (out, after);
@@ -494,7 +507,7 @@ pub(super) fn code(p: &str, items: &[(u64, String)], cuts: &BTreeSet<usize>) -> 
 /// native_compile_correct): the source, the homes, and
 /// `Source::checked_spelled`'s read, each statement's `out` and the set
 /// `Stmt::checked` finds before it, in preorder.
-pub(super) struct Checks<'a> { pub src: &'a str, pub homes: &'a str, pub sets: &'a [u64] }
+pub(super) struct Checks<'a> { pub src: &'a str, pub homes: &'a str, pub frames: &'a str, pub sets: &'a [u64] }
 
 impl Checks<'_> {
     /// `{p}_ck_{id}` for each part, and `{p}_allocation_is`, that the
@@ -559,7 +572,7 @@ impl Inits<'_> {
     /// joined by `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The
     /// literal is cut where each starts and ends.
     fn state(&self, writer: &mut Writer<'_>, entered: usize, live: &str) -> Result<(), String> {
-        let (p, layout) = (writer.p, writer.layout);
+        let (p, layout) = (writer.p, writer.layout.clone());
         let chunk = lowered::CHUNK as u64;
         // Two items store each initial byte while there is room, and the
         // entry's items before them save the command line's address and the
@@ -610,8 +623,8 @@ impl Inits<'_> {
                 j + 1, j + 1));
         }
         let start = writer.program(framed);
-        text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}) = {end} {{\n    \
-            {src}().entry_of({LOW}, {homes}, {live}, {start}, {end}, {p}_ck_0(), {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
+        text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}, {frames}) = {end} {{\n    \
+            {src}().entry_of({LOW}, {homes}, {frames}, {live}, {start}, {end}, {p}_ck_0(), {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, frames = self.frames, LOW = super::elf::LOW));
         writer.cuts.insert(framed);
         writer.theorems.push_str(&text);
         Ok(())
@@ -620,7 +633,9 @@ impl Inits<'_> {
 
 struct Writer<'a> {
     p: &'a str,
-    layout: &'a str,
+    /// The layout of the statement being written: `main`'s, or a
+    /// procedure's own.
+    layout: String,
     readings: &'a [Reading],
     /// Where each read's items start in the program.
     starts: &'a [usize],
@@ -646,7 +661,7 @@ impl Writer<'_> {
     /// States `part` as `{p}_e_{id}`: its emission from where its items
     /// start to where they end. Returns the two, and the label name after it.
     fn part(&mut self, part: &Part) -> Result<(usize, usize, u64), String> {
-        let (p, layout) = (self.p, self.layout);
+        let (p, layout) = (self.p, self.layout.clone());
         let (id, names, start, end, after, proof) = match part {
             Part::Whole { id, names, read, .. } => {
                 let after = self.readings[*read].names.ok_or_else(out_of_order)?;
@@ -708,15 +723,15 @@ fn deep_text(p: &str, src: &str, homes: &str, layout: &str, end: &str, last: u64
     let functions = format!("{src}().functions");
     let exit = format!("{end}.deep_exit({layout})");
     if count == 0 {
-        return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{ refl }}\n");
+        return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{ refl }}\n");
     }
     let evaluable = super::verified::evaluable_text_over(p, &functions, count, &format!("{functions}.map(λ (f: Function) => f.parameters.len())"));
     format!("{evaluable}
 theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
 theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}
-theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), program_room({functions})).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
-theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{
-    {exit}.links_of({functions}, {homes}.places, {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
+theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), table_room({homes}.room_table({functions}))).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
+theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{
+    {exit}.links_of({functions}, {homes}.places, {homes}.room_table({functions}), {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
 }}
 ")
 }

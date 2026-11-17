@@ -138,7 +138,7 @@ fn mebibyte_buffer_runs_as_cat() {
     // 2097321 bytes, in 513 pages.
     let size = 513 * 4096u64;
     let certificate = std::fs::read_to_string(dir.join("mib_cat.certificate.hthr")).unwrap();
-    for statement in [&format!("fn mib_cat_elf_size() → Nat {{ {size} }}")[..], "theorem mib_cat_elf_fits()", "theorem mib_cat_elf_simulates("] {
+    for statement in [&format!("fn mib_cat_elf_size() → Nat {{ {size} }}")[..], "theorem mib_cat_elf_fits()", "theorem mib_cat_elf_runs("] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
     let file = std::fs::read(&binary).unwrap();
@@ -178,8 +178,18 @@ fn every_written_program_gets_its_theorem() {
     let result = write_elf(PROBES, "head10", &binary);
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
-    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_simulates(", "theorem head10_elf_runs("] {
+    // Its theorem is over its contract, whose lines the certificate names
+    // and the compile prints: on the system's stack, the room below RSP is
+    // one of them, and taken on trust.
+    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_runs(", "start: head10_elf_contract().Start(head10_elf_file(), top, args)(s)",
+        "fn head10_elf_from() → StackFrom { FromSystem }",
+        "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackRoom("] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
+    let printed = String::from_utf8_lossy(&result.stdout).to_string();
+    for line in ["`head10` presumes of the system that runs it:", "  [standard]  execution starts at the header's entry address (ELF gABI)",
+        "bytes below the stack pointer as the process starts are usable", "  [presumed]  no fatal signal is delivered, the kernel's out-of-memory kill included"] {
+        assert!(printed.contains(line), "the compile prints `{line}`:\n{printed}");
     }
     let every: Vec<u8> = (0..700u32).map(|i| (i * 7 % 256) as u8).collect();
     for input in [&b"hello, head\n"[..], &every] {
@@ -303,7 +313,8 @@ fn structured_regions_run() {
 
 /// The same program on a stack of its own (`--stack segment`): its theorem
 /// asks the system for the file loaded, the entry and the command line
-/// (`SegmentStart`) and nothing of the stack Linux made, and it runs.
+/// (`SegmentStart`, which its contract's `Start` is) and nothing of the
+/// stack Linux made: its contract has no line for stack room. It runs.
 #[test]
 fn a_program_can_carry_its_own_stack() {
     let dir = scratch("head10_segment");
@@ -311,10 +322,11 @@ fn a_program_can_carry_its_own_stack() {
     let result = write_elf_with(PROBES, "head10", &binary, &["--stack", "segment"]);
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
-    for statement in ["theorem head10_elf_runs(", "start: SegmentStart(head10_elf_size(), head10_elf_file(), args, s)", "fn head10_elf_stack() → List<Instruction> {"] {
+    for statement in ["theorem head10_elf_runs(", "fn head10_elf_from() → StackFrom { FromSegment }", "fn head10_elf_stack() → List<Instruction> {",
+        "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, CallsAnswered, NoFatalSignal]"] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
-    assert!(!certificate.contains("StackPlaced"), "and asks nothing of where Linux put a stack");
+    assert!(!String::from_utf8_lossy(&result.stdout).contains("below the stack pointer"), "and the compile prints no line about the system's stack");
     let (code, out) = run(&binary, b"hello, head\n", Stdio::piped());
     assert_eq!(code, Some(0), "head -c 10 exits 0");
     assert_eq!(out, b"hello, hea", "and has sent the first ten bytes");

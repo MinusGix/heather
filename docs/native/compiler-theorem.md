@@ -255,16 +255,21 @@ Beyond the kernel, the theorem rests on these:
 A program `write-elf` writes has no caller: its file is loaded and run by
 Linux. The file's code is entry code and then the compiled program. The
 compiled program asks, where it starts, for RSP at the top of a stack with
-the source's room (`Source::stack_room`, a figure computed for the program)
+what the source needs (`Source::need`, a figure computed for the program
+under its placement)
 and RDI where the command line is; the entry code is what provides them
 (`Source::runs_after`, `lib/native/native_compile_elf.hthr`). Which entry
-code is a choice made when the file is written (`write-elf --stack`), and
-each choice has one record of everything its theorem asks of the system
-(`docs/native/system-contract-design.md`).
+code is a choice made when the file is written (`write-elf --stack`). Either
+way the file has one record of what it presumes of the system, its
+`Contract` (`docs/native/system-contract-design.md` §2): the certificate
+states it (`<source>_elf_contract`, its lines by name in
+`<source>_elf_presumes`), `write-elf` prints those lines, and the file's
+theorem, `<source>_elf_runs` by `Source::elf_runs`, takes the contract's
+`Start` as its one premise about the system.
 
 **The system's stack** (`--stack system`, the default; `stack_from_system`).
-The theorem is `Source::elf_file_runs`, each certificate's
-`<source>_elf_runs`, and its premise is `LinuxStart`:
+The contract's `Start` is `LinuxStart` (the theorem behind it is
+`Source::elf_file_runs`):
 
 - **`loaded`**: the file's two `PT_LOAD` headers were honoured (its bytes at
   0x400000 readable and executable, the data segment zero-filled, readable
@@ -279,8 +284,8 @@ The theorem is `Source::elf_file_runs`, each certificate's
 
 **The program's own stack** (`--stack segment`; `stack_from_segment`). The
 data segment is sized for the layout and the stack room after it, and the
-entry code points RSP at the end of that room. The theorem is
-`Source::elf_segment_file_runs` and its premise is `SegmentStart`, which is
+entry code points RSP at the end of that room. The contract's `Start` is
+`SegmentStart` (the theorem behind it is `Source::elf_segment_file_runs`), which is
 `loaded`, `entry` and `argv` only: nothing is asked of the stack limit, of
 growth, or of how much stack exec maps. What it costs: the stack's size is
 fixed when the file is written, a limit on the data segment or the address

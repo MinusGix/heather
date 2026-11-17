@@ -100,7 +100,10 @@ theorem Target::outputs_unused(self t: Target, nodes: List<Node>, r: Gpr, m: Mem
 // ---------------------------------------------------------------------------
 // Inputs in
 
-theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits(id).IsTrue()): id < layout.words { Nat::leb_sound(Succ(id), layout.words, fits) }
+// A word's fit, named: its callers hand it the check where `known` finds
+// it, and the slot's bound is read from it where a slot is
+// (`Layout::home_inside`).
+theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits(id).IsTrue()): layout.word_fits(id).IsTrue() { fits }
 
 // The registers after a port is loaded, by its kind.
 fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs) → Gprs {
@@ -254,17 +257,9 @@ theorem Prog::within_leaf_into(self p: Prog, layout: Layout, out: List<Nat>, nod
     let outs = layout.leaf_outputs(nodes);
     let inputs = nodes_inputs(nodes);
     let region = leaf_region(nodes);
-    (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
-            None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs))),
-        } }) = Some(q) → p.Within(q) {
-        False => λ none => absurd(none),
-        True => (match loaded_is: p.ports_to(layout, inputs, ins) {
-            None => λ none => absurd(none),
-            Some(loaded) => λ stored => Prog::within_trans(Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
-                loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, stored)),
-        }),
-    })(emitted)
+    cases emitted as checked, loaded_is(loaded);
+    Prog::within_trans(Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+        loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, emitted))
 }
 
 theorem Prog::within_leaf(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, out, nodes) = Some(q)): p.Within(q) {

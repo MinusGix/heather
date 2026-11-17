@@ -37,7 +37,8 @@ heather write-elf demo.hthr -o validate      # `main` by default; `f::source` na
 gives a standalone x86-64 Linux executable, no C `main`, whose certificate
 states, with no proof written for this program:
 
-- `main::source_elf_simulates`: the process Linux makes of the file
+- `main::source_elf_runs`: the process Linux makes of the file, started as
+  the file's contract says (`docs/native/system-contract-design.md`),
   simulates the `Source` (the compiler's theorem, as for every `write-elf`
   program today, `native_compile_elf`);
 - `main::reads`: that `Source`'s tree, read against **any** world, is
@@ -70,7 +71,7 @@ Built (with the file to read):
 | `ELoop` (`Seq`, `While`), `ELoop::lower_reads` | `rt_io_loop.hthr` | built |
 | `Lend`: a computation calls a span `runtime fn` that may write | `rt_io.hthr`, PR #581 | built as a term; not reflected |
 | `tr` as one `ELoop` term, through `write-elf`, held to GNU tr | `rt_io_lend_tests.hthr`, `native_tools.rs` | built; since round 2 the `runtime fn tr_upper` (`runtime_program_tests.hthr`), compiled as `tr_upper::source` |
-| `write-elf` of any nullary `Source`, `<s>_elf_simulates` | `crates/cli/src/native/elf.rs`, `native_compile_elf` | built |
+| `write-elf` of any nullary `Source`, `<s>_elf_runs` | `crates/cli/src/native/elf.rs`, `native_compile_elf` | built |
 | Data segment sized to the program (1 MiB buffers) | issue `native-data-capacity` | built |
 
 So `tr` already runs as a compiled computation over `Io` with its theorem,
@@ -248,7 +249,7 @@ is written for `f`.
 
 **`write-elf` takes it by its path.** Today `write-elf <file> <source>`
 takes a plain identifier (`symbol_ok`); it learns `f::source`, and the
-certificate names its members after it (`f::source_elf_simulates`, …).
+certificate names its members after it (`f::source_elf_runs`, …).
 The certificate then has every link: the file simulates the `Source`
 (`elf_simulates`), the `Source`'s fuelled program and its fuel-free tree
 refine each other (`Source::tree_co_refines`), and the tree reads as `f`
@@ -410,13 +411,16 @@ initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
 
-**The surface (built, 2026-11-16).** `b"valid\n"` is the name `b` with a
-string literal right after it, no space between (`Parser::byte_string`; `b`
-alone or `b "x"` is what it was). Its bytes are the string's characters,
-each ASCII, since a non-ASCII character is refused rather than read as its
-UTF-8 encoding; the escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`,
-`\"`, `\0`, `\u{…}` up to `7F`), and a byte above `0x7F` has no spelling
-yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_string_*`)
+**The surface (built, 2026-11-16).** `b"valid\n"` is one token, `ByteStr`,
+from its `b` (`b` alone or `b "x"` is what it was), cut the same by the
+Rust lexer (`lex_byte_string`) and Heather's own scanner
+(`lib/lang/lexer/lexer_scan.hthr`, `step_byte_string`). Its bytes are its
+characters, each ASCII, since a non-ASCII character is refused rather than
+read as its UTF-8 encoding (the message spells its bytes as escapes); the
+escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`) but
+`\u{…}`, which names a scalar value and not a byte, and `\xHH`, exactly
+two hexadecimal digits, for any byte (`b"\xC3\xA9"`). A string or
+character literal has no `\x`. It elaborates (`Literals::elab_byte_string_*`)
 to the collection literal of its numerals at `[u8; n]`, or at
 `List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
 exactly the term `[118, 97, …]` would be, with nothing new in the kernel;

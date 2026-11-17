@@ -1,17 +1,17 @@
 // A program that brings its own optimizer rule.
 //
-// `add_sub_left` is an ordinary theorem about words under the `rule` prefix
+// `sub_self` is an ordinary theorem about words under the `rule` prefix
 // (docs/native/optimizer-rules-design.md). Declaring it is all there is:
 // the prefix registers it, `compile-x86` takes the rules registered in the
 // program's modules beside the library's, the search finds where the
 // statement fits, and the certificate's replay uses the rule's soundness,
 // which the prefix proved from the theorem.
 //
-//     heather compile-x86 examples/x86-native/own_rule.hthr first_and_back -o own_rule.s
+//     heather compile-x86 examples/x86-native/own_rule.hthr first_and_nothing -o own_rule.s
 //
-// With the rule the compiled function has no add and no subtraction;
+// With the rule the compiled function has no subtraction and no add;
 // without it, both. The standard set of rules (function_ir_identities)
-// has the sum taken back from the right, `(a + b) - b`, and not this one.
+// does not have a word taken from itself, and no rule it has gives it.
 import logic;
 import bool;
 import nat;
@@ -21,6 +21,7 @@ import pair;
 import bitvec;
 import bitvec_nat;
 import bitvec_omega;
+import bitvec_ring;
 import omega;
 import tactic;
 import char;
@@ -33,15 +34,15 @@ import function_ir_replay;
 import function_ir_rule;
 import runtime;
 
-rule theorem add_sub_left({w: Nat}, a, b: BitVec(w)): (a + b) - a = b {
-    trans(cong_fn(λ (z: BitVec(w)) => z - a, BitVec::add_comm(w, a, b)), BitVec::add_sub_cancel(w, b, a))
+rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 {
+    trans(cong_fn(λ (z: BitVec(w)) => z - a, sym(BitVec::zero_add(w, a))), BitVec::add_sub_cancel(w, 0, a))
 }
 
 // The first byte of a span, or zero of an empty one, with the length
-// added in front and taken away again.
-runtime fn first_and_back(s: List<u8>, n: u64) → u64 {
+// less itself added on.
+runtime fn first_and_nothing(s: List<u8>, n: u64) → u64 {
     if h: 0 < n {
-        (n + s.byte_within(n, 0).zero_extend(56)) - n
+        s.byte_within(n, 0).zero_extend(56) + (n - n)
     } else {
         0
     }

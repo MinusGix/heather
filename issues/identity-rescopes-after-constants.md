@@ -1,6 +1,6 @@
 ---
 title: Delete the elaborator's rescopes and rescope memos that constants made the identity
-status: open
+status: closed
 labels: [kernel,elaborator,simplicity,cleanup]
 area: kernel
 created: 2026-11-10
@@ -65,3 +65,8 @@ a `scripts/perf ab`. Item 5 is a kernel change.
   - `scripts/perf ab` on `calc_parser`, `x86_64_asm_runs` and `function_ir_spills_tests`: all 45 counter columns are identical, and the seconds are within the noise. On these files the padding never varied while one of these memos was live, so this change is about the keys stating what the answers depend on, not about speed.
   - Plain `scripts/test`, with #697 (the master fix) merged in locally: 4057 passed, 1 failed. The failure was `native_linked`'s certificate killed at the rail under contention; it passes when run alone.
   - Item 5 (`shift_univ_psi`) is left; it is a kernel change.
+- 2026-11-16: Item 5 (2026-11-16). Investigated first. `shift_univ_psi` rebuilt every statement and body of Ψ each time the checker or conversion went under universe binders, and `ShiftUniv` has no bounds skip. In practice it costs nothing: a temporary counter over calc_parser, vec_code, x86_64_asm_runs and recursion_binder_tests saw no calls, because the elaborator never builds UPi, ULam or a code recursor.
+
+  Done anyway, at Minus's choice. The signature now grows only at an empty L: `check_signature_extension` refuses otherwise with `SignatureUnderUniverses`, and DESIGN.md states the rule. Given that, `shift_univ_psi` shares Σ and shifts only the variables. The kernel tests' replica now matches; it had also been dropping `consts`.
+
+  Results: kernel 176 unit and 429 integration tests passed, `scripts/test --pr` 3729 passed. All five items are done. Closed.

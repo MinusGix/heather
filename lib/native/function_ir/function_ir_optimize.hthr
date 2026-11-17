@@ -278,14 +278,16 @@ fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted
 // The function with the conditionals its own tests decide replaced by
 // their arms and the narrowings its ranges make moves written as moves,
 // where there is one of either.
-fn Function::find_learned(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
-    shared(function.learn_plan(entries := entries, learners := learners), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
+fn Function::find_learned(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
-fn Function::find_learned_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
-    shared(function.learn_plan(entries := entries, learners := learners).plain_kept(), λ plan =>
+fn Function::find_learned_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings).plain_kept(), λ plan =>
         match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 

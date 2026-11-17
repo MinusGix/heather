@@ -336,7 +336,7 @@ fn the_automaton_is_one_export() {
         .filter_map(|line| line.strip_prefix("runtime fn step_"))
         .map(|rest| &rest[..rest.find('(').expect("parameters")])
         .collect();
-    assert_eq!(families.len(), 24);
+    assert_eq!(families.len(), 25);
     for family in families {
         assert_eq!(choose.matches(&format!("step_{family}(s, b)")).count(), 1, "step_{family} in scan_choose");
     }
@@ -522,6 +522,15 @@ fn what_is_refused_and_where() {
         ("'ab'", 0),
         ("'\n'", 0),
         ("'\\u{41}x'", 0),
+        // Byte strings: unterminated, across a line, a string's `\u`, a
+        // character past ASCII, and a `\x` short of two digits.
+        ("b\"ab", 0),
+        ("x b\"a\nb\"", 2),
+        ("b\"\\u{7f}\"", 0),
+        ("b\"aé\"", 0),
+        ("b\"\\x4g\"", 0),
+        ("b\"\\x", 0),
+        ("b\"\\", 0),
     ];
     let mut reasons = std::collections::HashSet::new();
     for (source, at) in refused {
@@ -901,6 +910,9 @@ const PROBES: &[&str] = &[
     "0x_1 0o",
     "\"\\u41\"",
     "'a\\qb'",
+    "b\"a\\x7F\\n\" b \"c\" bb\"\"",
+    "b\"\\xg\"",
+    "b\"é\"",
 ];
 
 /// A Heather string literal for a source.

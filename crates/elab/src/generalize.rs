@@ -219,8 +219,9 @@ impl Generalize<'_> {
             }
         }
         Refined {
-            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None))),
+            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None)), eqbind),
             retyped: Vec::new(),
+            beside: Vec::new(),
         }
     }
 
@@ -245,9 +246,16 @@ impl Generalize<'_> {
             .rev()
             .find(|&p| wrapped.abstract_local(&Term::Var(LocalVar((m - 1 - p) as u32))).is_some())
             .map_or(0, |p| p + 1);
+        // A record's type is about the scrutinee where its arguments are,
+        // not where a field's type happens to spell it, as the motive reads
+        // the goal (`matching::synthesize_motive`,
+        // issues/named-match-third-level-kernel-rejects.md).
         let contains = |q: usize| {
             cx.gamma.entries.get(q).is_some_and(|entry| {
-                entry.ty.shift_local((m - q) as u32).abstract_local(scrutinee).is_some()
+                let ty = entry.ty.shift_local((m - q) as u32);
+                ty.abstract_local(scrutinee).is_some()
+                    && crate::matching::MotiveSynthesisElab::fold_declarations(self.0, cx, &ty)
+                        .is_none_or(|folded| folded.abstract_local(scrutinee).is_some())
             })
         };
         let named = arm_names(arms);
@@ -276,9 +284,13 @@ impl Generalize<'_> {
         if about.is_empty() {
             return Refined::default();
         }
-        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))));
+        let beside: Vec<String> = eqbind.map_or_else(Vec::new, |h| {
+            let passed = passed_beside(arms, h);
+            about.iter().map(|&q| cx.names[q].to_string()).filter(|n| passed.contains(n)).collect()
+        });
+        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind);
         retyped.retain(|(q, _)| positions.contains(q));
-        Refined { positions, retyped }
+        Refined { positions, retyped, beside }
     }
 
     /// Of the binders `about` the scrutinee, what an arm names or the goal
@@ -290,7 +302,10 @@ impl Generalize<'_> {
     /// beside `h` in one call, `InSlot => t.goes_slot(…, slot, within, …)`:
     /// the callee states the two about the test as written, which is what
     /// passing the evidence along is for
-    /// (issues/case-split-refines-hypotheses-under-calls.md).
+    /// (issues/case-split-refines-hypotheses-under-calls.md). A hypothesis
+    /// named like the equation `eqbind` is not refined for its name: the
+    /// arms' mention of that name is the equation, which a refined copy of
+    /// the hypothesis would shadow.
     fn select_refined(
         &self,
         cx: &Cx,
@@ -298,6 +313,7 @@ impl Generalize<'_> {
         expected: &Type,
         about: Vec<usize>,
         convoy: Option<(&Term, Option<&str>)>,
+        eqbind: Option<&str>,
     ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
@@ -322,7 +338,9 @@ impl Generalize<'_> {
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && ((named.iter().any(|n| n == &cx.names[q]) && !takes_h(q))
+                    && ((named.iter().any(|n| n == &cx.names[q])
+                        && eqbind.is_none_or(|h| h != &cx.names[q])
+                        && !takes_h(q))
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
@@ -475,6 +493,35 @@ impl Generalize<'_> {
 pub(crate) struct Refined {
     pub(crate) positions: Vec<usize>,
     pub(crate) retyped: Vec<(usize, Type)>,
+    /// The binders about the scrutinee that an arm names and the match
+    /// leaves as written only because an arm passes them beside `h`
+    /// ([`Generalize::select_refined`]): what a refusal inside the match
+    /// says, since the arm that needed one refined is not the arm that
+    /// passed it.
+    pub(crate) beside: Vec<String>,
+}
+
+impl Refined {
+    /// `error` with the binders left as written beside `h` named, when it is
+    /// a refusal the elaborator made inside the match.
+    pub(crate) fn explain(&self, h: &str, error: crate::ElabError) -> crate::ElabError {
+        let crate::ElabError::Elab { msg, span } = error else {
+            return error;
+        };
+        if self.beside.is_empty() {
+            return crate::ElabError::Elab { msg, span };
+        }
+        let names: Vec<String> = self.beside.iter().map(|n| format!("`{n}`")).collect();
+        let (verb, it) = if names.len() == 1 { ("is", "it") } else { ("are", "them") };
+        crate::ElabError::Elab {
+            msg: format!(
+                "{msg}\nnote: {} {verb} read as written in every arm of this `match {h}:`, not at the arm's case, because an arm passes {it} beside `{h}` in one call. Where an arm needs {it} at its case, keep {it} out of that call: bind what the call takes first (`let fact = {};`)",
+                names.join(", "),
+                self.beside[0],
+            ),
+            span,
+        }
+    }
 }
 
 /// Every name an arm's body mentions as a variable.

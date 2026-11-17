@@ -427,6 +427,14 @@ impl Checking<'_> {
                 Defaults(self).elab_param_default(cx, args, expected, lvl, e.span, &[])
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name.starts_with(heather_syntax::CASES_HYPOTHESIS))
+                    && named.is_empty() =>
+            {
+                let ExprKind::Var(name) = &head.kind else { unreachable!("guarded above") };
+                let step = crate::hypothesis_cases::step(self, cx, name, args, expected, e.span)?;
+                self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
                     && named.is_empty() =>
             {
@@ -662,7 +670,7 @@ impl Checking<'_> {
                     };
                     let elim = match eqbind {
                         None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run)?,
-                        Some(h) => run(&gcx, Some(h))?,
+                        Some(h) => run(&gcx, Some(h)).map_err(|error| refined.explain(h, error))?,
                     };
                     return Ok(Generalize(self).instantiate_generalized(cx, elim, gen_ty, &positions));
                 }
@@ -691,7 +699,7 @@ impl Checking<'_> {
                     };
                     let elim = match eqbind {
                         None => Inference(self).elab_match_pending(cx, &scrut_ty, &run)?,
-                        Some(h) => run(cx, Some(h))?,
+                        Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error))?,
                     };
                     return Ok(Generalize(self).instantiate_aliases(cx, elim, gen_ty, &dependents));
                 }
@@ -718,7 +726,7 @@ impl Checking<'_> {
                 };
                 match eqbind {
                     None => Inference(self).elab_match_pending(cx, &scrut_ty, &run),
-                    Some(h) => run(cx, Some(h)),
+                    Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error)),
                 }
             }
             // `absurd(p)`: from an equation between distinct constructors,
