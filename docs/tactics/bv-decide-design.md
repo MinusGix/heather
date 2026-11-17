@@ -61,6 +61,12 @@ Every obligation in the refutation is `X = True` or `X = literal` by
 The host cuts the solver's proof into stages (`refutation` in
 `crates/elab/src/host/sat.rs`):
 
+- **Pieces** (`reaches_piece`): the clause list as the tactic wrote it
+  (`BVPred::clauses(p, K)`) is met against the host's spelling of it a
+  piece of `PIECE` clauses at a time: `cs.take(n) = chunks` by `refl`, the
+  rest left as `cs.drop(n)` for the next piece. Meeting a 64-bit adder's
+  4193 clauses in one conversion passed the budget; each piece computes the
+  list again, which is cheap next to comparing it.
 - **Build** (`reaches_build`): the input clauses the proof uses, a run of
   consecutive ones at a time (at most `BUILD_PER`), inserted into the
   formula; every `BUILD_EVERY` runs, and after the last, the formula as a
@@ -68,7 +74,9 @@ The host cuts the solver's proof into stages (`refutation` in
 - **Drop** (`reaches_drop`): runs of input clauses no step names are never
   inserted. Dropping hypotheses is sound for a refutation.
 - **Add** (`reaches_add`): the solver's steps, a chunk at a time, cut by the
-  hinted literals they read (`STEP_PER`); every `EVERY` chunks the formula
+  hinted literals they read (`STEP_PER`, 500: on a 64-bit adder's proof
+  chunks of 800 passed the budget, since lookups deepen as the formula and
+  the variables grow); every `EVERY` chunks the formula
   becomes a literal again (`reaches_add_at`), so a stage replays at most
   `EVERY` chunks of insertions.
 - **Done** (`reaches_done`): the last chunk derives the empty clause.
@@ -92,6 +100,14 @@ term; built any other way they are compared by evaluation, which is slow.
   (`reaches_keep`, `reaches_trim`) costs a lookup and an insertion per kept
   clause, which at thousands of live clauses is several times the budget;
   it is kept for experiments (`SAT_KEEP=1`) and off by default.
+- The solver's proofs are long even for small claims: reassociating three
+  4-bit additions takes about 5000 hints (CaDiCaL's options barely move it,
+  `HEATHER_SAT_OPTIONS=name=value,…` to try more), and each hinted literal
+  costs the kernel several hundred steps. So a claim's check time is the
+  proof's length times that constant: a few seconds for chained byte
+  arithmetic, tens of seconds for 64-bit `x + y = y + x`. The checker's
+  constant (`lib/std/tactic/lrat.hthr`'s lookups through two tries) is the
+  lever for every claim at once.
 - Multiplication is hard for any SAT solver: 8-bit `x * y = y * x` is over a
   million hints, out of reach. Multiplication by a constant is cheap.
 

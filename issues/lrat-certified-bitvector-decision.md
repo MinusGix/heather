@@ -158,4 +158,11 @@ before a generator is worth writing.
   clauses (`reaches_keep`, `reaches_trim`) costs a lookup and an insertion
   per kept clause, several budgets at thousands of clauses, so it is off.
   Multiplication of two variables stays out of reach (8-bit `x * y = y * x`
-  is over a million hints).
+  is over a million hints). The tactic's clause list is met against the
+  host's chunks a piece at a time (`reaches_piece`, by `take`/`drop`): in
+  one conversion a 64-bit adder's 4193 clauses passed the budget. With that
+  and step chunks of 500 hinted literals, 64-bit addition commuting checks
+  (tens of seconds). Next lever, for every claim: the checker's constant,
+  several hundred kernel steps per hinted literal, and CaDiCaL's long proofs
+  on small arithmetic (three 4-bit additions reassociated: about 5000
+  hints).
