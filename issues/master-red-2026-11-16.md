@@ -4,7 +4,7 @@ status: open
 labels: [testing, sentinel]
 area: infrastructure
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 Nightly sentinel at accd1145ed0c (`Merge pull request #707 from MinusGix/claude/project-thread-80aop7`),
@@ -122,3 +122,7 @@ store, each with a `heather` process reported near its 300 s CPU rail (98%
 for `write-elf examples/utf8/utf8check.hthr`), and both pass at the same
 commit once the stores are warm; the logs do not say which merge raised the
 cold cost, and no merge is blamed.
+
+## Log
+
+- 2026-11-17: same target failed again at be464226 with the same shape; see [[master-red-2026-11-17]].
