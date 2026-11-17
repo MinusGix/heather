@@ -119,22 +119,17 @@ theorem live_before_reads(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat
 theorem Homes::nodes_checked_sound(self homes: Homes, out: List<Nat>, nodes: List<Node>): (l: List<Nat>) →
     homes.nodes_checked(nodes, out) = Some(l) → (l = nodes_live_in(nodes, out)) ∧ homes.nodes_apart(nodes, out).IsTrue() {
     match nodes {
-        Nil => λ l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
-        Cons(node, rest) => λ l => {
+        Nil => λ l found => {
+            cases found;
+            ⟨refl, trivial⟩
+        },
+        Cons(node, rest) => λ l found => {
             let id = node_output(node).id;
             let reads = function_ir_eval::Node::reads(node);
-            (match got: homes.nodes_checked(rest, out) {
-                None => λ none => absurd(none),
-                Some(after) => {
-                    let inner = homes.nodes_checked_sound(out, rest, after, got);
-                    (match ok: homes.apart(id, after) {
-                        False => λ none => absurd(none),
-                        True => λ same => j(inner.left, λ a _ => (l = live_before(reads, id, a)) ∧ (homes.apart(id, a) && homes.nodes_apart(rest, out)).IsTrue(),
-                            ⟨sym(Option::some_inj(live_before(reads, id, after), l, same)),
-                             Bool::is_true_and_intro(homes.apart(id, after), homes.nodes_apart(rest, out), j(sym(ok), λ v _ => v.IsTrue(), trivial), inner.right)⟩),
-                    })
-                },
-            })
+            cases found as got(after), ok;
+            let inner = homes.nodes_checked_sound(out, rest, after, got);
+            j(inner.left, λ a _ => (live_before(reads, id, after) = live_before(reads, id, a)) ∧ (homes.apart(id, a) && homes.nodes_apart(rest, out)).IsTrue(),
+                ⟨refl, Bool::is_true_and_intro(homes.apart(id, after), homes.nodes_apart(rest, out), Bool::is_true_of_eq(ok), inner.right)⟩)
         },
     }
 }
@@ -152,20 +147,12 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
     s.checked(homes, out) = Some(l) → (l = s.live_in(homes, out)) ∧ s.checks(homes, out).IsTrue() {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ out l => (match got: homes.nodes_checked(body.nodes, out) {
-                None => λ none => absurd(none),
-                Some(live) => {
-                    let inner = homes.nodes_checked_sound(out, body.nodes, live, got);
-                    (match homes.all_apart(nodes_writes(body.nodes), out) as λ b => homes.all_apart(nodes_writes(body.nodes), out) = b →
-                            (match b { False => None, True => Some(live) }) = Some(l) →
-                            (l = nodes_live_in(body.nodes, out)) ∧ (homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out)).IsTrue() {
-                        False => λ _ none => absurd(none),
-                        True => λ ok same => ⟨trans(sym(Option::some_inj(live, l, same)), inner.left),
-                            Bool::is_true_and_intro(homes.nodes_apart(body.nodes, out), homes.all_apart(nodes_writes(body.nodes), out), inner.right,
-                                j(sym(ok), λ v _ => v.IsTrue(), trivial))⟩,
-                    })(refl)
-                },
-            }),
+            Dataflow(body) => λ out l found => {
+                cases found as got(live), apart;
+                let inner = homes.nodes_checked_sound(out, body.nodes, live, got);
+                ⟨inner.left, Bool::is_true_and_intro(homes.nodes_apart(body.nodes, out), homes.all_apart(nodes_writes(body.nodes), out), inner.right,
+                    Bool::is_true_of_eq(apart))⟩
+            },
             Sequence(a, b) => λ out l same => homes.region_checked_sound(Sequence(a, b), out, l, same),
             Compose(a, b) => λ out l same => homes.region_checked_sound(Compose(a, b), out, l, same),
             Conditional(a, b, c, d, e, f) => λ out l same => homes.region_checked_sound(Conditional(a, b, c, d, e, f), out, l, same),
@@ -173,64 +160,44 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
             Call(a, b, c) => λ out l same => homes.region_checked_sound(Call(a, b, c), out, l, same),
             Loop(a, b, c, d, e, f, g, h, i) => λ out l same => homes.region_checked_sound(Loop(a, b, c, d, e, f, g, h, i), out, l, same),
         },
-        Invoke(shape) => λ out l => (match homes.apart(shape.result(), out) as λ b => homes.apart(shape.result(), out) = b →
-                (match b { False => None, True => Some(live_before(shape.reads(), shape.result(), out)) }) = Some(l) →
-                (l = live_before(shape.reads(), shape.result(), out)) ∧ homes.apart(shape.result(), out).IsTrue() {
-            False => λ _ none => absurd(none),
-            True => λ ok same => ⟨sym(Option::some_inj(live_before(shape.reads(), shape.result(), out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
-        })(refl),
-        Then(first, rest) => λ out l => (match got_rest: rest.checked(homes, out) {
-            None => λ none => absurd(none),
-            Some(mid) => λ got_first => {
-                let r = rest.checked_sound(homes, out, mid, got_rest);
-                let f = j(r.left, λ a _ => (l = first.live_in(homes, a)) ∧ first.checks(homes, a).IsTrue(), first.checked_sound(homes, mid, l, got_first));
-                ⟨f.left, Bool::is_true_and_intro(first.checks(homes, rest.live_in(homes, out)), rest.checks(homes, out), f.right, r.right)⟩
-            },
-        }),
-        Branch(condition, yes, no) => λ out l => (match got_yes: yes.checked(homes, out) {
-            None => λ none => absurd(none),
-            Some(y) => (match got_no: no.checked(homes, out) {
-                None => λ none => absurd(none),
-                Some(n) => λ same => {
-                    let ys = yes.checked_sound(homes, out, y, got_yes);
-                    let ns = no.checked_sound(homes, out, n, got_no);
-                    let e1 = j(ys.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, a.union(n)), refl);
-                    let e2 = j(ns.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, yes.live_in(homes, out).union(a)), e1);
-                    ⟨trans(sym(Option::some_inj(Cons(condition, y.union(n)), l, same)), e2),
-                     Bool::is_true_and_intro(yes.checks(homes, out), no.checks(homes, out), ys.right, ns.right)⟩
-                },
-            }),
-        }),
-        Repeat(body, again) => λ out l => {
+        Invoke(shape) => λ out l found => {
+            cases found;
+            ⟨refl, trivial⟩
+        },
+        Then(first, rest) => λ out l found => {
+            cases found as got_rest(mid);
+            let r = rest.checked_sound(homes, out, mid, got_rest);
+            let f = j(r.left, λ a _ => (l = first.live_in(homes, a)) ∧ first.checks(homes, a).IsTrue(), first.checked_sound(homes, mid, l, found));
+            ⟨f.left, Bool::is_true_and_intro(first.checks(homes, rest.live_in(homes, out)), rest.checks(homes, out), f.right, r.right)⟩
+        },
+        Branch(condition, yes, no) => λ out l found => {
+            cases found as got_yes(y), got_no(n);
+            let ys = yes.checked_sound(homes, out, y, got_yes);
+            let ns = no.checked_sound(homes, out, n, got_no);
+            let e1 = j(ys.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, a.union(n)), refl);
+            ⟨j(ns.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, yes.live_in(homes, out).union(a)), e1),
+             Bool::is_true_and_intro(yes.checks(homes, out), no.checks(homes, out), ys.right, ns.right)⟩
+        },
+        Repeat(body, again) => λ out l found => {
             let set = homes.loop_set(again);
             let after = loop_after(again, set, out);
-            (match got: body.checked(homes, after) {
-                None => λ none => absurd(none),
-                Some(b) => {
-                    let bs = body.checked_sound(homes, after, b, got);
-                    (match b.within(set) as λ w => b.within(set) = w → (match w { False => None, True => Some(set) }) = Some(l) →
-                            (l = set) ∧ (body.live_in(homes, after).within(set) && body.checks(homes, after)).IsTrue() {
-                        False => λ _ none => absurd(none),
-                        True => λ inside same => ⟨sym(Option::some_inj(set, l, same)),
-                            Bool::is_true_and_intro(body.live_in(homes, after).within(set), body.checks(homes, after),
-                                j(bs.left, λ a _ => a.within(set).IsTrue(), j(sym(inside), λ v _ => v.IsTrue(), trivial)), bs.right)⟩,
-                    })(refl)
-                },
-            })
+            cases found as got(b), inside;
+            let bs = body.checked_sound(homes, after, b, got);
+            ⟨refl, Bool::is_true_and_intro(body.live_in(homes, after).within(set), body.checks(homes, after),
+                j(bs.left, λ a _ => a.within(set).IsTrue(), Bool::is_true_of_eq(inside)), bs.right)⟩
         },
-        Exit(status) => λ out l same => ⟨sym(Option::some_inj([status], l, same)), trivial⟩,
-        Arg(index, _, len) => λ out l => (match homes.apart(len, out) as λ b => homes.apart(len, out) = b →
-                (match b { False => None, True => Some(live_before([index], len, out)) }) = Some(l) →
-                (l = live_before([index], len, out)) ∧ homes.apart(len, out).IsTrue() {
-            False => λ _ none => absurd(none),
-            True => λ ok same => ⟨sym(Option::some_inj(live_before([index], len, out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
-        })(refl),
-        Perform(_, args, results) => λ out l => (match homes.all_apart(results, out) as λ b => homes.all_apart(results, out) = b →
-                (match b { False => None, True => Some(args.union(out.minus(results))) }) = Some(l) →
-                (l = args.union(out.minus(results))) ∧ homes.all_apart(results, out).IsTrue() {
-            False => λ _ none => absurd(none),
-            True => λ ok same => ⟨sym(Option::some_inj(args.union(out.minus(results)), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
-        })(refl),
+        Exit(status) => λ out l found => {
+            cases found;
+            ⟨refl, trivial⟩
+        },
+        Arg(index, _, len) => λ out l found => {
+            cases found;
+            ⟨refl, trivial⟩
+        },
+        Perform(_, args, results) => λ out l found => {
+            cases found;
+            ⟨refl, trivial⟩
+        },
     }
 }
 
