@@ -1,6 +1,6 @@
 ---
 title: "`cases h` stops at a recursive stage, keeps a refuted `guard` case, and cannot be used in a recursion's arm"
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [tactics,elaborator,matching,proofs]
 area: tactics
@@ -61,3 +61,8 @@ are each one `cases emitted as …;` and the arm's proof, in place.
 ## Log
 
 - 2026-11-17: filed from the adoption round after PR #753.
+
+## Log
+
+- 2026-11-17 (thread "Refine hypotheses through calls in case splits"): fixed by `cases` splitting `Π(h). goal` itself with the blocker search's motive and applying the split to `h` (docs/tactics/goal-combinators.md, `cases h`). (1) A λ-bound `h` whose type comes from unfolding `EmitsRun` is decoded to its equation first, and recursion arms work. (2) In each case `h` is the reduct the test was found in, so `yes.emits(…)` reads as the call and is split and named. (3) and (4) came from the motive-less match's §4.7 reading and passed-beside rule, which `cases` no longer goes through. `Stmt::emits_runs`' Branch, Repeat, Exit, Arg and Perform arms are `cases emitted as …;`, and `/mnt/project-files/compile-proofs/emits_runs_arms_by_cases_attempt.hthr` checks clean.
+
