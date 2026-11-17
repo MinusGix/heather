@@ -78,10 +78,10 @@ headline:
 
 ```text
 theorem sort_in_place_sorts(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    s.SortedPerm(BitVec::unsigned_le, sort_in_place(s, n).after)
+    s.SortedPerm((<=), sort_in_place(s, n).after)
 
 theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    sort_in_place(s, n).after = s.insertion_sort(BitVec::unsigned_le)
+    sort_in_place(s, n).after = s.insertion_sort((<=))
 ```
 
 `.after` is the span as the function leaves it. The second theorem follows from
@@ -98,8 +98,8 @@ rest. Then
 
 ```text
 theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
-    sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted(BitVec::unsigned_le)):
-    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
+    sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted((<=))):
+    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered((<=), b) ++ rest
 ```
 
 The loop that shuffles bytes up a buffer, followed by the store into the hole,
