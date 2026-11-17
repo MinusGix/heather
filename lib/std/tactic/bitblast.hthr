@@ -1551,3 +1551,64 @@ theorem BVPred::refuted_sound(self p: BVPred, K: Nat, steps: List<Step>, ok: che
     p.eval(λ k => Succ(k).leb(K) && bits(k)) = True {
     p.unsat_sound(K, λ v => refuted(p.clauses(K), steps, ok, v), bits)
 }
+
+// ---------------------------------------------------------------------------
+// Reading words as inputs. A caller lays its words out in one bit sequence
+// and shows each `BVar` reads its word back.
+
+// Bit `k` of `x`, false past its width.
+fn BitVec::bit_at({n: Nat}, self x: BitVec(n), k: Nat) → Bool {
+    (match n as λ m => BitVec(m) → Nat → Bool {
+        Zero => λ x k => False,
+        Succ(_, ih) => λ x k => match k {
+            Zero => x.head_bit(),
+            Succ(i) => ih(x.tail_bits(), i),
+        },
+    })(x, k)
+}
+
+// The window at offset `o` reads `x` back when the bits there are `x`'s.
+theorem window_of(n: Nat, bits: Nat → Bool, o: Nat, x: BitVec(n), at: (i: Nat) → i < n → bits(o + i) = x.bit_at(i)): window(bits, o, n, n := n) = x {
+    match n {
+        Zero => refl,
+        Succ(k) => {
+            let zero: (o = o + 0) = omega;
+            let first: (bits(o) = x.head_bit()) = trans(cong_fn(bits, zero), at(0, omega));
+            let rest = window_of(k, bits, Succ(o), x.tail_bits(), λ i lt => {
+                let moved: (Succ(o) + i = o + Succ(i)) = omega;
+                let inside: (Succ(i) < Succ(k)) = omega(lt);
+                trans(cong_fn(bits, moved), at(Succ(i), inside))
+            });
+            BitVec::cons_bit_cong(k, first, rest)
+        },
+    }
+}
+
+fn BitVec::pick_bit({n: Nat}, first: Bool, x, y: BitVec(n), k: Nat) → Bool {
+    match first {
+        True => x.bit_at(k),
+        False => y.bit_at(k - n),
+    }
+}
+
+// Two words of width `n`, `x` at offset 0 and `y` at offset `n`.
+fn BitVec::pair_bits({n: Nat}, x, y: BitVec(n)) → Nat → Bool { λ k => BitVec::pick_bit(Succ(k).leb(n), x, y, k) }
+
+theorem BitVec::pair_window_low(n: Nat, x, y: BitVec(n)): window(λ k => Succ(k).leb(n + n) && BitVec::pair_bits(x, y)(k), 0, n, n := n) = x {
+    window_of(n, λ k => Succ(k).leb(n + n) && BitVec::pair_bits(x, y)(k), 0, x, λ i lt => {
+        let at: (0 + i = i) = omega;
+        let both: (Succ(i) <= n + n) = omega(lt);
+        trans(cong_fn(λ k => Succ(k).leb(n + n) && BitVec::pair_bits(x, y)(k), at),
+            Bool::and_cong(Nat::leb_true(Succ(i), n + n, both), cong_fn(λ (t: Bool) => BitVec::pick_bit(t, x, y, i), Nat::leb_true(Succ(i), n, lt))))
+    })
+}
+
+theorem BitVec::pair_window_high(n: Nat, x, y: BitVec(n)): window(λ k => Succ(k).leb(n + n) && BitVec::pair_bits(x, y)(k), n, n, n := n) = y {
+    window_of(n, λ k => Succ(k).leb(n + n) && BitVec::pair_bits(x, y)(k), n, y, λ i lt => {
+        let both: (Succ(n + i) <= n + n) = omega(lt);
+        let past: (n < Succ(n + i)) = omega;
+        let back: ((n + i) - n = i) = omega;
+        trans(Bool::and_cong(Nat::leb_true(Succ(n + i), n + n, both), cong_fn(λ (t: Bool) => BitVec::pick_bit(t, x, y, n + i), Nat::leb_false(Succ(n + i), n, past))),
+            cong_fn(λ k => y.bit_at(k), back))
+    })
+}

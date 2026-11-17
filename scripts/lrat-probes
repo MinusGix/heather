@@ -4,6 +4,7 @@
 
     scripts/lrat-probes addcomm|mulcomm <width> [--per N] [--every K]
                         [--solver cadical|naive] [--heather <binary>]
+    scripts/lrat-probes blast <name> <file.hthr> <predicate> <K> [--per N] [--every K]
 
 prints a module body: the Tseitin clauses of a miter saying `a + b ≠ b + a`
 (or `a * b ≠ b * a`) over `width`-bit words, a refutation, cut into stage
@@ -16,6 +17,13 @@ mostly one variable lookup per hinted literal); `--every` makes every K-th
 stage's formula a literal, so later stages do not replay the insertions
 before it.
 
+`blast` takes the clauses from the bit-blaster instead
+(`lib/std/tactic/bitblast.hthr`): `heather eval` computes
+`<predicate>.clauses(<K>)` in `<file.hthr>`, CaDiCaL refutes them, and the
+output ends in `<name>_holds`, the predicate at every input of `K` bits,
+through `BVPred::unsat_sound`. The blaster numbers node `x` from 0, so its
+literals are DIMACS variable `x + 1`.
+
 This is a probe generator, not the decision procedure: a `bv_decide` tactic
 would bit-blast inside the elaborator and ask the host for the proof
 (issues/lrat-certified-bitvector-decision.md).
@@ -23,6 +31,7 @@ would bit-blast inside the elaborator and ask the host for the proof
 import argparse
 import os
 import subprocess
+import sys
 import tempfile
 
 # ---------------------------------------------------------------------------
@@ -194,8 +203,14 @@ def problem(kind, w):
     return c.n, c.cl
 
 # DIMACS literal to the checker's: variable `v` is `2v`, its negation `2v + 1`.
+# The blaster's variables start at 0, DIMACS's at 1: `SHIFT` is 1 for it.
+SHIFT = 0
+
 def lit(l):
-    return 2 * abs(l) + (1 if l < 0 else 0)
+    return 2 * (abs(l) - SHIFT) + (1 if l < 0 else 0)
+
+def dimacs(code):
+    return (code // 2 + 1) * (-1 if code % 2 else 1)
 
 def trie_literal(entries):
     # entries: dict key(Nat) -> hthr value text; NatMap layout: 0 at root, Succ(k) -> child low_bit(k) at k//2
@@ -290,7 +305,47 @@ def cadical(heather, n, cls):
         proof.append((t[0], t[1:z], t[z + 1:-1]))
     return proof
 
+def blasted(heather, name, path, pred, K):
+    # The blaster's clauses, as the kernel will compute them.
+    term = f"({pred}).clauses({K})"
+    lib = os.path.join(os.path.dirname(__file__), "..", "lib")
+    r = subprocess.run([heather, "eval", path, term, "-L", lib, "--cache"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"heather eval: exit {r.returncode}: {r.stderr.strip()}")
+    codes = eval(r.stdout.strip().splitlines()[-1])
+    cls = [[dimacs(c) for c in cl] for cl in codes]
+    n = max(abs(l) for cl in cls for l in cl)
+    return n, cls
+
+def blast_tail(name, pred, K):
+    return (f"theorem {name}_cnf_is(): ({pred}).clauses({K}) = {name}_cnf() {{ refl }}\n"
+            f"theorem {name}_holds(bits: Nat → Bool): ({pred}).eval(λ k => Succ(k).leb({K}) && bits(k)) = True {{\n"
+            f"    ({pred}).unsat_sound({K}, λ v => j(sym({name}_cnf_is()), λ g _ => all_true(g, v) = False, {name}_refuted(v)), bits)\n}}\n")
+
+def main_blast(argv):
+    ap = argparse.ArgumentParser(description="Refute a bit-blasted predicate as a staged Heather proof.")
+    ap.add_argument("name")
+    ap.add_argument("file")
+    ap.add_argument("predicate")
+    ap.add_argument("K", type=int)
+    ap.add_argument("--per", type=int, default=1100)
+    ap.add_argument("--every", type=int, default=8)
+    ap.add_argument("--heather", default=os.path.join(os.path.dirname(__file__), "..", "target", "release", "heather"))
+    args = ap.parse_args(argv)
+    global EVERY, SHIFT
+    EVERY = args.every
+    SHIFT = 1
+    n, cls = blasted(args.heather, args.name, args.file, args.predicate, args.K)
+    proof = cadical(args.heather, n, cls)
+    assert check(cls, proof)
+    hints = sum(len(h) for _, _, h in proof)
+    print(f"// {args.name}: {n} variables, {len(cls)} clauses, {len(proof)} steps, {hints} hints (cadical)")
+    print(emit_staged(args.name, cls, proof, args.per, True), end="")
+    print(blast_tail(args.name, args.predicate, args.K), end="")
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "blast":
+        return main_blast(sys.argv[2:])
     ap = argparse.ArgumentParser(description="Write an LRAT refutation as a staged Heather proof.")
     ap.add_argument("kind", choices=["addcomm", "mulcomm"])
     ap.add_argument("width", type=int)
