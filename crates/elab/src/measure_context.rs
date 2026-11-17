@@ -73,6 +73,15 @@ impl MeasureContext<'_> {
     /// scope. `None` where a binder has no type (it cannot be left out: its
     /// name could then resolve to an unrelated global).
     fn measure_query(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder]) -> Option<(Elaborator, Cx)> {
+        self.measure_query_valued(decl, signatures, scope, false)
+    }
+
+    /// [`Self::measure_query`], where `valued` binds each `let` with a value
+    /// as the alias of its value, as the body does, instead of as a local of
+    /// its type: a search that reads `let j₂ = j - 1` then knows what `j₂`
+    /// is. Each value is elaborated (and its own searches run), so a query
+    /// asks this only once the plain telescope was not enough.
+    fn measure_query_valued(&self, decl: &Decl, signatures: &[(String, Ty)], scope: &[measure::Binder], valued: bool) -> Option<(Elaborator, Cx)> {
         let mut query = self.0.clone();
         query.attempt.prepare();
         query.attempt.goal_arena.configure(0, 0);
@@ -91,6 +100,23 @@ impl MeasureContext<'_> {
             // names to unrelated globals. Decline the query conservatively.
             let surface = binder.ty.as_ref()?;
             let (ty, level) = query.elab_ty(&cx, surface).ok()?;
+            if valued
+                && let Some(value) = &binder.value
+                && let Ok(term) = query.elab_check(&cx, value, &ty, &level)
+            {
+                let depth = cx.names.len();
+                cx.aliases.push(Rc::new(crate::context::Alias {
+                    name: binder.name.clone(),
+                    depth,
+                    term: Rc::new(term),
+                    ty,
+                    level,
+                    skel: None,
+                    spliced: None,
+                    shifted: Default::default(),
+                }));
+                continue;
+            }
             cx.push_skel(binder.name.clone(), ty.clone(), level, skel_of_ty(surface));
             if let Type::Ty(level) = ty {
                 cx.tyvars.push(TyVar { name: binder.name.clone(),
@@ -111,10 +137,17 @@ impl MeasureContext<'_> {
         scope: &[measure::Binder], call: &Expr,
     ) -> Option<Vec<measure::FoundGoal>> {
         let stripped = heather_syntax::without_decrease_labels(call);
-        let (query, cx) = self.measure_query(decl, signatures, scope)?;
-        *query.pass.default_goals.borrow_mut() = Some(Vec::new());
-        query.elab_infer(&cx, &stripped).ok()?;
-        let recorded = query.pass.default_goals.borrow_mut().take()?;
+        let recorded_at = |valued: bool| {
+            let (query, cx) = self.measure_query_valued(decl, signatures, scope, valued)?;
+            *query.pass.default_goals.borrow_mut() = Some(Vec::new());
+            query.elab_infer(&cx, &stripped).ok()?;
+            let recorded = query.pass.default_goals.borrow_mut().take()?;
+            Some((recorded, valued))
+        };
+        // A search that reads what a `let` in scope is bound to fails over
+        // the plain telescope; it is asked again with the values bound.
+        let valued_scope = scope.iter().any(|b| b.value.is_some());
+        let (recorded, valued) = recorded_at(false).or_else(|| if valued_scope { recorded_at(true) } else { None })?;
         // An argument's own defaults are elaborated before the call's, so
         // the call's are the last run of distinct parameters of one owner.
         let owner = recorded.last()?.owner.clone();
@@ -142,7 +175,7 @@ impl MeasureContext<'_> {
         }
         if found.is_empty() { return None; }
         // The check: with each goal assumed, the call takes the assumptions.
-        let (check, mut cx) = self.measure_query(decl, signatures, scope)?;
+        let (check, mut cx) = self.measure_query_valued(decl, signatures, scope, valued)?;
         let mut given = stripped.clone();
         for (i, f) in found.iter().enumerate() {
             let local = format!("__found_given_{i}");

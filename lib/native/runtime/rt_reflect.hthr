@@ -1116,23 +1116,37 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
 // shows a global as a call of it is spelled, which for a member (`fn
 // List::poke`, called `span.poke(…)`) is its base name; that one is found
 // under its first parameter's type. `shown` where neither is it.
+// A loop a body's `for` or `while` is lifted to is minted `f#run`, which
+// no lookup finds, and designed `f::run`, which one does: the name with
+// its first `#` spelled `::`.
+fn rt_designed(cs: List<Char>) → List<Char> {
+    match cs {
+        Nil => Nil,
+        Cons(c, rest) => match c.code.same(35) { True => "::".chars ++ rest, False => Cons(c, rt_designed(rest)) },
+    }
+}
+
 fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
     let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
+    let designed = String(rt_designed(shown.chars));
     lookup(shown).bind(λ c => match is_g(c) {
         True => pure(shown),
-        False => infer(Global(g)).bind(λ ct => match ct {
+        False => lookup(designed).bind(λ cd => match is_g(cd) { True => pure(designed), False => infer(Global(g)).bind(λ ct => match ct {
             Refused(_) => pure(shown),
             Accepted(t) => view(t).bind(λ v => match v {
                 HPi(dom) => view(dom).bind(λ dv => match dv {
                     HGlobal(_, owner, _) => lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
                         True => pure(owner ++ "::" ++ shown),
-                        False => pure(shown),
+                        False => lookup(owner ++ "::" ++ designed).bind(λ c3 => match is_g(c3) {
+                            True => pure(owner ++ "::" ++ designed),
+                            False => pure(shown),
+                        }),
                     }),
                     _ => pure(shown),
                 }),
                 _ => pure(shown),
             }),
-        }),
+        }) }),
     })
 }
 

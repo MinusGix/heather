@@ -276,7 +276,11 @@ impl<'a> Walk<'a> {
 
         let shape = if self.opaque.contains(&spelled) {
             Shape::Leaf
-        } else if self.stated.contains(&spelled) { self.known(word).unwrap_or(Shape::Leaf) } else { self.shape(word) };
+        } else if self.stated.contains(&spelled) {
+            self.known(word).or_else(|| self.alias(word)).unwrap_or(Shape::Leaf)
+        } else {
+            self.shape(word)
+        };
         let split = match &shape { Shape::Split(n, m, x, low) => Some((n.clone(), m.clone(), x.clone(), *low)), _ => None };
         let kind = match shape {
             Shape::Add(a, b) => match (self.word_at(w.clone(), &a)?, self.word_at(w.clone(), &b)?) {
@@ -290,6 +294,14 @@ impl<'a> Walk<'a> {
             Shape::Value(lemma, c) => {
                 let c_source = nat_term_source(self.elab, self.cx, &c)?;
                 Kind::Value(lemma, c_source, self.nat(&c)?)
+            }
+            Shape::Alias(local) => {
+                if let Some(target) = self.word_at(w.clone(), &local)? {
+                    let to = self.nodes[target].word.clone();
+                    self.bridges.push((format!("__bv_alias{}", self.bridges.len()),
+                        format!("bitvec::BitVec::toNat({spelled}) = bitvec::BitVec::toNat({to})"), "refl".into()));
+                }
+                Kind::Leaf
             }
             Shape::Leaf | Shape::Split(..) => self.defined_kind(&spelled)?,
         };
@@ -446,8 +458,24 @@ impl<'a> Walk<'a> {
         }
         let oracle = self.elab.goal_oracle();
         oracle
-            .unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| self.known(&Rc::new(reduct)))
+            .unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| {
+                if matches!(reduct, Term::Var(_)) {
+                    return Some(Shape::Alias(Rc::new(reduct)));
+                }
+                self.known(&Rc::new(reduct))
+            })
             .unwrap_or(Shape::Leaf)
+    }
+
+    /// A stated word that is another spelling of a local (§ [`Shape::Alias`]):
+    /// a fact about `s.len()` is a fact about `n`.
+    fn alias(&self, word: &Rc<Term>) -> Option<Shape> {
+        if !matches!(crate::spelling::app_spine(word).0, Term::GlobalTm { .. }) {
+            return None;
+        }
+        self.elab.goal_oracle().unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| {
+            matches!(reduct, Term::Var(_)).then(|| Shape::Alias(Rc::new(reduct)))
+        })
     }
 
     fn known(&self, word: &Rc<Term>) -> Option<Shape> {
@@ -486,6 +514,10 @@ enum Shape {
     Sub(Rc<Term>, Rc<Term>),
     /// `ofNat(c)` or `word_of_nat(n, c)`, with the lemma that reads it back.
     Value(&'static str, Rc<Term>),
+    /// A call whose definition steps to a local (`s.len()` of a `Bytes(n)`
+    /// is `n`): another spelling of that local's word, joined to it by a
+    /// `refl` bridge, so two such calls at different receivers are one atom.
+    Alias(Rc<Term>),
     Leaf,
 }
 
@@ -1304,6 +1336,8 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
 /// `opaque` are words kept as atoms: an attempt whose side conditions over
 /// them failed is retried with them as leaves (§5.1).
 pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool, opaque: &HashSet<String>) -> Result<Generated, String> {
+    let restated = aliased_goal(elab, cx, expected);
+    let expected = restated.as_ref().unwrap_or(expected);
     if let Some(source) = bridge_goal(elab, cx, expected) {
         return Ok(Generated { source, prelude: String::new(), obligations: Vec::new(), retry: false });
     }
@@ -1825,4 +1859,47 @@ fn hidden_roots(fact_names: &[String], restated: &[(String, Type)]) -> Vec<Strin
         }
     }
     roots
+}
+
+/// The goal with each call that does not spell, and whose definition steps
+/// to a local, read as that local: `s.put(i, v, inside := …).len()` of a
+/// `Bytes(n)` is `n`. The found proof inside such a call has no source
+/// spelling, which would leave the whole goal unspellable; the restated
+/// goal is the same type up to conversion, which is how the proof written
+/// for it is checked against the original.
+pub(crate) fn aliased_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<Type> {
+    fn collect(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Term, Term)>) {
+        let (head, args) = crate::spelling::app_spine(tm);
+        if matches!(head, Term::GlobalTm { .. }) && !args.is_empty() && elab.spell_term_source(cx, tm).is_none() {
+            let local = elab.goal_oracle().unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| {
+                matches!(reduct, Term::Var(_)).then_some(reduct)
+            });
+            if let Some(local) = local {
+                out.push(((**tm).clone(), local));
+                return;
+            }
+        }
+        if let Term::Succ(inner) = &**tm {
+            return collect(elab, cx, inner, out);
+        }
+        for arg in args {
+            collect(elab, cx, arg, out);
+        }
+    }
+    let mut pairs = Vec::new();
+    match expected {
+        Type::El { tm, .. } => collect(elab, cx, tm, &mut pairs),
+        Type::Id { lhs, rhs, .. } => {
+            collect(elab, cx, lhs, &mut pairs);
+            collect(elab, cx, rhs, &mut pairs);
+        }
+        _ => {}
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    // Abstracted under a binder `z` the replacements never mention, then
+    // `z` instantiated away.
+    let pairs: Vec<(Term, Term)> = pairs.into_iter().map(|(pat, local)| (pat, local.shift_local(1))).collect();
+    Some(expected.abstract_local_with_all(&pairs)?.inst_top(0, &Term::TmNat))
 }

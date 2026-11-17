@@ -1410,7 +1410,7 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
 - `break`, `continue` and `return` in a loop over words (refused by name).
 - A loop over words whose state is the receiver and other locals: it is
   lifted as a plain `f#run` returning the state, which a `runtime fn`
-  does not compile.
+  does not compile. (Built for one other local, §23.)
 - A `mut self` method whose result is only its receiver (`→ ()`): each
   SHA-256 step returns its count. And the method a loop is lifted to is
   called by a one-call function, which the linked code keeps as a call
@@ -1478,3 +1478,115 @@ runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.
 Probes: `lib/_tests/std/core/early_return_tests.hthr`; parse-level facts
 in `crates/syntax/tests/imperative_statements.rs`
 (`a_return_outside_a_loop_splits_the_body`).
+
+## 23. Loops over a span in a `runtime fn`, as built (2026-11-17)
+
+Minus asked that a compiled function over a byte span get what a laid
+record's methods have: `for`, `while`, `let mut` locals, a loop in a
+loop. Probes: `lib/_tests/native/runtime/runtime_lifted_loops_tests.hthr`.
+
+### 23.1 The receiver and one other local: a method returning it
+
+A `for` over words or a `while c decreases m` whose state is the receiver
+`r` of a `mut self` method and **one** other local `o` lifts
+(`crates/elab/src/loops.rs`, `Lift::receiver_in`) to a `mut self` method
+of the receiver's type, named as §21.1 names one, `T::f_loop`:
+
+```heather
+fn T::f_loop(mut self r: T, c̄, o: O) → Mutated<T, O> decreases m {
+    if c { body; r.f_loop(c̄, o′) } else { Mutated(r, o) }
+}
+```
+
+(a `for` also takes its counter, and tests `i < hi`), and the loop is
+the `Mutated` its call returns, read back by `.after` for `r` and
+`.value` for `o` (`Shape::Mutated`). With the receiver alone the method
+returns the counter, as §21.1 built. This is the shape a hand-written
+span loop has (`sift` in examples/sort), so the generator compiles it as
+one, and the function calls it.
+
+Unlike §16's pure `while`, the body is **under** the test, not hoisted
+above it: a store into the receiver may not run where the condition
+fails, and the code would run it. Its claimed method calls on the
+receiver are spelled as plain `let`s and put in SSA form first
+(`measure::rebind_marked`, `alpha::ssa`): the test's equation reads the
+receiver the method was called with, and a later rebinding of the same
+name otherwise made the kernel compare it against the stored span
+(a `∧` condition that reads the span, with a store in the body).
+
+### 23.2 Loops nest
+
+A `decreases` function's loops lift as any function's (`loops::lower` no
+longer refuses one; its equation is the measure lowering's own
+`f_unfold`, so §7.1's is not generated for it). A loop in a loop is a
+loop in the method the outer one lifted to. An arm whose equation binder
+is private (`__…`, the lifted test's own) may hold a loop: no source
+names it.
+
+### 23.3 A plain loop in a `runtime fn` is compiled
+
+A loop whose state is not the receiver is still `f#run` (designed
+`f::run`), but a prefix generator now runs over it as over the methods
+(`Family::methods`), by its designed name, which a lookup resolves; its
+measure companions (`body`, `rec`, `ext`, `irrel`) are designated under
+that name too. The reflector finds a minted `f#run`'s code under
+`f::run` (`rt_designed`). Its self-call is spelled by its base name, which
+is how a member recurses (a qualified self-call is not in scope while the
+member is checked).
+
+### 23.4 A test of several conjuncts, and invariants
+
+The insertion sort's inner loop is
+`while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases
+j.toNat() { s[j] := s[j - 1]; j := j - 1; }`
+(`docs/native/span-record-design.md`).
+
+- **`&&` and `||` bind looser than the relations** (`<`, `<=`, `≈`, `≠`)
+  and tighter than `=` (Minus, 2026-11-17): `0 < j && key < b` is a
+  conjunction of two tests. A relation operand of `&&`/`||` is decided
+  (`decide_bit<0 < j>()`), so it reads as the `Bool` it tests
+  (`crates/syntax/src/parser.rs`, `bool_chain`).
+- **A test is tested conjunct by conjunct** (`Lift::tested`): `c₁ && c₂`
+  or `c₁ ∧ c₂` is a `match` on `c₁` whose `True` arm matches on `c₂`, each
+  equation in scope for what follows, so `s[j - 1]` is elaborated where
+  `0 < j` holds and `j - 1` does not wrap. An element read in a test is
+  bound by a `let` just before its match: inside the proposition it would
+  be part of a type, and every copy of that type would search for its
+  found proof again.
+- **`invariant P`** (after the test, before `decreases`): each conjunct of
+  `P` is a squashed parameter `__invN_k: ∥Pₖ∥` of the lifted loop, found
+  by `bv_omega` at the entry and, at the recursion, by a `have` at the end
+  of the body over the state's latest names (`bitvec_omega::found_fact`),
+  passed by name. Inside the body a search at a squashed goal reads the
+  squashed facts in scope through the squash eliminator
+  (`Checking::release_squashed_facts`). The facts stay squashed so that
+  every proof of them is the same term, which the `#ext` companion needs.
+- **Captured facts.** A lifted loop's obligations (`f#obl_N`) take the
+  loop's fact parameters as evidence (`measure::lift_obligation`).
+- **The invariant after the loop.** Each fact `Pₖ` is a theorem
+  `T::f_loop#keepsK` over the loop's parameters, `∥Pₖ[r, o := the
+  loop's result's .after, .value]∥`, proved by induction along the loop
+  (`induct T::f_loop(…)`): where it stops, `bv_omega` from the fact it
+  was given; where it recurs, the induction hypothesis (`Lift::keeps`).
+  Right after the loop the caller binds `have __heldN_k: ∥Pₖ∥` at the
+  loop's result by that theorem, so `s[j] := key` after the sort's inner
+  loop finds `j < s.len()` from `j <= i` and `i < s.len()`. Each read
+  of the result in a restated fact takes the span of the name it
+  replaces (`at_result`): one span for every read made the dot-receiver
+  cache answer a `.len()` with the wrong receiver.
+
+### 23.5 Not built
+
+- The negated test after the loop (`¬(0 < j && key < s[j - 1])`), and an
+  invariant that is not about words (the stopping case is closed by
+  `bv_omega`).
+- `let key = s[i]` with no annotation before a loop that reads `key`:
+  the loop lifter recovers a local's type by a query that does not run the
+  read's found proof, and refuses (`annotate its let`).
+- A loop's state of two locals besides the receiver, or of two locals in
+  a plain loop: `f#State` is a record, which the generator has no layout
+  for (refused with that reason).
+- A byte (`u8`) local captured by a loop in a function that writes a
+  span: such a function's code takes 64-bit words
+  (`issues/runtime-repr-narrow-words.md`), so the probes carry the key
+  as a `u64`.
