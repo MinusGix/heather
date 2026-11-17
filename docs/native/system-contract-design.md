@@ -211,6 +211,32 @@ mechanisms, which compose:
 **Q3a**: ask, touch, or both. I recommend both: ask for the message, touch
 for the truth.
 
+How each would be built (2026-11-17, not started):
+
+- **Ask, as source.** The check is ordinary source code put in front of
+  `main`: a call of `getrlimit(RLIMIT_STACK)` into a word, a branch on it
+  against `Source::need` plus a margin for what exec put on the stack, and
+  on the short side a fixed message to standard error and a fixed exit
+  status. The refusal outcome is then the source's own behaviour, and the
+  compiler's one theorem covers it with nothing new at the ELF level. What
+  it costs: `LinuxCmd` gains a call (`getrlimit`, or `prlimit64`), so every
+  match over `LinuxCmd` in the library gains an arm, and `Perform` reaches
+  it. `RLIM_INFINITY` passes. The stack line stays `presumed`.
+- **Touch, as entry code.** Entry code writes a byte in each page of the
+  room, from the top down, before the program starts. The memory profile is
+  fixed for a run (`X86Profile` is what a run relies on throughout), so the
+  run has two phases: the touch, in a profile that does not rely on the
+  room, under a new rule of the Linux model (a store below RSP within the
+  growth window either makes that page data or ends the process with a
+  signal); then the program, in `X86Profile::process`, from a state the
+  touch has shown to meet it. The theorem's conclusion widens: the process
+  is killed before any event, or it simulates the source. The stack line
+  changes from "N bytes are usable" to "a write below the stack pointer
+  maps its page or kills the process", which is how Linux describes stack
+  growth, and the failure measured in §3 (output, then a SIGSEGV mid-run)
+  can no longer happen. What it costs: the growth rule, the phase change of
+  profile, and a `LinuxStart` whose stack field is gone.
+
 A mapped provider can also be entry code: `mmap` before the compiled
 program starts, the memory profile chosen from the address it returned. That
 needs the syscall in the model but not regions that appear during the run
