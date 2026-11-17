@@ -15,6 +15,7 @@ import native_compile_homes;
 import native_alloc;
 import native_compile_steps;
 import native_compile_segments;
+import native_compile_claims;
 import function_ir_pass;
 import function_ir_eval;
 import linux_calls;
@@ -220,123 +221,57 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
     let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps(known.unknown([fd, from, len]), result, out, i, m, ne);
     let shape = Writes(fd, buf, from, len, result);
     let c = shape.cmd(env);
-    let bytes = span(env.buffer(buf), env.number(from), env.number(len));
     let clamped = env.number(from).min(cap);
-    let w0 = p.known_to(layout, known, from, R8);
-    let w1 = then(w0, Block([MovRI(R9, BitVec::ofNat(cap))]));
-    let start = w1.clamp(R8, R9, Succ(names));
-    let w2 = then(start, Block([SubRR(R9, R8)]));
-    let w3 = w2.known_to(layout, known, len, Rdx);
-    let room = w3.clamp(Rdx, R9, Succ(Succ(names)));
+    let r = Run(t, known, out, live, env);
+    // The code before the SYSCALL, in the order it runs.
     let asking: List<Instruction> = [MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))];
-    let w4 = then(room, Block(asking));
-    let w5 = w4.known_to(layout, known, fd, Rdi);
-    let asked = then(w5, Syscall);
+    let request = Both(Place(0, Block(asking)), Fetch(fd, Rdi));
+    let counted = Both(Place(0, Block([SubRR(R9, R8)])), Both(Fetch(len, Rdx), Both(Fragment::clamp(Rdx, R9, names + 1), request)));
+    let code = Both(Fetch(from, R8), Both(Place(0, Block([MovRI(R9, BitVec::ofNat(cap))])), Both(Fragment::clamp(R8, R9, names), counted)));
+    let ready = code.onto(r.cx(), p);
+    let asked = then(ready, Syscall);
     let w_asked = asked.word_from_within(layout, out, result, Rax, t.program, within);
-    let w_w5 = w5.within_before(0, Syscall, t.program, w_asked);
-    let w_w4 = w4.known_to_within(layout, known, fd, Rdi, t.program, w_w5);
-    let w_room = room.within_before(0, Block(asking), t.program, w_w4);
-    let w_w3 = w3.clamp_within(Rdx, R9, Succ(Succ(names)), t.program, w_room);
-    let w_w2 = w2.known_to_within(layout, known, len, Rdx, t.program, w_w3);
-    let w_start = start.within_before(0, Block([SubRR(R9, R8)]), t.program, w_w2);
-    let w_w1 = w1.clamp_within(R8, R9, Succ(names), t.program, w_start);
-    let w_w0 = w0.within_before(0, Block([MovRI(R9, BitVec::ofNat(cap))]), t.program, w_w1);
-    let room_cap: (cap < Nat::pow(2, 64)) = t.cap_small(buf, cap, found);
     // The SYSCALL, each answer stored to its word.
     let after = λ (a: WriteResult) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(c, a) ∧
         (t.Held(live, env, u.gprs, u.memory) ∧ (env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(env, a)));
-    let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, w5, 0, w_asked.proof, c, tree, after,
+    let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, ready, 0, w_asked.proof, c, tree, after,
         λ a u here resident held => t.goes_result(live, out, env, shape.answer(env, a), asked, result, in_result, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
         (t.site().Resident(s.memory) → (a: WriteResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ u =>
             t.site().Resident(u.memory) ∧ after(a, u)));
-    let q5 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
-    let at_w5: t.Goes(prog_len(w5), Vis(c, tree), λ s => q5(s.gprs, s.memory)) = t.goes_weaken(called,
-        λ s held => held(s.flags, s.rip));
-    let at_w4 = t.goes_known_to(live, env, w4, known, fd, Rdi, in_fd, m_fd, w_w5, Vis(c, tree), q5, at_w5);
-    let post4 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q5(write_gpr(Rdi, env.word(fd), t.rbx_known_gprs(known, env, fd, u.gprs)), u.memory);
-    let at_room0 = t.goes_block(room, 0, asking, w_w4, Vis(c, tree), post4, at_w4);
-    // At the request: the offset and the count clamped.
-    let q_room = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-        ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap - clamped)));
-    let at_room: t.Goes(prog_len(room), Vis(c, tree), λ s => q_room(s.gprs, s.memory)) = t.goes_weaken(at_room0, λ s held => {
-            let kept = held.left;
-            let asked = t.writes_request(env.with_words(kept.witness), s.memory, kept.proof.left, buf, cap, found, env.number(from), env.number(len),
-                read_gpr(R8, s.gprs), read_gpr(Rdx, s.gprs), held.right.left, held.right.right);
-            ⟨kept, t.rbx_known_cases(known, env, fd, execute_block_normal(asking, s).gprs,
-                λ (g1: Gprs) => q5(write_gpr(Rdi, env.word(fd), g1), s.memory),
-                λ _ _ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
-                λ resident a => match a {
-                    Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
-                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
-                            word_of_nat_eq_ofNat(64, count))⟩⟩⟩,
-                    WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
-                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
-                }⟩,
-                λ _ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
-                λ resident a => match a {
-                    Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
-                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
-                            word_of_nat_eq_ofNat(64, count))⟩⟩⟩,
-                    WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
-                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
-                }⟩)⟩
-        });
-    // The count clamped to what is left past the offset.
-    let room_pre = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
-        ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_room(g, m)) ∧
-        ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_room(write_gpr(Rdx, read_gpr(R9, g), g), m));
-    let at_w3 = t.goes_clamp(w3, Rdx, R9, Succ(names), w_room, Vis(c, tree), q_room, at_room);
-    let q_w2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-        ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap - clamped));
-    let at_w2: t.Goes(prog_len(w2), Vis(c, tree), λ s => q_w2(s.gprs, s.memory)) = t.goes_weaken(t.goes_known_to(live, env, w2, known, len, Rdx, in_len, m_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
-            let word = env.word(len);
-            let g1 = t.rbx_known_gprs(known, env, len, s.gprs);
-            let held1: t.Held(live, env, g1, s.memory) = t.held_rbx_known(live, env, s.gprs, s.memory, held.left, known, env, len);
-            let r8_is: (read_gpr(R8, g1).toNat() = clamped) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
-                t.rbx_known_other(known, env, len, s.gprs, R8, refl)), held.right.left);
-            let r9 = read_gpr(R9, g1);
-            let r9_is: (r9.toNat() = cap - clamped) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
-                t.rbx_known_other(known, env, len, s.gprs, R9, refl)), held.right.right);
-            let both: (word.toNat().min(r9.toNat()) = env.number(len).min(cap - clamped)) =
-                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.reads_number(live, env, s.gprs, s.memory, held.left, known, len, m_len, in_len), r9_is);
-            ⟨held.left, ⟨λ kept => ⟨held1, ⟨r8_is, trans(sym(BitVec::clamp_kept(word, r9, kept)), both)⟩⟩,
-                λ bound => ⟨held1, ⟨r8_is, trans(sym(BitVec::clamp_bound(word, r9, bound)), both)⟩⟩⟩⟩
-        });
-    // What is left of the buffer past the offset.
-    let q_start = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-        ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap));
-    let at_start: t.Goes(prog_len(start), Vis(c, tree), λ s => q_start(s.gprs, s.memory)) = t.goes_weaken(t.goes_block(start, 0, [SubRR(R9, R8)], w_w2, Vis(c, tree), λ u => q_w2(u.gprs, u.memory), at_w2),
-        λ s held => {
-            let r8 = read_gpr(R8, s.gprs);
-            let r9 = read_gpr(R9, s.gprs);
-            let short: (clamped <= cap) = env.number(from).min_le_r(cap);
-            let order: (r8.toNat() <= r9.toNat()) = j(sym(held.right.right), λ n _ => r8.toNat() <= n,
-                j(sym(held.right.left), λ n _ => n <= cap, short));
-            ⟨held.left, ⟨held.right.left, trans(toNat_sub(64, r9, r8, order), eq2(λ (x: Nat) (y: Nat) => x - y, held.right.right, held.right.left))⟩⟩
-        });
-    // The offset clamped to the capacity.
-    let start_pre = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
-        ((read_gpr(R8, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_start(g, m)) ∧
-        ((read_gpr(R8, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_start(write_gpr(R8, read_gpr(R9, g), g), m));
-    let at_w1 = t.goes_clamp(w1, R8, R9, names, w_start, Vis(c, tree), q_start, at_start);
-    let q_w0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(R8, g).toNat() = env.number(from));
-    let at_w0: t.Goes(prog_len(w0), Vis(c, tree), λ s => q_w0(s.gprs, s.memory)) = t.goes_weaken(t.goes_block(w0, 0, [MovRI(R9, BitVec::ofNat(cap))], w_w1, Vis(c, tree),
-            λ u => start_pre(u.gprs, u.memory), at_w1),
-        λ s held => {
-            let r8 = read_gpr(R8, s.gprs);
-            let bound = BitVec::ofNat(cap, n := 64);
-            let bound_is: (bound.toNat() = cap) = BitVec::toNat_ofNat(64, cap, room_cap);
-            let both: (r8.toNat().min(bound.toNat()) = clamped) =
-                eq2(λ (x: Nat) (y: Nat) => x.min(y), held.right, bound_is);
-            ⟨λ kept => ⟨held.left, ⟨trans(sym(BitVec::clamp_kept(r8, bound, kept)), both), bound_is⟩⟩,
-             λ over => ⟨held.left, ⟨trans(sym(BitVec::clamp_bound(r8, bound, over)), both), bound_is⟩⟩⟩
-        });
-    t.goes_weaken(t.goes_known_to(live, env, p, known, from, R8, in_from, m_from, w_w0, Vis(c, tree), q_w0, at_w0),
-        λ s held => ⟨held, ⟨t.held_rbx_known(live, env, s.gprs, s.memory, held, known, env, from),
-            t.reads_number(live, env, s.gprs, s.memory, held, known, from, m_from, in_from)⟩⟩)
+    let ran = code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(c, tree), call_pre, called);
+    t.goes_weaken(ran, λ s held => {
+        let m = s.memory;
+        let bound = BitVec::ofNat(cap, n := 64);
+        let bound_is: (bound.toNat() = cap) = BitVec::toNat_ofNat(64, cap, t.cap_small(buf, cap, found));
+        let from_is = t.reads_number(live, env, s.gprs, m, held, known, from, m_from, in_from);
+        let len_is = t.reads_number(live, env, s.gprs, m, held, known, len, m_len, in_len);
+        let g2 = write_gpr(R9, bound, write_gpr(R8, env.word(from), write_gpr(Rbx, t.rbx_known(known, env, from), s.gprs)));
+        ⟨⟨in_from, m_from⟩, ⟨held, λ f rip =>
+        // The offset: the word clamped to the capacity.
+        Fragment::clamp_before(r, R8, R9, names, counted.before(r, call_pre), MachineState(g2, f, rip, m), λ offset is_offset f rip => {
+            let at_offset: (offset.toNat() = clamped) = trans(is_offset, eq2(λ (x: Nat) (y: Nat) => x.min(y), from_is, bound_is));
+            let order: (offset.toNat() <= bound.toNat()) = j(sym(bound_is), λ n _ => offset.toNat() <= n,
+                j(sym(at_offset), λ n _ => n <= cap, env.number(from).min_le_r(cap)));
+            let room: (bound.sub(offset).toNat() = cap - clamped) = trans(toNat_sub(64, bound, offset, order), eq2(λ (x: Nat) (y: Nat) => x - y, bound_is, at_offset));
+            let g4 = write_gpr(Rdx, env.word(len), write_gpr(Rbx, t.rbx_known(known, env, len), write_gpr(R9, bound.sub(offset), write_gpr(R8, offset, g2))));
+            ⟨⟨in_len, m_len⟩, ⟨held, λ f rip =>
+            // The count: the length clamped to what is left past the offset.
+            Fragment::clamp_before(r, Rdx, R9, names + 1, request.before(r, call_pre), MachineState(g4, f, rip, m), λ count is_count f rip => {
+                let at_count: (count.toNat() = env.number(len).min(cap - clamped)) = trans(is_count, eq2(λ (x: Nat) (y: Nat) => x.min(y), len_is, room));
+                let wanted = t.writes_request(env.with_words(held.witness), m, held.proof.left, buf, cap, found, env.number(from), env.number(len),
+                    offset, count, at_offset, at_count);
+                ⟨⟨in_fd, m_fd⟩, ⟨held, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨wanted.left, wanted.right.left⟩⟩⟩, trivial⟩,
+                    λ resident a => match a {
+                        Wrote(wrote) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held,
+                            cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), word_of_nat_eq_ofNat(64, wrote))⟩⟩⟩,
+                        WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held,
+                            cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
+                    }⟩⟩⟩
+            })⟩⟩
+        })⟩⟩
+    })
 }
 
 // The buffer's address past an offset inside it.
