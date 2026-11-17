@@ -1,0 +1,333 @@
+// Bit-blasting for certified bit-level decisions
+// (issues/lrat-certified-bitvector-decision.md). A claim about words is
+// turned into an and-inverter circuit, the circuit into clauses (Tseitin),
+// and the clauses are refuted by a SAT solver whose proof the kernel checks
+// (`lrat.hthr`). Nothing that builds the circuit or the clauses is trusted:
+// the theorems here say the clauses are true at every valuation that
+// evaluates the circuit, so a refutation proves the claim.
+//
+// A circuit is its gates, newest first; a gate's node is its place counted
+// from the oldest, so node 0 is the first gate, which is always `GFalse`.
+// Its value at a valuation of the inputs is a fold from the oldest gate
+// (`values`), each gate reading the nodes below it. A gate that reads a node
+// not below it is a builder's mistake; it is the constant false, here and in
+// its clauses alike, so no invariant is owed for the clauses to be right.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import nat_map;
+import lrat;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Literals and gates.
+
+// A node, or its negation.
+inductive Lit { Pos(x: Nat), Neg(x: Nat) }
+
+fn Lit::node(self l: Lit) → Nat {
+    match l {
+        Pos(x) => x,
+        Neg(x) => x,
+    }
+}
+
+fn Lit::not(self l: Lit) → Lit {
+    match l {
+        Pos(x) => Neg(x),
+        Neg(x) => Pos(x),
+    }
+}
+
+// The literal's value when node `x` is `v(x)`.
+fn Lit::value(self l: Lit, v: Nat → Bool) → Bool {
+    match l {
+        Pos(x) => v(x),
+        Neg(x) => !v(x),
+    }
+}
+
+// The checker's number for the literal: node `x` is `2x`, its negation
+// `2x + 1` (`lrat.hthr`).
+fn Lit::code(self l: Lit) → Nat {
+    match l {
+        Pos(x) => x * 2,
+        Neg(x) => Succ(x * 2),
+    }
+}
+
+// Whether the literal reads a node below `x`.
+fn Lit::below(self l: Lit, x: Nat) → Bool { Succ(l.node()).leb(x) }
+
+inductive Gate { GFalse, GInput(var: Nat, bit: Nat), GAnd(a: Lit, b: Lit) }
+
+// ---------------------------------------------------------------------------
+// Values. `env(i, j)` is bit `j` of input word `i`.
+
+fn node_of(m: NatMap<Bool>, x: Nat) → Bool {
+    match nat_map_get(m, x) {
+        None => False,
+        Some(b) => b,
+    }
+}
+
+// An and gate whose inputs are below it (`ok`) is their conjunction.
+fn and_value(ok: Bool, m: NatMap<Bool>, a, b: Lit) → Bool {
+    match ok {
+        False => False,
+        True => a.value(λ y => node_of(m, y)) && b.value(λ y => node_of(m, y)),
+    }
+}
+
+fn gate_value(env: Nat → Nat → Bool, m: NatMap<Bool>, x: Nat, g: Gate) → Bool {
+    match g {
+        GFalse => False,
+        GInput(i, j) => env(i, j),
+        GAnd(a, b) => and_value(a.below(x) && b.below(x), m, a, b),
+    }
+}
+
+fn values_with(env: Nat → Nat → Bool, m: NatMap<Bool>, x: Nat, g: Gate) → NatMap<Bool> {
+    nat_map_set(m, x, gate_value(env, m, x, g))
+}
+
+fn values(env: Nat → Nat → Bool, gs: List<Gate>) → NatMap<Bool> {
+    match gs {
+        Nil => MEmpty,
+        Cons(g, rest) => values_with(env, values(env, rest), rest.len(), g),
+    }
+}
+
+// The valuation of the nodes: what the circuit computes.
+fn valuation(env: Nat → Nat → Bool, gs: List<Gate>) → Nat → Bool { λ x => node_of(values(env, gs), x) }
+
+// ---------------------------------------------------------------------------
+// Clauses, over literals. `x` is the gate's node.
+
+fn and_clauses(ok: Bool, x: Nat, a, b: Lit) → List<List<Lit>> {
+    match ok {
+        False => [[Neg(x)]],
+        True => [[Neg(x), a], [Neg(x), b], [Pos(x), a.not(), b.not()]],
+    }
+}
+
+fn gate_clauses(x: Nat, g: Gate) → List<List<Lit>> {
+    match g {
+        GFalse => [[Neg(x)]],
+        GInput(_, _) => [],
+        GAnd(a, b) => and_clauses(a.below(x) && b.below(x), x, a, b),
+    }
+}
+
+// The clauses of the gates `gs`, whose newest is node `k - 1` (`k` is
+// `gs.len()`, passed so that nothing counts the list).
+fn tseitin(gs: List<Gate>, k: Nat) → List<List<Lit>> {
+    match gs {
+        Nil => [],
+        Cons(g, rest) => match k {
+            Zero => [],
+            Succ(x) => gate_clauses(x, g) ++ tseitin(rest, x),
+        },
+    }
+}
+
+// The clauses as the checker numbers them.
+fn clause_of(c: List<Lit>) → List<Nat> { c.map(λ l => l.code()) }
+fn cnf_of(cs: List<List<Lit>>) → List<List<Nat>> { cs.map(λ c => clause_of(c)) }
+
+fn clause_holds(c: List<Lit>, v: Nat → Bool) → Bool {
+    match c {
+        Nil => False,
+        Cons(l, rest) => l.value(v) || clause_holds(rest, v),
+    }
+}
+
+fn all_hold(cs: List<List<Lit>>, v: Nat → Bool) → Bool {
+    match cs {
+        Nil => True,
+        Cons(c, rest) => clause_holds(c, v) && all_hold(rest, v),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A literal's number means the literal.
+
+theorem Nat::half_mul_two(self x: Nat): (x * 2).half() = x {
+    let twice: (x * 2 = x + x) = omega;
+    rewrite(twice, x.half_double())
+}
+
+theorem Nat::half_succ_mul_two(self x: Nat): Succ(x * 2).half() = x {
+    match x {
+        Zero => refl,
+        Succ(y) => {
+            let twice: (Succ(Succ(y) * 2) = Succ(Succ(Succ(y * 2)))) = omega;
+            rewrite(twice, Nat::cong_succ(y.half_succ_mul_two()))
+        },
+    }
+}
+
+theorem Nat::low_bit_mul_two(self x: Nat): (x * 2).low_bit() = 0 {
+    let h: (x * 2 - (x * 2).half() * 2 = x * 2 - x * 2) = rewrite(x.half_mul_two(), refl);
+    trans(h, omega)
+}
+
+theorem Nat::low_bit_succ_mul_two(self x: Nat): Succ(x * 2).low_bit() = 1 {
+    let h: (Succ(x * 2) - Succ(x * 2).half() * 2 = Succ(x * 2) - x * 2) = rewrite(x.half_succ_mul_two(), refl);
+    trans(h, omega)
+}
+
+theorem Bool::not_not(self a: Bool): !(!a) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem Bool::xor_false_r(self a: Bool): a.xor(False) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem Bool::xor_true_r(self a: Bool): a.xor(True) = !a {
+    match a { False => refl, True => refl }
+}
+
+theorem Lit::code_true(self l: Lit, v: Nat → Bool): lit_true(l.code(), v) = l.value(v) {
+    match l {
+        Pos(x) => {
+            let neg: (lit_negative(x * 2) = False) = cong_fn(λ (n: Nat) => match n { Zero => False, Succ(_) => True }, x.low_bit_mul_two());
+            let parts: (v((x * 2).half()).xor(lit_negative(x * 2)) = v(x).xor(False)) =
+                trans(cong_fn(λ (n: Nat) => v(n).xor(lit_negative(x * 2)), x.half_mul_two()), cong_fn(λ (b: Bool) => v(x).xor(b), neg));
+            trans(parts, v(x).xor_false_r())
+        },
+        Neg(x) => {
+            let neg: (lit_negative(Succ(x * 2)) = True) = cong_fn(λ (n: Nat) => match n { Zero => False, Succ(_) => True }, x.low_bit_succ_mul_two());
+            let parts: (v(Succ(x * 2).half()).xor(lit_negative(Succ(x * 2))) = v(x).xor(True)) =
+                trans(cong_fn(λ (n: Nat) => v(n).xor(lit_negative(Succ(x * 2))), x.half_succ_mul_two()), cong_fn(λ (b: Bool) => v(x).xor(b), neg));
+            trans(parts, v(x).xor_true_r())
+        },
+    }
+}
+
+theorem Lit::not_value(self l: Lit, v: Nat → Bool): l.not().value(v) = !l.value(v) {
+    match l {
+        Pos(x) => refl,
+        Neg(x) => sym(v(x).not_not()),
+    }
+}
+
+theorem clause_of_true(c: List<Lit>, v: Nat → Bool): clause_true(clause_of(c), v) = clause_holds(c, v) {
+    match c {
+        Nil => refl,
+        Cons(l, rest) => Bool::or_cong(l.code_true(v), clause_of_true(rest, v)),
+    }
+}
+
+theorem cnf_of_true(cs: List<List<Lit>>, v: Nat → Bool): all_true(cnf_of(cs), v) = all_hold(cs, v) {
+    match cs {
+        Nil => refl,
+        Cons(c, rest) => Bool::and_cong(clause_of_true(c, v), cnf_of_true(rest, v)),
+    }
+}
+
+theorem all_hold_append(cs, ds: List<List<Lit>>, v: Nat → Bool): all_hold(cs ++ ds, v) = all_hold(cs, v) && all_hold(ds, v) {
+    match cs {
+        Nil => refl,
+        Cons(c, rest) => trans(Bool::and_cong(refl, all_hold_append(rest, ds, v)), sym(clause_holds(c, v).and_assoc(all_hold(rest, v), all_hold(ds, v)))),
+    }
+}
+
+// A literal reads only its node.
+theorem Lit::value_agree(self l: Lit, v, w: Nat → Bool, same: v(l.node()) = w(l.node())): l.value(v) = l.value(w) {
+    match l {
+        Pos(x) => same,
+        Neg(x) => cong_fn(λ (b: Bool) => !b, same),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The clauses are true wherever the nodes have the circuit's values.
+
+fn and_gate_formula(p, qa, qb, na, nb: Bool) → Bool {
+    (!p || (qa || False)) && ((!p || (qb || False)) && ((p || (na || (nb || False))) && True))
+}
+
+theorem and_gate_bool(qa, qb: Bool): and_gate_formula(qa && qb, qa, qb, !qa, !qb) = True {
+    match qa {
+        False => match qb { False => refl, True => refl },
+        True => match qb { False => refl, True => refl },
+    }
+}
+
+theorem and_gate_holds(p, qa, qb, na, nb: Bool, hp: p = qa && qb, hna: na = !qa, hnb: nb = !qb): and_gate_formula(p, qa, qb, na, nb) = True {
+    j(sym(hp), λ z _ => and_gate_formula(z, qa, qb, na, nb) = True,
+        j(sym(hna), λ z _ => and_gate_formula(qa && qb, qa, qb, z, nb) = True,
+            j(sym(hnb), λ z _ => and_gate_formula(qa && qb, qa, qb, !qa, z) = True, and_gate_bool(qa, qb))))
+}
+
+// A literal below `x` has the same value at `v` as at the nodes `m` holds.
+theorem below_agree(l: Lit, x: Nat, v: Nat → Bool, m: NatMap<Bool>, agree: (y: Nat) → y < x → v(y) = node_of(m, y), lb: l.below(x) = True): l.value(v) = l.value(λ y => node_of(m, y)) {
+    l.value_agree(v, λ y => node_of(m, y), agree(l.node(), Nat::le_of_leb(Succ(l.node()), x, lb)))
+}
+
+theorem and_clauses_hold(ok: Bool, x: Nat, a, b: Lit, v: Nat → Bool, m: NatMap<Bool>, agree: (y: Nat) → y < x → v(y) = node_of(m, y), below: ok = (a.below(x) && b.below(x))): v(x) = and_value(ok, m, a, b) → all_hold(and_clauses(ok, x, a, b), v) = True {
+    match ok {
+        False => λ at => rewrite(at, refl),
+        True => λ at => {
+            let parts = a.below(x).and_true_parts(b.below(x), sym(below));
+            let va: (a.value(v) = a.value(λ y => node_of(m, y))) = below_agree(a, x, v, m, agree, parts.left);
+            let vb: (b.value(v) = b.value(λ y => node_of(m, y))) = below_agree(b, x, v, m, agree, parts.right);
+            let hp: (v(x) = a.value(v) && b.value(v)) = trans(at, sym(Bool::and_cong(va, vb)));
+            and_gate_holds(v(x), a.value(v), b.value(v), a.not().value(v), b.not().value(v), hp, a.not_value(v), b.not_value(v))
+        },
+    }
+}
+
+theorem gate_clauses_hold(env: Nat → Nat → Bool, m: NatMap<Bool>, x: Nat, v: Nat → Bool, agree: (y: Nat) → y < x → v(y) = node_of(m, y), g: Gate): v(x) = gate_value(env, m, x, g) → all_hold(gate_clauses(x, g), v) = True {
+    match g {
+        GFalse => λ at => rewrite(at, refl),
+        GInput(i, j) => λ _ => refl,
+        GAnd(a, b) => and_clauses_hold(a.below(x) && b.below(x), x, a, b, v, m, agree, refl),
+    }
+}
+
+theorem node_of_set_other(m: NatMap<Bool>, x: Nat, b: Bool, y: Nat, ne: x ≠ y): node_of(nat_map_set(m, x, b), y) = node_of(m, y) {
+    cong_fn(λ (o: Option<Bool>) => match o { None => False, Some(c) => c }, nat_map_get_set_other(m, x, b, y, ne))
+}
+
+theorem node_of_set_same(m: NatMap<Bool>, x: Nat, b: Bool): node_of(nat_map_set(m, x, b), x) = b {
+    cong_fn(λ (o: Option<Bool>) => match o { None => False, Some(c) => c }, nat_map_get_set_same(m, x, b))
+}
+
+// Every clause of the circuit holds at any `v` that has the circuit's
+// values on its nodes.
+theorem tseitin_holds(env: Nat → Nat → Bool, gs: List<Gate>, v: Nat → Bool, agree: (y: Nat) → y < gs.len() → v(y) = node_of(values(env, gs), y)): all_hold(tseitin(gs, gs.len()), v) = True {
+    match gs {
+        Nil => refl,
+        Cons(g, rest) => {
+            let m = values(env, rest);
+            let x = rest.len();
+            let below: ((y: Nat) → y < x → v(y) = node_of(m, y)) = λ y lt => trans(agree(y, omega), node_of_set_other(m, x, gate_value(env, m, x, g), y, λ same => Nat::ne_of_lt(y, x, lt)(sym(same))));
+            let at: (v(x) = gate_value(env, m, x, g)) = trans(agree(x, omega), node_of_set_same(m, x, gate_value(env, m, x, g)));
+            let here = gate_clauses_hold(env, m, x, v, below, g, at);
+            trans(all_hold_append(gate_clauses(x, g), tseitin(rest, x), v), Bool::and_true_of(all_hold(gate_clauses(x, g), v), all_hold(tseitin(rest, x), v), here, tseitin_holds(env, rest, v, below)))
+        },
+    }
+}
+
+// What a refutation of the circuit's clauses, with `out` asserted false,
+// proves: `out` is true at every input.
+theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, steps: List<Step>, ok: check(formula_of(cnf_of(Cons([out.not()], tseitin(gs, gs.len())))), steps) = True): out.value(valuation(env, gs)) = True {
+    let v = valuation(env, gs);
+    let none: (all_true(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), v) = False) = refuted(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), steps, ok, v);
+    let rest: (all_hold(tseitin(gs, gs.len()), v) = True) = tseitin_holds(env, gs, v, λ y _ => refl);
+    let held: ((out.not().value(v) || False) && all_hold(tseitin(gs, gs.len()), v) = False) = trans(sym(cnf_of_true(Cons([out.not()], tseitin(gs, gs.len())), v)), none);
+    let neg: ((out.not().value(v) || False) && True = False) = trans(Bool::and_cong(refl, sym(rest)), held);
+    match e: out.value(v) {
+        True => refl,
+        False => {
+            let t: (out.not().value(v) = True) = trans(out.not_value(v), cong_fn(λ (b: Bool) => !b, e));
+            absurd(trans(sym(neg), j(sym(t), λ z _ => (z || False) && True = True, refl)))
+        },
+    }
+}

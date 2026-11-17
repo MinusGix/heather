@@ -480,6 +480,10 @@ theorem Bool::or_cong({a, b, c, d: Bool}, ab: a = b, cd: c = d): a || c = b || d
     j(ab, λ x _ => a || c = x || d, j(cd, λ y _ => a || c = a || y, refl))
 }
 
+theorem Bool::and_cong({a, b, c, d: Bool}, ab: a = b, cd: c = d): a && c = b && d {
+    j(ab, λ x _ => a && c = x && d, j(cd, λ y _ => a && c = a && y, refl))
+}
+
 // Two Booleans true together are equal: a Boolean identity is two
 // implications, each one `omega` over the guards' atoms.
 theorem Bool::eq_of_is_true_iff(self a: Bool): (b: Bool) → (a.IsTrue() → b.IsTrue()) → (b.IsTrue() → a.IsTrue()) → a = b {
