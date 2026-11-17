@@ -1191,10 +1191,11 @@ fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
 
 // What a procedure keeps for its caller, which is what a function keeps
 // (System V's callee-saved registers): RBX, which carries R10 across every
-// call, and of RBP and R12 to R15 those a word lives in. R10 it may write,
-// as a function may.
+// call, and RBP and R12 to R15. Those it pins (`Homes::pinned`) it never
+// writes, so it saves the rest: the ones a word lives in and the ones its
+// leaves compute in. R10 it may write, as a function may.
 fn kept_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp] }
-fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => homes.uses(register))) }
+fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => !homes.pinned(register))) }
 fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
 
 // Its way in: the label, the depth counted, the registers it keeps pushed

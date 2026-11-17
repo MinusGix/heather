@@ -101,6 +101,10 @@ record Target {
     // `main`'s frame is the stack's top, with nothing above it.
     index: Nat,
     frames: List<BitVec(64)>,
+    // What the registers the homes pin held when the activation was entered,
+    // by their places in the home pool: it never writes them, so they hold
+    // it still, unsaved.
+    pinned: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
     roomy: (room * (8 * (words + 7)) + program_calls_room(functions)) + 8 <= index,

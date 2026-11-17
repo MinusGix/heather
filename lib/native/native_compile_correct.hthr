@@ -1389,7 +1389,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
                                 let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
                                 let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
-                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
+                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], home_values(s.gprs), src.depth, framed, roomy);
                                 let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());
                                 let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
                                 let live = src.main.live_in(homes, []);
@@ -1411,7 +1411,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
                                         runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-                                    s, here, at_whole, ⟨zero, ⟨argv, trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i))⟩⟩)
+                                    s, here, at_whole, ⟨zero, ⟨argv, ⟨trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), λ k _ _ => refl⟩⟩⟩)
                             }))(resident),
                     })
                 },
@@ -1858,9 +1858,10 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             let roomy_c: ((d2 * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= ic) = omega(was, few, comm);
             let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
             let framed_c: (ic + 8 * (t.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
-            let c = t.activation(ic, g0.saved(kept, top), d2, framed_c, roomy_c);
+            let c = t.activation(ic, g0.saved(kept, top), home_values(g0), d2, framed_c, roomy_c);
+            let at_entry = λ (r: Nat) (inside: r < 6) (_: t.homes.pinned(home_register(r)) = True) => sym(home_value(g0, r, inside));
             let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, k(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
-                t.room_small(d2, eq),
+                at_entry, t.room_small(d2, eq),
                 λ s2 rip_s resident_s bare_s kept_s holding_s => {
                     let bare_i: t.Bare(after, t.room, t.index, above, s2.gprs, s2.memory) = j(sym(eq), λ r _ => t.Bare(after, r, t.index, above, s2.gprs, s2.memory),
                         j(back_i, λ x _ => t.Bare(after, Succ(d2), x, above, s2.gprs, s2.memory), bare_s));
@@ -1871,7 +1872,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
                 n, start, k, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
             let next_c = c.at_like(prog_len(entry), entry_live, tree, start, env.set_words(proc.params, values),
                 env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
-            let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, passed,
+            let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, at_entry, passed,
                 tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
             j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
                 t.Bare(env, d2, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
@@ -1972,7 +1973,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
     let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
     let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
-        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
+        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], home_values(s.gprs), src.depth, framed, roomy);
     let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
     let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, built.names, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, built.linked);
@@ -2000,7 +2001,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
         t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
             runs(n, n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-        s, here, resident, ⟨zero, ⟨argv, trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i))⟩⟩)
+        s, here, resident, ⟨zero, ⟨argv, ⟨trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), λ k _ _ => refl⟩⟩⟩)
 }
 
 // The compiled program, from its first byte with its code resident, its

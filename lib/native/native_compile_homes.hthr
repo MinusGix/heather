@@ -293,8 +293,37 @@ theorem List::home_used(self of: List<Home>, loops: List<List<Nat>>): (id, k: Na
     }
 }
 
-theorem Homes::used(self homes: Homes, id, k: Nat, at: homes.home(id) = InReg(k)): homes.uses(home_register(k)) = True {
+theorem Homes::lived(self homes: Homes, id, k: Nat, at: homes.home(id) = InReg(k)): homes.lives(home_register(k)) = True {
     homes.of.home_used(homes.loops, id, k, at)
+}
+
+theorem Homes::used(self homes: Homes, id, k: Nat, at: homes.home(id) = InReg(k)): homes.uses(home_register(k)) = True {
+    homes.lives(home_register(k)).or_true_l(homes.pinned(home_register(k)), homes.lived(id, k, at))
+}
+
+// A pinned register is one the homes use, and no word lives in it.
+theorem Homes::pinned_used(self homes: Homes, x: Gpr, pinned: homes.pinned(x) = True): homes.uses(x) = True {
+    homes.lives(x).or_true_r(homes.pinned(x), pinned)
+}
+
+theorem Homes::pinned_unlived(self homes: Homes, x: Gpr, pinned: homes.pinned(x) = True): homes.lives(x) = False {
+    match e: homes.lives(x) {
+        True => absurd(trans(sym(pinned), j(sym(e), λ b _ => (!b && (homes.pins.homes_use(x) && !x.same(R10))) = False, refl))),
+        False => refl,
+    }
+}
+
+// A register the homes do not use is not pinned, and a register that is not
+// pinned is apart from every pinned one.
+theorem Homes::unused_unpinned(self homes: Homes, x: Gpr, unused: homes.uses(x) = False): homes.pinned(x) = False {
+    match e: homes.pinned(x) { True => absurd(trans(sym(unused), homes.pinned_used(x, e))), False => refl }
+}
+
+theorem Homes::unpinned_apart(self homes: Homes, x, y: Gpr, pinned: homes.pinned(y) = True, free: homes.pinned(x) = False): x.same(y) = False {
+    match e: x.same(y) {
+        True => absurd(trans(sym(free), trans(cong_fn<Gpr, Bool>(λ r => homes.pinned(r), x.same_sound(y, e)), pinned))),
+        False => refl,
+    }
 }
 
 // Every home register is one of the pool (past the pool, `R12`).
@@ -338,7 +367,8 @@ theorem List::uses_outside(self of: List<Home>, x: Gpr, outside: x.absent_from(h
 
 // So no word lives in a statement's scratch.
 theorem Homes::unused(self homes: Homes, x: Gpr, outside: x.absent_from(home_pool()).IsTrue()): homes.uses(x) = False {
-    homes.of.uses_outside(x, outside)
+    j(sym(homes.of.uses_outside(x, outside)), λ b _ => (b || (!b && (homes.pins.homes_use(x) && !x.same(R10)))) = False,
+        j(sym(homes.pins.uses_outside(x, outside)), λ b _ => (b && !x.same(R10)) = False, refl))
 }
 
 theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) { λ _ => home_register_pooled(k) }
@@ -433,9 +463,13 @@ fn Env::with_words(self env: Env, words: List<Nat>) → Env { Env(words, env.buf
 
 // What the kept values say: every live word reads as the environment's
 // from its home, and the stack pointer, after the pool's registers among
-// `values`, is the running frame.
+// `values`, is the running frame; and every register the homes pin holds
+// what it did when the activation was entered.
+fn Target::Pins(self t: Target, values: List<BitVec(64)>) → Type {
+    (k: Nat) → k < 6 → t.homes.pinned(home_register(k)) = True → values.get_or(k, BitVec::zero()) = t.pinned.get_or(k, BitVec::zero())
+}
 fn Target::Agreeing(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) → Type {
-    t.homes.Agrees(live, env, words, values) ∧ (values.get_or(6, BitVec::zero()) = t.frame())
+    t.homes.Agrees(live, env, words, values) ∧ ((values.get_or(6, BitVec::zero()) = t.frame()) ∧ t.Pins(values))
 }
 
 // The region placed with the environment's buffers and command line and some
@@ -448,7 +482,14 @@ fn Target::Held(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory
 // RSP, read off the claim.
 theorem Target::held_rsp(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
     read_gpr(Rsp, g) = t.frame() {
-    held.proof.right.right
+    held.proof.right.right.left
+}
+
+// A pinned register, read off the claim: what it held at the entry.
+theorem Target::held_pin(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    k: Nat, inside: k < 6, pinned: t.homes.pinned(home_register(k)) = True):
+    read_gpr(home_register(k), g) = t.pinned.get_or(k, BitVec::zero()) {
+    trans(sym(home_value(g, k, inside)), held.proof.right.right.right(k, inside, pinned))
 }
 
 // Fewer words live.
@@ -486,7 +527,24 @@ theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs
     same: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g),
     rsp: read_gpr(Rsp, g2) = read_gpr(Rsp, g)):
     t.Held(live, env, g2, m) {
-    Exists(held.witness, ⟨held.proof.left, ⟨t.agrees_regs(live, env, held.witness, g, g2, held.proof.right.left, same), trans(rsp, held.proof.right.right)⟩⟩)
+    Exists(held.witness, ⟨held.proof.left, ⟨t.agrees_regs(live, env, held.witness, g, g2, held.proof.right.left, same),
+        ⟨trans(rsp, held.proof.right.right.left), λ k inside pinned => trans(home_value(g2, k, inside),
+            trans(same(k, inside, t.homes.pinned_used(home_register(k), pinned)),
+                trans(sym(home_value(g, k, inside)), held.proof.right.right.right(k, inside, pinned))))⟩⟩⟩)
+}
+
+// The pinned registers read as they did: they hold the entry's values still.
+theorem Target::pins_regs(self t: Target, g, g2: Gprs, pins: t.Pins(home_values(g)),
+    same: (k: Nat) → k < 6 → t.homes.pinned(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g)):
+    t.Pins(home_values(g2)) {
+    λ k inside pinned => trans(home_value(g2, k, inside), trans(same(k, inside, pinned), trans(sym(home_value(g, k, inside)), pins(k, inside, pinned))))
+}
+
+// A register that is not pinned, written.
+theorem Target::pins_write(self t: Target, g: Gprs, x: Gpr, v: BitVec(64), free: t.homes.pinned(x) = False, pins: t.Pins(home_values(g))):
+    t.Pins(home_values(write_gpr(x, v, g))) {
+    t.pins_regs(g, write_gpr(x, v, g), pins, λ k inside pinned =>
+        read_gpr_other(x, home_register(k), v, g, t.homes.unpinned_apart(x, home_register(k), pinned, free)))
 }
 
 // A register no word lives in, and not RSP, written.
@@ -523,12 +581,12 @@ theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(id
 }
 
 theorem Target::held_placed(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), placed: t.Placed(env, m),
-    slotted: t.homes.slotted(live).IsTrue(), rsp: read_gpr(Rsp, g) = t.frame()): t.Held(live, env, g, m) {
+    slotted: t.homes.slotted(live).IsTrue(), rsp: read_gpr(Rsp, g) = t.frame(), pins: t.Pins(home_values(g))): t.Held(live, env, g, m) {
     Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, refl), ⟨λ i m2 =>
         j(sym(t.homes.slotted_home(live, slotted, i, m2)), λ h _ => (match h {
             InSlot => env.words.get_or(i, 0),
             InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
-        }) = env.number(i), refl), rsp⟩⟩)
+        }) = env.number(i), refl), ⟨rsp, pins⟩⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -696,9 +754,12 @@ theorem Target::held_reg_set(self t: Target, live, out: List<Nat>, env: Env, id:
         })(refl), trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
     };
     let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
-        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.proof.right.right);
+        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.proof.right.right.left);
+    let pins: t.Pins(values) = λ r within pinned => trans(List::put_other(k, home_values(g), w, BitVec::zero(), r,
+        λ e => absurd(trans(sym(t.homes.pinned_unlived(home_register(k), j(e, λ x _ => t.homes.pinned(home_register(x)) = True, pinned))),
+            t.homes.lived(id, k, at)))), held.proof.right.right.right(r, within, pinned));
     j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.Agreeing(out, env.set_word(id, w), ws, vs)),
-        Exists(words, ⟨held.proof.left, ⟨agrees, rsp⟩⟩))
+        Exists(words, ⟨held.proof.left, ⟨agrees, ⟨rsp, pins⟩⟩⟩))
 }
 
 // What a write to a word's home leaves the rest of the registers: every one

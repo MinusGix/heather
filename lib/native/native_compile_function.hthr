@@ -711,13 +711,13 @@ theorem Gprs::holding_args(self g: Gprs, values: List<BitVec(64)>): (registers: 
     }
 }
 
-// Every register a procedure keeps (`Homes::kept`) a function keeps too:
+// Every register a procedure keeps for its caller a function keeps too:
 // RBX, RBP and R12 to R15.
 theorem Homes::kept_callee(self homes: Homes, g, u: Gprs, kept: Kept(callee_kept(), g, u)):
-    (x: Gpr) → Mem(x, homes.kept()) → read_gpr(x, u) = read_gpr(x, g) {
+    (x: Gpr) → Mem(x, Cons(Rbx, kept_pool())) → read_gpr(x, u) = read_gpr(x, g) {
     λ x mem => match mem {
         Inl(e) => j(sym(e), λ y _ => read_gpr(y, u) = read_gpr(y, g), kept.left),
-        Inr(later) => match kept_pool().mem_filter(x, λ (register: Gpr) => homes.uses(register), later) {
+        Inr(later) => match later {
             Inl(e) => j(sym(e), λ y _ => read_gpr(y, u) = read_gpr(y, g), kept.right.right.left),
             Inr(m1) => match m1 {
                 Inl(e) => j(sym(e), λ y _ => read_gpr(y, u) = read_gpr(y, g), kept.right.right.right.left),

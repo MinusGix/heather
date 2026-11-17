@@ -70,7 +70,11 @@ fn Home::in_pool(self home: Home) → Bool {
 // `places` is the registers of the values of the functions the program
 // calls (`lower_program`'s placement), a proposal like the rest: the
 // function compiler checks what it is given.
-record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [] }
+// `pins` names registers of the pool the body leaves alone though no word
+// of its own lives there (`Homes::pinned`): a callee's caller may have a
+// word in one, so the callee neither takes it for a leaf nor saves it
+// (docs/native/native-procedure-frames-design.md §2.4).
+record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [], pins: List<Home> := [] }
 
 fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
     match homes.loops.nth(again) { None => [], Some(set) => set }
@@ -95,7 +99,20 @@ fn List::homes_use(self of: List<Home>, register: Gpr) → Bool {
     }
 }
 
-fn Homes::uses(self homes: Homes, register: Gpr) → Bool { homes.of.homes_use(register) }
+// Whether a word lives in `register`…
+fn Homes::lives(self homes: Homes, register: Gpr) → Bool { homes.of.homes_use(register) }
+
+// …or the body is to leave it as it found it: a register a callee keeps
+// that the homes pin and no word lives in. R10 is not one: a callee may
+// write it, and a caller carries it across a call itself.
+fn Homes::pinned(self homes: Homes, register: Gpr) → Bool {
+    !homes.lives(register) && (homes.pins.homes_use(register) && !register.same(R10))
+}
+
+// Whether the body's code is to keep `register` between statements: a
+// word lives in it, or it is pinned. Every other register is a leaf's
+// scratch.
+fn Homes::uses(self homes: Homes, register: Gpr) → Bool { homes.lives(register) || homes.pinned(register) }
 
 // The registers some word lives in.
 fn Homes::registers(self homes: Homes) → List<Gpr> { home_pool().filter(λ (register: Gpr) => homes.uses(register)) }
@@ -581,7 +598,7 @@ fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fue
 // The same homes with `places` for the values of the functions the regions
 // call (`Prog::links`, native_compile): a proposal like the homes, checked
 // by the functions' lowering.
-fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places) }
+fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places, homes.pins) }
 
 // Every procedure's body passes the check, from its results, and its
 // parameters are apart from what is live as it starts: its entry writes
@@ -820,7 +837,7 @@ fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
     }
 }
 
-fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places) }
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places, homes.pins) }
 
 // Each word in turn, heaviest first, given the first register none of its
 // neighbours has, or its slot; a word live at the start keeps its slot.
