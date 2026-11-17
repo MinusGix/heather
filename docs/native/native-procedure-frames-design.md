@@ -333,9 +333,8 @@ allocation's check is stated over `Homes`, and stays as it was.
   `Target::called(i, …)` is the activation that runs it:
   `t.called(i, …).layout() = t.layout().body(i)` by `refl`.
 - `Procedure::fits` also asks that the frame's homes are in the pool and
-  that `words <= reserved`. Until F4 the stack bound charges every level
-  `8 * (reserved + 7)` (`Target.roomy`), so the premise of
-  `native_compile_correct` is unchanged.
+  that `words <= reserved`: the data offsets read `reserved`, so a frame
+  may not pass it.
 - The allocator colours `main` alone (`Greedy::colouring`) and each body
   alone (`Greedy::frame`, under the source's loop sets), then pins as many
   spare callee-saved registers as the body's leaves leave free, found by
@@ -350,3 +349,48 @@ application (`Layout::tabled`), not a chain of `with_…` calls. A `match`
 on a call that takes `t.layout()` abstracts its scrutinee from the goal
 after unfolding, and a third wrapper around the layout made the leaves'
 proofs stop finding it.
+
+### 6.4 F4: the bound by the call graph
+
+`Source::need(homes, bodies)` is what a program needs of its stack under a
+placement, and the `deep` premise of `native_compile_correct` and of the
+ELF theorems is `src.need(homes, bodies) <= stack.size`. It is §2.5's
+`need`, built as §2.5 says to compute it:
+
+- `Frame::level(places)` is one activation: `8 * words`, 8 for each
+  register of `Homes::kept` and the return address.
+- `Stmt::performed()` lists the procedures a statement performs, and
+  `List::performed_by(i)` those of procedure `i`'s body.
+- `List::deep_row(bodies, places, d)` has, for each procedure, the most
+  its calls take with `d` levels of room: a row from the row before
+  (`List::deepest` over the body's callees), so the table costs the depth
+  times the call sites. `List::reach(procedures, bodies, places, d)` is
+  the same for a list of callees, and nothing at `d = 0`.
+- `need` is `main`'s `reach` at the source's depth, the functions' room
+  (`program_calls_room`, unchanged), and `8 * (words + 1)` for `main`.
+
+**How the proof knows which procedures a body calls.** Nothing is
+threaded through `Stmt::emit_runs`. `Layout.callees` (and
+`Target.callees`) names the procedures the running body may call:
+`main.performed()` in `Source::layout`, the procedure's own in
+`Layout::body`. `Layout::call_fits` refuses a call of any other, and
+`Target::Calls` already hands a call's `call_fits` to the proof, so a call
+arrives with `callees.holds(index)` (`CallFits.allowed`). `Target.roomy`
+is `callees.reach(procedures, bodies, places, room)` plus the floor it
+always had, and `List::reach_call` is the one step: a listed callee's
+level and its own `reach` at one level less are within the caller's.
+
+**The depth counts in a word, said on its own.** The old bound charged
+every level at least a byte, so `depth * … <= stack.size` kept the depth
+below `2^64` for the counter. The new bound does not grow with the depth
+where nothing recurses, so the theorems take `small: src.depth <
+Nat::pow(2, 64)`; a certificate gives it by evaluation.
+
+**What it is not yet.** The floor is still added, not maxed:
+`program_calls_room + 8` sits below the deepest call even where the
+deepest procedure calls no function. That is at most one function's room
+too much, and F5 is where the functions' room changes. A premise free of
+the placement (`need` is at most the old bound) is not proved; nothing
+uses one. `need` over frames that are not literals is costly to
+evaluate (`src.bodies()` runs the allocator's scan at every use), so a
+test states it over `SpillAll().frames(src)` or a literal.

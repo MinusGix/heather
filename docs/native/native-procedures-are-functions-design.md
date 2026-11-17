@@ -633,6 +633,8 @@ gates passing on the new code.
     128 * functions) + 8 * (words + 1) <= stack`. A program with no calls
     carries the word too (cat's theorems), the price of one statement for
     every source.
+    (Since: the levels are each procedure's own and follow the calls its
+    body makes, `Source::need`, `native-procedure-frames-design.md` §6.4.)
   - *What a callee keeps.* `Homes::kept` (§2.2). Not R10: saved by the
     callee it would be a seventh word a level, and the caller's carry in
     RBX is needed for functions anyway (`Homes::returned` reads every
