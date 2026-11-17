@@ -10,6 +10,7 @@ CLAUDE.md says when each one applies.
 - `roadmap.md`: the areas, their priority, the milestones.
 - `compilation-vision.md`: the settled principles of native compilation.
 - `proof-patterns.md`: how to write proofs that check cheaply.
+- `library/program-and-proof-style.md`: how definitions, data and proofs about programs should read.
 - `testing-generated-terms.md`: the axes a test of generated terms varies.
 - `test-value-audit.md`: when a claim is a Rust test and when a theorem.
 - `agent-policy.md`: what a thread may decide and what it asks.
