@@ -400,7 +400,33 @@ fn Circ::Makes(self c: Circ, r: Pair<Circ, Lit>, f: (Nat → Bool) → Bool) →
     c.Grows(r.fst) ∧ ((r.snd.node() < r.fst.size) ∧ ((d: Circ) → r.fst.Grows(d) → (env: Nat → Nat → Bool) → r.snd.value(d.at(env)) = f(d.at(env))))
 }
 
-fn Circ::and(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.push(GAnd(a, b)) }
+fn Circ::and_gate(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.push(GAnd(a, b)) }
+
+// A literal on node 0 is a constant; an and with a constant needs no gate.
+fn Lit::constant(self l: Lit) → Option<Bool> {
+    match l {
+        Pos(x) => match x { Zero => Some(False), Succ(_) => None },
+        Neg(x) => match x { Zero => Some(True), Succ(_) => None },
+    }
+}
+
+fn Circ::and_with(self c: Circ, ka, kb: Option<Bool>, a, b: Lit) → Pair<Circ, Lit> {
+    match ka {
+        Some(t) => match t {
+            False => Pair(c, Pos(0)),
+            True => Pair(c, b),
+        },
+        None => match kb {
+            Some(t) => match t {
+                False => Pair(c, Pos(0)),
+                True => Pair(c, a),
+            },
+            None => c.and_gate(a, b),
+        },
+    }
+}
+
+fn Circ::and(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.and_with(a.constant(), b.constant(), a, b) }
 
 fn Circ::negated(r: Pair<Circ, Lit>) → Pair<Circ, Lit> { Pair(r.fst, r.snd.not()) }
 
@@ -417,7 +443,7 @@ theorem Lit::not_node(self l: Lit): l.not().node() = l.node() {
     match l { Pos(x) => refl, Neg(x) => refl }
 }
 
-theorem Circ::and_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and(a, b), λ v => a.value(v) && b.value(v)) {
+theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_gate(a, b), λ v => a.value(v) && b.value(v)) {
     let g = c.push_grows(good, GAnd(a, b));
     let ok: (a.below(c.size) && b.below(c.size) = True) = Bool::and_true_of(a.below(c.size), b.below(c.size), Nat::leb_true(Succ(a.node()), c.size, va), Nat::leb_true(Succ(b.node()), c.size, vb));
     ⟨g, ⟨Nat::le_refl(Succ(c.size)), λ d later env => {
@@ -428,6 +454,56 @@ theorem Circ::and_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < 
             trans(c.push_value(good, GAnd(a, b), env), cong_fn(λ (t: Bool) => and_value(t, values(env, c.gates), a, b), ok));
         trans(trans(here, made), sym(Bool::and_cong(c.grows_value(d, cd, a, va, env), c.grows_value(d, cd, b, vb, env))))
     }⟩⟩
+}
+
+
+// `k` is the value `l` has wherever node 0 is false, when `k` is known.
+fn Lit::Means(k: Option<Bool>, l: Lit) → Type {
+    (t: Bool) → k = Some(t) → (v: Nat → Bool) → v(0) = False → l.value(v) = t
+}
+
+theorem Lit::constant_means(self l: Lit): Lit::Means(l.constant(), l) {
+    match l {
+        Pos(x) => match x {
+            Zero => λ t e v z => trans(z, Option::some_inj(False, t, e)),
+            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Pos(Succ(y)).value(v) = t),
+        },
+        Neg(x) => match x {
+            Zero => λ t e v z => trans(cong_fn(λ (b: Bool) => !b, z), Option::some_inj(True, t, e)),
+            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Neg(Succ(y)).value(v) = t),
+        },
+    }
+}
+
+
+
+theorem Circ::and_with_makes(self c: Circ, good: c.Good(), ka, kb: Option<Bool>, a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size, ma: Lit::Means(ka, a), mb: Lit::Means(kb, b)):
+    c.Makes(c.and_with(ka, kb, a, b), λ v => a.value(v) && b.value(v)) {
+    (match ka as λ k => Lit::Means(k, a) → c.Makes(c.and_with(k, kb, a, b), λ v => a.value(v) && b.value(v)) {
+        Some(t) => λ ma => (match t as λ s => Lit::Means(Some(s), a) → c.Makes(c.and_with(Some(s), kb, a, b), λ v => a.value(v) && b.value(v)) {
+            False => λ ma => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => {
+                let z = later.left.right.right(env);
+                trans(z, sym(cong_fn(λ (x: Bool) => x && b.value(d.at(env)), ma(False, refl, d.at(env), z))))
+            }⟩⟩,
+            True => λ ma => ⟨c.grows_refl(good), ⟨vb, λ d later env =>
+                sym(cong_fn(λ (x: Bool) => x && b.value(d.at(env)), ma(True, refl, d.at(env), later.left.right.right(env))))⟩⟩,
+        })(ma),
+        None => λ ma => (match kb as λ k => Lit::Means(k, b) → c.Makes(c.and_with(None, k, a, b), λ v => a.value(v) && b.value(v)) {
+            Some(t) => λ mb => (match t as λ s => Lit::Means(Some(s), b) → c.Makes(c.and_with(None, Some(s), a, b), λ v => a.value(v) && b.value(v)) {
+                False => λ mb => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => {
+                    let z = later.left.right.right(env);
+                    trans(z, sym(trans(cong_fn(λ (x: Bool) => a.value(d.at(env)) && x, mb(False, refl, d.at(env), z)), a.value(d.at(env)).and_false_r())))
+                }⟩⟩,
+                True => λ mb => ⟨c.grows_refl(good), ⟨va, λ d later env =>
+                    sym(trans(cong_fn(λ (x: Bool) => a.value(d.at(env)) && x, mb(True, refl, d.at(env), later.left.right.right(env))), a.value(d.at(env)).and_true_r()))⟩⟩,
+            })(mb),
+            None => λ mb => c.and_gate_makes(good, a, b, va, vb),
+        })(mb),
+    })(ma)
+}
+
+theorem Circ::and_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and(a, b), λ v => a.value(v) && b.value(v)) {
+    c.and_with_makes(good, a.constant(), b.constant(), a, b, va, vb, a.constant_means(), b.constant_means())
 }
 
 theorem Bool::not_and_not(a, b: Bool): !(!a && !b) = a || b {
