@@ -34,3 +34,16 @@ fn bits() → Function {
 fn bits_learned() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), bits(), bits().learn_plan()) }
 
 theorem bits_kept(): bits_learned() = Some(bits()) { refl }
+
+// A search through a word's other spellings. `(y + x) - y` fits no rule
+// as written, and the plain walk leaves it; with the search `add_comm`
+// spells the sum the other way round and `add_sub` fits. `0 & x` is zero by
+// `and_comm` and `and_zero`, at the node itself.
+fn turned() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Sub(64, 4, 3, 2), Const(64, 5, 0), BitAnd(64, 6, 5, 4)], Ports([]))), 6, 1)
+}
+
+theorem turned_left(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan()) = Some(turned()) { refl }
+
+theorem turned_searched(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan(spellings := 8)) =
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Move(64, 4, 1), Const(64, 5, 0), Const(64, 6, 0)], Ports([]))), 6, 1)) { refl }

@@ -197,17 +197,17 @@ function deciding through a connective (`calls_either` in
 `own_rule.hthr` declares a rule beside the function it compiles:
 
 ```heather
-rule theorem add_sub_left({w: Nat}, a, b: BitVec(w)): (a + b) - a = b { … }
+rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 { … }
 ```
 
 It is an ordinary theorem about words. The `rule` prefix reads the
-statement as what the optimizer may do (a sum with its left part taken
-away is a move of the right part), proves that sound from the theorem, and
+statement as what the optimizer may do (a word less itself is the
+constant zero), proves that sound from the theorem, and
 registers it. `compile-x86` then uses the rules registered in the
 program's modules beside the library's own, and the certificate's replay
 is over both, so nothing about the rule is trusted beyond the theorem the
-kernel checked. `first_and_back` compiles to 39 bytes with the rule and
-45 without: the add and the subtraction are gone
+kernel checked. `first_and_nothing` compiles to 39 bytes with the rule and
+48 without: the subtraction and the add are gone
 (`crates/cli/tests/native_own_rule.rs`; `docs/native/optimizer-rules-design.md`).
 
 `own_learner.hthr` goes one step further. Its rule says a mask of the low
@@ -245,24 +245,33 @@ is the standard set: the plain identities of words (`x | 0 = x`,
 rule's result read by the next:
 
 ```console
+  t9 = t1 + t8 = t8 + t1   by add_comm
   t10 = (t8 + t1) - t1 = t8   by add_sub
   t11 = t1 ^ t1 = 0   by xor_self
   t12 = t10 | 0 = t10   by or_zero
 ```
 
+The first line is the optimizer searching. `tangled` writes its sum with
+the length first, and `add_sub`, `(a + b) - b = a`, does not fit
+`(n + x) - n` as it stands. At each node the search follows the rules
+through the other ways the word, and each word it reads, can be spelled
+(`add_comm` turns a sum round) and writes the cheapest it reaches, so a
+rule is stated once and found either way round.
+
 `--explain-optimizer` prints what the optimizer did with the rules, a line
 for each one used, in the rule's own words and by its name:
 
 ```console
-$ heather compile-x86 examples/x86-native/own_rule.hthr first_and_back \
-    -o target/x86-native/first_and_back.s --explain-optimizer
-function 0: 6 rules used
+$ heather compile-x86 examples/x86-native/own_rule.hthr first_and_nothing \
+    -o target/x86-native/first_and_nothing.s --explain-optimizer
+function 0: 7 rules used
   …
   t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
-  t10 = (t1 + t8) - t1 = t8   by add_sub_left
+  t9 = t1 - t1 = 0   by sub_self
+  t10 = t8 + 0 = t8   by add_zero
 ```
 
-`t10` is the word the subtraction computed; the line says what it was,
+`t9` is the word the subtraction computed; the line says what it was,
 what the rule makes it, and (in brackets, for `narrow_back`) the facts a
 rule needed.
 

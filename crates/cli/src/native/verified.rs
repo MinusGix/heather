@@ -705,6 +705,11 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         let mut placement = None;
         let wanted = format!("{earlier}, Wanted::usual()");
         let replay = |search: &str| (Stage::Replay, search.to_string());
+        // The walks search (`spellings := 8`, `Seen::searched`): at a node
+        // they follow the rules through up to eight other spellings of its
+        // word and of each word it reads, and write the cheapest. The
+        // library's own plan tests walk without it, so what their proofs
+        // cost does not move.
         // With no test: inlined and tidied, within the search's room or
         // not at all.
         let mut tidied = run(&mut fork, &mut modules, "t", &original, None,
@@ -718,7 +723,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             let last = tested[0].function.clone();
             tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
                 &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_copied_past()"), replay("find_swept_past()"),
-                    replay("find_learned_past()"), replay("find_copied_past()"), replay("find_swept_past()")])?);
+                    replay("find_learned_past(spellings := 8)"), replay("find_copied_past()"), replay("find_swept_past()")])?);
             if fits(&mut fork, &modules, &tested, "tested_")? && let Some(places) = lowers(&mut fork, &modules, &tested, "tested_")? {
                 made = tested;
                 placement = Some(places);
@@ -729,7 +734,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         if made.is_empty() {
             let mut learned = tidied.clone();
             learned.extend(run(&mut fork, &mut modules, "l", &named(&tidied), tidied.last().map(|last| last.function.clone()),
-                &[replay("find_learned()")])?);
+                &[replay("find_learned(spellings := 8)")])?);
             if learned.len() > tidied.len() {
                 let last = learned.last().map(|last| last.function.clone());
                 learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
@@ -757,8 +762,8 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                 worded.extend(put);
                 let last = worded.last().map(|last| last.function.clone());
                 worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
-                    &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
-                        replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
+                    &[replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
+                        replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
                     made = worded;
                     placement = Some(places);
@@ -790,7 +795,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             if stored.len() > made.len() {
                 let last = stored.last().map(|last| last.function.clone());
                 stored.extend(run(&mut fork, &mut modules, "z", &named(&stored), last,
-                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")),
+                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")),
                         replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &stored, "stored_")? {
                     made = stored;
