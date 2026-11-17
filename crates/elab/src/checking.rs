@@ -445,8 +445,42 @@ impl Checking<'_> {
                     && named.is_empty() =>
             {
                 let ExprKind::Var(name) = &head.kind else { unreachable!("guarded above") };
-                let step = crate::hypothesis_cases::step(self, cx, name, args, expected, e.span)?;
-                self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots)
+                match crate::hypothesis_cases::step(self, cx, name, args, expected, lvl, e.span)? {
+                    crate::hypothesis_cases::Stepped::Expr(step) => self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots),
+                    // `Π(h). goal` split as `split_all` splits a goal, then
+                    // applied to `h`.
+                    crate::hypothesis_cases::Stepped::Split { split, premise, level, hypothesis } => {
+                        let (scrut, ty, scrut_level) = self.elab_infer(cx, &split.scrut)?;
+                        let mut split = split;
+                        // The test as the split spells it may be written
+                        // otherwise in the goal than where the search found
+                        // it (`fits(b)` against a constructor's field read
+                        // `fits(…)`): abstract it as written too.
+                        if split.dependent.is_none()
+                            && let Some(motive) = split.motive.inst_top(0, &scrut).abstract_local_any(std::slice::from_ref(&scrut))
+                        {
+                            split.motive = motive;
+                        }
+                        goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &premise, &level, "case split's motive, at its scrutinee,", e.span)?;
+                        goal_combinators::motive_is_a_type(self, cx, &split.motive, split.dependent.as_ref(), &premise, &scrut, &ty, &scrut_level, &level, e.span)?;
+                        let split_term = match split.dependent {
+                            None => Inference(self).elab_convoy(
+                                cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                                scrut, &ty, &scrut_level, split.motive, &level, &premise, e.span,
+                            )?,
+                            Some(dependent) => {
+                                let refl = Term::Refl { level: scrut_level.clone(), ty: Rc::new(ty.clone()), tm: Rc::new(scrut.clone()) };
+                                let at = dependent.inst_top_above(0, 1, &scrut).inst_top(0, &refl);
+                                goal_combinators::restates(self, cx, &at, &premise, &level, "case split's motive, at its scrutinee and `refl`,", e.span)?;
+                                Inference(self).elab_convoy_dependent(
+                                    cx, &split.equation, &split.arms, scrut, &ty, &scrut_level, split.motive, dependent, &level, &premise, e.span,
+                                )?
+                            }
+                        };
+                        let Type::Pi { dom_level, cod_level, dom, cod } = premise else { unreachable!("a step's premise is a Π") };
+                        Ok(Term::App { fun: Rc::new(split_term), dom_level, cod_level, dom, cod, arg: Rc::new(hypothesis) })
+                    }
+                }
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
@@ -618,12 +652,20 @@ impl Checking<'_> {
                     cx, arms, (&scrut_t, &scrut_ty, &scrut_lvl), dec, expected, eqbind.as_deref(), e.span,
                 );
                 let unrefined = std::mem::take(&mut positions);
+                // The equation's `refl` reading, and what the match could
+                // not refine, are recorded whether or not it generalizes
+                // anything (arm-readings-design §3.3, §3.5, §5).
                 let kept_cx;
-                let cx = if refined.kept.is_empty() {
+                let cx = if refined.kept.is_empty() && eqbind.is_none() {
                     cx
                 } else {
                     let mut with = cx.clone();
                     crate::readings::Readings::register_kept(&mut with, &refined.kept);
+                    let mut shadowed: Vec<&str> = Vec::new();
+                    for arm in arms.iter() {
+                        arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
+                    }
+                    crate::readings::Readings::register(&mut with, &[], &[], &shadowed, eqbind.as_deref());
                     kept_cx = with;
                     &kept_cx
                 };
@@ -681,7 +723,7 @@ impl Checking<'_> {
                         arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
                     }
                     let mut gcx = cx.clone();
-                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
+                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, None);
                     crate::readings::Readings::register_kept(&mut gcx, &kept);
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
@@ -719,13 +761,13 @@ impl Checking<'_> {
                         && registered.iter().any(|r| matches!(r.kind, crate::readings::ReadingKind::Written(_)));
                     let (elim, unused) = if !droppable {
                         let elim = match eqbind {
-                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_t, &scrut_ty, &run),
                             Some(h) => run(&gcx, Some(h)),
                         };
                         (elim, Vec::new())
                     } else { self.probe_unless(|| {
                         let elim = match eqbind {
-                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_t, &scrut_ty, &run),
                             Some(h) => run(&gcx, Some(h)),
                         };
                         let m = cx.names.len();
@@ -785,7 +827,7 @@ impl Checking<'_> {
                         ),
                     };
                     let elim = match eqbind {
-                        None => Inference(self).elab_match_pending(cx, &scrut_ty, &run)?,
+                        None => Inference(self).elab_match_pending(cx, &scrut_t, &scrut_ty, &run)?,
                         Some(h) => run(cx, Some(h))?,
                     };
                     return Ok(Generalize(self).instantiate_aliases(cx, elim, gen_ty, &dependents));
@@ -812,7 +854,7 @@ impl Checking<'_> {
                     ),
                 };
                 match eqbind {
-                    None => Inference(self).elab_match_pending(cx, &scrut_ty, &run),
+                    None => Inference(self).elab_match_pending(cx, &scrut_t, &scrut_ty, &run),
                     Some(h) => run(cx, Some(h)),
                 }
             })()
@@ -1606,6 +1648,13 @@ impl Checking<'_> {
                 // (docs/language/when-design.md §5).
                 if let Some(value) = crate::tested::Tested(self).coerce(cx, e, &t, &got, &head, lvl)? {
                     return Ok(value);
+                }
+                // Inside an arm, a term stated with the match's test where
+                // the arm's constructor is wanted, or the other way round,
+                // is carried along the match's equation
+                // (docs/language/matching/arm-readings-design.md §5).
+                if let Some(crate::readings::Carried::Term(carried)) = crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
+                    return Ok(carried);
                 }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)

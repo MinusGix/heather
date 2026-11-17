@@ -1,12 +1,12 @@
 ---
 title: A case split on a value the callee let-binds refines the hypothesis that reads it
-status: open
+status: closed
 thread: Refine hypotheses through calls in case splits
 labels: [elaborator,matching,proofs]
 area: language
 milestone: [lang-proof-modularity]
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 `Stmt::pair_known`'s `Dataflow` arm binds `let known =
@@ -36,3 +36,7 @@ already rewritten).
 ## Done when
 
 `Region::paired` is written with motive-free matches.
+
+## Log
+
+- 2026-11-17: `Region::paired` is now `cases carried as reads, passed;` and one line (thread "Refine hypotheses through calls in case splits"): `cases` finds the guard test as `pair_known` wrote it, with `known` inlined, and leaves `carried: body.nodes.leaves_known() = Cons(f, fs)`. The `match` rule this issue asked for (§4.7 refining through a let-bound call) is unchanged; a proof that needs it today writes `cases`. Closed on the Done-when; reopen if a `match` site needs the rule itself.

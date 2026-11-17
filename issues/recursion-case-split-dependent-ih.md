@@ -4,7 +4,7 @@ status: open
 labels: [frontend,recursion,elaboration]
 area: language
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-17
 ---
 
 A case split inside structural recursion keeps the enclosing guard
@@ -44,3 +44,4 @@ passing it varied.
 
 - 2026-11-02: A top-level recursion lowering would retire this family: [[recursion-on-elaborated-terms]]; meanwhile [[recursion-meaning-check]] catches miscompiles.
 - 2026-11-04: 2026-11-04: Recursion at the top ([[recursion-below-nat-fallback]]) generalizes `n`, but `walk_shape` still does not check there: the call passes the arm's `n`, which a `match` does not substitute by the arm's constructor, so its type is about `n` while the goal is about `Zero` in any lowering. The remaining fix is a match refinement (the arm's `n` is the pattern), not a recursion one (docs/language/recursion/recursion-at-the-top-design.md §5). Passing the constructor (`walk_shape(k, 0)`) is accepted already.
+- 2026-11-17: 2026-11-17: `walk_shape` checks: the call's result, stated at `n`, is carried along the split's equation to the arm's goal (docs/language/matching/arm-readings-design.md §5, `Readings::coerce`), which is the match refinement the 2026-11-04 entry asked for. The probe in recursion_case_split_tests is now positive. The second acceptance line (a split whose ih would not fit is refused by the elaborator, never only by the kernel) is not examined.

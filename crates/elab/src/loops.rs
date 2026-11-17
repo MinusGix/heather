@@ -239,7 +239,7 @@ impl<'a> Lift<'a> {
     /// with at most one other local beside it (the position of that local
     /// in `vars`): such a loop is lifted as a `mut self` method of the
     /// receiver's type, which returns the other local
-    /// (docs/language/sequencing-surface-design.md §22).
+    /// (docs/language/sequencing-surface-design.md §23).
     fn receiver_in(&self, vars: &[&str]) -> Option<(Param, Option<usize>)> {
         if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
             return None;

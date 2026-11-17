@@ -174,18 +174,17 @@ theorem Target::held_agree(self t: Target, live: List<Nat>, env, other: Env, g: 
 theorem Prog::within_computes_best(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat, c: Compiled,
     emitted: p.computes_best(layout, out, nodes, names) = Some(c)): p.Within(c.prog) {
     let better = nodes.optimised(out);
-    (match (layout.homes.nodes_apart(better, out) && layout.homes.all_apart(nodes_writes(better), out))
-            && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) as λ g =>
-            (match g as λ _ => Option<Compiled> {
-                False => p.computes(layout, out, nodes, names),
-                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
-            }) = Some(c) → p.Within(c.prog) {
-        False => λ e => p.within_computes(layout, out, nodes, names, c, e),
-        True => (match at: p.computes(layout, out, better, names) {
-            None => λ e => p.within_computes(layout, out, nodes, names, c, e),
-            Some(d) => λ e => j(Option::some_inj(d, c, e), λ x _ => p.Within(x.prog), p.within_computes(layout, out, better, names, d, at)),
-        }),
-    })(emitted)
+    match passed: (layout.homes.nodes_apart(better, out) && layout.homes.all_apart(nodes_writes(better), out))
+            && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) {
+        False => p.within_computes(layout, out, nodes, names, c, emitted),
+        True => match at: p.computes(layout, out, better, names) {
+            None => p.within_computes(layout, out, nodes, names, c, emitted),
+            Some(d) => {
+                cases emitted;
+                p.within_computes(layout, out, better, names, d, at)
+            },
+        },
+    }
 }
 
 // The leaf compiled through the pass runs as the leaf: from where its code
@@ -198,27 +197,21 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
     let layout = t.layout();
     let better = nodes.optimised(out);
     let guard = (t.homes.nodes_apart(better, out) && t.homes.all_apart(nodes_writes(better), out)) && nodes_live_in(better, out).within(nodes_live_in(nodes, out));
-    (match guard as λ g => guard = g →
-            (match g as λ _ => Option<Compiled> {
-                False => p.computes(layout, out, nodes, names),
-                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
-            }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
-        False => λ _ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
-        True => λ passed => (match at: p.computes(layout, out, better, names) {
-            None => λ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
-            Some(d) => λ e => {
-                let same: (d = c) = Option::some_inj(d, c, e);
-                let parts = Bool::both(j(sym(passed), λ b _ => b.IsTrue(), trivial));
+    match passed: guard {
+        False => t.goes_computes(out, env, p, nodes, names, c, emitted, within, tree, checked, next),
+        True => match at: p.computes(layout, out, better, names) {
+            None => t.goes_computes(out, env, p, nodes, names, c, emitted, within, tree, checked, next),
+            Some(d) => {
+                cases emitted;
+                let parts = Bool::both(Bool::is_true_of_eq(passed));
                 let agree = env.computes_optimised(nodes, out);
                 let held = λ (s: MachineState<X86Memory(t.r.profile)>) (h: t.Held(out, env.computes(better), s.gprs, s.memory)) =>
                     t.held_agree(out, env.computes(better), env.computes(nodes), s.gprs, s.memory, h, agree.left, agree.right.left, agree.right.right);
-                let after: t.At(prog_len(d.prog), out, tree, env.computes(better)) = j(sym(same), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(better)),
-                    t.goes_weaken(next, held));
-                let ran = t.goes_computes(out, env, p, better, names, d, at, j(sym(same), λ x _ => x.prog.Within(t.program), within), tree, parts.left, after);
+                let ran = t.goes_computes(out, env, p, better, names, d, at, within, tree, parts.left, t.goes_weaken(next, held));
                 t.goes_weaken(ran,
                     λ s h => t.held_sub(h,
                         nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
             },
-        }),
-    })(refl, emitted)
+        },
+    }
 }

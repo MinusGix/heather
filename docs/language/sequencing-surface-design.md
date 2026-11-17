@@ -1260,7 +1260,7 @@ own call) is unchanged.
   yield a value (`let got = if b { c.tick(1); 1 } else { 0 };`): the
   statement spelling with a `let mut` for the value works, at the cost
   `issues/statement-form-join-copies-calls.md` records.
-- `return` outside a loop (§5.5), which this does not touch.
+- `return` outside a loop (§5.5): built later, §22.
 - An arm that binds (`let x <- e;`) before it updates: the arm's binds are
   lowered when it closes (§13), which puts what follows them under a λ, and
   the update is refused there as it was.
@@ -1410,7 +1410,7 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
 - `break`, `continue` and `return` in a loop over words (refused by name).
 - A loop over words whose state is the receiver and other locals: it is
   lifted as a plain `f#run` returning the state, which a `runtime fn`
-  does not compile. (Built for one other local, §22.)
+  does not compile. (Built for one other local, §23.)
 - A `mut self` method whose result is only its receiver (`→ ()`): each
   SHA-256 step returns its count. And the method a loop is lifted to is
   called by a one-call function, which the linked code keeps as a call
@@ -1420,13 +1420,72 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
   `nth`, which the reflector does not read; the SHA-256 round still
   writes `vector_index(s.working, 7, trivial)`.
 
-## 22. Loops over a span in a `runtime fn`, as built (2026-11-17)
+## 22. `return` outside a loop as built (2026-11-17)
+
+§5.5 for straight-line code. A function's body may `return` from its own
+statements and from a statement `if`/`match` among them, at any depth of
+statement forms:
+
+```heather
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if j = 0 { return j; }
+    let below = s.byte_within(n, j - 1);
+    if below.zero_extend(56) <= key { return j; }
+    s.put_within(n, j, below);
+    s.sift(n, j - 1, key)
+}
+```
+
+1. **The parser splits the body in tail position**, as `imperative::tail` does for
+   a loop body's exits (§15): a statement form that returns takes the rest
+   of the body into each of its arms, and a `return e;` ends the arm it
+   stands in (`imperative::lower_body`, run instead of `lower_block` on
+   the block the parser marks as a declaration's body). So `if c { return
+   e; } rest` is `match decide_bit<c>() { True => e, False => rest }`, and
+   the function's equations are its branches: `simp_only(…, List::sift,
+   …)` takes the one the facts in scope decide, as it took the nested
+   `if`s' before.
+2. **The arms are a branch that ends the body**, so they update the
+   body's `let mut` locals as §19.1's arms do; the prefix before the
+   split is lowered first, and each arm continues with its locals.
+3. **In a `mut self` method** `return e` is `Mutated(x, e)` over the
+   receiver as it stands there, which lexical scope makes the receiver
+   the statements before it have threaded. The body's own end was already
+   written (`Parser::receiver_end`, §19.2–19.3) before the split, so the
+   arms that fall through end exactly as the body did: the method's own
+   tail call stays `\0mutated_whole`, which the `decreases` companions and
+   the `runtime fn` generator's loop rule need.
+4. **The rest is the `False` arm**, so it knows the test failed: a
+   `decreases` call there decreases (`sift`'s `j - 1` needs no `h:`), and
+   `if h: c { return e; }` names the failed test `h` in the rest.
+5. **The rest is copied into every arm that falls through.** One does, as
+   usual, so the body stays linear; a continuation reached from several
+   arms is copied, not bound once as §5.5's join point.
+6. **Refused, at parse time:** `return` in a λ or a block in value
+   position ("not from a λ or a block in value position"), `break` or
+   `continue` outside a loop, and a statement after a `return` in its
+   block. A returning `for` after a returning guard is a statement of
+   the guard's arm, which ends the function, so `lower_returns` follows
+   the split's arms; one in a statement form that does not itself return
+   is still refused as §15 (5) says.
+7. **Beside `?`** a `return e` is the function's whole result, as `?`'s
+   own exit is (§6.3's agreement for `Result` and `Option`): the binds are
+   lowered after the split, inside the arm that holds them.
+8. **Not built:** a `return` in a `let x <- e;` block of another carrier
+   (not probed), a `return` whose value is itself a call that updates the
+   `mut self` receiver, and §5.5's join point.
+
+Probes: `lib/_tests/std/core/early_return_tests.hthr`; parse-level facts
+in `crates/syntax/tests/imperative_statements.rs`
+(`a_return_outside_a_loop_splits_the_body`).
+
+## 23. Loops over a span in a `runtime fn`, as built (2026-11-17)
 
 Minus asked that a compiled function over a byte span get what a laid
 record's methods have: `for`, `while`, `let mut` locals, a loop in a
 loop. Probes: `lib/_tests/native/runtime/runtime_lifted_loops_tests.hthr`.
 
-### 22.1 The receiver and one other local: a method returning it
+### 23.1 The receiver and one other local: a method returning it
 
 A `for` over words or a `while c decreases m` whose state is the receiver
 `r` of a `mut self` method and **one** other local `o` lifts
@@ -1455,7 +1514,7 @@ receiver the method was called with, and a later rebinding of the same
 name otherwise made the kernel compare it against the stored span
 (a `∧` condition that reads the span, with a store in the body).
 
-### 22.2 Loops nest
+### 23.2 Loops nest
 
 A `decreases` function's loops lift as any function's (`loops::lower` no
 longer refuses one; its equation is the measure lowering's own
@@ -1464,7 +1523,7 @@ loop in the method the outer one lifted to. An arm whose equation binder
 is private (`__…`, the lifted test's own) may hold a loop: no source
 names it.
 
-### 22.3 A plain loop in a `runtime fn` is compiled
+### 23.3 A plain loop in a `runtime fn` is compiled
 
 A loop whose state is not the receiver is still `f#run` (designed
 `f::run`), but a prefix generator now runs over it as over the methods
@@ -1475,7 +1534,7 @@ that name too. The reflector finds a minted `f#run`'s code under
 is how a member recurses (a qualified self-call is not in scope while the
 member is checked).
 
-### 22.4 Not built
+### 23.4 Not built
 
 - A loop's state of two locals besides the receiver, or of two locals in
   a plain loop: `f#State` is a record, which the generator has no layout

@@ -8,12 +8,14 @@
 //! place decides, not the shape of the arm's source. The equation of a
 //! `match h:` reads `C(x̄) = C(x̄)` the same way, and is `refl` there.
 
+use heather_kernel::conv::ConvError;
+use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Expr, ExprKind, Span};
 use crate::diagnostics::ElabError;
-use crate::{Cx, Elaborator};
+use crate::{Cx, Elaborator, stats};
 
 /// What a name an arm binds can also be read as.
 pub(crate) enum ReadingKind {
@@ -41,6 +43,18 @@ pub(crate) struct Reading {
     /// hypothesis no arm used refined is not generalized
     /// (design §3.4): the match is lowered again without it.
     pub(crate) uses: std::cell::Cell<u32>,
+}
+
+/// What [`Readings::coerce`] makes of a term whose type is not the one
+/// expected.
+pub(crate) enum Carried {
+    /// The term, transported along an enclosing match's equation.
+    Term(Term),
+    /// A plain match around it has the equation that may carry it, and
+    /// has been told: once its arms are done it is elaborated again with
+    /// the equation bound, and that version stands if it elaborates. The
+    /// caller goes on as if nothing were found.
+    Retry,
 }
 
 pub(crate) struct Readings<'e>(pub(crate) &'e Elaborator);
@@ -107,6 +121,127 @@ impl Readings<'_> {
             Term::Refl { level: level.clone(), ty: Rc::clone(&ty), tm: Rc::clone(&rhs) },
             Type::Id { level, ty, lhs: Rc::clone(&rhs), rhs },
         ))
+    }
+
+    /// The equations of the enclosing `match h:`s, innermost first: each
+    /// the proof, and its type's parts as `(level, carrier, test, case)`,
+    /// scoped in `cx`.
+    fn equations(cx: &Cx) -> Vec<(Term, Level, Rc<Type>, Rc<Term>, Rc<Term>)> {
+        let len = cx.names.len();
+        let mut out = Vec::new();
+        for (position, _) in cx.names.iter().enumerate().collect::<Vec<_>>().into_iter().rev() {
+            let Some(Reading { kind: ReadingKind::Equation, .. }) = Self::at(cx, position) else { continue };
+            let Some(entry) = cx.gamma.entries.get(position) else { continue };
+            let Type::Id { level, ty, lhs, rhs } = entry.ty.shift_local((len - position) as u32) else { continue };
+            out.push((Term::Var(LocalVar((len - 1 - position) as u32)), level, ty, lhs, rhs));
+        }
+        out
+    }
+
+    /// Stage 2 (design §5): `term : got` where `expected` is wanted, inside
+    /// an arm whose match has an equation `h : e = C`. If the two types
+    /// differ only in spelling the test as `e` where the other has `C`,
+    /// the term transported along `h`. `None` where the two convert
+    /// already (the term is then left exactly as it was), where no
+    /// enclosing equation's test occurs in either, or where no transport
+    /// along one equation closes the gap.
+    pub(crate) fn coerce(&self, cx: &Cx, term: &Term, got: &Type, expected: &Type, lvl: &Level) -> Option<Carried> {
+        if (cx.readings.is_empty() && cx.pending_tests.is_empty()) || got == expected {
+            return None;
+        }
+        let mut decided = false;
+        for (proof, level, ty, test, case) in Self::equations(cx) {
+            // Syntactic and linear: nothing below runs for a type that
+            // does not spell the test.
+            let from_expected = expected.abstract_local(&test);
+            let from_got = got.abstract_local(&test);
+            if from_expected.is_none() && from_got.is_none() {
+                continue;
+            }
+            // Only a decided disagreement is transported: a term whose
+            // type converts today stays the term it is.
+            if !decided {
+                let verdict = stats::time_kernel(|| self.0.goal_oracle().convert_type(&cx.gamma, Layer::Prog, got, expected, lvl));
+                if verdict != Err(ConvError::NotConvertible) {
+                    return None;
+                }
+                decided = true;
+            }
+            let at_case = |motive: &Type| motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&case)));
+            let well_formed = |motive: &Type| crate::matching::MotiveSynthesisElab::motive_well_formed(self.0, cx, motive, &ty, &level);
+            // `expected` is `M(e)` and the term proves `M(C)`: back along `h`.
+            if let Some(motive) = &from_expected
+                && self.0.conv_types(cx, got, &at_case(motive), lvl)
+                && well_formed(motive)
+            {
+                let symmetric = Term::J {
+                    ty_level: level.clone(),
+                    motive_level: level.clone(),
+                    ty: Rc::clone(&ty),
+                    lhs: Rc::clone(&test),
+                    motive: Rc::new(Type::Id {
+                        level: level.clone(),
+                        ty: Rc::new(ty.shift_local(2)),
+                        lhs: Rc::new(Term::Var(LocalVar(1))),
+                        rhs: Rc::new(test.shift_local(2)),
+                    }),
+                    case: Rc::new(Term::Refl { level: level.clone(), ty: Rc::clone(&ty), tm: Rc::clone(&test) }),
+                    rhs: Rc::clone(&case),
+                    proof: Rc::new(proof),
+                };
+                return Some(Carried::Term(Term::J {
+                    ty_level: level,
+                    motive_level: lvl.clone(),
+                    ty,
+                    lhs: case,
+                    motive: Rc::new(motive.shift_local(1)),
+                    case: Rc::new(term.clone()),
+                    rhs: test,
+                    proof: Rc::new(symmetric),
+                }));
+            }
+            // `got` is `M(e)` and `M(C)` is expected: forward along `h`.
+            if let Some(motive) = &from_got
+                && self.0.conv_types(cx, &at_case(motive), expected, lvl)
+                && well_formed(motive)
+            {
+                return Some(Carried::Term(Term::J {
+                    ty_level: level,
+                    motive_level: lvl.clone(),
+                    ty,
+                    lhs: test,
+                    motive: Rc::new(motive.shift_local(1)),
+                    case: Rc::new(term.clone()),
+                    rhs: case,
+                    proof: Rc::new(proof),
+                }));
+            }
+        }
+        // A plain match around this has its equation pending
+        // (dependent-match-compiler-design §4.3): if its test is spelled
+        // in either type, the match is told, and tries itself again with
+        // the equation bound once its arms are done.
+        let len = cx.names.len();
+        let mut retry = false;
+        for (id, test, depth) in cx.pending_tests.iter().rev() {
+            let test = test.shift_local((len - depth) as u32);
+            if expected.abstract_local(&test).is_none() && got.abstract_local(&test).is_none() {
+                continue;
+            }
+            if !decided {
+                let verdict = stats::time_kernel(|| self.0.goal_oracle().convert_type(&cx.gamma, Layer::Prog, got, expected, lvl));
+                if verdict != Err(ConvError::NotConvertible) {
+                    return None;
+                }
+                decided = true;
+            }
+            let mut carried = self.0.attempt.match_eq_carried.borrow_mut();
+            if !carried.contains(id) {
+                carried.push(*id);
+            }
+            retry = true;
+        }
+        retry.then_some(Carried::Retry)
     }
 
     /// A use of a name, elaborated to `term` at type `got`, where `expected`

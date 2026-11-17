@@ -1,5 +1,5 @@
 // Probes for loops in `runtime fn`s over a span (docs/language/sequencing-surface-design.md
-// §22): a `while` or a `for` over words whose state is the `mut self`
+// §23): a `while` or a `for` over words whose state is the `mut self`
 // receiver and one other local is lifted as a `mut self` method of the
 // receiver's type that returns that local, which the `runtime` generator
 // compiles as a loop over the span; a loop in a loop lifts the inner one
