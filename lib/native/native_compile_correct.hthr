@@ -782,27 +782,17 @@ theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, bodi
 // client need not evaluate it again.
 theorem Source::compile_laid(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program)):
     program.laid_out().IsTrue() {
-    let emitted = src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0);
-    let bare: Option<Prog> = match emitted { None => None, Some(c) => c.prog.finish() };
-    (match src.allocation_ok(homes) as λ a => (match a {
-            False => None,
-            True => match src.procedures {
-                Nil => match src.functions { Nil => bare, Cons(_, _) => src.compile_calls(low, homes, bodies) },
-                Cons(_, _) => src.compile_calls(low, homes, bodies),
+    cases compiled as allocated;
+    match src.procedures {
+        Nil => match src.functions {
+            Nil => {
+                cases compiled as made(c);
+                then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, compiled)
             },
-        }) = Some(program) → program.laid_out().IsTrue() {
-        False => λ none => absurd(none),
-        True => (match src.procedures {
-            Nil => (match src.functions {
-                Nil => (match emitted {
-                    None => λ none => absurd(none),
-                    Some(c) => λ same => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, same),
-                }),
-                Cons(_, _) => λ calls => src.calls_laid(low, homes, bodies, program, calls),
-            }),
-            Cons(_, _) => λ calls => src.calls_laid(low, homes, bodies, program, calls),
-        }),
-    })(compiled)
+            Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
+        },
+        Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
+    }
 }
 
 // A source without procedures or functions compiles as before them: `main`
