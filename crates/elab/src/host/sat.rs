@@ -8,12 +8,18 @@
 //! conversion of its own, which keeps every conversion inside the kernel's
 //! per-conversion fuel:
 //!
-//! - the formula is built a chunk of clauses at a time (`reaches_build`);
+//! - the input clauses some step names are built into the formula a run of
+//!   consecutive ones at a time (`reaches_build`), a literal trie every
+//!   [`BUILD_EVERY`] runs and after the last; runs no step names are
+//!   dropped (`reaches_drop`);
 //! - the solver's steps are added a chunk at a time (`reaches_add`), every
-//!   [`EVERY`]th stage ending in a literal trie of the formula so far
-//!   (`reaches_mark`, and `reaches_build`'s own `built`), so a stage replays
-//!   at most [`EVERY`] chunks of insertions;
+//!   [`EVERY`]th chunk ending in a literal trie of the formula so far
+//!   (`reaches_add_at`), so a stage replays at most [`EVERY`] chunks of
+//!   insertions;
 //! - the last chunk derives the empty clause (`reaches_done`).
+//!
+//! The cost shape behind these choices is in
+//! `docs/tactics/bv-decide-design.md`.
 //!
 //! The whole is `reaches_refutes(cs, …)`, whose type mentions `cs` as the
 //! tactic wrote it: the kernel converts `cs` with the chunks once.
@@ -25,11 +31,18 @@ use std::collections::HashMap;
 const BUILD_PER: usize = 256;
 
 /// Hinted literals one step chunk reads: each costs a lookup of its
-/// variable, which dominates a stage (the probes' measure,
-/// `scripts/lrat-probes --per`).
-const STEP_PER: usize = 1100;
+/// variable, which dominates a stage, and lookups deepen as the formula and
+/// the variables grow. A chunk of 1100 needed about four fifths of the budget
+/// on an 8-bit adder's proof; on a 64-bit adder's, chunks of 800 passed it
+/// and chunks of 500 all fit.
+const STEP_PER: usize = 500;
 
 /// Stages between literal checkpoints of the formula.
+const BUILD_EVERY: usize = 2;
+
+/// Input clauses one `reaches_piece` meets against their chunks: each piece
+/// computes the tactic's clause list again, so pieces are few and large.
+const PIECE: usize = 1024;
 const EVERY: usize = 8;
 
 /// Literals the clauses may hold before the host declines to read them.
@@ -80,6 +93,8 @@ struct Spell {
     map_node: Wrap,
     none: Wrap,
     some: Wrap,
+    chunks_nil: Wrap,
+    chunks_cons: Wrap,
 }
 
 /// A constructor's spelling, a function of `lrat`'s whose body is the
@@ -119,6 +134,14 @@ impl Spell {
         let mut out = self.clause_nil.at(&[]);
         for c in cs.iter().rev() {
             out = self.clause_cons.at(&[c, &out]);
+        }
+        out
+    }
+
+    fn chunks(&self, cs: &[Term]) -> Term {
+        let mut out = self.chunks_nil.at(&[]);
+        for c in cs.iter().rev() {
+            out = self.chunks_cons.at(&[c, &out]);
         }
         out
     }
@@ -178,11 +201,16 @@ enum Stage {
     /// `reaches_build(k, f, chunk, g, rest, built, ·)`, `g` a literal at a
     /// checkpoint.
     Build { k: Term, f: Term, chunk: Term, g: Term },
-    /// `reaches_trim(f, keys, g, ·, ·, ·)`.
-    Trim { f: Term, keys: Term, g: Term },
+    /// `reaches_piece(f, cs, n, chunks, ·, ·)`: the next `n` clauses of the
+    /// list as the tactic wrote it (`cs`), met against their chunks.
+    Piece { f: Term, cs: Term, n: Term, chunks: Term },
+    /// `reaches_drop(f, chunk, ·, ·)`: clauses no step names.
+    Drop { f: Term, chunk: Term },
     /// `reaches_add(f, steps, ·, ·, ·)`, or `reaches_keep` into `g` holding
     /// `keys`.
     Add { f: Term, steps: Term, keep: Option<(Term, Term)> },
+    /// `reaches_add_at(f, steps, g, ·, ·, ·, ·)`: `g` the literal it builds.
+    AddAt { f: Term, steps: Term, g: Term },
     /// `reaches_done(f, steps, ·)`.
     Done { f: Term, steps: Term },
 }
@@ -247,7 +275,15 @@ impl Host<'_> {
         let shape = || Fault::Ill("`lrat::reaches_refutes`'s statement is not the shape the host builds".into());
         let Some(Type::Pi { dom: r_dom, cod, cod_level, .. }) = inst(&refutes_ty, &[&t]) else { return Err(shape()) };
         let f0 = reaches_args(&r_dom).ok_or_else(shape)?.0;
-        let proof = Rc::new(self.refutation(f0, &clauses, &steps)?);
+        let (proof, proof_ty) = self.refutation(f0, &t, &clauses, &steps)?;
+        let proof = Rc::new(proof);
+        if std::env::var_os("HEATHER_SAT_TRACE").is_some() {
+            let start = std::time::Instant::now();
+            let fits = crate::oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel)
+                .convert_type(&LocalCtx::nil(), Layer::Prog, &proof_ty, &r_dom, &Level::Zero)
+                .is_ok();
+            eprintln!("sat: the clauses as written against their chunks: {}, {:.2?}", if fits { "fits" } else { "past the budget" }, start.elapsed());
+        }
         let t = Rc::new(t);
         let ty = (*cod).clone().apply_local(&LocalSubst::id(&LocalCtx::nil()).extended(Rc::clone(&proof)));
         let term = Term::AppAt { fun: Rc::new(Term::AppAt { fun: Rc::new(refutes), arg: t }), arg: Rc::clone(&proof) };
@@ -283,6 +319,8 @@ impl Host<'_> {
             map_node: self.lrat_wrap("cert_map_node")?,
             none: self.lrat_wrap("cert_none")?,
             some: self.lrat_wrap("cert_some")?,
+            chunks_nil: self.lrat_wrap("cert_chunks_nil")?,
+            chunks_cons: self.lrat_wrap("cert_chunks_cons")?,
         })
     }
 
@@ -297,7 +335,7 @@ impl Host<'_> {
     /// the only conversions that compute are the obligations (`adds(…) =
     /// True`, `check(…) = True`, a checkpoint's `… = literal`) and `cs`
     /// against its chunks.
-    fn refutation(&self, f0: Term, clauses: &[Vec<u64>], steps: &[heather_sat::Step]) -> Result<Term, Fault> {
+    fn refutation(&self, f0: Term, t: &Term, clauses: &[Vec<u64>], steps: &[heather_sat::Step]) -> Result<(Term, Type), Fault> {
         let sp = self.spell()?;
         let bad = |why: String| Fault::Ill(format!("the solver's refutation does not fit the checker: {why}"));
         let shape = || Fault::Ill("a `lrat` stage theorem's statement is not the shape the host builds".into());
@@ -307,9 +345,13 @@ impl Host<'_> {
         }
         let lemma = |name: &str| self.lrat_global(name).map(|(t, ty, _)| (t, ty));
         let build = lemma("reaches_build")?;
-        let trim = lemma("reaches_trim")?;
+        let drop = lemma("reaches_drop")?;
+        let piece = lemma("reaches_piece")?;
+        let same_clauses = self.lrat_term("reaches_same_clauses")?;
         let add = lemma("reaches_add")?;
         let keep = lemma("reaches_keep")?;
+        let add_at = lemma("reaches_add_at")?;
+        let pruned = knob("SAT_KEEP", 0) == 1;
         let done = lemma("reaches_done")?;
         let ok = self.lrat_term("reaches_true")?;
         let same = self.lrat_term("reaches_same")?;
@@ -378,20 +420,60 @@ impl Host<'_> {
         let mut held = std::collections::BTreeSet::new();
         let mut trie = Trie(None);
         let mut f = f0;
-        // The formula, a chunk at a time, a literal of the whole of it every
-        // `EVERY` chunks; then cut to the clauses the steps name.
-        for (n, chunk) in clauses.chunks(BUILD_PER).enumerate() {
-            let k = (n * BUILD_PER) as u64 + 1;
-            let mut cs = Vec::with_capacity(chunk.len());
-            for i in 0..chunk.len() as u64 {
-                let c = Rc::clone(&spelled[&(k + i)]);
-                trie = sp.set(&trie, k + i, Rc::clone(&c));
-                held.insert(k + i);
-                cs.push(c);
+        // The formula: the clauses some step names, a run of consecutive
+        // ones at a time (`BUILD_PER` at most), a literal of the whole of it
+        // every `EVERY` runs and after the last; the runs between, which no
+        // step names, dropped.
+        let live = |i: usize| last_use.contains_key(&(i as u64 + 1));
+        let mut runs: Vec<(usize, usize, bool)> = Vec::new();
+        for i in 0..clauses.len() {
+            match runs.last_mut() {
+                Some((start, end, l)) if *l == live(i) && (!*l || *end - *start < BUILD_PER) => *end = i + 1,
+                _ => runs.push((i, i + 1, live(i))),
             }
+        }
+        let built_runs = runs.iter().filter(|r| r.2).count();
+        let mut nth = 0;
+        // The list as the tactic wrote it, met a piece of runs at a time.
+        let mut listed = t.clone();
+        let mut piece_start = 0;
+        for (r, &(start, end, is_live)) in runs.iter().enumerate() {
+            let cs: Vec<Rc<Term>> = (start..end).map(|i| Rc::clone(&spelled[&(i as u64 + 1)])).collect();
             let chunk = sp.clauses(&cs);
-            let k = nat_term(k);
-            let g = if (n + 1) % knob("SAT_BUILD_EVERY", EVERY) == 0 {
+            if start == piece_start {
+                let mut chunks = vec![chunk.clone()];
+                let mut upto = end;
+                for &(s2, e2, _) in &runs[r + 1..] {
+                    if e2 - start > PIECE {
+                        break;
+                    }
+                    let cs2: Vec<Rc<Term>> = (s2..e2).map(|i| Rc::clone(&spelled[&(i as u64 + 1)])).collect();
+                    chunks.push(sp.clauses(&cs2));
+                    upto = e2;
+                }
+                let n = nat_term((upto - start) as u64);
+                let chunks = sp.chunks(&chunks);
+                // What is left after it, `listed.drop(n)` as `r`'s type spells it.
+                let at = inst(&piece.1, &[&f, &listed, &n, &chunks, &nil]).ok_or_else(shape)?;
+                let Type::Pi { dom, .. } = at else { return Err(shape()) };
+                let joined = reaches_args(&dom).ok_or_else(shape)?.1;
+                let left = spine_args(&joined).last().map(|d| (*d).clone()).ok_or_else(shape)?;
+                stages.push(Stage::Piece { f: f.clone(), cs: listed.clone(), n, chunks });
+                listed = left;
+                piece_start = upto;
+            }
+            if !is_live {
+                stages.push(Stage::Drop { f: f.clone(), chunk });
+                continue;
+            }
+            for i in start..end {
+                let id = i as u64 + 1;
+                trie = sp.set(&trie, id, Rc::clone(&spelled[&id]));
+                held.insert(id);
+            }
+            nth += 1;
+            let k = nat_term(start as u64 + 1);
+            let g = if nth % knob("SAT_BUILD_EVERY", BUILD_EVERY) == 0 || nth == built_runs {
                 sp.trie(&trie)
             } else {
                 // `formula_from(chunk, k, f)` as `built`'s statement spells it.
@@ -403,11 +485,6 @@ impl Host<'_> {
             stages.push(Stage::Build { k, f: f.clone(), chunk, g: g.clone() });
             f = g;
         }
-        if knob("SAT_TRIM", 1) == 1 {
-            let (keys, g) = checkpoint(&held, None);
-            stages.push(Stage::Trim { f, keys, g: g.clone() });
-            f = g;
-        }
         held.retain(|id| last_use.contains_key(id));
         let last = chunks.len() - 1;
         for (n, chunk) in chunks.iter().enumerate() {
@@ -417,7 +494,16 @@ impl Host<'_> {
                 break;
             }
             held.extend(chunk.iter().map(|(id, _, _)| *id));
-            if (n + 1) % knob("SAT_EVERY", EVERY) == 0 {
+            if !pruned {
+                for (id, c, _) in chunk {
+                    trie = sp.set(&trie, *id, Rc::clone(c));
+                }
+            }
+            if (n + 1) % knob("SAT_EVERY", EVERY) == 0 && !pruned {
+                let g = sp.trie(&trie);
+                stages.push(Stage::AddAt { f: f.clone(), steps, g: g.clone() });
+                f = g;
+            } else if (n + 1) % knob("SAT_EVERY", EVERY) == 0 {
                 let (keys, g) = checkpoint(&held, Some(n));
                 held.retain(|id| last_use.get(id).is_some_and(|&u| u > n));
                 stages.push(Stage::Add { f: f.clone(), steps, keep: Some((keys, g.clone())) });
@@ -451,10 +537,22 @@ impl Host<'_> {
                     let same_g = app(&same, &[&g]);
                     (vec![f, steps, keys, g, cs, ok.clone(), same_g, r], &keep)
                 }
-                Stage::Trim { f, keys, g } => {
+                Stage::AddAt { f, steps, g } => {
                     let (r, cs) = rest()?;
                     let same_g = app(&same, &[&g]);
-                    (vec![f, keys, g, cs, same_g, r], &trim)
+                    (vec![f, steps, g, cs, ok.clone(), same_g, r], &add_at)
+                }
+                Stage::Piece { f, cs, n, chunks } => {
+                    let (r, _) = rest()?;
+                    let at = inst(&piece.1, &[&f, &cs, &n, &chunks]).ok_or_else(shape)?;
+                    let Type::Pi { dom, .. } = at else { return Err(shape()) };
+                    let Type::Id { rhs, .. } = &*dom else { return Err(shape()) };
+                    let took = app(&same_clauses, &[rhs]);
+                    (vec![f, cs, n, chunks, took, r], &piece)
+                }
+                Stage::Drop { f, chunk } => {
+                    let (r, cs) = rest()?;
+                    (vec![f, chunk, cs, r], &drop)
                 }
                 Stage::Build { k, f, chunk, g } => {
                     let (r, cs) = rest()?;
@@ -464,19 +562,20 @@ impl Host<'_> {
             };
             let refs: Vec<&Term> = args.iter().collect();
             if trace {
-                eprintln!("sat: stage {}", ["done", "add", "keep", "trim", "build"][[&done, &add, &keep, &trim, &build].iter().position(|l| std::ptr::eq(*l, lemma)).unwrap_or(0)]);
+                eprintln!("sat: stage {}", ["done", "add", "keep", "drop", "build", "add_at", "piece"][[&done, &add, &keep, &drop, &build, &add_at, &piece].iter().position(|l| std::ptr::eq(*l, lemma)).unwrap_or(0)]);
                 self.trace_obligations(&lemma.1, &refs);
             }
             let stage_ty = inst(&lemma.1, &refs).ok_or_else(shape)?;
             proof = Some((app(&lemma.0, &refs), stage_ty));
         }
-        Ok(proof.expect("at least the last stage").0)
+        Ok(proof.expect("at least the last stage"))
     }
 }
 
 impl Host<'_> {
     /// Each `X = Y` parameter of a stage, converted on its own and timed
-    /// (`HEATHER_SAT_TRACE`): which obligation is past the kernel's budget.
+    /// (`HEATHER_SAT_TRACE`): which obligation is past the kernel's budget,
+    /// and with any other value than `fit` the fraction of it each needs.
     fn trace_obligations(&self, ty: &Type, args: &[&Term]) {
         let mut cur = ty.clone();
         for (i, a) in args.iter().enumerate() {
@@ -489,6 +588,13 @@ impl Host<'_> {
                         .convert_type(&LocalCtx::nil(), Layer::Prog, &actual, &dom, &Level::Zero)
                         .is_ok()
                 };
+                if std::env::var("HEATHER_SAT_TRACE").is_ok_and(|v| v == "fit") {
+                    if !fits(self.policy.fuel) {
+                        eprintln!("sat: obligation {i}: past the budget, {:.2?}", start.elapsed());
+                    }
+                    cur = (*cod).clone().apply_local(&LocalSubst::id(&LocalCtx::nil()).extended(Rc::new((*a).clone())));
+                    continue;
+                }
                 let (mut lo, mut hi) = (0u64, self.policy.fuel * 64);
                 if fits(hi) {
                     while hi - lo > hi / 64 {

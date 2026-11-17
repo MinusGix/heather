@@ -130,3 +130,32 @@ before a generator is worth writing.
   that reflects a `BitVec` goal into `BVPred` and lays out its words;
   subtraction, multiplication, extraction and concatenation; folding equal
   and opposite operands.
+- 2026-11-17: the tactic, `by bv_decide()` (`lib/std/tactic/bv_decide.hthr`,
+  design in `docs/tactics/bv-decide-design.md`). A new host request
+  `Sat(cs, vars)` (tag 38, `crates/elab/src/host/sat.rs`) evaluates a closed
+  clause term, runs CaDiCaL in process, and answers with a model or with the
+  whole refutation as one term (`reaches_refutes`), its stages each one
+  conversion: input clauses built a run at a time (`reaches_build`), runs no
+  step names dropped (`reaches_drop`), steps added a chunk at a time
+  (`reaches_add`) with a literal checkpoint every few chunks
+  (`reaches_add_at`), the empty clause last (`reaches_done`). Each stage's
+  statement is read off the lemma instantiated at its arguments; built any
+  other way, parent and child types were compared by evaluation. The
+  bit-blaster gained subtraction, negation, multiplication, signed
+  less-than, slices, sign extension, concatenation, single bits, Boolean
+  atoms and `PXor`. The tactic reads `BitVec`/`Bool` claims (unfolding
+  definitions it does not know), lays the atoms into one bit stream, and
+  carries `BVPred::unsat_sound` back by congruence over the sides abstracted
+  at the atoms; a satisfiable predicate fails naming a counterexample. First
+  customer: `examples/utf8/utf8_check.hthr`'s `cont_word` and the 2-, 3- and
+  4-byte code words now prove by `bv_decide()` as word equations, replacing
+  the `Fintype` enumerations, the payload lemmas and `bv_omega`, at about the
+  same check time. Probes: `lib/_tests/std/tactic/bv_decide_tests.hthr`.
+  Measured: a step chunk's check is linear in its hinted literals (about four
+  fifths of the budget per 1100 on an 8-bit adder's proof, more as the
+  formula deepens, so chunks are 800); a literal checkpoint costs about its
+  new insertions, its comparison cheap; pruning a checkpoint to the live
+  clauses (`reaches_keep`, `reaches_trim`) costs a lookup and an insertion
+  per kept clause, several budgets at thousands of clauses, so it is off.
+  Multiplication of two variables stays out of reach (8-bit `x * y = y * x`
+  is over a million hints).

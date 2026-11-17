@@ -203,7 +203,7 @@ theorem Lit::code_true(self l: Lit, v: Nat → Bool): lit_true(l.code(), v) = l.
 
 theorem Lit::not_value(self l: Lit, v: Nat → Bool): l.not().value(v) = !l.value(v) {
     match l {
-        Pos(x) => refl,
+        Pos(_) => refl,
         Neg(x) => sym(v(x).not_not()),
     }
 }
@@ -232,8 +232,8 @@ theorem all_hold_append(cs, ds: List<List<Lit>>, v: Nat → Bool): all_hold(cs +
 // A literal reads only its node.
 theorem Lit::value_agree(self l: Lit, v, w: Nat → Bool, same: v(l.node()) = w(l.node())): l.value(v) = l.value(w) {
     match l {
-        Pos(x) => same,
-        Neg(x) => cong_fn(λ (b: Bool) => !b, same),
+        Pos(_) => same,
+        Neg(_) => cong_fn(λ (b: Bool) => !b, same),
     }
 }
 
@@ -278,7 +278,7 @@ theorem and_clauses_hold(ok: Bool, x: Nat, a, b: Lit, v: Nat → Bool, m: NatMap
 theorem gate_clauses_hold(env: Nat → Nat → Bool, m: NatMap<Bool>, x: Nat, v: Nat → Bool, agree: (y: Nat) → y < x → v(y) = node_of(m, y), g: Gate): v(x) = gate_value(env, m, x, g) → all_hold(gate_clauses(x, g), v) = True {
     match g {
         GFalse => λ at => rewrite(at, refl),
-        GInput(i, j) => λ _ => refl,
+        GInput(_, _) => λ _ => refl,
         GAnd(a, b) => and_clauses_hold(a.below(x) && b.below(x), x, a, b, v, m, agree, refl),
     }
 }
@@ -454,7 +454,7 @@ fn Circ::xor_with(r1: Pair<Circ, Lit>, a, b: Lit) → Pair<Circ, Lit> {
 fn Circ::xor(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { Circ::xor_with(c.and(a, b.not()), a, b) }
 
 theorem Lit::not_node(self l: Lit): l.not().node() = l.node() {
-    match l { Pos(x) => refl, Neg(x) => refl }
+    match l { Pos(_) => refl, Neg(_) => refl }
 }
 
 theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_gate(a, b), λ v => a.value(v) && b.value(v)) {
@@ -475,10 +475,10 @@ theorem Lit::same_value(self a, b: Lit, e: a.same(b) = True, v: Nat → Bool): a
     match a {
         Pos(x) => match b {
             Pos(y) => cong_fn(v, Nat::same_sound(x, y, e)),
-            Neg(y) => absurd(e),
+            Neg(_) => absurd(e),
         },
         Neg(x) => match b {
-            Pos(y) => absurd(e),
+            Pos(_) => absurd(e),
             Neg(y) => cong_fn(λ (n: Nat) => !v(n), Nat::same_sound(x, y, e)),
         },
     }
@@ -1781,6 +1781,7 @@ inductive BVPred {
     PBit(n: Nat, a: BVExpr, k: Nat),
     // The input bit at `offset`: a Boolean of the claim's own.
     PVar(offset: Nat),
+    PXor(p: BVPred, q: BVPred),
 }
 
 fn BVPred::eval(self p: BVPred, bits: Nat → Bool) → Bool {
@@ -1795,6 +1796,7 @@ fn BVPred::eval(self p: BVPred, bits: Nat → Bool) → Bool {
         PSlt(n, a, b) => a.eval(n, bits).signed_lt_bit(b.eval(n, bits)),
         PBit(n, a, k) => a.eval(n, bits).bit_at(k),
         PVar(o) => bits(o),
+        PXor(q, r) => q.eval(bits).xor(r.eval(bits)),
     }
 }
 
@@ -1875,6 +1877,7 @@ fn BVPred::blast(self p: BVPred, K: Nat) → Circ → Pair<Circ, Lit> {
         PSlt(n, a, b) => λ c => Circ::words_then(a.blast(K, n)(c), b.blast(K, n), λ c xs ys => c.signed_less(xs, ys)),
         PBit(n, a, k) => λ c => Circ::word_bit(a.blast(K, n)(c), k),
         PVar(o) => λ c => Pair(c, input_lit(K, o)),
+        PXor(q, r) => λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.xor(x, y)),
     }
 }
 
@@ -1902,6 +1905,8 @@ theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K),
             λ c xs ys => c.signed_less(xs, ys), λ x y => x.signed_lt_bit(y), Circ::slt_ok(n)),
         PBit(n, a, k) => Circ::bit_blasts(n, K, a.blast(K, n), λ v => a.eval(n, input_env(K, v)), a.blast_ok(K, n), k),
         PVar(o) => Circ::pure_lit_blasts(K, input_lit(K, o), λ v => input_env(K, v)(o), λ size kin => input_lit_valid(K, o, size, kin), λ v z => input_lit_value(K, o, v, z)),
+        PXor(q, r) => Circ::lit_blasts(K, q.blast(K), r.blast(K), λ v => q.eval(input_env(K, v)), λ v => r.eval(input_env(K, v)), q.blast_ok(K), r.blast_ok(K),
+            λ c x y => c.xor(x, y), λ x y => x.xor(y), Circ::xor_ok()),
     }
 }
 
@@ -1921,7 +1926,7 @@ theorem window_ext(n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k
 theorem BVExpr::eval_ext(self e: BVExpr, n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k)): e.eval(n, b1) = e.eval(n, b2) {
     match e {
         BVar(o, w) => window_ext(n, b1, b2, same, o, w),
-        BConst(x) => refl,
+        BConst(_) => refl,
         BNot(a) => cong_fn(λ (x: BitVec(n)) => x.complement(), a.eval_ext(n, b1, b2, same)),
         BAnd(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.band(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         BOr(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bor(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
@@ -1940,7 +1945,7 @@ theorem BVExpr::eval_ext(self e: BVExpr, n: Nat, b1, b2: Nat → Bool, same: (k:
 
 theorem BVPred::eval_ext(self p: BVPred, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k)): p.eval(b1) = p.eval(b2) {
     match p {
-        PConst(b) => refl,
+        PConst(_) => refl,
         PEq(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.eq_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         PUlt(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.unsigned_lt_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         PNot(q) => cong_fn(λ (x: Bool) => !x, q.eval_ext(b1, b2, same)),
@@ -1950,6 +1955,7 @@ theorem BVPred::eval_ext(self p: BVPred, b1, b2: Nat → Bool, same: (k: Nat) �
         PSlt(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.signed_lt_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         PBit(n, a, k) => cong_fn(λ (x: BitVec(n)) => x.bit_at(k), a.eval_ext(n, b1, b2, same)),
         PVar(o) => same(o),
+        PXor(q, r) => cong_args<Bool, Bool, Bool>(λ x y => x.xor(y), q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
     }
 }
 

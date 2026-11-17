@@ -18,9 +18,9 @@
 // atoms' values that make the claim false.
 //
 // Read: `+ - *`, negation, `& | ^`, complement, shifts by a numeral,
-// `zero_extend`, `truncate`, `sign_extend`, `concat`, numerals, and at the
-// Boolean level `&& || !`, `bool_eq`, `eq_bit`, `unsigned_lt_bit`,
-// `signed_lt_bit`, `bit_at` at a numeral. A goal is `a = b` between words,
+// `zero_extend`, `truncate`, `take_low`, `drop_low`, `sign_extend`, `concat`,
+// numerals, and at the Boolean level `&& || !`, `xor`, `bool_eq`, `eq_bit`,
+// `unsigned_lt_bit`, `signed_lt_bit`, `bit_at` at a numeral, `head_bit`. A goal is `a = b` between words,
 // `p = q` between Booleans, or `p = True`.
 import tactic;
 import list;
@@ -60,6 +60,7 @@ fn bvq_iff(p, q: BVPred) → BVPred { PIff(p, q) }
 fn bvq_slt(n: Nat, a, b: BVExpr) → BVPred { PSlt(n, a, b) }
 fn bvq_bit(n: Nat, a: BVExpr, k: Nat) → BVPred { PBit(n, a, k) }
 fn bvq_pvar(o: Nat) → BVPred { PVar(o) }
+fn bvq_pxor(p, q: BVPred) → BVPred { PXor(p, q) }
 
 // ---------------------------------------------------------------------------
 // What the reader recognizes, by reference.
@@ -68,6 +69,7 @@ record BVOps {
     word: Nat, add: Nat, sub: Nat, mul: Nat, neg: Nat, band: Nat, bor: Nat, bxor: Nat, compl: Nat,
     shl: Nat, shr: Nat, of_nat: Nat, zext: Nat, trunc: Nat, sext: Nat, concat: Nat,
     eq_bit: Nat, ult: Nat, slt: Nat, bit_at: Nat, and: Nat, or: Nat, not: Nat, iff: Nat, bool: Nat,
+    take: Nat, drop: Nat, head: Nat, xor: Nat,
 }
 
 fn bv_ref(name: String) → Tac<Nat> {
@@ -101,7 +103,12 @@ fn bv_ops() → Tac<BVOps> {
     let not <- bv_ref("bool::Bool::not");
     let iff <- bv_ref("bitvec::BitVec::bool_eq");
     let bool <- bv_ref("bool::Bool");
-    pure(BVOps(word, add, sub, mul, neg, band, bor, bxor, compl, shl, shr, of_nat, zext, trunc, sext, concat, eq_bit, ult, slt, bit_at, and, or, not, iff, bool))
+    let take <- bv_ref("bitvec::BitVec::take_low");
+    let drop <- bv_ref("bitvec::BitVec::drop_low");
+    let head <- bv_ref("bitvec::BitVec::head_bit");
+    let xor <- bv_ref("bool::Bool::xor");
+    pure(BVOps(word, add, sub, mul, neg, band, bor, bxor, compl, shl, shr, of_nat, zext, trunc, sext, concat, eq_bit, ult, slt, bit_at, and, or, not, iff, bool,
+        take, drop, head, xor))
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +254,11 @@ fn bv_read_word_call(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRe
     else if arity.same(1) && g.same(ops.compl) { let ra <- rec(a, WWord(n), st); pure(BVRead(OWord(BNot(ra.word())), ra.st)) }
     else if arity.same(1) && g.same(ops.of_nat) { let v <- bv_numeral(a, "a word's value"); pure(BVRead(OWord(BConst(v)), st)) }
     else if arity.same(3) && g.same(ops.trunc) { bv_at_width(ops, rec, bv_arg(args, 2), st, λ m r => BVRead(OWord(BFrom(r.word(), m, 0)), r.st)) }
+    else if arity.same(3) && g.same(ops.take) { bv_at_width(ops, rec, bv_arg(args, 2), st, λ m r => BVRead(OWord(BFrom(r.word(), m, 0)), r.st)) }
+    else if arity.same(3) && g.same(ops.drop) {
+        let skip <- bv_numeral(a, "a count of dropped bits");
+        bv_at_width(ops, rec, bv_arg(args, 2), st, λ m r => BVRead(OWord(BFrom(r.word(), m, skip)), r.st))
+    }
     else { bv_unfolded(rec, h, WWord(n), st) }
 }
 
@@ -277,6 +289,8 @@ fn bv_read_test_call(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRe
         let k <- bv_numeral(b, "a bit index");
         bv_at_width(ops, rec, a, st, λ n r => BVRead(OBool(PBit(n, r.word(), k)), r.st))
     }
+    else if arity.same(2) && g.same(ops.xor) { bv_test_op(rec, a, b, st, λ p q => PXor(p, q)) }
+    else if arity.same(1) && g.same(ops.head) { bv_at_width(ops, rec, a, st, λ n r => BVRead(OBool(PBit(n, r.word(), 0)), r.st)) }
     else if arity.same(1) && g.same(ops.not) { let ra <- rec(a, WBool, st); pure(BVRead(OBool(PNot(ra.bool())), ra.st)) }
     else { bv_unfolded(rec, h, WBool, st) }
 }
@@ -363,6 +377,7 @@ fn BVPred::placed(self p: BVPred, offs: List<Nat>, bools: Nat) → BVPred {
         PSlt(n, a, b) => PSlt(n, a.placed(offs), b.placed(offs)),
         PBit(n, a, k) => PBit(n, a.placed(offs), k),
         PVar(j) => PVar(bools + j),
+        PXor(q, r) => PXor(q.placed(offs, bools), r.placed(offs, bools)),
     }
 }
 
@@ -372,7 +387,7 @@ fn BVPred::placed(self p: BVPred, offs: List<Nat>, bools: Nat) → BVPred {
 record BVQuote {
     var: Handle, cnst: Handle, not: Handle, and: Handle, or: Handle, xor: Handle, add: Handle, shl: Handle, shr: Handle,
     sub: Handle, neg: Handle, mul: Handle, from: Handle, sext: Handle, concat: Handle,
-    pconst: Handle, eq: Handle, ult: Handle, pnot: Handle, pand: Handle, por: Handle, iff: Handle, slt: Handle, bit: Handle, pvar: Handle,
+    pconst: Handle, eq: Handle, ult: Handle, pnot: Handle, pand: Handle, por: Handle, iff: Handle, slt: Handle, bit: Handle, pvar: Handle, pxor: Handle,
     tru: Handle, fls: Handle,
 }
 
@@ -404,10 +419,11 @@ fn bv_quotes() → Tac<BVQuote> {
     let slt <- bv_resolve("bv_decide::bvq_slt");
     let bit <- bv_resolve("bv_decide::bvq_bit");
     let pvar <- bv_resolve("bv_decide::bvq_pvar");
+    let pxor <- bv_resolve("bv_decide::bvq_pxor");
     let tru <- bv_resolve("bv_decide::bv_true");
     let fls <- bv_resolve("bv_decide::bv_false");
     pure(BVQuote(var, cnst, not, and, or, xor, add, shl, shr, sub, neg, mul, from, sext, concat,
-        pconst, eq, ult, pnot, pand, por, iff, slt, bit, pvar, tru, fls))
+        pconst, eq, ult, pnot, pand, por, iff, slt, bit, pvar, pxor, tru, fls))
 }
 
 fn bv_true() → Bool { True }
@@ -451,6 +467,7 @@ fn BVPred::quote(self p: BVPred, q: BVQuote) → Expr {
         PSlt(n, a, b) => bv_app(q.slt, [NatLit(n), a.quote(q), b.quote(q)]),
         PBit(n, a, k) => bv_app(q.bit, [NatLit(n), a.quote(q), NatLit(k)]),
         PVar(o) => bv_app(q.pvar, [NatLit(o)]),
+        PXor(r, s) => bv_app(q.pxor, [r.quote(q), s.quote(q)]),
     }
 }
 
@@ -571,17 +588,33 @@ fn bv_name(locals: List<LocalInfo>, x: LocalRef) → String {
     }
 }
 
-fn bv_show_words(locals: List<LocalInfo>, ws: List<BVWord>, o: Nat, model: List<Bool>) → String {
+fn bv_show_words(locals: List<LocalInfo>, ws: List<BVWord>, o: Nat, model: List<Bool>) → List<String> {
     match ws {
-        Nil => "",
-        Cons(w, rest) => bv_name(locals, w.x) ++ " = " ++ bv_decimal(40, bv_model_word(model, o, w.w)) ++ ", " ++ bv_show_words(locals, rest, o + w.w, model),
+        Nil => [],
+        Cons(w, rest) => Cons(bv_name(locals, w.x) ++ " = " ++ bv_decimal(40, bv_model_word(model, o, w.w)), bv_show_words(locals, rest, o + w.w, model)),
     }
 }
 
-fn bv_show_bools(locals: List<LocalInfo>, bs: List<LocalRef>, o: Nat, model: List<Bool>) → String {
+fn bv_show_bools(locals: List<LocalInfo>, bs: List<LocalRef>, o: Nat, model: List<Bool>) → List<String> {
     match bs {
+        Nil => [],
+        Cons(b, rest) => Cons(bv_name(locals, b) ++ " = " ++ (match bv_model_bit(model, o) { True => "True", False => "False" }), bv_show_bools(locals, rest, Succ(o), model)),
+    }
+}
+
+fn bv_joined(parts: List<String>) → String {
+    match parts {
         Nil => "",
-        Cons(b, rest) => bv_name(locals, b) ++ " = " ++ (match bv_model_bit(model, o) { True => "True", False => "False" }) ++ ", " ++ bv_show_bools(locals, rest, Succ(o), model),
+        Cons(a, rest) => match rest { Nil => a, Cons(_, _) => a ++ ", " ++ bv_joined(rest) },
+    }
+}
+
+// What the solver's model says the atoms are, or that the claim is false
+// outright when it has none.
+fn bv_counterexample(locals: List<LocalInfo>, ws: List<BVWord>, bs: List<LocalRef>, wbits: Nat, model: List<Bool>) → String {
+    match bv_show_words(locals, ws, 0, model) ++ bv_show_bools(locals, bs, wbits, model) {
+        Nil => "bv_decide: the claim is false",
+        Cons(a, rest) => "bv_decide: the claim is false at " ++ bv_joined(Cons(a, rest)),
     }
 }
 
@@ -640,7 +673,7 @@ fn bv_decide() → Tac<Expr> {
     let pe = pred.quote(q);
     let verdict <- sat(bv_app(l.clauses, [pe, NatLit(k)]), Succ(k)).or_fail("bv_decide: ");
     match verdict {
-        Satisfiable(model) => fail("bv_decide: the claim is false at " ++ bv_show_words(g.locals, ws, 0, model) ++ bv_show_bools(g.locals, bs, wbits, model) ++ "for instance", []),
+        Satisfiable(model) => fail(bv_counterexample(g.locals, ws, bs, wbits, model), []),
         Unsatisfiable(r) => {
             let bools = bv_lay_bools(l, bs, wbits);
             let lay = bv_lay(l, ws, 0, bools);

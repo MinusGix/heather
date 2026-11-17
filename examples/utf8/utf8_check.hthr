@@ -19,11 +19,10 @@ import function_ir_eval;
 import runtime;
 import utf8;
 import bitvec_concat;
-import bitvec_shift_nat;
-import ring;
 import list_window;
 import fintype;
 import bitvec_fintype;
+import bv_decide;
 
 // Whether a lead byte and the continuation bytes after it are one UTF-8
 // sequence: 1 when they are, 0 when not. Each byte is a word, read from the
@@ -130,65 +129,25 @@ runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n,
 // ---------------------------------------------------------------------------
 // Why it is right
 
-// Claims about every byte are checked by evaluating them at each of the 256
-// (`Fintype::all`). Two words computed from a byte that agree at each agree.
-theorem BitVec::bytes_agree(m: Nat, f, g: u8 → BitVec(m), all: Fintype::all<u8>(λ c => f(c).eq_bit(g(c))) = True, b: u8): f(b) = g(b) {
-    BitVec::eq_of_eq_bit(m, f(b), g(b), Fintype::all_sound<u8>(λ c => f(c).eq_bit(g(c)), all, b))
-}
-
-// Two tests of a byte that agree at each of the 256 agree.
-theorem BitVec::bytes_decide_alike(f, g: u8 → Bool, all: Fintype::all<u8>(λ c => !(f(c).xor(g(c)))) = True, b: u8): f(b) = g(b) {
-    Bool::eq_of_not_xor(f(b), g(b), Fintype::all_sound<u8>(λ c => !(f(c).xor(g(c))), all, b))
-}
+// Claims about words are decided by `bv_decide`: the claim is bit-blasted,
+// a SAT solver refutes its negation, and the kernel replays the refutation
+// (docs/tactics/bv-decide-design.md).
 
 // A byte as the program reads it: a word.
 fn word(b: u8) → u64 { b.zero_extend(56) }
 
-// What a continuation test is, and what each mask keeps.
-theorem cont_word(c: u8): (word(c) & 0xC0).eq_bit(0x80) = (utf8::bit7(c) && !utf8::bit6(c)) {
-    BitVec::bytes_decide_alike(λ c => (word(c) & 0xC0).eq_bit(0x80), λ c => utf8::bit7(c) && !utf8::bit6(c), refl, c)
-}
-theorem cont_payload_word(c: u8): (word(c) & 0x3F).toNat() = utf8::cont_payload(c).toNat() {
-    trans(cong_fn(λ (w: u64) => w.toNat(),
-            BitVec::bytes_agree(64, λ c => word(c) & 0x3F, λ c => utf8::cont_payload(c).zero_extend(58), refl, c)),
-        BitVec::toNat_zero_extend(6, 58, utf8::cont_payload(c)))
-}
-
-theorem Nat::doubled_pow(self x: Nat, n: Nat): x.doubled(n) = x * Nat::pow(2, n) {
-    match n {
-        Zero => omega,
-        Succ(k) => {
-            let ih = x.doubled_pow(k);
-            calc {
-                x.doubled(Succ(k)) = x.doubled(k) + x.doubled(k) := x.doubled_succ(k),
-                = x * Nat::pow(2, k) + x * Nat::pow(2, k) := rewrite(ih, refl),
-                = x * (Nat::pow(2, k) * 2) := ring,
-                = x * Nat::pow(2, Succ(k)) := refl,
-            }
-        },
-    }
-}
-
-theorem lead2_payload_word(b: u8): (word(b) & 0x1F).toNat() = utf8::lead2_payload(b).toNat() {
-    trans(cong_fn(λ (w: u64) => w.toNat(),
-            BitVec::bytes_agree(64, λ c => word(c) & 0x1F, λ c => utf8::lead2_payload(c).zero_extend(59), refl, b)),
-        BitVec::toNat_zero_extend(5, 59, utf8::lead2_payload(b)))
-}
+// What a continuation test is.
+theorem cont_word(c: u8): (word(c) & 0xC0).eq_bit(0x80) = (utf8::bit7(c) && !utf8::bit6(c)) { by bv_decide() }
 
 // The scalar value two bytes spell, as the program assembles it and as the
-// decoder does.
+// decoder does: the same word, so the same number.
+theorem code2_bits(b, c1: u8):
+    ((word(b) & 0x1F) << 6) + (word(c1) & 0x3F) = utf8::cont_payload(c1).concat(utf8::lead2_payload(b)).zero_extend(53) { by bv_decide() }
+
 theorem code2_word(b, c1: u8):
     (((word(b) & 0x1F) << 6) + (word(c1) & 0x3F)).toNat() = utf8::cont_payload(c1).concat(utf8::lead2_payload(b)).toNat() {
-    let high = lead2_payload_word(b);
-    let low = cont_payload_word(c1);
-    let high_small = BitVec::toNat_lt_pow(5, utf8::lead2_payload(b));
-    let low_small = BitVec::toNat_lt_pow(6, utf8::cont_payload(c1));
-    let shifted = BitVec::toNat_shift_left(64, word(b) & 0x1F, 6, omega);
-    calc {
-        (((word(b) & 0x1F) << 6) + (word(c1) & 0x3F)).toNat() = utf8::cont_payload(c1).toNat() + utf8::lead2_payload(b).toNat() * Nat::pow(2, 6) := bv_omega,
-        = utf8::cont_payload(c1).toNat() + utf8::lead2_payload(b).toNat().doubled(6) := sym(cong_fn(λ (d: Nat) => utf8::cont_payload(c1).toNat() + d, utf8::lead2_payload(b).toNat().doubled_pow(6))),
-        = utf8::cont_payload(c1).concat(utf8::lead2_payload(b)).toNat() := sym(BitVec::toNat_concat(6, 5, utf8::cont_payload(c1), utf8::lead2_payload(b))),
-    }
+    trans(cong_fn(λ (w: u64) => w.toNat(), code2_bits(b, c1)),
+        BitVec::toNat_zero_extend(11, 53, utf8::cont_payload(c1).concat(utf8::lead2_payload(b))))
 }
 
 // Whether an option holds a value (`function_ir_lower` has this as
@@ -280,30 +239,16 @@ theorem below_word(w, k: u64, v: Nat, value: w.toNat() = v): w.unsigned_lt_bit(k
 // ---------------------------------------------------------------------------
 // Three bytes
 
-theorem lead3_payload_word(b: u8): (word(b) & 0x0F).toNat() = utf8::lead3_payload(b).toNat() {
-    trans(cong_fn(λ (w: u64) => w.toNat(),
-            BitVec::bytes_agree(64, λ c => word(c) & 0x0F, λ c => utf8::lead3_payload(c).zero_extend(60), refl, b)),
-        BitVec::toNat_zero_extend(4, 60, utf8::lead3_payload(b)))
-}
-
 fn code3(b, c1, c2: u8) → Nat { utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead3_payload(b))).toNat() }
+
+theorem code3_bits(b, c1, c2: u8):
+    ((word(b) & 0x0F) << 12) + ((word(c1) & 0x3F) << 6) + (word(c2) & 0x3F)
+      = utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead3_payload(b))).zero_extend(48) { by bv_decide() }
 
 theorem code3_word(b, c1, c2: u8):
     (((word(b) & 0x0F) << 12) + ((word(c1) & 0x3F) << 6) + (word(c2) & 0x3F)).toNat() = code3(b, c1, c2) {
-    let high = lead3_payload_word(b);
-    let mid = cont_payload_word(c1);
-    let low = cont_payload_word(c2);
-    let high_small = BitVec::toNat_lt_pow(4, utf8::lead3_payload(b));
-    let mid_small = BitVec::toNat_lt_pow(6, utf8::cont_payload(c1));
-    let low_small = BitVec::toNat_lt_pow(6, utf8::cont_payload(c2));
-    let high_shifted = BitVec::toNat_shift_left(64, word(b) & 0x0F, 12, omega);
-    let mid_shifted = BitVec::toNat_shift_left(64, word(c1) & 0x3F, 6, omega);
-    let upper = BitVec::toNat_concat(6, 4, utf8::cont_payload(c1), utf8::lead3_payload(b));
-    let whole = BitVec::toNat_concat(6, 10, utf8::cont_payload(c2), utf8::cont_payload(c1).concat(utf8::lead3_payload(b)));
-    let d4 = utf8::lead3_payload(b).toNat().doubled_pow(6);
-    let d10 = utf8::cont_payload(c1).concat(utf8::lead3_payload(b)).toNat().doubled_pow(6);
-    let is: (code3(b, c1, c2) = utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead3_payload(b))).toNat()) = refl;
-    bv_omega
+    trans(cong_fn(λ (w: u64) => w.toNat(), code3_bits(b, c1, c2)),
+        BitVec::toNat_zero_extend(16, 48, utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead3_payload(b)))))
 }
 
 // A value below 0x110000 is a scalar value unless it is a surrogate.
@@ -364,39 +309,18 @@ theorem three_decides(b, c1, c2: u8, r: List<u8>):
 // ---------------------------------------------------------------------------
 // Four bytes
 
-theorem lead4_payload_word(b: u8): (word(b) & 0x07).toNat() = utf8::lead4_payload(b).toNat() {
-    trans(cong_fn(λ (w: u64) => w.toNat(),
-            BitVec::bytes_agree(64, λ c => word(c) & 0x07, λ c => utf8::lead4_payload(c).zero_extend(61), refl, b)),
-        BitVec::toNat_zero_extend(3, 61, utf8::lead4_payload(b)))
-}
-
 fn code4(b, c1, c2, c3: u8) → Nat {
     utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b)))).toNat()
 }
 
+theorem code4_bits(b, c1, c2, c3: u8):
+    ((word(b) & 0x07) << 18) + ((word(c1) & 0x3F) << 12) + ((word(c2) & 0x3F) << 6) + (word(c3) & 0x3F)
+      = utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b)))).zero_extend(43) { by bv_decide() }
+
 theorem code4_word(b, c1, c2, c3: u8):
     (((word(b) & 0x07) << 18) + ((word(c1) & 0x3F) << 12) + ((word(c2) & 0x3F) << 6) + (word(c3) & 0x3F)).toNat() = code4(b, c1, c2, c3) {
-    let p0 = lead4_payload_word(b);
-    let p1 = cont_payload_word(c1);
-    let p2 = cont_payload_word(c2);
-    let p3 = cont_payload_word(c3);
-    let s0 = BitVec::toNat_lt_pow(3, utf8::lead4_payload(b));
-    let s1 = BitVec::toNat_lt_pow(6, utf8::cont_payload(c1));
-    let s2 = BitVec::toNat_lt_pow(6, utf8::cont_payload(c2));
-    let s3 = BitVec::toNat_lt_pow(6, utf8::cont_payload(c3));
-    let h0 = BitVec::toNat_shift_left(64, word(b) & 0x07, 18, omega);
-    let h1 = BitVec::toNat_shift_left(64, word(c1) & 0x3F, 12, omega);
-    let h2 = BitVec::toNat_shift_left(64, word(c2) & 0x3F, 6, omega);
-    let top = utf8::cont_payload(c1).concat(utf8::lead4_payload(b));
-    let upper = utf8::cont_payload(c2).concat(top);
-    let t1 = BitVec::toNat_concat(6, 3, utf8::cont_payload(c1), utf8::lead4_payload(b));
-    let t2 = BitVec::toNat_concat(6, 9, utf8::cont_payload(c2), top);
-    let t3 = BitVec::toNat_concat(6, 15, utf8::cont_payload(c3), upper);
-    let d1 = utf8::lead4_payload(b).toNat().doubled_pow(6);
-    let d2 = top.toNat().doubled_pow(6);
-    let d3 = upper.toNat().doubled_pow(6);
-    let is: (code4(b, c1, c2, c3) = utf8::cont_payload(c3).concat(upper).toNat()) = refl;
-    bv_omega
+    trans(cong_fn(λ (w: u64) => w.toNat(), code4_bits(b, c1, c2, c3)),
+        BitVec::toNat_zero_extend(21, 43, utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b))))))
 }
 
 theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):

@@ -1,0 +1,63 @@
+// Probes of `bv_decide` (lib/std/tactic/bv_decide.hthr): one claim per
+// operation the reader takes, claims mixing words and Booleans, claims at
+// wider words, and claims it refuses: a false one, answered with a
+// counterexample, and one it cannot read.
+import logic;
+import bool;
+import nat;
+import bitvec;
+import bv_decide;
+
+// Bitwise operations and complement.
+theorem demorgan(x, y: u8): (x & y).complement() = x.complement() | y.complement() { by bv_decide() }
+theorem xor_twice(x, y: u8): x.bxor(y).bxor(y) = x { by bv_decide() }
+
+// Arithmetic. A proof's check is linear in the solver's proof, which grows
+// fast with adders in series: these stay at a few bits where a byte costs
+// seconds (docs/tactics/bv-decide-design.md).
+theorem add_comm(x, y: u8): x + y = y + x { by bv_decide() }
+theorem add_assoc(x, y, z: BitVec(3)): x + y + z = x + (y + z) { by bv_decide() }
+theorem sub_add(x, y: BitVec(3)): x - y + y = x { by bv_decide() }
+theorem neg_is(x: u8): -x = x.complement() + 1 { by bv_decide() }
+theorem mul_three(x: BitVec(4)): x * 3 = x + x + x { by bv_decide() }
+theorem mul_two(x: u8): x * 2 = x << 1 { by bv_decide() }
+theorem mul_comm(x, y: BitVec(3)): x * y = y * x { by bv_decide() }
+
+// Shifts by a numeral.
+theorem shifts(x: u8): (x >> 4) << 4 = x & 0xF0 { by bv_decide() }
+
+// Slices, extension and concatenation.
+theorem halves(x: u8): x.take_low(4, 4).concat(x.drop_low(4, 4)) = x { by bv_decide() }
+theorem low_byte(x: u16): x.truncate(8, 8) = x.take_low(8, 8) { by bv_decide() }
+theorem widen(x: u8): x.zero_extend(8).truncate(8, 8) = x { by bv_decide() }
+theorem sign_top(x: u8): x.sign_extend(8).bit_at(15) = x.bit_at(7) { by bv_decide() }
+
+// Comparisons and single bits.
+theorem slt_flip(x, y: u8): x.signed_lt_bit(y) = x.bxor(0x80).unsigned_lt_bit(y.bxor(0x80)) { by bv_decide() }
+theorem ult_succ(x: u8): (x.eq_bit(255) || x.unsigned_lt_bit(x + 1)) = True { by bv_decide() }
+theorem bit0(x: u8): x.bit_at(0) = (x & 1).eq_bit(1) { by bv_decide() }
+theorem head0(x: u8): x.head_bit() = x.bit_at(0) { by bv_decide() }
+
+// Booleans, alone and beside words.
+theorem bool_comm(b, c: Bool): (b && c) = (c && b) { by bv_decide() }
+theorem bool_xor(b, c: Bool): b.xor(c) = ((b || c) && !(b && c)) { by bv_decide() }
+theorem mixed(x: u8, b: Bool): (x.bit_at(3) && b) || !b || !x.bit_at(3) = True { by bv_decide() }
+
+// A definition the reader does not know is unfolded.
+fn low_nibble(x: u8) → u8 { x & 0x0F }
+theorem nibble_twice(x: u8): low_nibble(low_nibble(x)) = low_nibble(x) { by bv_decide() }
+
+// Wider words.
+theorem demorgan32(x, y: u32): (x | y).complement() = x.complement() & y.complement() { by bv_decide() }
+theorem mask64(x: u64): (x & 0xFF) | (x & 0xFF00) = x & 0xFFFF { by bv_decide() }
+
+// Refusals: a false claim names values that falsify it; a claim with a
+// shift by a variable count is not one the reader takes.
+// expect-error: bv_decide: the claim is false at x =
+theorem add_left(x, y: u8): x + y = x { by bv_decide() }
+
+// expect-error: bv_decide: the claim is false at b =
+theorem not_self(b: Bool): b = !b { by bv_decide() }
+
+// expect-error: bv_decide: a shift count is not a numeral
+theorem shift_by(x: u8, n: Nat): x << n = x << n { by bv_decide() }
