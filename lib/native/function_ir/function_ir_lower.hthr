@@ -222,12 +222,14 @@ theorem File::represents_write(self file: File, values: Valuation(), gprs: Gprs,
 {
     ⟨λ query => j(sym(file.write_at(register, slot, query)),
         λ now _ => SlotRep(values, now, read_gpr(query, write_gpr(register, word, gprs))),
-        match register.same(query) as λ b =>
-            SlotRep(values, match b { False => file.at(query), True => slot },
-                match b { False => gprs.at(query), True => word }) {
-            False => before.left(query),
-            True => written,
-        }), before.right⟩
+        j(sym(read_gpr_write(register, query, word, gprs)),
+            λ now _ => SlotRep(values, match register.same(query) { False => file.at(query), True => slot }, now),
+            match register.same(query) as λ b =>
+                SlotRep(values, match b { False => file.at(query), True => slot },
+                    match b { False => read_gpr(query, gprs), True => word }) {
+                False => before.left(query),
+                True => written,
+            })), before.right⟩
 }
 
 theorem File::represents_know(self file: File, values: Valuation(), gprs: Gprs, known: Known,
@@ -1575,10 +1577,14 @@ fn GprsAgree(left, right: Gprs) → Type {
 theorem gprs_agree_write_read(register: Gpr, gprs: Gprs):
     GprsAgree(gprs, write_gpr(register, read_gpr(register, gprs), gprs))
 {
-    λ query => match same: register.same(query) {
-        False => refl,
-        True => j(register.same_sound(query, same),
-            λ q _ => read_gpr(q, gprs) = read_gpr(register, gprs), refl),
+    λ query => {
+        let here: (read_gpr(query, gprs) = match register.same(query) { False => read_gpr(query, gprs), True => read_gpr(register, gprs) }) =
+            match same: register.same(query) {
+                False => refl,
+                True => j(register.same_sound(query, same),
+                    λ q _ => read_gpr(q, gprs) = read_gpr(register, gprs), refl),
+            };
+        trans(here, sym(read_gpr_write(register, query, read_gpr(register, gprs), gprs)))
     }
 }
 
@@ -1587,12 +1593,14 @@ theorem gprs_agree_write(register: Gpr, word, written: BitVec(64), left, right: 
     agree: GprsAgree(left, write_gpr(register, written, right))):
     GprsAgree(write_gpr(register, word, left), write_gpr(register, word, right))
 {
-    λ query => (match register.same(query) as λ b =>
-            (left.at(query) = match b { False => right.at(query), True => written }) →
-            match b { False => left.at(query), True => word } = match b { False => right.at(query), True => word } {
-        False => λ here => here,
-        True => λ _ => refl,
-    })(agree(query))
+    λ query => trans(read_gpr_write(register, query, word, left),
+        trans((match register.same(query) as λ b =>
+                (read_gpr(query, left) = match b { False => read_gpr(query, right), True => written }) →
+                match b { False => read_gpr(query, left), True => word } = match b { False => read_gpr(query, right), True => word } {
+            False => λ here => here,
+            True => λ _ => refl,
+        })(trans(agree(query), read_gpr_write(register, query, written, right))),
+            sym(read_gpr_write(register, query, word, right))))
 }
 
 theorem File::represents_agree(self file: File, values: Valuation(), left, right: Gprs,
@@ -1998,12 +2006,13 @@ theorem in_place_settle_shifts<M>(destination: Gpr, width: Nat, high: width <= 6
 theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
     InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
 {
-    match width.eq_dec(32) {
+    (match width.eq_dec(32) as λ d => InPlace<M>(match d { Inl(_) => [MovSelf32(destination)], Inr(_) => settle_shifts(destination, width) },
+            destination, λ x => x.resize(width).resize(64)) {
         Inl(at) => j(sym(at), λ v _ => InPlace<M>([MovSelf32(destination)], destination, λ x => x.resize(v).resize(64)),
             in_place_same<M>([MovSelf32(destination)], destination, mov_self32_value, λ x => x.resize(32).resize(64),
                 mov_self32_resize, in_place_mov_self32<M>(destination))),
         Inr(_) => in_place_settle_shifts<M>(destination, width, high, fits),
-    }
+    })
 }
 
 // What in-place code leaves, at the kinds the file holds its operand and

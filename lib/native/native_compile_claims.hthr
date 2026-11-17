@@ -1,0 +1,280 @@
+// Run claims computed from the code
+// (issues/emitted-code-claims-without-positions.md,
+// docs/library/program-and-proof-style.md §3): the code an emitter adds is a
+// `Fragment`, what a fragment needs before it so that `post` holds after it
+// is a function of the fragment (`Fragment::before`), and that is sound once
+// for every fragment (`Fragment::goes`). A lemma about an emitter is then
+// the fact that its starting condition gives the computed one: no prefix of
+// the program, no position in it and no condition between two instructions
+// is written. A condition is written where two paths join, and it is named
+// by the code that remains (`rest.before(r, post)`).
+import native_source;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_homes;
+import native_alloc;
+import native_compile_steps;
+import function_ir_pass;
+import linux_calls;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_byte_memory;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import native_compile_segments;
+import bitvec_nat;
+
+// ---------------------------------------------------------------------------
+// The register file after a word is fetched: RBX written, nothing else
+
+theorem Target::rbx_file(self t: Target, env: Env, id: Nat, g: Gprs): t.rbx_gprs(env, id, g) = write_gpr(Rbx, t.rbx_word(env, id), g) {
+    (match t.homes.home(id) as λ h =>
+        (match h { InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)), InReg(_) => write_gpr(Rbx, env.word(id), g) }) =
+            write_gpr(Rbx, match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }, g) {
+        InSlot(_) => refl,
+        InReg(_) => refl,
+    })
+}
+
+theorem Target::rbx_known_file(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs):
+    t.rbx_known_gprs(known, env, id, g) = write_gpr(Rbx, t.rbx_known(known, env, id), g) {
+    (match known.known(id) as λ o =>
+        (match o { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }) =
+            write_gpr(Rbx, match o { None => t.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g) {
+        None => t.rbx_file(env, id, g),
+        Some(_) => refl,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Fragments
+
+record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
+
+// Code to add after a program: items, a word fetched to a register, a
+// register kept in a word's home, and `body` skipped where the flags meet
+// `cc` (its label the name after `names`).
+inductive Fragment {
+    Skip,
+    Place(name: Nat, item: Asm),
+    Fetch(id: Nat, register: Gpr),
+    Keep(id: Nat, register: Gpr),
+    Both(first: Fragment, rest: Fragment),
+    Unless(cc: ConditionCode, names: Nat, body: Fragment),
+}
+
+fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
+    match code {
+        Skip => p,
+        Place(name, item) => At(p, name, item),
+        Fetch(id, register) => p.known_to(cx.layout, cx.known, id, register),
+        Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
+        Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
+        Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
+    }
+}
+
+theorem Fragment::extends(self code: Fragment, cx: Emission, p: Prog): p.Within(code.onto(cx, p)) {
+    match code {
+        Skip => p.within_self(),
+        Place(name, item) => p.within_then(name, item),
+        Fetch(id, register) => p.within_known_to(cx.layout, cx.known, id, register),
+        Keep(id, register) => p.within_word_from(cx.layout, cx.out, id, register),
+        Both(first, rest) => Prog::within_trans(first.extends(cx, p), rest.extends(cx, first.onto(cx, p))),
+        Unless(cc, names, body) => {
+            let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
+            calc {
+                p <= jcc := p.within_then(0, Jcc(cc, names + 1)),
+                <= body.onto(cx, jcc) := body.extends(cx, jcc),
+                <= At(body.onto(cx, jcc), names + 1, Block([])) := body.onto(cx, jcc).within_then(names + 1, Block([])),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What a fragment needs before it
+
+// Where code runs: the target, the facts known, and the environment whose
+// `live` words are in their homes.
+record Run { t: Target, known: List<Fact>, out: List<Nat>, live: List<Nat>, env: Env }
+
+fn Run::cx(self r: Run) → Emission { Emission(r.t.layout(), r.known, r.out) }
+fn Run::State(self r: Run) → Type { MachineState<X86Memory(r.t.r.profile)> }
+
+fn Fragment::before(self code: Fragment, r: Run, post: r.State() → Type) → r.State() → Type {
+    match code {
+        Skip => post,
+        Place(_, item) => match item {
+            Block(instructions) => λ s => post(execute_block_normal(instructions, s)),
+            _ => λ _ => False,
+        },
+        Fetch(id, register) => λ s => (r.t.layout().word_fits(id).IsTrue() ∧ r.env.Reads(r.known, r.live, id)) ∧
+            (r.t.Held(r.live, r.env, s.gprs, s.memory) ∧ ((f: Flags) → (rip: BitVec(64)) →
+                post(MachineState(write_gpr(register, r.env.word(id), write_gpr(Rbx, r.t.rbx_known(r.known, r.env, id), s.gprs)), f, rip, s.memory)))),
+        Keep(_, _) => λ _ => False,
+        Both(first, rest) => first.before(r, rest.before(r, post)),
+        Unless(cc, _, body) => λ s =>
+            (((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
+             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → body.before(r, post)(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
+            (condition_defined(cc, s.flags.defined) = True),
+    }
+}
+
+// From a state meeting what the fragment needs, the code runs to its end.
+theorem Fragment::goes_from(self code: Fragment, r: Run, p: Prog, tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type):
+    code.onto(r.cx(), p).Within(r.t.program) → r.t.Goes(prog_len(code.onto(r.cx(), p)), tree, post) → r.t.Goes(prog_len(p), tree, code.before(r, post)) {
+    let t = r.t;
+    match code {
+        Skip => λ _ next => next,
+        Place(name, item) => match item {
+            Block(instructions) => λ within next => t.goes_block(p, name, instructions, within, tree, post, next),
+            _ => λ _ _ s here resident holds => false_elim(holds),
+        },
+        Fetch(id, register) => λ within next => {
+            let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m));
+            let after: t.GoesR(prog_len(p.known_to(t.layout(), r.known, id, register)), tree, q) = t.goes_weaken(next, λ s held => held(s.flags, s.rip));
+            λ s here resident holds => t.goes_known_to(r.live, r.env, p, r.known, id, register, holds.left.left, holds.left.right, within, tree, q, after)(s, here, resident,
+                ⟨holds.right.left, j(sym(t.rbx_known_file(r.known, r.env, id, s.gprs)), λ file _ => q(write_gpr(register, r.env.word(id), file), s.memory), holds.right.right)⟩)
+        },
+        Keep(_, _) => λ _ _ s here resident holds => false_elim(holds),
+        Both(first, rest) => λ within next => {
+            let mid = first.onto(r.cx(), p);
+            first.goes_from(r, p, tree, rest.before(r, post))(Prog::within_trans(rest.extends(r.cx(), mid), within), rest.goes_from(r, mid, tree, post)(within, next))
+        },
+        Unless(cc, names, body) => λ within next => {
+            let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
+            let bodied = body.onto(r.cx(), jcc);
+            let w_bodied = bodied.within_before(names + 1, Block([]), t.program, within);
+            let w_jcc: jcc.Within(t.program) = Prog::within_trans(body.extends(r.cx(), jcc), w_bodied);
+            let landed: t.Goes(prog_len(bodied), tree, post) = t.goes_block(bodied, names + 1, [], within, tree, post, next);
+            let fall = body.goes_from(r, jcc, tree, post)(w_bodied, landed);
+            let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
+                ((condition_holds(cc, f) = True) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m))) ∧
+                ((condition_holds(cc, f) = False) → (rip: BitVec(64)) → body.before(r, post)(MachineState(g, f, rip, m)));
+            let lands = t.program.lands_jcc(t.laid, w_jcc.witness, p, 0, cc, names, w_jcc.proof, within.witness, bodied, Block([]), within.proof);
+            t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, p, 0, cc, names + 1, w_jcc.proof, prog_len(bodied), lands, tree, pre,
+                λ u here resident held => landed(u, here, resident, held.left.left(held.right, u.rip)),
+                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))
+        },
+    }
+}
+
+theorem Fragment::goes(self code: Fragment, r: Run, p: Prog, within: code.onto(r.cx(), p).Within(r.t.program),
+    tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type, next: r.t.Goes(prog_len(code.onto(r.cx(), p)), tree, post)):
+    r.t.Goes(prog_len(p), tree, code.before(r, post)) {
+    code.goes_from(r, p, tree, post)(within, next)
+}
+
+// ---------------------------------------------------------------------------
+// A clamp
+
+// CMP and a JB: kept where it is below the bound, the bound where not.
+theorem BitVec::min_kept(v, b: BitVec(64), borrow: v.borrow_sub_bit(b) = True): v.toNat() = v.toNat().min(b.toNat()) {
+    sym(Nat::min_eq_l(v.toNat(), b.toNat(), Nat::le_of_lt(v.toNat(), b.toNat(), BitVec::borrow_sub_of_bit_true(64, v, b, borrow))))
+}
+
+theorem BitVec::min_bound(v, b: BitVec(64), no: v.borrow_sub_bit(b) = False): b.toNat() = v.toNat().min(b.toNat()) {
+    sym(Nat::min_eq_r(v.toNat(), b.toNat(), v.toNat().le_of_not_lt(b.toNat(),
+        λ (below: v.toNat() < b.toNat()) => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(64, v, b, below))))))
+}
+
+// `value` clamped to `bound`, unsigned: unless it is below, the bound.
+fn Fragment::clamp(value, bound: Gpr, names: Nat) → Fragment {
+    Both(Place(0, Block([CmpRR(value, bound)])), Unless(B, names, Place(0, Block([MovRR(value, bound)]))))
+}
+
+// What a clamp needs: what follows it, with a word that is the smaller of
+// the two in `value`.
+theorem Fragment::clamp_before(r: Run, value, bound: Gpr, names: Nat, post: r.State() → Type, s: r.State(),
+    next: (w: BitVec(64)) → w.toNat() = read_gpr(value, s.gprs).toNat().min(read_gpr(bound, s.gprs).toNat()) → (f: Flags) → (rip: BitVec(64)) →
+        post(MachineState(write_gpr(value, w, s.gprs), f, rip, s.memory))):
+    Fragment::clamp(value, bound, names).before(r, post)(s) {
+    let v = read_gpr(value, s.gprs);
+    let b = read_gpr(bound, s.gprs);
+    let s1 = execute_block_normal([CmpRR(value, bound)], s);
+    ⟨⟨λ below rip => j(write_gpr_held(value, s.gprs), λ file _ => post(MachineState(file, s1.flags, rip, s.memory)),
+        next(v, BitVec::min_kept(v, b, below), s1.flags, rip)),
+      λ over rip => {
+        let u = execute_block_normal([MovRR(value, bound)], MachineState(s1.gprs, s1.flags, rip, s1.memory));
+        next(b, BitVec::min_bound(v, b, over), u.flags, u.rip)
+      }⟩, refl⟩
+}
+
+// ---------------------------------------------------------------------------
+// The run of a call
+
+// Where a call that reads the words `ids` and writes `result` runs: the
+// words live before it are those it reads that are not known, and those
+// live after it other than its result.
+fn Target::calling(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, ids: List<Nat>, result: Nat) → Run {
+    Run(t, known, out, live_before(known.unknown(ids), result, out), env)
+}
+
+// A word the call reads can be fetched…
+theorem Target::calling_reads(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, knows: env.Knows(known), ids: List<Nat>, result: Nat,
+    id: Nat, m: Mem(id, ids)): env.Reads(known, t.calling(known, out, env, ids, result).live, id) {
+    env.reads_of(known, knows, ids, live_before(known.unknown(ids), result, out), id, m, λ i m => live_before_reads(known.unknown(ids), result, out, i, m))
+}
+
+// … and a word live after it, other than its result, is live before it.
+theorem Target::calling_keeps(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, ids: List<Nat>, result: Nat,
+    i: Nat, m: Mem(i, out), ne: i ≠ result): Mem(i, t.calling(known, out, env, ids, result).live) {
+    live_before_keeps(known.unknown(ids), result, out, i, m, ne)
+}
+
+// ---------------------------------------------------------------------------
+// A call to Linux whose answer is kept
+
+// What a SYSCALL needs where it asks `shape`'s call and RAX is then kept as
+// `result`: Linux is asked the call the source makes, and however it
+// answers, the words are held and the environment with RAX in `result` is
+// the one the source's answer gives.
+fn Run::Asks(self r: Run, shape: CallShape, result: Nat) → r.State() → Type {
+    λ s => LinuxRequests(r.t.io(), s, shape.cmd(r.env)) ∧
+        (r.t.site().Resident(s.memory) → (a: shape.cmd(r.env).Resp()) → LinuxCmd::Answers(shape.cmd(r.env), a) →
+            LinuxResumes(r.t.io(), s, shape.cmd(r.env), a, λ u => r.t.site().Resident(u.memory) ∧ (LinuxCmd::Answers(shape.cmd(r.env), a) ∧
+                (r.t.Held(r.live, r.env, u.gprs, u.memory) ∧ (r.env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(r.env, a))))))
+}
+
+// Code, a SYSCALL, and RAX kept as `result`: from a state where the code
+// leads to the request, the call is made and the run goes on with its
+// answer in the environment.
+theorem Run::goes_asked(self r: Run, code: Fragment, p: Prog, shape: CallShape, result: Nat,
+    inside: r.t.layout().word_fits(result).IsTrue(), sub: (i: Nat) → Mem(i, r.out) → i ≠ result → Mem(i, r.live), apart: r.t.homes.apart(result, r.out).IsTrue(),
+    within: then(code.onto(r.cx(), p), Syscall).word_from(r.t.layout(), r.out, result, Rax).Within(r.t.program),
+    tree: shape.cmd(r.env).Resp() → ITree<BitVec(64)>(Events::linux()),
+    next: (a: shape.cmd(r.env).Resp()) → LinuxCmd::Answers(shape.cmd(r.env), a) →
+        r.t.At(prog_len(then(code.onto(r.cx(), p), Syscall).word_from(r.t.layout(), r.out, result, Rax)), r.out, tree(a), shape.answer(r.env, a))):
+    r.t.Goes(prog_len(p), Vis(shape.cmd(r.env), tree), code.before(r, r.Asks(shape, result))) {
+    let t = r.t;
+    let ready = code.onto(r.cx(), p);
+    let asked = then(ready, Syscall);
+    let w_asked = asked.word_from_within(t.layout(), r.out, result, Rax, t.program, within);
+    let after = λ (a: shape.cmd(r.env).Resp()) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(shape.cmd(r.env), a) ∧
+        (t.Held(r.live, r.env, u.gprs, u.memory) ∧ (r.env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(r.env, a)));
+    let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, ready, 0, w_asked.proof, shape.cmd(r.env), tree, after,
+        λ a u here resident held => t.goes_result(r.live, r.out, r.env, shape.answer(r.env, a), asked, result, inside, sub, apart, within, tree(a), next(a, held.left),
+            u, here, resident, held.right));
+    code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(shape.cmd(r.env), tree), r.Asks(shape, result), called)
+}

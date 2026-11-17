@@ -91,9 +91,10 @@ theorem byte_load_result<M>(load: ByteLoad, byte: BitVec(8), before: MachineStat
 theorem byte_load_preserves<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>, register: Gpr,
     distinct: load.destination.same(register) = False):
     read_gpr(register, byte_load_after(load, byte, before).gprs) = read_gpr(register, before.gprs) {
-    cong_fn<Bool, BitVec(64)>(λ same => match same {
-        False => read_gpr(register, before.gprs), True => byte.zero_extend(56),
-    }, distinct)
+    trans(read_gpr_write(load.destination, register, byte.zero_extend(56), before.gprs),
+        cong_fn<Bool, BitVec(64)>(λ same => match same {
+            False => read_gpr(register, before.gprs), True => byte.zero_extend(56),
+        }, distinct))
 }
 // Normal-path MOV r64, qword [base] (Intel SDM Vol. 2B, MOV: REX.W + 8B /r),
 // over the same canonical ModRM/SIB/displacement subset as the byte load. Its
@@ -404,7 +405,8 @@ theorem indexed_word_load_result<M>(load: IndexedWordLoad, word: BitVec(64), bef
 theorem word_load_preserves<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>, register: Gpr,
     distinct: load.destination.same(register) = False):
     read_gpr(register, word_load_after(load, word, before).gprs) = read_gpr(register, before.gprs) {
-    cong_fn<Bool, BitVec(64)>(λ same => match same {
-        False => read_gpr(register, before.gprs), True => word,
-    }, distinct)
+    trans(read_gpr_write(load.destination, register, word, before.gprs),
+        cong_fn<Bool, BitVec(64)>(λ same => match same {
+            False => read_gpr(register, before.gprs), True => word,
+        }, distinct))
 }

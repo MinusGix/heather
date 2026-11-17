@@ -83,11 +83,12 @@ theorem write_spares(register, query: Gpr, value: BitVec(64), gprs: Gprs):
     (!register.same(query)).IsTrue() →
     read_gpr(query, write_gpr(register, value, gprs)) = read_gpr(query, gprs)
 {
-    (match register.same(query) as λ b =>
-        (!b).IsTrue() → match b { False => gprs.at(query), True => value } = gprs.at(query) {
-        False => λ _ => refl,
-        True => λ no => false_elim(no),
-    })
+    λ apart => trans(read_gpr_write(register, query, value, gprs),
+        (match register.same(query) as λ b =>
+            (!b).IsTrue() → match b { False => read_gpr(query, gprs), True => value } = read_gpr(query, gprs) {
+            False => λ _ => refl,
+            True => λ no => false_elim(no),
+        })(apart))
 }
 
 theorem execute_spares<M>(instruction: Instruction, s: MachineState<M>, query: Gpr):
