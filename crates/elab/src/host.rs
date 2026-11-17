@@ -3558,6 +3558,21 @@ impl Host<'_> {
     }
 
     fn view_term(&self, run: &mut Run, at: usize, t: &Term) -> HeadView {
+        // A type held as a term, `¬(a = b)`'s argument: the code of an
+        // equation or a function type is shown as the type it decodes to.
+        match t {
+            Term::TmId { level, ty: carrier, lhs, rhs } => {
+                let carrier = Type::El { level: level.clone(), tm: Rc::clone(carrier) };
+                let l = run.issue(at, Held::Term((**lhs).clone(), carrier.clone(), level.clone()));
+                let r = run.issue(at, Held::Term((**rhs).clone(), carrier, level.clone()));
+                return HeadView::Eq(l, r);
+            }
+            Term::TmPi { dom_level, dom, .. } => {
+                let dom = Type::El { level: dom_level.clone(), tm: Rc::clone(dom) };
+                return HeadView::Pi(run.issue(at, Held::Type(dom, dom_level.clone())));
+            }
+            _ => {}
+        }
         if let Some(n) = crate::inductive::nat_value(t) {
             return HeadView::Lit(n as u64);
         }
