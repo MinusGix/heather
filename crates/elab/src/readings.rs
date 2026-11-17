@@ -50,9 +50,10 @@ pub(crate) struct Reading {
 pub(crate) enum Carried {
     /// The term, transported along an enclosing match's equation.
     Term(Term),
-    /// A plain match around it has the equation that may carry it: the
-    /// equation is now wanted, and the caller fails so that the match is
-    /// elaborated again with it.
+    /// A plain match around it has the equation that may carry it, and
+    /// has been told: once its arms are done it is elaborated again with
+    /// the equation bound, and that version stands if it elaborates. The
+    /// caller goes on as if nothing were found.
     Retry,
 }
 
@@ -218,8 +219,8 @@ impl Readings<'_> {
         }
         // A plain match around this has its equation pending
         // (dependent-match-compiler-design §4.3): if its test is spelled
-        // in either type, the equation is wanted, and the match is
-        // elaborated again with it bound.
+        // in either type, the match is told, and tries itself again with
+        // the equation bound once its arms are done.
         let len = cx.names.len();
         let mut retry = false;
         for (id, test, depth) in cx.pending_tests.iter().rev() {
@@ -234,9 +235,9 @@ impl Readings<'_> {
                 }
                 decided = true;
             }
-            let mut wanted = self.0.attempt.match_eq_wanted.borrow_mut();
-            if !wanted.contains(id) {
-                wanted.push(*id);
+            let mut carried = self.0.attempt.match_eq_carried.borrow_mut();
+            if !carried.contains(id) {
+                carried.push(*id);
             }
             retry = true;
         }

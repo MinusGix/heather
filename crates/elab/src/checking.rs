@@ -1619,15 +1619,8 @@ impl Checking<'_> {
                 // the arm's constructor is wanted, or the other way round,
                 // is carried along the match's equation
                 // (docs/language/matching/arm-readings-design.md §5).
-                match crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
-                    Some(crate::readings::Carried::Term(carried)) => return Ok(carried),
-                    // A plain match's arm: the match is elaborated again
-                    // with its equation, and this is the error if that
-                    // fails too.
-                    Some(crate::readings::Carried::Retry) => {
-                        return Err(MismatchNotes(self).mismatch_error(cx, &got, &head, lvl, e.span));
-                    }
-                    None => {}
+                if let Some(crate::readings::Carried::Term(carried)) = crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
+                    return Ok(carried);
                 }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)

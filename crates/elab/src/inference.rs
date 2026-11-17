@@ -1712,7 +1712,14 @@ impl Inference<'_> {
         let mut tests = (*pcx.pending_tests).clone();
         tests.push((id, scrut.clone(), cx.names.len()));
         pcx.pending_tests = Rc::new(tests);
+        let notes = self.attempt.check_notes.borrow().len();
         let first = run(&pcx, None);
+        let carried = {
+            let mut carried = self.attempt.match_eq_carried.borrow_mut();
+            let had = carried.contains(&id);
+            carried.retain(|w| *w != id);
+            had
+        };
         let wanted = {
             let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
             let had = wanted.contains(&id);
@@ -1730,6 +1737,32 @@ impl Inference<'_> {
                     matching::MatchSpeculationState::rollback_match_state(self.0, mark);
                     error
                 })
+            }
+            // An arm produced a term at the other spelling of its type,
+            // which the equation would carry (arm-readings-design §5). The
+            // match is elaborated again with the equation, and that stands
+            // if it elaborates; if not, the match is what it would have
+            // been had nothing asked, by elaborating it a third time with
+            // its test out of sight.
+            Ok(_) if carried => {
+                let back = || {
+                    matching::MatchSpeculationState::rollback_match_state(self.0, mark);
+                    self.attempt.check_notes.borrow_mut().truncate(notes);
+                };
+                back();
+                let mut ecx = cx.clone();
+                crate::readings::Readings::register(&mut ecx, &[], &[], &[], Some(MATCH_EQ));
+                match run(&ecx, Some(MATCH_EQ)) {
+                    Ok(term) => Ok(term),
+                    Err(_) => {
+                        back();
+                        let mut plain = pcx.clone();
+                        let mut tests = (*plain.pending_tests).clone();
+                        tests.retain(|(w, _, _)| *w != id);
+                        plain.pending_tests = Rc::new(tests);
+                        run(&plain, None)
+                    }
+                }
             }
             other => other,
         }
