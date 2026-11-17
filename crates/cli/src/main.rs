@@ -54,6 +54,7 @@ mod eval;
 mod fmt;
 mod limits;
 mod native;
+mod sat;
 
 /// Where the standard library lives when nobody says otherwise
 /// (docs/language/modules-design.md §3.2). Defaulted only if it exists, so a run from
@@ -199,6 +200,7 @@ fn run(args: Vec<String>) -> ExitCode {
         },
         Some((cmd, rest)) if cmd == "eval" => eval::run(rest),
         Some((cmd, rest)) if cmd == "fmt" => fmt::run(rest),
+        Some((cmd, rest)) if cmd == "sat" => sat::run(rest),
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
         Some((cmd, rest)) if cmd == "reflect" => native::reflect(rest),
         Some((cmd, rest)) if cmd == "warm-native" => native::warm(rest),
@@ -213,6 +215,7 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather eval <file.hthr> <term> [--type <type>] [-L <dir>]... [--cache | --cache-dir <dir>] [--accept-stale-images] [--limit <n>] [--kernel-workers <n>]\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
+                     \x20      heather sat <file.cnf>\n\
                      \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--explain-optimizer[=all]] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\
                      \x20      heather warm-native <file.hthr>... (--cache-dir <dir> [--through <module> | --unbuilt] | --list) [-L <dir>]... [--kernel-workers <n>]\n\
