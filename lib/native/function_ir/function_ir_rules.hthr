@@ -592,8 +592,9 @@ fn testing() → List<Matchable> {
 record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Matchable>, testing: List<Matchable>, placed: List<RuleEntry>, learners: List<Learner>,
     // How many of a word's other spellings the walk follows the rules
     // through at a node, where it searches them (`Seen::searched`,
-    // function_ir_learn); none where it is zero.
-    spellings: Nat }
+    // function_ir_learn); none where it is zero. And, where it searches, how
+    // many times the function reads each word (`Function::seen`).
+    spellings: Nat, reads: NatMap<Nat> }
 
 fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     match entries {
@@ -653,9 +654,13 @@ fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rule
 fn Tables::of(entries: List<RuleEntry>, learners: List<Learner>) → Tables {
     shared(entries_added(entries), λ added => shared(rules(), λ library => shared(library.len(), λ first =>
         Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first),
-            testing() ++ entries_testing(added, first), entries_placed(entries), learners, 0))))
+            testing() ++ entries_testing(added, first), entries_placed(entries), learners, 0, NatMap::empty()))))
 }
 
 fn Tables::searching(self tables: Tables, spellings: Nat) → Tables {
-    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings)
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings, tables.reads)
+}
+
+fn Tables::reading(self tables: Tables, reads: NatMap<Nat>) → Tables {
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, reads)
 }

@@ -220,14 +220,64 @@ fn RulePattern::numbers_from(self pattern: RulePattern, k: Nat, at: Node, had: W
 // ---------------------------------------------------------------------------
 // The instance, checked against what the walk has
 
-// An id no function has, for the word of a node not yet put; and past it,
-// at `unput() + id`, the walk keeps the node that wrote the word `id`
-// before a rule wrote another for it (`Seen::respelled`, function_ir_learn).
-// The replayer's facts have both, and a rule may read the earlier one: the
-// sum of two constants is still that sum once it is written as a constant.
+// An id no function has, for the word of a node not yet put. Past it the
+// walk keeps the nodes rules wrote another node for, each under a key made
+// of what it computes and from which words (`Node::alike_key`,
+// `Seen::respelled`, function_ir_learn): the replayer's facts still have
+// such a node, and a rule may read it, as the sum of two constants is
+// still that sum once it is written as a constant. A key is found in one
+// read, where looking through every node the walk has for one alike would
+// cost a walk of them at each node a rule nearly fits.
 fn unput() → Nat { 4611686018427387904 }
 
-fn Walked::earlier(self had: Walked, id: Nat) → Option<Node> { nat_map_get(had.made, unput() + id) }
+// Where a node's output is among its numbers.
+fn Node::output_at(self node: Node) → Nat {
+    match node { BufferLoad(_, _, _) => 0, BufferStore(_, _, _, _) => 0, Resize(_, _, _, _) => 2, SignResize(_, _, _, _) => 2, _ => 1 }
+}
+
+fn numbers_equal(xs, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys { Nil => False, Cons(y, more) => x.same(y) && numbers_equal(rest, more) },
+    }
+}
+
+fn numbers_but(xs, ys: List<Nat>, skip: Nat) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys {
+            Nil => False,
+            Cons(y, more) => match skip { Zero => numbers_equal(rest, more), Succ(less) => x.same(y) && numbers_but(rest, more, less) },
+        },
+    }
+}
+
+// Two nodes that compute the same from the same words into words of their
+// own: the same but for their outputs. A table read's entries are not
+// among its numbers, so none is alike another.
+fn Node::alike(self node: Node, other: Node) → Bool {
+    node.kind().same(other.kind()) && (!node.kind().same(17) && numbers_but(node.numbers(), other.numbers(), node.output_at()))
+}
+
+fn numbers_keyed(xs: List<Nat>, skip, key: Nat) → Nat {
+    match xs {
+        Nil => key,
+        Cons(x, rest) => match skip {
+            Zero => numbers_keyed(rest, xs.len(), key),
+            Succ(less) => numbers_keyed(rest, less, key * 4096 + Succ(x)),
+        },
+    }
+}
+
+// Where the walk keeps a node by what it computes: two nodes alike have
+// one key, and two that are not seldom do (a word numbered past 4094
+// runs into its neighbour, and `Walked::earlier` compares what it finds).
+fn Node::alike_key(self node: Node) → Nat { unput() + numbers_keyed(node.numbers(), node.output_at(), Succ(node.kind())) }
+
+// The node alike `node` a rule wrote another node for.
+fn Walked::earlier(self had: Walked, node: Node) → Option<Node> {
+    nat_map_get(had.made, node.alike_key()).and_then(λ known => known.alike(node).then(Some(known)))
+}
 
 // A premise the replayer's facts have where the walk's do: a node passed,
 // or a range that holds what is known of the word.
@@ -235,7 +285,7 @@ fn Fact::passed(self fact: Fact, at: Node, had: Walked) → Bool {
     match fact {
         Is(node) => match had.of_kind(at, node_output(node).id, node.kind()) {
             Some(known) => node.same(known),
-            None => match had.earlier(node_output(node).id) { None => False, Some(known) => node.same(known) },
+            None => match had.earlier(node) { None => False, Some(known) => node.same(known) },
         },
         Within(id, low, high) => range_known(had.range, id).inside(Range(low, high)),
         _ => False,
@@ -391,8 +441,51 @@ fn facts_writing(facts: List<Fact>, id: Nat) → Option<Node> {
 // the clause has writing that number's word, written to `unput()`.
 record Helped { slot: Nat, found: NatMap<Nat>, node: Node }
 
+// Whether some slot of `slots` other than the one at `output` is the
+// rule's number `k`.
+fn slots_read(slots: List<PatternSlot>, output, k: Nat) → Bool {
+    match slots {
+        Nil => False,
+        Cons(slot, rest) => match output {
+            Zero => slots_read(rest, slots.len(), k),
+            Succ(less) => (match slot { Numbered(n) => n.same(k), _ => False }) || slots_read(rest, less, k),
+        },
+    }
+}
+
+fn premises_read(premises: List<PatternFact>, k: Nat) → Bool {
+    match premises {
+        Nil => False,
+        Cons(premise, rest) => (match premise {
+            Makes(_, output, slots) => slots_read(slots, output, k),
+            Ranges(x, _, _) => match x { Numbered(n) => n.same(k), _ => False },
+            Unread => False,
+        }) || premises_read(rest, k),
+    }
+}
+
+fn slots_lent(premises: List<PatternFact>, slots: List<PatternSlot>, output: Nat) → Bool {
+    match slots {
+        Nil => False,
+        Cons(slot, rest) => match output {
+            Zero => slots_lent(premises, rest, slots.len()),
+            Succ(less) => (match slot {
+                Numbered(k) => match premises_writing(premises, k) { None => False, Some(_) => !premises_read(premises, k) },
+                _ => False,
+            }) || slots_lent(premises, rest, less),
+        },
+    }
+}
+
+// Whether the rule's other side has a node of its own: its conclusion
+// reads a word a premise writes and no premise reads. Most rules do not,
+// and nothing more is tried of them.
+fn RulePattern::lends(self pattern: RulePattern) → Bool {
+    match pattern.conclusion { Makes(_, output, slots) => slots_lent(pattern.premises, slots, output), _ => False }
+}
+
 fn Matchable::helped(self m: Matchable, at: Node, had: Walked) → Option<Helped> {
-    m.fits(at).then(m.anchor).and_then(λ k =>
+    (m.fits(at) && m.pattern.lends()).then(m.anchor).and_then(λ k =>
         premises_settled(m.pattern.premises, m.pattern.premises, at, had, nat_map_set(NatMap::empty(), k, node_output(at).id)).and_then(λ found =>
             match numbers_missing(found, 0, m.pattern.arity) {
                 Nil => None,
@@ -404,51 +497,11 @@ fn Matchable::helped(self m: Matchable, at: Node, had: Walked) → Option<Helped
             }))
 }
 
-// Where a node's output is among its numbers.
-fn Node::output_at(self node: Node) → Nat {
-    match node { BufferLoad(_, _, _) => 0, BufferStore(_, _, _, _) => 0, Resize(_, _, _, _) => 2, SignResize(_, _, _, _) => 2, _ => 1 }
-}
-
-fn numbers_equal(xs, ys: List<Nat>) → Bool {
-    match xs {
-        Nil => match ys { Nil => True, Cons(_, _) => False },
-        Cons(x, rest) => match ys { Nil => False, Cons(y, more) => x.same(y) && numbers_equal(rest, more) },
-    }
-}
-
-fn numbers_but(xs, ys: List<Nat>, skip: Nat) → Bool {
-    match xs {
-        Nil => match ys { Nil => True, Cons(_, _) => False },
-        Cons(x, rest) => match ys {
-            Nil => False,
-            Cons(y, more) => match skip { Zero => numbers_equal(rest, more), Succ(less) => x.same(y) && numbers_but(rest, more, less) },
-        },
-    }
-}
-
-// Two nodes that compute the same from the same words into words of their
-// own: the same but for their outputs. A table read's entries are not
-// among its numbers, so none is alike another.
-fn Node::alike(self node: Node, other: Node) → Bool {
-    node.kind().same(other.kind()) && (!node.kind().same(17) && numbers_but(node.numbers(), other.numbers(), node.output_at()))
-}
-
-// The word some node the walk has computes as `node` would.
-fn made_alike(made: NatMap<Node>, node: Node) → Option<Nat> {
-    match made {
-        MEmpty => None,
-        MNode(here, even, odd) => match here.and_then(λ known => known.alike(node).then(Some(node_output(known).id))) {
-            Some(id) => Some(id),
-            None => match made_alike(even, node) { Some(id) => Some(id), None => made_alike(odd, node) },
-        },
-    }
-}
-
 // The instance where the node the premises leave is one a word is
 // computed by.
 fn Matchable::found_helped(self m: Matchable, at: Node, had: Walked) → Option<Matched> {
-    m.helped(at, had).and_then(λ help => made_alike(had.made, help.node).and_then(λ id =>
-        numbers_found(nat_map_set(help.found, help.slot, id), 0, m.pattern.arity).and_then(λ numbers => m.found_with(numbers, at, had))))
+    m.helped(at, had).and_then(λ help => had.earlier(help.node).and_then(λ known =>
+        numbers_found(nat_map_set(help.found, help.slot, node_output(known).id), 0, m.pattern.arity).and_then(λ numbers => m.found_with(numbers, at, had))))
 }
 
 fn Matchable::found_either(self m: Matchable, at: Node, had: Walked) → Option<Matched> {

@@ -757,12 +757,19 @@ the matcher, for the rules whose conclusion is a node.
   - **The matcher** (`Matchable::helped`, `found_helped` in
     `function_ir_match.hthr`): where the premises leave exactly one number,
     the clause is made with that word unput, which gives the node, and the
-    instance is found where some word the walk has is computed by a node
-    alike it (`made_alike`). A word a rule wrote another node for keeps
-    its earlier node beside the new one (`Seen::respelled`,
-    `Walked::earlier`): the sum of two constants is still that sum for
-    `add_assoc` once `add_consts` has written it as a constant, and the
-    replayer's facts have both.
+    instance is found where a word a rule wrote another node for was
+    computed by a node alike it. Such a word keeps its earlier node
+    (`Seen::respelled`) under a key made of what the node computes and
+    from which words (`Node::alike_key`, `Walked::earlier`): the sum of
+    two constants is still that sum for `add_assoc` once `add_consts` has
+    written it as a constant, and the replayer's facts have both. The key
+    is one read. Looking through every node of the function for one alike,
+    at each sum of a sum and each spelling of it, was more than SHA-256's
+    compile had memory for; a sum the code already has that no rule
+    rewrote is so not found, which a table of every node by its key (what
+    congruence needs too) would give. Only a rule whose conclusion reads a
+    word a premise writes and no premise reads is tried this way
+    (`RulePattern::lends`).
   - **The ask** (`Seen::helping`): where no word is, and the rules give
     the node a cheaper spelling (`Seen::folds`), the walk asks for it,
     with the words the fitted node reads as what to wait for
@@ -776,8 +783,14 @@ the matcher, for the rules whose conclusion is a node.
     keeps the result where the lowering takes it.
   - **The cost** has a second part for this: between two spellings of a
     weight, the one whose operands are computed from less far back
-    (`Node::cost`). `x + c` reads `x` where `(x + a) + b` read `x + a`,
-    which the sweep then takes if nothing else reads it.
+    (`Seen::cost`), and only where it frees what the node read
+    (`Seen::frees`): each word the node read and the spelling does not is
+    a constant or is read once in the function (`Tables.reads`, counted by
+    `StructuredRegion::reads` when the walk searches). `x + c` reads `x`
+    where `(x + a) + b` read `x + a`, which the sweep then takes; where
+    something else reads `x + a` the code would keep both sums, so the
+    spelling is not taken and the node is not asked for (`sums_shared`,
+    `shared_not_asked`).
 
   ```
   t15 = 3 + 4 = 7   by add_consts
@@ -790,6 +803,24 @@ the matcher, for the rules whose conclusion is a node.
   one round is run, so a chain of three constants folds two of them; a
   node that itself needs a node put waits for a schedule that repeats the
   stage.
+  - **A sum that indexes stays a sum** (`Seen::settles`). The hand-written
+    recognisers know an index as a base and a constant (`Ordered.sums`):
+    the joins of byte loads into one load, and the comparison of a wide
+    access's last byte, which the lowering reads. With `add_consts` on,
+    `60 + 1` became `61` and `60 + 3` became `63`, the four loads stayed
+    four or the joined load was refused, and SHA-256 grew by a tenth. A
+    sum of two constants a load or a store indexes by, or that is past
+    such an index, is so not rewritten (`consts_folded`, `index_kept`).
+    This is a recogniser's reading leaking into the rules: it goes when
+    the joins and bounds read a constant index, or are rules themselves
+    (`issues/optimizer-constant-index-recognisers.md`).
+
+  ```
+  optimize: function 15 lowering `taken_worded_15`: refused
+  ```
+
+  is how `HEATHER_OPTIMIZE_TRACE=1` showed it. The linked SHA-256 is
+  unchanged by this piece: its sums are of words, not constants.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose
