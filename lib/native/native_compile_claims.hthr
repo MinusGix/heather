@@ -206,7 +206,8 @@ theorem Fragment::goes(self code: Fragment, r: Run, p: Prog, within: code.onto(r
     code.goes_inside(r, p, tree, None, λ _ => False, post)(trivial, within, next)
 }
 
-// A loop: where `invariant(n)` holds at its head, a round of `body` either
+// A loop: where `invariant(n)` holds at its head (in memory the code is
+// resident in), a round of `body` either
 // leaves to what follows the loop or comes back round with the invariant
 // at a smaller number. Then the loop runs from what `enter` needs to reach
 // the invariant at some number, or to leave.
@@ -214,7 +215,7 @@ theorem Fragment::goes_loop(r: Run, p: Prog, names: Nat, enter, body: Fragment, 
     invariant: Nat → Gprs → X86Memory(r.t.r.profile) → Type,
     within: Cycle(names, enter, body).onto(r.cx(), p).Within(r.t.program),
     next: r.t.Goes(prog_len(Cycle(names, enter, body).onto(r.cx(), p)), tree, post),
-    round: (n: Nat) → (s: r.State()) → invariant(n, s.gprs, s.memory) →
+    round: (n: Nat) → (s: r.State()) → r.t.site().Resident(s.memory) → invariant(n, s.gprs, s.memory) →
         body.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory)))(s)):
     r.t.Goes(prog_len(p), tree, enter.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))) {
     let t = r.t;
@@ -235,7 +236,8 @@ theorem Fragment::goes_loop(r: Run, p: Prog, names: Nat, enter, body: Fragment, 
             λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => Exists<Nat>(λ k => (k < n) ∧ invariant(k, g, m)),
             λ u here resident held => smaller(held.witness, held.proof.left)(u, here, resident, held.proof.right));
         let through = body.goes_inside(r, head, tree, Some(names + 1), post, again)(exits, w_bodied, jump);
-        t.goes_weaken(t.goes_block(entered, names + 1, [], w_head, tree, body.inside(r, Some(names + 1), post, again), through), λ s holds => round(n, s, holds))
+        let at_head = t.goes_block(entered, names + 1, [], w_head, tree, body.inside(r, Some(names + 1), post, again), through);
+        λ s here resident holds => at_head(s, here, resident, round(n, s, resident, holds))
     };
     let up_to: (n: Nat) → (k: Nat) → k <= n → At(k) = λ n => match n {
         Zero => λ k small => around(k, λ m below => false_elim(Nat::not_succ_le_zero(m, Nat::le_trans(Succ(m), k, 0, below, small)))),
