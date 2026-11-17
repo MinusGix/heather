@@ -169,6 +169,11 @@ impl Inference<'_> {
 
     /// [`Self::elab_infer_at`], below the binding-statement restatement.
     fn elab_infer_at_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        // A call made only of facts about a scrutinee is taken as written
+        // if it checks as written (docs/language/matching/arm-readings-design.md §3.4).
+        if let Some(written) = crate::readings::Readings(self.0).as_written(cx, e, None) {
+            return self.elab_infer_at_written(&written, e, expected);
+        }
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e)) {
             if let Some(result) = receiver.get() {
                 // A failed inference must still be allowed to check against

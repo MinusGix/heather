@@ -31,17 +31,11 @@ uint64_t sort_in_place(uint8_t *bytes, uint64_t length);
 
 ```text
 runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
-    if h: 0 < j {
-        let below = s.byte_within(n, j - 1);
-        if larger: key < below.zero_extend(56) {
-            s.put_within(n, j, below);
-            s.sift(n, j - 1, key)
-        } else {
-            j
-        }
-    } else {
-        j
-    }
+    if j = 0 { return j; }
+    let below = s.byte_within(n, j - 1);
+    if below.zero_extend(56) <= key { return j; }
+    s.put_within(n, j, below);
+    s.sift(n, j - 1, key)
 }
 
 runtime fn List::sort_from(mut self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
