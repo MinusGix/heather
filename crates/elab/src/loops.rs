@@ -673,15 +673,16 @@ impl Lift<'_> {
             captures.push((b.name.clone(), t));
         }
         self.implicit_captures(&mut captures, state_tys.iter());
-        // The invariant's facts: parameters `__invN_k: P_k` after the
+        // The invariant's facts: parameters `__invN_k: ∥P_k∥` after the
         // state, each found (`bv_omega`) where the loop starts and where a
-        // round recurs, and assumed in the body. Not squashed: a search
-        // reads a fact in scope only where it is not under `∥…∥`.
+        // round recurs, and assumed in the body (a search for a condition
+        // releases them). Squashed, so two proofs of one are one, as the
+        // companions of a `decreases` function need.
         self.next_if += 1;
         let facts: Vec<Param> = invariant_facts(invariant)
             .into_iter()
             .enumerate()
-            .map(|(k, p)| param(&format!("__inv{}_{k}", self.next_if), p, span))
+            .map(|(k, p)| param(&format!("__inv{}_{k}", self.next_if), Ty { span: p.span, kind: TyKind::Squash(Box::new(p)) }, span))
             .collect();
         let found = |at: Span| -> Vec<Expr> { facts.iter().map(|_| var("bv_omega", at)).collect() };
         // At a `mut self` receiver with one other local, the loop is a
@@ -763,7 +764,7 @@ impl Lift<'_> {
         &mut self,
         span: Span,
         body: &Block,
-        captures: Vec<(String, Ty)>,
+        mut captures: Vec<(String, Ty)>,
         r: Param,
         (o, o_ty): (&str, Ty),
         cond: &Expr,
@@ -774,9 +775,12 @@ impl Lift<'_> {
         let run = self.method_name();
         let method = run.rsplit("::").next().unwrap_or(&run).to_string();
         let mut params: Vec<Param> = self.solver_params();
-        // The captures first: the receiver's type may mention one (`Bytes(n)`).
-        params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+        // The receiver first, as a function over a span takes its span,
+        // after only the captures its type names (`n` of `Bytes(n)`).
+        let named = named_first(&mut captures, &r.ty);
+        params.extend(captures[..named].iter().map(|(n, t)| param(n, t.clone(), span)));
         params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+        params.extend(captures[named..].iter().map(|(n, t)| param(n, t.clone(), span)));
         params.push(param(o, o_ty.clone(), span));
         params.extend(facts.iter().cloned());
         let dot = |args: Vec<Expr>, at: Span| Expr {
@@ -1022,6 +1026,10 @@ impl Lift<'_> {
         // The receiver of a `mut self` method among the state, with at most
         // one other local beside it.
         let receiver = self.receiver_in(&vars);
+        let named = match &receiver {
+            Some((r, _)) => named_first(&mut captures, &r.ty),
+            None => 0,
+        };
         let (mut run, state, run_designed, state_designed) = self.names("run");
         // A method of the receiver's type is a member under a name of its
         // own, `T::f_loop` (`T::f_loop2` for a second loop): a generator
@@ -1044,9 +1052,10 @@ impl Lift<'_> {
         let capture_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
         let (result, recur, done, entry, shape) = match &receiver {
             Some((r, other)) => {
-                // The captures first: the receiver's type may mention one (`Bytes(n)`).
-                params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+                // The receiver first, after only the captures its type names.
+                params.extend(captures[..named].iter().map(|(n, t)| param(n, t.clone(), span)));
                 params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+                params.extend(captures[named..].iter().map(|(n, t)| param(n, t.clone(), span)));
                 let other = other.map(|k| (vars[k], state_tys[k].clone()));
                 if let Some((o, t)) = &other {
                     params.push(param(o, t.clone(), span));
@@ -1174,6 +1183,16 @@ fn while_parts(e: &Expr) -> Option<(&Expr, &Expr, Option<&Expr>)> {
         return None;
     }
     Some((&args[0], &args[1], args.get(2)))
+}
+
+/// Moves the captures `ty` names to the front, keeping each group's order,
+/// and answers how many there are.
+fn named_first(captures: &mut Vec<(String, Ty)>, ty: &Ty) -> usize {
+    let (mut named, rest): (Vec<_>, Vec<_>) = std::mem::take(captures).into_iter().partition(|(n, _)| measure::mentions_ty(ty, n));
+    let count = named.len();
+    named.extend(rest);
+    *captures = named;
+    count
 }
 
 /// The conjuncts of a proposition `P ∧ (Q ∧ …)`, each its own.

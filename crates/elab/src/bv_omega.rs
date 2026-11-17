@@ -1852,7 +1852,7 @@ fn hidden_roots(fact_names: &[String], restated: &[(String, Type)]) -> Vec<Strin
 /// spelling, which would leave the whole goal unspellable; the restated
 /// goal is the same type up to conversion, which is how the proof written
 /// for it is checked against the original.
-fn aliased_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<Type> {
+pub(crate) fn aliased_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<Type> {
     fn collect(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Term, Term)>) {
         let (head, args) = crate::spelling::app_spine(tm);
         if matches!(head, Term::GlobalTm { .. }) && !args.is_empty() && elab.spell_term_source(cx, tm).is_none() {
