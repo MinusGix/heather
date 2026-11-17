@@ -51,21 +51,21 @@ theorem cat_within(): cat_size() <= io_data_limit() { Nat::leb_sound(cat_size(),
 // (native_alloc's `Source::homes`), spelled: the compile checks them, and
 // evaluating the allocator too would overrun the declaration's fuel.
 fn cat_homes() → Homes {
-    Homes([InSlot, InSlot, InSlot, InSlot, InReg(1), InReg(0), InReg(0), InReg(1), InReg(0), InSlot,
-            InSlot, InSlot, InReg(3), InReg(0), InReg(5), InSlot, InReg(2), InReg(4), InReg(4), InSlot],
+    Homes([InSlot(0), InSlot(1), InSlot(2), InSlot(3), InReg(1), InReg(0), InReg(0), InReg(1), InReg(0), InSlot(9),
+            InSlot(10), InSlot(11), InReg(3), InReg(0), InReg(5), InSlot(15), InReg(2), InReg(4), InReg(4), InSlot(19)],
         [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [1, 4, 5, 16, 3, 19, 10, 15, 0, 2, 11, 15], [0, 2, 16, 10, 11, 1, 19, 15]])
 }
 
 // The compile succeeds: evaluated once, as a `Bool`.
-theorem cat_compiled(): cat(cat_capacity()).compile(io_data_low(), cat_homes()).is_some() = True { refl }
-theorem cat_present(): cat(cat_capacity()).compile(io_data_low(), cat_homes()).is_some().IsTrue() {
+theorem cat_compiled(): cat(cat_capacity()).compile(io_data_low(), cat_homes(), []).is_some() = True { refl }
+theorem cat_present(): cat(cat_capacity()).compile(io_data_low(), cat_homes(), []).is_some().IsTrue() {
     j(sym(cat_compiled()), λ b _ => b.IsTrue(), trivial)
 }
 
-fn cat_code() → Prog { cat(cat_capacity()).compile(io_data_low(), cat_homes()).get(cat_present()) }
+fn cat_code() → Prog { cat(cat_capacity()).compile(io_data_low(), cat_homes(), []).get(cat_present()) }
 
-theorem cat_compiles(): cat(cat_capacity()).compile(io_data_low(), cat_homes()) = Some(cat_code()) {
-    cat(cat_capacity()).compile(io_data_low(), cat_homes()).some_get(cat_present())
+theorem cat_compiles(): cat(cat_capacity()).compile(io_data_low(), cat_homes(), []) = Some(cat_code()) {
+    cat(cat_capacity()).compile(io_data_low(), cat_homes(), []).some_get(cat_present())
 }
 
 theorem cat_fits(): Layout::of(io_data_low(), cat(cat_capacity()).words, cat(cat_capacity()).capacities(), cat_homes()).size() <= cat_size() {
@@ -78,7 +78,7 @@ fn cat_bytes() → List<BitVec(8)> { assemble(no_fills(), cat_code(), Nil) }
 theorem cat_short(): (232 + prog_len(cat_code())).leb(65536) = True { refl }
 
 theorem cat_bytes_fit(): 232 + cat_bytes().len() <= 65536 {
-    let long = asm_len_is(no_fills(), asm_labels(cat_code()), cat_code(), cat_code().laid_out_fits(cat(cat_capacity()).compile_laid(io_data_low(), cat_homes(), cat_code(), cat_compiles())),
+    let long = asm_len_is(no_fills(), asm_labels(cat_code()), cat_code(), cat_code().laid_out_fits(cat(cat_capacity()).compile_laid(io_data_low(), cat_homes(), [], cat_code(), cat_compiles())),
         Nil, 0, refl);
     j(sym(long), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + prog_len(cat_code()), 65536, j(sym(cat_short()), λ b _ => b.IsTrue(), trivial)))
 }
@@ -90,7 +90,8 @@ theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, 
     entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(cat_size(), top, depth).linux(), cat(cat_capacity()).denote(args), s) {
-    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
+    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep,
+        Nat::leb_sound(Succ(cat(cat_capacity()).depth), Nat::pow(2, 64), trivial), args, argv)
 }
 
 // So every run of that process that Linux can give cat's answers, along a

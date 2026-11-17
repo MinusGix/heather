@@ -45,3 +45,23 @@ theorem wide_passes(): writes().allocation_ok(Homes([], writes().loop_sets(0, []
 // compile's check.
 theorem spill_all_by_class(src: Source): src.allocation_ok(src.homes_by(SpillAll())).IsTrue() { src.homes_by_ok(SpillAll()) }
 theorem greedy_by_class(src: Source): src.allocation_ok(src.homes_by(Greedy(3))).IsTrue() { src.homes_by_ok(Greedy(3)) }
+
+// ---------------------------------------------------------------------------
+// Slots by index (`InSlot(k)`)
+
+// Two words in one slot, or a listed slot past the list, fail the homes'
+// check; slots apart pass in any order.
+theorem shared_slot_refused(): Homes([InSlot(0), InSlot(0)], []).fits() = False { refl }
+theorem slot_past_list_refused(): Homes([InSlot(2), InReg(0)], []).fits() = False { refl }
+theorem slots_permuted_fit(): Homes([InSlot(1), InReg(0), InSlot(0)], []).fits() = True { refl }
+// A word past the list has the slot of its own number.
+theorem unlisted_slot(): Homes([InSlot(0)], []).home(3) = InSlot(3) { refl }
+// Packed: each slotted word the body names a slot from zero in the words'
+// order, a word in a register keeping it, a word never named in a slot
+// past them; the frame is as many words as the named ones' slots.
+fn loose() → List<Home> { [InSlot(0), InReg(2), InSlot(2), InSlot(3)] }
+theorem packed_slots(): loose().packed([1, 2, 3], 0, 4, 0, 2) = [InSlot(2), InReg(2), InSlot(0), InSlot(1)] { refl }
+theorem packed_count(): loose().slots_used([1, 2, 3], 0, 4) = 2 { refl }
+theorem packed_fits(): Homes(loose().packed([1, 2, 3], 0, 4, 0, 2), []).fits() = True { refl }
+// Past the list a word is in a slot, and is packed as one.
+theorem packed_past_list(): [InReg(0)].packed([0, 1, 2], 0, 3, 0, 2) = [InReg(0), InSlot(0), InSlot(1)] { refl }

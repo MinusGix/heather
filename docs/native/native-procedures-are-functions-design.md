@@ -159,8 +159,9 @@ stack.at(i)                  the return address
 stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
 ```
 
-- **Slots.** Word `id` with home `InSlot` is the stack word at
-  `RSP + 8·id`. `InReg(k)` is `home_register(k)`, as now.
+- **Slots.** Word `id` with home `InSlot(k)` is the stack word at
+  `RSP + 8·k` (the word's own number until
+  native-procedure-frames-design.md §6.6). `InReg(k)` is `home_register(k)`, as now.
 - **Access.** `MovRR(Rbx, Rsp)`, `AddRI32(Rbx, 8·id)`, then the `Load` or
   `Store` a slot uses today. One instruction more than the static address
   costs; a `[rsp + disp32]` form in the stack model would make it one
@@ -633,6 +634,8 @@ gates passing on the new code.
     128 * functions) + 8 * (words + 1) <= stack`. A program with no calls
     carries the word too (cat's theorems), the price of one statement for
     every source.
+    (Since: the levels are each procedure's own and follow the calls its
+    body makes, `Source::need`, `native-procedure-frames-design.md` §6.4.)
   - *What a callee keeps.* `Homes::kept` (§2.2). Not R10: saved by the
     callee it would be a seventh word a level, and the caller's carry in
     RBX is needed for functions anyway (`Homes::returned` reads every
