@@ -309,3 +309,8 @@ theorem squash_bind_assoc<A, B, C>(q: ∥A∥, f: A → ∥B∥, g: B → ∥C�
     squash_bind<B, C>(squash_bind<A, B>(q, f), g) =
         squash_bind<A, C>(q, λ (x: A) => squash_bind<B, C>(f(x), g))
 {}
+
+// A function of two arguments respects equality in both.
+theorem cong_args<A, B, C>(f: A → B → C, {a1, a2: A}, {b1, b2: B}, ea: a1 = a2, eb: b1 = b2): f(a1, b1) = f(a2, b2) {
+    j(ea, λ x _ => f(a1, b1) = f(x, b2), j(eb, λ y _ => f(a1, b1) = f(a1, y), refl))
+}
