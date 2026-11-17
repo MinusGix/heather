@@ -55,13 +55,6 @@ theorem Nat::same_comm(self n: Nat): (m: Nat) → n.same(m) = m.same(n) {
     }
 }
 
-theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
-    match e: n.same(m) {
-        True => false_elim(ne(n.same_sound(m, e))),
-        False => refl,
-    }
-}
-
 theorem Nat::differs_eq_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
     (match a.eq_dec(b) {
         Inl(e) => false_elim(ne(e)),

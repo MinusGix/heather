@@ -333,23 +333,35 @@ theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, ste
 // Building circuits. A circuit under construction knows its size, so that
 // adding a gate never counts the list.
 
-// Gates already built, by their inputs' numbers: the and of `a` and `b` is
-// node `x` when `table_find(t, a.code(), b.code())` is `Some(x)`. Building
-// an and gate twice is never needed, so equal subcircuits are one.
-fn table_row_of(o: Option<NatMap<Nat>>) → NatMap<Nat> {
+// Gates already built, by their inputs' numbers: the and of `a` and `b`
+// (`a`'s number the smaller) is node `x` when `table_find(t, a.code(),
+// b.code())` is `Some(x)`. Building an and gate twice is never needed, so
+// equal subcircuits are one. The table is keyed by the larger number, each
+// row a short list: a node feeds few gates.
+fn table_row_of(o: Option<List<Pair<Nat, Nat>>>) → List<Pair<Nat, Nat>> {
     match o {
-        None => MEmpty,
+        None => Nil,
         Some(r) => r,
     }
 }
 
-fn table_row(t: NatMap<NatMap<Nat>>, i: Nat) → NatMap<Nat> { table_row_of(nat_map_get(t, i)) }
+fn table_row(t: NatMap<List<Pair<Nat, Nat>>>, j: Nat) → List<Pair<Nat, Nat>> { table_row_of(nat_map_get(t, j)) }
 
-fn table_find(t: NatMap<NatMap<Nat>>, i, j: Nat) → Option<Nat> { nat_map_get(table_row(t, i), j) }
+fn row_find(r: List<Pair<Nat, Nat>>, i: Nat) → Option<Nat> {
+    match r {
+        Nil => None,
+        Cons(e, rest) => match e.fst.same(i) {
+            True => Some(e.snd),
+            False => row_find(rest, i),
+        },
+    }
+}
 
-fn table_note(t: NatMap<NatMap<Nat>>, i, j, x: Nat) → NatMap<NatMap<Nat>> { nat_map_set(t, i, nat_map_set(table_row(t, i), j, x)) }
+fn table_find(t: NatMap<List<Pair<Nat, Nat>>>, i, j: Nat) → Option<Nat> { row_find(table_row(t, j), i) }
 
-record Circ { gates: List<Gate>, size: Nat, table: NatMap<NatMap<Nat>> }
+fn table_note(t: NatMap<List<Pair<Nat, Nat>>>, i, j, x: Nat) → NatMap<List<Pair<Nat, Nat>>> { nat_map_set(t, j, Cons(Pair(i, x), table_row(t, j))) }
+
+record Circ { gates: List<Gate>, size: Nat, table: NatMap<List<Pair<Nat, Nat>>> }
 
 fn Circ::empty() → Circ { Circ([GFalse], 1, MEmpty) }
 
@@ -379,25 +391,25 @@ fn Circ::Grows(self c, d: Circ) → Type {
     d.Good() ∧ ((c.size <= d.size) ∧ ((env: Nat → Nat → Bool) → (y: Nat) → y < c.size → d.at(env)(y) = c.at(env)(y)))
 }
 
-// What noting a gate leaves: every other entry, and the one it adds.
-theorem table_find_note(t: NatMap<NatMap<Nat>>, i, j, x, k, l: Nat):
-    Or<table_find(table_note(t, i, j, x), k, l) = table_find(t, k, l), And<i = k, And<j = l, table_find(table_note(t, i, j, x), k, l) = Some(x)>>> {
-    let r = nat_map_set(table_row(t, i), j, x);
+theorem row_find_cons(i, x: Nat, r: List<Pair<Nat, Nat>>, k: Nat): Or<row_find(Cons(Pair(i, x), r), k) = row_find(r, k), And<i = k, row_find(Cons(Pair(i, x), r), k) = Some(x)>> {
     match i.eq_dec(k) {
-        Inr(ne) => Inl(cong_fn(λ (o: Option<NatMap<Nat>>) => nat_map_get(table_row_of(o), l), nat_map_get_set_other(t, i, r, k, ne))),
-        Inl(ik) => {
-            let here: (table_row(table_note(t, i, j, x), i) = r) = cong_fn(table_row_of, nat_map_get_set_same(t, i, r));
-            match j.eq_dec(l) {
-                Inl(jl) => {
-                    let hit: (table_find(table_note(t, i, j, x), i, l) = Some(x)) =
-                        trans(cong_fn(λ (q: NatMap<Nat>) => nat_map_get(q, l), here), j(jl, λ z _ => nat_map_get(r, z) = Some(x), nat_map_get_set_same(table_row(t, i), j, x)));
-                    Inr(And(ik, And(jl, j(ik, λ z _ => table_find(table_note(t, i, j, x), z, l) = Some(x), hit))))
-                },
-                Inr(ne) => {
-                    let miss: (table_find(table_note(t, i, j, x), i, l) = table_find(t, i, l)) =
-                        trans(cong_fn(λ (q: NatMap<Nat>) => nat_map_get(q, l), here), nat_map_get_set_other(table_row(t, i), j, x, l, ne));
-                    Inl(j(ik, λ z _ => table_find(table_note(t, i, j, x), z, l) = table_find(t, z, l), miss))
-                },
+        Inl(ik) => Inr(And(ik, j(ik, λ z _ => row_find(Cons(Pair(i, x), r), z) = Some(x), cong_fn(λ (b: Bool) => match b { True => Some(x), False => row_find(r, i) }, i.same_self())))),
+        Inr(ne) => Inl(cong_fn(λ (b: Bool) => match b { True => Some(x), False => row_find(r, k) }, i.same_false(k, ne))),
+    }
+}
+
+// What noting a gate leaves: every other entry, and the one it adds.
+theorem table_find_note(t: NatMap<List<Pair<Nat, Nat>>>, i, j, x, k, l: Nat):
+    Or<table_find(table_note(t, i, j, x), k, l) = table_find(t, k, l), And<i = k, And<j = l, table_find(table_note(t, i, j, x), k, l) = Some(x)>>> {
+    let r = Cons(Pair(i, x), table_row(t, j));
+    match j.eq_dec(l) {
+        Inr(ne) => Inl(cong_fn(λ (o: Option<List<Pair<Nat, Nat>>>) => row_find(table_row_of(o), k), nat_map_get_set_other(t, j, r, l, ne))),
+        Inl(jl) => {
+            let here: (table_row(table_note(t, i, j, x), j) = r) = cong_fn(table_row_of, nat_map_get_set_same(t, j, r));
+            let at: (table_find(table_note(t, i, j, x), k, j) = row_find(r, k)) = cong_fn(λ (q: List<Pair<Nat, Nat>>) => row_find(q, k), here);
+            match row_find_cons(i, x, table_row(t, j), k) {
+                Inl(miss) => Inl(j(jl, λ z _ => table_find(table_note(t, i, j, x), k, z) = table_find(t, k, z), trans(at, miss))),
+                Inr(hit) => Inr(And(hit.left, And(jl, j(jl, λ z _ => table_find(table_note(t, i, j, x), k, z) = Some(x), trans(at, hit.right))))),
             }
         },
     }
@@ -437,7 +449,7 @@ theorem Circ::entry_keeps(self c, d: Circ, le: c.size <= d.size, keeps: (env: Na
 }
 
 theorem Circ::shares_keeps(self c, d: Circ, same: d.table = c.table, le: c.size <= d.size, keeps: (env: Nat → Nat → Bool) → (y: Nat) → y < c.size → d.at(env)(y) = c.at(env)(y), sh: c.Shares()): d.Shares() {
-    λ a b x found => c.entry_keeps(d, le, keeps, a, b, x, sh(a, b, x, trans(cong_fn(λ (t: NatMap<NatMap<Nat>>) => table_find(t, a.code(), b.code()), sym(same)), found)))
+    λ a b x found => c.entry_keeps(d, le, keeps, a, b, x, sh(a, b, x, trans(cong_fn(λ (t: NatMap<List<Pair<Nat, Nat>>>) => table_find(t, a.code(), b.code()), sym(same)), found)))
 }
 
 theorem Circ::empty_good(): Circ::empty().Good() {
