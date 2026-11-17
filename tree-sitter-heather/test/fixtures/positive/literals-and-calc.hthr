@@ -8,6 +8,7 @@ fn parenthesized_string() -> String { ("text") }
 fn string_argument() -> String { g("text") }
 fn byte_strings() -> List<u8> { b"valid\n\t\\\"\0\x7f\xFF" }
 fn byte_string_argument() -> Nat { g(b"", b"x", b) }
+fn byte_characters() -> List<u8> { [b'a', b'\n', b'\'', b'"', b'\xFF', b'\0'] }
 fn literal_scrutinee() -> Nat { match 'a' { x => 0 } }
 fn string_scrutinee() -> Nat { match "text" { x => 0 } }
 theorem literal_type(): 'a' = 'a' { refl }

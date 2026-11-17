@@ -482,8 +482,7 @@ impl Literals<'_> {
     /// literal needs `string`.
     fn byte_string_type(&self, cx: &Cx, len: usize, list: bool, span: Span) -> R<(Type, Level)> {
         let byte_key = self.closure_key(BITVEC_TYPE).ok_or_else(|| self.literal_needs_module(BITVEC_TYPE, span))?;
-        let width = Expr { kind: ExprKind::Num(8u64.into()), span };
-        let byte = Ty { kind: TyKind::OfExpr(Box::new(call(var(&byte_key, span), vec![width], span))), span };
+        let byte = Self::byte_ty(&byte_key, span);
         let ty = if list {
             let list_key = self.closure_key(LIST_TYPE).ok_or_else(|| self.literal_needs_module(LIST_TYPE, span))?;
             Ty { kind: TyKind::Named { name: list_key, args: vec![byte] }, span }
@@ -492,6 +491,32 @@ impl Literals<'_> {
             Ty { kind: TyKind::Vec { elem: Box::new(byte), len: Box::new(len) }, span }
         };
         self.read_in_module(key_module(&byte_key), |s| s.elab_ty(cx, &ty))
+    }
+
+    /// `u8`, spelled by key: `bitvec::BitVec(8)`.
+    fn byte_ty(byte_key: &str, span: Span) -> Ty {
+        let width = Expr { kind: ExprKind::Num(8u64.into()), span };
+        Ty { kind: TyKind::OfExpr(Box::new(call(var(byte_key, span), vec![width], span))), span }
+    }
+
+    /// A byte literal `b'…'` in inference position: the numeral of its byte
+    /// at `u8`, which is what each element of a byte string is, so it adds
+    /// no route of its own either.
+    pub(crate) fn elab_byte_char_infer(&self, cx: &Cx, byte: u8, e: &Expr) -> R<(Term, Type, Level)> {
+        let byte_key = self.closure_key(BITVEC_TYPE).ok_or_else(|| self.literal_needs_module(BITVEC_TYPE, e.span))?;
+        let (ty, level) = self.read_in_module(key_module(&byte_key), |s| s.elab_ty(cx, &Self::byte_ty(&byte_key, e.span)))?;
+        let numeral = Expr { kind: ExprKind::Num(u64::from(byte).into()), span: e.span };
+        let term = self.read_in_module(BITVEC_MODULE, |s| s.elab_check(cx, &numeral, &ty, &level))?;
+        Ok((term, ty, level))
+    }
+
+    /// A byte literal in checking position: a `u8` whatever is expected, as
+    /// `42u8` is, with a disagreement noted for the gate as any inferred
+    /// term's is.
+    pub(crate) fn elab_byte_char_check(&self, cx: &Cx, byte: u8, e: &Expr, expected: &Type) -> R<Term> {
+        let (term, ty, level) = self.elab_byte_char_infer(cx, byte, e)?;
+        MismatchNotes(self).note_check_mismatch(cx, &ty, expected, &level, e.span);
+        Ok(term)
     }
 
     /// The bytes as the collection literal of their numerals, checked at

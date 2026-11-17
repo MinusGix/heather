@@ -379,7 +379,7 @@ module.exports = grammar({
       // A head position is where a match scrutinee lives, so the contextual
       // words have to be ordinary names here too — `match code { … }` is an
       // ordinary match on a variable named `code`.
-      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.byte_string, $.hole, $.argument_slot,
+      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.byte_string, $.byte_character, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
@@ -437,6 +437,7 @@ module.exports = grammar({
       $.character,
       $.string,
       $.byte_string,
+      $.byte_character,
       $.hole,
       $.universe,
       $.vector_type,
@@ -540,6 +541,7 @@ module.exports = grammar({
       $.character,
       $.string,
       $.byte_string,
+      $.byte_character,
       $.hole,
       $.argument_slot,
       $.universe,
@@ -791,6 +793,8 @@ module.exports = grammar({
     // token to the compiler too: ASCII characters, a string's escapes but
     // `\u{…}`, and `\xHH` for any byte.
     byte_string: _ => token(seq('b"', repeat(choice(/[\x00-\x09\x0b\x0c\x0e-\x21\x23-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\x[0-9A-Fa-f]{2}/)), '"')),
+    // `b'…'`: one byte, an ASCII character or a byte string's escape.
+    byte_character: _ => token(seq("b'", choice(/[\x00-\x09\x0b\x0c\x0e-\x26\x28-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\x[0-9A-Fa-f]{2}/), "'")),
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),
     argument_slot: _ => token(/·[₀₁₂₃₄₅₆₇₈₉]*/),
     comment: _ => token(seq('//', /[^\n]*/)),

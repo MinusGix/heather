@@ -1120,6 +1120,10 @@ pub enum ExprKind {
     /// It is the vector literal `[u8; n]` of those bytes, or the list
     /// literal of them at `List<u8>`.
     ByteStr(Vec<u8>),
+    /// `b'…'` — a byte literal, carrying its byte (an ASCII character or a
+    /// byte string's escape). It is the numeral of that byte at `u8`
+    /// wherever it stands, as each element of a byte string is.
+    ByteChar(u8),
     /// `·` / `·₀` / `·₁₂` — an anonymous argument slot
     /// (issues/argument-slot-sections.md). `None` is an unindexed slot;
     /// `Some(n)` is the explicitly zero-based slot `n`. Checking-position

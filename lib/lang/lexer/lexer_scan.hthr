@@ -166,6 +166,8 @@ def KIND_OPLUS: u64 = 69;
 def KIND_TILDE: u64 = 70;
 // A byte string, `b"…"` (docs/native/io-programs-design.md §5 D3).
 def KIND_BYTE_STR: u64 = 71;
+// A byte character, `b'…'`: one byte.
+def KIND_BYTE_CHAR: u64 = 72;
 
 // ---------------------------------------------------------------------------
 // States: the number in the low byte, the accepted kind above it.
@@ -283,6 +285,13 @@ def BSTR: u64 = 0x00a8;
 def BSTR_ESC: u64 = 0x00a9;
 def BSTR_X: u64 = 0x00aa;
 def BSTR_X1: u64 = 0x00ab;
+// A byte character: before its one byte, an escape, `\x`'s two hexadecimal
+// digits, and after its byte, where only the closing quote may stand.
+def BCHR: u64 = 0x00b0;
+def BCHR_ESC: u64 = 0x00b1;
+def BCHR_X: u64 = 0x00b2;
+def BCHR_X1: u64 = 0x00b3;
+def BCHR_CLOSE: u64 = 0x00b4;
 
 // ---------------------------------------------------------------------------
 // Refusals: why a source is refused, each the Rust lexer's message
@@ -343,6 +352,9 @@ def REFUSED_NOT_UTF8: u64 = 21;
 // `\x` escape.
 def REFUSED_NOT_ASCII: u64 = 22;
 def REFUSED_BYTE_ESCAPE: u64 = 23;
+// A byte character: the byte refused is where its closing quote belongs,
+// right after `b'` (it holds no byte) or after its one byte (it holds more).
+def REFUSED_BYTE_COUNT: u64 = 24;
 
 // The states that refuse, one for each reason a byte can be refused for.
 def FAIL_BANG_EQ: u64 = 0x0202;
@@ -367,6 +379,7 @@ def FAIL_ESCAPE_HEX: u64 = 0x1402;
 def FAIL_NOT_UTF8: u64 = 0x1502;
 def FAIL_NOT_ASCII: u64 = 0x1602;
 def FAIL_BYTE_ESCAPE: u64 = 0x1702;
+def FAIL_BYTE_COUNT: u64 = 0x1802;
 
 // ---------------------------------------------------------------------------
 // A finished token of each kind that ends where it is first accepted: state 1,
@@ -425,6 +438,7 @@ def DONE_COLON_COLON: u64 = 0x4101;
 def DONE_OPLUS: u64 = 0x4501;
 def DONE_TILDE: u64 = 0x4601;
 def DONE_BYTE_STR: u64 = 0x4701;
+def DONE_BYTE_CHAR: u64 = 0x4801;
 
 // ---------------------------------------------------------------------------
 // The families: each state's way on, one byte further.
@@ -530,9 +544,11 @@ runtime fn step_trivia(s, b: u64) → u64 {
 runtime fn step_names(s, b: u64) → u64 {
     if s.eq_bit(IDENT_B) {
         // The identifier `b`: a `"` (34) right after it opens a byte
-        // string; anything else goes on as in an identifier.
+        // string and a `'` (39) a byte character; anything else goes on as
+        // in an identifier.
         // Bytes: 95 `_`, 58 `:`.
         if b.eq_bit(34) { BSTR }
+        else if b.eq_bit(39) { BCHR }
         else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) || b.eq_bit(95) { IDENT }
         else if b.eq_bit(58) { ID_COLON }
         else { DEAD }
@@ -1110,6 +1126,46 @@ runtime fn step_byte_string(s, b: u64) → u64 {
     }
 }
 
+// Byte characters, `b'…'`: one byte, an ASCII character or a byte string's
+// escape, then the closing quote.
+runtime fn step_byte_char(s, b: u64) → u64 {
+    if s.eq_bit(BCHR) {
+        // Before the byte: an escape (92), an ASCII byte but a line feed
+        // and the quote (39), which would close it empty.
+        if b.eq_bit(39) { FAIL_BYTE_COUNT }
+        else if b.eq_bit(92) { BCHR_ESC }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
+        else if b.unsigned_lt_bit(128) { BCHR_CLOSE }
+        else if b.unsigned_lt_bit(256) { FAIL_NOT_ASCII }
+        else { FAIL_UNTERMINATED }
+    } else if s.eq_bit(BCHR_ESC) {
+        // After `\`: `n t r \ ' " 0`, or `x` (120).
+        // Bytes: 110 `n`, 116 `t`, 114 `r`, 92 `\`, 39 `'`, 34 `"`, 48
+        // `0`.
+        if b.eq_bit(110) || b.eq_bit(116) || b.eq_bit(114) || b.eq_bit(92) || b.eq_bit(39) || b.eq_bit(34) || b.eq_bit(48) { BCHR_CLOSE }
+        else if b.eq_bit(120) { BCHR_X }
+        else if b.unsigned_lt_bit(256) { FAIL_ESCAPE }
+        else { FAIL_ESCAPE_END }
+    } else if s.eq_bit(BCHR_X) {
+        // After `\x`: the first of two hexadecimal digits.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { BCHR_X1 }
+        else { FAIL_BYTE_ESCAPE }
+    } else if s.eq_bit(BCHR_X1) {
+        // The second.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { BCHR_CLOSE }
+        else { FAIL_BYTE_ESCAPE }
+    } else if s.eq_bit(BCHR_CLOSE) {
+        // After the byte: the closing quote; a line feed or the end leave
+        // it unterminated, and any other byte is a second one.
+        if b.eq_bit(39) { DONE_BYTE_CHAR }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
+        else if b.unsigned_lt_bit(256) { FAIL_BYTE_COUNT }
+        else { FAIL_UNTERMINATED }
+    } else {
+        DEAD
+    }
+}
+
 // `λ`, `¬` and argument slots.
 runtime fn step_two_byte(s, b: u64) → u64 {
     if s.eq_bit(LEAD_CE) {
@@ -1269,7 +1325,7 @@ runtime fn scan_choose(f, s, b: u64) → u64 {
             if f.unsigned_lt_bit(21) {
                 if f.unsigned_lt_bit(19) { step_char_escape(s, b) } else if f.unsigned_lt_bit(20) { step_two_byte(s, b) } else { step_three_byte(s, b) }
             } else {
-                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else if f.unsigned_lt_bit(24) { step_char_more(s, b) } else if f.unsigned_lt_bit(25) { step_byte_string(s, b) } else { DEAD }
+                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else if f.unsigned_lt_bit(24) { step_char_more(s, b) } else if f.unsigned_lt_bit(25) { step_byte_string(s, b) } else if f.unsigned_lt_bit(26) { step_byte_char(s, b) } else { DEAD }
             }
         }
     }
