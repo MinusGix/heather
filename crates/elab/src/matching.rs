@@ -44,6 +44,18 @@ pub(crate) trait MotiveSynthesisElab {
     fn motive_well_formed(&self, _cx: &Cx, _motive: &Type, _scrutinee_type: &Type, _scrutinee_level: &Level) -> bool {
         true
     }
+    /// `ty` with every sub-type that is a declaration's lowering spelled as
+    /// its reference (`B(n, out)`, not `B`'s `Σ`), so that abstraction sees
+    /// the declaration's arguments and never its field types; `None` when
+    /// nothing folded. Undone by [`Self::unfold_declarations`].
+    fn fold_declarations(&self, _cx: &Cx, _ty: &Type) -> Option<Type> {
+        None
+    }
+    /// The inverse of [`Self::fold_declarations`]: the references back to
+    /// the lowerings the elaborator reads. `None` when there is none.
+    fn unfold_declarations(&self, _ty: &Type) -> Option<Type> {
+        None
+    }
 }
 
 /// The declaration-local state which must disappear when a motive candidate
@@ -664,6 +676,29 @@ pub(crate) fn synthesize_motive(
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
+    // A declaration's type in the goal is abstracted at its arguments and
+    // never inside its lowering: a record whose field states something about
+    // the scrutinee (`ea: st1(n) = Some(a)`) is still that record in every
+    // arm, and a motive that rewrote its field types builds, in an arm, a
+    // `Σ` that only displays as the record, which the kernel refuses where
+    // the arm's value is the record
+    // (`issues/named-match-third-level-kernel-rejects.md`).
+    let Some(folded) = elab.fold_declarations(cx, expected) else {
+        return motive_of(elab, cx, scrutinee, scrutinee_type, scrutinee_level, expected, span);
+    };
+    let motive = motive_of(elab, cx, scrutinee, scrutinee_type, scrutinee_level, &folded, span);
+    elab.unfold_declarations(&motive).unwrap_or(motive)
+}
+
+fn motive_of(
+    elab: &impl MotiveSynthesisElab,
+    cx: &Cx,
+    scrutinee: &Term,
+    scrutinee_type: &Type,
+    scrutinee_level: &Level,
+    expected: &Type,
+    span: Span,
+) -> Type {
     let indexed = elab.generalizes_an_index(cx, scrutinee_type);
     let rewrap = field_rewrap(cx, scrutinee, indexed);
     if let Some(motive) = abstract_scrut(expected, scrutinee, &rewrap) {
@@ -672,6 +707,7 @@ pub(crate) fn synthesize_motive(
     let Some(exposed) = expose(elab, cx, expected, span) else {
         return expected.shift_local(1);
     };
+    let exposed = elab.fold_declarations(cx, &exposed).unwrap_or(exposed);
     // Every rung past the first reads the goal reduced, where the scrutinee
     // can be spelled in more ways than the abstraction reaches: a motive
     // that rewrote some and missed others is refused here, where the arms
