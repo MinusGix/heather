@@ -15,11 +15,11 @@ fn down(E: Events, a: Nat) → CoTree<Nat>(E) { CoTree::iter(E, λ x => down_bod
 // Observations compute at a literal depth and at an open one, for `spin` and
 // for a loop.
 theorem spin_two<R>(E: Events): CoTree::approx(E, 2, CoTree::spin<R>(E)) = Tau(Tau(Cut)) { refl }
-theorem spin_open<R>(E: Events, n: Nat): CoTree::approx(E, Succ(n), CoTree::spin<R>(E)) = Tau(CoTree::approx(E, n, CoTree::spin<R>(E))) { refl }
+theorem spin_open<R>(E: Events, n: Nat): CoTree::approx(E, n + 1, CoTree::spin<R>(E)) = Tau(CoTree::approx(E, n, CoTree::spin<R>(E))) { refl }
 theorem down_obs(E: Events): CoTree::obs(E, down(E, 2)) = OTau(down(E, 1)) { refl }
 theorem down_one(E: Events): CoTree::approx(E, 2, down(E, 1)) = Tau(Ret(0)) { refl }
-theorem down_cont(E: Events, n: Nat): CoTree::obs(E, down(E, Succ(n))) = OTau(down(E, n)) {
-    CoTree::iter_continue(E, λ x => down_body(E, x), Succ(n), n, refl)
+theorem down_cont(E: Events, n: Nat): CoTree::obs(E, down(E, n + 1)) = OTau(down(E, n)) {
+    CoTree::iter_continue(E, λ x => down_body(E, x), n + 1, n, refl)
 }
 
 // A client's own coinduction, and a bisimilarity used through the bridge to
@@ -50,7 +50,7 @@ fn echo(acc: Nat) → CoTree<Nat>(Ask()) {
 }
 theorem echo_ticks(): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(1)), 2)) = OTau(echo(3)) { refl }
 theorem echo_ticks_open(acc: Nat, m: Nat):
-    CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(acc)), Succ(m))) = OTau(echo(Succ(m) + acc)) { refl }
+    CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(acc)), m + 1)) = OTau(echo(m + 1 + acc)) { refl }
 theorem echo_stops(acc: Nat): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(acc)), 0)) = ORet(acc) { refl }
 // expect-error(kernel): the kernel rejected `echo_stops_wrong`: NotConvertible
 theorem echo_stops_wrong(): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(2)), 0)) = ORet(0) { refl }
@@ -89,7 +89,7 @@ theorem spin_twice_approx<R>(E: Events, n: Nat):
 // set, a checking position, and the negative control.
 theorem inj_obs_ret(E: Events, n: Nat, r: Nat, e: CoTree::obs<Nat>(E, CRet(n)) = ORet(r)): n = r { inj(e) }
 theorem inj_obs_map(E: Events, n: Nat, r: Nat,
-    e: CoTree::obs<Nat>(E, CoTree::map<Nat, Nat>(E, CRet(n), λ m => Succ(m))) = ORet(r)): Succ(n) = r
+    e: CoTree::obs<Nat>(E, CoTree::map<Nat, Nat>(E, CRet(n), λ m => m + 1)) = ORet(r)): n + 1 = r
 {
     inj(e)
 }

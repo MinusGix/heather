@@ -54,7 +54,7 @@ theorem Sha2::pieces_add<A>(size, a: Nat): (b: Nat) → (xs: List<A>) →
     match a {
         Zero => λ b xs => cong_fn(λ (d: List<A>) => Sha2::pieces(size, b, d), sym(xs.drop_zero())),
         Succ(k, ih) => λ b xs => {
-            let moved: (xs.drop(size).drop(size * k) = xs.drop(size * Succ(k))) = xs.drop_drop(size, size * k);
+            let moved: (xs.drop(size).drop(size * k) = xs.drop(size * (k + 1))) = xs.drop_drop(size, size * k);
             cong_fn(λ (r: List<List<A>>) => Cons(xs.take(size), r),
                 trans(ih(b, xs.drop(size)), cong_fn(λ (d: List<A>) => Sha2::pieces(size, k, xs.drop(size)) ++ Sha2::pieces(size, b, d), moved)))
         },
@@ -121,10 +121,10 @@ theorem Sha2::words_joined(blocks: List<List<u8>>): Sha2::Blocks(blocks) →
             let sixteen: (W1.len() = 16) = Sha2::len_words(B, 16, each.left);
             let front: ((W1 ++ W2).take(16) = W1) = simp_only(sym(sixteen), List::take_append_len);
             let back: ((W1 ++ W2).drop(16) = W2) = simp_only(sym(sixteen), List::drop_append_len);
-            let cut: (Sha2::pieces(16, Succ(rest.len()), W1 ++ W2) = Cons(W1, Sha2::pieces(16, rest.len(), W2))) =
+            let cut: (Sha2::pieces(16, rest.len() + 1, W1 ++ W2) = Cons(W1, Sha2::pieces(16, rest.len(), W2))) =
                 trans(cong_fn(λ (f: List<u32>) => Cons(f, Sha2::pieces(16, rest.len(), (W1 ++ W2).drop(16))), front),
                     cong_fn(λ (d: List<u32>) => Cons(W1, Sha2::pieces(16, rest.len(), d)), back));
-            trans(cong_fn(λ (w: List<u32>) => Sha2::pieces(16, Succ(rest.len()), w), parts),
+            trans(cong_fn(λ (w: List<u32>) => Sha2::pieces(16, rest.len() + 1, w), parts),
                 trans(cut, cong_fn(λ (t: List<List<u32>>) => Cons(W1, t), Sha2::words_joined(rest, each.right))))
         },
     }
@@ -312,7 +312,7 @@ theorem Sha2::len_spelled(ws: List<u32>): Sha2::spelled(ws).len() = 4 * ws.len()
     }
 }
 
-theorem Sha2::pieces_four(v: [u8; 4], n: Nat, rest: List<u8>): Sha2::pieces(4, Succ(n), vector_entries(v) ++ rest) = Cons(vector_entries(v), Sha2::pieces(4, n, rest)) {
+theorem Sha2::pieces_four(v: [u8; 4], n: Nat, rest: List<u8>): Sha2::pieces(4, n + 1, vector_entries(v) ++ rest) = Cons(vector_entries(v), Sha2::pieces(4, n, rest)) {
     let v0 = vector_index(v, 0, trivial);
     let v1 = vector_index(v, 1, trivial);
     let v2 = vector_index(v, 2, trivial);
@@ -356,8 +356,8 @@ theorem Sha2::spelled_update(ws: List<u32>): (q, r: Nat) → (w0: u32) → (b: u
             },
             Succ(k) => λ r w0 b below at => {
                 let inner = Sha2::spelled_update(rest, k, r, w0, b, below, at);
-                let place: (Succ(Succ(Succ(Succ(4 * k + r)))) = 4 * Succ(k) + r) = omega;
-                j(place, λ x _ => Sha2::spelled(Cons(w, rest).update(Succ(k), λ _ => w0.with_byte_be(4, r, b))) = Sha2::spelled(Cons(w, rest)).update(x, λ _ => b),
+                let place: (4 * k + r + 4 = 4 * (k + 1) + r) = omega;
+                j(place, λ x _ => Sha2::spelled(Cons(w, rest).update(k + 1, λ _ => w0.with_byte_be(4, r, b))) = Sha2::spelled(Cons(w, rest)).update(x, λ _ => b),
                     cong_fn(λ (t: List<u8>) => vector_entries(w.bytes_be(4)) ++ t, inner))
             },
         },

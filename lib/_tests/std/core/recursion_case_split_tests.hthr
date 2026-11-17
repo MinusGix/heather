@@ -49,7 +49,7 @@ theorem pick_false(): pick<Nat>([1, 2, 3], False, 4) = 7 { refl }
 // docs/language/matching/arm-readings-design.md §5).
 theorem walk_shape(d: Nat, n: Nat): walk(d, n) = (match n { Zero => 0, Succ(_) => d }) {
     match d { Zero => match n { Zero => refl, Succ(_) => refl }, Succ(k) => match n {
-        Zero => walk_shape(k, n), Succ(_) => Nat::cong(λ (w: Nat) => Succ(w), walk_shape(k, n)) } }
+        Zero => walk_shape(k, n), Succ(_) => Nat::cong(λ (w: Nat) => w + 1, walk_shape(k, n)) } }
 }
 
 // A split whose arm descends through it is still the recursion, at its own

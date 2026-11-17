@@ -67,10 +67,10 @@ theorem OrderedField::of_nat_zero_mul(x: K): K.of_nat(Zero) * x ≈ K.unit {
 // The step `x + s` from a point of `[a, b]` at least `s` short of `b` is in
 // `[a, b]`, with one step fewer left to `b`.
 theorem Within::step(a, b, x, s: K, m: Nat, dx: Within(<=, a, x, b), ps: K.unit < s, far: s < b + K.inv(x),
-    span: b + K.inv(x) <= K.of_nat(Succ(m)) * s): Within(<=, a, x + s, b) ∧ b + K.inv(x + s) <= K.of_nat(m) * s
+    span: b + K.inv(x) <= K.of_nat(m + 1) * s): Within(<=, a, x + s, b) ∧ b + K.inv(x + s) <= K.of_nat(m) * s
 {
-    let su: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
-    let w: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(su);
+    let su: (K.of_nat(m + 1) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+    let w: (K.of_nat(m + 1) * s ≈ K.of_nat(m) * s + s) = ring(su);
     let ax: (a <= x) = dx.left;
     And(And(linarith(ax, ps), linarith(far)), linarith(span, w))
 }
@@ -83,35 +83,35 @@ theorem Within::step(a, b, x, s: K, m: Nat, dx: Within(<=, a, x, b), ps: K.unit 
 theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, pd: K.unit < d,
     md: (x, y: K) → D(x) → D(y) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), e), n: Nat):
     (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * (d / 2) →
-        AbsLe(f(y) + K.inv(f(x)), K.of_nat(Succ(n)) * e)
+        AbsLe(f(y) + K.inv(f(x)), K.of_nat(n + 1) * e)
 {
     match n {
         Zero => λ x y dx dy xy span => {
             let s = d / 2;
             let w: (K.of_nat(Zero) * s ≈ K.unit) = OrderedField::of_nat_zero_mul(s);
             let r = md(x, y, dx, dy, linarith(xy, span, w, pd));
-            let su: (K.of_nat(Succ(Zero)) ≈ K.of_nat(Zero) + K.multiplicative.unit) = K.of_nat_succ(Zero);
+            let su: (K.of_nat(1) ≈ K.of_nat(Zero) + K.multiplicative.unit) = K.of_nat_succ(Zero);
             let z0: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
-            LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(Succ(Zero)) * e, r,
-                K.rel_refl(f(y) + K.inv(f(x))), StrictOrder::le_of_same(e, K.of_nat(Succ(Zero)) * e, ring(su, z0)))
+            LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(1) * e, r,
+                K.rel_refl(f(y) + K.inv(f(x))), StrictOrder::le_of_same(e, K.of_nat(1) * e, ring(su, z0)))
         },
         Succ(m) => λ x y dx dy xy span => {
             let s = d / 2;
             let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
             let sd: (s < d) = OrderedField::half_lt(d, pd);
-            let su: (K.of_nat(Succ(Succ(m))) ≈ K.of_nat(Succ(m)) + K.multiplicative.unit) = K.of_nat_succ(Succ(m));
-            let w: (K.of_nat(Succ(Succ(m))) * e ≈ K.of_nat(Succ(m)) * e + e) = ring(su);
+            let su: (K.of_nat(m + 2) ≈ K.of_nat(m + 1) + K.multiplicative.unit) = K.of_nat_succ(m + 1);
+            let w: (K.of_nat(m + 2) * e ≈ K.of_nat(m + 1) * e + e) = ring(su);
             match K.rel_cotrans(s, d, y + K.inv(x), sd) {
                 Inr(close) => {
                     let r = md(x, y, dx, dy, linarith(xy, close));
                     let pe: (K.unit <= e) = LocatedAddGroup::abs_le_nonneg(f(y) + K.inv(f(x)), e, r);
-                    let nn: (K.unit <= K.of_nat(Succ(m)) * e) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(m)), e, OrderedField::of_nat_nonneg(Succ(m)), pe);
-                    LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(Succ(Succ(m))) * e, r,
+                    let nn: (K.unit <= K.of_nat(m + 1) * e) = OrderedSemiring::mul_nonneg(K.of_nat(m + 1), e, OrderedField::of_nat_nonneg(m + 1), pe);
+                    LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(m + 2) * e, r,
                         K.rel_refl(f(y) + K.inv(f(x))), linarith(nn, w))
                 },
                 Inl(far) => {
-                    let sm: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
-                    let ws: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(sm);
+                    let sm: (K.of_nat(m + 1) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+                    let ws: (K.of_nat(m + 1) * s ≈ K.of_nat(m) * s + s) = ring(sm);
                     let xz: (x <= x + s) = linarith(ps);
                     let zy: (x + s <= y) = linarith(far);
                     let dz = hD(x, y, x + s, dx, dy, xz, zy);
@@ -119,7 +119,7 @@ theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, p
                     let left: (y + K.inv(x + s) <= K.of_nat(m) * s) = linarith(span, ws);
                     let rest = UnifContOn::steps(D, f, hD, e, d, pd, md, m, x + s, y, dz, dy, zy, left);
                     LocatedAddGroup::abs_le_sum2(f(y) + K.inv(f(x + s)), f(x + s) + K.inv(f(x)), f(y) + K.inv(f(x)),
-                        K.of_nat(Succ(m)) * e, e, K.of_nat(Succ(Succ(m))) * e, rest, first, ring, linarith(w))
+                        K.of_nat(m + 1) * e, e, K.of_nat(m + 2) * e, rest, first, ring, linarith(w))
                 },
             }
         },
@@ -131,22 +131,22 @@ theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, p
 theorem UnifContOn::bounded_close(a, b: K, ab: a <= b, f: K → K, d: K, pd: K.unit < d,
     md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), K.multiplicative.unit),
     n: Nat, hn: b + K.inv(a) <= K.of_nat(n) * (d / 2)):
-    BoundedOn(λ (x: K) => Within(<=, a, x, b), f, f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n)) * K.multiplicative.unit)
+    BoundedOn(λ (x: K) => Within(<=, a, x, b), f, f(a) * f(a) + K.multiplicative.unit + K.of_nat(n + 1) * K.multiplicative.unit)
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let c = f(a) * f(a) + K.multiplicative.unit;
     let fa: AbsLe(f(a), c) = OrderedField::abs_le_sq_succ(f(a));
     let pc: (K.unit <= c) = LocatedAddGroup::abs_le_nonneg(f(a), c, fa);
-    let nn: (K.unit <= K.of_nat(Succ(n)) * K.multiplicative.unit) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(n)), K.multiplicative.unit,
-        OrderedField::of_nat_nonneg(Succ(n)), StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o));
+    let nn: (K.unit <= K.of_nat(n + 1) * K.multiplicative.unit) = OrderedSemiring::mul_nonneg(K.of_nat(n + 1), K.multiplicative.unit,
+        OrderedField::of_nat_nonneg(n + 1), StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o));
     let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
     And(linarith(pc, nn), λ x dx => {
         let ax: (a <= x) = dx.left;
         let xb: (x <= b) = dx.right;
         let r = UnifContOn::steps(λ (y: K) => Within(<=, a, y, b), f, ConvexOn::within(a, b), K.multiplicative.unit, d, pd, md, n,
             a, x, da, dx, ax, linarith(xb, hn));
-        LocatedAddGroup::abs_le_sum2(f(x) + K.inv(f(a)), f(a), f(x), K.of_nat(Succ(n)) * K.multiplicative.unit, c,
-            c + K.of_nat(Succ(n)) * K.multiplicative.unit, r, fa, ring, linarith)
+        LocatedAddGroup::abs_le_sum2(f(x) + K.inv(f(a)), f(a), f(x), K.of_nat(n + 1) * K.multiplicative.unit, c,
+            c + K.of_nat(n + 1) * K.multiplicative.unit, r, fa, ring, linarith)
     })
 }
 
@@ -157,7 +157,7 @@ theorem UnifContOn::bounded(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let mo = hf(K.multiplicative.unit, o);
     let n = OrderedField::archimedean_mul(b + K.inv(a), mo.witness / 2, OrderedField::half_pos(mo.witness, mo.proof.left));
-    Exists(f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n.witness)) * K.multiplicative.unit,
+    Exists(f(a) * f(a) + K.multiplicative.unit + K.of_nat(n.witness + 1) * K.multiplicative.unit,
         UnifContOn::bounded_close(a, b, ab, f, mo.witness, mo.proof.left, mo.proof.right, n.witness, n.proof))
 }
 
@@ -400,15 +400,15 @@ theorem RootStage::cut(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K
 theorem RootStage::cut_width(t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
     hw: r + K.inv(l) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), n) * w,
     zl: l + t * (r + K.inv(l)) <= z, zr: z <= r + K.inv(t * (r + K.inv(l)))):
-    r + K.inv(z) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), Succ(n)) * w ∧
-        z + K.inv(l) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), Succ(n)) * w
+    r + K.inv(z) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), n + 1) * w ∧
+        z + K.inv(l) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), n + 1) * w
 {
     let c = K.multiplicative.unit + K.inv(t);
     let hc0: (K.unit <= c) = linarith(ht2, ht);
     let hwc: ((r + K.inv(l)) * c <= (OrderedField::npow(c, n) * w) * c) =
         OrderedSemiring::mul_le_mono_r(r + K.inv(l), OrderedField::npow(c, n) * w, c, hw, hc0);
-    let ps: (OrderedField::npow(c, Succ(n)) * w ≈ (OrderedField::npow(c, n) * c) * w) =
-        OrderedSemiring::mul_respects(OrderedField::npow(c, Succ(n)), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
+    let ps: (OrderedField::npow(c, n + 1) * w ≈ (OrderedField::npow(c, n) * c) * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, n + 1), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
     let ps2: ((OrderedField::npow(c, n) * w) * c ≈ (OrderedField::npow(c, n) * c) * w) = ring;
     let e1: (r + K.inv(l + t * (r + K.inv(l))) ≈ (r + K.inv(l)) * c) = ring;
     let e2: ((r + K.inv(t * (r + K.inv(l)))) + K.inv(l) ≈ (r + K.inv(l)) * c) = ring;
@@ -419,7 +419,7 @@ theorem RootStage::cut_width(t: K, ht: K.unit < t, ht2: t + t < K.multiplicative
 theorem RootStage::keep_right(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
     h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r),
     zin: Within(<=, l + t * (r + K.inv(l)), z, r + K.inv(t * (r + K.inv(l)))), neg: f(z) < K.unit):
-    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), z, r) ∧ (l <= z ∧ r <= r)
+    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n + 1, z, r) ∧ (l <= z ∧ r <= r)
 {
     let lr: (l < r) = h.right.right.left;
     let pd: (K.unit < t * (r + K.inv(l))) = OrderedSemiring::mul_pos(t, r + K.inv(l), ht, linarith(lr));
@@ -438,7 +438,7 @@ theorem RootStage::keep_right(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t 
 theorem RootStage::keep_left(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
     h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r),
     zin: Within(<=, l + t * (r + K.inv(l)), z, r + K.inv(t * (r + K.inv(l)))), pos: K.unit < f(z)):
-    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l, z) ∧ (l <= l ∧ z <= r)
+    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n + 1, l, z) ∧ (l <= l ∧ z <= r)
 {
     let lr: (l < r) = h.right.right.left;
     let pd: (K.unit < t * (r + K.inv(l))) = OrderedSemiring::mul_pos(t, r + K.inv(l), ht, linarith(lr));
@@ -458,7 +458,7 @@ theorem RootStage::keep_left(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t +
 // is only that choice, so that unfolding a stage reads no proof.
 fn RootStage::step(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r: K, h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)) →
-    ∃ l2: K, ∃ r2: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l2, r2) ∧ (l <= l2 ∧ r2 <= r)
+    ∃ l2: K, ∃ r2: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n + 1, l2, r2) ∧ (l <= l2 ∧ r2 <= r)
 {
     let cut = RootStage::cut(a, b, f, t, ht, ht2, w, n, l, r, h);
     let found = nc(l + t * (r + K.inv(l)), r + K.inv(t * (r + K.inv(l))), K.unit, cut.left, cut.right.left, cut.right.right);

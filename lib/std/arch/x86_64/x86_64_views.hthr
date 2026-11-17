@@ -83,7 +83,7 @@ theorem Loan::view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack
     let within: ((v: Nat) → (k: Nat) → k < views.size(v) → views.start(v) + k < spans.size(views.of(v))) = λ v k short => omega(short, viewed.inside(v));
     let reach: ((v: Nat) → (k: Nat) → (n: Nat) → k + n <= views.size(v) → views.start(v) + k + n <= spans.size(views.of(v))) =
         λ v k n fits => omega(fits, viewed.inside(v));
-    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     Loan(
         room := loan.room,
         canonical := λ v => {
@@ -218,7 +218,7 @@ theorem Loan::view_outside<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 // A window of the bytes a span reads is read at the window's start.
 theorem readable_window<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs: List<BitVec(8)>, reads: Readable(data, memory, a, xs),
     start, end: Nat, low: start <= end, high: end <= xs.len()): Readable(data, memory, next_rip(a, start), xs.window(start, end)) {
-    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     let value: (next_rip(a, start).toNat() = a.toNat() + start) = BitVec::offset_toNat(64, a, start, omega(reads.left, low, high, wide));
     let len: (xs.window(start, end).len() = end - start) = xs.len_window(start, end, low, high);
     ⟨omega(value, len, reads.left, low, high),
@@ -275,7 +275,7 @@ theorem Loan::store_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>},
     reads: Readable(data, memory, spans.at(b), xs)):
     Readable(data, stack.writes.store(memory, spans.byte(b, k), bytes), spans.at(b), xs.put_window(k, bytes)) {
     let after = stack.writes.store(memory, spans.byte(b, k), bytes);
-    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     let value: (next_rip(spans.at(b), k).toNat() = spans.at(b).toNat() + k) =
         BitVec::offset_toNat(64, spans.at(b), k, omega(loan.canonical(b), inside, wide));
     let now: Readable(data, after, next_rip(spans.at(b), k), bytes) =

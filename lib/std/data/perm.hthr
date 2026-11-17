@@ -122,7 +122,7 @@ theorem List::picks_mem_split<A>(x, a: A, self ys: List<A>): (rest: List<A>) →
     }
 }
 
-theorem List::picks_len<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) → ys.len() = Succ(rest.len()) {
+theorem List::picks_len<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) → ys.len() = rest.len() + 1 {
     match ys {
         Nil => λ rest h => false_elim(h),
         Cons(_, t) => λ rest => match rest {
@@ -399,8 +399,8 @@ fn List::occurrences<A: DecEq>(self xs: List<A>, a: A) → Nat {
 
 // Two independent decisions, each adding one, commute.
 theorem List::pick_succ_swap<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
-    or_pick(d1, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
-        = or_pick(d2, or_pick(d1, n, Succ(n)), Succ(or_pick(d1, n, Succ(n))))
+    or_pick(d1, or_pick(d2, n, n + 1), or_pick(d2, n, n + 1) + 1)
+        = or_pick(d2, or_pick(d1, n, n + 1), or_pick(d1, n, n + 1) + 1)
 {
     match d1 {
         Inl(_) => match d2 { Inl(_) => refl, Inr(_) => refl },
@@ -421,7 +421,7 @@ theorem List::occurrences_picks<A: DecEq>(x, a: A, self ys: List<A>): (rest: Lis
             Cons(r, rs) => λ h => match h {
                 Inl(hd) => subst(hd.left, subst(hd.right, refl)),
                 Inr(later) => rewrite(later.left,
-                    trans(cong_fn(λ (n: Nat) => or_pick(A.eq_dec(a, r), n, Succ(n)), t.occurrences_picks(x, a, rs, later.right)),
+                    trans(cong_fn(λ (n: Nat) => or_pick(A.eq_dec(a, r), n, n + 1), t.occurrences_picks(x, a, rs, later.right)),
                           List::pick_succ_swap(A.eq_dec(a, r), A.eq_dec(a, x), rs.occurrences(a)))),
             },
         },
@@ -436,14 +436,14 @@ theorem List::perm_occurrences<A: DecEq>(a: A, self xs: List<A>): (ys: List<A>) 
         },
         Cons(x, t) => λ ys p => match p {
             Exists(r, hr) => trans(
-                cong_fn(λ (n: Nat) => or_pick(A.eq_dec(a, x), n, Succ(n)), t.perm_occurrences(a, r, hr.right)),
+                cong_fn(λ (n: Nat) => or_pick(A.eq_dec(a, x), n, n + 1), t.perm_occurrences(a, r, hr.right)),
                 sym(ys.occurrences_picks(x, a, r, hr.left))),
         },
     }
 }
 
 // The head of a list is counted.
-theorem List::occurrences_head<A: DecEq>(x: A, self t: List<A>): Cons(x, t).occurrences(x) = Succ(t.occurrences(x)) {
+theorem List::occurrences_head<A: DecEq>(x: A, self t: List<A>): Cons(x, t).occurrences(x) = t.occurrences(x) + 1 {
     match A.eq_dec(x, x) {
         Inl(_) => refl,
         Inr(ne) => false_elim(ne(refl)),
@@ -464,7 +464,7 @@ theorem List::picks_of_mem<A>(x: A, self ys: List<A>): Mem(x, ys) → Exists<Lis
 }
 
 // An element counted at least once is there.
-theorem List::mem_of_occurrences<A: DecEq>(a: A, self xs: List<A>): (k: Nat) → xs.occurrences(a) = Succ(k) → Mem(a, xs) {
+theorem List::mem_of_occurrences<A: DecEq>(a: A, self xs: List<A>): (k: Nat) → xs.occurrences(a) = k + 1 → Mem(a, xs) {
     match xs {
         Nil => λ k h => Nat::zero_ne_succ(k, h),
         Cons(x, t) => λ k => match A.eq_dec(a, x) {

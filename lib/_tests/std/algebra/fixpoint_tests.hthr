@@ -49,8 +49,8 @@ theorem least_fixed_point<A: Fintype + PartialOrderRel(same, le) + DecidableRel(
 {
     match Fintype::kleene_total(same, le, f, mono, x, rise) {
         Exists(y, h) => Exists(y, And(
-            PartialOrderRel::kleene_fixed(same, le, f, mono, Succ(Fintype::card<A>()), x, y, rise, h),
-            λ p above pre => PartialOrderRel::kleene_least(same, le, f, mono, Succ(Fintype::card<A>()), x, y, h, p, above, pre))),
+            PartialOrderRel::kleene_fixed(same, le, f, mono, (Fintype::card<A>()) + 1, x, y, rise, h),
+            λ p above pre => PartialOrderRel::kleene_least(same, le, f, mono, (Fintype::card<A>()) + 1, x, y, h, p, above, pre))),
     }
 }
 

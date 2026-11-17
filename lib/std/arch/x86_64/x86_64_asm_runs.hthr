@@ -47,7 +47,7 @@ theorem asm_back_back(k: Nat): (p: Prog) → (j: Nat) → asm_back(asm_back(p, k
 
 theorem Prog::within_self(self p: Prog): p.Within(p) { Exists(Zero, refl) }
 
-theorem Prog::within_then(self p: Prog, name: Nat, item: Asm): p.Within(At(p, name, item)) { Exists(Succ(Zero), refl) }
+theorem Prog::within_then(self p: Prog, name: Nat, item: Asm): p.Within(At(p, name, item)) { Exists(1, refl) }
 
 theorem Prog::within_trans({a, b, c: Prog}, first: a.Within(b), second: b.Within(c)): a.Within(c) {
     Exists(first.witness + second.witness,
@@ -137,8 +137,8 @@ theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → a
             At(before, name, item) => match name {
                 Zero => λ fresh rest => names_unique_back(j, before, fresh, rest),
                 Succ(n) => λ fresh rest => {
-                    let parts = Bool::is_true_and(before.lacks(Succ(n)), before.fresh_names(j), fresh);
-                    Bool::is_true_and_intro(before.lacks(Succ(n)), before.names_unique(), parts.left, names_unique_back(j, before, parts.right, rest))
+                    let parts = Bool::is_true_and(before.lacks(n + 1), before.fresh_names(j), fresh);
+                    Bool::is_true_and_intro(before.lacks(n + 1), before.names_unique(), parts.left, names_unique_back(j, before, parts.right, rest))
                 },
             },
         },
@@ -169,18 +169,18 @@ theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) →
 // A label named `Succ(n)` in a program whose names are unique is where a
 // jump to `Succ(n)` lands.
 theorem label_target(k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.names_unique().IsTrue() →
-    asm_back(p, k) = At(q, Succ(n), item) → asm_target(p, Succ(n)) = prog_len(q) {
+    asm_back(p, k) = At(q, n + 1, item) → asm_target(p, n + 1) = prog_len(q) {
     match k {
-        Zero => λ p q n item _ at => j(sym(at), λ x _ => asm_target(x, Succ(n)) = prog_len(q),
-            j(sym(n.leb_refl()), λ b _ => (match b && b { True => prog_len(q), False => asm_target(q, Succ(n)) }) = prog_len(q), refl)),
+        Zero => λ p q n item _ at => j(sym(at), λ x _ => asm_target(x, n + 1) = prog_len(q),
+            j(sym(n.leb_refl()), λ b _ => (match b && b { True => prog_len(q), False => asm_target(q, n + 1) }) = prog_len(q), refl)),
         Succ(i) => λ p => match p {
             Start => λ q n item _ no => absurd(no),
             At(before, m, it) => λ q n item => match m {
                 Zero => λ unique at => label_target(i, before, q, n, item, unique, at),
                 Succ(l) => λ unique at => {
-                    let both = Bool::is_true_and(before.lacks(Succ(l)), before.names_unique(), unique);
-                    j(sym(lacks_label(Succ(l), i, before, q, Succ(n), item, both.left, at)),
-                        λ b _ => (match b { True => prog_len(before), False => asm_target(before, Succ(n)) }) = prog_len(q),
+                    let both = Bool::is_true_and(before.lacks(l + 1), before.names_unique(), unique);
+                    j(sym(lacks_label(l + 1, i, before, q, n + 1, item, both.left, at)),
+                        λ b _ => (match b { True => prog_len(before), False => asm_target(before, n + 1) }) = prog_len(q),
                         label_target(i, before, q, n, item, both.right, at))
                 },
             },

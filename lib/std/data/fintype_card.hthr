@@ -68,7 +68,7 @@ theorem Fintype::pigeonhole<A: Fintype, B: Fintype + DecEq>(f: A → B, small: F
 {
     match A.elems.map(f).nodup_dec() {
         Inl(d) => false_elim(Nat::lt_irrefl(Fintype::card<B>(),
-            Nat::le_trans(Succ(Fintype::card<B>()), Fintype::card<A>(), Fintype::card<B>(), small,
+            Nat::le_trans((Fintype::card<B>()) + 1, Fintype::card<A>(), Fintype::card<B>(), small,
                 j(A.elems.len_map(f), λ n q => n <= Fintype::card<B>(), Fintype::nodup_len_le<B>(A.elems.map(f), d))))),
         Inr(u) => A.elems.dup_map(f, A.nodup, u),
     }
@@ -77,8 +77,8 @@ theorem Fintype::pigeonhole<A: Fintype, B: Fintype + DecEq>(f: A → B, small: F
 // ---------------------------------------------------------------------------
 // The instances' cardinalities.
 
-theorem Fintype::card_option<A: Fintype>(): Fintype::card<Option<A>>() = Succ(Fintype::card<A>()) {
-    cong_fn(λ (n: Nat) => Succ(n), A.elems.len_map(λ (a: A) => Some(a)))
+theorem Fintype::card_option<A: Fintype>(): Fintype::card<Option<A>>() = (Fintype::card<A>()) + 1 {
+    cong_fn(λ (n: Nat) => n + 1, A.elems.len_map(λ (a: A) => Some(a)))
 }
 
 theorem Fintype::card_pair<A: Fintype, B: Fintype>(): Fintype::card<Pair<A, B>>() = Fintype::card<A>() * Fintype::card<B>() {

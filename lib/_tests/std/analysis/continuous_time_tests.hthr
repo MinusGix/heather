@@ -63,8 +63,8 @@ theorem fall_clock_spec(dt, t: Rat, n: Nat): fall_clock(dt, t, n) ≈ t + Rat::o
         Zero => { let r: (t ≈ t + Rat::ofInt(OfNat(Zero)) * dt) = ring; r },
         Succ(m) => {
             let ih = fall_clock_spec(dt, t + dt, m);
-            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
-            let r: ((t + dt) + Rat::ofInt(OfNat(m)) * dt ≈ t + Rat::ofInt(OfNat(Succ(m))) * dt) = ring(c);
+            let c: (Rat::ofInt(OfNat(m + 1)) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let r: ((t + dt) + Rat::ofInt(OfNat(m)) * dt ≈ t + Rat::ofInt(OfNat(m + 1)) * dt) = ring(c);
             Rat::same_trans(ih, r)
         },
     }
@@ -76,12 +76,12 @@ fn fall_at(T: Rat, k: Nat) → Rat { fall_run(T * Rat::inv_succ(k), 0, 0, Succ(k
 // Its exact value: the continuous answer `T²` less an error linear in `dt`.
 theorem fall_at_spec(T: Rat, k: Nat): fall_at(T, k) ≈ T * T + -((T * T) * Rat::inv_succ(k)) {
     let dt = T * Rat::inv_succ(k);
-    let inv = fall_invariant(dt, 0, 0, Succ(k));
-    let c = fall_clock_spec(dt, 0, Succ(k));
-    let s: (Rat::ofInt(OfNat(Succ(k))) ≈ Rat::ofInt(OfNat(k)) + 1) = omega;
+    let inv = fall_invariant(dt, 0, 0, k + 1);
+    let c = fall_clock_spec(dt, 0, k + 1);
+    let s: (Rat::ofInt(OfNat(k + 1)) ≈ Rat::ofInt(OfNat(k)) + 1) = omega;
     let u: (Rat::inv_succ(k) * (Rat::ofInt(OfNat(k)) + 1) ≈ 1) = Rat::inv_succ_cancel(k);
-    let ct: (fall_clock(dt, 0, Succ(k)) ≈ T) = ring(c, s, u);
-    let d: (fall_at(T, k) ≈ fall_run(dt, 0, 0, Succ(k))) = Rat::same_refl(fall_at(T, k));
+    let ct: (fall_clock(dt, 0, k + 1) ≈ T) = ring(c, s, u);
+    let d: (fall_at(T, k) ≈ fall_run(dt, 0, 0, k + 1)) = Rat::same_refl(fall_at(T, k));
     ring(inv, ct, d, u)
 }
 
@@ -181,10 +181,10 @@ theorem walk_second(h, x: Rat, n: Nat): walk_expect(λ (y: Rat) => y * y, h, x, 
         Succ(m) => {
             let a = walk_second(h, x + h, m);
             let b = walk_second(h, x + -h, m);
-            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let c: (Rat::ofInt(OfNat(m + 1)) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
             let u: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
             let g: ((walk_expect(λ (y: Rat) => y * y, h, x + h, m) + walk_expect(λ (y: Rat) => y * y, h, x + -h, m)) * Rat::inv_succ(1)
-                ≈ x * x + Rat::ofInt(OfNat(Succ(m))) * (h * h)) = ring(a, b, c, u);
+                ≈ x * x + Rat::ofInt(OfNat(m + 1)) * (h * h)) = ring(a, b, c, u);
             g
         },
     }
@@ -206,11 +206,11 @@ theorem walk_fourth(h, x: Rat, n: Nat):
         Succ(m) => {
             let a = walk_fourth(h, x + h, m);
             let b = walk_fourth(h, x + -h, m);
-            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let c: (Rat::ofInt(OfNat(m + 1)) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
             let u: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
             let g: ((walk_expect(λ (y: Rat) => (y * y) * (y * y), h, x + h, m) + walk_expect(λ (y: Rat) => (y * y) * (y * y), h, x + -h, m)) * Rat::inv_succ(1)
-                ≈ (x * x) * (x * x) + 6 * (x * x) * (Rat::ofInt(OfNat(Succ(m))) * (h * h))
-                + (3 * (Rat::ofInt(OfNat(Succ(m))) * Rat::ofInt(OfNat(Succ(m)))) + -(2 * Rat::ofInt(OfNat(Succ(m))))) * ((h * h) * (h * h))) = ring(a, b, c, u);
+                ≈ (x * x) * (x * x) + 6 * (x * x) * (Rat::ofInt(OfNat(m + 1)) * (h * h))
+                + (3 * (Rat::ofInt(OfNat(m + 1)) * Rat::ofInt(OfNat(m + 1))) + -(2 * Rat::ofInt(OfNat(m + 1)))) * ((h * h) * (h * h))) = ring(a, b, c, u);
             g
         },
     }
@@ -225,18 +225,18 @@ theorem walk_unit_fourth_runs(): walk_unit(λ (y: Rat) => (y * y) * (y * y), 1) 
     Rat::same_of_bool(walk_unit(λ (y: Rat) => (y * y) * (y * y), 1), Rat(5, 2), refl)
 }
 
-theorem walk_unit_clock(j: Nat): Rat::ofInt(OfNat(Succ(j) * Succ(j))) * (Rat::inv_succ(j) * Rat::inv_succ(j)) ≈ 1 {
+theorem walk_unit_clock(j: Nat): Rat::ofInt(OfNat((j + 1) * (j + 1))) * (Rat::inv_succ(j) * Rat::inv_succ(j)) ≈ 1 {
     let u: (Rat::inv_succ(j) * (Rat::ofInt(OfNat(j)) + 1) ≈ 1) = Rat::inv_succ_cancel(j);
-    let m: (Rat::ofInt(OfNat(Succ(j) * Succ(j))) ≈ Rat::ofInt(OfNat(Succ(j))) * Rat::ofInt(OfNat(Succ(j)))) =
-        Rat::same_refl(Rat::ofInt(OfNat(Succ(j) * Succ(j))));
-    let s: (Rat::ofInt(OfNat(Succ(j))) ≈ Rat::ofInt(OfNat(j)) + 1) = omega;
+    let m: (Rat::ofInt(OfNat((j + 1) * (j + 1))) ≈ Rat::ofInt(OfNat(j + 1)) * Rat::ofInt(OfNat(j + 1))) =
+        Rat::same_refl(Rat::ofInt(OfNat((j + 1) * (j + 1))));
+    let s: (Rat::ofInt(OfNat(j + 1)) ≈ Rat::ofInt(OfNat(j)) + 1) = omega;
     ring(u, m, s)
 }
 
 // The variance at time 1 is 1 at every resolution, so in the limit.
 theorem walk_unit_variance(j: Nat): walk_unit(λ (y: Rat) => y * y, j) ≈ 1 {
-    let a = walk_second(Rat::inv_succ(j), 0, Succ(j) * Succ(j));
-    let d: (walk_unit(λ (y: Rat) => y * y, j) ≈ walk_expect(λ (y: Rat) => y * y, Rat::inv_succ(j), 0, Succ(j) * Succ(j))) =
+    let a = walk_second(Rat::inv_succ(j), 0, (j + 1) * (j + 1));
+    let d: (walk_unit(λ (y: Rat) => y * y, j) ≈ walk_expect(λ (y: Rat) => y * y, Rat::inv_succ(j), 0, (j + 1) * (j + 1))) =
         Rat::same_refl(walk_unit(λ (y: Rat) => y * y, j));
     ring(d, a, walk_unit_clock(j))
 }
@@ -244,8 +244,8 @@ theorem walk_unit_variance(j: Nat): walk_unit(λ (y: Rat) => y * y, j) ≈ 1 {
 // The fourth moment is `3 - 2·dt`, and its continuous value is 3: the
 // Gaussian's `(4 - 1)!!`.
 theorem walk_unit_fourth(j: Nat): walk_unit(λ (y: Rat) => (y * y) * (y * y), j) ≈ 3 + -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)) {
-    let a = walk_fourth(Rat::inv_succ(j), 0, Succ(j) * Succ(j));
-    let d: (walk_unit(λ (y: Rat) => (y * y) * (y * y), j) ≈ walk_expect(λ (y: Rat) => (y * y) * (y * y), Rat::inv_succ(j), 0, Succ(j) * Succ(j))) =
+    let a = walk_fourth(Rat::inv_succ(j), 0, (j + 1) * (j + 1));
+    let d: (walk_unit(λ (y: Rat) => (y * y) * (y * y), j) ≈ walk_expect(λ (y: Rat) => (y * y) * (y * y), Rat::inv_succ(j), 0, (j + 1) * (j + 1))) =
         Rat::same_refl(walk_unit(λ (y: Rat) => (y * y) * (y * y), j));
     ring(d, a, walk_unit_clock(j))
 }

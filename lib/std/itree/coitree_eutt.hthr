@@ -67,19 +67,19 @@ theorem CoTree::after_settled<R>(E: Events, n: Nat, t: CoTree<R>(E), o: Obs<R>(E
 
 // One more drop past a tree whose root is a silent step.
 theorem CoTree::after_succ<R>(E: Events, n: Nat, t: CoTree<R>(E), s: CoTree<R>(E), h: CoTree::obs(E, t) = OTau(s)):
-    CoTree::after(E, Succ(n), t) = CoTree::after(E, n, s)
+    CoTree::after(E, n + 1, t) = CoTree::after(E, n, s)
 {
-    j(sym(h), λ y q => CoTree::after_obs(E, Succ(n), y) = CoTree::after(E, n, s), refl)
+    j(sym(h), λ y q => CoTree::after_obs(E, n + 1, y) = CoTree::after(E, n, s), refl)
 }
 
 // Dropping `k` steps to reach `CTau(s)`, then one more, then `m`, is dropping
 // `m` steps from `s`.
 theorem CoTree::after_obs_join<R>(E: Events, k: Nat, m: Nat, s: CoTree<R>(E)):
     (o: Obs<R>(E)) → CoTree::after_obs(E, k, o) = OTau(s) →
-    CoTree::after_obs(E, Succ(m + k), o) = CoTree::after(E, m, s)
+    CoTree::after_obs(E, m + k + 1, o) = CoTree::after(E, m, s)
 {
     match k {
-        Zero => λ o h => j(sym(h), λ y q => CoTree::after_obs(E, Succ(m), y) = CoTree::after(E, m, s), refl),
+        Zero => λ o h => j(sym(h), λ y q => CoTree::after_obs(E, m + 1, y) = CoTree::after(E, m, s), refl),
         Succ(k2) => λ o => match o {
             ORet(_) => λ h => absurd(h),
             OTau(s2) => λ h => CoTree::after_obs_join(E, k2, m, s, CoTree::obs(E, s2), h),
@@ -89,14 +89,14 @@ theorem CoTree::after_obs_join<R>(E: Events, k: Nat, m: Nat, s: CoTree<R>(E)):
 }
 
 theorem CoTree::after_join<R>(E: Events, k: Nat, m: Nat, t: CoTree<R>(E), s: CoTree<R>(E),
-    h: CoTree::after(E, k, t) = OTau(s)): CoTree::after(E, Succ(m + k), t) = CoTree::after(E, m, s)
+    h: CoTree::after(E, k, t) = OTau(s)): CoTree::after(E, m + k + 1, t) = CoTree::after(E, m, s)
 {
     CoTree::after_obs_join(E, k, m, s, CoTree::obs(E, t), h)
 }
 
 // [`after_join`] ending at what `s` observes.
 theorem CoTree::after_via<R>(E: Events, k: Nat, m: Nat, t: CoTree<R>(E), s: CoTree<R>(E), o: Obs<R>(E),
-    h: CoTree::after(E, k, t) = OTau(s), h2: CoTree::after(E, m, s) = o): CoTree::after(E, Succ(m + k), t) = o
+    h: CoTree::after(E, k, t) = OTau(s), h2: CoTree::after(E, m, s) = o): CoTree::after(E, m + k + 1, t) = o
 {
     trans(CoTree::after_join(E, k, m, t, s, h), h2)
 }
@@ -336,7 +336,7 @@ theorem CoTree::converges_after<R>(E: Events, t: CoTree<R>(E), o: Obs<R>(E), tr:
             ORet(r) => λ h => j(sym(trans(h0, h)), λ y q => Converges<R>(E, λ n => CoTree::approx_obs(E, n, y), tr), c),
             OTau(t1) => λ h => {
                 let c1: Converges<R>(E, λ n => CoTree::approx(E, n, t1), tr) = CoTree::converges_after(E, t1, o, tr, c, m, h);
-                Converges(Succ(c1.n), j(sym(h0), λ y q => IsTrace(E, CoTree::approx_obs(E, Succ(c1.n), y), tr), c1.h))
+                Converges(c1.n + 1, j(sym(h0), λ y q => IsTrace(E, CoTree::approx_obs(E, c1.n + 1, y), tr), c1.h))
             },
             OVis(c2, k2) => λ h =>
                 j(sym(trans(h0, h)), λ y q => Converges<R>(E, λ n => CoTree::approx_obs(E, n, y), tr), c),
@@ -359,7 +359,7 @@ theorem Eutt::traces_ret<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     match it {
         Stopped(at) => CoTree::converges_nil(E, u, tr, at),
         Returned(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
-            CoTree::converges_after(E, u, ORet(r), TRet(r), Converges(Succ(Zero), Returned(refl)), w.m, w.at)),
+            CoTree::converges_after(E, u, ORet(r), TRet(r), Converges(1, Returned(refl)), w.m, w.at)),
     }
 }
 
@@ -379,12 +379,12 @@ theorem Eutt::traces_vis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     match it {
         Prefix(at) => CoTree::converges_nil(E, u, tr, at),
         Pending(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
-            CoTree::converges_after(E, u, OVis(c, w.k2), TCall(c), Converges(Succ(Zero), Pending(refl)), w.m, w.at)),
+            CoTree::converges_after(E, u, OVis(c, w.k2), TCall(c), Converges(1, Pending(refl)), w.m, w.at)),
         Answered(a, rest, at, sub) => {
             let c1: Converges<R>(E, λ k3 => CoTree::approx(E, k3, w.k2(a)), rest) = ih(k(a), w.k2(a), w.next(a), rest, sub);
             j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
                 CoTree::converges_after(E, u, OVis(c, w.k2), TAns(c, a, rest),
-                    Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)), w.m, w.at))
+                    Converges(c1.n + 1, Answered(a, rest, refl, c1.h)), w.m, w.at))
         },
     }
 }
@@ -392,7 +392,7 @@ theorem Eutt::traces_vis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
 // One level of [`Eutt::traces`], at what `t` observes.
 theorem Eutt::traces_obs<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u), tr: Trace<R>(E), m: Nat,
     ih: Eutt::TracesAt<R>(E, m)):
-    (o: Obs<R>(E)) → CoTree::obs(E, t) = o → IsTrace(E, CoTree::approx_obs(E, Succ(m), o), tr) →
+    (o: Obs<R>(E)) → CoTree::obs(E, t) = o → IsTrace(E, CoTree::approx_obs(E, m + 1, o), tr) →
     Converges<R>(E, λ k => CoTree::approx(E, k, u), tr)
 {
     λ o => match o {
@@ -458,8 +458,8 @@ theorem CoTree::after_bind<A, B>(E: Events, h: A → CoTree<B>(E), o: Obs<A>(E),
                 CoTree::after_succ(E, k2, CoTree::bind(E, t, h), CoTree::bind(E, s, h), CoTree::obs_bind_at(E, t, h, OTau(s), h0)),
                 CoTree::after_bind(E, h, o, nr, k2, s, e)),
             OVis(c, k1) => λ e =>
-                j(e, λ y q => CoTree::after(E, Succ(k2), CoTree::bind(E, t, h)) = Obs::bind(E, y, h),
-                    CoTree::after_settled(E, Succ(k2), CoTree::bind(E, t, h), OVis(c, λ a => CoTree::bind(E, k1(a), h)),
+                j(e, λ y q => CoTree::after(E, k2 + 1, CoTree::bind(E, t, h)) = Obs::bind(E, y, h),
+                    CoTree::after_settled(E, k2 + 1, CoTree::bind(E, t, h), OVis(c, λ a => CoTree::bind(E, k1(a), h)),
                         CoTree::obs_bind_at(E, t, h, OVis(c, k1), h0), trivial)),
         },
     }
@@ -550,7 +550,7 @@ theorem CoTree::after_map<A, B>(E1: Events, E2: Events, F: CoTree<A>(E1) → CoT
                 let w: AfterIs<B>(E2, F(s), Fo(o)) = CoTree::after_map(E1, E2, F, Fo, hF, hT, o, k2, s, e);
                 let ht: (CoTree::obs(E2, F(t)) = OTau(F(s))) =
                     prelude::trans(hF(t), prelude::trans(j(h0, λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl), hT(s)));
-                AfterIs(Succ(w.m), prelude::trans(CoTree::after_succ(E2, w.m, F(t), F(s), ht), w.at))
+                AfterIs(w.m + 1, prelude::trans(CoTree::after_succ(E2, w.m, F(t), F(s), ht), w.at))
             },
             OVis(_, _) => λ e => AfterIs(Zero, prelude::trans(hF(t), j(prelude::trans(h0, e), λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl))),
         },
@@ -775,7 +775,7 @@ theorem Bisim::after<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>
             ORet(r) => λ o h => {
                 let w: (CoTree::obs(E, v) = ORet(r)) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
                 let e: (o = ORet(r)) = prelude::sym(h);
-                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), CoTree::after_settled(E, Succ(m), v, ORet(r), w, trivial))
+                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, m + 1, v)), CoTree::after_settled(E, m + 1, v, ORet(r), w, trivial))
             },
             OTau(u2) => λ o h => {
                 let w: TauTo<R>(E, u2, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
@@ -784,10 +784,10 @@ theorem Bisim::after<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>
             },
             OVis(c, k) => λ o h => {
                 let w: VisTo<R>(E, c, k, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
-                let p: VisAt<R>(E, c, k, CoTree::after(E, Succ(m), v)) =
-                    VisAt(w.k2, CoTree::after_settled(E, Succ(m), v, OVis(c, w.k2), w.at, trivial), w.next);
+                let p: VisAt<R>(E, c, k, CoTree::after(E, m + 1, v)) =
+                    VisAt(w.k2, CoTree::after_settled(E, m + 1, v, OVis(c, w.k2), w.at, trivial), w.next);
                 let e: (o = OVis(c, k)) = prelude::sym(h);
-                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), p)
+                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, m + 1, v)), p)
             },
         },
     }
@@ -843,7 +843,7 @@ theorem CoTree::bind_ret_at<A, B>(E: Events, h: A → CoTree<B>(E), r: A, k: Nat
                     CoTree::obs_bind_at(E, t, h, ORet(r), prelude::trans(h0, e)))),
             OTau(s) => λ e => {
                 let w: BindRetAt<A, B>(E, s, h, r) = CoTree::bind_ret_at(E, h, r, k2, s, e);
-                BindRetAt(Succ(w.j), λ m => prelude::trans(
+                BindRetAt(w.j + 1, λ m => prelude::trans(
                     CoTree::after_succ(E, m + w.j, CoTree::bind(E, t, h), CoTree::bind(E, s, h), CoTree::obs_bind_at(E, t, h, OTau(s), h0)),
                     w.at(m)))
             },

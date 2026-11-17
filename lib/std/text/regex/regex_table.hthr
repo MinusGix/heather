@@ -141,11 +141,11 @@ theorem Regex::any_same_mem(bs: List<Nat>, x: Nat): bs.any_bit(λ b => b.same(x)
 
 // Codes on the same side of a range's two breakpoints are in or out of it
 // together.
-theorem Regex::range_same(lo, hi, c, d: Nat, low: lo.leb(c) = lo.leb(d), high: Succ(hi).leb(c) = Succ(hi).leb(d)):
+theorem Regex::range_same(lo, hi, c, d: Nat, low: lo.leb(c) = lo.leb(d), high: (hi + 1).leb(c) = (hi + 1).leb(d)):
     (lo.leb(c) && c.leb(hi)) = (lo.leb(d) && d.leb(hi))
 {
     trans(cong_fn(λ (x: Bool) => lo.leb(c) && x, c.leb_flip(hi)),
-        trans(cong_fn(λ (x: Bool) => x && !Succ(hi).leb(c), low),
+        trans(cong_fn(λ (x: Bool) => x && !(hi + 1).leb(c), low),
             trans(cong_fn(λ (x: Bool) => lo.leb(d) && !x, high),
                 sym(cong_fn(λ (x: Bool) => lo.leb(d) && x, d.leb_flip(hi))))))
 }
@@ -156,10 +156,10 @@ theorem Regex::deriv_simp_class(self r: Regex, bs: List<Nat>, c, d: Nat, side: R
 {
     match r {
         Range(lo, hi) => λ cut => {
-            let parts = bs.any_bit(λ b => b.same(lo)).and_true_parts(bs.any_bit(λ b => b.same(Succ(hi))), cut);
+            let parts = bs.any_bit(λ b => b.same(lo)).and_true_parts(bs.any_bit(λ b => b.same(hi + 1)), cut);
             cong_fn(λ (x: Bool) => match x { True => Eps, False => NoMatch },
                 Regex::range_same(lo, hi, c, d, side(lo, Regex::any_same_mem(bs, lo, parts.left)),
-                    side(Succ(hi), Regex::any_same_mem(bs, Succ(hi), parts.right))))
+                    side(hi + 1, Regex::any_same_mem(bs, hi + 1, parts.right))))
         },
         Seq(a, b) => λ cut => {
             let parts = a.cut_by(bs).and_true_parts(b.cut_by(bs), cut);

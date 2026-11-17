@@ -30,7 +30,7 @@ theorem int_pythagoras(): Hurwitz::Same(Hurwitz::add(Hurwitz::mul(Hurwitz::sin<I
 // Read at one coefficient, the addition law is the binomial theorem, proved
 // again by coinduction rather than by Pascal's rule.
 theorem binomial_by_coinduction(a, b: Rat, n: Nat):
-    ∑ i < Succ(n), Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b) ≈ ∏ k < n, (a + b)
+    ∑ i < n + 1, Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b) ≈ ∏ k < n, (a + b)
 { Hurwitz::exp_add(a, b, n) }
 theorem rat_leibniz(f, g: Hurwitz<Rat>): Hurwitz::Same(Hurwitz::d(Hurwitz::mul(f, g)), Hurwitz::add(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g)))) {
     Hurwitz::leibniz(f, g)
@@ -41,7 +41,7 @@ theorem ring_series(f, g: Hurwitz<Int>): (f + g) * (f + g) ≈ f * f + (f * g + 
 // expect-error: differ by
 theorem ring_series_not_identity(f, g: Hurwitz<Int>): (f + g) * (f + g) ≈ f * f + g * g { ring }
 theorem series_binomial(f, g: Hurwitz<Rat>, n: Nat):
-    ∏ k < n, (f + g) ≈ ∑ i < Succ(n), Semiring::of_nat<Hurwitz<Rat>>(n.choose(i)) * ((∏ k < i, f) * ∏ k < n - i, g)
+    ∏ k < n, (f + g) ≈ ∑ i < n + 1, Semiring::of_nat<Hurwitz<Rat>>(n.choose(i)) * ((∏ k < i, f) * ∏ k < n - i, g)
 { CommSemiring::binomial(f, g, n) }
 
 // Series of series: two variables, through the class system.

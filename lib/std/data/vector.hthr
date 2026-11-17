@@ -70,7 +70,7 @@ fn List::vector_of<A>(self xs: List<A>, k: Nat, pad: A) → [A; k] {
 theorem vector_entries_len<A>(k: Nat): (v: [A; k]) → vector_entries(v).len() = k {
     match k as λ j => (v: [A; j]) → vector_entries(v).len() = j {
         Zero => λ v => refl,
-        Succ(_, ih) => λ v => Nat::cong(λ m => Succ(m), ih(tail(v))),
+        Succ(_, ih) => λ v => Nat::cong(λ m => m + 1, ih(tail(v))),
     }
 }
 
@@ -91,7 +91,7 @@ theorem vector_of_entries<A>(k: Nat, pad: A): (v: [A; k]) → (rest: List<A>) �
 theorem List::vector_of_append<A>(k: Nat, pad: A): (xs, more: List<A>) → k <= xs.len() → (xs ++ more).vector_of(k, pad) = xs.vector_of(k, pad) {
     match k as λ j => (xs, more: List<A>) → j <= xs.len() → (xs ++ more).vector_of(j, pad) = xs.vector_of(j, pad) {
         Zero => λ xs more _ => refl,
-        Succ(j, ih) => λ xs more => match xs as λ ys => Succ(j) <= ys.len() → (ys ++ more).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+        Succ(j, ih) => λ xs more => match xs as λ ys => j + 1 <= ys.len() → (ys ++ more).vector_of(j + 1, pad) = ys.vector_of(j + 1, pad) {
             Nil => λ never => false_elim(never),
             Cons(h, t) => λ fits => {
                 let inner: (cons(h, (t ++ more).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t, more, fits), refl);
@@ -116,7 +116,7 @@ theorem vector_of_entries_exact<A>(k: Nat, pad: A): (v: [A; k]) → vector_entri
 theorem List::entries_vector_of<A>(k: Nat, pad: A): (xs: List<A>) → xs.len() = k → vector_entries(xs.vector_of(k, pad)) = xs {
     match k as λ j => (xs: List<A>) → xs.len() = j → vector_entries(xs.vector_of(j, pad)) = xs {
         Zero => λ xs => match xs { Nil => λ _ => refl, Cons(_, _) => λ long => absurd(long) },
-        Succ(j, ih) => λ xs => match xs as λ ys => ys.len() = Succ(j) → vector_entries(ys.vector_of(Succ(j), pad)) = ys {
+        Succ(j, ih) => λ xs => match xs as λ ys => ys.len() = j + 1 → vector_entries(ys.vector_of(j + 1, pad)) = ys {
             Nil => λ short => absurd(short),
             Cons(h, t) => λ exact => List::cong_cons(h, ih(t, Nat::succ_inj(t.len(), j, exact))),
         },
@@ -136,7 +136,7 @@ fn List::vector_at<A>(self xs: List<A>, at, k: Nat, pad: A) → [A; k] {
 
 // A list's first entries as a vector are its first and then the rest's.
 theorem List::vector_of_succ<A>(k: Nat, pad: A): (xs: List<A>) →
-    xs.vector_of(Succ(k), pad) = cons(xs.nth(0).unwrap_or(pad), xs.drop(1).vector_of(k, pad)) {
+    xs.vector_of(k + 1, pad) = cons(xs.nth(0).unwrap_or(pad), xs.drop(1).vector_of(k, pad)) {
     λ xs => match xs {
         Nil => refl,
         Cons(h, t) => {
@@ -151,10 +151,10 @@ theorem List::vector_of_drop<A>(self xs: List<A>, pad: A): (k, at: Nat) → xs.d
     λ k => match k as λ j => (at: Nat) → xs.drop(at).vector_of(j, pad) = xs.vector_at(at, j, pad) {
         Zero => λ at => refl,
         Succ(j, ih) => λ at => {
-            let first: (xs.drop(at).vector_of(Succ(j), pad) = cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad))) =
+            let first: (xs.drop(at).vector_of(j + 1, pad) = cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad))) =
                 List::vector_of_succ(j, pad, xs.drop(at));
-            let rest: (cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad)) = cons(xs.nth(at).unwrap_or(pad), xs.vector_at(Succ(at), j, pad))) =
-                rewrite(sym(xs.nth_drop(at)), rewrite(sym(xs.drop_succ(at)), rewrite(ih(Succ(at)), refl)));
+            let rest: (cons(xs.drop(at).nth(0).unwrap_or(pad), xs.drop(at).drop(1).vector_of(j, pad)) = cons(xs.nth(at).unwrap_or(pad), xs.vector_at(at + 1, j, pad))) =
+                rewrite(sym(xs.nth_drop(at)), rewrite(sym(xs.drop_succ(at)), rewrite(ih(at + 1), refl)));
             trans(first, rest)
         },
     }
@@ -164,7 +164,7 @@ theorem List::vector_of_drop<A>(self xs: List<A>, pad: A): (k, at: Nat) → xs.d
 theorem List::vector_of_take<A>(k: Nat, pad: A): (xs: List<A>) → xs.take(k).vector_of(k, pad) = xs.vector_of(k, pad) {
     match k as λ j => (xs: List<A>) → xs.take(j).vector_of(j, pad) = xs.vector_of(j, pad) {
         Zero => λ xs => refl,
-        Succ(j, ih) => λ xs => match xs as λ ys => ys.take(Succ(j)).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+        Succ(j, ih) => λ xs => match xs as λ ys => ys.take(j + 1).vector_of(j + 1, pad) = ys.vector_of(j + 1, pad) {
             Nil => refl,
             Cons(h, t) => {
                 let inner: (cons(h, t.take(j).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t), refl);
@@ -191,7 +191,7 @@ fn vector_index<A>({n: Nat}, v: [A; n], i: Nat, inside: i < n) → A {
 theorem vector_index_irrel<A>({n: Nat}, v: [A; n], i: Nat, a, b: i < n): vector_index(v, i, a) = vector_index(v, i, b) {
     (match n as λ m => (v: [A; m]) → (i: Nat) → (a, b: i < m) → vector_index(v, i, a) = vector_index(v, i, b) {
         Zero => λ v i a b => false_elim(a),
-        Succ(m, ih) => λ v i => match i as λ k => (a, b: k < Succ(m)) → vector_index(v, k, a) = vector_index(v, k, b) {
+        Succ(m, ih) => λ v i => match i as λ k => (a, b: k < m + 1) → vector_index(v, k, a) = vector_index(v, k, b) {
             Zero => λ a b => refl,
             Succ(j) => λ a b => ih(tail(v), j, a, b),
         },
@@ -240,11 +240,11 @@ theorem vector_get_past<A>(n: Nat): (v: [A; n]) → (i: Nat) → (pad: A) → n 
 theorem List::vector_at_get<A>(self xs: List<A>, pad: A): (k, at, i: Nat) → i < k → vector_get(xs.vector_at(at, k, pad), i, pad) = xs.nth(at + i).unwrap_or(pad) {
     λ k => match k as λ m => (at, i: Nat) → i < m → vector_get(xs.vector_at(at, m, pad), i, pad) = xs.nth(at + i).unwrap_or(pad) {
         Zero => λ at i inside => false_elim(inside),
-        Succ(j, ih) => λ at i => match i as λ c => c < Succ(j) → vector_get(xs.vector_at(at, Succ(j), pad), c, pad) = xs.nth(at + c).unwrap_or(pad) {
+        Succ(j, ih) => λ at i => match i as λ c => c < j + 1 → vector_get(xs.vector_at(at, j + 1, pad), c, pad) = xs.nth(at + c).unwrap_or(pad) {
             Zero => λ _ => refl,
             Succ(c) => λ inside => {
-                let moved: (Succ(at) + c = at + Succ(c)) = at.add_succ_left(c);
-                trans(ih(Succ(at), c, inside), cong_fn(λ (n: Nat) => xs.nth(n).unwrap_or(pad), moved))
+                let moved: (at + 1 + c = at + (c + 1)) = at.add_succ_left(c);
+                trans(ih(at + 1, c, inside), cong_fn(λ (n: Nat) => xs.nth(n).unwrap_or(pad), moved))
             },
         },
     }
@@ -319,7 +319,7 @@ theorem vector_get_update_other<A>(n: Nat): (v: [A; n]) → (i, j: Nat) → (a, 
             },
             Succ(i1) => match j {
                 Zero => λ other => refl,
-                Succ(j1) => λ other => ih(tail(v), i1, j1, a, pad, λ same => other(cong_fn(λ (m: Nat) => Succ(m), same))),
+                Succ(j1) => λ other => ih(tail(v), i1, j1, a, pad, λ same => other(cong_fn(λ (m: Nat) => m + 1, same))),
             },
         },
     }

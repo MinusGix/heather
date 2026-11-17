@@ -16,7 +16,7 @@ def six = Succ(five);
 // A closed verdict by computation, through both definitions.
 theorem six_is(): six = 6 {}
 
-theorem six_unfolds(): six = Succ(five) { refl }
+theorem six_unfolds(): six = five + 1 { refl }
 
 // A polymorphic value: its type parameter is implicit, so it is still used
 // bare, and inference fills it.

@@ -29,7 +29,7 @@ fn guarded<T, A>(source: List<T>,
 theorem progress_after<T>(source: List<T>, begin, middle, end: Cursor<T>(source),
     prefix: begin.offset.Le(middle.offset), step: middle.offset.Lt(end.offset)):
     rest(source, end).len().Lt(rest(source, begin).len()) {
-    let moved: begin.offset.Lt(end.offset) = Succ(begin.offset).le_trans(Succ(middle.offset), end.offset, prefix, step);
+    let moved: begin.offset.Lt(end.offset) = (begin.offset + 1).le_trans(middle.offset + 1, end.offset, prefix, step);
     drop_length_strict(source, begin.offset, end.offset, moved, end.within)
 }
 

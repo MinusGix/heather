@@ -49,13 +49,13 @@ fn lticks(k: Nat) → ITree<Nat>(Counter()) {
     match k { Zero => Ret(0), Succ(j) => ITree::bind(Counter(), lticks(j), λ n => tick()) }
 }
 theorem thread_literal(): ITree::thread(tick(), 2) = Some(Pair(3, 2)) { refl }
-theorem thread_open(s: Nat): ITree::thread(tick(), s) = Some(Pair(Succ(s), s)) { refl }
+theorem thread_open(s: Nat): ITree::thread(tick(), s) = Some(Pair(s + 1, s)) { refl }
 theorem thread_deep(): ITree::thread(lticks(24), 0) = Some(Pair(24, 23)) { refl }
 
 // A program built by `rec` grows with fuel, produces its value, and binds.
 fn body(c: Cmd) → ITree<Resp(c)>(Events::sum(C(), C())) { match c { Ask => Ret(7), Say(_) => Ret(trivial) } }
 fn asks() → Program<Nat>(C()) { Program::rec(C(), C(), λ c => body(c), Ask) }
-theorem asks_grows(n: Nat): ITree::Below(C(), asks().at(n), asks().at(Succ(n))) { asks().grows(n) }
+theorem asks_grows(n: Nat): ITree::Below(C(), asks().at(n), asks().at(n + 1)) { asks().grows(n) }
 theorem asks_seven(): Program::Produces<Nat>(C(), asks(), TRet(7)) { Converges(1, Returned(refl)) }
 theorem twice(): Program::Produces<Nat>(C(), Program::bind(C(), asks(), λ a => Program::pure(C(), a + a)), TRet(14)) {
     Converges(1, Returned(refl))

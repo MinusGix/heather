@@ -70,19 +70,19 @@ fn Shift<A>(xs: List<A>, m: Nat) → Type {
     match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Shift(r2, Succ(m)) } }
 }
 theorem shift_all<A>(xs: List<A>, m: Nat): Shift(xs, m) {
-    match xs { Nil => refl, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => shift_all(r2, Succ(m)) } }
+    match xs { Nil => refl, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => shift_all(r2, m + 1) } }
 }
 // In checking position: the type is computed by the window.
 theorem shift_two(): Shift<Nat>([1, 2], 0) { refl }
 
 // A written `λ`, its binder read by the call (probe 2's shape).
 theorem shift_lam<A>(xs: List<A>): (m: Nat) → Shift(xs, m) {
-    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => shift_lam(r2, Succ(m)) } }
+    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => shift_lam(r2, m + 1) } }
 }
 
 // Two `λ`s, the goal reading both.
 theorem shift_lam2<A>(xs: List<A>): (m: Nat) → (k: Nat) → Shift(xs, m + k) {
-    match xs { Nil => λ m k => refl, Cons(_, r) => λ m k => match r { Nil => trivial, Cons(_, r2) => shift_lam2(r2, m, Succ(k)) } }
+    match xs { Nil => λ m k => refl, Cons(_, r) => λ m k => match r { Nil => trivial, Cons(_, r2) => shift_lam2(r2, m, k + 1) } }
 }
 
 // Three deep, under the `λ`: the peel is handed down to the second convoy.
@@ -90,7 +90,7 @@ fn Shift3(xs: List<Nat>, m: Nat) → Type {
     match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => match r2 { Nil => True, Cons(_, r3) => Shift3(r3, Succ(m)) } } }
 }
 theorem shift3_lam(xs: List<Nat>): (m: Nat) → Shift3(xs, m) {
-    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => match r2 { Nil => trivial, Cons(_, r3) => shift3_lam(r3, Succ(m)) } } }
+    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => match r2 { Nil => trivial, Cons(_, r3) => shift3_lam(r3, m + 1) } } }
 }
 
 // Negative control: the call passes `m` where the motive at `r2` needs
