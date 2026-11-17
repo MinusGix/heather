@@ -111,10 +111,10 @@ runtime fn sort_in_place(s: List<u8>, n: u64) → Mutated<List<u8>, u64> {
 }
 
 theorem sort_in_place_sorts(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    s.SortedPerm(BitVec::unsigned_le, sort_in_place(s, n).after) { … }
+    s.SortedPerm((<=), sort_in_place(s, n).after) { … }
 
 theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    sort_in_place(s, n).after = s.insertion_sort(BitVec::unsigned_le) { … }
+    sort_in_place(s, n).after = s.insertion_sort((<=)) { … }
 ```
 
 A function that writes returns a `Mutated`: the buffer `after` the call, and
