@@ -215,6 +215,11 @@ impl Checking<'_> {
         if let Some(quoted) = Host(self).quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
         }
+        // A call made only of facts about a scrutinee is taken as written
+        // if it checks as written (docs/language/matching/arm-readings-design.md §3.4).
+        if let Some(written) = crate::readings::Readings(self).as_written(cx, e, Some((expected, lvl))) {
+            return self.elab_check_skel_slots_written(&written, e, expected, lvl, hint, skel, capture_slots);
+        }
         // A name an enclosing match gave two readings is the one this
         // position asks for (docs/language/matching/arm-readings-design.md).
         if let ExprKind::Var(name) = &e.kind
@@ -601,17 +606,25 @@ impl Checking<'_> {
                 // which is what `h` is passed to, `g: (b = False) → A` at
                 // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md,
                 // issues/case-split-refines-hypotheses-under-calls.md).
-                let refined = Generalize(self).refined_hypotheses(
+                let mut refined = Generalize(self).refined_hypotheses(
                     cx, arms, (&scrut_t, &scrut_ty, &scrut_lvl), dec, expected, eqbind.as_deref(), e.span,
                 );
-                let unrefined = positions.clone();
-                for &p in &refined.positions {
-                    if !positions.contains(&p) {
-                        positions.push(p);
+                let unrefined = std::mem::take(&mut positions);
+                // Lowered at most twice: a hypothesis generalized because an
+                // arm names it, whose refined reading no arm then used, is
+                // left out the second time (arm-readings-design §3.4).
+                let mut again = false;
+                loop {
+                    let mut positions = unrefined.clone();
+                    for &p in &refined.positions {
+                        if !positions.contains(&p) {
+                            positions.push(p);
+                        }
                     }
-                }
-                positions.sort_unstable();
-                if !positions.is_empty() {
+                    positions.sort_unstable();
+                    if positions.is_empty() {
+                        break;
+                    }
                     // A hypothesis read through a call is spelled with the
                     // scrutinee, which the syntactic rung finds first; the
                     // goal is spelled so too, at the motive it gets alone,
@@ -649,7 +662,7 @@ impl Checking<'_> {
                         arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
                     }
                     let mut gcx = cx.clone();
-                    crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
+                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     if let Some(dec) = guard {
@@ -677,10 +690,42 @@ impl Checking<'_> {
                             &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
                         ),
                     };
-                    let elim = match eqbind {
-                        None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run)?,
-                        Some(h) => run(&gcx, Some(h))?,
-                    };
+                    let (elim, unused) = self.probe_unless(|| {
+                        let elim = match eqbind {
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            Some(h) => run(&gcx, Some(h)),
+                        };
+                        let m = cx.names.len();
+                        let mut unused: Vec<usize> = Vec::new();
+                        if !again && elim.is_ok() {
+                            for reading in &registered {
+                                if let crate::readings::ReadingKind::Written(q) = reading.kind
+                                    && reading.uses.get() == 0
+                                    && expected.abstract_local(&Term::Var(heather_kernel::term::LocalVar((m - 1 - q) as u32))).is_none()
+                                {
+                                    unused.push(q);
+                                }
+                            }
+                            // One a kept hypothesis's type mentions stays.
+                            while let Some(i) = unused.iter().position(|&q| {
+                                positions.iter().any(|&p| p > q && !unused.contains(&p) && generalize::mentions_binder(cx, p, q))
+                            }) {
+                                unused.remove(i);
+                            }
+                        }
+                        let keep = unused.is_empty();
+                        ((elim, unused), keep)
+                    });
+                    if !unused.is_empty() {
+                        refined.positions.retain(|p| !unused.contains(p));
+                        refined.retyped.retain(|(p, _)| !unused.contains(p));
+                        again = true;
+                        continue;
+                    }
+                    let elim = elim?;
+                    // What this match generalizes it reads: a copy an
+                    // enclosing match bound is used by being refined again.
+                    positions.iter().for_each(|&p| crate::readings::Readings::note_use(cx, p));
                     return Ok(Generalize(self).instantiate_generalized(cx, elim, gen_ty, &positions));
                 }
                 // An alias whose type is about the scrutinee rides along as a

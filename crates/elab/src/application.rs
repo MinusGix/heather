@@ -252,6 +252,9 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     /// (`readings.rs`): each a term and its type.
     fn argument_readings(&self, _cx: &Cx, _term: &Term) -> Vec<(Term, Type)> { Vec::new() }
 
+    /// A name that elaborated to `term` was given another of its readings.
+    fn argument_reading_replaced(&self, _cx: &Cx, _term: &Term) {}
+
     /// Do an argument's type and its parameter's convert?
     fn argument_type_converts(&self, _cx: &Cx, _got: &Type, _expected: &Type, _level: &Level) -> bool { true }
 
@@ -1508,7 +1511,13 @@ fn apply_implicit_planned(
                             if readings.is_empty() || fits(&inferred_ty, true) {
                                 (inferred, inferred_ty)
                             } else {
-                                readings.into_iter().find(|(_, ty)| fits(ty, false)).unwrap_or((inferred, inferred_ty))
+                                match readings.into_iter().find(|(_, ty)| fits(ty, false)) {
+                                    Some(other) => {
+                                        elab.argument_reading_replaced(cx, &inferred);
+                                        other
+                                    }
+                                    None => (inferred, inferred_ty),
+                                }
                             }
                         }
                         _ => (inferred, inferred_ty),

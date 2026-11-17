@@ -1485,6 +1485,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         readings
     }
 
+    fn argument_reading_replaced(&self, cx: &Cx, term: &Term) {
+        readings::Readings::note_replaced(cx, term);
+    }
+
     fn argument_type_converts(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level) -> bool {
         self.conv_types(cx, got, expected, level)
     }
@@ -3144,7 +3148,10 @@ impl Elaborator {
         let local_pos = cx.names.lookup(name);
         let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
-            (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
+            (Some(pos), Some(a)) if a.depth <= pos => {
+                readings::Readings::note_use(cx, pos);
+                return Ok(self.local(cx, pos));
+            }
             (_, Some(a)) => {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
@@ -3152,7 +3159,10 @@ impl Elaborator {
                 let (term, ty) = if splice { a.splice(by) } else { a.at(by) };
                 return Ok((term, ty, a.level.clone()));
             }
-            (Some(pos), None) => return Ok(self.local(cx, pos)),
+            (Some(pos), None) => {
+                readings::Readings::note_use(cx, pos);
+                return Ok(self.local(cx, pos));
+            }
             (None, None) => {}
         }
         if let Some((ind, i)) = self.ctor_of(name).or_else(|| Constructors(self).ctor_over_types(name)) {
