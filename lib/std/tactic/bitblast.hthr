@@ -318,9 +318,9 @@ theorem tseitin_holds(env: Nat → Nat → Bool, gs: List<Gate>, v: Nat → Bool
 
 // What a refutation of the circuit's clauses, with `out` asserted false,
 // proves: `out` is true at every input.
-theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, steps: List<Step>, ok: check(formula_of(cnf_of(Cons([out.not()], tseitin(gs, gs.len())))), steps) = True): out.value(valuation(env, gs)) = True {
+theorem circuit_unsat(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, unsat: (v: Nat → Bool) → all_true(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), v) = False): out.value(valuation(env, gs)) = True {
     let v = valuation(env, gs);
-    let none: (all_true(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), v) = False) = refuted(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), steps, ok, v);
+    let none: (all_true(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), v) = False) = unsat(v);
     let rest: (all_hold(tseitin(gs, gs.len()), v) = True) = tseitin_holds(env, gs, v, λ y _ => refl);
     let held: ((out.not().value(v) || False) && all_hold(tseitin(gs, gs.len()), v) = False) = trans(sym(cnf_of_true(Cons([out.not()], tseitin(gs, gs.len())), v)), none);
     let neg: ((out.not().value(v) || False) && True = False) = trans(Bool::and_cong(refl, sym(rest)), held);
@@ -331,6 +331,11 @@ theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, ste
             absurd(trans(sym(neg), j(sym(t), λ z _ => (z || False) && True = True, refl)))
         },
     }
+}
+
+// The same from a refutation checked in one step.
+theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, steps: List<Step>, ok: check(formula_of(cnf_of(Cons([out.not()], tseitin(gs, gs.len())))), steps) = True): out.value(valuation(env, gs)) = True {
+    circuit_unsat(env, gs, out, λ v => refuted(cnf_of(Cons([out.not()], tseitin(gs, gs.len()))), steps, ok, v))
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +537,176 @@ theorem Circ::zip_makes(n: Nat, c: Circ, good: c.Good(), op: Circ → Lit → Li
                 word_valid_grows(k, tail(ys), c.size, h.fst.size, vy.right, mh.left.right.left));
             ⟨c.grows_trans(h.fst, rest.fst, mh.left, mr.left), ⟨⟨h.fst.grows_valid(rest.fst, mr.left, h.snd, mh.right.left), mr.right.left⟩, λ d later env =>
                 BitVec::cons_bit_cong(k, mh.right.right(d, h.fst.grows_trans(rest.fst, d, mr.left, later), env), mr.right.right(d, later, env))⟩⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words built without gates: constants, complements and inputs. Node 0 is
+// false, so `Pos(0)` is the constant false and `Neg(0)` the constant true.
+
+fn Lit::of_bool(b: Bool) → Lit {
+    match b {
+        False => Pos(0),
+        True => Neg(0),
+    }
+}
+
+theorem Lit::of_bool_value(b: Bool, v: Nat → Bool, z: v(0) = False): Lit::of_bool(b).value(v) = b {
+    match b {
+        False => z,
+        True => cong_fn(λ (x: Bool) => !x, z),
+    }
+}
+
+theorem Lit::of_bool_node(b: Bool): Lit::of_bool(b).node() = 0 {
+    match b { False => refl, True => refl }
+}
+
+// The literal `l` at every bit.
+fn word_repeat({n: Nat}, l: Lit) → [Lit; n] {
+    match n {
+        Zero => [],
+        Succ(_, ih) => cons(l, ih),
+    }
+}
+
+theorem word_repeat_value(n: Nat, l: Lit, v: Nat → Bool): word_value(word_repeat(l, n := n), v) = BitVec::repeat_bit(l.value(v), n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, word_repeat_value(k, l, v)),
+    }
+}
+
+theorem word_repeat_valid(n: Nat, l: Lit, size: Nat, valid: l.node() < size): word_valid(word_repeat(l, n := n), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => ⟨valid, word_repeat_valid(k, l, size, valid)⟩,
+    }
+}
+
+theorem word_zero_value(n: Nat, v: Nat → Bool, z: v(0) = False): word_value(word_repeat(Pos(0), n := n), v) = BitVec::zero(n := n) {
+    trans(word_repeat_value(n, Pos(0), v), cong_fn(λ (b: Bool) => BitVec::repeat_bit(b, n := n), z))
+}
+
+// The number `x` at width `n`, as `BitVec::ofNat` spells it.
+fn word_const({n: Nat}, x: Nat) → [Lit; n] {
+    (match n as λ k => Nat → [Lit; k] {
+        Zero => λ x => [],
+        Succ(_, ih) => λ x => cons(Lit::of_bool(BitVec::odd_bit(x)), ih(x.half())),
+    })(x)
+}
+
+theorem word_const_value(n, x: Nat, v: Nat → Bool, z: v(0) = False): word_value(word_const(x, n := n), v) = BitVec::ofNat(x, n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, Lit::of_bool_value(BitVec::odd_bit(x), v, z), word_const_value(k, x.half(), v, z)),
+    }
+}
+
+theorem word_const_valid(n, x, size: Nat, pos: 0 < size): word_valid(word_const(x, n := n), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => ⟨j(sym(Lit::of_bool_node(BitVec::odd_bit(x))), λ z _ => z < size, pos), word_const_valid(k, x.half(), size, pos)⟩,
+    }
+}
+
+fn word_not({n: Nat}, ws: [Lit; n]) → [Lit; n] {
+    (match n as λ k => [Lit; k] → [Lit; k] {
+        Zero => λ ws => [],
+        Succ(_, ih) => λ ws => cons(head(ws).not(), ih(tail(ws))),
+    })(ws)
+}
+
+theorem word_not_value(n: Nat, ws: [Lit; n], v: Nat → Bool): word_value(word_not(ws), v) = word_value(ws, v).complement() {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, head(ws).not_value(v), word_not_value(k, tail(ws), v)),
+    }
+}
+
+theorem word_not_valid(n: Nat, ws: [Lit; n], size: Nat, valid: word_valid(ws, size)): word_valid(word_not(ws), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => ⟨j(sym(head(ws).not_node()), λ z _ => z < size, valid.left), word_not_valid(k, tail(ws), size, valid.right)⟩,
+    }
+}
+
+// Inputs. The circuit's first `K` nodes after node 0 are the input bits
+// (`Circ::inputs`): bit `k` is node `k + 1`. A bit at or past `K` reads
+// false, so that every literal is a node of the circuit.
+fn input_env(K: Nat, v: Nat → Bool) → Nat → Bool { λ k => Succ(k).leb(K) && v(Succ(k)) }
+
+fn input_lit_with(inside: Bool, k: Nat) → Lit {
+    match inside {
+        False => Pos(0),
+        True => Pos(Succ(k)),
+    }
+}
+
+fn input_lit(K, k: Nat) → Lit { input_lit_with(Succ(k).leb(K), k) }
+
+theorem input_lit_with_value(inside: Bool, k: Nat, v: Nat → Bool, z: v(0) = False): input_lit_with(inside, k).value(v) = inside && v(Succ(k)) {
+    match inside {
+        False => z,
+        True => refl,
+    }
+}
+
+theorem input_lit_value(K, k: Nat, v: Nat → Bool, z: v(0) = False): input_lit(K, k).value(v) = input_env(K, v)(k) {
+    input_lit_with_value(Succ(k).leb(K), k, v, z)
+}
+
+theorem input_lit_valid(K, k, size: Nat, kin: K < size): input_lit(K, k).node() < size {
+    (match Succ(k).leb(K) as λ i => Succ(k).leb(K) = i → input_lit_with(i, k).node() < size {
+        False => λ e => { let p: (0 < size) = omega; p },
+        True => λ e => {
+            let le: (Succ(k) <= K) = Nat::le_of_leb(Succ(k), K, e);
+            let p: (Succ(k) < size) = omega;
+            p
+        },
+    })(refl)
+}
+
+// Bits `o, o + 1, …` of `bits`, `w` of them and then zeros, at width `n`: an
+// input word of width `w` stored at offset `o`, zero-extended or truncated
+// to `n`.
+fn window({n: Nat}, bits: Nat → Bool, o, w: Nat) → BitVec(n) {
+    (match n as λ k => Nat → Nat → BitVec(k) {
+        Zero => λ o w => BitVec::nil(),
+        Succ(_, ih) => λ o w => match w {
+            Zero => BitVec::zero(),
+            Succ(r) => ih(Succ(o), r).cons_bit(bits(o)),
+        },
+    })(o, w)
+}
+
+fn var_word({n: Nat}, K, o, w: Nat) → [Lit; n] {
+    (match n as λ k => Nat → Nat → [Lit; k] {
+        Zero => λ o w => [],
+        Succ(_, ih) => λ o w => match w {
+            Zero => word_repeat(Pos(0)),
+            Succ(r) => cons(input_lit(K, o), ih(Succ(o), r)),
+        },
+    })(o, w)
+}
+
+theorem var_word_value(n, K, o, w: Nat, v: Nat → Bool, z: v(0) = False): word_value(var_word(K, o, w, n := n), v) = window(input_env(K, v), o, w, n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => match w {
+            Zero => word_zero_value(Succ(k), v, z),
+            Succ(r) => BitVec::cons_bit_cong(k, input_lit_value(K, o, v, z), var_word_value(k, K, Succ(o), r, v, z)),
+        },
+    }
+}
+
+theorem var_word_valid(n, K, o, w, size: Nat, kin: K < size): word_valid(var_word(K, o, w, n := n), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => match w {
+            Zero => { let p: (0 < size) = omega; word_repeat_valid(Succ(k), Pos(0), size, p) },
+            Succ(r) => ⟨input_lit_valid(K, o, size, kin), var_word_valid(k, K, Succ(o), r, size, kin)⟩,
         },
     }
 }
