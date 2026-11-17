@@ -1,7 +1,7 @@
 # A hypothesis has two readings in an arm
 
 Design for `issues/match-eqbind-generalizes-passed-hypotheses.md`
-(2026-11-17). **Status: proposed, nothing built.** It changes how case
+(2026-11-17). **Status: proposed; stage 1 prototyped on this branch (§6).** It changes how case
 splits elaborate, so it is Minus's to decide; §9 lists the decisions.
 
 It replaces two syntactic exceptions in `generalize::select_refined`:
@@ -147,15 +147,14 @@ hypothesis as bound last).
   syntactically `T`. No other checking site pays anything
   (`MismatchNotes`' rule, recording is not probing, stands).
 - **Argument of a call whose implicits are still open**: the refined
-  reading teaches the implicits, as any inferred argument does. The
-  application engine already owes each such argument one comparison with
-  its parameter under the call's final solutions (`OwedChecks::discharge`);
-  for a two-reading name that comparison is decided there, and the written
-  reading takes its place if it is the one that converts. If an argument
-  that has no second reading then clashes with an implicit a refined
-  reading taught, the application is elaborated once more with every
-  two-reading name as written. Two attempts at most, the second only on a
-  clash.
+  reading teaches the implicits, as any inferred argument does, and
+  stands unless its type clashes with an implicit already solved. Then
+  another reading takes its place if it settles the parameter's type and
+  converts with it. Where the parameter's type is already known,
+  conversion decides, as in checking position. (Not built: if an argument
+  with no second reading clashes with an implicit a refined reading
+  taught, elaborate the application once more with every two-reading name
+  as written. The library has no such call.)
 - **Inference position** (`absurd(same)`, a `let` without a type, a
   receiver): the refined reading. It is the informative one, and it is
   what the plain `match` gives.
@@ -358,8 +357,19 @@ readings module, one field, two call sites.
 - The probes that pinned the exceptions check unchanged: `pick_by` with
   `pick_by_true` by `refl`, the `taken_*` family, `passed_h`,
   `passed_beside`, `Bisim::of_obs`.
-- The whole-library sweep with the prototype: **(running; filled in
-  before this leaves draft).**
+- **The whole library re-elaborates with no proof changed** (fresh
+  cache, no stale images, every `lib/**/*.hthr`): one file fails, and it
+  is the file that fails the same way on master
+  (`constructor_equation_tests.hthr`, an expectation that no longer
+  matches its refusal). `branch_equations_tests.hthr`, which master
+  refuses, checks. The first sweep found one regression, in the
+  application engine's use of the readings: with implicits still open,
+  "the unifier reported no clash" is not "this reading fits", and
+  `BinaryOp::bit_written`'s `cong_fn(extended, holds)` was handed the
+  written `holds`. The rule that came out of it is in §3.2: the name as
+  it elaborated stands unless it clashes with a solved implicit, and
+  another reading replaces it only if it settles the parameter's type at
+  its own.
 
 ## 7. What it costs, and what could go wrong
 
