@@ -62,7 +62,7 @@ fn Tm::open_at(self t: Tm, k: Nat, u: Tm) → Tm {
     match t {
         Bv(i) => Tm::bv_or(i.same(k), u, i),
         Fv(a) => Fv(a),
-        Lam(b) => Lam(b.open_at(Succ(k), u)),
+        Lam(b) => Lam(b.open_at(k + 1, u)),
         App(f, a) => App(f.open_at(k, u), a.open_at(k, u)),
         NZero => NZero,
         NSucc(p) => NSucc(p.open_at(k, u)),
@@ -80,7 +80,7 @@ fn Tm::Lc(self t: Tm, d: Nat) → Type {
     match t {
         Bv(i) => i < d,
         Fv(_) => True,
-        Lam(b) => b.Lc(Succ(d)),
+        Lam(b) => b.Lc(d + 1),
         App(f, a) => f.Lc(d) ∧ a.Lc(d),
         NZero => True,
         NSucc(p) => p.Lc(d),

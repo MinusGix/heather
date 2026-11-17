@@ -88,14 +88,14 @@ fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
         Var(i) => Share::at(g, i),
         Lit(c, _) => Share([d], c.holds_bytes()),
         Prim(op, _) => Share([d], op.result().holds_bytes()),
-        Let(e, body) => body.share(sigs, Succ(d), Cons(e.share(sigs, d, g), g)),
+        Let(e, body) => body.share(sigs, d + 1, Cons(e.share(sigs, d, g), g)),
         If(_, yes, no) => Share::join(yes.share(sigs, d, g), no.share(sigs, d, g)),
         IfEq(_, yes, no) => Share::join(yes.share(sigs, d, g), no.share(sigs, d, g)),
         Make(_, args) => Share(Cons(d, Share::ids_of(g, args)), True),
         Field(_, _, of) => Share(Share::at(g, of).ids, True),
         Call(f, args) => Share(Cons(d, Share::ids_of(g, args)), Sig::at(sigs, f).result.holds_bytes()),
         Fold(_, init, step) => Share(Cons(d, Share::at(g, init).ids), Sig::at(sigs, step).result.holds_bytes()),
-        Case(_, zero, succ) => Share::join(zero.share(sigs, d, g), succ.share(sigs, Succ(d), Cons(Share([d], False), g))),
+        Case(_, zero, succ) => Share::join(zero.share(sigs, d, g), succ.share(sigs, d + 1, Cons(Share([d], False), g))),
         Byte(_, _, _) => Share([d], False),
     }
 }
@@ -113,7 +113,7 @@ fn Share::class(g: List<Share>, c: List<Nat>) → List<Nat> {
 
 // Does variable `v`, at depth `d`, name one of the levels `ls` below `bound`?
 fn Tm::hit(v: Nat, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
-    (d - Succ(v)).among(ls) && Succ(d - Succ(v)).leb(bound)
+    (d - (v + 1)).among(ls) && (d - (v + 1) + 1).leb(bound)
 }
 
 fn Tm::hits(vs: List<Nat>, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
@@ -126,14 +126,14 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
         Var(i) => Tm::hit(i, d, bound, ls),
         Lit(_, _) => False,
         Prim(_, args) => Tm::hits(args, d, bound, ls),
-        Let(e, body) => e.reads(d, bound, ls) || body.reads(Succ(d), bound, ls),
+        Let(e, body) => e.reads(d, bound, ls) || body.reads(d + 1, bound, ls),
         If(c, yes, no) => Tm::hit(c, d, bound, ls) || yes.reads(d, bound, ls) || no.reads(d, bound, ls),
         IfEq(c, yes, no) => Tm::hit(c, d, bound, ls) || yes.reads(d, bound, ls) || no.reads(d, bound, ls),
         Make(_, args) => Tm::hits(args, d, bound, ls),
         Field(_, _, of) => Tm::hit(of, d, bound, ls),
         Call(_, args) => Tm::hits(args, d, bound, ls),
         Fold(over, init, _) => Tm::hit(over, d, bound, ls) || Tm::hit(init, d, bound, ls),
-        Case(c, zero, succ) => Tm::hit(c, d, bound, ls) || zero.reads(d, bound, ls) || succ.reads(Succ(d), bound, ls),
+        Case(c, zero, succ) => Tm::hit(c, d, bound, ls) || zero.reads(d, bound, ls) || succ.reads(d + 1, bound, ls),
         Byte(_, i, length) => Tm::hit(i, d, bound, ls) || Tm::hit(length, d, bound, ls),
     }
 }
@@ -144,7 +144,7 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
 record After { body: Tm, d: Nat }
 
 fn After::clear(ks: List<After>, ls: List<Nat>) → Bool {
-    match ks { Nil => True, Cons(k, rest) => !k.body.reads(Succ(k.d), k.d, ls) && After::clear(rest, ls) }
+    match ks { Nil => True, Cons(k, rest) => !k.body.reads(k.d + 1, k.d, ls) && After::clear(rest, ls) }
 }
 
 // Storage with the identities `c` is dead after the point: nothing after it
@@ -182,7 +182,7 @@ fn Consume::ok(self c: Consume) → Bool { match c { Write(ok, _) => ok, Pass(_,
 
 // A parameter's identity is its level, below the parameter count.
 fn Share::of_param(c: List<Nat>, n: Nat) → Bool {
-    match c { Nil => False, Cons(x, rest) => Succ(x).leb(n) || Share::of_param(rest, n) }
+    match c { Nil => False, Cons(x, rest) => (x + 1).leb(n) || Share::of_param(rest, n) }
 }
 
 fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: List<After>) → List<Consume> {
@@ -190,11 +190,11 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         Var(_) => [],
         Lit(_, _) => [],
         Prim(op, args) => match op {
-            Set(_) => [Write(Succ(args.head_or(0)).leb(d) && Share::dead(g, ks, Share::at(g, args.head_or(0)).ids),
+            Set(_) => [Write((args.head_or(0) + 1).leb(d) && Share::dead(g, ks, Share::at(g, args.head_or(0)).ids),
                 Share::of_param(Share::at(g, args.head_or(0)).ids, n))],
             _ => [],
         },
-        Let(e, body) => e.uses(sigs, n, d, g, Cons(After(body, d), ks)) ++ body.uses(sigs, n, Succ(d), Cons(e.share(sigs, d, g), g), ks),
+        Let(e, body) => e.uses(sigs, n, d, g, Cons(After(body, d), ks)) ++ body.uses(sigs, n, d + 1, Cons(e.share(sigs, d, g), g), ks),
         If(_, yes, no) => yes.uses(sigs, n, d, g, ks) ++ no.uses(sigs, n, d, g, ks),
         IfEq(_, yes, no) => yes.uses(sigs, n, d, g, ks) ++ no.uses(sigs, n, d, g, ks),
         Make(_, _) => [],
@@ -204,14 +204,14 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         // being folded.
         Fold(over, init, step) => [Pass(step, Share::moves(g, ks, Share::bufs_of(g, [init]))
             && !Nat::meets(Share::flat(Share::bufs_of(g, [init])), Share::at(g, over).ids))],
-        Case(_, zero, succ) => zero.uses(sigs, n, d, g, ks) ++ succ.uses(sigs, n, Succ(d), Cons(Share([d], False), g), ks),
+        Case(_, zero, succ) => zero.uses(sigs, n, d, g, ks) ++ succ.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),
         Byte(_, _, _) => [],
     }
 }
 
 // The parameters' context: each its own identity, the last one variable 0.
 fn Share::params(ps: List<Ty>, l: Nat, g: List<Share>) → List<Share> {
-    match ps { Nil => g, Cons(p, rest) => Share::params(rest, Succ(l), Cons(Share([l], p.holds_bytes()), g)) }
+    match ps { Nil => g, Cons(p, rest) => Share::params(rest, l + 1, Cons(Share([l], p.holds_bytes()), g)) }
 }
 
 fn Fun::uses(self f: Fun, sigs: List<Sig>) → List<Consume> {

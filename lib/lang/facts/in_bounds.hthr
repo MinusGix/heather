@@ -66,7 +66,7 @@ evidence theorem InBounds::of_range({len: Nat}, {bounds: List<Nat>}, {e: Ix}, h:
 
 // Does `q` hold at every number up to `b`?
 fn upto_all(b: Nat, q: Nat → Bool) → Bool {
-    match b { Zero => q(0), Succ(k) => q(0) && upto_all(k, λ v => q(Succ(v))) }
+    match b { Zero => q(0), Succ(k) => q(0) && upto_all(k, λ v => q(v + 1)) }
 }
 
 // Does `p` hold at every list of numbers each at most its bound?
@@ -79,12 +79,12 @@ fn all_within(bounds: List<Nat>, p: List<Nat> → Bool) → Bool {
 
 // How many lists that is: what the search costs.
 fn box_size(bounds: List<Nat>) → Nat {
-    match bounds { Nil => 1, Cons(b, bs) => Succ(b) * box_size(bs) }
+    match bounds { Nil => 1, Cons(b, bs) => (b + 1) * box_size(bs) }
 }
 
 // The search, refused past the budget.
 fn Ix::exhausts(self e: Ix, len: Nat, bounds: List<Nat>, budget: Nat) → Bool {
-    box_size(bounds).leb(budget) && all_within(bounds, λ vs => Succ(e.eval(vs)).leb(len))
+    box_size(bounds).leb(budget) && all_within(bounds, λ vs => (e.eval(vs) + 1).leb(len))
 }
 
 theorem upto_all_sound(b: Nat): (q: Nat → Bool) → upto_all(b, q).IsTrue() → (v: Nat) → v <= b → q(v).IsTrue() {
