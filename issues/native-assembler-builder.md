@@ -44,9 +44,6 @@ Related: [[native-emission-context]], [[native-syscall-model]],
 ## Log
 
 - 2026-11-17: filed from Minus's review of `lib/native/native_compile*.hthr` (`docs/library/program-and-proof-style.md`).
-
-## Log
-
 - 2026-11-17: a prototype over the four Linux calls (a context record,
   fragments, a builder with the open block and `fresh` labels, a call
   convention record), each emitter equal to today's by `refl`, and one
