@@ -67,7 +67,7 @@ theorem Fragment::extends(self code: Fragment, cx: Emission, p: Prog): p.Within(
             }
         },
         Leave(cc, to) => p.within_then(0, Jcc(cc, to)),
-        Loop(names, enter, body) => {
+        Cycle(names, enter, body) => {
             let head = Prog::At(enter.onto(cx, p), names + 1, Block([]));
             let jumped = Prog::At(body.onto(cx, head), 0, Jmp(names + 1));
             calc {
@@ -124,7 +124,7 @@ fn Fragment::inside(self code: Fragment, r: Run, out: Option<Nat>, leave: r.Stat
                   ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
                  (condition_defined(cc, s.flags.defined) = True)),
         },
-        Loop(_, _, _) => λ _ => False,
+        Cycle(_, _, _) => λ _ => False,
     }
 }
 
@@ -196,7 +196,7 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, p: Prog, tree: ITree<
                     λ u here resident held => next(u, here, resident, held.left.right(held.right, u.rip)))(s, here, resident, holds.right)
             },
         },
-        Loop(_, _, _) => λ _ _ _ s here resident holds => false_elim(holds),
+        Cycle(_, _, _) => λ _ _ _ s here resident holds => false_elim(holds),
     }
 }
 
@@ -212,8 +212,8 @@ theorem Fragment::goes(self code: Fragment, r: Run, p: Prog, within: code.onto(r
 // the invariant at some number, or to leave.
 theorem Fragment::goes_loop(r: Run, p: Prog, names: Nat, enter, body: Fragment, tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type,
     invariant: Nat → Gprs → X86Memory(r.t.r.profile) → Type,
-    within: Loop(names, enter, body).onto(r.cx(), p).Within(r.t.program),
-    next: r.t.Goes(prog_len(Loop(names, enter, body).onto(r.cx(), p)), tree, post),
+    within: Cycle(names, enter, body).onto(r.cx(), p).Within(r.t.program),
+    next: r.t.Goes(prog_len(Cycle(names, enter, body).onto(r.cx(), p)), tree, post),
     round: (n: Nat) → (s: r.State()) → invariant(n, s.gprs, s.memory) →
         body.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory)))(s)):
     r.t.Goes(prog_len(p), tree, enter.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))) {

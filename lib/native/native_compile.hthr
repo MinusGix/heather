@@ -545,7 +545,7 @@ inductive Fragment {
     Both(first: Fragment, rest: Fragment),
     Unless(cc: ConditionCode, names: Nat, body: Fragment),
     Leave(cc: ConditionCode, to: Nat),
-    Loop(names: Nat, enter: Fragment, body: Fragment),
+    Cycle(names: Nat, enter: Fragment, body: Fragment),
 }
 
 fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
@@ -557,7 +557,7 @@ fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
         Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
         Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
         Leave(cc, to) => At(p, 0, Jcc(cc, to)),
-        Loop(names, enter, body) => At(At(body.onto(cx, At(enter.onto(cx, p), names + 1, Block([]))), 0, Jmp(names + 1)), names + 2, Block([])),
+        Cycle(names, enter, body) => At(At(body.onto(cx, At(enter.onto(cx, p), names + 1, Block([]))), 0, Jmp(names + 1)), names + 2, Block([])),
     }
 }
 
@@ -615,7 +615,7 @@ fn Build::loop(self b: Build, enter: Label → Build → Build, body: Label → 
     let out = Label(b.names + 2);
     let entered = enter(out, b.cx.from(b.names + 2)).cut();
     let inside = body(out, b.cx.from(entered.names)).cut();
-    Build(b.cx, Both(b.cut().code, Loop(b.names, entered.code, inside.code)), [], inside.names)
+    Build(b.cx, Both(b.cut().code, Cycle(b.names, entered.code, inside.code)), [], inside.names)
 }
 
 // `body` again and again, until it leaves.
