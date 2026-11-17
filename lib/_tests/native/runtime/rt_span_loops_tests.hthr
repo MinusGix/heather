@@ -141,7 +141,7 @@ theorem count_guarded(): Fun::GuardedAt(count_words(), Word(64), count_body(), c
         λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
             count_from::rec(length.sub(i).toNat(), s, y1, y2, y3, p),
         λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (y3: BitVec(64)) _ => again(s, [place, y1, y2, y3]),
-        λ s y1 y2 y3 p q => trans(count_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, y3, p,
+        λ s y1 y2 y3 p q => trans(count_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, y3, p,
                 nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
             sym(hyp(s, [place, y1, y2, y3], refl, p))),
         span, length, i, acc, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat())))

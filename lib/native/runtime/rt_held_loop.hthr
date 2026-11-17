@@ -66,7 +66,7 @@ theorem Tm::convoy_map<T, U>(c: Bool, yes, no: T, f: T → U): Tm::convoy(U, c, 
 }
 
 theorem Tm::words_len(w: World, g: List<Ty>, env: Env(w.tys, g), vs: List<Nat>): Tm::words(w, g, env, vs).len() = vs.len() {
-    match vs { Nil => refl, Cons(v, rest) => cong_fn(λ (n: Nat) => Succ(n), Tm::words_len(w, g, env, rest)) }
+    match vs { Nil => refl, Cons(v, rest) => cong_fn(λ (n: Nat) => n + 1, Tm::words_len(w, g, env, rest)) }
 }
 
 // The pass of a body's byte meaning: `FTm::tail_sem` up to its self-call.
@@ -226,9 +226,9 @@ theorem FTm::tail_held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sou
     match t {
         Pure(v) => λ len known _ g env knows own a holds => Agrees(refl, holds),
         Let(e, body) => λ len known kept g env knows own a holds => {
-            let both = e.kept(hw, len).is_true_and(body.tail_kept(hw, words, Succ(len), Cons(e.literal(), known)), kept);
+            let both = e.kept(hw, len).is_true_and(body.tail_kept(hw, words, len + 1, Cons(e.literal(), known)), kept);
             let same = e.reader_ok(hw, whole, sound, len, both.left, own, a, g, env, holds);
-            let ran = body.tail_held_runs(hw, whole, sound, res, words, Succ(len), Cons(e.literal(), known), both.right, Cons(e.ty(hw.fw.w, g), g),
+            let ran = body.tail_held_runs(hw, whole, sound, res, words, len + 1, Cons(e.literal(), known), both.right, Cons(e.ty(hw.fw.w, g), g),
                 Pair(FTm::value(hw.fw, own, e, g, env), env), e.literal_known(hw.fw, own, g, env, known, knows), own, a, holds);
             let goal: Pass::Agrees<A, res.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len), words,
                 body.held_pass(hw, res, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
@@ -259,9 +259,9 @@ theorem FTm::tail_held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sou
         },
         Put(_, _, _, _) => λ len known kept => false_elim(kept),
         Call(f, args, body) => λ len known kept g env knows own a holds => {
-            let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.tail_kept(hw, words, Succ(len), Cons(None, known)), kept);
+            let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.tail_kept(hw, words, len + 1, Cons(None, known)), kept);
             let got = FTm::call_kept(hw, whole, sound, f, args, len, known, both.left, g, env, knows, own, a, holds);
-            let ran = body.tail_held_runs(hw, whole, sound, res, words, Succ(len), Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+            let ran = body.tail_held_runs(hw, whole, sound, res, words, len + 1, Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
                 Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
                 FTm::knows_more(hw.fw.w.tys, g, env, known, knows, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value),
                 FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a), got.right);
@@ -279,7 +279,7 @@ theorem FTm::tail_held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sou
                 λ (xs: List<Nat>) => Pass::Agrees<A, res.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len), words,
                     Goes(Tm::words(hw.fw.w, g, env, xs), a), Goes(Tm::words(hw.fw.w, g, env, xs), own)),
                 λ place rest long => And(refl, And(
-                    cong_fn(λ (k: Nat) => Succ(Succ(k)), trans(Tm::words_len(hw.fw.w, g, env, rest),
+                    cong_fn(λ (k: Nat) => k + 2, trans(Tm::words_len(hw.fw.w, g, env, rest),
                         Nat::same_sound(rest.len(), words, eq_true_of_is_true(rest.len().same(words), long)))),
                     And(refl, holds))),
                 kept),
@@ -308,10 +308,10 @@ theorem FFun::falls<A>(run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>, m
     result: Mutated<A, BitVec(64)>,
     all: (again: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → ((c: A) → (us: List<BitVec(64)>) → m(c, us) < bound → again(c, us) = run(c, us)) →
         result = again(b, zs)): m(b, zs) < bound {
-    let below = λ (c: A) (us: List<BitVec(64)>) => Succ(m(c, us)).leb(bound);
+    let below = λ (c: A) (us: List<BitVec(64)>) => (m(c, us) + 1).leb(bound);
     let other = λ (v: BitVec(64)) (c: A) (us: List<BitVec(64)>) => match below(c, us) { False => Mutated(c, v), True => run(c, us) };
     let agrees = λ (v: BitVec(64)) (c: A) (us: List<BitVec(64)>) (lt: m(c, us) < bound) =>
-        cong_fn(λ (t: Bool) => match t { False => Mutated(c, v), True => run(c, us) }, Nat::leb_true(Succ(m(c, us)), bound, lt));
+        cong_fn(λ (t: Bool) => match t { False => Mutated(c, v), True => run(c, us) }, Nat::leb_true(m(c, us) + 1, bound, lt));
     let zero: BitVec(64) = BitVec::ofNat(0);
     let one: BitVec(64) = BitVec::ofNat(1);
     (match below(b, zs) as λ t => (below(b, zs) = t) → m(b, zs) < bound {
@@ -322,14 +322,14 @@ theorem FFun::falls<A>(run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>, m
             let words: (zero.toNat() = one.toNat()) = cong_fn(λ (x: Mutated<A, BitVec(64)>) => x.value.toNat(), same);
             false_elim(Nat::zero_ne_succ(0, trans(sym(BitVec::toNat_ofNat(64, 0, trivial)), trans(words, BitVec::toNat_ofNat(64, 1, trivial)))))
         },
-        True => λ e => Nat::leb_sound(Succ(m(b, zs)), bound, Bool::is_true_of_eq(e)),
+        True => λ e => Nat::leb_sound(m(b, zs) + 1, bound, Bool::is_true_of_eq(e)),
     })(refl)
 }
 
 // One pass: where the passes after it agree with the function below this
 // state's measure, the pass before them agrees with it here.
 theorem FFun::round_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), ws: List<Ty>, body: FTm, words, len: Nat,
-    arity: ws.len() = Succ(Succ(words)), kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
+    arity: ws.len() = words + 2, kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
     at: F → FTm::Sem(hw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, passes: FFun::Passes(ws, Word(64), body, hw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(hw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(hw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
@@ -413,13 +413,13 @@ theorem FFun::round_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(
 // As deep as the measure: the iteration `n` passes deep is the function
 // of the record wherever the span holds one whose measure is at most `n`.
 theorem FFun::rounds_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), ws: List<Ty>, body: FTm, words, len: Nat,
-    arity: ws.len() = Succ(Succ(words)), kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
+    arity: ws.len() = words + 2, kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
     at: F → FTm::Sem(hw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, hw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(hw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(hw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
     run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>, m: A → List<BitVec(64)> → Nat, guarded: FFun::HeldGuarded(hw, ws, body, run, m), n: Nat):
     (xs: List<BitVec(64)>) → xs.len() = ws.len() → (own: List<BitVec(8)>) → (a: A) → whole.Holds(own, FTm::operand(xs, 1), a) →
-    m(a, xs.drop(2)) < Succ(n) →
+    m(a, xs.drop(2)) < n + 1 →
     rt_held::Agrees<A, BitVec(64)>(whole, FTm::operand(xs, 1), run(a, xs.drop(2)),
         FFun::uncurry(hw.fw.w.tys, ws, Word(64), at(FFun::rounds(n, pass, stop)), xs, own)) {
     match n {
@@ -430,13 +430,13 @@ theorem FFun::rounds_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>
             FFun::round_held(hw, whole, sound, ws, body, words, len, arity, kept, at, pass, passes, lengthy, run, m, guarded,
                 FFun::rounds(k, pass, stop), xs, fits, own, a, holds,
                 λ zs o b len_z holds_z lt => FFun::rounds_held(hw, whole, sound, ws, body, words, len, arity, kept, at, pass, stop, passes, lengthy, run, m,
-                    guarded, k, zs, len_z, o, b, holds_z, Nat::lt_of_lt_of_le(m(b, zs.drop(2)), m(a, xs.drop(2)), Succ(k), lt, below))),
+                    guarded, k, zs, len_z, o, b, holds_z, Nat::lt_of_lt_of_le(m(b, zs.drop(2)), m(a, xs.drop(2)), k + 1, lt, below))),
     }
 }
 
 // At the count the code has: a measure that is a word's is below it.
 theorem FFun::counted_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), ws: List<Ty>, body: FTm, words, len: Nat,
-    arity: ws.len() = Succ(Succ(words)), kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
+    arity: ws.len() = words + 2, kept: body.tail_kept(hw, words, len, Nil).IsTrue(),
     at: F → FTm::Sem(hw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, hw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(hw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(hw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),

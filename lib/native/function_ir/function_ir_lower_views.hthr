@@ -163,7 +163,7 @@ theorem views_store_at(views: List<View>, c: Nat): views_store(views, c).IsTrue(
             },
             Inr(later) => {
                 let found = views_store_at(rest, c, later);
-                Exists(Succ(found.witness), found.proof)
+                Exists(found.witness + 1, found.proof)
             },
         },
     }
@@ -219,7 +219,7 @@ theorem views_alone_at(views: List<View>): views_alone(views).IsTrue() → (v, u
                             Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
                         },
                     })(both.left)),
-                    Succ(k) => λ written differ => views_alone_at(rest, both.right, i, k, written, λ same => differ(cong_fn<Nat, Nat>(λ n => Succ(n), same))),
+                    Succ(k) => λ written differ => views_alone_at(rest, both.right, i, k, written, λ same => differ(cong_fn<Nat, Nat>(λ n => n + 1, same))),
                 },
             }
         },
@@ -250,7 +250,7 @@ theorem buffer_bytes_past(held: Buffers(), c: Nat, past: held.len() <= c): buffe
 }
 
 theorem buffer_bytes_later(after: Buffers(), k: Nat):
-    buffer_bytes(match after { Nil => Nil, Cons(_, later) => later }, k) = buffer_bytes(after, Succ(k)) {
+    buffer_bytes(match after { Nil => Nil, Cons(_, later) => later }, k) = buffer_bytes(after, k + 1) {
     match after { Nil => refl, Cons(_, _) => refl }
 }
 
@@ -345,7 +345,7 @@ theorem put_views_stored(views: List<View>, values: Valuation()): views_alone(vi
                     let c = view_buffer(rest.nth(i));
                     let put = view.put(values, buffer_bytes(after, 0), held);
                     let other: (view.written = True → view.buffer ≠ c) = λ head =>
-                        match views_alone_at(Cons(view, rest), alone, 0, Succ(i), head, λ same => absurd(same)) {
+                        match views_alone_at(Cons(view, rest), alone, 0, i + 1, head, λ same => absurd(same)) {
                             Inl(differs) => differs,
                             Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
                         };
@@ -484,7 +484,7 @@ theorem view_canonical(values: Valuation(), addresses: List<BitVec(64)>, buffers
         Some(view) => λ is => {
             let address = address_of(addresses, view.buffer);
             let start = values(64, view.start).toNat();
-            let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+            let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
             let len = view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is);
             let low: (start <= values(64, view.end).toNat()) = is.left.right.left;
             let high: (values(64, view.end).toNat() <= buffer_bytes(buffers, view.buffer).len()) = is.left.right.right;
@@ -547,9 +547,9 @@ theorem views_lents_hold(views: List<View>, values: Valuation(), addresses: List
     HomesHold(views_lents_from(views, k), values, addresses, buffers) {
     match views {
         Nil => λ k _ => trivial,
-        Cons(view, rest) => λ k each => ⟨each(0), views_lents_hold(rest, values, addresses, buffers, Succ(k), λ i => {
-            let shift: (k + Succ(i) = Succ(k) + i) = omega();
-            j(shift, λ n _ => ViewHome(rest.nth(i), values, address_of(addresses, n), buffer_bytes(buffers, n)), each(Succ(i)))
+        Cons(view, rest) => λ k each => ⟨each(0), views_lents_hold(rest, values, addresses, buffers, k + 1, λ i => {
+            let shift: (k + (i + 1) = k + 1 + i) = omega();
+            j(shift, λ n _ => ViewHome(rest.nth(i), values, address_of(addresses, n), buffer_bytes(buffers, n)), each(i + 1))
         })⟩,
     }
 }

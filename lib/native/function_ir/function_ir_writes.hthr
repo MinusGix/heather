@@ -468,11 +468,11 @@ theorem program_quiet_drop_zero(functions: List<Function>): program_quiet(functi
 }
 
 theorem program_quiet_drop(functions: List<Function>): (n: Nat) → program_quiet_head(functions.drop(n)).IsTrue() →
-    program_quiet(functions.drop(Succ(n))).IsTrue() → program_quiet(functions.drop(n)).IsTrue() {
+    program_quiet(functions.drop(n + 1)).IsTrue() → program_quiet(functions.drop(n)).IsTrue() {
     match functions {
         Nil => λ _ _ _ => trivial,
         Cons(last, earlier) => λ n => match n as λ i => program_quiet_head(Cons(last, earlier).drop(i)).IsTrue() →
-            program_quiet(Cons(last, earlier).drop(Succ(i))).IsTrue() → program_quiet(Cons(last, earlier).drop(i)).IsTrue() {
+            program_quiet(Cons(last, earlier).drop(i + 1)).IsTrue() → program_quiet(Cons(last, earlier).drop(i)).IsTrue() {
             Zero => λ head rest => Bool::is_true_and_intro(last.body.quiet(), program_quiet(earlier), head, program_quiet_drop_zero(earlier, rest)),
             Succ(k) => λ head rest => program_quiet_drop(earlier, k, head, rest),
         },
@@ -690,12 +690,12 @@ theorem program_stores_within_drop_zero(functions: List<Function>, marks: List<B
 }
 
 theorem program_stores_within_drop(functions: List<Function>, marks: List<Bool>): (n: Nat) →
-    program_stores_within_head(functions.drop(n), marks).IsTrue() → program_stores_within(functions.drop(Succ(n)), marks).IsTrue() →
+    program_stores_within_head(functions.drop(n), marks).IsTrue() → program_stores_within(functions.drop(n + 1), marks).IsTrue() →
     program_stores_within(functions.drop(n), marks).IsTrue() {
     match functions {
         Nil => λ _ _ _ => trivial,
         Cons(last, earlier) => λ n => match n as λ i => program_stores_within_head(Cons(last, earlier).drop(i), marks).IsTrue() →
-            program_stores_within(Cons(last, earlier).drop(Succ(i)), marks).IsTrue() →
+            program_stores_within(Cons(last, earlier).drop(i + 1), marks).IsTrue() →
             program_stores_within(Cons(last, earlier).drop(i), marks).IsTrue() {
             Zero => λ head rest => Bool::is_true_and_intro(last.body.stores_within(marks) && last.body.lendless(),
                 program_stores_within(earlier, marks), head, program_stores_within_drop_zero(earlier, marks, rest)),

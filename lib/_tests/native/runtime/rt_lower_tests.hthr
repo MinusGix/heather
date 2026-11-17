@@ -168,12 +168,12 @@ theorem wrong_neg_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Na
         let one = Valuation::set(values, next, λ wd => BitVec::ofNat(0));
         let x = Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a));
         let pa_lt: (pa < next) = Ty::below_cast(w.tys, Ty::at(g, a), Bit, ea, pa, next, below_at(w.tys, g, ports, next, below, a, pa, at_a));
-        let step: (next <= Succ(next)) = Nat::le_succ_r(next, next, next.le_refl());
-        ⟨Nat::le_succ_r(next, Succ(next), step), ⟨Succ(next).lt_succ_self(),
-            ⟨λ wd id lt => trans(Valuation::set_other(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), wd, id,
-                    Nat::ne_of_lt(id, Succ(next), Nat::lt_of_lt_of_le(id, next, Succ(next), lt, step))),
+        let step: (next <= next + 1) = Nat::le_succ_r(next, next, next.le_refl());
+        ⟨Nat::le_succ_r(next, next + 1, step), ⟨(next + 1).lt_succ_self(),
+            ⟨λ wd id lt => trans(Valuation::set_other(one, next + 1, λ v => one(v, pa).bxor(one(v, next)), wd, id,
+                    Nat::ne_of_lt(id, next + 1, Nat::lt_of_lt_of_le(id, next, next + 1, lt, step))),
                 Valuation::set_other(values, next, λ v => BitVec::ofNat(0), wd, id, Nat::ne_of_lt(id, next, lt))),
-            trans(Valuation::set_here(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), 1),
+            trans(Valuation::set_here(one, next + 1, λ v => one(v, pa).bxor(one(v, next)), 1),
                 trans(eq2(λ (p: BitVec(1)) (q: BitVec(1)) => p.bxor(q),
                         trans(Valuation::set_other(values, next, λ v => BitVec::ofNat(0), 1, pa, Nat::ne_of_lt(pa, next, pa_lt)),
                             Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Bit, ea)),

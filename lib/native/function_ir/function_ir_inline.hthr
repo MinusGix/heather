@@ -249,11 +249,11 @@ theorem Valuation::over_below(values, inner: Valuation(), by: Nat): Valuation::A
     λ id under w => cong_fn(λ (t: Bool) => match t { True => values(w, id), False => inner(w, id - by) }, under)
 }
 
-theorem raised_past(id, by: Nat): by < Succ(id + by) { omega }
+theorem raised_past(id, by: Nat): by < id + by + 1 { omega }
 
 theorem Valuation::over_above(values, inner: Valuation(), by, w, id: Nat): Valuation::over(values, inner, by, w, id + by) = inner(w, id) {
     trans(cong_fn(λ (t: Bool) => match t { True => values(w, id + by), False => inner(w, (id + by) - by) },
-            Succ(id + by).leb_false(by, raised_past(id, by))),
+            (id + by + 1).leb_false(by, raised_past(id, by))),
         cong_fn(λ (k: Nat) => inner(w, k), id.add_sub_cancel(by)))
 }
 
@@ -286,7 +286,7 @@ theorem binds_run(values, inner, new: Valuation(), by: Nat, below: Valuation::Ag
         Cons(p, ps) => λ arguments => match arguments {
             Nil => λ _ _ => refl,
             Cons(a, rest) => λ under same => {
-                let parts = Bool::and_true_parts(Succ(a).leb(by), ids_under(rest, by), under);
+                let parts = Bool::and_true_parts((a + 1).leb(by), ids_under(rest, by), under);
                 let words = List::cons_inj(inner(64, p), values(64, a), words_of(inner, ps), words_of(values, rest), same);
                 Exists(file, ⟨⟨trans(above(64, p), trans(words.left, sym(below(a, parts.left, 64)))), refl⟩,
                     binds_run(values, inner, new, by, below, above, file, ps, rest, parts.right, words.right)⟩)
@@ -306,7 +306,7 @@ theorem Function::inlined_runs(self callee: Function, effects: Effects(), by, ro
     let inner = ran.witness;
     let new = Valuation::over(values, inner, by);
     let below = Valuation::over_below(values, inner, by);
-    let parts = Bool::and_true_parts(Succ(result).leb(by), ids_under(arguments, by), under);
+    let parts = Bool::and_true_parts((result + 1).leb(by), ids_under(arguments, by), under);
     let body = callee.body.raised_runs(effects, by, new, before, after,
         callee.body.runs_agree(effects, room, inside, inner, λ w id => new(w, id + by),
             λ id _ w => Valuation::over_above(values, inner, by, w, id), before, after, ran.proof.right.left));
@@ -623,7 +623,7 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                 let more = Option::and_then_some(inline_region(callees, when_false, a.bound, no),
                     λ (c: Inlined) => Some(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound)), r, got.proof.right);
                 let c = more.witness;
-                let parts = Bool::and_true_parts(Succ(condition).leb(by), when_true.under(by) && when_false.under(by), under);
+                let parts = Bool::and_true_parts((condition + 1).leb(by), when_true.under(by) && when_false.under(by), under);
                 let arms = Bool::and_true_parts(when_true.under(by), when_false.under(by), parts.right);
                 let sa = inline_region_sound(callees, when_true, by, yes, a, got.proof.left, arms.left);
                 let sc = inline_region_sound(callees, when_false, a.bound, no, c, more.proof.left,
@@ -631,8 +631,8 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                 let le = by.leb_trans(a.bound, c.bound, sa.left, sc.left);
                 j(Option::some_inj(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound), r, more.proof.right),
                     λ x _ => x.Sound(effects, Conditional(inputs, condition, arguments, outputs, when_true, when_false), by),
-                    ⟨le, ⟨Bool::and_true_of(Succ(condition).leb(c.bound), a.region.under(c.bound) && c.region.under(c.bound),
-                            Succ(condition).leb_trans(by, c.bound, parts.left, le),
+                    ⟨le, ⟨Bool::and_true_of((condition + 1).leb(c.bound), a.region.under(c.bound) && c.region.under(c.bound),
+                            (condition + 1).leb_trans(by, c.bound, parts.left, le),
                             Bool::and_true_of(a.region.under(c.bound), c.region.under(c.bound), a.region.under_mono(a.bound, c.bound, sc.left, sa.right.left),
                                 sc.right.left)),
                         λ values before after =>

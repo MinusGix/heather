@@ -91,7 +91,7 @@ theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, 
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(cat_size(), top, depth).linux(), cat(cat_capacity()).denote(args), s) {
     cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep,
-        Nat::leb_sound(Succ(cat(cat_capacity()).depth), Nat::pow(2, 64), trivial), args, argv)
+        Nat::leb_sound(cat(cat_capacity()).depth + 1, Nat::pow(2, 64), trivial), args, argv)
 }
 
 // So every run of that process that Linux can give cat's answers, along a
@@ -107,6 +107,6 @@ theorem cat_native_sends(header: List<BitVec(8)>, long: header.len() = 232, top,
     let program = cat(cat_capacity()).denote(args);
     trans(sim_run_sends(io, program.at(produces.n), s, cat_native_simulates(header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv, produces.n), tr, produces.h, valid,
             Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns), run, ran, responses, BitVec::ofNat(1)),
-        cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(Succ(cat_capacity()), Nat::pow(2, 63), trivial),
+        cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(cat_capacity() + 1, Nat::pow(2, 63), trivial),
             tr, produces, valid, returns))
 }

@@ -695,7 +695,7 @@ theorem Reader::all_at<A>(rs: List<Reader<A>>): (P: Nat → (width: Nat) → Nat
         Nil => λ P R all f => trivial,
         Cons(r, rest) => λ P R all f => match f {
             Zero => all.left,
-            Succ(k) => Reader::all_at(rest, λ (j: Nat) => P(Succ(j)), λ (j: Nat) => R(Succ(j)), all.right, k),
+            Succ(k) => Reader::all_at(rest, λ (j: Nat) => P(j + 1), λ (j: Nat) => R(j + 1), all.right, k),
         },
     }
 }
@@ -707,7 +707,7 @@ theorem Writer::all_at<A>(ws: List<Writer<A>>): (P: Nat → (width: Nat) → Nat
         Nil => λ P Q S all f => trivial,
         Cons(w, rest) => λ P Q S all f => match f {
             Zero => all.left,
-            Succ(k) => Writer::all_at(rest, λ (j: Nat) => P(Succ(j)), λ (j: Nat) => Q(Succ(j)), λ (j: Nat) => S(Succ(j)), all.right, k),
+            Succ(k) => Writer::all_at(rest, λ (j: Nat) => P(j + 1), λ (j: Nat) => Q(j + 1), λ (j: Nat) => S(j + 1), all.right, k),
         },
     }
 }
@@ -977,9 +977,9 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
     match t {
         Pure(v) => λ len known _ g env knows own a holds => Agrees(refl, holds),
         Let(e, body) => λ len known kept g env knows own a holds => {
-            let both = e.kept(hw, len).is_true_and(body.kept(hw, Succ(len), Cons(e.literal(), known)), kept);
+            let both = e.kept(hw, len).is_true_and(body.kept(hw, len + 1, Cons(e.literal(), known)), kept);
             let same = e.reader_ok(hw, whole, sound, len, both.left, own, a, g, env, holds);
-            let ran = body.held_runs(hw, whole, sound, Succ(len), Cons(e.literal(), known), both.right, Cons(e.ty(hw.fw.w, g), g),
+            let ran = body.held_runs(hw, whole, sound, len + 1, Cons(e.literal(), known), both.right, Cons(e.ty(hw.fw.w, g), g),
                 Pair(FTm::value(hw.fw, own, e, g, env), env), e.literal_known(hw.fw, own, g, env, known, knows), own, a, holds);
             let goal: Agrees<A, body.ty(hw.fw.w, hw.fw.fsigs, Cons(e.ty(hw.fw.w, g), g)).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
                 body.held(hw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
@@ -1020,9 +1020,9 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
         },
         Put(_, _, _, _) => λ len known kept => false_elim(kept),
         Call(f, args, body) => λ len known kept g env knows own a holds => {
-            let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.kept(hw, Succ(len), Cons(None, known)), kept);
+            let both = Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known).is_true_and(body.kept(hw, len + 1, Cons(None, known)), kept);
             let got = FTm::call_kept(hw, whole, sound, f, args, len, known, both.left, g, env, knows, own, a, holds);
-            let ran = body.held_runs(hw, whole, sound, Succ(len), Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+            let ran = body.held_runs(hw, whole, sound, len + 1, Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
                 Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
                 FTm::knows_more(hw.fw.w.tys, g, env, known, knows, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value),
                 FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a), got.right);
