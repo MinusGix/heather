@@ -1285,6 +1285,9 @@ inductive BVExpr {
     BAnd(a: BVExpr, b: BVExpr),
     BOr(a: BVExpr, b: BVExpr),
     BXor(a: BVExpr, b: BVExpr),
+    BAdd(a: BVExpr, b: BVExpr),
+    BShl(a: BVExpr, count: Nat),
+    BShr(a: BVExpr, count: Nat),
 }
 
 fn BVExpr::eval(self e: BVExpr, n: Nat, bits: Nat → Bool) → BitVec(n) {
@@ -1295,12 +1298,16 @@ fn BVExpr::eval(self e: BVExpr, n: Nat, bits: Nat → Bool) → BitVec(n) {
         BAnd(a, b) => a.eval(n, bits).band(b.eval(n, bits)),
         BOr(a, b) => a.eval(n, bits).bor(b.eval(n, bits)),
         BXor(a, b) => a.eval(n, bits).bxor(b.eval(n, bits)),
+        BAdd(a, b) => a.eval(n, bits).add(b.eval(n, bits)),
+        BShl(a, k) => a.eval(n, bits).shift_left(k),
+        BShr(a, k) => a.eval(n, bits).shift_right(k),
     }
 }
 
 inductive BVPred {
     PConst(b: Bool),
     PEq(n: Nat, a: BVExpr, b: BVExpr),
+    PUlt(n: Nat, a: BVExpr, b: BVExpr),
     PNot(p: BVPred),
     PAnd(p: BVPred, q: BVPred),
     POr(p: BVPred, q: BVPred),
@@ -1311,6 +1318,7 @@ fn BVPred::eval(self p: BVPred, bits: Nat → Bool) → Bool {
     match p {
         PConst(b) => b,
         PEq(n, a, b) => a.eval(n, bits).eq_bit(b.eval(n, bits)),
+        PUlt(n, a, b) => a.eval(n, bits).unsigned_lt_bit(b.eval(n, bits)),
         PNot(q) => !q.eval(bits),
         PAnd(q, r) => q.eval(bits) && r.eval(bits),
         POr(q, r) => q.eval(bits) || r.eval(bits),
@@ -1347,6 +1355,9 @@ fn BVExpr::blast(self e: BVExpr, K, n: Nat) → Circ → Pair<Circ, [Lit; n]> {
         BAnd(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.and(x, y)),
         BOr(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.or(x, y)),
         BXor(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.xor(x, y)),
+        BAdd(a, b) => λ c => Circ::add_then(a.blast(K, n)(c), b.blast(K, n)),
+        BShl(a, k) => λ c => Circ::map_word(a.blast(K, n)(c), λ ws => word_shl(ws, k)),
+        BShr(a, k) => λ c => Circ::map_word(a.blast(K, n)(c), λ ws => word_shr(ws, k)),
     }
 }
 
@@ -1372,6 +1383,14 @@ theorem BVExpr::blast_ok(self e: BVExpr, K, n: Nat): Circ::BlastsWord(K, e.blast
             Circ::zip_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n),
                 λ c x y => c.xor(x, y), λ x y => x.xor(y), Circ::xor_ok()),
             λ v z => BitVec::zip_with_xor(n, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v)))),
+        BAdd(a, b) => Circ::blasts_word_eq(n, K, λ c => Circ::add_then(a.blast(K, n)(c), b.blast(K, n)),
+            λ v => a.eval(n, input_env(K, v)).add_bits(b.eval(n, input_env(K, v)), v(0)), λ v => a.eval(n, input_env(K, v)).add(b.eval(n, input_env(K, v))),
+            Circ::add_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n)),
+            λ v z => cong_fn(λ (t: Bool) => a.eval(n, input_env(K, v)).add_bits(b.eval(n, input_env(K, v)), t), z)),
+        BShl(a, k) => Circ::map_blasts(n, K, a.blast(K, n), λ v => a.eval(n, input_env(K, v)), a.blast_ok(K, n), λ ws => word_shl(ws, k), λ x => x.shift_left(k),
+            λ ws size pos valid => word_shl_valid(n, ws, k, size, pos, valid), λ ws v z => word_shl_value(n, ws, k, v, z)),
+        BShr(a, k) => Circ::map_blasts(n, K, a.blast(K, n), λ v => a.eval(n, input_env(K, v)), a.blast_ok(K, n), λ ws => word_shr(ws, k), λ x => x.shift_right(k),
+            λ ws size pos valid => word_shr_valid(n, ws, k, size, pos, valid), λ ws v z => word_shr_value(n, ws, k, v, z)),
     }
 }
 
@@ -1379,6 +1398,7 @@ fn BVPred::blast(self p: BVPred, K: Nat) → Circ → Pair<Circ, Lit> {
     match p {
         PConst(b) => λ c => Pair(c, Lit::of_bool(b)),
         PEq(n, a, b) => λ c => Circ::equal_then(a.blast(K, n)(c), b.blast(K, n)),
+        PUlt(n, a, b) => λ c => Circ::ult_then(a.blast(K, n)(c), b.blast(K, n)),
         PNot(q) => λ c => Circ::negated(q.blast(K)(c)),
         PAnd(q, r) => λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.and(x, y)),
         POr(q, r) => λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.or(x, y)),
@@ -1391,6 +1411,10 @@ theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K),
         PConst(b) => Circ::pure_lit_blasts(K, Lit::of_bool(b), λ v => b,
             λ size kin => { let p: (0 < size) = omega; j(sym(Lit::of_bool_node(b)), λ z _ => z < size, p) }, λ v z => Lit::of_bool_value(b, v, z)),
         PEq(n, a, b) => Circ::equal_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n)),
+        PUlt(n, a, b) => Circ::blasts_lit_eq(K, λ c => Circ::ult_then(a.blast(K, n)(c), b.blast(K, n)),
+            λ v => a.eval(n, input_env(K, v)).borrow_bits(b.eval(n, input_env(K, v)), v(0)), λ v => a.eval(n, input_env(K, v)).unsigned_lt_bit(b.eval(n, input_env(K, v))),
+            Circ::ult_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n)),
+            λ v z => cong_fn(λ (t: Bool) => a.eval(n, input_env(K, v)).borrow_bits(b.eval(n, input_env(K, v)), t), z)),
         PNot(q) => Circ::negated_blasts(K, q.blast(K), λ v => q.eval(input_env(K, v)), q.blast_ok(K)),
         PAnd(q, r) => Circ::lit_blasts(K, q.blast(K), r.blast(K), λ v => q.eval(input_env(K, v)), λ v => r.eval(input_env(K, v)), q.blast_ok(K), r.blast_ok(K),
             λ c x y => c.and(x, y), λ x y => x && y, Circ::and_ok()),
@@ -1427,6 +1451,9 @@ theorem BVExpr::eval_ext(self e: BVExpr, n: Nat, b1, b2: Nat → Bool, same: (k:
         BAnd(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.band(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         BOr(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bor(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         BXor(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bxor(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        BAdd(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.add(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        BShl(a, k) => cong_fn(λ (x: BitVec(n)) => x.shift_left(k), a.eval_ext(n, b1, b2, same)),
+        BShr(a, k) => cong_fn(λ (x: BitVec(n)) => x.shift_right(k), a.eval_ext(n, b1, b2, same)),
     }
 }
 
@@ -1434,6 +1461,7 @@ theorem BVPred::eval_ext(self p: BVPred, b1, b2: Nat → Bool, same: (k: Nat) �
     match p {
         PConst(b) => refl,
         PEq(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.eq_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        PUlt(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.unsigned_lt_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
         PNot(q) => cong_fn(λ (x: Bool) => !x, q.eval_ext(b1, b2, same)),
         PAnd(q, r) => Bool::and_cong(q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
         POr(q, r) => Bool::or_cong(q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
