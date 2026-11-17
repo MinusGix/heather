@@ -1075,6 +1075,204 @@ theorem Circ::borrower_makes(n: Nat, c: Circ, good: c.Good(), xs, ys: [Lit; n], 
     }
 }
 
+theorem cong_args<A, B, C>(f: A → B → C, {a1, a2: A}, {b1, b2: B}, ea: a1 = a2, eb: b1 = b2): f(a1, b1) = f(a2, b2) {
+    j(ea, λ x _ => f(a1, b1) = f(x, b2), j(eb, λ y _ => f(a1, b1) = f(a1, y), refl))
+}
+
+// ---------------------------------------------------------------------------
+// Shifts by a constant move literals; the bit shifted in is node 0.
+
+fn word_init({n: Nat}, ws: [Lit; Succ(n)]) → [Lit; n] {
+    (match n as λ k => [Lit; Succ(k)] → [Lit; k] {
+        Zero => λ ws => [],
+        Succ(_, ih) => λ ws => cons(head(ws), ih(tail(ws))),
+    })(ws)
+}
+
+theorem word_init_value(n: Nat, ws: [Lit; Succ(n)], v: Nat → Bool): word_value(word_init(ws), v) = word_value(ws, v).init() {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, word_init_value(k, tail(ws), v)),
+    }
+}
+
+theorem word_init_valid(n: Nat, ws: [Lit; Succ(n)], size: Nat, valid: word_valid(ws, size)): word_valid(word_init(ws), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => ⟨valid.left, word_init_valid(k, tail(ws), size, valid.right)⟩,
+    }
+}
+
+fn word_snoc({n: Nat}, ws: [Lit; n], l: Lit) → [Lit; Succ(n)] {
+    (match n as λ k => [Lit; k] → [Lit; Succ(k)] {
+        Zero => λ ws => [l],
+        Succ(_, ih) => λ ws => cons(head(ws), ih(tail(ws))),
+    })(ws)
+}
+
+theorem word_snoc_value(n: Nat, ws: [Lit; n], l: Lit, v: Nat → Bool): word_value(word_snoc(ws, l), v) = word_value(ws, v).snoc(l.value(v)) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(Succ(k), refl, word_snoc_value(k, tail(ws), l, v)),
+    }
+}
+
+theorem word_snoc_valid(n: Nat, ws: [Lit; n], l: Lit, size: Nat, valid: word_valid(ws, size), vl: l.node() < size): word_valid(word_snoc(ws, l), size) {
+    match n {
+        Zero => ⟨vl, trivial⟩,
+        Succ(k) => ⟨valid.left, word_snoc_valid(k, tail(ws), l, size, valid.right, vl)⟩,
+    }
+}
+
+fn word_shl_one({n: Nat}, ws: [Lit; n]) → [Lit; n] {
+    (match n as λ k => [Lit; k] → [Lit; k] {
+        Zero => λ ws => [],
+        Succ(_) => λ ws => cons(Pos(0), word_init(ws)),
+    })(ws)
+}
+
+fn word_shr_one({n: Nat}, ws: [Lit; n]) → [Lit; n] {
+    (match n as λ k => [Lit; k] → [Lit; k] {
+        Zero => λ ws => [],
+        Succ(_) => λ ws => word_snoc(tail(ws), Pos(0)),
+    })(ws)
+}
+
+theorem word_shl_one_value(n: Nat, ws: [Lit; n], v: Nat → Bool, z: v(0) = False): word_value(word_shl_one(ws), v) = word_value(ws, v).shift_left_one() {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, z, word_init_value(k, ws, v)),
+    }
+}
+
+theorem word_shr_one_value(n: Nat, ws: [Lit; n], v: Nat → Bool, z: v(0) = False): word_value(word_shr_one(ws), v) = word_value(ws, v).shift_right_one() {
+    match n {
+        Zero => refl,
+        Succ(k) => trans(word_snoc_value(k, tail(ws), Pos(0), v), cong_fn(λ (b: Bool) => word_value(tail(ws), v).snoc(b), z)),
+    }
+}
+
+theorem word_shl_one_valid(n: Nat, ws: [Lit; n], size: Nat, pos: 0 < size, valid: word_valid(ws, size)): word_valid(word_shl_one(ws), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => ⟨pos, word_init_valid(k, ws, size, valid)⟩,
+    }
+}
+
+theorem word_shr_one_valid(n: Nat, ws: [Lit; n], size: Nat, pos: 0 < size, valid: word_valid(ws, size)): word_valid(word_shr_one(ws), size) {
+    match n {
+        Zero => trivial,
+        Succ(k) => word_snoc_valid(k, tail(ws), Pos(0), size, valid.right, pos),
+    }
+}
+
+fn word_shl({n: Nat}, ws: [Lit; n], count: Nat) → [Lit; n] {
+    match count {
+        Zero => ws,
+        Succ(k) => word_shl_one(word_shl(ws, k)),
+    }
+}
+
+fn word_shr({n: Nat}, ws: [Lit; n], count: Nat) → [Lit; n] {
+    match count {
+        Zero => ws,
+        Succ(k) => word_shr_one(word_shr(ws, k)),
+    }
+}
+
+theorem word_shl_value(n: Nat, ws: [Lit; n], count: Nat, v: Nat → Bool, z: v(0) = False): word_value(word_shl(ws, count), v) = word_value(ws, v).shift_left(count) {
+    match count {
+        Zero => refl,
+        Succ(k) => trans(word_shl_one_value(n, word_shl(ws, k), v, z), cong_fn(λ (x: BitVec(n)) => x.shift_left_one(), word_shl_value(n, ws, k, v, z))),
+    }
+}
+
+theorem word_shr_value(n: Nat, ws: [Lit; n], count: Nat, v: Nat → Bool, z: v(0) = False): word_value(word_shr(ws, count), v) = word_value(ws, v).shift_right(count) {
+    match count {
+        Zero => refl,
+        Succ(k) => trans(word_shr_one_value(n, word_shr(ws, k), v, z), cong_fn(λ (x: BitVec(n)) => x.shift_right_one(), word_shr_value(n, ws, k, v, z))),
+    }
+}
+
+theorem word_shl_valid(n: Nat, ws: [Lit; n], count, size: Nat, pos: 0 < size, valid: word_valid(ws, size)): word_valid(word_shl(ws, count), size) {
+    match count {
+        Zero => valid,
+        Succ(k) => word_shl_one_valid(n, word_shl(ws, k), size, pos, word_shl_valid(n, ws, k, size, pos, valid)),
+    }
+}
+
+theorem word_shr_valid(n: Nat, ws: [Lit; n], count, size: Nat, pos: 0 < size, valid: word_valid(ws, size)): word_valid(word_shr(ws, count), size) {
+    match count {
+        Zero => valid,
+        Succ(k) => word_shr_one_valid(n, word_shr(ws, k), size, pos, word_shr_valid(n, ws, k, size, pos, valid)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Builders for sums, comparisons and moved words.
+
+fn Circ::map_word({n: Nat}, r: Pair<Circ, [Lit; n]>, t: [Lit; n] → [Lit; n]) → Pair<Circ, [Lit; n]> { Pair(r.fst, t(r.snd)) }
+
+theorem Circ::map_blasts(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f: (Nat → Bool) → BitVec(n), h: Circ::BlastsWord(K, b, f),
+    t: [Lit; n] → [Lit; n], g: BitVec(n) → BitVec(n),
+    tvalid: (ws: [Lit; n]) → (size: Nat) → 0 < size → word_valid(ws, size) → word_valid(t(ws), size),
+    tvalue: (ws: [Lit; n]) → (v: Nat → Bool) → v(0) = False → word_value(t(ws), v) = g(word_value(ws, v))):
+    Circ::BlastsWord(K, λ c => Circ::map_word(b(c), t), λ v => g(f(v))) {
+    λ c good kin => {
+        let m = h(c, good, kin);
+        ⟨m.left, ⟨tvalid(b(c).snd, b(c).fst.size, m.left.left.right.left, m.right.left), λ d later env =>
+            trans(tvalue(b(c).snd, d.at(env), later.left.right.right(env)), cong_fn(g, m.right.right(d, later, env)))⟩⟩
+    }
+}
+
+fn Circ::add_pair({n: Nat}, r1, r2: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n]> { r2.fst.adder(r1.snd, r2.snd, Pos(0)) }
+
+fn Circ::add_then({n: Nat}, r1: Pair<Circ, [Lit; n]>, next: Circ → Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n]> {
+    Circ::add_pair(r1, next(r1.fst))
+}
+
+theorem Circ::add_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa, fb: (Nat → Bool) → BitVec(n), ha: Circ::BlastsWord(K, ba, fa), hb: Circ::BlastsWord(K, bb, fb)):
+    Circ::BlastsWord(K, λ c => Circ::add_then(ba(c), bb), λ v => fa(v).add_bits(fb(v), v(0))) {
+    λ c good kin => {
+        let r1 = ba(c);
+        let m1 = ha(c, good, kin);
+        let r2 = bb(r1.fst);
+        let m2 = hb(r1.fst, m1.left.left, Nat::lt_of_lt_of_le(K, c.size, r1.fst.size, kin, m1.left.right.left));
+        let r3 = r2.fst.adder(r1.snd, r2.snd, Pos(0));
+        let m3 = Circ::adder_makes(n, r2.fst, m2.left.left, r1.snd, r2.snd, Pos(0), word_valid_grows(n, r1.snd, r1.fst.size, r2.fst.size, m1.right.left, m2.left.right.left), m2.right.left,
+            m2.left.left.right.left);
+        ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+            let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+            let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+            trans(m3.right.right(d, later, env), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.add_bits(y, d.at(env)(0)), m1.right.right(d, from1, env), m2.right.right(d, from2, env)))
+        }⟩⟩
+    }
+}
+
+fn Circ::ult_pair({n: Nat}, r1, r2: Pair<Circ, [Lit; n]>) → Pair<Circ, Lit> { r2.fst.borrower(r1.snd, r2.snd, Pos(0)) }
+
+fn Circ::ult_then({n: Nat}, r1: Pair<Circ, [Lit; n]>, next: Circ → Pair<Circ, [Lit; n]>) → Pair<Circ, Lit> {
+    Circ::ult_pair(r1, next(r1.fst))
+}
+
+theorem Circ::ult_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa, fb: (Nat → Bool) → BitVec(n), ha: Circ::BlastsWord(K, ba, fa), hb: Circ::BlastsWord(K, bb, fb)):
+    Circ::BlastsLit(K, λ c => Circ::ult_then(ba(c), bb), λ v => fa(v).borrow_bits(fb(v), v(0))) {
+    λ c good kin => {
+        let r1 = ba(c);
+        let m1 = ha(c, good, kin);
+        let r2 = bb(r1.fst);
+        let m2 = hb(r1.fst, m1.left.left, Nat::lt_of_lt_of_le(K, c.size, r1.fst.size, kin, m1.left.right.left));
+        let r3 = r2.fst.borrower(r1.snd, r2.snd, Pos(0));
+        let m3 = Circ::borrower_makes(n, r2.fst, m2.left.left, r1.snd, r2.snd, Pos(0), word_valid_grows(n, r1.snd, r1.fst.size, r2.fst.size, m1.right.left, m2.left.right.left), m2.right.left,
+            m2.left.left.right.left);
+        ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+            let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+            let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+            trans(m3.right.right(d, later, env), cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.borrow_bits(y, d.at(env)(0)), m1.right.right(d, from1, env), m2.right.right(d, from2, env)))
+        }⟩⟩
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Expressions. A word expression is read at a width chosen by its user; an
 // input `BVar(o, w)` is the `w` bits of the input at offset `o`, zero-extended
@@ -1210,9 +1408,6 @@ theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K),
 // ---------------------------------------------------------------------------
 // Inputs read as the same bits wherever they appear.
 
-theorem cong_args<A, B, C>(f: A → B → C, {a1, a2: A}, {b1, b2: B}, ea: a1 = a2, eb: b1 = b2): f(a1, b1) = f(a2, b2) {
-    j(ea, λ x _ => f(a1, b1) = f(x, b2), j(eb, λ y _ => f(a1, b1) = f(a1, y), refl))
-}
 
 theorem window_ext(n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k), o, w: Nat): window(b1, o, w, n := n) = window(b2, o, w, n := n) {
     match n {
