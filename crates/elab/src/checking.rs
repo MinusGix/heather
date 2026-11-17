@@ -427,6 +427,14 @@ impl Checking<'_> {
                 Defaults(self).elab_param_default(cx, args, expected, lvl, e.span, &[])
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name.starts_with(heather_syntax::CASES_HYPOTHESIS))
+                    && named.is_empty() =>
+            {
+                let ExprKind::Var(name) = &head.kind else { unreachable!("guarded above") };
+                let step = crate::hypothesis_cases::step(self, cx, name, args, expected, e.span)?;
+                self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
                     && named.is_empty() =>
             {
