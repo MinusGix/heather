@@ -1641,6 +1641,58 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 }
 
 // ---------------------------------------------------------------------------
+// The procedures' placements
+
+// Whether every leaf of the procedure's body has the registers it needs
+// under the frame: the scan's verdict, over the frame's own layout.
+fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
+    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([]), src.procedures, src.functions, []),
+            proc.results, 1) {
+        Passed(_) => True,
+        Refused(_) => False,
+    }
+}
+
+// RBP and R12 to R15 where no word of the frame lives, as homes.
+fn Frame::spare(self frame: Frame) → List<Home> {
+    [InReg(0), InReg(1), InReg(2), InReg(3), InReg(4)].filter(λ (home: Home) => match home {
+        InSlot => False,
+        InReg(k) => !frame.of.homes_use(home_register(k)),
+    })
+}
+
+// The frame pinning as many of `spare` as its leaves leave free, from the
+// first: a pinned register is neither saved nor a leaf's, so a procedure
+// saves only the registers its words live in and the ones its largest leaf
+// needs past the caller-saved ones
+// (docs/native/native-procedure-frames-design.md §2.4).
+fn Frame::pinning(self frame: Frame, src: Source, proc: Procedure, spare: List<Home>, count: Nat) → Frame {
+    match count {
+        Zero => frame,
+        Succ(fewer) => {
+            let pinned = Frame(frame.of, frame.loops, spare.take(count), frame.words);
+            match pinned.scans(src, proc) { True => pinned, False => frame.pinning(src, proc, spare, fewer) }
+        },
+    }
+}
+
+fn List::pinned_for(self frames: List<Frame>, src: Source, procs: List<Procedure>) → List<Frame> {
+    match frames {
+        Nil => [],
+        Cons(frame, rest) => match procs {
+            Nil => [],
+            Cons(proc, more) => Cons(frame.pinning(src, proc, frame.spare(), frame.spare().len()), rest.pinned_for(src, more)),
+        },
+    }
+}
+
+// The placements `write-elf` compiles a source's procedures with: each
+// body coloured alone (`Greedy::frame`), pinning what its leaves do not
+// need. A proposal, as the homes are: the compile checks each procedure
+// under its own (`Procedure::fits`).
+fn Source::bodies(self src: Source) → List<Frame> { Greedy::standard().frames(src).pinned_for(src, src.procedures) }
+
+// ---------------------------------------------------------------------------
 // Reading a program back a part at a time (`heather write-elf`)
 
 // The statement tree in preorder, three numbers a node: its kind (0 a leaf,

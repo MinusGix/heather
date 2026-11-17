@@ -30,10 +30,10 @@ fn low() → BitVec(64) { io_data_low() }
 // same for any homes the check passes, and the greedy allocator is
 // `write-elf`'s, evaluated on its fork, too costly beside a compile in one
 // declaration's fuel.
-fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src)) }
+fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src), SpillAll().frames(src)) }
 
 // A source's layout with every word in its slot.
-fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src)) }
+fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src), SpillAll().frames(src)) }
 
 // `head -c 10`: cat whose read length is a countdown word. Words as cat's;
 // 2 the bytes still to copy, 20 and 21 scratch.
@@ -105,7 +105,7 @@ fn narrow_long_leaf() → Source {
     Source::of([], Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
 }
 
-theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes()) = [1, 0, 1, 41, 12] { refl }
+theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes(), narrow_long_leaf().bodies()) = [1, 0, 1, 41, 12] { refl }
 
 // The third statement exits with a word past the slots; the second, a loop,
 // tests one; a write names a buffer the source does not have.
@@ -299,7 +299,7 @@ fn Prog::calls_of(self p: Prog, label: Nat) → Nat {
         },
     }
 }
-fn compiled_or_start(src: Source) → Prog { match src.compile(low(), Homes::slots(src)) { None => Start, Some(p) => p } }
+fn compiled_or_start(src: Source) → Prog { match src.compile(low(), Homes::slots(src), SpillAll().frames(src)) { None => Start, Some(p) => p } }
 
 // It compiles, with every word in its slot and with the allocator's homes;
 // its body is emitted once, at its label, and called from three sites: the
@@ -328,8 +328,8 @@ theorem spreading_allocated(): spreading().allocation_ok(spreading().homes()) = 
 // The allocator's homes keep the three parameters apart, all live as the
 // body starts and none written by it, so the procedure fits and the source
 // compiles with them.
-theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().homes())) = True { refl }
-theorem spreading_homed(): spreading().refusal(low(), spreading().homes()) = [] { refl }
+theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().homes(), spreading().bodies()).body(0)) = True { refl }
+theorem spreading_homed(): spreading().refusal(low(), spreading().homes(), spreading().bodies()) = [] { refl }
 theorem spreading_exits(): ITree::next(Events::linux(), spreading().tree([], 4)) = Exits(BitVec::ofNat(59)) { refl }
 
 // Two procedures calling each other (docs/native/native-procedures-are-functions-design.md
@@ -361,7 +361,7 @@ fn alternating() → Source { alternating_to(5, 6) }
 fn alternating_shallow() → Source { alternating_to(5, 5) }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
-theorem alternating_homed(): alternating().refusal(low(), alternating().homes()) = [] { refl }
+theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
 theorem alternating_two_bodies(): compiled_or_start(alternating()).named(1) + compiled_or_start(alternating()).named(2) = 2 { refl }
 theorem alternating_calls(): compiled_or_start(alternating()).calls_of(1) + compiled_or_start(alternating()).calls_of(2) = 3 { refl }
 theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
@@ -414,7 +414,7 @@ fn view_source(written: Bool) → Source {
 
 // Its functions' values where the function compiler's planner puts them.
 fn view_refused(written: Bool) → List<Nat> {
-    view_source(written).refusal(low(), Homes::slots(view_source(written)).placed(plan_program(view_functions(written))))
+    view_source(written).refusal(low(), Homes::slots(view_source(written)).placed(plan_program(view_functions(written))), SpillAll().frames(view_source(written)))
 }
 
 // The functions link: placeless, the view's base hidden, and with rows

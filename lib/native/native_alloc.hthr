@@ -614,24 +614,18 @@ fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fue
 // by the functions' lowering.
 fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places, homes.pins) }
 
-// Every procedure's body passes the check, from its results, and its
-// parameters are apart from what is live as it starts: its entry writes
-// them there, and `Procedure::fits` refuses the procedure otherwise.
-fn List::bodies_check(self procs: List<Procedure>, homes: Homes) → Bool {
-    match procs {
-        Nil => True,
-        Cons(proc, rest) => match proc.body.checked(homes, proc.results) {
-            None => False,
-            Some(live) => homes.all_apart(proc.params, live) && rest.bodies_check(homes),
-        },
-    }
+// A procedure's body passes the check under `homes`, from its results, and
+// its parameters are apart from what is live as it starts: its entry
+// writes them there, and `Procedure::fits` refuses the procedure otherwise.
+fn Procedure::checks_under(self proc: Procedure, homes: Homes) → Bool {
+    match proc.body.checked(homes, proc.results) { None => False, Some(live) => homes.all_apart(proc.params, live) }
 }
 
-// `homes` when the check passes them, `main` and every procedure's body,
-// else `fallback`: a heuristic made complete by a complete fallback
-// (`Homes::or_else_ok`).
+// `homes` when the check passes them, else `fallback`: a heuristic made
+// complete by a complete fallback (`Homes::or_else_ok`). They are `main`'s:
+// each procedure has its own (`Greedy::frame`).
 fn Homes::or_else(self homes: Homes, src: Source, fallback: Homes) → Homes {
-    match src.allocation_ok(homes) { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }
+    match src.allocation_ok(homes) { True => homes, False => fallback }
 }
 
 // Every word in its slot.
@@ -875,34 +869,53 @@ record Greedy { loop_weight: Nat }
 // The weight write-elf's homes are coloured with.
 fn Greedy::standard() → Greedy { Greedy(7) }
 
-// Each procedure's body's interference and weights after `main`'s: the
-// words are the source's, so a body's two words that interfere get two
-// registers as `main`'s do. A procedure's entry writes its parameters with
-// what is live as its body starts, so they interfere there: no statement
-// of the body writes a parameter it only reads, and without this two such
-// parameters got one register and the procedure was refused.
-fn List::bodies_graph(self procs: List<Procedure>, homes: Homes, of: List<List<Bool>>) → List<List<Bool>> {
-    match procs {
-        Nil => of,
-        Cons(proc, rest) => {
-            let body = proc.body.graph(homes, proc.results, of);
-            rest.bodies_graph(homes, body.of.all_written(proc.params, body.live))
-        },
-    }
-}
-fn List::bodies_weights(self procs: List<Procedure>, loop_weight: Nat, weights: List<Nat>) → List<Nat> {
-    match procs { Nil => weights, Cons(proc, rest) => rest.bodies_weights(loop_weight, proc.body.weights(loop_weight, 1, weights)) }
-}
-
+// `main`'s words coloured: a procedure's body has its own homes
+// (`Greedy::frame`), so its words neither interfere with `main`'s nor weigh
+// against them.
 fn Greedy::colouring(self g: Greedy, src: Source) → Homes {
     let slots = Homes::slots(src);
     let graph = src.main.graph(slots, [], []);
-    let of = src.procedures.bodies_graph(slots, graph.of);
     // A row for every word the source declares, so `registers_of` meets
     // each word a row may flag.
-    let rows = of.put(src.words - 1, of.row(src.words - 1), []);
-    src.procedures.bodies_weights(g.loop_weight, src.main.weights(g.loop_weight, 1, [])).heaviest().colour(graph.live, rows, slots)
+    let rows = graph.of.put(src.words - 1, graph.of.row(src.words - 1), []);
+    src.main.weights(g.loop_weight, 1, []).heaviest().colour(graph.live, rows, slots)
 }
+
+// How many words a procedure's frame has: one past the greatest id its
+// parameters, results and body name.
+fn Procedure::named(self proc: Procedure) → Nat { (proc.params ++ (proc.results ++ proc.body.words())).bound() }
+
+// One procedure's body coloured alone, under the source's loop sets: its
+// own interference and weights, so two bodies' words share registers. A
+// procedure's entry writes its parameters with what is live as its body
+// starts, so they interfere there: no statement of the body writes a
+// parameter it only reads, and without this two such parameters got one
+// register and the procedure was refused. A colouring the check refuses
+// gives way to every word in its slot, as `main`'s does. No register is
+// pinned here: that takes the leaves' needs (`Source::bodies`,
+// native_compile).
+fn Greedy::frame(self g: Greedy, loops: List<List<Nat>>, proc: Procedure) → Frame {
+    let slots = Homes([], loops);
+    let body = proc.body.graph(slots, proc.results, []);
+    let of = body.of.all_written(proc.params, body.live);
+    let words = proc.named();
+    let rows = of.put(words - 1, of.row(words - 1), []);
+    let coloured = proc.body.weights(g.loop_weight, 1, []).heaviest().colour([], rows, slots);
+    Frame(match proc.checks_under(coloured) { True => coloured.of, False => [] }, loops, [], words)
+}
+
+fn List::frames_by(self procs: List<Procedure>, g: Greedy, loops: List<List<Nat>>) → List<Frame> {
+    match procs { Nil => [], Cons(proc, rest) => Cons(g.frame(loops, proc), rest.frames_by(g, loops)) }
+}
+
+// Every word of every procedure in its slot, and nothing pinned.
+fn List::frames_slotted(self procs: List<Procedure>, loops: List<List<Nat>>) → List<Frame> {
+    match procs { Nil => [], Cons(proc, rest) => Cons(Frame([], loops, [], proc.named()), rest.frames_slotted(loops)) }
+}
+fn SpillAll::frames(self a: SpillAll, src: Source) → List<Frame> { src.procedures.frames_slotted(Homes::slots(src).loops) }
+
+// Every procedure's frame, each body coloured alone.
+fn Greedy::frames(self g: Greedy, src: Source) → List<Frame> { src.procedures.frames_by(g, Homes::slots(src).loops) }
 
 fn Greedy::assign(self g: Greedy, src: Source) → Homes { g.colouring(src).or_else(src, Homes::slots(src)) }
 
@@ -918,6 +931,17 @@ fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
 }
 
 fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.of.homes_spelled() ++ homes.loops.sets_spelled()) }
+
+// The procedures' frames as numbers: each its words, its homes (their
+// count first) and its pins (their count first). Their loop sets are the
+// source's, which `Homes::spelled` gives.
+fn List::frames_spelled(self frames: List<Frame>) → List<Nat> {
+    match frames {
+        Nil => [],
+        Cons(frame, rest) => Cons(frame.words, Cons(frame.of.len(), frame.of.homes_spelled() ++
+            Cons(frame.pins.len(), frame.pins.homes_spelled() ++ rest.frames_spelled()))),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The instances: neither is ever refused
@@ -1303,11 +1327,8 @@ theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTru
 theorem Homes::or_else_ok(self homes: Homes, src: Source, fallback: Homes, ok: src.allocation_ok(fallback).IsTrue()):
     src.allocation_ok(homes.or_else(src, fallback)).IsTrue() {
     (match src.allocation_ok(homes) as λ b => src.allocation_ok(homes) = b →
-            src.allocation_ok(match b { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }).IsTrue() {
-        True => λ passed => match src.procedures.bodies_check(homes) {
-            True => j(sym(passed), λ b _ => b.IsTrue(), trivial),
-            False => ok,
-        },
+            src.allocation_ok(match b { True => homes, False => fallback }).IsTrue() {
+        True => λ passed => j(sym(passed), λ b _ => b.IsTrue(), trivial),
         False => λ _ => ok,
     })(refl)
 }

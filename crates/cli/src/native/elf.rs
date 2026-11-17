@@ -220,18 +220,21 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     };
     let finish = "then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)";
     let homes = format!("{p}_homes()");
+    // Each procedure's own placement (`Source::bodies`), by name.
+    let frames = format!("{p}_frames()");
     // The layout by name, a literal (`layout_literal`): every statement of
     // the emission names it, and `Source::layout` walks the program for its
     // word count and filters the register pools by the homes, which each
     // declaration of the certificate otherwise did again
     // (issues/native-certificate-layout-per-item.md).
     let layout = format!("{p}_layout()");
-    let entry = format!("{src}().entry({LOW}, {homes})");
+    let entry = format!("{src}().entry({LOW}, {homes}, {frames})");
     let probes = format!("import {root};\n{imports}{lowered}
 fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacities(), Homes([], [])).size(), io_data_limit()] }}
 fn {p}_sizes() → List<Nat> {{ Cons({src}().words, {src}().capacities()) }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
+fn {p}_frames_spelled() → List<Nat> {{ {src}().bodies().frames_spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
@@ -278,6 +281,10 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         return Err(format!("`{symbol}`'s procedures did not read back"));
     };
     let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
+    // Each procedure's frame and homes, from the allocator (`Source::bodies`,
+    // native_compile): a proposal the compile checks, a procedure at a time
+    // (`Procedure::fits`).
+    let frames_spelled = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_frames_spelled"))? } else { Vec::new() };
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
         first, (procedures > 0 || functions > 0).then_some(emission::CallsOf { src: &src, homes: &homes, shapes: &bodies, functions: usize::try_from(functions).map_err(|_| format!("`{symbol}`'s functions did not read back"))? }))?;
     // Where the values of the functions the source calls go, from the
@@ -298,10 +305,12 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
-        let homes_def = format!("fn {homes} → Homes {{ {} }}\nfn {layout} → Layout {{ {} }}\n",
+        let homes_def = format!("fn {homes} → Homes {{ {} }}\n{}fn {layout} → Layout {{ {} }}\n{}",
             homes_literal(spelled, places.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?,
-            layout_literal(&src, &homes, &sizes, spelled).ok_or_else(|| format!("`{symbol}`'s layout did not read back"))?);
-        let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
+            frames_literal(&frames, &homes, &frames_spelled).ok_or_else(|| format!("`{symbol}`'s procedures' placements did not read back"))?,
+            layout_literal(&src, &homes, &frames, &sizes, spelled).ok_or_else(|| format!("`{symbol}`'s layout did not read back"))?,
+            body_layouts(p, &src, &homes, &frames, &layout, &sizes, &frames_spelled).ok_or_else(|| format!("`{symbol}`'s procedures' layouts did not read back"))?);
+        let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}, {frames}) }}\n\
             fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
             fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
         fork.elab_module_source(parts, &text).map_err(|e| e.render(&text))?;
@@ -364,8 +373,8 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     plan.text = emission::live_literals(p, &plan.text, &sets)?;
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, &plain, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
-        emission::Checks { src: &src, homes: &homes, sets: &live_sets })?;
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, &plain, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, frames: &frames, shapes }),
+        emission::Checks { src: &src, homes: &homes, frames: &frames, sets: &live_sets })?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
@@ -420,7 +429,7 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {frames}, {p}_compiles(), {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep, args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
@@ -437,15 +446,15 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
-"), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, refl, {p}_emitted(), {p}_laid())")),
+"), format!("{src}().compile_of({LOW}, {homes}, {frames}, {p}_code(), {p}_allocated(), refl, refl, {p}_emitted(), {p}_laid())")),
         Some(emission::CallsStated { main, names, procedures: procs, after }) => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})) {{
     j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})), {p}_e_0())
 }}
 "), if procedures > 0 {
-            format!("{src}().compile_calls_of({LOW}, {homes}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procs}, {names}, {after},
+            format!("{src}().compile_calls_of({LOW}, {homes}, {frames}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procs}, {names}, {after},
         {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         } else {
-            format!("{src}().compile_functions_of({LOW}, {homes}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
+            format!("{src}().compile_functions_of({LOW}, {homes}, {frames}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
         {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         }),
     };
@@ -457,7 +466,7 @@ import {root};
 // The words' homes and the loops' sets, as the greedy allocator gave them
 // (and, for a source that calls functions, where the function compiler's
 // heuristic puts their values).
-{homes_def}theorem {p}_layout_is(): {p}_layout() = {src}().layout({LOW}, {homes}) {{ refl }}
+{homes_def}theorem {p}_layout_is(): {p}_layout() = {src}().layout({LOW}, {homes}, {frames}) {{ refl }}
 // The program: what `{src}().compile` computes.
 {code}
 // Its emission, and the compile's check of the homes (`{p}_ck_`), a part of
@@ -476,7 +485,7 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
     {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes(), {p}_reads())
 }}
 
-theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
+theorem {p}_compiles(): {src}().compile({LOW}, {homes}, {frames}) = Some({p}_code()) {{
     {compiles}
 }}
 
@@ -506,7 +515,7 @@ theorem {p}_file_is(): io_elf_file({p}_upto_0(), {p}_size()) = {p}_file() {{
 }}
 
 // Whatever names the compile's program, its file is the one written.
-theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = Some(program)):
+theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}, {frames}) = Some(program)):
     io_elf_file(assemble(no_fills(), program, []), {p}_size()) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
     j(same, λ q _ => io_elf_file(assemble(no_fills(), q, []), {p}_size()) = {p}_file(),
@@ -648,22 +657,87 @@ fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
     Some(format!("Homes([{}], [{}]{places})", of.join(", "), sets.join(", ")))
 }
 
+/// One procedure's placement as `List::frames_spelled` (native_alloc) spells
+/// it: its frame's words, its words' homes (their count first; 0 the slot,
+/// `k + 1` register `k`), and the registers it pins, the same way.
+struct FrameRead<'a> { words: u64, of: &'a [u64], pins: &'a [u64] }
+
+fn frames_read(mut numbers: &[u64]) -> Option<Vec<FrameRead<'_>>> {
+    let mut frames = Vec::new();
+    while let [words, count, rest @ ..] = numbers {
+        let count = usize::try_from(*count).ok().filter(|&c| c < rest.len())?;
+        let (of, rest) = rest.split_at(count);
+        let (&pinned, rest) = rest.split_first()?;
+        let pinned = usize::try_from(pinned).ok().filter(|&c| c <= rest.len())?;
+        let (pins, rest) = rest.split_at(pinned);
+        frames.push(FrameRead { words: *words, of, pins });
+        numbers = rest;
+    }
+    numbers.is_empty().then_some(frames)
+}
+
+fn homes_list(homes: &[u64]) -> String {
+    homes.iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect::<Vec<_>>().join(", ")
+}
+
+/// The procedures' placements, by name: every frame's loop sets are the
+/// source's (`homes`).
+fn frames_literal(frames: &str, homes: &str, numbers: &[u64]) -> Option<String> {
+    let list: Vec<String> = frames_read(numbers)?.iter()
+        .map(|f| format!("Frame([{}], {homes}.loops, [{}], {})", homes_list(f.of), homes_list(f.pins), f.words)).collect();
+    Some(format!("fn {frames} → List<Frame> {{ [{}] }}\n", list.join(", ")))
+}
+
+const REGISTER_POOL: [&str; 14] = ["Rax", "Rcx", "Rdx", "Rsi", "Rdi", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "Rbp"];
+const HOME_POOL: [&str; 6] = ["R12", "R13", "R14", "R15", "Rbp", "R10"];
+
+/// The registers a body keeps between statements (`Homes::uses`): those a
+/// word lives in, and those it pins that no word lives in, R10 never one.
+fn used_registers(of: &[u64], pins: &[u64]) -> Vec<&'static str> {
+    // `home_register`: a home past the pool reads as the pool's first.
+    let register = |h: &u64| HOME_POOL.get((*h - 1) as usize).copied().unwrap_or(HOME_POOL[0]);
+    let mut used: Vec<&str> = of.iter().filter(|&&h| h != 0).map(register).collect();
+    let pinned: Vec<&str> = pins.iter().filter(|&&h| h != 0).map(register).filter(|r| *r != "R10" && !used.contains(r)).collect();
+    used.extend(pinned);
+    used
+}
+
+/// The registers no word lives in (`Homes::leaf_pool`) and those one does
+/// (`Homes::registers`), as two lists' contents.
+fn pools(used: &[&str]) -> (String, String) {
+    let list = |pool: &[&str], keep: bool| pool.iter().filter(|r| used.contains(r) == keep).copied().collect::<Vec<_>>().join(", ");
+    (list(&REGISTER_POOL, false), list(&HOME_POOL, true))
+}
+
 /// The layout `Source::layout` computes over these homes, as a literal: the
 /// word count and the capacities as read (`sizes`), the registers no word
 /// lives in (`Homes::leaf_pool`) and those one does (`Homes::registers`),
 /// each worked out here from the homes' spelling. The kernel checks it
 /// against the computed one, once (`{p}_layout_is`).
-fn layout_literal(src: &str, homes: &str, sizes: &[u64], spelled: &[u64]) -> Option<String> {
-    const REGISTER_POOL: [&str; 14] = ["Rax", "Rcx", "Rdx", "Rsi", "Rdi", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15", "Rbp"];
-    const HOME_POOL: [&str; 6] = ["R12", "R13", "R14", "R15", "Rbp", "R10"];
+fn layout_literal(src: &str, homes: &str, frames: &str, sizes: &[u64], spelled: &[u64]) -> Option<String> {
     let (words, capacities) = sizes.split_first()?;
     let (&count, rest) = spelled.split_first()?;
     let of = rest.get(..usize::try_from(count).ok()?)?;
-    // `home_register`: a home past the pool reads as the pool's first.
-    let used: Vec<&str> = of.iter().filter(|&&h| h != 0).map(|&h| HOME_POOL.get((h - 1) as usize).copied().unwrap_or(HOME_POOL[0])).collect();
-    let list = |pool: &[&str], keep: bool| pool.iter().filter(|r| used.contains(r) == keep).copied().collect::<Vec<_>>().join(", ");
-    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{}], [{}], {src}().procedures, {src}().functions)",
-        capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", "), list(&REGISTER_POOL, false), list(&HOME_POOL, true)))
+    let (pool, taken) = pools(&used_registers(of, &[]));
+    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames})",
+        capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
+}
+
+/// Each procedure's layout (`Layout::body`), a literal as `main`'s is, and
+/// the theorem that holds it to the computed one: a procedure's parts are
+/// stated over it.
+fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, sizes: &[u64], numbers: &[u64]) -> Option<String> {
+    let (reserved, capacities) = sizes.split_first()?;
+    let capacities = capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+    let mut text = String::new();
+    for (i, f) in frames_read(numbers)?.iter().enumerate() {
+        let (pool, taken) = pools(&used_registers(f.of, f.pins));
+        let name = emission::body_layout(p, i);
+        text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}]), [{pool}], [{taken}], \
+            {src}().procedures, {src}().functions, {frames}) }}\n\
+            theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), homes_list(f.pins)));
+    }
+    Some(text)
 }
 
 /// `{p}_upto_c()`'s length for each piece `c`, from the program's start:
