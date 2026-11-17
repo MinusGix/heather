@@ -219,12 +219,12 @@ theorem kept_or<A>(n: Nat, a: A, other: Kept<A>(n, a)): Kept<A>(n, a) {
     }
 }
 
-// The limit: a record that does not use one of its parameters is not
-// recovered from its fields, so the motive still reads inside it and the
-// arm's value at the record as written is refused.
+// A record that does not use one of its parameters is not recovered from
+// its fields, so the motive still reads inside it: the arm's value at the
+// record as written is carried along the equation
+// (docs/language/matching/arm-readings-design.md §5).
 record Loose(n: Nat, unused: Nat) { a: Nat, one: first(n) = Some(a) }
 
-// expect-error: they differ in something the display does not show
 theorem loose_or(n, k: Nat, other: Loose(n, k)): Loose(n, k) {
     match one: first(n) {
         None => other,
