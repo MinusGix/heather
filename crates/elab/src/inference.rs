@@ -1695,6 +1695,7 @@ impl Inference<'_> {
     pub(crate) fn elab_match_pending(
         &self,
         cx: &Cx,
+        scrut: &Term,
         scrut_ty: &Type,
         run: &dyn Fn(&Cx, Option<&str>) -> R<Term>,
     ) -> R<Term> {
@@ -1708,6 +1709,9 @@ impl Inference<'_> {
         let mut pending = (*pcx.pending_eqs).clone();
         pending.push(id);
         pcx.pending_eqs = Rc::new(pending);
+        let mut tests = (*pcx.pending_tests).clone();
+        tests.push((id, scrut.clone(), cx.names.len()));
+        pcx.pending_tests = Rc::new(tests);
         let first = run(&pcx, None);
         let wanted = {
             let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
@@ -1718,7 +1722,11 @@ impl Inference<'_> {
         match first {
             Err(error) if wanted => {
                 matching::MatchSpeculationState::rollback_match_state(self.0, mark);
-                run(cx, Some(MATCH_EQ)).map_err(|_| {
+                // The equation the convoy binds has its `refl` reading,
+                // and carries terms, as a written one does.
+                let mut ecx = cx.clone();
+                crate::readings::Readings::register(&mut ecx, &[], &[], &[], Some(MATCH_EQ));
+                run(&ecx, Some(MATCH_EQ)).map_err(|_| {
                     matching::MatchSpeculationState::rollback_match_state(self.0, mark);
                     error
                 })

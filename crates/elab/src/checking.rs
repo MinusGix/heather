@@ -727,13 +727,13 @@ impl Checking<'_> {
                         && registered.iter().any(|r| matches!(r.kind, crate::readings::ReadingKind::Written(_)));
                     let (elim, unused) = if !droppable {
                         let elim = match eqbind {
-                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_t, &scrut_ty, &run),
                             Some(h) => run(&gcx, Some(h)),
                         };
                         (elim, Vec::new())
                     } else { self.probe_unless(|| {
                         let elim = match eqbind {
-                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_t, &scrut_ty, &run),
                             Some(h) => run(&gcx, Some(h)),
                         };
                         let m = cx.names.len();
@@ -793,7 +793,7 @@ impl Checking<'_> {
                         ),
                     };
                     let elim = match eqbind {
-                        None => Inference(self).elab_match_pending(cx, &scrut_ty, &run)?,
+                        None => Inference(self).elab_match_pending(cx, &scrut_t, &scrut_ty, &run)?,
                         Some(h) => run(cx, Some(h))?,
                     };
                     return Ok(Generalize(self).instantiate_aliases(cx, elim, gen_ty, &dependents));
@@ -820,7 +820,7 @@ impl Checking<'_> {
                     ),
                 };
                 match eqbind {
-                    None => Inference(self).elab_match_pending(cx, &scrut_ty, &run),
+                    None => Inference(self).elab_match_pending(cx, &scrut_t, &scrut_ty, &run),
                     Some(h) => run(cx, Some(h)),
                 }
             })()
@@ -1619,8 +1619,15 @@ impl Checking<'_> {
                 // the arm's constructor is wanted, or the other way round,
                 // is carried along the match's equation
                 // (docs/language/matching/arm-readings-design.md §5).
-                if let Some(carried) = crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
-                    return Ok(carried);
+                match crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
+                    Some(crate::readings::Carried::Term(carried)) => return Ok(carried),
+                    // A plain match's arm: the match is elaborated again
+                    // with its equation, and this is the error if that
+                    // fails too.
+                    Some(crate::readings::Carried::Retry) => {
+                        return Err(MismatchNotes(self).mismatch_error(cx, &got, &head, lvl, e.span));
+                    }
+                    None => {}
                 }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)

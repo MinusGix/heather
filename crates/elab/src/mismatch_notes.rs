@@ -110,6 +110,25 @@ impl MismatchNotes<'_> {
         });
     }
 
+    /// The mismatch at `span` as an error, for a site that has decided it
+    /// and gives up there: the message the gate's refusal would carry.
+    pub(crate) fn mismatch_error(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) -> ElabError {
+        let note = CheckNote {
+            span,
+            cx: Rc::new(cx.clone()),
+            got: got.clone(),
+            expected: expected.clone(),
+            level: lvl.clone(),
+            clash: None,
+            partial: None,
+        };
+        let msg = match self.probed_check_note(&note) {
+            Some((MismatchNote::Spelled(msg) | MismatchNote::Located(msg), _)) => msg,
+            None => "the type of this expression does not convert to the type expected here".to_string(),
+        };
+        ElabError::Elab { msg, span }
+    }
+
     /// The deferred half of [`Self::note_check_mismatch`]: run one recorded
     /// candidate's conversion and spelling, and return the message if it has
     /// one.

@@ -45,6 +45,17 @@ pub(crate) struct Reading {
     pub(crate) uses: std::cell::Cell<u32>,
 }
 
+/// What [`Readings::coerce`] makes of a term whose type is not the one
+/// expected.
+pub(crate) enum Carried {
+    /// The term, transported along an enclosing match's equation.
+    Term(Term),
+    /// A plain match around it has the equation that may carry it: the
+    /// equation is now wanted, and the caller fails so that the match is
+    /// elaborated again with it.
+    Retry,
+}
+
 pub(crate) struct Readings<'e>(pub(crate) &'e Elaborator);
 
 impl std::ops::Deref for Readings<'_> {
@@ -133,8 +144,8 @@ impl Readings<'_> {
     /// already (the term is then left exactly as it was), where no
     /// enclosing equation's test occurs in either, or where no transport
     /// along one equation closes the gap.
-    pub(crate) fn coerce(&self, cx: &Cx, term: &Term, got: &Type, expected: &Type, lvl: &Level) -> Option<Term> {
-        if cx.readings.is_empty() || got == expected {
+    pub(crate) fn coerce(&self, cx: &Cx, term: &Term, got: &Type, expected: &Type, lvl: &Level) -> Option<Carried> {
+        if (cx.readings.is_empty() && cx.pending_tests.is_empty()) || got == expected {
             return None;
         }
         let mut decided = false;
@@ -177,7 +188,7 @@ impl Readings<'_> {
                     rhs: Rc::clone(&case),
                     proof: Rc::new(proof),
                 };
-                return Some(Term::J {
+                return Some(Carried::Term(Term::J {
                     ty_level: level,
                     motive_level: lvl.clone(),
                     ty,
@@ -186,14 +197,14 @@ impl Readings<'_> {
                     case: Rc::new(term.clone()),
                     rhs: test,
                     proof: Rc::new(symmetric),
-                });
+                }));
             }
             // `got` is `M(e)` and `M(C)` is expected: forward along `h`.
             if let Some(motive) = &from_got
                 && self.0.conv_types(cx, &at_case(motive), expected, lvl)
                 && well_formed(motive)
             {
-                return Some(Term::J {
+                return Some(Carried::Term(Term::J {
                     ty_level: level,
                     motive_level: lvl.clone(),
                     ty,
@@ -202,10 +213,34 @@ impl Readings<'_> {
                     case: Rc::new(term.clone()),
                     rhs: case,
                     proof: Rc::new(proof),
-                });
+                }));
             }
         }
-        None
+        // A plain match around this has its equation pending
+        // (dependent-match-compiler-design §4.3): if its test is spelled
+        // in either type, the equation is wanted, and the match is
+        // elaborated again with it bound.
+        let len = cx.names.len();
+        let mut retry = false;
+        for (id, test, depth) in cx.pending_tests.iter().rev() {
+            let test = test.shift_local((len - depth) as u32);
+            if expected.abstract_local(&test).is_none() && got.abstract_local(&test).is_none() {
+                continue;
+            }
+            if !decided {
+                let verdict = stats::time_kernel(|| self.0.goal_oracle().convert_type(&cx.gamma, Layer::Prog, got, expected, lvl));
+                if verdict != Err(ConvError::NotConvertible) {
+                    return None;
+                }
+                decided = true;
+            }
+            let mut wanted = self.0.attempt.match_eq_wanted.borrow_mut();
+            if !wanted.contains(id) {
+                wanted.push(*id);
+            }
+            retry = true;
+        }
+        retry.then_some(Carried::Retry)
     }
 
     /// A use of a name, elaborated to `term` at type `got`, where `expected`
