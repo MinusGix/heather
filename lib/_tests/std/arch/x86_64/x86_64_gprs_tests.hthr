@@ -1,0 +1,31 @@
+// The register file is data (issues/native-gprs-writes-not-canonical.md):
+// files that hold the same words are the same file by conversion, whatever
+// writes built them.
+import x86_64;
+import bitvec;
+import logic;
+import list;
+
+// Two writes of one register are the one write.
+theorem write_twice(a, b: BitVec(64), g: Gprs): write_gpr(Rbx, a, write_gpr(Rbx, b, g)) = write_gpr(Rbx, a, g) { refl }
+
+// Writes of two registers commute.
+theorem write_commutes(a, b: BitVec(64), g: Gprs): write_gpr(R8, a, write_gpr(R9, b, g)) = write_gpr(R9, b, write_gpr(R8, a, g)) { refl }
+
+// Writing back what a register holds changes nothing.
+theorem write_held(g: Gprs): write_gpr(Rdx, read_gpr(Rdx, g), g) = g { refl }
+
+// A read sees through writes of other registers, and the last write of its own.
+theorem read_through(a, b, c: BitVec(64), g: Gprs): read_gpr(R8, write_gpr(Rbx, c, write_gpr(R8, a, write_gpr(R8, b, g)))) = a { refl }
+theorem read_other(a: BitVec(64), g: Gprs): read_gpr(Rsp, write_gpr(Rbx, a, g)) = read_gpr(Rsp, g) { refl }
+
+// At a register that is not known, a read after a write is the lemma's.
+theorem read_any(register, query: Gpr, a: BitVec(64), g: Gprs):
+    read_gpr(query, write_gpr(register, a, g)) = match register.same(query) { False => read_gpr(query, g), True => a } {
+    read_gpr_write(register, query, a, g)
+}
+
+// Negative control: writes of different words are different files.
+theorem write_differs(g: Gprs): ¬(write_gpr(Rax, BitVec::ofNat(1), g) = write_gpr(Rax, BitVec::ofNat(2), g)) {
+    λ same => absurd(cong_fn<Gprs, Bool>(λ file => read_gpr(Rax, file).head_bit(), same))
+}
