@@ -271,6 +271,11 @@ impl DeclAttempt {
         }
     }
 
+    /// Close `mark` keeping everything recorded since it.
+    pub(super) fn keep(&self, mark: AttemptMark) {
+        self.goal_arena.keep(mark.goal_arena);
+    }
+
     /// Take the attempt back to `mark`: every log cut to its length, every
     /// cell given its value back, the goal arena restored
     /// ([`GoalArena::restore`]).

@@ -328,6 +328,16 @@ impl GoalArena {
         allocated
     }
 
+    /// Close `checkpoint` keeping everything done since it: the changes
+    /// stay logged for a checkpoint still open outside it.
+    pub(super) fn keep(&self, checkpoint: GoalCheckpoint) {
+        let _ = checkpoint;
+        self.checkpoints.set(self.checkpoints.get() - 1);
+        if self.checkpoints.get() == 0 {
+            self.undo.borrow_mut().clear();
+        }
+    }
+
     /// Log goal `index`'s state and spelling before it is changed in place,
     /// if a checkpoint is open.
     fn log_change(&self, goal: &Goal, index: usize) {

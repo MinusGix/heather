@@ -762,8 +762,8 @@ impl Elaborator {
             }),
         };
         let (out, keep) = body();
-        if keep {
-            guard.mark = None;
+        if keep && let Some(ProbeMark { attempt, .. }) = guard.mark.take() {
+            self.attempt.keep(attempt);
         }
         out
     }

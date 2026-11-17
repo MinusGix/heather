@@ -467,6 +467,18 @@ impl Generalize<'_> {
     }
 }
 
+/// Whether an arm calls the declaration being elaborated.
+pub(crate) fn arms_call_self(cx: &Cx, arms: &[Arm]) -> bool {
+    let Some(s) = cx.selfref.as_ref() else { return false };
+    let mut calls = false;
+    for arm in arms {
+        walk_expr(&arm.body, &mut |e| {
+            calls |= crate::recursion::surface_self_call(s, e).is_some();
+        });
+    }
+    calls
+}
+
 /// What a `match` refines: the binders it generalizes, ascending, and those
 /// of them it reads at another spelling of their type
 /// ([`Generalize::refined_hypotheses`]).

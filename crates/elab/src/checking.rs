@@ -690,7 +690,19 @@ impl Checking<'_> {
                             &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
                         ),
                     };
-                    let (elim, unused) = self.probe_unless(|| {
+                    // A recursion's own match generalizes for its calls
+                    // as well, which no use of a name shows.
+                    let droppable = !again
+                        && eqbind.is_some()
+                        && !generalize::arms_call_self(cx, arms.as_slice())
+                        && registered.iter().any(|r| matches!(r.kind, crate::readings::ReadingKind::Written(_)));
+                    let (elim, unused) = if !droppable {
+                        let elim = match eqbind {
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            Some(h) => run(&gcx, Some(h)),
+                        };
+                        (elim, Vec::new())
+                    } else { self.probe_unless(|| {
                         let elim = match eqbind {
                             None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
                             Some(h) => run(&gcx, Some(h)),
@@ -715,7 +727,7 @@ impl Checking<'_> {
                         }
                         let keep = unused.is_empty();
                         ((elim, unused), keep)
-                    });
+                    }) };
                     if !unused.is_empty() {
                         refined.positions.retain(|p| !unused.contains(p));
                         refined.retyped.retain(|(p, _)| !unused.contains(p));

@@ -162,9 +162,10 @@ impl Readings<'_> {
         (!cx.aliases.iter_inner().any(|a| a.name == *name && a.depth > position)).then_some(position)
     }
 
-    /// A call made only of facts about a scrutinee, `k(h)` or `k(h, w)`
-    /// with `k` a refined hypothesis and each argument the equation or a
-    /// refined hypothesis, is taken as written if it checks as written
+    /// A call that hands a match's equation to facts about its scrutinee,
+    /// `k(h)` or `k(h, w)` with `k` a refined hypothesis and each argument
+    /// the equation or a refined hypothesis, is taken as written if it
+    /// checks as written
     /// (design §3.4): the context to elaborate it in, with the refined
     /// copies out of reach of their names. `expected` is the call's type
     /// where the position states one.
@@ -190,6 +191,9 @@ impl Readings<'_> {
         let Some(Reading { kind: ReadingKind::Written(_), .. }) = Self::at(cx, head_position) else { return None };
         let head_origin = origin(head_position);
         let type_at = |position: usize| cx.gamma.entries.get(position).map(|entry| entry.ty.shift_local((len - position) as u32));
+        // The call hands the match's equation on: without it there is no
+        // written fact for the others to be beside.
+        let mut equation = false;
         let mut ty = type_at(head_origin)?;
         let mut level = cx.gamma.entries.get(head_origin)?.level.clone();
         for arg in args {
@@ -197,7 +201,10 @@ impl Readings<'_> {
             let position = Self::binder(cx, name)?;
             let at = match &Self::at(cx, position)?.kind {
                 ReadingKind::Written(_) => origin(position),
-                ReadingKind::Equation => position,
+                ReadingKind::Equation => {
+                    equation = true;
+                    position
+                }
             };
             let Type::Pi { dom_level, cod_level, dom, cod } = self.0.whnf(cx, &ty, e.span).ok()? else { return None };
             if !self.0.conv_types(cx, &type_at(at)?, &dom, &dom_level) {
@@ -206,7 +213,7 @@ impl Readings<'_> {
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Var(LocalVar((len - 1 - at) as u32)))));
             level = cod_level;
         }
-        if hidden.is_empty() {
+        if hidden.is_empty() || !equation {
             return None;
         }
         if let Some((expected, expected_level)) = expected
