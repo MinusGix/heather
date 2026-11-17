@@ -112,8 +112,10 @@ fn Tree::emits(self t: Tree, p: List<Nat>) → Option<List<Nat>> {
     }
 }
 
+// What is left of `same` is the right subtree's call, passed beside the
+// equation that names the left one's.
 theorem node_left(w: Nat, l, r: Tree, p, c: List<Nat>, same: TNode(w, l, r).emits(p) = Some(c),
-    k: (q: List<Nat>) → l.emits(Cons(w, p)) = Some(q) → Nat): Nat {
+    k: (q: List<Nat>) → l.emits(Cons(w, p)) = Some(q) → r.emits(q) = Some(c) → Nat): Nat {
     cases same as fw, left(q);
-    k(q, left)
+    k(q, left, same)
 }

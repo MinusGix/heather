@@ -319,7 +319,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             cases scoped as ok, got(bs), bits;
             let parts = Bool::both(Bool::is_true_of_eq(ok));
             let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
-            ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨refl, Bool::is_true_of_eq(bits)⟩)⟩⟩
+            ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
         },
     }
 }
