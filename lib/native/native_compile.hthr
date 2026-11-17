@@ -393,7 +393,7 @@ fn Layout::tabled(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, 
 // The layout procedure `index`'s code is compiled with: the same region,
 // tables and placements, and the procedure's own frame and homes.
 fn Layout::body(self layout: Layout, index: Nat) → Layout {
-    Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places),
+    Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places, layout.homes.rooms),
         layout.procedures, layout.functions, layout.bodies, layout.procedures.performed_by(index))
 }
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
@@ -1247,7 +1247,7 @@ fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
 
 // What one activation of a procedure takes of the stack: its frame, the
 // registers it saves and its return address.
-fn Frame::level(self frame: Frame, places: List<Place>) → Nat { (8 * frame.words + 8 * frame.homes(places).kept().len()) + 8 }
+fn Frame::level(self frame: Frame, places: List<Place>) → Nat { (8 * frame.words + 8 * frame.homes(places, []).kept().len()) + 8 }
 
 // A row's entry for a procedure: nothing where the row has none.
 fn List::deep_at(self row: List<Nat>, index: Nat) → Nat { match row.nth(index) { None => 0, Some(deep) => deep } }
@@ -1330,33 +1330,41 @@ fn program_linkable(functions: List<Function>) → Bool {
     (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
 }
 
-// The stack a program's calls of its functions ask below the caller: the
-// largest room of `program_room` and the CALL's return address; none
-// where there is no function. A program lowered with any placement is
-// checked against that table, which no placement exceeds, so the bound
-// needs nothing of the placement.
-fn program_calls_room(functions: List<Function>) → Nat {
-    match functions { Nil => 0, Cons(_, _) => rooms_top(program_rooms(functions)) + 8 }
+// The stack a program's calls of its functions ask below the caller,
+// under the room table `rooms` the functions are emitted with: the table's
+// largest room and the CALL's return address; none where there is no
+// function. The table is a choice the function compiler checks a function
+// at a time (`Function::roomy`), so any the functions link under bounds
+// their calls.
+fn table_room(rooms: List<Nat>) → Nat → Nat { λ (f: Nat) => rooms_at(rooms, f) }
+fn table_calls_room(functions: List<Function>, rooms: List<Nat>) → Nat {
+    match functions { Nil => 0, Cons(_, _) => rooms_top(rooms) + 8 }
 }
+
+// The table the homes choose (`Homes.rooms`), or with none chosen the one
+// no placement exceeds; and what a call of a function takes under it.
+fn Homes::room_table(self homes: Homes, functions: List<Function>) → List<Nat> {
+    match homes.rooms { Nil => program_rooms(functions), Cons(_, _) => homes.rooms }
+}
+fn Homes::calls_room(self homes: Homes, functions: List<Function>) → Nat { table_calls_room(functions, homes.room_table(functions)) }
 
 // What a program needs of its stack: `main`'s frame and its saved RSP's
 // word, the deepest its calls go, the room of a function a region calls,
 // and one return address more.
 fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    (src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 * (src.words + 1)
+    (src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1)
 }
 
-theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ(f) <= functions.len()):
-    program_room(functions)(f) + 8 <= program_calls_room(functions) {
-    let below: (program_room(functions)(f) <= rooms_top(program_rooms(functions))) = rooms_at_top(program_rooms(functions), f);
-    (match functions as λ fs => Succ(f) <= fs.len() → program_room(fs)(f) <= rooms_top(program_rooms(fs)) →
-        program_room(fs)(f) + 8 <= program_calls_room(fs) {
-        Nil => λ none _ => false_elim(nothing_below_zero(f, none)),
-        Cons(last, earlier) => λ _ under => {
-            let unfold: (program_calls_room(Cons(last, earlier)) = rooms_top(program_rooms(Cons(last, earlier))) + 8) = refl;
-            omega(under, unfold)
+theorem table_calls_room_above(functions: List<Function>, rooms: List<Nat>, f: Nat, called: Succ(f) <= functions.len()):
+    table_room(rooms)(f) + 8 <= table_calls_room(functions, rooms) {
+    let below: (table_room(rooms)(f) <= rooms_top(rooms)) = rooms_at_top(rooms, f);
+    (match functions as λ fs => Succ(f) <= fs.len() → table_room(rooms)(f) + 8 <= table_calls_room(fs, rooms) {
+        Nil => λ none => false_elim(nothing_below_zero(f, none)),
+        Cons(last, earlier) => λ _ => {
+            let unfold: (table_calls_room(Cons(last, earlier), rooms) = rooms_top(rooms) + 8) = refl;
+            omega(below, unfold)
         },
-    })(called, below)
+    })(called)
 }
 
 // The functions the regions call, after the program's own code `p`, their
@@ -1365,13 +1373,13 @@ theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ
 // lent: the program lends them to write
 // (docs/native/native-one-compiler-design.md §2.6). Each function is emitted
 // under the count of buffers it says it is lent (`program_counts`) and the
-// room table no placement exceeds (`program_room`).
-fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat) → Option<Prog> {
+// room table `rooms` (`Homes::room_table`).
+fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, rooms: List<Nat>, names: Nat) → Option<Prog> {
     match functions {
         Nil => Some(p),
         Cons(_, _) => match program_linkable(functions) {
             False => None,
-            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)) {
+            True => match emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)) {
                 None => None,
                 Some(out) => Some(out.prog),
             },
@@ -1383,21 +1391,21 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, nam
 // certificate pays the kernel's per-declaration fuel for the largest piece
 // and not for all of them at once (`write-elf`'s `_deep`; evaluability a
 // function at a time, `program_scan_at_drop`).
-theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, names: Nat, q: Prog,
+theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, rooms: List<Nat>, names: Nat, q: Prog,
     evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
-    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), program_room(functions)).map(λ out => out.prog) = Some(q)):
-    p.links(functions, places, names) = Some(q)
+    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)).map(λ out => out.prog) = Some(q)):
+    p.links(functions, places, rooms, names) = Some(q)
 {
     let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
         Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
             Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
     match functions as λ fs => program_linkable(fs) = True →
-        emit_functions_after_lent(p, fs, places, names, program_counts(fs), program_room(fs)).map(λ out => out.prog) = Some(q) →
-        p.links(fs, places, names) = Some(q) {
+        emit_functions_after_lent(p, fs, places, names, program_counts(fs), table_room(rooms)).map(λ out => out.prog) = Some(q) →
+        p.links(fs, places, rooms, names) = Some(q) {
         Nil => λ _ e => e,
-        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) {
+        Cons(last, earlier) => λ l e => j(sym(l), λ b _ => (match b { False => None, True => match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), table_room(rooms)) {
                 None => None, Some(out) => Some(out.prog) } }) = Some(q),
-            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), program_room(Cons(last, earlier))) as λ r =>
+            match emit_functions_after_lent(p, Cons(last, earlier), places, names, program_counts(Cons(last, earlier)), table_room(rooms)) as λ r =>
                 r.map(λ out => out.prog) = Some(q) → (match r { None => None, Some(out) => Some(out.prog) }) = Some(q) {
                 None => λ h => h,
                 Some(_) => λ h => h,
@@ -1415,7 +1423,7 @@ fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes, bodies
         Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
                 layout, 0, c.names) {
             None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                 None => None,
                 Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
             },
@@ -1701,7 +1709,7 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List
             False => [0, 5, 12, 0, 0],
             True => match src.procedures.procedures_refusal(src.layout(low, homes, bodies), 0) {
                 Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
-                Nil => match Start.links(src.functions, homes.places, 0) {
+                Nil => match Start.links(src.functions, homes.places, homes.room_table(src.functions), 0) {
                     None => [0, 5, 17, 0, 0],
                     Some(_) => match src.compile(low, homes, bodies) { None => [0, 5, 9, 0, 0], Some(_) => [] },
                 },
@@ -1716,7 +1724,7 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 // Whether every leaf of the procedure's body has the registers it needs
 // under the frame: the scan's verdict, over the frame's own layout.
 fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
-    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([]), src.procedures, src.functions, [], proc.body.performed()),
+    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([], []), src.procedures, src.functions, [], proc.body.performed()),
             proc.results, 1) {
         Passed(_) => True,
         Refused(_) => False,

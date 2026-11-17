@@ -466,3 +466,24 @@ theorem unlisted_call_refused():
     Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
 theorem listed_call_fits():
     Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0]).call_fits([], 0, [0], [7]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The functions' room table (`Homes.rooms`)
+
+// The table the planner's placement asks for: `view_put` is a leaf that
+// saves nothing and needs no stack below its return address, the lender
+// its call of it. With no table chosen every function is taken to save six
+// registers and to call with eight slots.
+fn view_planned(written: Bool) → Homes {
+    Homes::slots(view_source(written)).placed(plan_program(view_functions(written))).roomed(program_rooms_planned(view_functions(written)))
+}
+theorem view_rooms_planned(): program_rooms_planned(view_functions(True)) = [0, 24] { refl }
+theorem view_rooms_default(): Homes::slots(view_source(True)).room_table(view_functions(True)) = [48, 184] { refl }
+theorem view_planned_compiles(): view_source(True).refusal(low(), view_planned(True), []) = [] { refl }
+// What a call of a function takes of the stack, under each table.
+theorem view_calls_room_planned(): view_planned(True).calls_room(view_functions(True)) = 32 { refl }
+theorem view_calls_room_default(): Homes::slots(view_source(True)).calls_room(view_functions(True)) = 192 { refl }
+// A table is checked, not trusted: one too small for the lender's call is
+// refused where the functions link.
+theorem view_small_table_refused():
+    view_source(True).refusal(low(), Homes::slots(view_source(True)).placed(plan_program(view_functions(True))).roomed([0, 8]), []) = [0, 5, 17, 0, 0] { refl }

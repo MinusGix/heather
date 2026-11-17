@@ -386,11 +386,40 @@ below `2^64` for the counter. The new bound does not grow with the depth
 where nothing recurses, so the theorems take `small: src.depth <
 Nat::pow(2, 64)`; a certificate gives it by evaluation.
 
-**What it is not yet.** The floor is still added, not maxed:
-`program_calls_room + 8` sits below the deepest call even where the
+**What it is not yet.** The floor is still added, not maxed: the
+functions' room and a word sit below the deepest call even where the
 deepest procedure calls no function. That is at most one function's room
-too much, and F5 is where the functions' room changes. A premise free of
+too much. A premise free of
 the placement (`need` is at most the old bound) is not proved; nothing
 uses one. `need` over frames that are not literals is costly to
 evaluate (`src.bodies()` runs the allocator's scan at every use), so a
 test states it over `SpillAll().frames(src)` or a literal.
+
+### 6.5 F5: the functions' room table is the homes'
+
+`Homes.rooms` is the room table the functions are emitted under, function
+`f`'s room at entry `f`. `Prog::links(functions, places, rooms, names)`
+takes it, and `Homes::calls_room(functions)`, the largest room and the
+CALL's word, is the functions' term of `Target.roomy` and of
+`Source::need`. The table is a choice, as `places` is: the function
+compiler checks each function against it (`Function::roomy`), so the
+proofs are stated over any table and nothing new is proved about one.
+
+- With no table (`rooms = []`), `Homes::room_table` is `program_rooms`,
+  the table no placement exceeds: every function saving six registers and
+  calling with eight slots. That is what the bound was before, and what
+  `Source::homes()` and a test's `Homes::slots(src).placed(…)` still get.
+- `write-elf` reads `program_rooms_planned`, the table its places ask
+  for, on the fork and spells it in the homes' literal. A leaf that saves
+  nothing then asks for no stack below its return address.
+
+The table cannot be computed from `places` inside `links` without planning
+or emitting the functions first: where one function's places end in the
+list is known only by emitting it. So it is stated beside the places, by
+whoever chose them.
+
+The issue's other loose end, the optimizer's `Function::lowers` and its
+probe in `verified.rs` under `index_rooms()`, is left as it is. That call
+asks whether a placement lowers, yes or no, and reads nothing of the room;
+a smaller table would cost a table's evaluation at every probe and change
+no answer.

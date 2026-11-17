@@ -74,7 +74,11 @@ fn Home::in_pool(self home: Home) → Bool {
 // of its own lives there (`Homes::pinned`): a callee's caller may have a
 // word in one, so the callee neither takes it for a leaf nor saves it
 // (docs/native/native-procedure-frames-design.md §2.4).
-record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [], pins: List<Home> := [] }
+// `rooms` is the room table the functions are emitted under, function
+// `f`'s room at entry `f`: a choice the function compiler checks
+// (`Function::roomy`), from which the stack a call of a function needs is
+// read. Empty, the table no placement exceeds is used (`Homes::room_table`).
+record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [], pins: List<Home> := [], rooms: List<Nat> := [] }
 
 // A procedure's placement: its body's words' homes and loop sets, the
 // registers it pins, and how many words its frame has. Each body has its
@@ -88,7 +92,7 @@ fn List::frame(self bodies: List<Frame>, index: Nat) → Frame {
 }
 
 // The frame's homes, with the functions' values where the program has them.
-fn Frame::homes(self frame: Frame, places: List<Place>) → Homes { Homes(frame.of, frame.loops, places, frame.pins) }
+fn Frame::homes(self frame: Frame, places: List<Place>, rooms: List<Nat>) → Homes { Homes(frame.of, frame.loops, places, frame.pins, rooms) }
 
 fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
     match homes.loops.nth(again) { None => [], Some(set) => set }
@@ -612,7 +616,8 @@ fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fue
 // The same homes with `places` for the values of the functions the regions
 // call (`Prog::links`, native_compile): a proposal like the homes, checked
 // by the functions' lowering.
-fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places, homes.pins) }
+fn Homes::placed(self homes: Homes, places: List<Place>) → Homes { Homes(homes.of, homes.loops, places, homes.pins, homes.rooms) }
+fn Homes::roomed(self homes: Homes, rooms: List<Nat>) → Homes { Homes(homes.of, homes.loops, homes.places, homes.pins, rooms) }
 
 // A procedure's body passes the check under `homes`, from its results, and
 // its parameters are apart from what is live as it starts: its entry
@@ -845,7 +850,7 @@ fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
     }
 }
 
-fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places, homes.pins) }
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places, homes.pins, homes.rooms) }
 
 // Each word in turn, heaviest first, given the first register none of its
 // neighbours has, or its slot; a word live at the start keeps its slot.

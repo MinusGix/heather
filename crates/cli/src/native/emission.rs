@@ -191,7 +191,7 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
             }
             let deep = planner.read("deep", format!("Start.deep_exit({layout})"));
             let count = functions;
-            let functions = (count > 0).then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {after}).unwrap_or(Start)")));
+            let functions = (count > 0).then(|| planner.read("functions", format!("Start.links({src}().functions, {homes}.places, {homes}.room_table({src}().functions), {after}).unwrap_or(Start)")));
             Some(Calls { src: src.to_string(), homes: homes.to_string(), bodies, deep, functions, count })
         }
     };
@@ -723,15 +723,15 @@ fn deep_text(p: &str, src: &str, homes: &str, layout: &str, end: &str, last: u64
     let functions = format!("{src}().functions");
     let exit = format!("{end}.deep_exit({layout})");
     if count == 0 {
-        return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{ refl }}\n");
+        return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{ refl }}\n");
     }
     let evaluable = super::verified::evaluable_text_over(p, &functions, count, &format!("{functions}.map(λ (f: Function) => f.parameters.len())"));
     format!("{evaluable}
 theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
 theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}
-theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), program_room({functions})).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
-theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {last}) = Some({p}_code()) {{
-    {exit}.links_of({functions}, {homes}.places, {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
+theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), table_room({homes}.room_table({functions}))).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
+theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{
+    {exit}.links_of({functions}, {homes}.places, {homes}.room_table({functions}), {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_linked())
 }}
 ")
 }

@@ -97,7 +97,7 @@ record Target {
     // deepest of its calls takes with that room (`List::reach`: each level
     // a return address, the registers the callee saves and the callee's
     // own frame), then room for a function a region calls
-    // (`program_calls_room`: its room under `program_room` and the CALL's
+    // (`Homes::calls_room`: its room under the homes' table and the CALL's
     // word) and for one return address more: a call with no room left is
     // refused in the callee's entry, after its CALL.
     // `main`'s frame is the stack's top, with nothing above it.
@@ -114,7 +114,7 @@ record Target {
     pinned: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: (callees.reach(procedures, bodies, homes.places, room) + program_calls_room(functions)) + 8 <= index,
+    roomy: (callees.reach(procedures, bodies, homes.places, room) + homes.calls_room(functions)) + 8 <= index,
 }
 
 fn Target::layout(self t: Target) → Layout {

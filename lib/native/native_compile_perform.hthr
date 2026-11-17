@@ -74,7 +74,7 @@ import set_tactic;
 
 // The same target running another activation.
 fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.words + frames.len()) <= t.stack.size,
-    roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, room) + program_calls_room(t.functions)) + 8 <= index) → Target {
+    roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index) → Target {
     Target(t.r, t.reserved, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
         t.stack_above, t.stack_canonical, t.bodies, t.callees, index, frames, pinned, room, framed, roomy)
 }
@@ -82,17 +82,17 @@ fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, pinn
 // The target running an activation of procedure `p`: the same region,
 // program and tables, with the procedure's frame and homes
 // (`Layout::body`).
-fn Target::called(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
+fn Target::called(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
     pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + program_calls_room(t.functions)) + 8 <= index) → Target {
-    Target(t.r, t.reserved, t.bodies.frame(p).words, t.caps, t.bodies.frame(p).homes(t.homes.places), homed, t.fits, t.program, t.origin, t.laid, t.args,
+    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index) → Target {
+    Target(t.r, t.reserved, t.bodies.frame(p).words, t.caps, t.bodies.frame(p).homes(t.homes.places, t.homes.rooms), homed, t.fits, t.program, t.origin, t.laid, t.args,
         t.procedures, t.functions, t.stack, t.stack_writes, t.stack_above, t.stack_canonical, t.bodies, t.procedures.performed_by(p), index, frames, pinned, room, framed, roomy)
 }
 
 // Its layout is the procedure's.
-theorem Target::called_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
+theorem Target::called_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
     pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + program_calls_room(t.functions)) + 8 <= index):
+    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index):
     t.called(p, homed, index, frames, pinned, room, framed, roomy).layout() = t.layout().body(p) {
     refl
 }
@@ -110,7 +110,7 @@ theorem Target::held_slots(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
 
 // The claim reads no proof of the activation's.
 theorem Target::held_proofs(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, t.room) + program_calls_room(t.functions)) + 8 <= t.index):
+    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, t.room) + t.homes.calls_room(t.functions)) + 8 <= t.index):
     t.activation(t.index, t.frames, t.pinned, t.room, framed, roomy).Held(live, env, g, m) {
     held
 }

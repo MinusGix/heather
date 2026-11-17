@@ -865,7 +865,7 @@ theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, bodi
         None => absurd(compiled),
         Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
             None => absurd(compiled),
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                 None => absurd(compiled),
                 Some(whole) => whole.laid_of(program, compiled),
             },
@@ -963,7 +963,7 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), homes: Homes, bodi
 theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program, main, procs: Prog, names, after: Nat,
     emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
-    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
+    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile_calls(low, homes, bodies) = Some(program) {
     let layout = src.layout(low, homes, bodies);
     let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
@@ -974,7 +974,7 @@ theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Home
         }) = Some(program), laid_here);
     let after_main = j(sym(code), λ o _ => (match o {
             None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                 None => None,
                 Some(x) => match x.laid_out() { False => None, True => Some(x) },
             },
@@ -983,7 +983,7 @@ theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Home
             None => None,
             Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
                 None => None,
-                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                     None => None,
                     Some(x) => match x.laid_out() { False => None, True => Some(x) },
                 },
@@ -997,7 +997,7 @@ theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes
     allocated: src.allocation_ok(homes).IsTrue(), calls: src.procedures = Cons(first, rest),
     emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
-    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
+    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile(low, homes, bodies) = Some(program) {
     let layout = src.layout(low, homes, bodies);
     let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, emitted, code, whole, laid);
@@ -1020,7 +1020,7 @@ theorem Source::compile_functions_of(self src: Source, low: BitVec(64), homes: H
     allocated: src.allocation_ok(homes).IsTrue(), bare: src.procedures = Nil, calls: src.functions = Cons(first, rest),
     emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
-    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
+    whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile(low, homes, bodies) = Some(program) {
     let layout = src.layout(low, homes, bodies);
     let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, emitted, code, whole, laid);
@@ -1351,10 +1351,10 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                             λ at_whole => {
                                 // `main`'s frame: the stack's top words.
                                 let index = stack.size - 8 * src.words;
-                                let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
+                                let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
                                 let top_i: (stack.size = index + 8 * src.words) = omega(needed);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-                                let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
+                                let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
                                 let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
                                     src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), index, [], home_values(s.gprs), src.depth, framed, roomy);
                                 let live = src.main.live_in(homes, []);
@@ -1515,7 +1515,7 @@ record CallsBuilt(src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame
     laid: program.laid_out().IsTrue(),
     base: Prog,
     names: Nat,
-    linked: base.links(src.functions, homes.places, names) = Some(program),
+    linked: base.links(src.functions, homes.places, homes.room_table(src.functions), names) = Some(program),
 }
 
 theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile_calls(low, homes, bodies) = Some(program)):
@@ -1528,7 +1528,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
                 None => None,
                 Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
                     None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                         None => None,
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
@@ -1538,7 +1538,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
         Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
                 src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
                     None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
                         None => None,
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
@@ -1546,7 +1546,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
             None => λ _ none => absurd(none),
             Some(d) => λ code => {
                 let base = d.prog.deep_exit(layout);
-                (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
+                (match base.links(src.functions, homes.places, homes.room_table(src.functions), d.names) as λ o => base.links(src.functions, homes.places, homes.room_table(src.functions), d.names) = o →
                         (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
                         CallsBuilt(src, low, homes, bodies, program) {
                     None => λ _ none => absurd(none),
@@ -1554,9 +1554,9 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
                             CallsBuilt(src, low, homes, bodies, program) {
                         False => λ none => absurd(none),
                         True => λ same => {
-                            let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
+                            let linked_p: (base.links(src.functions, homes.places, homes.room_table(src.functions), d.names) = Some(program)) =
                                 subst(same, linked);
-                            let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
+                            let w_base: base.Within(program) = base.links_grows(homes.places, homes.room_table(src.functions), d.names, program, src.functions, linked_p);
                             let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
                             let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
                             let r: CallsBuilt(src, low, homes, bodies, program) = CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
@@ -1777,7 +1777,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         // and its homes.
         let layout = t.layout().body(index);
         let frame = t.bodies.frame(index);
-        let homes = frame.homes(t.homes.places);
+        let homes = frame.homes(t.homes.places, t.homes.rooms);
         let kept = homes.kept();
         let hosted = hosts.hosted(index, proc, found);
         let pre_i = hosted.pre;
@@ -1810,8 +1810,8 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         let more = λ (d2: Nat) (eq: t.room = Succ(d2)) => {
             let d_eq: (d2 = d) = omega(eq, room);
             let places = t.homes.places;
-            let was: ((t.callees.reach(t.procedures, t.bodies, places, Succ(d2)) + program_calls_room(t.functions)) + 8 <= t.index) =
-                j(eq, λ r _ => (t.callees.reach(t.procedures, t.bodies, places, r) + program_calls_room(t.functions)) + 8 <= t.index, t.roomy);
+            let was: ((t.callees.reach(t.procedures, t.bodies, places, Succ(d2)) + t.homes.calls_room(t.functions)) + 8 <= t.index) =
+                j(eq, λ r _ => (t.callees.reach(t.procedures, t.bodies, places, r) + t.homes.calls_room(t.functions)) + 8 <= t.index, t.roomy);
             // The call's level and what the callee's own calls take are
             // within what this body's calls take.
             let below = t.procedures.performed_by(index).reach(t.procedures, t.bodies, places, d2);
@@ -1823,7 +1823,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             let i2 = (ic + 8 * frame.words) + 8 * kept.len();
             let at_i: (i2 = t.index - 8) = omega(was, level);
             let back_i: (i2 + 8 = t.index) = omega(was, level);
-            let roomy_c: ((below + program_calls_room(t.functions)) + 8 <= ic) = omega(was, level);
+            let roomy_c: ((below + t.homes.calls_room(t.functions)) + 8 <= ic) = omega(was, level);
             let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
             let framed_c: (ic + 8 * (frame.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
             let c = t.called(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), d2, framed_c, roomy_c);
@@ -1937,14 +1937,14 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let w_whole = built.exit_within;
     // `main`'s frame: the stack's top words.
     let index = stack.size - 8 * src.words;
-    let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
+    let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
     let top_i: (stack.size = index + 8 * src.words) = omega(needed);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-    let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
+    let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
     let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
         src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), index, [], home_values(s.gprs), src.depth, framed, roomy);
     let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
-    let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, built.names, program, t.site(), t.laid, stack, program.within_self(),
+    let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, homes.room_table(src.functions), built.names, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, built.linked);
     let answers: t.Answered(call) = t.answers_of(known, known, meets.right);
     let fns = t.functions_run(call, answers);

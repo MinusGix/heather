@@ -240,6 +240,7 @@ fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(),
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
 fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask, Short(name) => 289 + name }} }}
 fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
+fn {p}_rooms() → List<Nat> {{ program_rooms_planned({src}().functions) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -302,11 +303,19 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         }).collect::<Result<Vec<_>, String>>()?;
         Some(format!("[{}]", places.join(", ")))
     };
+    // The room table those places ask for, each function saving what its
+    // plan says (`program_rooms_planned`), spelled: the table the
+    // functions are emitted under and the stack bound reads
+    // (`Homes::room_table`), least where the default is every function
+    // saving all six registers.
+    let rooms = if functions == 0 { None } else {
+        Some(format!("[{}]", numbers(&fork, &probe, &format!("{p}_rooms"))?.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
+    };
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
         let homes_def = format!("fn {homes} → Homes {{ {} }}\n{}fn {layout} → Layout {{ {} }}\n{}",
-            homes_literal(spelled, places.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?,
+            homes_literal(spelled, places.as_deref(), rooms.as_deref()).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?,
             frames_literal(&frames, &homes, &frames_spelled).ok_or_else(|| format!("`{symbol}`'s procedures' placements did not read back"))?,
             layout_literal(&src, &homes, &frames, &sizes, spelled).ok_or_else(|| format!("`{symbol}`'s layout did not read back"))?,
             body_layouts(p, &src, &homes, &frames, &layout, &sizes, &frames_spelled).ok_or_else(|| format!("`{symbol}`'s procedures' layouts did not read back"))?);
@@ -643,9 +652,9 @@ fn refused(symbol: &str, why: &[u64]) -> String {
 
 /// The homes `Homes::spelled` (native_alloc) reads back as, spelled: how
 /// many words have one, each (0 the slot, `k + 1` register `k`), then each
-/// loop's set, its length first. With `places`, where the values of the
+/// loop's set, its length first. With `rooms`, the functions' room table; with `places`, where the values of the
 /// functions the source calls go.
-fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
+fn homes_literal(numbers: &[u64], places: Option<&str>, rooms: Option<&str>) -> Option<String> {
     let (&count, rest) = numbers.split_first()?;
     let count = usize::try_from(count).ok().filter(|&c| c <= rest.len())?;
     let of: Vec<String> = rest[..count].iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect();
@@ -657,7 +666,8 @@ fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
         at = &more[len..];
     }
     let places = places.map(|places| format!(", places := {places}")).unwrap_or_default();
-    Some(format!("Homes([{}], [{}]{places})", of.join(", "), sets.join(", ")))
+    let rooms = rooms.map(|rooms| format!(", rooms := {rooms}")).unwrap_or_default();
+    Some(format!("Homes([{}], [{}]{places}{rooms})", of.join(", "), sets.join(", ")))
 }
 
 /// One procedure's placement as `List::frames_spelled` (native_alloc) spells
@@ -736,7 +746,7 @@ fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, siz
     for (i, f) in frames_read(numbers)?.iter().enumerate() {
         let (pool, taken) = pools(&used_registers(f.of, f.pins));
         let name = emission::body_layout(p, i);
-        text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}]), [{pool}], [{taken}], \
+        text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}], {homes}.rooms), [{pool}], [{taken}], \
             {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i})) }}\n\
             theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), homes_list(f.pins)));
     }
