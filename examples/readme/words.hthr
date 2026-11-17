@@ -1,0 +1,81 @@
+import logic;
+import bool;
+import simp;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import nat;
+import omega;
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_correct;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import list;
+import option;
+
+// A word function the compiler takes: `heather compile-x86 words.hthr clamp`.
+runtime fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+// Inside the bounds, clamping changes nothing.
+theorem clamp_inside({x, lo, hi: u64}, above: lo <= x, below: x <= hi): clamp(x, lo, hi) = x {
+    split_all; all_goals { bv_omega }
+}
+
+// Whatever `x` is, the answer is within the bounds.
+theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, lo, hi) ∧ clamp(x, lo, hi) <= hi {
+    split_all; all_goals { bv_omega }
+}
+
+// So clamping twice is clamping once.
+theorem clamp_twice(x: u64, {lo, hi: u64}, ordered: lo <= hi): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
+    split_all; all_goals { bv_omega }
+}
+
+// The program the generator built from `clamp` computes `clamp`.
+theorem clamp_program(x, lo, hi: u64): program_eval(clamp::program, 0, [x, lo, hi]) = clamp(x, lo, hi) {
+    clamp::agrees(x, lo, hi)
+}
+
+// Whatever machine code `compile-x86` lowers `clamp`'s program to, that
+// code implements `clamp`: at any three words, wherever it is loaded, it
+// returns what `clamp` does.
+theorem clamp_implements<M>(placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(clamp::program, placement, [], rooms) = Some(code), machine: Machine<M>):
+    code.Implements(machine, 0, rooms(0), 3, clamp) {
+    λ x lo hi => compiled_computes<M>(clamp::program, placement, rooms, code, lowered, trivial, machine, 0, trivial,
+        [x, lo, hi], trivial, clamp(x, lo, hi), clamp_program(x, lo, hi))
+}
+
+// So the theorems about `clamp` are theorems about the code: for ordered
+// bounds, it returns a word within them.
+theorem clamp_code_within<M>(placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(clamp::program, placement, [], rooms) = Some(code), machine: Machine<M>,
+    x: u64, {lo, hi: u64}, ordered: lo <= hi):
+    Exists<u64>(λ v => code.Computes(machine, 0, rooms(0), [x, lo, hi], v) ∧ ((lo <= v) ∧ (v <= hi))) {
+    let computes = code.implements_at(machine, 0, rooms(0), 3, clamp, clamp_implements<M>(placement, rooms, code, lowered, machine), [x, lo, hi], refl);
+    Exists(clamp(x, lo, hi), ⟨computes, clamp_within(x, ordered)⟩)
+}

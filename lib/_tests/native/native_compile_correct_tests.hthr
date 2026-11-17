@@ -16,7 +16,7 @@ import x86_64_asm_runs;
 
 fn low() → BitVec(64) { io_data_low() }
 fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
-fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless())) }
+fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless()), SpillAll().frames(exit_unless())) }
 
 // A `Repeat`'s body is a `Branch`, which no `Then` join fits.
 // expect-error: `trivial` proves `True`, but `IsTrue(is_then(left((exit_unless).main)))` is expected here
@@ -28,7 +28,7 @@ theorem branch_is_no_then(): exit_unless().main.left().emits(Start, eu_layout(),
 // it is not the check's (`Stmt::live_head`), and the checked join does not
 // take it.
 fn two_exits() → Source { Source::of([], Then(Exit(1), Exit(2))) }
-fn te_layout() → Layout { two_exits().layout(low(), Homes::slots(two_exits())) }
+fn te_layout() → Layout { two_exits().layout(low(), Homes::slots(two_exits()), SpillAll().frames(two_exits())) }
 
 // expect-error: `reads_known(right((two_exits).main))` and `False` are not
 theorem exit_rest_is_not_plain(): two_exits().main.emits(Start, te_layout(), [], [], 0) =

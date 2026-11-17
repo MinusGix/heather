@@ -1,0 +1,23 @@
+import logic;
+import nat;
+import algebra;
+import tactic;
+import ring;
+
+// 0 + 1 + … + n.
+fn Nat::triangle(self n: Nat) → Nat {
+    match n {
+        Zero => 0,
+        Succ(k) => k.triangle() + n,
+    }
+}
+
+theorem Nat::triangle_closed(self n: Nat): 2 * n.triangle() = n * (n + 1) {
+    match n {
+        Zero => refl,
+        Succ(k) => calc {
+            2 * Succ(k).triangle() = 2 * (k.triangle() + Succ(k)) := refl,
+            = Succ(k) * (Succ(k) + 1) := ring(k.triangle_closed()),
+        },
+    }
+}
