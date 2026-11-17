@@ -222,6 +222,28 @@ theorem Fragment::clamp_before(r: Run, value, bound: Gpr, names: Nat, post: r.St
 }
 
 // ---------------------------------------------------------------------------
+// The run of a call
+
+// Where a call that reads the words `ids` and writes `result` runs: the
+// words live before it are those it reads that are not known, and those
+// live after it other than its result.
+fn Target::calling(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, ids: List<Nat>, result: Nat) → Run {
+    Run(t, known, out, live_before(known.unknown(ids), result, out), env)
+}
+
+// A word the call reads can be fetched…
+theorem Target::calling_reads(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, knows: env.Knows(known), ids: List<Nat>, result: Nat,
+    id: Nat, m: Mem(id, ids)): env.Reads(known, t.calling(known, out, env, ids, result).live, id) {
+    env.reads_of(known, knows, ids, live_before(known.unknown(ids), result, out), id, m, λ i m => live_before_reads(known.unknown(ids), result, out, i, m))
+}
+
+// … and a word live after it, other than its result, is live before it.
+theorem Target::calling_keeps(self t: Target, known: List<Fact>, out: List<Nat>, env: Env, ids: List<Nat>, result: Nat,
+    i: Nat, m: Mem(i, out), ne: i ≠ result): Mem(i, t.calling(known, out, env, ids, result).live) {
+    live_before_keeps(known.unknown(ids), result, out, i, m, ne)
+}
+
+// ---------------------------------------------------------------------------
 // A call to Linux whose answer is kept
 
 // What a SYSCALL needs where it asks `shape`'s call and RAX is then kept as
