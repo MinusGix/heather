@@ -9,20 +9,23 @@ const PREC = {
   OR: 3,
   AND: 4,
   COMPARE: 5,
+  // `&&`/`||` sit between `=` and the relations, as in the compiler:
+  // `0 < j && k < j` is two tests, `x && True = x` is `(x && True) = x`.
   BOOL_OR: 6,
   BOOL_AND: 7,
+  RELATION: 8,
   // Bitwise and shift rungs, in Rust's order (issues/integer-operator-symbols.md).
   // `⊕` is Rust's `^` (issues/bitvec-xor-complement-symbols.md).
-  BIT_OR: 8,
-  BIT_XOR: 9,
-  BIT_AND: 10,
-  SHIFT: 11,
-  ADD: 12,
-  MUL: 13,
-  PREFIX: 14,
+  BIT_OR: 9,
+  BIT_XOR: 10,
+  BIT_AND: 11,
+  SHIFT: 12,
+  ADD: 13,
+  MUL: 14,
+  PREFIX: 15,
   // `-x ^ 2` is `-(x ^ 2)` and `x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, as in the compiler.
-  POWER: 15,
-  POSTFIX: 16,
+  POWER: 16,
+  POSTFIX: 17,
 };
 
 // Words that introduce a special form only before their fixed follower
@@ -328,7 +331,7 @@ module.exports = grammar({
     // `while c decreases m { body }` (§5.3): a recursive function over the
     // locals the body assigns, `m` its measure.
     // With no `decreases`, a loop of a carrier that iterates (docs/language/sequencing-surface-design.md §18).
-    while_statement: $ => seq('while', field('condition', $._head_expression), optional(seq('decreases', field('measure', $._head_expression))), field('body', $.block)),
+    while_statement: $ => seq('while', field('condition', $._head_expression), optional(seq('invariant', field('invariant', $._head_expression))), optional(seq('decreases', field('measure', $._head_expression))), field('body', $.block)),
     // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
     // words, statements only before `;` or `}`.
     exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
@@ -403,7 +406,8 @@ module.exports = grammar({
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
       ...headBinary($, ['∧'], PREC.AND, 'right'),
-      ...headBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
+      ...headBinary($, ['='], PREC.COMPARE, 'left'),
+      ...headBinary($, ['≠', '≈', '<=', '<'], PREC.RELATION, 'left'),
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['|'], PREC.BIT_OR, 'left'),
@@ -472,7 +476,8 @@ module.exports = grammar({
       ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...typeBinary($, ['∨'], PREC.OR, 'right'),
       ...typeBinary($, ['∧'], PREC.AND, 'right'),
-      ...typeBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
+      ...typeBinary($, ['='], PREC.COMPARE, 'left'),
+      ...typeBinary($, ['≠', '≈', '<=', '<'], PREC.RELATION, 'left'),
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['|'], PREC.BIT_OR, 'left'),
@@ -745,7 +750,8 @@ module.exports = grammar({
       ...binary($, ['∧'], PREC.AND, 'right'),
       // The compiler rejects comparison chains semantically. Left association
       // here gives incomplete edits a stable CST instead of a grammar conflict.
-      ...binary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
+      ...binary($, ['='], PREC.COMPARE, 'left'),
+      ...binary($, ['≠', '≈', '<=', '<'], PREC.RELATION, 'left'),
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['|'], PREC.BIT_OR, 'left'),

@@ -1534,8 +1534,55 @@ that name too. The reflector finds a minted `f#run`'s code under
 is how a member recurses (a qualified self-call is not in scope while the
 member is checked).
 
-### 23.4 Not built
+### 23.4 A test of several conjuncts, and invariants
 
+The insertion sort's inner loop is
+`while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases
+j.toNat() { s[j] := s[j - 1]; j := j - 1; }`
+(`docs/native/span-record-design.md`).
+
+- **`&&` and `||` bind looser than the relations** (`<`, `<=`, `≈`, `≠`)
+  and tighter than `=` (Minus, 2026-11-17): `0 < j && key < b` is a
+  conjunction of two tests. A relation operand of `&&`/`||` is decided
+  (`decide_bit<0 < j>()`), so it reads as the `Bool` it tests
+  (`crates/syntax/src/parser.rs`, `bool_chain`).
+- **A test is tested conjunct by conjunct** (`Lift::tested`): `c₁ && c₂`
+  or `c₁ ∧ c₂` is a `match` on `c₁` whose `True` arm matches on `c₂`, each
+  equation in scope for what follows, so `s[j - 1]` is elaborated where
+  `0 < j` holds and `j - 1` does not wrap. An element read in a test is
+  bound by a `let` just before its match: inside the proposition it would
+  be part of a type, and every copy of that type would search for its
+  found proof again.
+- **`invariant P`** (after the test, before `decreases`): each conjunct of
+  `P` is a squashed parameter `__invN_k: ∥Pₖ∥` of the lifted loop, found
+  by `bv_omega` at the entry and, at the recursion, by a `have` at the end
+  of the body over the state's latest names (`bitvec_omega::found_fact`),
+  passed by name. Inside the body a search at a squashed goal reads the
+  squashed facts in scope through the squash eliminator
+  (`Checking::release_squashed_facts`). The facts stay squashed so that
+  every proof of them is the same term, which the `#ext` companion needs.
+- **Captured facts.** A lifted loop's obligations (`f#obl_N`) take the
+  loop's fact parameters as evidence (`measure::lift_obligation`).
+- **The invariant after the loop.** Each fact `Pₖ` is a theorem
+  `T::f_loop#keepsK` over the loop's parameters, `∥Pₖ[r, o := the
+  loop's result's .after, .value]∥`, proved by induction along the loop
+  (`induct T::f_loop(…)`): where it stops, `bv_omega` from the fact it
+  was given; where it recurs, the induction hypothesis (`Lift::keeps`).
+  Right after the loop the caller binds `have __heldN_k: ∥Pₖ∥` at the
+  loop's result by that theorem, so `s[j] := key` after the sort's inner
+  loop finds `j < s.len()` from `j <= i` and `i < s.len()`. Each read
+  of the result in a restated fact takes the span of the name it
+  replaces (`at_result`): one span for every read made the dot-receiver
+  cache answer a `.len()` with the wrong receiver.
+
+### 23.5 Not built
+
+- The negated test after the loop (`¬(0 < j && key < s[j - 1])`), and an
+  invariant that is not about words (the stopping case is closed by
+  `bv_omega`).
+- `let key = s[i]` with no annotation before a loop that reads `key`:
+  the loop lifter recovers a local's type by a query that does not run the
+  read's found proof, and refuses (`annotate its let`).
 - A loop's state of two locals besides the receiver, or of two locals in
   a plain loop: `f#State` is a record, which the generator has no layout
   for (refused with that reason).
@@ -1543,8 +1590,3 @@ member is checked).
   span: such a function's code takes 64-bit words
   (`issues/runtime-repr-narrow-words.md`), so the probes carry the key
   as a `u64`.
-- `&&` binds tighter than the comparisons (`0 < j && key < b` reads as
-  `0 < (j && key) < b`); a loop's condition writes `∧`.
-- What a span is (a record carrying its length), its elements read and
-  stored with a proof that the index is inside, and the facts a lifted
-  loop needs for that proof (invariants): the next rounds.
