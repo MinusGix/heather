@@ -4040,8 +4040,8 @@ impl Parser {
         self.loop_stmt(start, iter, x, xspan, "for")
     }
 
-    /// `while c decreases m { body }` (docs/language/sequencing-surface-design.md
-    /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
+    /// `while c [invariant p] decreases m { body }` (docs/language/sequencing-surface-design.md
+    /// §5.3, §22.5): the `for` marker over the header `\0while(decide_bit<c>(),
     /// m)` and a private binder, so [`crate::imperative`] threads its state
     /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
     /// instead of a step over a fold.
@@ -4053,6 +4053,13 @@ impl Parser {
         let start = self.bump().span;
         let condition = self.with_record_lit(true, |p| p.expr())?;
         let cspan = condition.span;
+        // `invariant P`: a fact the loop keeps, proved where it starts and
+        // at each round's end, and assumed in the body (§22.5).
+        let invariant = if self.eat_kw("invariant") {
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
         let measure = if self.eat_kw("decreases") {
             Some(self.with_record_lit(true, |p| p.expr())?)
         } else {
@@ -4084,8 +4091,19 @@ impl Parser {
             },
             span: cspan,
         };
+        if let Some(p) = &invariant
+            && measure.is_none()
+        {
+            return Err(ParseError {
+                msg: "a `while` with an `invariant` states its measure too: `while c invariant p decreases m { … }`"
+                    .into(),
+                span: p.span,
+            });
+        }
         let mut header_args = vec![scrut];
         header_args.extend(measure.clone());
+        // The invariant rides third, read as the proposition it states.
+        header_args.extend(invariant.map(|p| Expr { span: p.span, kind: ExprKind::TyLit(Box::new(expr_as_ty(&p))) }));
         let header = crate::imperative::call_marker(crate::imperative::WHILE, header_args, start.join(cspan));
         let x = self.hygienic("while");
         self.defer_binds = measure.is_none();
