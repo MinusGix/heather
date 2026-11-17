@@ -900,3 +900,135 @@ theorem Circ::equal_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa,
         }⟩⟩
     }
 }
+
+// ---------------------------------------------------------------------------
+// Expressions. A word expression is read at a width chosen by its user; an
+// input `BVar(o, w)` is the `w` bits of the input at offset `o`, zero-extended
+// or truncated to that width.
+
+inductive BVExpr {
+    BVar(offset: Nat, width: Nat),
+    BConst(value: Nat),
+    BNot(a: BVExpr),
+    BAnd(a: BVExpr, b: BVExpr),
+    BOr(a: BVExpr, b: BVExpr),
+    BXor(a: BVExpr, b: BVExpr),
+}
+
+fn BVExpr::eval(self e: BVExpr, n: Nat, bits: Nat → Bool) → BitVec(n) {
+    match e {
+        BVar(o, w) => window(bits, o, w),
+        BConst(x) => BitVec::ofNat(x),
+        BNot(a) => a.eval(n, bits).complement(),
+        BAnd(a, b) => a.eval(n, bits).band(b.eval(n, bits)),
+        BOr(a, b) => a.eval(n, bits).bor(b.eval(n, bits)),
+        BXor(a, b) => a.eval(n, bits).bxor(b.eval(n, bits)),
+    }
+}
+
+inductive BVPred {
+    PConst(b: Bool),
+    PEq(n: Nat, a: BVExpr, b: BVExpr),
+    PNot(p: BVPred),
+    PAnd(p: BVPred, q: BVPred),
+    POr(p: BVPred, q: BVPred),
+    PIff(p: BVPred, q: BVPred),
+}
+
+fn BVPred::eval(self p: BVPred, bits: Nat → Bool) → Bool {
+    match p {
+        PConst(b) => b,
+        PEq(n, a, b) => a.eval(n, bits).eq_bit(b.eval(n, bits)),
+        PNot(q) => !q.eval(bits),
+        PAnd(q, r) => q.eval(bits) && r.eval(bits),
+        POr(q, r) => q.eval(bits) || r.eval(bits),
+        PIff(q, r) => BitVec::bool_eq(q.eval(bits), r.eval(bits)),
+    }
+}
+
+theorem BitVec::zip_with_and(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a && b, x, y) = x.band(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_and(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+theorem BitVec::zip_with_or(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a || b, x, y) = x.bor(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_or(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+theorem BitVec::zip_with_xor(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a.xor(b), x, y) = x.bxor(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_xor(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+fn BVExpr::blast(self e: BVExpr, K, n: Nat) → Circ → Pair<Circ, [Lit; n]> {
+    match e {
+        BVar(o, w) => λ c => Pair(c, var_word(K, o, w)),
+        BConst(x) => λ c => Pair(c, word_const(x)),
+        BNot(a) => λ c => Circ::not_word(a.blast(K, n)(c)),
+        BAnd(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.and(x, y)),
+        BOr(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.or(x, y)),
+        BXor(a, b) => λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.xor(x, y)),
+    }
+}
+
+theorem BVExpr::blast_ok(self e: BVExpr, K, n: Nat): Circ::BlastsWord(K, e.blast(K, n), λ v => e.eval(n, input_env(K, v))) {
+    match e {
+        BVar(o, w) => Circ::pure_blasts(n, K, var_word(K, o, w), λ v => window(input_env(K, v), o, w),
+            λ size kin => var_word_valid(n, K, o, w, size, kin), λ v z => var_word_value(n, K, o, w, v, z)),
+        BConst(x) => Circ::pure_blasts(n, K, word_const(x), λ v => BitVec::ofNat(x),
+            λ size kin => { let p: (0 < size) = omega; word_const_valid(n, x, size, p) }, λ v z => word_const_value(n, x, v, z)),
+        BNot(a) => Circ::not_blasts(n, K, a.blast(K, n), λ v => a.eval(n, input_env(K, v)), a.blast_ok(K, n)),
+        BAnd(a, b) => Circ::blasts_word_eq(n, K, λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.and(x, y)),
+            λ v => BitVec::zip_with(λ x y => x && y, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v))), λ v => a.eval(n, input_env(K, v)).band(b.eval(n, input_env(K, v))),
+            Circ::zip_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n),
+                λ c x y => c.and(x, y), λ x y => x && y, Circ::and_ok()),
+            λ v => BitVec::zip_with_and(n, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v)))),
+        BOr(a, b) => Circ::blasts_word_eq(n, K, λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.or(x, y)),
+            λ v => BitVec::zip_with(λ x y => x || y, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v))), λ v => a.eval(n, input_env(K, v)).bor(b.eval(n, input_env(K, v))),
+            Circ::zip_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n),
+                λ c x y => c.or(x, y), λ x y => x || y, Circ::or_ok()),
+            λ v => BitVec::zip_with_or(n, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v)))),
+        BXor(a, b) => Circ::blasts_word_eq(n, K, λ c => Circ::word_then(a.blast(K, n)(c), b.blast(K, n), λ c x y => c.xor(x, y)),
+            λ v => BitVec::zip_with(λ x y => x.xor(y), a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v))), λ v => a.eval(n, input_env(K, v)).bxor(b.eval(n, input_env(K, v))),
+            Circ::zip_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n),
+                λ c x y => c.xor(x, y), λ x y => x.xor(y), Circ::xor_ok()),
+            λ v => BitVec::zip_with_xor(n, a.eval(n, input_env(K, v)), b.eval(n, input_env(K, v)))),
+    }
+}
+
+fn BVPred::blast(self p: BVPred, K: Nat) → Circ → Pair<Circ, Lit> {
+    match p {
+        PConst(b) => λ c => Pair(c, Lit::of_bool(b)),
+        PEq(n, a, b) => λ c => Circ::equal_then(a.blast(K, n)(c), b.blast(K, n)),
+        PNot(q) => λ c => Circ::negated(q.blast(K)(c)),
+        PAnd(q, r) => λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.and(x, y)),
+        POr(q, r) => λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.or(x, y)),
+        PIff(q, r) => λ c => Circ::negated(Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.xor(x, y))),
+    }
+}
+
+theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K), λ v => p.eval(input_env(K, v))) {
+    match p {
+        PConst(b) => Circ::pure_lit_blasts(K, Lit::of_bool(b), λ v => b,
+            λ size kin => { let p: (0 < size) = omega; j(sym(Lit::of_bool_node(b)), λ z _ => z < size, p) }, λ v z => Lit::of_bool_value(b, v, z)),
+        PEq(n, a, b) => Circ::equal_blasts(n, K, a.blast(K, n), b.blast(K, n), λ v => a.eval(n, input_env(K, v)), λ v => b.eval(n, input_env(K, v)), a.blast_ok(K, n), b.blast_ok(K, n)),
+        PNot(q) => Circ::negated_blasts(K, q.blast(K), λ v => q.eval(input_env(K, v)), q.blast_ok(K)),
+        PAnd(q, r) => Circ::lit_blasts(K, q.blast(K), r.blast(K), λ v => q.eval(input_env(K, v)), λ v => r.eval(input_env(K, v)), q.blast_ok(K), r.blast_ok(K),
+            λ c x y => c.and(x, y), λ x y => x && y, Circ::and_ok()),
+        POr(q, r) => Circ::lit_blasts(K, q.blast(K), r.blast(K), λ v => q.eval(input_env(K, v)), λ v => r.eval(input_env(K, v)), q.blast_ok(K), r.blast_ok(K),
+            λ c x y => c.or(x, y), λ x y => x || y, Circ::or_ok()),
+        PIff(q, r) => Circ::blasts_lit_eq(K, λ c => Circ::negated(Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.xor(x, y))),
+            λ v => !(q.eval(input_env(K, v)).xor(r.eval(input_env(K, v)))), λ v => BitVec::bool_eq(q.eval(input_env(K, v)), r.eval(input_env(K, v))),
+            Circ::negated_blasts(K, λ c => Circ::lit_then(q.blast(K)(c), r.blast(K), λ c x y => c.xor(x, y)), λ v => q.eval(input_env(K, v)).xor(r.eval(input_env(K, v))),
+                Circ::lit_blasts(K, q.blast(K), r.blast(K), λ v => q.eval(input_env(K, v)), λ v => r.eval(input_env(K, v)), q.blast_ok(K), r.blast_ok(K),
+                    λ c x y => c.xor(x, y), λ x y => x.xor(y), Circ::xor_ok())),
+            λ v => BitVec::bool_eq_by_xor(q.eval(input_env(K, v)), r.eval(input_env(K, v)))),
+    }
+}
