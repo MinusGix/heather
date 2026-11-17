@@ -66,7 +66,7 @@ theorem Tm::red_iota_zero(z, s: Tm): NRec(z, s, NZero).Red(z) { Inl(refl) }
 theorem Tm::red_iota_succ(z, s, m: Tm): NRec(z, s, NSucc(m)).Red(App(App(s, m), NRec(z, s, m))) { Inl(refl) }
 theorem Tm::red_proj(p: Proj, a, b: Tm): SProj(p, SPair(a, b)).Red(p.pick(a, b)) { Inl(refl) }
 theorem Tm::red_unpack_zero(w: Tm): NRun(0, w).Red(w) { refl }
-theorem Tm::red_unpack_succ(m: Nat, w: Tm): NRun(Succ(m), w).Red(NSucc(NRun(m, w))) { refl }
+theorem Tm::red_unpack_succ(m: Nat, w: Tm): NRun(m + 1, w).Red(NSucc(NRun(m, w))) { refl }
 
 // A context that steps whenever its hole does.
 fn Tm::Context(C: Tm → Tm) → Type { (a, b: Tm) → a.Red(b) → C(a).Red(C(b)) }
@@ -680,9 +680,9 @@ theorem Tm::bump_sound(rd: Tm → Option<Aff>, ih: Tm::Reads(rd), p: Tm, x: Aff,
     match rd(p) as λ o => (rd(p) = o) → Aff::bump(o) = Some(x) → NSucc(p).Reduces(x.term(Fv(1))) {
         None => λ ep q => absurd(q),
         Some(y) => match y {
-            Leaf(q, l) => λ ep e2 => j(Option::some_inj(Leaf(Succ(q), l), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
+            Leaf(q, l) => λ ep e2 => j(Option::some_inj(Leaf(q + 1, l), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
                 Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, Leaf(q, l), ep))),
-            Lit(q) => λ ep e2 => j(Option::some_inj(Lit(Succ(q)), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
+            Lit(q) => λ ep e2 => j(Option::some_inj(Lit(q + 1), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
                 Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, Lit(q), ep))),
             Branch(_, _) => λ ep e2 => absurd(e2),
         },
@@ -776,10 +776,10 @@ theorem Tm::fold_affine_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel
             Tm::reduces_one(Tm::ctx_rec(z, s, NRun(0, x), x, Tm::red_unpack_zero(x)))),
         Succ(m, ih) => λ r e =>
             match tree.iter(m) as λ o => (tree.iter(m) = o) → Aff::then_compose(tree, o) = Some(r) →
-                    NRec(z, s, NRun(Succ(m), x)).Reduces(r.term(NRec(z, s, x))) {
+                    NRec(z, s, NRun(m + 1, x)).Reduces(r.term(NRec(z, s, x))) {
                 None => λ ei q => absurd(q),
                 Some(r2) => λ ei q => Tm::reduces_step(
-                    Tm::ctx_rec(z, s, NRun(Succ(m), x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
+                    Tm::ctx_rec(z, s, NRun(m + 1, x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
                     Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(m, x)),
                     Tm::reduces_trans(
                         Tm::probe_affine(s, ground, fuel, tree, read, NRun(m, x), NRec(z, s, NRun(m, x)),
@@ -803,7 +803,7 @@ theorem Tm::fold_affine(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat,
 theorem Tm::fold_affine_peeled_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
         read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
         c: Nat): (r: Aff) → tree.iter(c) = Some(r) →
-        NRec(z, s, NRun(Succ(c), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+        NRec(z, s, NRun(c + 1, x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
     match c {
         Zero => λ r e => j(Option::some_inj(Aff::identity(), r, e),
             λ y p => NRec(z, s, NRun(1, x)).Reduces(y.term(App(App(s, x), NRec(z, s, x)))),
@@ -817,17 +817,17 @@ theorem Tm::fold_affine_peeled_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0
                     Tm::ctx_app_arg(App(s, x)), Tm::ctx_rec(z, s), NRun(0, x), x, Tm::red_unpack_zero(x))))))),
         Succ(m, ih) => λ r e =>
             match tree.iter(m) as λ o => (tree.iter(m) = o) → Aff::then_compose(tree, o) = Some(r) →
-                    NRec(z, s, NRun(Succ(Succ(m)), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+                    NRec(z, s, NRun(m + 2, x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
                 None => λ ei q => absurd(q),
                 Some(r2) => λ ei q => Tm::reduces_step(
-                    Tm::ctx_rec(z, s, NRun(Succ(Succ(m)), x), NSucc(NRun(Succ(m), x)), Tm::red_unpack_succ(Succ(m), x)),
-                    Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(Succ(m), x)),
+                    Tm::ctx_rec(z, s, NRun(m + 2, x), NSucc(NRun(m + 1, x)), Tm::red_unpack_succ(m + 1, x)),
+                    Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(m + 1, x)),
                     Tm::reduces_step(
-                        Tm::ctx_comp(λ (y: Tm) => App(y, NRec(z, s, NRun(Succ(m), x))), λ (y: Tm) => App(s, y),
-                            Tm::ctx_app_head(NRec(z, s, NRun(Succ(m), x))), Tm::ctx_app_arg(s),
-                            NRun(Succ(m), x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
+                        Tm::ctx_comp(λ (y: Tm) => App(y, NRec(z, s, NRun(m + 1, x))), λ (y: Tm) => App(s, y),
+                            Tm::ctx_app_head(NRec(z, s, NRun(m + 1, x))), Tm::ctx_app_arg(s),
+                            NRun(m + 1, x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
                     Tm::reduces_trans(
-                        Tm::probe_peeled_affine(s, ground, fuel, tree, read, NRun(m, x), NRec(z, s, NRun(Succ(m), x)),
+                        Tm::probe_peeled_affine(s, ground, fuel, tree, read, NRun(m, x), NRec(z, s, NRun(m + 1, x)),
                             x_closed, And(z_closed, And(s_closed, x_closed))),
                     Tm::reduces_trans(tree.term_map(ih(r2, ei)),
                         tree.compose_sound(r2, r, App(App(s, x), NRec(z, s, x)), q)))))),
@@ -838,7 +838,7 @@ theorem Tm::fold_affine_peeled_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0
 theorem Tm::fold_affine_peeled(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
         read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
         c: Nat, r: Aff, iterated: tree.iter(c) = Some(r)):
-        NRec(z, s, NRun(Succ(c), x)).Joins(r.build(App(App(s, x), NRec(z, s, x)))) {
+        NRec(z, s, NRun(c + 1, x)).Joins(r.build(App(App(s, x), NRec(z, s, x)))) {
     Exists(r.term(App(App(s, x), NRec(z, s, x))), And(
         Tm::fold_affine_peeled_unary(s, ground, s_closed, fuel, tree, read, z, x, z_closed, x_closed, c, r, iterated),
         r.build_unpacks(App(App(s, x), NRec(z, s, x)))))
@@ -935,7 +935,7 @@ theorem Tm::strip_value_sound(st: Tm → Option<Nat>, ih: Tm::Strips(st), g: Nat
         NSucc(p) => λ e2 => match st(p) as λ o => (st(p) = o) → Tm::succ_of(o) = Some(q) →
                 NSucc(p).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
             None => λ ep e3 => absurd(e3),
-            Some(q2) => λ ep e3 => j(Option::some_inj(Succ(q2), q, e3),
+            Some(q2) => λ ep e3 => j(Option::some_inj(q2 + 1, q, e3),
                 λ y pp => NSucc(p).Reduces(Tm::succs(y, App(Fv(1), Fv(2)))),
                 Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, q2, ep))),
         }(refl, e2),
@@ -993,17 +993,17 @@ theorem Tm::fold_sync_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: 
     match m {
         Zero => λ a b => Tm::reduces_refl(App(NRec(z, s, NRun(a, t)), NRun(b, x))),
         Succ(n, ih) => λ a b => j(Tm::succs_succs(q, q * n, App(NRec(z, s, NRun(a, t)), NRun(b, x))),
-            λ y p => App(NRec(z, s, NRun(Succ(a + n), t)), NRun(Succ(b + n), x)).Reduces(y),
+            λ y p => App(NRec(z, s, NRun(a + n + 1, t)), NRun(b + n + 1, x)).Reduces(y),
             Tm::reduces_step(
-                Tm::ctx_comp(λ (y: Tm) => App(y, NRun(Succ(b + n), x)), λ (y: Tm) => NRec(z, s, y),
-                    Tm::ctx_app_head(NRun(Succ(b + n), x)), Tm::ctx_rec(z, s),
-                    NRun(Succ(a + n), t), NSucc(NRun(a + n, t)), Tm::red_unpack_succ(a + n, t)),
+                Tm::ctx_comp(λ (y: Tm) => App(y, NRun(b + n + 1, x)), λ (y: Tm) => NRec(z, s, y),
+                    Tm::ctx_app_head(NRun(b + n + 1, x)), Tm::ctx_rec(z, s),
+                    NRun(a + n + 1, t), NSucc(NRun(a + n, t)), Tm::red_unpack_succ(a + n, t)),
             Tm::reduces_step(
-                Tm::ctx_app_head(NRun(Succ(b + n), x), NRec(z, s, NSucc(NRun(a + n, t))),
+                Tm::ctx_app_head(NRun(b + n + 1, x), NRec(z, s, NSucc(NRun(a + n, t))),
                     App(App(s, NRun(a + n, t)), NRec(z, s, NRun(a + n, t))), Tm::red_iota_succ(z, s, NRun(a + n, t))),
             Tm::reduces_step(
                 Tm::ctx_app_arg(App(App(s, NRun(a + n, t)), NRec(z, s, NRun(a + n, t))),
-                    NRun(Succ(b + n), x), NSucc(NRun(b + n, x)), Tm::red_unpack_succ(b + n, x)),
+                    NRun(b + n + 1, x), NSucc(NRun(b + n, x)), Tm::red_unpack_succ(b + n, x)),
             Tm::reduces_trans(
                 Tm::probe_sync(s, ground, fuel, q, read, NRun(a + n, t), NRec(z, s, NRun(a + n, t)), NRun(b + n, x),
                     t_closed, And(z_closed, And(s_closed, t_closed)), x_closed),

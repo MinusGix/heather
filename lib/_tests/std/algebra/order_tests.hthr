@@ -22,7 +22,7 @@ theorem product_refl(x: Pair<Nat, Int>): ProductOrder(nat::Nat::Le, int::Int::Le
 
 // A pullback along an injective map is a partial order ...
 fn SuccOrder(a, b: Nat) → Type { Pullback(Succ, nat::Nat::Le, a, b) }
-fn succ_injective(x, y: Nat, h: Succ(x) = Succ(y)) → x = y { nat::Nat::succ_inj(x, y, h) }
+fn succ_injective(x, y: Nat, h: x + 1 = y + 1) → x = y { nat::Nat::succ_inj(x, y, h) }
 fn succ_partial_order() → PartialOrder<Nat>(SuccOrder) { pullback_partial_order(Succ, nat::Nat::Le, succ_injective) }
 theorem succ_order_antisym(x, y: Nat, hxy: SuccOrder(x, y), hyx: SuccOrder(y, x)): x = y {
     succ_partial_order().rel_antisym(x, y, hxy, hyx)

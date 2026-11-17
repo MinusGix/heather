@@ -73,7 +73,7 @@ theorem Series::err_nonneg(self s: Series, k: Nat): 0 <= s.err(k) {
 
 // One step past `start` at most halves a term, so the next error is at most
 // the term itself.
-theorem Series::err_step(self s: Series, k: Nat, hk: s.start <= k): s.err(Succ(k)) <= s.term(k).abs() {
+theorem Series::err_step(self s: Series, k: Nat, hk: s.start <= k): s.err(k + 1) <= s.term(k).abs() {
     let t = s.term(k);
     let r = s.ratio(k);
     let h = Rat::inv_succ(1);
@@ -106,7 +106,7 @@ theorem Series::tail(self s: Series, n: Nat, hs: s.start <= n, j: Nat): (s.sum(n
                 ≈ a + u := Rat::same_sym(b.add_assoc(-c, u)),
             };
             calc {
-                ((b + u) - c).abs() + s.err(Succ(m)) <= (a + u).abs() + u.abs() := Rat::add_le_mono(Rat::le_of_same(Rat::abs_respects(shift)), s.err_step(m, hm)),
+                ((b + u) - c).abs() + s.err(m + 1) <= (a + u).abs() + u.abs() := Rat::add_le_mono(Rat::le_of_same(Rat::abs_respects(shift)), s.err_step(m, hm)),
                 <= (a.abs() + u.abs()) + u.abs() := by mono_with([a.abs_triangle(u)]),
                 ≈ a.abs() + (u.abs() + u.abs()) := a.abs().add_assoc(u.abs(), u.abs()),
                 <= s.err(n) := s.tail(n, hs, i),
@@ -123,7 +123,7 @@ theorem Series::sum_close(self s: Series, n, l: Nat, hs: s.start <= n, h: n <= l
 }
 
 // One step past `start` at least halves the error.
-theorem Series::err_half(self s: Series, k: Nat, hk: s.start <= k): s.err(Succ(k)) <= s.err(k) * Rat::inv_succ(1) {
+theorem Series::err_half(self s: Series, k: Nat, hk: s.start <= k): s.err(k + 1) <= s.err(k) * Rat::inv_succ(1) {
     let t = s.term(k).abs();
     let half: (t <= (t + t) * Rat::inv_succ(1)) = Rat::le_of_same(ring);
     Rat::le_trans(s.err_step(k, hk), half)
@@ -379,7 +379,7 @@ theorem Series::settle_has(self s: Series, p, fuel: Nat): (b: SeriesBox) → (k:
         Zero => λ b k hk ht hq => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
         Succ(f, ih) => λ b k hk ht hq => match b.term.small(p) {
             True => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
-            False => ih(s.box_step(b, k, p), Succ(k), s.start.le_succ_r(k, hk),
+            False => ih(s.box_step(b, k, p), k + 1, s.start.le_succ_r(k, hk),
                 Interval::mul_has(b.term, Interval::of_rat(s.ratio(k), p), p, ht, Interval::of_rat_has(s.ratio(k), p)),
                 Interval::add_has(b.sum, b.term, p, hq, ht)),
         },

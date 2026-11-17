@@ -641,7 +641,7 @@ fn Setup::compile_measured<F>(s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, r
 // Transparent, and `Nat::lt_succ_self` itself: a `decreases` function's
 // body passes that proof to its recursor, and the instance's statements
 // meet it by conversion.
-fn Setup::lt_succ(n: Nat) → n < Succ(n) { Nat::lt_succ_self(n) }
+fn Setup::lt_succ(n: Nat) → n < n + 1 { Nat::lt_succ_self(n) }
 
 theorem Setup::below_pow(x: BitVec(64)): x.toNat() < Nat::pow(2, 64) { BitVec::toNat_lt_pow(64, x) }
 
@@ -703,11 +703,11 @@ theorem Ty::answers_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrow
     match ps {
         Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → ans(ws) = Ty::uncurry(tys, Nil, r, v, ws) {
             Nil => λ _ => held,
-            Cons(_, more) => λ (bad: Succ(more.len()) = 0) => false_elim(more.len().succ_ne_zero(bad)),
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
         },
-        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = Succ(rest.len()) → ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
-            Nil => λ (bad: 0 = Succ(rest.len())) => false_elim(rest.len().zero_ne_succ(bad)),
-            Cons(x, more) => λ (same: Succ(more.len()) = Succ(rest.len())) =>
+        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 → ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
+            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) =>
                 Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
                     Nat::succ_inj(more.len(), rest.len(), same)),
         },

@@ -188,7 +188,7 @@ fn performs_onto(perform_co: PerformsCo(), perform: Nat → Performs()) → Type
 // construct's parts are found at fuels raised to their sum
 // (`CoTree::onto_bind`, `CoTree::onto_iter`).
 theorem Stmt::onto_co(self s: Stmt, call: Writers(), perform: Nat → Performs(),
-    grows: (n: Nat) → performs_below(perform(n), perform(Succ(n))), perform_co: PerformsCo(),
+    grows: (n: Nat) → performs_below(perform(n), perform(n + 1)), perform_co: PerformsCo(),
     hp: performs_onto(perform_co, perform)): (env: Env) →
     CoTree::Onto(Events::linux(), s.denote_co(call, perform_co)(env), λ n => s.denote(call, perform(n), n, env))
 {
@@ -198,12 +198,12 @@ theorem Stmt::onto_co(self s: Stmt, call: Writers(), perform: Nat → Performs()
             λ a n => Ret(Onward(shape.answer(env, a))), λ a => CoTree::onto_ret(Events::linux(), Onward(shape.answer(env, a)))),
         Then(first, rest) => λ env => CoTree::onto_bind(Events::linux(), first.denote_co(call, perform_co)(env),
             λ n => first.denote(call, perform(n), n, env),
-            λ n => first.grows(call, perform(n), perform(Succ(n)), grows(n), n, env),
+            λ n => first.grows(call, perform(n), perform(n + 1), grows(n), n, env),
             λ flow => match flow { Onward(next) => rest.denote_co(call, perform_co)(next), Exited(status) => CRet(Exited(status)) },
             λ flow n => match flow { Onward(next) => rest.denote(call, perform(n), n, next), Exited(status) => Ret(Exited(status)) },
             λ flow => match flow as λ f => ITree::Grows(Events::linux(),
                     λ n => match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, perform(n), n, next), Exited(status) => Ret(Exited(status)) }) {
-                Onward(next) => λ n => rest.grows(call, perform(n), perform(Succ(n)), grows(n), n, next),
+                Onward(next) => λ n => rest.grows(call, perform(n), perform(n + 1), grows(n), n, next),
                 Exited(status) => λ n => refl,
             },
             first.onto_co(call, perform, grows, perform_co, hp, env),
@@ -221,12 +221,12 @@ theorem Stmt::onto_co(self s: Stmt, call: Writers(), perform: Nat → Performs()
         },
         Repeat(body, again) => λ env => λ k tr it => CoTree::onto_iter(Events::linux(),
             λ n e => ITree::map(Events::linux(), body.denote(call, perform(n), n, e), λ flow => flow.pass(again)),
-            λ n e => ITree::below_bind(Events::linux(), body.denote(call, perform(n), n, e), body.denote(call, perform(Succ(n)), Succ(n), e),
-                λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, perform(n), perform(Succ(n)), grows(n), n, e),
+            λ n e => ITree::below_bind(Events::linux(), body.denote(call, perform(n), n, e), body.denote(call, perform(n + 1), n + 1, e),
+                λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, perform(n), perform(n + 1), grows(n), n, e),
                 λ flow => refl),
             λ e => CoTree::map(Events::linux(), body.denote_co(call, perform_co)(e), λ flow => flow.pass(again)),
             λ e => CoTree::onto_map(Events::linux(), body.denote_co(call, perform_co)(e), λ n => body.denote(call, perform(n), n, e),
-                λ n => body.grows(call, perform(n), perform(Succ(n)), grows(n), n, e), λ flow => flow.pass(again),
+                λ n => body.grows(call, perform(n), perform(n + 1), grows(n), n, e), λ flow => flow.pass(again),
                 body.onto_co(call, perform, grows, perform_co, hp, e)),
             k, env, tr, it),
         Exit(status) => λ env => CoTree::onto_ret(Events::linux(), Exited(env.word(status))),
@@ -256,7 +256,7 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), depth: Nat):
             Some(proc) => CoTree::onto_map(Events::linux(),
                 proc.body.denote_co(call, src.performs_co(call, d))(proc.enter(env, args)),
                 λ n => proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
-                λ n => proc.body.grows(call, src.performs(call, n, d), src.performs(call, Succ(n), d), src.performs_grows(call, n, d), n,
+                λ n => proc.body.grows(call, src.performs(call, n, d), src.performs(call, n + 1, d), src.performs_grows(call, n, d), n,
                     proc.enter(env, args)),
                 λ flow => proc.leave(env, results, flow),
                 proc.body.onto_co(call, λ n => src.performs(call, n, d), λ n => src.performs_grows(call, n, d), src.performs_co(call, d),
@@ -274,7 +274,7 @@ theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>):
     λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_co(args)), tr)) =>
         CoTree::onto_map(Events::linux(), src.main_tree_co(args), λ n => src.main_tree(args, n),
             λ n => src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
-                src.performs(program_writers(src.functions), Succ(n), src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
+                src.performs(program_writers(src.functions), n + 1, src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
                 n, src.start(args)),
             λ flow => flow.status(),
             src.main.onto_co(program_writers(src.functions), λ n => src.performs(program_writers(src.functions), n, src.depth),

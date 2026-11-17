@@ -270,13 +270,13 @@ theorem Io::pass_tau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
                 Io::loop_reading_at(body, t, io, OVis(c, k), h0)),
         },
         Succ(n2) => λ t io x2 e => match h0: CoTree::obs(Events::linux(), t) {
-            ORet(x) => by grind_with([CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
+            ORet(x) => by grind_with([CoTree::after_settled(Events::none(), n2 + 1, Io::pass_reading(t, io),
                 ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)]),
             OTau(s) => {
                 let w: PassTau<A, B>(body, s, io, x2) = Io::pass_tau(body, n2, s, io, x2,
                     prelude::trans(prelude::sym(CoTree::after_succ(Events::none(), n2, Io::pass_reading(t, io), Io::pass_reading(s, io),
                         Io::pass_reading_at(t, io, OTau(s), h0))), e));
-                PassTau(w.t2, w.io2, Succ(w.m), w.ex,
+                PassTau(w.t2, w.io2, w.m + 1, w.ex,
                     prelude::trans(CoTree::after_succ(Events::none(), w.m, Io::loop_reading(body, t, io), Io::loop_reading(body, s, io),
                         Io::loop_reading_at(body, t, io, OTau(s), h0)), w.at))
             },
@@ -285,7 +285,7 @@ theorem Io::pass_tau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
                     Io::pass_tau(body, n2, k(Io::call(io, c).value), Io::call(io, c).after, x2,
                         prelude::trans(prelude::sym(CoTree::after_succ(Events::none(), n2, Io::pass_reading(t, io),
                             Io::pass_reading(k(Io::call(io, c).value), Io::call(io, c).after), Io::pass_reading_at(t, io, OVis(c, k), h0))), e));
-                PassTau(w.t2, w.io2, Succ(w.m), w.ex,
+                PassTau(w.t2, w.io2, w.m + 1, w.ex,
                     prelude::trans(CoTree::after_succ(Events::none(), w.m, Io::loop_reading(body, t, io),
                         Io::loop_reading(body, k(Io::call(io, c).value), Io::call(io, c).after),
                         Io::loop_reading_at(body, t, io, OVis(c, k), h0)), w.at))
@@ -308,14 +308,14 @@ theorem Io::pass_ret<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
         },
         Succ(n2) => λ t io r e => match h0: CoTree::obs(Events::linux(), t) {
             ORet(x) => PassRet(x, io, 0,
-                by grind_with([CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
+                by grind_with([CoTree::after_settled(Events::none(), n2 + 1, Io::pass_reading(t, io),
                     ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)]),
                 Io::loop_reading_at(body, t, io, ORet(x), h0)),
             OTau(s) => {
                 let w: PassRet<A, B>(body, s, io, r) = Io::pass_ret(body, n2, s, io, r,
                     prelude::trans(prelude::sym(CoTree::after_succ(Events::none(), n2, Io::pass_reading(t, io), Io::pass_reading(s, io),
                         Io::pass_reading_at(t, io, OTau(s), h0))), e));
-                PassRet(w.x, w.io2, Succ(w.m), w.ex,
+                PassRet(w.x, w.io2, w.m + 1, w.ex,
                     prelude::trans(CoTree::after_succ(Events::none(), w.m, Io::loop_reading(body, t, io), Io::loop_reading(body, s, io),
                         Io::loop_reading_at(body, t, io, OTau(s), h0)), w.at))
             },
@@ -324,7 +324,7 @@ theorem Io::pass_ret<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
                     Io::pass_ret(body, n2, k(Io::call(io, c).value), Io::call(io, c).after, r,
                         prelude::trans(prelude::sym(CoTree::after_succ(Events::none(), n2, Io::pass_reading(t, io),
                             Io::pass_reading(k(Io::call(io, c).value), Io::call(io, c).after), Io::pass_reading_at(t, io, OVis(c, k), h0))), e));
-                PassRet(w.x, w.io2, Succ(w.m), w.ex,
+                PassRet(w.x, w.io2, w.m + 1, w.ex,
                     prelude::trans(CoTree::after_succ(Events::none(), w.m, Io::loop_reading(body, t, io),
                         Io::loop_reading(body, k(Io::call(io, c).value), Io::call(io, c).after),
                         Io::loop_reading_at(body, t, io, OVis(c, k), h0)), w.at))
@@ -436,12 +436,12 @@ theorem Io::against_returns<R>(t: ITree<R>(Events::linux())): (io: Io) → (m: M
             Returns(0, refl)),
         Tau(u) => λ io m e => {
             let h: Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), u), io), m) = Io::against_returns(u, io, m, e);
-            Returns(Succ(h.count), h.at)
+            Returns(h.count + 1, h.at)
         },
         Vis(c, k) => λ io m e => {
             let h: Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), k(Io::call(io, c).value)), Io::call(io, c).after), m) =
                 Io::against_returns(k(Io::call(io, c).value), Io::call(io, c).after, m, e);
-            Returns(Succ(h.count), h.at)
+            Returns(h.count + 1, h.at)
         },
         Cut => λ io m e => absurd(e),
     }

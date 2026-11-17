@@ -1358,8 +1358,8 @@ theorem List::below_bound(self ids: List<Nat>, i: Nat): Mem(i, ids) → i < ids.
     match ids {
         Nil => λ never => false_elim(never),
         Cons(id, rest) => λ x => match x {
-            Inl(e) => j(sym(e), λ k _ => k < Succ(id).max(rest.bound()), Succ(id).le_max_l(rest.bound())),
-            Inr(r) => Succ(i).le_trans(rest.bound(), Succ(id).max(rest.bound()), rest.below_bound(i, r), Succ(id).le_max_r(rest.bound())),
+            Inl(e) => j(sym(e), λ k _ => k < (id + 1).max(rest.bound()), (id + 1).le_max_l(rest.bound())),
+            Inr(r) => (i + 1).le_trans(rest.bound(), (id + 1).max(rest.bound()), rest.below_bound(i, r), (id + 1).le_max_r(rest.bound())),
         },
     }
 }

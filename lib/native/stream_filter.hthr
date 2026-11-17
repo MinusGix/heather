@@ -89,7 +89,7 @@ theorem filter_emitted_len<C>(step: C → BitVec(8) → Filtered<C>, bytes: List
             let whole: (filter_emitted(step, Cons(byte, rest), s).len() =
                     emitted_byte(step(s, byte).emit).len() + filter_emitted(step, rest, step(s, byte).next).len()) =
                 List::len_append(emitted_byte(step(s, byte).emit), filter_emitted(step, rest, step(s, byte).next));
-            let input: (Cons(byte, rest).len() = Succ(rest.len())) = refl;
+            let input: (Cons(byte, rest).len() = rest.len() + 1) = refl;
             omega
         },
     }
@@ -151,14 +151,14 @@ theorem counts_filtered<C>(g: C → BitVec(8) → C, field: C → Nat, p: BitVec
 
 // A count the step raises by one at every byte counts the bytes.
 theorem counts_len<C>(g: C → BitVec(8) → C, count: C → Nat,
-    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = Succ(count(s)), bytes: List<BitVec(8)>):
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + 1, bytes: List<BitVec(8)>):
     (s: C) → count(fold_bytes(g, bytes, s)) = count(s) + bytes.len() {
     match bytes {
         Nil => λ s => refl,
         Cons(b, rest) => λ s => {
             let ih = counts_len(g, count, grows, rest, g(s, b));
             let grew = grows(s, b);
-            let sum: (count(fold_bytes(g, rest, g(s, b))) = count(s) + Succ(rest.len())) = omega;
+            let sum: (count(fold_bytes(g, rest, g(s, b))) = count(s) + (rest.len() + 1)) = omega;
             sum
         },
     }
@@ -177,7 +177,7 @@ fn runs_of<A>(pieces: List<List<A>>) → Nat { pieces.count(List::non_empty) }
 fn first_run<A>(pieces: List<List<A>>) → Nat { match pieces { Nil => 0, Cons(piece, _) => Nat::of_bit(piece.non_empty()) } }
 fn inside_runs<A>(inside: Bool, pieces: List<List<A>>) → Nat { match inside { True => first_run(pieces), False => 0 } }
 
-theorem onto_first_runs<A>(x: A, pieces: List<List<A>>): runs_of(List::onto_first(x, pieces)) + first_run(pieces) = Succ(runs_of(pieces)) {
+theorem onto_first_runs<A>(x: A, pieces: List<List<A>>): runs_of(List::onto_first(x, pieces)) + first_run(pieces) = runs_of(pieces) + 1 {
     match pieces {
         Nil => refl,
         Cons(piece, rest) => match piece {
@@ -233,7 +233,7 @@ theorem fold_counts_filtered<C>(g: C → BitVec(8) → C, field: C → Nat, p: B
 }
 
 theorem fold_counts_len<C>(g: C → BitVec(8) → C, count: C → Nat,
-    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = Succ(count(s)), init: C, zero: count(init) = 0):
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + 1, init: C, zero: count(init) = 0):
     (bytes: List<BitVec(8)>) → bytes.len() = count(fold_bytes(g, bytes, init)) {
     λ bytes => {
         let counted = counts_len(g, count, grows, bytes, init);

@@ -38,15 +38,15 @@ fn BitVec::from_bits({n: Nat}, bits: [Bool; n]) → BitVec(n) { BitVec(bits) }
 
 theorem BitVec::nil_eq_from_bits(): BitVec::nil() = BitVec::from_bits([]) { refl }
 
-fn BitVec::cons_bit({n: Nat}, b: Bool, self x: BitVec(n)) → BitVec(Succ(n)) {
+fn BitVec::cons_bit({n: Nat}, b: Bool, self x: BitVec(n)) → BitVec(n + 1) {
     BitVec::from_bits(cons(b, x.bits))
 }
 
-fn BitVec::head_bit({n: Nat}, self x: BitVec(Succ(n))) → Bool { head(x.bits) }
+fn BitVec::head_bit({n: Nat}, self x: BitVec(n + 1)) → Bool { head(x.bits) }
 
 theorem BitVec::head_bit_cons_bit({n: Nat}, b: Bool, x: BitVec(n)): x.cons_bit(b).head_bit() = b { refl }
 
-fn BitVec::tail_bits({n: Nat}, self x: BitVec(Succ(n))) → BitVec(n) {
+fn BitVec::tail_bits({n: Nat}, self x: BitVec(n + 1)) → BitVec(n) {
     BitVec::from_bits(tail(x.bits))
 }
 
@@ -171,14 +171,14 @@ fn BitVec::sign_extend_zero(extra: Nat, self x: BitVec(0)) → BitVec(extra) {
     BitVec::zero()
 }
 
-fn BitVec::last_index(n: Nat) → Fin(Succ(n)) {
+fn BitVec::last_index(n: Nat) → Fin(n + 1) {
     match n {
         Zero => FZ,
         Succ(_, ih) => FS(ih),
     }
 }
 
-fn BitVec::sign_extend({n: Nat}, extra: Nat, self x: BitVec(Succ(n))) → BitVec(extra + Succ(n)) {
+fn BitVec::sign_extend({n: Nat}, extra: Nat, self x: BitVec(n + 1)) → BitVec(extra + (n + 1)) {
     x.concat(BitVec::repeat_bit(x.get(BitVec::last_index(n))))
 }
 
@@ -502,11 +502,11 @@ theorem BitVec::carry_sum_normalize(x, y, z, a, b: Nat):
 }
 
 theorem BitVec::pow_two_succ_twice(n: Nat):
-    Nat::pow(2, Succ(n)) = Nat::twice(Nat::pow(2, n))
+    Nat::pow(2, n + 1) = Nat::twice(Nat::pow(2, n))
 {
     let p = Nat::pow(2, n);
     calc {
-        Nat::pow(2, Succ(n))
+        Nat::pow(2, n + 1)
             = (0 + p) + p := refl,
             = p + p := Nat::cong(λ (q: Nat) => q + p, Nat::add_left_zero(p)),
             = Nat::twice(p) := sym(Nat::twice_add_self(p)),
@@ -525,17 +525,17 @@ theorem BitVec::carry_threshold(a, b, carry: Bool, power, tail_sum: Nat):
             },
             True => match carry {
                 False => Nat::twice_le_succ_twice_iff(power, tail_sum),
-                True => Nat::twice_le_twice_iff(power, Succ(tail_sum)),
+                True => Nat::twice_le_twice_iff(power, tail_sum + 1),
             },
         },
         True => match b {
             False => match carry {
                 False => Nat::twice_le_succ_twice_iff(power, tail_sum),
-                True => Nat::twice_le_twice_iff(power, Succ(tail_sum)),
+                True => Nat::twice_le_twice_iff(power, tail_sum + 1),
             },
             True => match carry {
-                False => Nat::twice_le_twice_iff(power, Succ(tail_sum)),
-                True => Nat::twice_le_succ_twice_iff(power, Succ(tail_sum)),
+                False => Nat::twice_le_twice_iff(power, tail_sum + 1),
+                True => Nat::twice_le_succ_twice_iff(power, tail_sum + 1),
             },
         },
     }
@@ -549,7 +549,7 @@ fn BitVec::CarryArithmetic({n: Nat}, a, b: BitVec(n), carry: Bool) → Type {
     Nat::pow(2, n) <= a.toNat() + b.toNat() + Nat::of_bit(carry)
 }
 
-theorem BitVec::carry_bits_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
+theorem BitVec::carry_bits_step(n: Nat, a, b: BitVec(n + 1), carry: Bool):
     BitVec::CarryBitTrue(a, b, carry) ↔
     BitVec::CarryBitTrue(a.tail_bits(), b.tail_bits(), BitVec::carry_majority(a.head_bit(), b.head_bit(), carry))
 {
@@ -563,7 +563,7 @@ theorem BitVec::carry_bits_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
     }
 }
 
-theorem BitVec::carry_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
+theorem BitVec::carry_arithmetic_step(n: Nat, a, b: BitVec(n + 1), carry: Bool):
     BitVec::CarryArithmetic(a, b, carry) ↔
     BitVec::CarryArithmetic(a.tail_bits(), b.tail_bits(), BitVec::carry_majority(a.head_bit(), b.head_bit(), carry))
 {
@@ -571,7 +571,7 @@ theorem BitVec::carry_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool
     let right = (b.tail_bits()).toNat();
     iff_trans(
         Nat::le_congr_iff(
-            Nat::pow(2, Succ(n)), Nat::twice(Nat::pow(2, n)),
+            Nat::pow(2, n + 1), Nat::twice(Nat::pow(2, n)),
             a.toNat() + b.toNat() + Nat::of_bit(carry),
             Nat::twice(left + right) +
                 BitVec::carry_weight(a.head_bit(), b.head_bit(), carry),
@@ -708,17 +708,17 @@ theorem BitVec::borrow_threshold(a, b, borrow: Bool, left, right: Nat):
             },
             True => match borrow {
                 False => Nat::twice_lt_succ_twice_iff(left, right),
-                True => Nat::twice_lt_twice_iff(left, Succ(right)),
+                True => Nat::twice_lt_twice_iff(left, right + 1),
             },
         },
         True => match b {
             False => match borrow {
-                False => Nat::twice_le_twice_iff(Succ(left), right),
+                False => Nat::twice_le_twice_iff(left + 1, right),
                 True => Nat::twice_lt_twice_iff(left, right),
             },
             True => match borrow {
                 False => Nat::twice_lt_twice_iff(left, right),
-                True => Nat::twice_le_twice_iff(Succ(left), Succ(right)),
+                True => Nat::twice_le_twice_iff(left + 1, right + 1),
             },
         },
     }
@@ -732,7 +732,7 @@ fn BitVec::BorrowArithmetic({n: Nat}, a, b: BitVec(n), borrow: Bool) → Type {
     a.toNat() < b.toNat() + Nat::of_bit(borrow)
 }
 
-theorem BitVec::borrow_bits_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
+theorem BitVec::borrow_bits_step(n: Nat, a, b: BitVec(n + 1), borrow: Bool):
     BitVec::BorrowBitTrue(a, b, borrow) ↔
     BitVec::BorrowBitTrue(a.tail_bits(), b.tail_bits(), BitVec::borrow_next(a.head_bit(), b.head_bit(), borrow))
 {
@@ -746,7 +746,7 @@ theorem BitVec::borrow_bits_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
     }
 }
 
-theorem BitVec::borrow_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), borrow: Bool):
+theorem BitVec::borrow_arithmetic_step(n: Nat, a, b: BitVec(n + 1), borrow: Bool):
     BitVec::BorrowArithmetic(a, b, borrow) ↔
     BitVec::BorrowArithmetic(a.tail_bits(), b.tail_bits(), BitVec::borrow_next(a.head_bit(), b.head_bit(), borrow))
 {
@@ -911,7 +911,7 @@ theorem BitVec::reflects_le(n: Nat, a, b: BitVec(n)): Reflects(a.unsigned_le(b),
             },
         }(refl, e),
         λ e p => match b.unsigned_lt_bit(a) as λ c => (b.unsigned_lt_bit(a) = c) → (!c = False) → False {
-            True => λ h _ => Nat::lt_irrefl(b.toNat(), Nat::le_trans(Succ(b.toNat()), a.toNat(), b.toNat(),
+            True => λ h _ => Nat::lt_irrefl(b.toNat(), Nat::le_trans(b.toNat() + 1, a.toNat(), b.toNat(),
                 BitVec::borrow_sub_bit_true_iff(n, b, a).mp(h), p)),
             False => λ _ no => absurd(no),
         }(refl, e))
@@ -941,14 +941,14 @@ instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_le(a, b)> {
 // ---------------------------------------------------------------------------
 // Shifts. Vacated bits are zero except for arithmetic right shift.
 
-fn BitVec::init({n: Nat}, self x: BitVec(Succ(n))) → BitVec(n) {
+fn BitVec::init({n: Nat}, self x: BitVec(n + 1)) → BitVec(n) {
     match n {
         Zero => BitVec::nil(),
         Succ(_, ih) => ih(x.tail_bits()).cons_bit(x.head_bit()),
     }
 }
 
-fn BitVec::snoc({n: Nat}, self x: BitVec(n), b: Bool) → BitVec(Succ(n)) {
+fn BitVec::snoc({n: Nat}, self x: BitVec(n), b: Bool) → BitVec(n + 1) {
     (match n as λ k => BitVec(k) → Bool → BitVec(Succ(k)) {
         Zero => λ x b => BitVec::from_bits([b]),
         Succ(_, ih) => λ x b => ih(x.tail_bits(), b).cons_bit(x.head_bit()),
@@ -1140,21 +1140,21 @@ theorem BitVec::iterate_increment_twice(n: Nat, x: BitVec(n), count: Nat):
     match count {
         Zero => refl,
         Succ(k) => trans(
-            BitVec::cong_increment(Succ(n), BitVec::cong_increment(Succ(n),
+            BitVec::cong_increment(n + 1, BitVec::cong_increment(n + 1,
                 BitVec::iterate_increment_twice(n, x, k))),
             refl),
     }
 }
 
 theorem BitVec::iterate_increment_succ_twice(n: Nat, x: BitVec(n), count: Nat):
-        (x.cons_bit(False)).iterate_increment(Succ(Nat::twice(count))) =
+        (x.cons_bit(False)).iterate_increment(Nat::twice(count) + 1) =
         (x.iterate_increment(count)).cons_bit(True) {
-    BitVec::cong_increment(Succ(n), BitVec::iterate_increment_twice(n, x, count))
+    BitVec::cong_increment(n + 1, BitVec::iterate_increment_twice(n, x, count))
 }
 
-theorem BitVec::cons_head_tail(n: Nat, x: BitVec(Succ(n))):
+theorem BitVec::cons_head_tail(n: Nat, x: BitVec(n + 1)):
         (x.tail_bits()).cons_bit(x.head_bit()) = x {
-    BitVec::extensionality(Succ(n),
+    BitVec::extensionality(n + 1,
         (x.tail_bits()).cons_bit(x.head_bit()), x,
         λ i => match i { FZ => refl, FS(_) => refl })
 }
@@ -1170,18 +1170,18 @@ theorem BitVec::iterate_increment_toNat_cons(n: Nat, bit: Bool, x: BitVec(n),
         BitVec::iterate_increment(BitVec::zero(), (x.cons_bit(bit)).toNat()) = x.cons_bit(bit) {
     match bit {
         False => calc {
-            BitVec::zero(n := Succ(n)).iterate_increment(0 + Nat::twice(x.toNat()))
-                = BitVec::zero(n := Succ(n)).iterate_increment(Nat::twice(x.toNat())) :=
-                    BitVec::cong_iterate_increment_count(Succ(n), BitVec::zero(),
+            BitVec::zero(n := n + 1).iterate_increment(0 + Nat::twice(x.toNat()))
+                = BitVec::zero(n := n + 1).iterate_increment(Nat::twice(x.toNat())) :=
+                    BitVec::cong_iterate_increment_count(n + 1, BitVec::zero(),
                         Nat::add_left_zero(Nat::twice(x.toNat()))),
                 = BitVec::zero(n := n).iterate_increment(x.toNat()).cons_bit(False) :=
                     BitVec::iterate_increment_twice(n, BitVec::zero(), x.toNat()),
                 = x.cons_bit(False) := BitVec::cons_bit_cong(n, refl, tail_law),
         },
         True => calc {
-            BitVec::zero(n := Succ(n)).iterate_increment(1 + Nat::twice(x.toNat()))
-                = BitVec::zero(n := Succ(n)).iterate_increment(Succ(Nat::twice(x.toNat()))) :=
-                    BitVec::cong_iterate_increment_count(Succ(n), BitVec::zero(),
+            BitVec::zero(n := n + 1).iterate_increment(1 + Nat::twice(x.toNat()))
+                = BitVec::zero(n := n + 1).iterate_increment(Nat::twice(x.toNat()) + 1) :=
+                    BitVec::cong_iterate_increment_count(n + 1, BitVec::zero(),
                         trans(Nat::add_succ_left(0, Nat::twice(x.toNat())),
                             Nat::cong_succ(Nat::add_left_zero(Nat::twice(x.toNat()))))),
                 = BitVec::zero(n := n).iterate_increment(x.toNat()).cons_bit(True) :=
@@ -1213,7 +1213,7 @@ theorem BitVec::zero_iterate_period(n: Nat):
     match n {
         Zero => refl,
         Succ(k, ih) => trans(
-            BitVec::cong_iterate_increment_count(Succ(k), BitVec::zero(), BitVec::pow_two_succ_twice(k)),
+            BitVec::cong_iterate_increment_count(k + 1, BitVec::zero(), BitVec::pow_two_succ_twice(k)),
             trans(BitVec::iterate_increment_twice(k, BitVec::zero(), Nat::pow(2, k)),
                 BitVec::cons_bit_cong(k, refl, ih, a := False, b := False))),
     }
@@ -1519,9 +1519,9 @@ theorem BitVec::truncate_zero_extend(n, extra: Nat, x: BitVec(n)):
     BitVec::split_concat_low(n, extra, x, BitVec::zero())
 }
 
-theorem BitVec::truncate_sign_extend(n, extra: Nat, x: BitVec(Succ(n))):
-        BitVec::truncate(Succ(n), extra, x.sign_extend(extra)) = x {
-    BitVec::split_concat_low(Succ(n), extra, x,
+theorem BitVec::truncate_sign_extend(n, extra: Nat, x: BitVec(n + 1)):
+        BitVec::truncate(n + 1, extra, x.sign_extend(extra)) = x {
+    BitVec::split_concat_low(n + 1, extra, x,
         BitVec::repeat_bit(x.get(BitVec::last_index(n))))
 }
 
@@ -1555,7 +1555,7 @@ theorem BitVec::iterate_increment_twice_cons(n: Nat, b: Bool, x: BitVec(n), coun
     match count {
         Zero => refl,
         Succ(k) => trans(
-            BitVec::cong_increment(Succ(n), BitVec::cong_increment(Succ(n),
+            BitVec::cong_increment(n + 1, BitVec::cong_increment(n + 1,
                 BitVec::iterate_increment_twice_cons(n, b, x, k))),
             BitVec::increment_increment_cons(n, b, x.iterate_increment(k))),
     }
@@ -1583,11 +1583,11 @@ theorem BitVec::add_bits_cons_leaf(k: Nat, ha, hb, carry: Bool, ta, tb: BitVec(k
             },
             True => match ha {
                 False => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, False, ta, tb.toNat())),
                     BitVec::cons_bit_tail_cong(k, True, tail_law)),
                 True => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, True, ta, tb.toNat())),
                     BitVec::cons_bit_tail_cong(k, False, tail_law)),
             },
@@ -1595,21 +1595,21 @@ theorem BitVec::add_bits_cons_leaf(k: Nat, ha, hb, carry: Bool, ta, tb: BitVec(k
         True => match carry {
             False => match ha {
                 False => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, False, ta, tb.toNat())),
                     BitVec::cons_bit_tail_cong(k, True, tail_law)),
                 True => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, True, ta, tb.toNat())),
                     BitVec::cons_bit_tail_cong(k, False, tail_law)),
             },
             True => match ha {
                 False => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k), BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1, BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, False, ta, tb.toNat()))),
                     BitVec::cons_bit_tail_cong(k, False, tail_law)),
                 True => λ tail_law => trans(
-                    BitVec::cong_increment(Succ(k), BitVec::cong_increment(Succ(k),
+                    BitVec::cong_increment(k + 1, BitVec::cong_increment(k + 1,
                         BitVec::iterate_increment_twice_cons(k, True, ta, tb.toNat()))),
                     BitVec::cons_bit_tail_cong(k, True, tail_law)),
             },
@@ -1624,7 +1624,7 @@ theorem BitVec::add_bits_cons(k: Nat, ha, hb, carry: Bool, ta, tb: BitVec(k),
     (ta.cons_bit(ha)).add_bits(tb.cons_bit(hb), carry)
 {
     trans(
-        BitVec::cong_iterate_increment_count(Succ(k), ta.cons_bit(ha),
+        BitVec::cong_iterate_increment_count(k + 1, ta.cons_bit(ha),
             BitVec::borrow_right_normalize(hb, carry, tb.toNat())),
         BitVec::add_bits_cons_leaf(k, ha, hb, carry, ta, tb, tail_law))
 }
@@ -1635,7 +1635,7 @@ theorem BitVec::iterate_increment_add_bits(n: Nat): (a, b: BitVec(n)) → (carry
     match n {
         Zero => λ a b carry => match carry { False => refl, True => refl },
         Succ(k, ih) => λ a b carry => trans(
-            BitVec::cong_iterate_increment(Succ(k), b.toNat() + Nat::of_bit(carry),
+            BitVec::cong_iterate_increment(k + 1, b.toNat() + Nat::of_bit(carry),
                 sym(BitVec::cons_head_tail(k, a))),
             BitVec::add_bits_cons(k, a.head_bit(), b.head_bit(), carry,
                 a.tail_bits(), b.tail_bits(),
@@ -1683,7 +1683,7 @@ theorem BitVec::iterate_decrement_twice_cons(n: Nat, b: Bool, count: Nat): (x: B
     match count {
         Zero => λ x => refl,
         Succ(k, ih) => λ x => trans(
-            BitVec::cong_iterate_decrement(Succ(n), Nat::twice(k),
+            BitVec::cong_iterate_decrement(n + 1, Nat::twice(k),
                 BitVec::decrement_decrement_cons(n, b, x)),
             ih(x.decrement())),
     }
@@ -1730,14 +1730,14 @@ theorem BitVec::sub_bits_cons_leaf(k: Nat, ha, hb, borrow: Bool, ta, tb: BitVec(
             },
             True => match ha {
                 False => λ tail_law => trans(
-                    BitVec::cong_iterate_decrement(Succ(k), Nat::twice(tb.toNat()),
+                    BitVec::cong_iterate_decrement(k + 1, Nat::twice(tb.toNat()),
                         BitVec::decrement_decrement_cons(k, False, ta)),
                     trans(
                         BitVec::iterate_decrement_twice_cons(k, False, tb.toNat(),
                             ta.decrement()),
                         BitVec::cons_bit_tail_cong(k, False, tail_law))),
                 True => λ tail_law => trans(
-                    BitVec::cong_iterate_decrement(Succ(k), Nat::twice(tb.toNat()),
+                    BitVec::cong_iterate_decrement(k + 1, Nat::twice(tb.toNat()),
                         BitVec::decrement_decrement_cons(k, True, ta)),
                     trans(
                         BitVec::iterate_decrement_twice_cons(k, True, tb.toNat(),
@@ -1761,7 +1761,7 @@ theorem BitVec::sub_bits_cons(k: Nat, ha, hb, borrow: Bool, ta, tb: BitVec(k),
     (ta.cons_bit(ha)).sub_bits(tb.cons_bit(hb), borrow)
 {
     trans(
-        BitVec::cong_iterate_decrement_count(Succ(k), ta.cons_bit(ha),
+        BitVec::cong_iterate_decrement_count(k + 1, ta.cons_bit(ha),
             BitVec::borrow_right_normalize(hb, borrow, tb.toNat())),
         BitVec::sub_bits_cons_leaf(k, ha, hb, borrow, ta, tb, tail_law))
 }
@@ -1772,7 +1772,7 @@ theorem BitVec::iterate_decrement_sub_bits(n: Nat): (a, b: BitVec(n)) → (borro
     match n {
         Zero => λ a b borrow => match borrow { False => refl, True => refl },
         Succ(k, ih) => λ a b borrow => trans(
-            BitVec::cong_iterate_decrement(Succ(k), b.toNat() + Nat::of_bit(borrow),
+            BitVec::cong_iterate_decrement(k + 1, b.toNat() + Nat::of_bit(borrow),
                 sym(BitVec::cons_head_tail(k, a))),
             BitVec::sub_bits_cons(k, a.head_bit(), b.head_bit(), borrow,
                 a.tail_bits(), b.tail_bits(),
@@ -1974,7 +1974,7 @@ theorem BitVec::odd_bit_twice(m: Nat): BitVec::odd_bit(Nat::twice(m)) = False {
     match m { Zero => refl, Succ(k) => BitVec::odd_bit_twice(k) }
 }
 
-theorem BitVec::odd_bit_succ_twice(m: Nat): BitVec::odd_bit(Succ(Nat::twice(m))) = True {
+theorem BitVec::odd_bit_succ_twice(m: Nat): BitVec::odd_bit(Nat::twice(m) + 1) = True {
     match m { Zero => refl, Succ(k) => BitVec::odd_bit_succ_twice(k) }
 }
 
@@ -1982,13 +1982,13 @@ theorem BitVec::half_twice(m: Nat): Nat::half(Nat::twice(m)) = m {
     match m { Zero => refl, Succ(k) => Nat::cong_succ(BitVec::half_twice(k)) }
 }
 
-theorem BitVec::half_succ_twice(m: Nat): Nat::half(Succ(Nat::twice(m))) = m {
+theorem BitVec::half_succ_twice(m: Nat): Nat::half(Nat::twice(m) + 1) = m {
     match m { Zero => refl, Succ(k) => Nat::cong_succ(BitVec::half_succ_twice(k)) }
 }
 
 // `Nat::add` recurses on its second argument, so a bit on the left of a stuck
 // `twice` needs the two left-unit laws to step.
-theorem BitVec::one_add(x: Nat): 1 + x = Succ(x) {
+theorem BitVec::one_add(x: Nat): 1 + x = x + 1 {
     trans(Nat::add_succ_left(0, x), Nat::cong_succ(Nat::add_left_zero(x)))
 }
 
@@ -2060,29 +2060,29 @@ theorem BitVec::ofNat_cong(n: Nat, {a, b: Nat}, p: a = b): BitVec::ofNat(a, n :=
 
 // `ofNat` at a low bit and twice a number is that bit on that number's word.
 theorem BitVec::ofNat_digit(k: Nat, b: Bool, m: Nat):
-    BitVec::ofNat(Nat::of_bit(b) + Nat::twice(m), n := Succ(k)) = BitVec::ofNat(m, n := k).cons_bit(b)
+    BitVec::ofNat(Nat::of_bit(b) + Nat::twice(m), n := k + 1) = BitVec::ofNat(m, n := k).cons_bit(b)
 {
     BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(b, m), BitVec::ofNat_cong(k, BitVec::half_digit(b, m)))
 }
 
 // One more, as `ofNat` writes it: a clear low bit is set, and a set one
 // carries into the increment of the rest.
-theorem BitVec::increment_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).increment() = BitVec::ofNat(Succ(x)) {
+theorem BitVec::increment_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).increment() = BitVec::ofNat(x + 1) {
     match n {
         Zero => λ x => refl,
         Succ(k, ih) => λ x => {
             let m = Nat::half(x);
             let step: (BitVec::ofNat(m, n := k).cons_bit(BitVec::odd_bit(x)).increment()
-                    = BitVec::ofNat(Succ(Nat::of_bit(BitVec::odd_bit(x)) + Nat::twice(m)), n := Succ(k))) =
+                    = BitVec::ofNat(Nat::of_bit(BitVec::odd_bit(x)) + Nat::twice(m) + 1, n := k + 1)) =
                 match BitVec::odd_bit(x) as λ b => BitVec::ofNat(m, n := k).cons_bit(b).increment()
-                        = BitVec::ofNat(Succ(Nat::of_bit(b) + Nat::twice(m)), n := Succ(k)) {
-                    False => sym(trans(BitVec::ofNat_cong(Succ(k), sym(Nat::add_succ_left(0, Nat::twice(m)))),
+                        = BitVec::ofNat(Nat::of_bit(b) + Nat::twice(m) + 1, n := k + 1) {
+                    False => sym(trans(BitVec::ofNat_cong(k + 1, sym(Nat::add_succ_left(0, Nat::twice(m)))),
                         BitVec::ofNat_digit(k, True, m))),
                     True => trans(BitVec::cons_bit_cong(k, refl, ih(m), a := False, b := False),
-                        sym(trans(BitVec::ofNat_cong(Succ(k), trans(Nat::cong_succ(BitVec::one_add(Nat::twice(m))), sym(Nat::add_left_zero(Nat::twice(Succ(m)))))),
-                            BitVec::ofNat_digit(k, False, Succ(m))))),
+                        sym(trans(BitVec::ofNat_cong(k + 1, trans(Nat::cong_succ(BitVec::one_add(Nat::twice(m))), sym(Nat::add_left_zero(Nat::twice(m + 1))))),
+                            BitVec::ofNat_digit(k, False, m + 1)))),
                 };
-            trans(step, BitVec::ofNat_cong(Succ(k), Nat::cong_succ(BitVec::odd_bit_add_twice_half(x))))
+            trans(step, BitVec::ofNat_cong(k + 1, Nat::cong_succ(BitVec::odd_bit_add_twice_half(x))))
         },
     }
 }
@@ -2126,12 +2126,12 @@ theorem BitVec::add_nat_iterate(n: Nat, a: BitVec(n), offset: Nat): a.add_nat(of
 }
 
 // A nonzero vector is one past its decrement.
-theorem BitVec::toNat_decrement(n: Nat, x: BitVec(n), nonzero: 0 < x.toNat()): Succ(x.decrement().toNat()) = x.toNat() {
+theorem BitVec::toNat_decrement(n: Nat, x: BitVec(n), nonzero: 0 < x.toNat()): x.decrement().toNat() + 1 = x.toNat() {
     let y = x.decrement();
     let k = y.toNat();
-    let back: (BitVec::zero(n := n).iterate_increment(Succ(k)) = x) =
+    let back: (BitVec::zero(n := n).iterate_increment(k + 1) = x) =
         trans(BitVec::cong_increment(n, BitVec::iterate_increment_toNat(n, y)), BitVec::increment_decrement(n, x));
-    match Succ(k).eq_dec(Nat::pow(2, n)) {
+    match (k + 1).eq_dec(Nat::pow(2, n)) {
         Inl(full) => {
             let wrapped: (x = BitVec::zero(n := n)) = trans(sym(back),
                 trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), full), BitVec::iterate_increment_period(n, BitVec::zero())));
@@ -2140,11 +2140,11 @@ theorem BitVec::toNat_decrement(n: Nat, x: BitVec(n), nonzero: 0 < x.toNat()): S
             false_elim(bad)
         },
         Inr(short) => {
-            let fits: (Succ(k) < Nat::pow(2, n)) = Succ(k).lt_of_le_of_ne(Nat::pow(2, n), BitVec::toNat_lt_pow(n, y), short);
-            let counted = BitVec::zero_iterate_increment(n, Succ(k));
+            let fits: (k + 1 < Nat::pow(2, n)) = (k + 1).lt_of_le_of_ne(Nat::pow(2, n), BitVec::toNat_lt_pow(n, y), short);
+            let counted = BitVec::zero_iterate_increment(n, k + 1);
             sym(trans(j(sym(back), λ z _ => x.toNat() = z.toNat(), refl),
-                trans(j(counted, λ z _ => BitVec::zero(n := n).iterate_increment(Succ(k)).toNat() = z.toNat(), refl),
-                    BitVec::toNat_ofNat(n, Succ(k), fits))))
+                trans(j(counted, λ z _ => BitVec::zero(n := n).iterate_increment(k + 1).toNat() = z.toNat(), refl),
+                    BitVec::toNat_ofNat(n, k + 1, fits))))
         },
     }
 }
@@ -2164,10 +2164,10 @@ theorem BitVec::toNat_zero_extend(n, extra: Nat, x: BitVec(n)): x.zero_extend(ex
 
 // Sign extension of a vector whose sign bit is clear is zero extension, so
 // it keeps the value (a small positive displacement reads as itself).
-theorem BitVec::sign_extend_clear_toNat(n, extra: Nat, x: BitVec(Succ(n)), clear: x.sign_bit() = False):
+theorem BitVec::sign_extend_clear_toNat(n, extra: Nat, x: BitVec(n + 1), clear: x.sign_bit() = False):
     (x.sign_extend(extra)).toNat() = x.toNat() {
     j(sym(clear), λ b _ => (x.concat(BitVec::repeat_bit(b, n := extra))).toNat() = x.toNat(),
-        BitVec::concat_zero_toNat(Succ(n), extra, x))
+        BitVec::concat_zero_toNat(n + 1, extra, x))
 }
 
 // A vector's value written back at a wider width is its zero extension,
@@ -2225,8 +2225,8 @@ theorem BitVec::widen_bits_concat(s: Bool, extra, n: Nat): (x: BitVec(n)) →
     }
 }
 
-theorem BitVec::sresize_sign_extend(n, extra: Nat, x: BitVec(Succ(n))): x.sresize(extra + Succ(n)) = x.sign_extend(extra) {
-    BitVec::widen_bits_concat(x.sign_bit(), extra, Succ(n), x)
+theorem BitVec::sresize_sign_extend(n, extra: Nat, x: BitVec(n + 1)): x.sresize(extra + (n + 1)) = x.sign_extend(extra) {
+    BitVec::widen_bits_concat(x.sign_bit(), extra, n + 1, x)
 }
 
 // A value below `2^n` has nothing above its low `n` bits. With n = 47 this is
@@ -2244,7 +2244,7 @@ theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
             let tail = (x.tail_bits()).toNat();
             let p = Nat::pow(2, k);
             let under = rewrite(BitVec::pow_two_succ_twice(k), in := h);
-            let twice = Succ(Nat::twice(tail)).le_trans(Succ(Nat::of_bit(x.head_bit()) + Nat::twice(tail)), Nat::twice(p),
+            let twice = (Nat::twice(tail) + 1).le_trans(Nat::of_bit(x.head_bit()) + Nat::twice(tail) + 1, Nat::twice(p),
                 Nat::le_add_r(Nat::of_bit(x.head_bit()), Nat::twice(tail)), under);
             ih(m, x.tail_bits(), Nat::twice_lt_twice_iff(tail, p).mp(twice))
         },

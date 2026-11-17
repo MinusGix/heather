@@ -41,7 +41,7 @@ theorem ITree::deep_mono<R>(E: Events, t: ITree<R>(E)): (d, e: Nat) → e <= d �
         Vis(_, k) => λ d e le deep => λ a => ITree::deep_mono(E, k(a), d, e, le, deep(a)),
         Cut => λ d e le (deep: d = 0) => (match e as λ x => x <= d → x = 0 {
             Zero => λ _ => refl,
-            Succ(e2) => λ (bad: Succ(e2) <= d) => false_elim(j(deep, λ y _ => Succ(e2) <= y, bad)),
+            Succ(e2) => λ (bad: e2 + 1 <= d) => false_elim(j(deep, λ y _ => e2 + 1 <= y, bad)),
         })(le),
     }
 }
@@ -72,13 +72,13 @@ theorem ITree::deep_iter<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(
         Succ(m) => λ a deep => ITree::deep_bind<Step<A, B>, B>(E, body(a), λ x => match x {
                 Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
                 Break(b) => Ret(b),
-            }, Succ(m), deep(a),
+            }, m + 1, deep(a),
             λ x => match x as λ y => ITree::Deep(E, match y as λ _ => ITree<B>(E) {
                     Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
                     Break(b) => Ret(b),
-                }, Succ(m)) {
+                }, m + 1) {
                 Continue(a2) => ITree::deep_iter(E, m, body, a2,
-                    λ x2 => ITree::deep_mono(E, body(x2), Succ(m), m, m.le_succ_r(m, m.le_refl()), deep(x2))),
+                    λ x2 => ITree::deep_mono(E, body(x2), m + 1, m, m.le_succ_r(m, m.le_refl()), deep(x2))),
                 Break(_) => trivial,
             }),
     }

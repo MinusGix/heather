@@ -166,19 +166,19 @@ theorem MonoidRel::over_fin(n: Nat): (g: Nat → A) →
     match n {
         Zero => λ g => A.rel_refl(A.unit),
         Succ(k) => λ g => {
-            let ih: (MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i))))) ≈ MonoidRel::range(op, k, λ m => g(Succ(m))))
-                = MonoidRel::over_fin(op, k, λ m => g(Succ(m)));
+            let ih: (MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Fin::to_nat(k, i) + 1))) ≈ MonoidRel::range(op, k, λ m => g(m + 1)))
+                = MonoidRel::over_fin(op, k, λ m => g(m + 1));
             calc {
-            g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))))
-                ≈ g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i)))))
+            g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(k + 1)) => g(Fin::to_nat(k + 1, i))))
+                ≈ g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Fin::to_nat(k, i) + 1)))
                     := rel_cong(MonoidRel::fold_of_eq(op,
-                        Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))),
-                        Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i)))),
-                        Fin::all(k).map_map(λ (i: Fin(k)) => Fin::succ(i), λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))))),
-                ≈ g(Zero) ∙ MonoidRel::range(op, k, λ m => g(Succ(m)))
+                        Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(k + 1)) => g(Fin::to_nat(k + 1, i))),
+                        Fin::all(k).map(λ (i: Fin(k)) => g(Fin::to_nat(k, i) + 1)),
+                        Fin::all(k).map_map(λ (i: Fin(k)) => Fin::succ(i), λ (i: Fin(k + 1)) => g(Fin::to_nat(k + 1, i))))),
+                ≈ g(Zero) ∙ MonoidRel::range(op, k, λ m => g(m + 1))
                     := rel_cong(ih),
-                ≈ MonoidRel::range(op, Succ(k), g) := A.rel_sym(MonoidRel::range(op, Succ(k), g),
-                    g(Zero) ∙ MonoidRel::range(op, k, λ m => g(Succ(m))), MonoidRel::range_succ_l(op, k, g)),
+                ≈ MonoidRel::range(op, k + 1, g) := A.rel_sym(MonoidRel::range(op, k + 1, g),
+                    g(Zero) ∙ MonoidRel::range(op, k, λ m => g(m + 1)), MonoidRel::range_succ_l(op, k, g)),
             }
         },
     }

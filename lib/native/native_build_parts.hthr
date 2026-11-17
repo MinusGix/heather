@@ -174,13 +174,13 @@ theorem Act::packs_seq_of(self a: Act, is: a.is_seq().IsTrue(), next: Nat, g0, g
 // its body.
 theorem Act::packs_let_of(self a: Act, is: a.is_let().IsTrue(), next: Nat, g0, g1, g2: List<Node>, f1, f2: List<Stmt> → List<Stmt>,
     init: (d: List<Stmt>) → a.init_items(next).pack(Packing(d, g0)) = Packing(f1(d), g1),
-    body: (d: List<Stmt>) → a.part(next, True).packs(Succ(next), Packing(d, g1)) = Packing(f2(d), g2)):
+    body: (d: List<Stmt>) → a.part(next, True).packs(next + 1, Packing(d, g1)) = Packing(f2(d), g2)):
     (d: List<Stmt>) → a.packs(next, Packing(d, g0)) = Packing(f2(f1(d)), g2) {
     (match a as λ b => b.is_let().IsTrue() → ((d: List<Stmt>) → b.init_items(next).pack(Packing(d, g0)) = Packing(f1(d), g1)) →
-            ((d: List<Stmt>) → b.part(next, True).packs(Succ(next), Packing(d, g1)) = Packing(f2(d), g2)) →
+            ((d: List<Stmt>) → b.part(next, True).packs(next + 1, Packing(d, g1)) = Packing(f2(d), g2)) →
             (d: List<Stmt>) → b.packs(next, Packing(d, g0)) = Packing(f2(f1(d)), g2) {
-        Let(v, rest) => λ _ h1 h2 d => trans(List::pack_append(v.assigned(next, Succ(next)).ops(), rest(Var(next)).items(Succ(next)), Packing(d, g0)),
-            trans(cong_fn<Packing, Packing>(λ k => rest(Var(next)).items(Succ(next)).pack(k), h1(d)), h2(f1(d)))),
+        Let(v, rest) => λ _ h1 h2 d => trans(List::pack_append(v.assigned(next, next + 1).ops(), rest(Var(next)).items(next + 1), Packing(d, g0)),
+            trans(cong_fn<Packing, Packing>(λ k => rest(Var(next)).items(next + 1).pack(k), h1(d)), h2(f1(d)))),
         Skip => λ no _ _ => false_elim(no),
         Seq(_) => λ no _ _ => false_elim(no),
         Set(_, _) => λ no _ _ => false_elim(no),
@@ -236,24 +236,24 @@ theorem Act::packs_when_of(self a: Act, is: a.is_when().IsTrue(), next: Nat, yes
 // A loop's pass: its body packed alone, then its test's nodes, the whole
 // one statement.
 theorem Act::pass_of(self a: Act, next: Nat, body: Packing, pass: Stmt,
-    packed: a.part(next, True).packs(Succ(next), Packing::start()) = body, closed: a.tested(next).nodes.ops().pack(body).stmt() = pass):
-    List::append(a.part(next, True).items(Succ(next)), a.tested(next).nodes.ops()).lowered() = pass {
-    trans(cong_fn<Packing, Stmt>(λ k => k.stmt(), List::pack_append(a.part(next, True).items(Succ(next)), a.tested(next).nodes.ops(), Packing::start())),
+    packed: a.part(next, True).packs(next + 1, Packing::start()) = body, closed: a.tested(next).nodes.ops().pack(body).stmt() = pass):
+    List::append(a.part(next, True).items(next + 1), a.tested(next).nodes.ops()).lowered() = pass {
+    trans(cong_fn<Packing, Stmt>(λ k => k.stmt(), List::pack_append(a.part(next, True).items(next + 1), a.tested(next).nodes.ops(), Packing::start())),
         j(sym(packed), λ k _ => a.tested(next).nodes.ops().pack(k).stmt() = pass, closed))
 }
 
 // A `while`: its test's nodes, then the branch into the loop.
 theorem Act::packs_while_of(self a: Act, is: a.is_while().IsTrue(), next: Nat, pass: Stmt,
-    passes: List::append(a.part(next, True).items(Succ(next)), a.tested(next).nodes.ops()).lowered() = pass):
+    passes: List::append(a.part(next, True).items(next + 1), a.tested(next).nodes.ops()).lowered() = pass):
     (k: Packing) → a.packs(next, k)
         = a.tested(next).nodes.ops().pack(k).step(Do(Branch(a.tested(next).id, Repeat(pass, a.tested(next).id), Stmt::leaf([])))) {
-    (match a as λ b => b.is_while().IsTrue() → List::append(b.part(next, True).items(Succ(next)), b.tested(next).nodes.ops()).lowered() = pass →
+    (match a as λ b => b.is_while().IsTrue() → List::append(b.part(next, True).items(next + 1), b.tested(next).nodes.ops()).lowered() = pass →
             (k: Packing) → b.packs(next, k)
                 = b.tested(next).nodes.ops().pack(k).step(Do(Branch(b.tested(next).id, Repeat(pass, b.tested(next).id), Stmt::leaf([])))) {
         While(condition, body) => λ _ h k => {
             let t = condition.truth().place(next);
-            trans(List::pack_append(t.nodes.ops(), [Do(Branch(t.id, Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id), Stmt::leaf([])))], k),
-                j(h, λ r _ => List::pack([Do(Branch(t.id, Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id), Stmt::leaf([])))], t.nodes.ops().pack(k))
+            trans(List::pack_append(t.nodes.ops(), [Do(Branch(t.id, Repeat((body.items(next + 1) ++ t.nodes.ops()).lowered(), t.id), Stmt::leaf([])))], k),
+                j(h, λ r _ => List::pack([Do(Branch(t.id, Repeat((body.items(next + 1) ++ t.nodes.ops()).lowered(), t.id), Stmt::leaf([])))], t.nodes.ops().pack(k))
                         = t.nodes.ops().pack(k).step(Do(Branch(t.id, Repeat(r, t.id), Stmt::leaf([])))),
                     refl))
         },
@@ -277,13 +277,13 @@ theorem Act::packs_while_of(self a: Act, is: a.is_while().IsTrue(), next: Nat, p
 
 // A `do … while`: the loop, its test inside it.
 theorem Act::packs_do_while_of(self a: Act, is: a.is_do_while().IsTrue(), next: Nat, pass: Stmt,
-    passes: List::append(a.part(next, True).items(Succ(next)), a.tested(next).nodes.ops()).lowered() = pass):
+    passes: List::append(a.part(next, True).items(next + 1), a.tested(next).nodes.ops()).lowered() = pass):
     (k: Packing) → a.packs(next, k) = k.step(Do(Repeat(pass, a.tested(next).id))) {
-    (match a as λ b => b.is_do_while().IsTrue() → List::append(b.part(next, True).items(Succ(next)), b.tested(next).nodes.ops()).lowered() = pass →
+    (match a as λ b => b.is_do_while().IsTrue() → List::append(b.part(next, True).items(next + 1), b.tested(next).nodes.ops()).lowered() = pass →
             (k: Packing) → b.packs(next, k) = k.step(Do(Repeat(pass, b.tested(next).id))) {
         DoWhile(body, condition) => λ _ h k => {
             let t = condition.truth().place(next);
-            j(h, λ r _ => List::pack([Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id))], k) = k.step(Do(Repeat(r, t.id))), refl)
+            j(h, λ r _ => List::pack([Do(Repeat((body.items(next + 1) ++ t.nodes.ops()).lowered(), t.id))], k) = k.step(Do(Repeat(r, t.id))), refl)
         },
         Skip => λ no _ => false_elim(no),
         Seq(_) => λ no _ => false_elim(no),

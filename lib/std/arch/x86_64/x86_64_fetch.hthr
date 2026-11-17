@@ -147,9 +147,9 @@ theorem fetch_more_bytes<M>(access: FetchAccess<M>, memory: M, start: BitVec(64)
     permission: access.executable(memory, start) = True,
     present: access.read_byte(memory, start) = Some(byte),
     no_wrap: start.carry_add_bit(BitVec::ofNat(1)) = False,
-    tail: fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))
+    tail: fetch_instruction_bytes(access, memory, rest_count + 1, next_rip(start, 1))
         = FetchedBytes(rest)):
-    fetch_instruction_bytes(access, memory, Succ(Succ(rest_count)), start)
+    fetch_instruction_bytes(access, memory, rest_count + 2, start)
         = FetchedBytes(Cons(byte, rest))
 {
     trans(fetch_with_byte_success(start, access.executable(memory, start),
@@ -157,12 +157,12 @@ theorem fetch_more_bytes<M>(access: FetchAccess<M>, memory: M, start: BitVec(64)
             match start.carry_add_bit(BitVec::ofNat(1)) {
                 True => FetchAddressWrap,
                 False => prepend_fetched(found,
-                    fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))),
+                    fetch_instruction_bytes(access, memory, rest_count + 1, next_rip(start, 1))),
             }, byte, permission, present),
         trans(cong_fn<Bool, InstructionFetch>(λ carry => match carry {
             True => FetchAddressWrap,
             False => prepend_fetched(byte,
-                fetch_instruction_bytes(access, memory, Succ(rest_count), next_rip(start, 1))),
+                fetch_instruction_bytes(access, memory, rest_count + 1, next_rip(start, 1))),
         }, no_wrap), cong_fn<InstructionFetch, InstructionFetch>(λ fetched => prepend_fetched(byte, fetched), tail)))
 }
 

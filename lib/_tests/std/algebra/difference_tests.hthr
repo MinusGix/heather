@@ -15,20 +15,20 @@ theorem choose_row(): ∑ i < 5, Nat::choose(4, i) = 16 { refl }
 // The binomial theorem, proved once at a commutative semiring, at the three
 // carriers: open at `Nat` and `Int` (`=`), open at `Rat` (`≈`), and closed.
 theorem nat_binomial(a, b, n: Nat):
-    ∏ k < n, (a + b) = ∑ i < Succ(n), Semiring::of_nat<Nat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+    ∏ k < n, (a + b) = ∑ i < n + 1, Semiring::of_nat<Nat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
 { CommSemiring::binomial(a, b, n) }
 theorem int_binomial(a, b: Int, n: Nat):
-    ∏ k < n, (a + b) = ∑ i < Succ(n), Semiring::of_nat<Int>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+    ∏ k < n, (a + b) = ∑ i < n + 1, Semiring::of_nat<Int>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
 { CommSemiring::binomial(a, b, n) }
 theorem rat_binomial(a, b: Rat, n: Nat):
-    ∏ k < n, (a + b) ≈ ∑ i < Succ(n), Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+    ∏ k < n, (a + b) ≈ ∑ i < n + 1, Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
 { CommSemiring::binomial(a, b, n) }
 theorem nat_binomial_closed(): ∏ k < 4, (2 + 3) = ∑ i < 5, Nat::choose(4, i) * (Nat::pow(2, i) * Nat::pow(3, 4 - i)) { refl }
 // The freshman's dream is false: the coefficients are needed.
 theorem not_freshman(): ¬((a, b: Nat) → ∏ k < 2, (a + b) = (∏ k < 2, a) + ∏ k < 2, b) { λ h => absurd(h(1, 1)) }
 
 // Vandermonde, open and closed.
-theorem vandermonde_open(a, b, n: Nat): ∑ i < Succ(n), a.choose(i) * b.choose(n - i) = (a + b).choose(n) { Nat::vandermonde(a, b, n) }
+theorem vandermonde_open(a, b, n: Nat): ∑ i < n + 1, a.choose(i) * b.choose(n - i) = (a + b).choose(n) { Nat::vandermonde(a, b, n) }
 theorem vandermonde_closed(): ∑ i < 3, Nat::choose(3, i) * Nat::choose(4, 2 - i) = 21 { refl }
 
 // Telescoping at an open sequence of integers, and its order form at `Rat`.
@@ -54,7 +54,7 @@ theorem geometric_closed(): ∑ k < 5, ∏ j < k, OfNat(2) = OfNat(31) { refl }
 // Summation by parts at `Rat`.
 theorem rat_by_parts(n: Nat, f, g: Nat → Rat):
     ∑ k < n, f(k) * GroupRel::delta(≈, +, g, k)
-        ≈ (f(n) * g(n) + Rat::neg(f(0) * g(0))) + Rat::neg(∑ k < n, GroupRel::delta(≈, +, f, k) * g(Succ(k)))
+        ≈ (f(n) * g(n) + Rat::neg(f(0) * g(0))) + Rat::neg(∑ k < n, GroupRel::delta(≈, +, f, k) * g(k + 1))
 { CommRing::sum_by_parts(n, f, g) }
 
 // The power sums at `Int`, open, and their closed instances.
@@ -71,7 +71,7 @@ theorem delta_falling_closed(): GroupRel::delta(≈, +, λ i => Ring::falling(Ri
 
 // Newton's formula at an open sequence of rationals, and at a closed one:
 // the cubes are recovered from their differences at zero.
-theorem rat_newton(n: Nat, f: Nat → Rat): f(n) ≈ ∑ k < Succ(n), Semiring::of_nat<Rat>(n.choose(k)) * GroupRel::delta_pow(≈, +, k, f, 0) {
+theorem rat_newton(n: Nat, f: Nat → Rat): f(n) ≈ ∑ k < n + 1, Semiring::of_nat<Rat>(n.choose(k)) * GroupRel::delta_pow(≈, +, k, f, 0) {
     CommRing::newton(n, f)
 }
 fn cube(k: Nat) → Int { OfNat(k * k * k) }
@@ -82,7 +82,7 @@ theorem cube_fourth(): GroupRel::delta_pow(≈, +, 4, cube, 0) = OfNat(0) { refl
 theorem cube_fourth_not_one(): ¬(GroupRel::delta_pow(≈, +, 4, cube, 0) = OfNat(1)) { λ h => omega(trans(sym(h), cube_fourth())) }
 
 // The geometric bound at `Rat`, at the ratio one half.
-theorem rat_geometric_le(x: Nat → Rat, n: Nat, step: (k: Nat) → Nat::Le(n, k) → x(Succ(k)) <= x(k) * Rat::inv_succ(1), j: Nat):
+theorem rat_geometric_le(x: Nat → Rat, n: Nat, step: (k: Nat) → Nat::Le(n, k) → x(k + 1) <= x(k) * Rat::inv_succ(1), j: Nat):
     x(n + j) <= x(n) * ∏ i < j, Rat::inv_succ(1)
 { OrderedField::geometric_le(x, Rat::inv_succ(1), n, Rat::le_of_lt(Rat::inv_succ_pos(1)), step, j) }
 

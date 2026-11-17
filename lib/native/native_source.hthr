@@ -326,13 +326,13 @@ fn performs_below(perform, perform2: Performs()) → Type {
 
 // More fuel grows a statement's tree, where a call's tree grows.
 theorem Stmt::grows(self s: Stmt, call: Writers(), perform, perform2: Performs(), below: performs_below(perform, perform2), n: Nat): (env: Env) →
-    ITree::Below(Events::linux(), s.denote(call, perform, n, env), s.denote(call, perform2, Succ(n), env)) {
+    ITree::Below(Events::linux(), s.denote(call, perform, n, env), s.denote(call, perform2, n + 1, env)) {
     match s {
         Compute(_) => λ env => refl,
         Invoke(shape) => λ env => ITree::below_refl(Events::linux(), Vis(shape.cmd(env), λ a => Ret(Onward(shape.answer(env, a))))),
-        Then(first, rest) => λ env => ITree::below_bind(Events::linux(), first.denote(call, perform, n, env), first.denote(call, perform2, Succ(n), env),
+        Then(first, rest) => λ env => ITree::below_bind(Events::linux(), first.denote(call, perform, n, env), first.denote(call, perform2, n + 1, env),
             λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
-            λ flow => match flow { Onward(next) => rest.denote(call, perform2, Succ(n), next), Exited(status) => Ret(Exited(status)) },
+            λ flow => match flow { Onward(next) => rest.denote(call, perform2, n + 1, next), Exited(status) => Ret(Exited(status)) },
             first.grows(call, perform, perform2, below, n, env),
             λ flow => match flow {
                 Onward(e) => rest.grows(call, perform, perform2, below, n, e),
@@ -340,14 +340,14 @@ theorem Stmt::grows(self s: Stmt, call: Writers(), perform, perform2: Performs()
             }),
         Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b =>
                 ITree::Below(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform, n, env), False => no.denote(call, perform, n, env) },
-                    match b { True => yes.denote(call, perform2, Succ(n), env), False => no.denote(call, perform2, Succ(n), env) }) {
+                    match b { True => yes.denote(call, perform2, n + 1, env), False => no.denote(call, perform2, n + 1, env) }) {
             True => yes.grows(call, perform, perform2, below, n, env),
             False => no.grows(call, perform, perform2, below, n, env),
         },
         Repeat(body, again) => λ env => ITree::iter_below(Events::linux(), n,
             λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)),
-            λ e => ITree::map(Events::linux(), body.denote(call, perform2, Succ(n), e), λ flow => flow.pass(again)),
-            λ e => ITree::below_bind(Events::linux(), body.denote(call, perform, n, e), body.denote(call, perform2, Succ(n), e),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform2, n + 1, e), λ flow => flow.pass(again)),
+            λ e => ITree::below_bind(Events::linux(), body.denote(call, perform, n, e), body.denote(call, perform2, n + 1, e),
                 λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, perform, perform2, below, n, e), λ flow => refl),
             env),
         Exit(_) => λ env => refl,
@@ -504,7 +504,7 @@ fn Source::performs(self src: Source, call: Writers(), n: Nat, depth: Nat) → P
 
 // More fuel grows every call's tree, at every depth.
 theorem Source::performs_grows(self src: Source, call: Writers(), n: Nat, depth: Nat):
-    performs_below(src.performs(call, n, depth), src.performs(call, Succ(n), depth)) {
+    performs_below(src.performs(call, n, depth), src.performs(call, n + 1, depth)) {
     match depth {
         Zero => λ procedure args results env => refl,
         Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
@@ -516,15 +516,15 @@ theorem Source::performs_grows(self src: Source, call: Writers(), n: Nat, depth:
                     },
                     match o {
                         None => Ret(Onward(env)),
-                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, Succ(n), d), Succ(n), proc.enter(env, args)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n + 1, d), n + 1, proc.enter(env, args)),
                             λ flow => proc.leave(env, results, flow)),
                     }) {
             None => refl,
             Some(proc) => ITree::below_bind(Events::linux(),
                 proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
-                proc.body.denote(call, src.performs(call, Succ(n), d), Succ(n), proc.enter(env, args)),
+                proc.body.denote(call, src.performs(call, n + 1, d), n + 1, proc.enter(env, args)),
                 λ flow => Ret(proc.leave(env, results, flow)), λ flow => Ret(proc.leave(env, results, flow)),
-                proc.body.grows(call, src.performs(call, n, d), src.performs(call, Succ(n), d), src.performs_grows(call, n, d), n, proc.enter(env, args)),
+                proc.body.grows(call, src.performs(call, n, d), src.performs(call, n + 1, d), src.performs_grows(call, n, d), n, proc.enter(env, args)),
                 λ flow => refl),
         },
     }

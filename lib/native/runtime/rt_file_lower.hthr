@@ -221,7 +221,7 @@ theorem FTm::bind_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
 // The branch
 
 theorem Ty::field_moves_quiet(fs: List<Ty>): (out, src: Nat) → nodes_quiet(Ty::field_moves(fs, out, src)).IsTrue() {
-    match fs { Nil => λ out src => trivial, Cons(_, rest) => λ out src => Ty::field_moves_quiet(rest, Succ(out), Succ(src)) }
+    match fs { Nil => λ out src => trivial, Cons(_, rest) => λ out src => Ty::field_moves_quiet(rest, out + 1, src + 1) }
 }
 
 // Moves store nothing.
@@ -343,8 +343,8 @@ theorem FTm::put_runs(call: Writers(), values: Valuation(), own: List<BitVec(8)>
     Keeps(values, FTm::put_region(pi, pl, pv, next).run(call, values, Cons(own, rest)).values, next) ∧
         (FTm::put_region(pi, pl, pv, next).run(call, values, Cons(own, rest)).buffers = Cons(own.with_byte_within(bound, index, byte), rest)) {
     let file: Buffers() = Cons(own, rest);
-    let wide = Succ(next);
-    let out = Succ(Succ(next));
+    let wide = next + 1;
+    let out = next + 2;
     let tested = Valuation::set(values, next, bit_value(values(64, pi).unsigned_lt_bit(values(64, pl))));
     let widened = Valuation::set(tested, wide, λ wd => BitVec::ofNat(tested(8, pv).toNat()));
     let sent = low_byte(widened(64, wide));
@@ -423,7 +423,7 @@ fn FTm::put_then(at: PutAt, next: Nat, lb: Lowered) → Option<Lowered> {
 theorem FTm::put_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, i, length, v: Nat, at: PutAt,
     found: FTm::PutAtHolds(g, ports, i, length, v, Some(at)), b: Ty,
     mb: Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, b.sem(fw.w.tys)>, lb: Lowered,
-    then: FTm::StepHolds(fw, base, g, ports, Succ(Succ(Succ(next))), b, mb, Some(lb))):
+    then: FTm::StepHolds(fw, base, g, ports, next + 3, b, mb, Some(lb))):
     FTm::StepHolds(fw, base, g, ports, next, b, λ env own => mb(env, FTm::put(fw.w.tys, g, env, i, length, v, own)), FTm::put_then(at, next, lb)) {
     λ call agree values env own held below => {
         let tys = fw.w.tys;
@@ -440,8 +440,8 @@ theorem FTm::put_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, nex
             Ty::below_cast(tys, Ty::at(g, i), Word(64), found.left.right, at.index, next, below_at(tys, g, ports, next, below, i, at.index, found.left.left)),
             Ty::below_cast(tys, Ty::at(g, v), Word(8), found.right.right.right, at.value, next,
                 below_at(tys, g, ports, next, below, v, at.value, found.right.right.left)));
-        let later = Succ(Succ(Succ(next)));
-        let step: (next <= later) = Nat::le_succ_r(next, Succ(Succ(next)), Nat::le_succ_r(next, Succ(next), Nat::le_succ_r(next, next, next.le_refl())));
+        let later = next + 3;
+        let step: (next <= later) = Nat::le_succ_r(next, next + 2, Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())));
         let written = own.with_byte_within(bound, index, byte);
         let two = then(call, agree, put.values, env, written, env_holds_keeps(tys, g, values, put.values, next, ran.left, ports, env, below, held),
             below_mono(tys, g, next, later, step, ports, below));
@@ -529,20 +529,20 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
             let word = Ty::cast(tys, r, Word(64), m.value);
             let called = Valuation::set(values, next, word_value(word));
             let moved = λ (wd: Nat) => called(wd, next);
-            let after = Valuation::set(called, Succ(next), moved);
+            let after = Valuation::set(called, next + 1, moved);
             let ran: (Tm::called(base + f, qs, next).region.run(call, values, file) = State(after, Cons(m.after, fw.rest))) =
-                cong_fn<Ending, State>(λ answer => State(Valuation::set(Valuation::set(values, next, word_value(answer.word)), Succ(next),
+                cong_fn<Ending, State>(λ answer => State(Valuation::set(Valuation::set(values, next, word_value(answer.word)), next + 1,
                     λ wd => Valuation::set(values, next, word_value(answer.word), wd, next)), answer.buffers), answered);
-            let word_moved: (after(64, Succ(next)) = word) =
-                trans(Valuation::set_here(called, Succ(next), moved, 64), Valuation::set_here(values, next, word_value(word), 64));
-            let holds: r.Holds(tys, after, Succ(next), m.value) = j(Ty::one_word_back(tys, r, er, m.value), λ u _ => r.Holds(tys, after, Succ(next), u),
-                Ty::one_word_holds(tys, after, Succ(next), r, er, word, word_moved));
+            let word_moved: (after(64, next + 1) = word) =
+                trans(Valuation::set_here(called, next + 1, moved, 64), Valuation::set_here(values, next, word_value(word), 64));
+            let holds: r.Holds(tys, after, next + 1, m.value) = j(Ty::one_word_back(tys, r, er, m.value), λ u _ => r.Holds(tys, after, next + 1, u),
+                Ty::one_word_holds(tys, after, next + 1, r, er, word, word_moved));
             let kept: Keeps(values, after, next) = λ wd id lt =>
-                trans(Valuation::set_other(called, Succ(next), moved, wd, id,
-                        Nat::ne_of_lt(id, Succ(next), Nat::lt_trans(id, next, Succ(next), lt, next.lt_succ_self()))),
+                trans(Valuation::set_other(called, next + 1, moved, wd, id,
+                        Nat::ne_of_lt(id, next + 1, Nat::lt_trans(id, next, next + 1, lt, next.lt_succ_self()))),
                     Valuation::set_other(values, next, word_value(word), wd, id, Nat::ne_of_lt(id, next, lt)));
-            ⟨Nat::le_succ_r(next, Succ(next), Nat::le_succ_r(next, next, next.le_refl())), ⟨Ty::one_word_below(tys, r, er, Succ(next)),
-                j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, Succ(next), fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
+            ⟨Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())), ⟨Ty::one_word_below(tys, r, er, next + 1),
+                j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, next + 1, fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
         })))
 }
 
@@ -617,7 +617,7 @@ theorem FTm::start_port_sound(w: World, g: List<Ty>, ports: List<Nat>, values: V
         Some(s) => (match FTm::word_port(g, ports, s) as λ r => FTm::WordPort(w.tys, g, env, values, zero, s, r) →
             FTm::StartPort(w.tys, g, env, values, zero, Some(s), r) {
             None => λ _ => trivial,
-            Some(p) => λ h => ⟨h.left, Nat::lt_trans(p, zero, Succ(zero), h.right, zero.lt_succ_self())⟩,
+            Some(p) => λ h => ⟨h.left, Nat::lt_trans(p, zero, zero + 1, h.right, zero.lt_succ_self())⟩,
         })(FTm::word_port_sound(w, g, ports, values, env, held, zero, below, s)),
     }
 }
@@ -706,8 +706,8 @@ fn FTm::zeros_past(views: List<FView>, zero: Nat) → Nat {
 theorem FTm::zeros_past_le(views: List<FView>): (zero: Nat) → zero <= FTm::zeros_past(views, zero) {
     match views {
         Nil => λ zero => zero.le_refl(),
-        Cons(_, rest) => λ zero => Nat::le_trans(zero, Succ(zero), FTm::zeros_past(rest, Succ(zero)), Nat::le_succ_r(zero, zero, zero.le_refl()),
-            FTm::zeros_past_le(rest, Succ(zero))),
+        Cons(_, rest) => λ zero => Nat::le_trans(zero, zero + 1, FTm::zeros_past(rest, zero + 1), Nat::le_succ_r(zero, zero, zero.le_refl()),
+            FTm::zeros_past_le(rest, zero + 1)),
     }
 }
 
@@ -719,7 +719,7 @@ theorem FTm::zero_node_quiet(start: Option<Nat>, zero: Nat, rest: List<Node>, qu
 theorem FTm::zeros_quiet(views: List<FView>): (zero: Nat) → nodes_quiet(FTm::zeros(views, zero)).IsTrue() {
     match views {
         Nil => λ zero => trivial,
-        Cons(view, rest) => λ zero => FTm::zero_node_quiet(view.start, zero, FTm::zeros(rest, Succ(zero)), FTm::zeros_quiet(rest, Succ(zero))),
+        Cons(view, rest) => λ zero => FTm::zero_node_quiet(view.start, zero, FTm::zeros(rest, zero + 1), FTm::zeros_quiet(rest, zero + 1)),
     }
 }
 
@@ -767,28 +767,28 @@ theorem FTm::views_ports_sound(w: World, g: List<Ty>, ports: List<Nat>, env: Env
             let tys = w.tys;
             let P = λ (r: Option<List<ViewPorts>>) => FTm::PortsHold(tys, g, env, file, Cons(view, rest), zero, values, r);
             let first = FTm::zeroed(view.start, zero, values);
-            let z = eval_nodes_over(file, FTm::zeros(rest, Succ(zero)), first);
-            let past = FTm::zeros_past(rest, Succ(zero));
+            let z = eval_nodes_over(file, FTm::zeros(rest, zero + 1), first);
+            let past = FTm::zeros_past(rest, zero + 1);
             Option::and_then_elim(P, trivial, view.ports(g, ports, zero),
-                λ at => FTm::views_ports(g, ports, rest, Succ(zero)).and_then(λ more => Some(Cons(at, more))), λ at found =>
-            Option::and_then_elim(P, trivial, FTm::views_ports(g, ports, rest, Succ(zero)), λ more => Some(Cons(at, more)), λ more found_rest => {
+                λ at => FTm::views_ports(g, ports, rest, zero + 1).and_then(λ more => Some(Cons(at, more))), λ at found =>
+            Option::and_then_elim(P, trivial, FTm::views_ports(g, ports, rest, zero + 1), λ more => Some(Cons(at, more)), λ more found_rest => {
                 let here = j(found, λ r _ => view.PortsHold(tys, g, env, values, zero, r), view.ports_sound(w, g, ports, values, env, held, zero, below));
                 let kept_first: Keeps(values, first, zero) = FTm::zeroed_keeps(view.start, zero, values);
-                let step: (zero < Succ(zero)) = zero.lt_succ_self();
-                let ih = j(found_rest, λ r _ => FTm::PortsHold(tys, g, env, file, rest, Succ(zero), first, r),
-                    FTm::views_ports_sound(w, g, ports, env, file, rest, Succ(zero), first,
+                let step: (zero < zero + 1) = zero.lt_succ_self();
+                let ih = j(found_rest, λ r _ => FTm::PortsHold(tys, g, env, file, rest, zero + 1, first, r),
+                    FTm::views_ports_sound(w, g, ports, env, file, rest, zero + 1, first,
                         env_holds_keeps(tys, g, values, first, zero, kept_first, ports, env, below, held),
-                        below_mono(tys, g, zero, Succ(zero), Nat::le_succ_r(zero, zero, zero.le_refl()), ports, below)));
-                let le_past: (Succ(zero) <= past) = FTm::zeros_past_le(rest, Succ(zero));
+                        below_mono(tys, g, zero, zero + 1, Nat::le_succ_r(zero, zero, zero.le_refl()), ports, below)));
+                let le_past: (zero + 1 <= past) = FTm::zeros_past_le(rest, zero + 1);
                 let kept: Keeps(values, z, zero) = λ wd id lt =>
-                    trans(ih.left(wd, id, Nat::lt_trans(id, zero, Succ(zero), lt, step)), kept_first(wd, id, lt));
-                j(sym(FTm::zero_node_eval(file, view.start, zero, FTm::zeros(rest, Succ(zero)), values)),
+                    trans(ih.left(wd, id, Nat::lt_trans(id, zero, zero + 1, lt, step)), kept_first(wd, id, lt));
+                j(sym(FTm::zero_node_eval(file, view.start, zero, FTm::zeros(rest, zero + 1), values)),
                     λ x _ => Keeps(values, x, zero) ∧ ((val: Valuation()) → Keeps(x, val, past) → FTm::ViewsRead(tys, g, env, val, Cons(view, rest), Cons(at, more))),
                     ⟨kept, λ val keeps => {
-                        let low = λ (p: Nat) (lt: p < zero) => trans(keeps(64, p, Nat::lt_of_lt_of_le(p, Succ(zero), past,
-                            Nat::lt_trans(p, zero, Succ(zero), lt, step), le_past)), kept(64, p, lt));
+                        let low = λ (p: Nat) (lt: p < zero) => trans(keeps(64, p, Nat::lt_of_lt_of_le(p, zero + 1, past,
+                            Nat::lt_trans(p, zero, zero + 1, lt, step), le_past)), kept(64, p, lt));
                         let start: (val(64, at.start) = FTm::start_word(tys, g, env, view.start)) =
-                            trans(keeps(64, at.start, Nat::lt_of_lt_of_le(at.start, Succ(zero), past, here.right.left.right, le_past)),
+                            trans(keeps(64, at.start, Nat::lt_of_lt_of_le(at.start, zero + 1, past, here.right.left.right, le_past)),
                                 trans(ih.left(64, at.start, here.right.left.right), here.right.left.left));
                         ⟨⟨here.left.left, trans(low(at.home, here.left.right.right), here.left.right.left)⟩,
                             ⟨⟨start, trans(low(at.end, here.right.right.right), here.right.right.left)⟩, ih.right(val, keeps)⟩⟩
@@ -814,15 +814,15 @@ fn FTm::homes_past(ats: List<ViewPorts>, home: Nat) → Nat {
 theorem FTm::homes_past_le(ats: List<ViewPorts>): (home: Nat) → home <= FTm::homes_past(ats, home) {
     match ats {
         Nil => λ home => home.le_refl(),
-        Cons(_, rest) => λ home => Nat::le_trans(home, Succ(Succ(home)), FTm::homes_past(rest, Succ(Succ(home))),
-            Nat::le_succ_r(home, Succ(home), Nat::le_succ_r(home, home, home.le_refl())), FTm::homes_past_le(rest, Succ(Succ(home)))),
+        Cons(_, rest) => λ home => Nat::le_trans(home, home + 2, FTm::homes_past(rest, home + 2),
+            Nat::le_succ_r(home, home + 1, Nat::le_succ_r(home, home, home.le_refl())), FTm::homes_past_le(rest, home + 2)),
     }
 }
 
 theorem FTm::views_built_quiet(ats: List<ViewPorts>): (written: Bool) → (home: Nat) → nodes_quiet(views_nodes(FTm::views_built(ats, written, home))).IsTrue() {
     match ats {
         Nil => λ written home => trivial,
-        Cons(_, rest) => λ written home => FTm::views_built_quiet(rest, False, Succ(Succ(home))),
+        Cons(_, rest) => λ written home => FTm::views_built_quiet(rest, False, home + 2),
     }
 }
 
@@ -831,7 +831,7 @@ theorem FTm::unwritten_put(values: Valuation(), ats: List<ViewPorts>): (home: Na
     put_views(FTm::views_built(ats, False, home), values, after, held) = held {
     match ats {
         Nil => λ home after held => refl,
-        Cons(_, rest) => λ home after held => FTm::unwritten_put(values, rest, Succ(Succ(home)), match after { Nil => Nil, Cons(_, later) => later }, held),
+        Cons(_, rest) => λ home after held => FTm::unwritten_put(values, rest, home + 2, match after { Nil => Nil, Cons(_, later) => later }, held),
     }
 }
 
@@ -855,8 +855,8 @@ theorem FTm::views_bound(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), fi
         Cons(view, rest) => λ ats => match ats {
             Nil => λ written home le z read => false_elim(read(z, λ wd id lt => refl)),
             Cons(at, more) => λ written home le z read => {
-                let length = Succ(home);
-                let later = Succ(Succ(home));
+                let length = home + 1;
+                let later = home + 2;
                 let z1 = Valuation::set(z, home, λ wd => z(wd, at.home).add(z(wd, at.start)));
                 let z2 = Valuation::set(z1, length, λ wd => z1(wd, at.end).sub(z1(wd, at.start)));
                 let b = eval_nodes_over(file, views_nodes(FTm::views_built(more, False, later)), z2);
@@ -973,13 +973,13 @@ theorem FTm::lend_ran(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next
     FTm::PortsHold(fw.w.tys, g, env, Cons(own, fw.rest), Cons(view, reads), next, values, Some(ats)) → (qs: List<Nat>) →
     FTm::lent_args(fw.w.tys, g, ports, views_homes(FTm::views_built(ats, True, FTm::zeros_past(Cons(view, reads), next))),
         Sig::at(fw.fsigs, f).params, args) = Some(qs) →
-    (next <= Succ(Succ(FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next))))) ∧
-        (Sig::at(fw.fsigs, f).result.Below(fw.w.tys, Succ(FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next))),
-                Succ(Succ(FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next))))) ∧
+    (next <= FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next)) + 2) ∧
+        (Sig::at(fw.fsigs, f).result.Below(fw.w.tys, FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next)) + 1,
+                FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next)) + 2) ∧
             FTm::Ran(Sig::at(fw.fsigs, f).result, fw.w.tys, values,
                 FTm::lent_lowered(base, f, FTm::zeros(Cons(view, reads), next), FTm::views_built(ats, True, FTm::zeros_past(Cons(view, reads), next)), qs,
                     FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next))).region.run(call, values, Cons(own, fw.rest)),
-                next, Succ(FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next))), fw.rest,
+                next, FTm::homes_past(ats, FTm::zeros_past(Cons(view, reads), next)) + 1, fw.rest,
                 FTm::lent(fw, g, env, f, Cons(view, reads), args, own))) {
     let tys = fw.w.tys;
     let r = Sig::at(fw.fsigs, f).result;
@@ -1017,16 +1017,16 @@ theorem FTm::lend_ran(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next
             let word = Ty::cast(tys, r, Word(64), m1.value);
             let called = Valuation::set(b, out, word_value(word));
             let moved = λ (wd: Nat) => called(wd, out);
-            let after = Valuation::set(called, Succ(out), moved);
+            let after = Valuation::set(called, out + 1, moved);
             let from = view.from(tys, g, env);
             let from_b: (b(64, at.start).toNat() = from) =
                 trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), read_b.right.left.left), FView::first_at(tys, g, env, view.start));
             let put_back: (put_views(views, b, Cons(m1.after, rest2), file) = Cons(own.put_window(from, m1.after), fw.rest)) =
-                trans(FTm::unwritten_put(b, more, Succ(Succ(top)), rest2,
+                trans(FTm::unwritten_put(b, more, top + 2, rest2,
                         file.update(at.buffer, λ (was: List<BitVec(8)>) => was.put_window(b(64, at.start).toNat(), m1.after))),
                     eq2(λ (k: Nat) (n: Nat) => file.update(k, λ (was: List<BitVec(8)>) => was.put_window(n, m1.after)), trans(read_b.left.left, at_own), from_b));
             let finish = λ (bound: State) (answer: Ending) => State(
-                Valuation::set(Valuation::set(bound.values, out, word_value(answer.word)), Succ(out),
+                Valuation::set(Valuation::set(bound.values, out, word_value(answer.word)), out + 1,
                     λ wd => Valuation::set(bound.values, out, word_value(answer.word), wd, out)),
                 put_views(views, bound.values, answer.buffers, bound.buffers));
             let lend_at = λ (bound: State) => finish(bound, call(viewed(views, bound.values, bound.buffers), base + f, words_of(bound.values, homes ++ qs)));
@@ -1038,17 +1038,17 @@ theorem FTm::lend_ran(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next
                         trans(cong_fn(λ (answer: Ending) => finish(State(b, file), answer), answered),
                             cong_fn(λ (left: Buffers()) => State(after, left), put_back))));
             let m = FTm::lent(fw, g, env, f, vs, args, own);
-            let word_moved: (after(64, Succ(out)) = word) =
-                trans(Valuation::set_here(called, Succ(out), moved, 64), Valuation::set_here(b, out, word_value(word), 64));
-            let holds: r.Holds(tys, after, Succ(out), m.value) = j(Ty::one_word_back(tys, r, er, m1.value), λ u _ => r.Holds(tys, after, Succ(out), u),
-                Ty::one_word_holds(tys, after, Succ(out), r, er, word, word_moved));
+            let word_moved: (after(64, out + 1) = word) =
+                trans(Valuation::set_here(called, out + 1, moved, 64), Valuation::set_here(b, out, word_value(word), 64));
+            let holds: r.Holds(tys, after, out + 1, m.value) = j(Ty::one_word_back(tys, r, er, m1.value), λ u _ => r.Holds(tys, after, out + 1, u),
+                Ty::one_word_holds(tys, after, out + 1, r, er, word, word_moved));
             let kept: Keeps(values, after, next) = λ wd id lt =>
-                trans(Valuation::set_other(called, Succ(out), moved, wd, id,
-                        Nat::ne_of_lt(id, Succ(out), Nat::lt_trans(id, out, Succ(out), Nat::lt_of_lt_of_le(id, next, out, lt, le_out), out.lt_succ_self()))),
+                trans(Valuation::set_other(called, out + 1, moved, wd, id,
+                        Nat::ne_of_lt(id, out + 1, Nat::lt_trans(id, out, out + 1, Nat::lt_of_lt_of_le(id, next, out, lt, le_out), out.lt_succ_self()))),
                     trans(Valuation::set_other(b, out, word_value(word), wd, id, Nat::ne_of_lt(id, out, Nat::lt_of_lt_of_le(id, next, out, lt, le_out))),
                         kept_b(wd, id, lt)));
-            ⟨Nat::le_succ_r(next, Succ(out), Nat::le_succ_r(next, out, le_out)), ⟨Ty::one_word_below(tys, r, er, Succ(out)),
-                j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, Succ(out), fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
+            ⟨Nat::le_succ_r(next, out + 1, Nat::le_succ_r(next, out, le_out)), ⟨Ty::one_word_below(tys, r, er, out + 1),
+                j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, out + 1, fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
         },
     }
 }
@@ -1195,7 +1195,7 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
                 g, ports, next)),
         Put(i, length, v, body) => λ g ports next => {
             let P = λ (r: Option<Lowered>) => FTm::LowerHolds(Put(i, length, v, body), fw, base, g, ports, next, r);
-            let later = Succ(Succ(Succ(next)));
+            let later = next + 3;
             Option::and_then_elim(P, trivial, FTm::put_ports(g, ports, i, length, v),
                 λ at => FTm::lower(body, fw.w, fw.fsigs, base, g, ports, later).and_then(λ lb => FTm::put_then(at, next, lb)), λ at found =>
             Option::and_then_elim(P, trivial, FTm::lower(body, fw.w, fw.fsigs, base, g, ports, later), λ lb => FTm::put_then(at, next, lb),

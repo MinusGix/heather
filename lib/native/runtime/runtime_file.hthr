@@ -414,12 +414,12 @@ theorem FTm::answers_at(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>
         Nil => λ F ans held words => match words as λ ws => ws.len() = 0 →
             ans(ws) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, Nil, Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws))) {
             Nil => λ _ => held,
-            Cons(_, more) => λ (bad: Succ(more.len()) = 0) => false_elim(more.len().succ_ne_zero(bad)),
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
         },
-        Cons(p, later) => λ F ans held words => match words as λ ws => ws.len() = Succ(later.len()) →
+        Cons(p, later) => λ F ans held words => match words as λ ws => ws.len() = later.len() + 1 →
             ans(ws) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, Cons(p, later), Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws))) {
-            Nil => λ (bad: 0 = Succ(later.len())) => false_elim(later.len().zero_ne_succ(bad)),
-            Cons(x, more) => λ (same: Succ(more.len()) = Succ(later.len())) =>
+            Nil => λ (bad: 0 = later.len() + 1) => false_elim(later.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: more.len() + 1 = later.len() + 1) =>
                 FTm::answers_at(tys, r, rest, later, F(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
                     Nat::succ_inj(more.len(), later.len(), same)),
         },
@@ -477,12 +477,12 @@ theorem Sig::links_still(arity: Nat → Option<Nat>, still: Nat → Bool, more: 
     match sigs {
         Nil => λ links named k never => false_elim(never),
         Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(Cons(s, rest), ls, still_arity(arity, still)).IsTrue() → (k: Nat) →
-            FTm::pure(Succ(rest.len()), k).IsTrue() → still(link_at(ls ++ more, k)).IsTrue() {
+            FTm::pure(rest.len() + 1, k).IsTrue() → still(link_at(ls ++ more, k)).IsTrue() {
             Nil => λ never k _ => false_elim(never),
             Cons(l, ls) => λ named k => {
                 let parts = Bool::is_true_and(arity_fits(still_arity(arity, still, l), s.params.len()),
                     Sig::links_fit(rest, ls, still_arity(arity, still)), named);
-                match k as λ i => FTm::pure(Succ(rest.len()), i).IsTrue() → still(link_at(Cons(l, ls) ++ more, i)).IsTrue() {
+                match k as λ i => FTm::pure(rest.len() + 1, i).IsTrue() → still(link_at(Cons(l, ls) ++ more, i)).IsTrue() {
                     Zero => λ _ => still_arity_fits(arity, still, l, s.params.len(), parts.left).left,
                     Succ(i) => λ below => Sig::links_still(arity, still, more, rest, ls, parts.right, i, below),
                 }

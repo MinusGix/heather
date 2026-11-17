@@ -167,8 +167,8 @@ fn count(a: Nat, xs: List<Nat>) → Nat { xs.occurrences(a) }
 // `Inr` for the outer decision makes both sides the same term, so the inner
 // split is needed only on the `Inl` side.
 theorem pick_succ_comm<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
-    or_pick(d1, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
-        = or_pick(d2, or_pick(d1, n, Succ(n)), Succ(or_pick(d1, n, Succ(n))))
+    or_pick(d1, or_pick(d2, n, n + 1), or_pick(d2, n, n + 1) + 1)
+        = or_pick(d2, or_pick(d1, n, n + 1), or_pick(d1, n, n + 1) + 1)
 {
     List::pick_succ_swap(d1, d2, n)
 }
@@ -191,7 +191,7 @@ theorem count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) {
 
 // Length, which permutation implies: `perm_len` reads it off the `Perm`
 // directly, so the fold over `count` the earlier comment wanted is not needed.
-theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = Succ(xs.len()) {
+theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = xs.len() + 1 {
     insert(x, xs).picks_len(x, xs, xs.insert_ordered_picks(Nat::Le, x))
 }
 

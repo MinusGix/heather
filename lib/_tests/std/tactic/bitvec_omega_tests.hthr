@@ -91,7 +91,7 @@ fn pairs_left_wrong(n, i: BitVec(64)) → Nat decreases (n - i).toNat() {
 theorem word_eq_hyp(fill: BitVec(64), same: fill = 63): fill.toNat() + 1 = 64 { bv_omega }
 theorem word_eq_hyp_flipped(fill: BitVec(64), same: 63 = fill): fill.toNat() + 1 = 64 { bv_omega }
 // Refuting a branch: the value says the word cannot be 63.
-theorem word_eq_hyp_refutes(fill: BitVec(64), k, len: Nat, at: fill.toNat() = len, short: len + Succ(k) = 63, same: fill = 63): logic::False { bv_omega }
+theorem word_eq_hyp_refutes(fill: BitVec(64), k, len: Nat, at: fill.toNat() = len, short: len + (k + 1) = 63, same: fill = 63): logic::False { bv_omega }
 // Two words, one composite.
 theorem word_eq_hyp_words(i, j: BitVec(64), h: j = i + 1, b: i < 8): j.toNat() = i.toNat() + 1 { bv_omega }
 

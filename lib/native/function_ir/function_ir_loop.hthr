@@ -107,10 +107,10 @@ fn LoopAddressBound(width: Nat, buffer: ReadonlyBytes) → Type {
     buffer.base + buffer.length < Nat::pow(2, width)
 }
 
-theorem loop_advance_bound(cursor, length: Nat, guarded: Succ(cursor).leb(length).IsTrue()):
-    Succ(cursor) <= length { Succ(cursor).leb_sound(length, guarded) }
+theorem loop_advance_bound(cursor, length: Nat, guarded: (cursor + 1).leb(length).IsTrue()):
+    cursor + 1 <= length { (cursor + 1).leb_sound(length, guarded) }
 
-theorem loop_budget_predecessor(rest: Nat): Succ(rest).sub(1) = rest {
+theorem loop_budget_predecessor(rest: Nat): (rest + 1).sub(1) = rest {
     Nat::sub_zero(rest)
 }
 
@@ -134,14 +134,14 @@ theorem loop_artifact_normal<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
 // loop-invariant proof can fold without unrolling an arbitrary budget.
 theorem loop_successor<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes,
     needle: BitVec(8), cursor: Nat, carry: C):
-    loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
+    loop_run(rest + 1, region, buffer, needle, cursor, carry) =
         match buffer.length.leb(cursor) {
-            True => End(cursor, Succ(rest), carry),
+            True => End(cursor, rest + 1, carry),
             False => match buffer.read(buffer.base + cursor) {
-                None => Denied(cursor, Succ(rest), carry),
+                None => Denied(cursor, rest + 1, carry),
                 Some(byte) => match region.body(needle, cursor, byte, carry) {
-                    Continue(next) => loop_run(rest, region, buffer, needle, Succ(cursor), next),
-                    Break(result) => Early(Succ(cursor), rest, result),
+                    Continue(next) => loop_run(rest, region, buffer, needle, cursor + 1, next),
+                    Break(result) => Early(cursor + 1, rest, result),
                 },
             },
         } { refl }
@@ -179,7 +179,7 @@ theorem loop_run_last<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle:
 }
 theorem loop_run_next<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C):
-    loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
+    loop_run(rest + 1, region, buffer, needle, cursor, carry) =
         loop_after_guard(rest, region, buffer, needle, cursor, carry, buffer.length.leb(cursor)) {
     refl
 }
@@ -192,7 +192,7 @@ theorem loop_run_end<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: 
             j(sym(ended), λ e _ => loop_after_last(cursor, carry, e) = End(cursor, 0, carry), refl)),
         Succ(rest) => trans(loop_run_next(rest, region, buffer, needle, cursor, carry),
             j(sym(ended), λ e _ => loop_after_guard(rest, region, buffer, needle, cursor, carry, e) =
-                End(cursor, Succ(rest), carry), refl)),
+                End(cursor, rest + 1, carry), refl)),
     }
 }
 
@@ -205,7 +205,7 @@ theorem loop_run_exhausted<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes, ne
 
 theorem loop_run_read<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, open: buffer.length.leb(cursor) = False):
-    loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
+    loop_run(rest + 1, region, buffer, needle, cursor, carry) =
         loop_after_read(rest, region, buffer, needle, cursor, carry, buffer.read(buffer.base + cursor)) {
     trans(loop_run_next(rest, region, buffer, needle, cursor, carry),
         j(sym(open), λ e _ => loop_after_guard(rest, region, buffer, needle, cursor, carry, e) =
@@ -215,16 +215,16 @@ theorem loop_run_read<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyByt
 theorem loop_run_denied<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, open: buffer.length.leb(cursor) = False,
     denied: buffer.read(buffer.base + cursor) = None):
-    loop_run(Succ(rest), region, buffer, needle, cursor, carry) = Denied(cursor, Succ(rest), carry) {
+    loop_run(rest + 1, region, buffer, needle, cursor, carry) = Denied(cursor, rest + 1, carry) {
     trans(loop_run_read(rest, region, buffer, needle, cursor, carry, open),
         j(sym(denied), λ found _ => loop_after_read(rest, region, buffer, needle, cursor, carry, found) =
-            Denied(cursor, Succ(rest), carry), refl))
+            Denied(cursor, rest + 1, carry), refl))
 }
 
 theorem loop_run_step<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, byte: BitVec(8), step: LoopStep<C>, open: buffer.length.leb(cursor) = False,
     present: ReadsByte(buffer, cursor, byte), stepped: region.body(needle, cursor, byte, carry) = step):
-    loop_run(Succ(rest), region, buffer, needle, cursor, carry) =
+    loop_run(rest + 1, region, buffer, needle, cursor, carry) =
         loop_after_step(rest, region, buffer, needle, cursor, step) {
     trans(loop_run_read(rest, region, buffer, needle, cursor, carry, open),
         j(sym(present), λ found _ => loop_after_read(rest, region, buffer, needle, cursor, carry, found) =
@@ -237,7 +237,7 @@ theorem loop_run_step<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyByt
 // Denied, which LoopReadable refutes.
 theorem loop_readable_byte<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, open: buffer.length.leb(cursor) = False,
-    readable: LoopReadable(Succ(rest), region, buffer, needle, cursor, carry)):
+    readable: LoopReadable(rest + 1, region, buffer, needle, cursor, carry)):
     Exists<BitVec(8)>(λ byte => ReadsByte(buffer, cursor, byte)) {
     match denied: buffer.read(buffer.base + cursor) {
         None => false_elim(j(loop_run_denied(rest, region, buffer, needle, cursor, carry, open, denied),
@@ -285,10 +285,10 @@ theorem step_fold_advances(region: ReadonlyLoop<Nat>, advance: LoopAdvancesByAtM
         Cons(byte, rest) => λ carry => {
             let next = loop_fold_step(region, needle, byte, carry);
             let later = step_fold_advances(region, advance, needle, rest, next);
-            let grew: (next <= Succ(carry)) = advance(needle, 0, byte, carry);
-            let moved: (next + rest.len() <= Succ(carry) + rest.len()) = Nat::add_le_mono_r(rest.len(), next, Succ(carry), grew);
-            let shifted: (Succ(carry) + rest.len() = carry + Succ(rest.len())) = Nat::add_succ_left(carry, rest.len());
-            step_fold(region, needle, rest, next).le_trans(next + rest.len(), carry + Succ(rest.len()), later,
+            let grew: (next <= carry + 1) = advance(needle, 0, byte, carry);
+            let moved: (next + rest.len() <= carry + 1 + rest.len()) = Nat::add_le_mono_r(rest.len(), next, carry + 1, grew);
+            let shifted: (carry + 1 + rest.len() = carry + (rest.len() + 1)) = Nat::add_succ_left(carry, rest.len());
+            step_fold(region, needle, rest, next).le_trans(next + rest.len(), carry + (rest.len() + 1), later,
                 j(shifted, λ total _ => next + rest.len() <= total, moved))
         },
     }
@@ -298,27 +298,27 @@ theorem step_fold_advances(region: ReadonlyLoop<Nat>, advance: LoopAdvancesByAtM
 // field of a record (docs/archive/native-wc-design.md §4.8).
 theorem step_fold_measure<C>(region: ReadonlyLoop<C>, measure: C → Nat,
     grows: (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
-        measure(loop_step_payload(region.body(needle, cursor, byte, carry))) <= Succ(measure(carry)),
+        measure(loop_step_payload(region.body(needle, cursor, byte, carry))) <= measure(carry) + 1,
     needle: BitVec(8), bytes: List<BitVec(8)>): (carry: C) → measure(step_fold(region, needle, bytes, carry)) <= measure(carry) + bytes.len() {
     match bytes {
         Nil => λ carry => measure(carry).le_refl(),
         Cons(byte, rest) => λ carry => {
             let next = loop_fold_step(region, needle, byte, carry);
             let later = step_fold_measure(region, measure, grows, needle, rest, next);
-            let grew: (measure(next) <= Succ(measure(carry))) = grows(needle, 0, byte, carry);
-            let moved: (measure(next) + rest.len() <= Succ(measure(carry)) + rest.len()) =
-                Nat::add_le_mono_r(rest.len(), measure(next), Succ(measure(carry)), grew);
-            let shifted: (Succ(measure(carry)) + rest.len() = measure(carry) + Succ(rest.len())) = Nat::add_succ_left(measure(carry), rest.len());
-            measure(step_fold(region, needle, rest, next)).le_trans(measure(next) + rest.len(), measure(carry) + Succ(rest.len()), later,
+            let grew: (measure(next) <= measure(carry) + 1) = grows(needle, 0, byte, carry);
+            let moved: (measure(next) + rest.len() <= measure(carry) + 1 + rest.len()) =
+                Nat::add_le_mono_r(rest.len(), measure(next), measure(carry) + 1, grew);
+            let shifted: (measure(carry) + 1 + rest.len() = measure(carry) + (rest.len() + 1)) = Nat::add_succ_left(measure(carry), rest.len());
+            measure(step_fold(region, needle, rest, next)).le_trans(measure(next) + rest.len(), measure(carry) + (rest.len() + 1), later,
                 j(shifted, λ total _ => measure(next) + rest.len() <= total, moved))
         },
     }
 }
 
-theorem loop_past_cursor(cursor: Nat): (k: Nat) → Succ(cursor + k).leb(cursor) = False {
+theorem loop_past_cursor(cursor: Nat): (k: Nat) → (cursor + k + 1).leb(cursor) = False {
     match cursor {
         Zero => λ k => refl,
-        Succ(c) => λ k => trans(cong_fn<Nat, Bool>(λ n => Succ(n).leb(Succ(c)), Nat::add_succ_left(c, k)), loop_past_cursor(c, k)),
+        Succ(c) => λ k => trans(cong_fn<Nat, Bool>(λ n => (n + 1).leb(c + 1), Nat::add_succ_left(c, k)), loop_past_cursor(c, k)),
     }
 }
 
@@ -338,10 +338,10 @@ theorem loop_run_folds<C>(region: ReadonlyLoop<C>, folds: LoopFolds(region), nee
             let next = loop_fold_step(region, needle, byte, carry);
             let open: (buffer.length.leb(cursor) = False) =
                 trans(cong_fn<Nat, Bool>(λ n => n.leb(cursor), length), loop_past_cursor(cursor, rest.len()));
-            let moved: (Succ(cursor) + rest.len() = cursor + Succ(rest.len())) = Nat::add_succ_left(cursor, rest.len());
-            let later = loop_run_folds(region, folds, needle, rest, buffer, Succ(cursor), next, trans(length, sym(moved)),
+            let moved: (cursor + 1 + rest.len() = cursor + (rest.len() + 1)) = Nat::add_succ_left(cursor, rest.len());
+            let later = loop_run_folds(region, folds, needle, rest, buffer, cursor + 1, next, trans(length, sym(moved)),
                 λ i found present => j(sym(Nat::add_succ_left(cursor, i)), λ at _ => buffer.read(buffer.base + at) = Some(found),
-                    reads(Succ(i), found, present)));
+                    reads(i + 1, found, present)));
             trans(loop_run_step(rest.len(), region, buffer, needle, cursor, carry, byte, Continue(next),
                     open, reads(0, byte, refl), folds(needle, cursor, byte, carry)),
                 trans(later, cong_fn<Nat, LoopOutcome<C>>(λ at => End(at, 0, step_fold(region, needle, rest, next)), moved)))

@@ -49,7 +49,7 @@ theorem demorgan8_refuted(v: Nat → Bool): all_true(demorgan8_cnf(), v) = False
     }
 }
 theorem demorgan8_cnf_is(): BVPred::clauses(demorgan8(), 16) = demorgan8_cnf() { refl }
-theorem demorgan8_holds(bits: Nat → Bool): BVPred::eval(demorgan8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem demorgan8_holds(bits: Nat → Bool): BVPred::eval(demorgan8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(demorgan8(), 16, λ v => j(sym(demorgan8_cnf_is()), λ g _ => all_true(g, v) = False, demorgan8_refuted(v)), bits)
 }
 
@@ -82,7 +82,7 @@ theorem addcomm8_refuted(v: Nat → Bool): all_true(addcomm8_cnf(), v) = False {
     }
 }
 theorem addcomm8_cnf_is(): BVPred::clauses(addcomm8(), 16) = addcomm8_cnf() { refl }
-theorem addcomm8_holds(bits: Nat → Bool): BVPred::eval(addcomm8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem addcomm8_holds(bits: Nat → Bool): BVPred::eval(addcomm8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(addcomm8(), 16, λ v => j(sym(addcomm8_cnf_is()), λ g _ => all_true(g, v) = False, addcomm8_refuted(v)), bits)
 }
 
@@ -103,7 +103,7 @@ theorem double8_refuted(v: Nat → Bool): all_true(double8_cnf(), v) = False {
     }
 }
 theorem double8_cnf_is(): BVPred::clauses(double8(), 8) = double8_cnf() { refl }
-theorem double8_holds(bits: Nat → Bool): BVPred::eval(double8(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem double8_holds(bits: Nat → Bool): BVPred::eval(double8(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(double8(), 8, λ v => j(sym(double8_cnf_is()), λ g _ => all_true(g, v) = False, double8_refuted(v)), bits)
 }
 
@@ -124,7 +124,7 @@ theorem succ_above8_refuted(v: Nat → Bool): all_true(succ_above8_cnf(), v) = F
     }
 }
 theorem succ_above8_cnf_is(): BVPred::clauses(succ_above8(), 8) = succ_above8_cnf() { refl }
-theorem succ_above8_holds(bits: Nat → Bool): BVPred::eval(succ_above8(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem succ_above8_holds(bits: Nat → Bool): BVPred::eval(succ_above8(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(succ_above8(), 8, λ v => j(sym(succ_above8_cnf_is()), λ g _ => all_true(g, v) = False, succ_above8_refuted(v)), bits)
 }
 
@@ -145,7 +145,7 @@ theorem cont64_refuted(v: Nat → Bool): all_true(cont64_cnf(), v) = False {
     }
 }
 theorem cont64_cnf_is(): BVPred::clauses(cont64(), 8) = cont64_cnf() { refl }
-theorem cont64_holds(bits: Nat → Bool): BVPred::eval(cont64(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem cont64_holds(bits: Nat → Bool): BVPred::eval(cont64(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(cont64(), 8, λ v => j(sym(cont64_cnf_is()), λ g _ => all_true(g, v) = False, cont64_refuted(v)), bits)
 }
 
@@ -166,7 +166,7 @@ theorem overlong2_refuted(v: Nat → Bool): all_true(overlong2_cnf(), v) = False
     }
 }
 theorem overlong2_cnf_is(): BVPred::clauses(overlong2(), 16) = overlong2_cnf() { refl }
-theorem overlong2_holds(bits: Nat → Bool): BVPred::eval(overlong2(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem overlong2_holds(bits: Nat → Bool): BVPred::eval(overlong2(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(overlong2(), 16, λ v => j(sym(overlong2_cnf_is()), λ g _ => all_true(g, v) = False, overlong2_refuted(v)), bits)
 }
 

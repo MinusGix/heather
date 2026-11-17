@@ -316,8 +316,8 @@ theorem induct_leaf_fails(i, n, acc: Nat): up(i, n, acc) = acc {
 // A structural function declared in another module: its principle is built
 // here, from the declaration `list`'s image keeps, the first time it is
 // asked for.
-theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
-    induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+theorem foldl_counts(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => k + 1, z) = z + xs.len() {
+    induct List::foldl(xs, λ (k: Nat) (a: Nat) => k + 1, z); all_goals { omega }
 }
 
 // A case with no arm that `known` cannot close names the case.

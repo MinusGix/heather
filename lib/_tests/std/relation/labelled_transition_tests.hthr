@@ -37,8 +37,8 @@ theorem print_determinate(): Determinate<Nat, Nat>(Print, λ a b => a = b, λ e 
         λ a a2 b b2 e f same left right _ => {
             let e_is: (e = a) = left.left;
             let f_is: (f = a2) = right.left;
-            let b_is: (b = Succ(a)) = left.right;
-            let b2_is: (b2 = Succ(a2)) = right.right;
+            let b_is: (b = a + 1) = left.right;
+            let b2_is: (b2 = a2 + 1) = right.right;
             let same_at: (a = a2) = same;
             ⟨{ omega }, { omega }⟩
         })
@@ -85,9 +85,9 @@ theorem drops_diagram(): TraceStarDiagram(Chatter, Print, Below, Drops) {
         Pair(pending, _) => match pending {
             Zero => match label {
                 None => λ m s => false_elim(s),
-                Some(e) => λ m s => Exists(0, Exists(Succ(b), ⟨
-                    StarT::event(Print, e, b, Succ(b), ⟨trans(s.left, m.right), refl⟩),
-                    j(sym(s.right), λ x _ => Drops(0, x, Succ(b)), ⟨refl, Nat::cong_succ(m.right)⟩)⟩)),
+                Some(e) => λ m s => Exists(0, Exists(b + 1, ⟨
+                    StarT::event(Print, e, b, b + 1, ⟨trans(s.left, m.right), refl⟩),
+                    j(sym(s.right), λ x _ => Drops(0, x, b + 1), ⟨refl, Nat::cong_succ(m.right)⟩)⟩)),
             },
             Succ(k) => match label {
                 None => λ m s => Exists(k, Exists(b, ⟨Inr(⟨Star::refl(Silent(Print), b), m.left⟩),
@@ -122,8 +122,8 @@ theorem shadow_diagram(): TraceLockstepDiagram(Print, PrintBoth, Shadowed) {
             let at: (c.fst = b) = m.left;
             let twice: (c.snd = b + b) = m.right;
             let printed: (e = b) = s.left;
-            let next: (b2 = Succ(b)) = s.right;
-            Exists(Pair(Succ(c.fst), Succ(Succ(c.snd))), ⟨⟨{ omega }, refl⟩, ⟨{ omega }, { omega }⟩⟩)
+            let next: (b2 = b + 1) = s.right;
+            Exists(Pair(c.fst + 1, c.snd + 2), ⟨⟨{ omega }, refl⟩, ⟨{ omega }, { omega }⟩⟩)
         },
     }
 }
@@ -149,8 +149,8 @@ theorem chatter_prints_shadowed(trace: List<Nat>, a, a2: Pair<Nat, Nat>, run: St
 // chatterer is still dropping no-ops.
 theorem drops_backward(i: Nat, a, a2: Pair<Nat, Nat>, b: Nat, label: Option<Nat>, matched: Drops(i, a, b),
     step: Chatter(a, label, a2)):
-    ∃ j: Nat, (∃ b3: Nat, Star(Silent(Print), Succ(b), b3) ∧ Drops(j, a2, b3) ∧ (label = Some(b))) ∨
+    ∃ j: Nat, (∃ b3: Nat, Star(Silent(Print), b + 1, b3) ∧ Drops(j, a2, b3) ∧ (label = Some(b))) ∨
         (Below(j, i) ∧ Drops(j, a2, b) ∧ (label = None)) {
     TraceStarDiagram::backward_event(Chatter, Print, Below, Drops, drops_diagram(), λ e f => True, print_determinate(),
-        i, a, b, label, a2, b, Succ(b), matched, ⟨refl, refl⟩, step, λ e _ => trivial)
+        i, a, b, label, a2, b, b + 1, matched, ⟨refl, refl⟩, step, λ e _ => trivial)
 }

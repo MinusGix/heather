@@ -17,8 +17,8 @@ theorem two<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
         Break(b) => Ret(b),
     }) { refl }
 theorem open_succ<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
-    ITree::iter(E, Succ(Succ(n)), body, a) = ITree::bind(E, body(a), λ x => match x {
-        Continue(a2) => Tau(ITree::iter(E, Succ(n), body, a2)),
+    ITree::iter(E, n + 2, body, a) = ITree::bind(E, body(a), λ x => match x {
+        Continue(a2) => Tau(ITree::iter(E, n + 1, body, a2)),
         Break(b) => Ret(b),
     }) { refl }
 

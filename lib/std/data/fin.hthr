@@ -9,16 +9,16 @@ import nat;
 import list;
 
 // `FS` needs an expected type; this is the function a `map` takes.
-fn Fin::succ({n: Nat}, i: Fin(n)) → Fin(Succ(n)) { FS(i) }
+fn Fin::succ({n: Nat}, i: Fin(n)) → Fin(n + 1) { FS(i) }
 
-fn Fin::pred_or({n: Nat}, i: Fin(Succ(n)), d: Fin(n)) → Fin(n) { match i { FZ => d, FS(k) => k } }
+fn Fin::pred_or({n: Nat}, i: Fin(n + 1), d: Fin(n)) → Fin(n) { match i { FZ => d, FS(k) => k } }
 
-fn Fin::is_zero({n: Nat}, i: Fin(Succ(n))) → Type { match i { FZ => True, FS(_) => False } }
+fn Fin::is_zero({n: Nat}, i: Fin(n + 1)) → Type { match i { FZ => True, FS(_) => False } }
 
 // Injectivity by a predecessor with a default, apartness by a type-valued
 // test: neither needs a `match` on an equation.
 theorem Fin::succ_inj({n: Nat}, a, b: Fin(n), e: Fin::succ(a) = Fin::succ(b)): a = b {
-    cong_fn(λ (i: Fin(Succ(n))) => Fin::pred_or(i, a), e)
+    cong_fn(λ (i: Fin(n + 1)) => Fin::pred_or(i, a), e)
 }
 
 theorem Fin::zero_ne_succ({n: Nat}, a: Fin(n)): ¬(FZ = Fin::succ(a)) {
@@ -54,7 +54,7 @@ theorem Fin::all_nodup(n: Nat): Fin::all(n).NoDup() {
 theorem Fin::len_all(n: Nat): Fin::all(n).len() = n {
     match n {
         Zero => refl,
-        Succ(k) => cong_fn(λ (m: Nat) => Succ(m), trans(Fin::all(k).len_map(λ (i: Fin(k)) => Fin::succ(i)), Fin::len_all(k))),
+        Succ(k) => cong_fn(λ (m: Nat) => m + 1, trans(Fin::all(k).len_map(λ (i: Fin(k)) => Fin::succ(i)), Fin::len_all(k))),
     }
 }
 

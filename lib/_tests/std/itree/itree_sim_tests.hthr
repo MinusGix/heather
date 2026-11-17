@@ -82,7 +82,7 @@ record TwiceAt(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E)) {
 fn twice_after(E: Events, c: E.Cmd, k: Nat) → Step<Nat, Nat> → ITree<Nat>(E) → Type {
     λ x w => ITree::StepK(E, λ a v => TwiceAt(E, c, k, a, v), λ r v => SimRet<Nat>(E, v, λ y => r = y), x, w)
 }
-theorem twice_second(E: Events, c: E.Cmd, k, a: Nat, f1: Nat, x: E.Resp(c)): Succ(k.twice()) <= f1 →
+theorem twice_second(E: Events, c: E.Cmd, k, a: Nat, f1: Nat, x: E.Resp(c)): k.twice() + 1 <= f1 →
     ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k),
         ITree::bind(E, ITree::trigger(E, c), λ y => Ret(countdown(a))), Tau(once_tree(E, c, f1, a.twice())))
 {
@@ -90,16 +90,16 @@ theorem twice_second(E: Events, c: E.Cmd, k, a: Nat, f1: Nat, x: E.Resp(c)): Suc
         Zero => λ (no: False) => false_elim(no),
         Succ(f2) => λ enough => match a {
             Zero => SimVis(trivial, λ y => Ret(0), refl, λ y v => SimRet(0, refl, refl)),
-            Succ(m) => SimVis(trivial, λ y => Tau(once_tree(E, c, f2, Succ(m.twice()))), refl,
+            Succ(m) => SimVis(trivial, λ y => Tau(once_tree(E, c, f2, m.twice() + 1)), refl,
                 λ y v => TwiceAt(f2, enough, refl)),
         },
     }
 }
 
-theorem twice_pass(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E), i: TwiceAt(E, c, Succ(k), a, v)):
+theorem twice_pass(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E), i: TwiceAt(E, c, k + 1, a, v)):
     ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v)
 {
-    (match i.fuel as λ f => Succ(k).twice() <= f → ITree::next(E, v) = ITree::next(E, once_tree(E, c, f, Succ(a.twice()))) →
+    (match i.fuel as λ f => (k + 1).twice() <= f → ITree::next(E, v) = ITree::next(E, once_tree(E, c, f, a.twice() + 1)) →
             ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v) {
         Zero => λ (no: False) at => false_elim(no),
         Succ(f1) => λ enough at => SimVis(trivial, λ x => Tau(once_tree(E, c, f1, a.twice())), at,
@@ -109,20 +109,20 @@ theorem twice_pass(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E), i: TwiceAt(
 
 theorem twice_sim(E: Events, c: E.Cmd, n, a: Nat):
     ITree::Sim<Nat, Nat>(E, E, TraceMap::id(E), Contract::none(E), λ x y => x = y,
-        ITree::iter(E, n, λ x => twice_body(E, c, x), a), once_tree(E, c, n.twice(), Succ(a.twice())))
+        ITree::iter(E, n, λ x => twice_body(E, c, x), a), once_tree(E, c, n.twice(), a.twice() + 1))
 {
-    let head: TwiceAt(E, c, n, a, once_tree(E, c, n.twice(), Succ(a.twice()))) = TwiceAt(n.twice(), n.twice().le_refl(), refl);
+    let head: TwiceAt(E, c, n, a, once_tree(E, c, n.twice(), a.twice() + 1)) = TwiceAt(n.twice(), n.twice().le_refl(), refl);
     ITree::simk_iter(E, E, TraceMap::id(E), Contract::none(E), λ x => twice_body(E, c, x), λ k x w => TwiceAt(E, c, k, x, w),
         λ r w => SimRet<Nat>(E, w, λ y => r = y), λ k x w i => twice_pass(E, c, k, x, w, i), n, a,
-        once_tree(E, c, n.twice(), Succ(a.twice())), head)
+        once_tree(E, c, n.twice(), a.twice() + 1), head)
 }
 
 theorem twice_simulates(E: Events, c: E.Cmd, a: Nat):
     Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
-        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())))
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), a.twice() + 1))
 {
     Program::simulates_at(E, E, TraceMap::id(E), Contract::none(E),
-        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), a.twice() + 1),
         λ n => n.twice(), λ n => twice_sim(E, c, n, a))
 }
 

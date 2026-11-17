@@ -91,10 +91,10 @@ theorem upto_all_sound(b: Nat): (q: Nat → Bool) → upto_all(b, q).IsTrue() �
     match b {
         Zero => λ q h v => match v { Zero => λ _ => h, Succ(_) => λ le => false_elim(le) },
         Succ(k, ih) => λ q h v => {
-            let parts = Bool::is_true_and(q(0), upto_all(k, λ u => q(Succ(u))), h);
+            let parts = Bool::is_true_and(q(0), upto_all(k, λ u => q(u + 1)), h);
             match v {
                 Zero => λ _ => parts.left,
-                Succ(u) => λ le => ih(λ x => q(Succ(x)), parts.right, u, le),
+                Succ(u) => λ le => ih(λ x => q(x + 1), parts.right, u, le),
             }
         },
     }
@@ -125,12 +125,12 @@ fn pad(args, bounds: List<Nat>) → List<Nat> {
     match bounds { Nil => Nil, Cons(_, bs) => Cons(word_at(args, 0), pad(args.tail(), bs)) }
 }
 
-theorem word_at_succ(args: List<Nat>, k: Nat): word_at(args, Succ(k)) = word_at(args.tail(), k) {
+theorem word_at_succ(args: List<Nat>, k: Nat): word_at(args, k + 1) = word_at(args.tail(), k) {
     match args { Nil => refl, Cons(_, _) => refl }
 }
 
 theorem within_tail(args: List<Nat>, b: Nat, bs: List<Nat>, w: Within(args, Cons(b, bs))): Within(args.tail(), bs) {
-    λ k => j(word_at_succ(args, k), λ x _ => x <= word_at(bs, k), w(Succ(k)))
+    λ k => j(word_at_succ(args, k), λ x _ => x <= word_at(bs, k), w(k + 1))
 }
 
 theorem pad_fits(bounds: List<Nat>): (args: List<Nat>) → Within(args, bounds) → Fits(bounds, pad(args, bounds)) {
@@ -168,8 +168,8 @@ theorem Ix::eval_ext(self e: Ix, a, b: List<Nat>, same: (k: Nat) → word_at(a, 
 // The search, when it says yes, proves the fact.
 theorem InBounds::by_exhaustion(len: Nat, bounds: List<Nat>, e: Ix, budget: Nat, h: e.exhausts(len, bounds, budget).IsTrue()): InBounds(len, bounds, e) {
     λ args w => {
-        let all = Bool::is_true_and(box_size(bounds).leb(budget), all_within(bounds, λ vs => Succ(e.eval(vs)).leb(len)), h).right;
-        let padded = Succ(e.eval(pad(args, bounds))).leb_sound(len, all_within_sound(bounds, λ vs => Succ(e.eval(vs)).leb(len), all, pad(args, bounds), pad_fits(bounds, args, w)));
+        let all = Bool::is_true_and(box_size(bounds).leb(budget), all_within(bounds, λ vs => (e.eval(vs) + 1).leb(len)), h).right;
+        let padded = (e.eval(pad(args, bounds)) + 1).leb_sound(len, all_within_sound(bounds, λ vs => (e.eval(vs) + 1).leb(len), all, pad(args, bounds), pad_fits(bounds, args, w)));
         j(e.eval_ext(pad(args, bounds), args, pad_word(bounds, args, w)), λ n _ => n < len, padded)
     }
 }

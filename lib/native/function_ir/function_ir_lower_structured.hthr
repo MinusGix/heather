@@ -252,14 +252,14 @@ theorem when_zero(values: Valuation(), inputs: Ports, condition: Nat, arguments,
 theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), values: Valuation(), prog: Prog, file: File,
     inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion,
     found: Found(file, Held(condition, Bit)), names: Nat, yes, no: Emitted,
-    yes_emits: Emits<M>(site, values, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHolds(values, when_true), yes),
-    no_emits: Emits<M>(site, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHolds(values, when_false), no)):
+    yes_emits: Emits<M>(site, values, prog.branch_label(found.register, names + 1), file, StructuredRegionHolds(values, when_true), yes),
+    no_emits: Emits<M>(site, values, yes.prog.else_label(names + 1, names + 2), file, StructuredRegionHolds(values, when_false), no)):
     Emits<M>(site, values, prog, file,
         StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)) {
+        Emitted(no.prog.join_label(names + 2), yes.file.meet(no.file, file.known), no.placement, no.names)) {
     let register = found.register;
-    let else_name = Succ(names);
-    let join_name = Succ(Succ(names));
+    let else_name = names + 1;
+    let join_name = names + 2;
     let branched = prog.branch_label(register, else_name);
     let jumped = At(yes.prog, 0, Jmp(join_name));
     let second = yes.prog.else_label(else_name, join_name);
@@ -287,7 +287,7 @@ theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), v
             λ to _ => JumpsForward(prog_len(prog.test_label(register)), 6,
                 asm_jump_of(labels, prog_len(prog.test_label(register)), Jcc(E, else_name)), to),
             jcc_lands(labels, branched_in.witness, program, prog.test_label(register), 0, E, else_name, lands, branched_in.proof));
-        let join_lands = j(label_target(within.witness, program, no.prog, Succ(names), Block([]), unique, within.proof),
+        let join_lands = j(label_target(within.witness, program, no.prog, names + 1, Block([]), unique, within.proof),
             λ to _ => NearLands(prog_len(yes.prog), asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
             jmp_lands(labels, jumped_in.witness, program, yes.prog, 0, join_name, lands, jumped_in.proof));
         let selects = λ (g: Gprs) (represents: file.Represents(values, g)) =>
@@ -353,35 +353,35 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
             match file.find(Held(condition, Bit)) {
                 None => trivial,
                 Some(found) =>
-                    (match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) as λ y =>
-                        MayEmit<M>(site, values, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHolds(values, when_true), y) →
+                    (match when_true.emit(prog.branch_label(found.register, names + 1), file, placement, names + 2) as λ y =>
+                        MayEmit<M>(site, values, prog.branch_label(found.register, names + 1), file, StructuredRegionHolds(values, when_true), y) →
                         MayEmit<M>(site, values, prog, file,
                             StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                             match y {
                                 None => None,
-                                Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
+                                Some(yes) => match when_false.emit(yes.prog.else_label(names + 1, names + 2), file, yes.placement, yes.names) {
                                     None => None,
-                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
+                                    Some(no) => Some(Emitted(no.prog.join_label(names + 2), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 },
                             }) {
                         None => λ _ => trivial,
                         Some(yes) => λ yes_emits =>
-                            (match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) as λ n =>
-                                MayEmit<M>(site, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                            (match when_false.emit(yes.prog.else_label(names + 1, names + 2), file, yes.placement, yes.names) as λ n =>
+                                MayEmit<M>(site, values, yes.prog.else_label(names + 1, names + 2), file,
                                     StructuredRegionHolds(values, when_false), n) →
                                 MayEmit<M>(site, values, prog, file,
                                     StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                                     match n {
                                         None => None,
-                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
+                                        Some(no) => Some(Emitted(no.prog.join_label(names + 2), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                     }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_emits => branch_emits<M>(site, laid, values, prog, file, inputs, condition, arguments, outputs,
                                     when_true, when_false, found, names, yes, no, yes_emits, no_emits),
-                            })(when_false.emit_emits<M>(site, laid, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                            })(when_false.emit_emits<M>(site, laid, values, yes.prog.else_label(names + 1, names + 2), file,
                                 yes.placement, yes.names)),
-                    })(when_true.emit_emits<M>(site, laid, values, prog.branch_label(found.register, Succ(names)), file, placement,
-                        Succ(Succ(names)))),
+                    })(when_true.emit_emits<M>(site, laid, values, prog.branch_label(found.register, names + 1), file, placement,
+                        names + 2)),
             },
         Lend(_, _, _, _) => λ prog file placement names => trivial,
         Call(_, _, _) => λ prog file placement names => trivial,

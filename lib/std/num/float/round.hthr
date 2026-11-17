@@ -66,7 +66,7 @@ fn Finite::H({F: Format}, self x: Finite(F)) → Int {
 }
 
 theorem Finite::signed_scale(s: Bool, m, b: Nat):
-    (match s { False => m.int(), True => -m.int() }) * Nat::pow(2, Succ(b)).int()
+    (match s { False => m.int(), True => -m.int() }) * Nat::pow(2, b + 1).int()
         = match s { False => ((m * Nat::pow(2, b)) * 2).int(), True => -((m * Nat::pow(2, b)) * 2).int() }
 {
     match s {
@@ -77,10 +77,10 @@ theorem Finite::signed_scale(s: Bool, m, b: Nat):
 }
 
 theorem Finite::val_grid({F: Format}, self x: Finite(F)): x.val() ≈ F.grid(x.H()) {
-    let al = Dyadic::align(x.signed(), F.qmin() - 1, Succ(x.bexp));
+    let al = Dyadic::align(x.signed(), F.qmin() - 1, x.bexp + 1);
     let qd: (x.q() = F.qmin() + x.bexp.int()) = refl;
-    let ex: (F.qmin() - 1 + Succ(x.bexp).int() = x.q()) = omega;
-    let mt: (x.signed() * Nat::pow(2, Succ(x.bexp)).int() = x.H()) = Finite::signed_scale(x.neg, x.mag, x.bexp);
+    let ex: (F.qmin() - 1 + (x.bexp + 1).int() = x.q()) = omega;
+    let mt: (x.signed() * Nat::pow(2, x.bexp + 1).int() = x.H()) = Finite::signed_scale(x.neg, x.mag, x.bexp);
     let moved = rewrite(ex, mt, in := al);
     Dyadic::same_sym(moved)
 }
@@ -158,41 +158,41 @@ theorem Format::cut_ge(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, 
 // float below `(m + 1) · 2^(e+1)` is at most `m · 2^(e+1)`.
 
 theorem Format::grid_gap(self F: Format, mg, bg, m, e: Nat,
-    gfit: Succ(mg) <= F.top(), gnorm: bg = 0 ∨ F.half() <= mg,
-    dfit: Succ(m) <= F.top(), dnorm: e = 0 ∨ F.half() <= m,
-    lt: mg * Nat::pow(2, Succ(bg)) < Succ(m) * Nat::pow(2, Succ(e))): mg * Nat::pow(2, Succ(bg)) <= m * Nat::pow(2, Succ(e))
+    gfit: mg + 1 <= F.top(), gnorm: bg = 0 ∨ F.half() <= mg,
+    dfit: m + 1 <= F.top(), dnorm: e = 0 ∨ F.half() <= m,
+    lt: mg * Nat::pow(2, bg + 1) < (m + 1) * Nat::pow(2, e + 1)): mg * Nat::pow(2, bg + 1) <= m * Nat::pow(2, e + 1)
 {
     let t: (F.top() = F.half() * 2) = F.top_double();
     match bg.lt_trichotomy(e) {
         Inl(below) => {
             let hm: (F.half() <= m) = match dnorm { Inl(z) => false_elim(omega(z)), Inr(y) => y };
-            let pg = Nat::pow(2, Succ(bg));
-            let pe = Nat::pow(2, Succ(e));
-            let pgg = Nat::pow(2, Succ(Succ(bg)));
-            let fit: (Succ(mg) * pg <= F.top() * pg) = Nat::mul_le_mono_r(pg, Succ(mg), F.top(), gfit);
-            let unf: (Succ(mg) * pg = pg + mg * pg) = mg.mul_succ_left(pg);
+            let pg = Nat::pow(2, bg + 1);
+            let pe = Nat::pow(2, e + 1);
+            let pgg = Nat::pow(2, bg + 2);
+            let fit: ((mg + 1) * pg <= F.top() * pg) = Nat::mul_le_mono_r(pg, mg + 1, F.top(), gfit);
+            let unf: ((mg + 1) * pg = pg + mg * pg) = mg.mul_succ_left(pg);
             let pd: (pgg = pg * 2) = refl;
             let dbl: (F.top() * pg = F.half() * pgg) = ring(t, pd);
-            let mono: (pgg <= pe) = Nat::pow_le_pow_r(2, Succ(Succ(bg)), Succ(e), trivial, below);
+            let mono: (pgg <= pe) = Nat::pow_le_pow_r(2, bg + 2, e + 1, trivial, below);
             let m1: (F.half() * pgg <= F.half() * pe) = F.half().mul_le_mono_l(pgg, pe, mono);
             let m2: (F.half() * pe <= m * pe) = Nat::mul_le_mono_r(pe, F.half(), m, hm);
             omega
         },
         Inr(rest) => match rest {
             Inl(same) => {
-                let back = j(sym(same), λ y _ => (mg * Nat::pow(2, Succ(y)) < Succ(m) * Nat::pow(2, Succ(e))) → mg * Nat::pow(2, Succ(y)) <= m * Nat::pow(2, Succ(e)),
-                    λ l => Nat::mul_le_mono_r(Nat::pow(2, Succ(e)), mg, m, mg.lt_of_mul_lt_mul_r(Succ(m), Nat::pow(2, Succ(e)), l)));
+                let back = j(sym(same), λ y _ => (mg * Nat::pow(2, y + 1) < (m + 1) * Nat::pow(2, e + 1)) → mg * Nat::pow(2, y + 1) <= m * Nat::pow(2, e + 1),
+                    λ l => Nat::mul_le_mono_r(Nat::pow(2, e + 1), mg, m, mg.lt_of_mul_lt_mul_r(m + 1, Nat::pow(2, e + 1), l)));
                 back(lt)
             },
             Inr(above) => {
                 let hg: (F.half() <= mg) = match gnorm { Inl(z) => false_elim(omega(z)), Inr(y) => y };
-                let pg = Nat::pow(2, Succ(bg));
-                let pe = Nat::pow(2, Succ(e));
-                let pee = Nat::pow(2, Succ(Succ(e)));
-                let fit: (Succ(m) * pe <= F.top() * pe) = Nat::mul_le_mono_r(pe, Succ(m), F.top(), dfit);
+                let pg = Nat::pow(2, bg + 1);
+                let pe = Nat::pow(2, e + 1);
+                let pee = Nat::pow(2, e + 2);
+                let fit: ((m + 1) * pe <= F.top() * pe) = Nat::mul_le_mono_r(pe, m + 1, F.top(), dfit);
                 let pd: (pee = pe * 2) = refl;
                 let dbl: (F.top() * pe = F.half() * pee) = ring(t, pd);
-                let mono: (pee <= pg) = Nat::pow_le_pow_r(2, Succ(Succ(e)), Succ(bg), trivial, above);
+                let mono: (pee <= pg) = Nat::pow_le_pow_r(2, e + 2, bg + 1, trivial, above);
                 let m1: (F.half() * pee <= F.half() * pg) = F.half().mul_le_mono_l(pee, pg, mono);
                 let m2: (F.half() * pg <= mg * pg) = Nat::mul_le_mono_r(pg, F.half(), mg, hg);
                 omega
@@ -231,12 +231,12 @@ theorem Finite::units_le_max({F: Format}, g: Finite(F)): g.units() <= F.max_mag(
         Inl(below) => {
             let pb = Nat::pow(2, g.bexp);
             let ps = Nat::pow(2, F.span);
-            let pbb = Nat::pow(2, Succ(g.bexp));
-            let fit: (Succ(g.mag) * pb <= F.top() * pb) = Nat::mul_le_mono_r(pb, Succ(g.mag), F.top(), omega(g.ok));
-            let unf: (Succ(g.mag) * pb = pb + g.mag * pb) = g.mag.mul_succ_left(pb);
+            let pbb = Nat::pow(2, g.bexp + 1);
+            let fit: ((g.mag + 1) * pb <= F.top() * pb) = Nat::mul_le_mono_r(pb, g.mag + 1, F.top(), omega(g.ok));
+            let unf: ((g.mag + 1) * pb = pb + g.mag * pb) = g.mag.mul_succ_left(pb);
             let pd: (pbb = pb * 2) = refl;
             let dbl: (F.top() * pb = F.half() * pbb) = ring(t, pd);
-            let mono: (pbb <= ps) = Nat::pow_le_pow_r(2, Succ(g.bexp), F.span, trivial, below);
+            let mono: (pbb <= ps) = Nat::pow_le_pow_r(2, g.bexp + 1, F.span, trivial, below);
             let m1: (F.half() * pbb <= F.half() * ps) = F.half().mul_le_mono_l(pbb, ps, mono);
             let m2: (F.half() * ps <= F.max_mag() * ps) = Nat::mul_le_mono_r(ps, F.half(), F.max_mag(), mb.left);
             omega
@@ -443,17 +443,17 @@ fn Format::Picked(self F: Format, h, e: Nat) → Type {
 }
 
 theorem Format::pick_spec(self F: Format, h, fuel: Nat):
-    (b, s: Nat) → s = h.shr(Succ(b)) → (b = 0 ∨ F.top() <= h.shr(b)) → b + fuel = F.span → F.Picked(h, F.pick(F.top(), s, b, fuel))
+    (b, s: Nat) → s = h.shr(b + 1) → (b = 0 ∨ F.top() <= h.shr(b)) → b + fuel = F.span → F.Picked(h, F.pick(F.top(), s, b, fuel))
 {
     match fuel {
         Zero => λ b s _ inv sum => { let pz: (F.pick(F.top(), s, b, 0) = b) = refl; And(omega, And(inv, Inr(sum))) },
         Succ(f) => {
             let ih = F.pick_spec(h, f);
-            λ b s es inv sum => match Succ(s).le_dec(F.top()) as λ d => F.Picked(h, match d { Inl(_) => b, Inr(_) => F.pick(F.top(), s.half(), Succ(b), f) }) {
+            λ b s es inv sum => match (s + 1).le_dec(F.top()) as λ d => F.Picked(h, match d { Inl(_) => b, Inr(_) => F.pick(F.top(), s.half(), b + 1, f) }) {
                 Inl(fits) => { let le: (b <= F.span) = omega; And(le, And(inv, Inl(rewrite(es, in := fits)))) },
                 Inr(no) => {
-                    let next: (s.half() = h.shr(Succ(Succ(b)))) = trans(Nat::cong(λ (w: Nat) => w.half(), es), sym(Nat::shr_succ_half(Succ(b), h)));
-                    ih(Succ(b), s.half(), next, Inr(rewrite(es, in := Nat::le_of_not_lt(s, F.top(), no))), omega)
+                    let next: (s.half() = h.shr(b + 2)) = trans(Nat::cong(λ (w: Nat) => w.half(), es), sym(Nat::shr_succ_half(b + 1, h)));
+                    ih(b + 1, s.half(), next, Inr(rewrite(es, in := Nat::le_of_not_lt(s, F.top(), no))), omega)
                 },
             }
         },
@@ -468,9 +468,9 @@ theorem Format::e_of_spec(self F: Format, h: Nat): F.Picked(h, F.e_of(h)) { F.pi
 
 // `h` sits in the cell of `m` at spacing `2^(e+1)`.
 theorem Format::m_floor(self F: Format, h: Nat):
-    F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) <= h ∧ h < Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))
+    F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) <= h ∧ h < (F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)
 {
-    And(Nat::shr_mul_le(Succ(F.e_of(h)), h), Nat::lt_succ_shr_mul(Succ(F.e_of(h)), h))
+    And(Nat::shr_mul_le(F.e_of(h) + 1, h), Nat::lt_succ_shr_mul(F.e_of(h) + 1, h))
 }
 
 // The first half-unit count past the largest float's cell: from there on the
@@ -479,7 +479,7 @@ fn Format::limit_h(self F: Format) → Nat { Succ(F.max_mag()) * Nat::pow(2, Suc
 
 // Below the limit, `(m, e)` is a canonical float.
 theorem Format::cell(self F: Format, h: Nat, below: h < F.limit_h()):
-    Succ(F.m_of(h)) <= F.top() ∧ F.e_of(h) <= F.span ∧ (F.e_of(h) = 0 ∨ F.half() <= F.m_of(h)) ∧ (F.e_of(h) = F.span → F.m_of(h) <= F.max_mag())
+    F.m_of(h) + 1 <= F.top() ∧ F.e_of(h) <= F.span ∧ (F.e_of(h) = 0 ∨ F.half() <= F.m_of(h)) ∧ (F.e_of(h) = F.span → F.m_of(h) <= F.max_mag())
 {
     let pk = F.e_of_spec(h);
     let fl = F.m_floor(h);
@@ -489,11 +489,11 @@ theorem Format::cell(self F: Format, h: Nat, below: h < F.limit_h()):
     let t: (F.top() = F.half() * 2) = F.top_double();
     let at_top: (e = F.span → m <= F.max_mag()) = λ es => {
         let moved = rewrite(es, in := fl.left);
-        let lt: (m * Nat::pow(2, Succ(F.span)) < Succ(F.max_mag()) * Nat::pow(2, Succ(F.span))) = Succ(m * Nat::pow(2, Succ(F.span))).le_trans(Succ(h), F.limit_h(), moved, below);
-        let c = m.lt_of_mul_lt_mul_r(Succ(F.max_mag()), Nat::pow(2, Succ(F.span)), lt);
+        let lt: (m * Nat::pow(2, F.span + 1) < (F.max_mag() + 1) * Nat::pow(2, F.span + 1)) = (m * Nat::pow(2, F.span + 1) + 1).le_trans(h + 1, F.limit_h(), moved, below);
+        let c = m.lt_of_mul_lt_mul_r(F.max_mag() + 1, Nat::pow(2, F.span + 1), lt);
         omega
     };
-    let fits: (Succ(m) <= F.top()) = match pk.right.right {
+    let fits: (m + 1 <= F.top()) = match pk.right.right {
         Inl(f) => f,
         Inr(es) => { let le = at_top(es); let mt = mb.right.left; omega },
     };
@@ -501,13 +501,13 @@ theorem Format::cell(self F: Format, h: Nat, below: h < F.limit_h()):
         Inl(z) => Inl(z),
         Inr(big) => {
             let pe = Nat::pow(2, e);
-            let pe1 = Nat::pow(2, Succ(e));
+            let pe1 = Nat::pow(2, e + 1);
             let lo: (h.shr(e) * pe <= h) = Nat::shr_mul_le(e, h);
             let sc: (F.top() * pe <= h.shr(e) * pe) = Nat::mul_le_mono_r(pe, F.top(), h.shr(e), big);
             let pd: (pe1 = pe * 2) = refl;
             let dbl: (F.top() * pe = F.half() * pe1) = ring(t, pd);
-            let lt: (F.half() * pe1 < Succ(m) * pe1) = omega(lo, sc, dbl, fl.right);
-            let c = F.half().lt_of_mul_lt_mul_r(Succ(m), pe1, lt);
+            let lt: (F.half() * pe1 < (m + 1) * pe1) = omega(lo, sc, dbl, fl.right);
+            let c = F.half().lt_of_mul_lt_mul_r(m + 1, pe1, lt);
             Inr(omega)
         },
     };
@@ -523,7 +523,7 @@ theorem Format::cell_ok(self F: Format, h: Nat, below: h < F.limit_h()): F.canon
 
 // The greatest float at or below: the cell's float, or the largest float
 // past the limit.
-fn Format::down_at(self F: Format, h: Nat, d: Succ(h) <= F.limit_h() ∨ ¬(Succ(h) <= F.limit_h())) → Finite(F) {
+fn Format::down_at(self F: Format, h: Nat, d: h + 1 <= F.limit_h() ∨ ¬(h + 1 <= F.limit_h())) → Finite(F) {
     match d { Inl(below) => Finite(False, F.m_of(h), F.e_of(h), F.cell_ok(h, below)), Inr(_) => Finite::max_finite(F) }
 }
 
@@ -532,25 +532,25 @@ fn Format::down(self F: Format, h: Nat) → Finite(F) { F.down_at(h, Succ(h).le_
 theorem Format::down_below(self F: Format, h: Nat, below: h < F.limit_h()):
     (F.down(h)).neg = False ∧ (F.down(h)).mag = F.m_of(h) ∧ (F.down(h)).bexp = F.e_of(h)
 {
-    match Succ(h).le_dec(F.limit_h()) as λ d => (F.down_at(h, d)).neg = False ∧ (F.down_at(h, d)).mag = F.m_of(h) ∧ (F.down_at(h, d)).bexp = F.e_of(h) {
+    match (h + 1).le_dec(F.limit_h()) as λ d => (F.down_at(h, d)).neg = False ∧ (F.down_at(h, d)).mag = F.m_of(h) ∧ (F.down_at(h, d)).bexp = F.e_of(h) {
         Inl(_) => And(refl, And(refl, refl)),
         Inr(no) => false_elim(no(below)),
     }
 }
 
 theorem Format::down_over(self F: Format, h: Nat, over: F.limit_h() <= h): F.down(h) = Finite::max_finite(F) {
-    match Succ(h).le_dec(F.limit_h()) {
+    match (h + 1).le_dec(F.limit_h()) {
         Inl(b) => false_elim(omega(b)),
         Inr(_) => refl,
     }
 }
 
-theorem Format::down_H(self F: Format, h: Nat, below: h < F.limit_h()): (F.down(h)).H() = (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h)))).int() {
+theorem Format::down_H(self F: Format, h: Nat, below: h < F.limit_h()): (F.down(h)).H() = (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1)).int() {
     let db = F.down_below(h, below);
     let pos = Finite::H_pos(F.down(h), db.left);
     let u: ((F.down(h)).units() = F.m_of(h) * Nat::pow(2, F.e_of(h))) = trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, (F.down(h)).bexp), db.right.left),
         Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, w), db.right.right));
-    let a: ((F.m_of(h) * Nat::pow(2, F.e_of(h))) * 2 = F.m_of(h) * Nat::pow(2, Succ(F.e_of(h)))) = F.m_of(h).mul_assoc(Nat::pow(2, F.e_of(h)), 2);
+    let a: ((F.m_of(h) * Nat::pow(2, F.e_of(h))) * 2 = F.m_of(h) * Nat::pow(2, F.e_of(h) + 1)) = F.m_of(h).mul_assoc(Nat::pow(2, F.e_of(h)), 2);
     trans(pos, Int::cong_ofnat(trans(Nat::cong(λ (w: Nat) => w * 2, u), a)))
 }
 
@@ -562,42 +562,42 @@ theorem Format::half_even(self F: Format): Nat::Even(F.half()) {
     match F.frac as λ f => 1 <= f → Nat::Even(Nat::pow(2, f)) { Zero => λ bad => false_elim(bad), Succ(k) => λ _ => k.even_pow_two() }(F.frac_ok)
 }
 
-theorem Format::up_step_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: Succ(Succ(F.m_of(h))) <= F.top(), inner: Succ(F.e_of(h)) <= F.span):
-    F.canonical(Succ(F.m_of(h)), F.e_of(h)).IsTrue()
+theorem Format::up_step_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: F.m_of(h) + 2 <= F.top(), inner: F.e_of(h) + 1 <= F.span):
+    F.canonical(F.m_of(h) + 1, F.e_of(h)).IsTrue()
 {
     let c = F.cell(h, below);
-    let normal: (F.e_of(h) = 0 ∨ F.half() <= Succ(F.m_of(h))) = match c.right.right.left {
+    let normal: (F.e_of(h) = 0 ∨ F.half() <= F.m_of(h) + 1) = match c.right.right.left {
         Inl(z) => Inl(z),
         Inr(le) => Inr(omega(le)),
     };
-    F.canonical_intro(Succ(F.m_of(h)), F.e_of(h), room, c.right.left, normal, λ rt sp => false_elim(omega))
+    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), room, c.right.left, normal, λ rt sp => false_elim(omega))
 }
 
-theorem Format::up_last_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: Succ(F.m_of(h)) <= F.max_mag()):
-    F.canonical(Succ(F.m_of(h)), F.e_of(h)).IsTrue()
+theorem Format::up_last_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: F.m_of(h) + 1 <= F.max_mag()):
+    F.canonical(F.m_of(h) + 1, F.e_of(h)).IsTrue()
 {
     let c = F.cell(h, below);
     let mb = F.max_mag_bounds();
     let mt = mb.right.left;
-    let normal: (F.e_of(h) = 0 ∨ F.half() <= Succ(F.m_of(h))) = match c.right.right.left {
+    let normal: (F.e_of(h) = 0 ∨ F.half() <= F.m_of(h) + 1) = match c.right.right.left {
         Inl(z) => Inl(z),
         Inr(le) => Inr(omega(le)),
     };
-    F.canonical_intro(Succ(F.m_of(h)), F.e_of(h), omega, c.right.left, normal, λ rt sp => { let eq = mb.right.right.left(rt); omega })
+    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), omega, c.right.left, normal, λ rt sp => { let eq = mb.right.right.left(rt); omega })
 }
 
-theorem Format::up_carry_ok(self F: Format, h: Nat, inner: Succ(F.e_of(h)) <= F.span): F.canonical(F.half(), Succ(F.e_of(h))).IsTrue() {
+theorem Format::up_carry_ok(self F: Format, h: Nat, inner: F.e_of(h) + 1 <= F.span): F.canonical(F.half(), F.e_of(h) + 1).IsTrue() {
     let two = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
-    F.canonical_intro(F.half(), Succ(F.e_of(h)), omega, inner, Inr(F.half().le_refl()), λ rt sp => omega)
+    F.canonical_intro(F.half(), F.e_of(h) + 1, omega, inner, Inr(F.half().le_refl()), λ rt sp => omega)
 }
 
-fn Format::up_top(self F: Format, h: Nat, below: h < F.limit_h(), d: Succ(F.m_of(h)) <= F.max_mag() ∨ ¬(Succ(F.m_of(h)) <= F.max_mag())) → Option<Finite(F)> {
+fn Format::up_top(self F: Format, h: Nat, below: h < F.limit_h(), d: F.m_of(h) + 1 <= F.max_mag() ∨ ¬(F.m_of(h) + 1 <= F.max_mag())) → Option<Finite(F)> {
     match d { Inl(room) => Some(Finite(False, Succ(F.m_of(h)), F.e_of(h), F.up_last_ok(h, below, room))), Inr(_) => None }
 }
 
-fn Format::up_inner(self F: Format, h: Nat, below: h < F.limit_h(), inner: Succ(F.e_of(h)) <= F.span,
-    d: Succ(Succ(F.m_of(h))) <= F.top() ∨ ¬(Succ(Succ(F.m_of(h))) <= F.top())) → Option<Finite(F)>
+fn Format::up_inner(self F: Format, h: Nat, below: h < F.limit_h(), inner: F.e_of(h) + 1 <= F.span,
+    d: F.m_of(h) + 2 <= F.top() ∨ ¬(F.m_of(h) + 2 <= F.top())) → Option<Finite(F)>
 {
     match d {
         Inl(room) => Some(Finite(False, Succ(F.m_of(h)), F.e_of(h), F.up_step_ok(h, below, room, inner))),
@@ -605,14 +605,14 @@ fn Format::up_inner(self F: Format, h: Nat, below: h < F.limit_h(), inner: Succ(
     }
 }
 
-fn Format::up_in(self F: Format, h: Nat, below: h < F.limit_h(), d: Succ(F.e_of(h)) <= F.span ∨ ¬(Succ(F.e_of(h)) <= F.span)) → Option<Finite(F)> {
+fn Format::up_in(self F: Format, h: Nat, below: h < F.limit_h(), d: F.e_of(h) + 1 <= F.span ∨ ¬(F.e_of(h) + 1 <= F.span)) → Option<Finite(F)> {
     match d {
         Inl(inner) => F.up_inner(h, below, inner, Succ(Succ(F.m_of(h))).le_dec(F.top())),
         Inr(_) => F.up_top(h, below, Succ(F.m_of(h)).le_dec(F.max_mag())),
     }
 }
 
-fn Format::up_at(self F: Format, h: Nat, d: Succ(h) <= F.limit_h() ∨ ¬(Succ(h) <= F.limit_h())) → Option<Finite(F)> {
+fn Format::up_at(self F: Format, h: Nat, d: h + 1 <= F.limit_h() ∨ ¬(h + 1 <= F.limit_h())) → Option<Finite(F)> {
     match d { Inl(below) => F.up_in(h, below, Succ(F.e_of(h)).le_dec(F.span)), Inr(_) => None }
 }
 
@@ -633,15 +633,15 @@ fn Format::UpCases(self F: Format, h: Nat, o: Option<Finite(F)>) → Type {
     UpIs(F, h, o) ∨ (o = None ∧ F.e_of(h) = F.span ∧ F.m_of(h) = F.max_mag())
 }
 
-theorem Format::up_step_H(self F: Format, h: Nat): ((Succ(F.m_of(h)) * Nat::pow(2, F.e_of(h))) * 2).int() = (Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int() {
-    Int::cong_ofnat(Succ(F.m_of(h)).mul_assoc(Nat::pow(2, F.e_of(h)), 2))
+theorem Format::up_step_H(self F: Format, h: Nat): (((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h))) * 2).int() = ((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int() {
+    Int::cong_ofnat((F.m_of(h) + 1).mul_assoc(Nat::pow(2, F.e_of(h)), 2))
 }
 
-theorem Format::up_top_cases(self F: Format, h: Nat, below: h < F.limit_h(), top_b: ¬(Succ(F.e_of(h)) <= F.span)):
-    (d: Succ(F.m_of(h)) <= F.max_mag() ∨ ¬(Succ(F.m_of(h)) <= F.max_mag())) → F.UpCases(h, F.up_top(h, below, d))
+theorem Format::up_top_cases(self F: Format, h: Nat, below: h < F.limit_h(), top_b: ¬(F.e_of(h) + 1 <= F.span)):
+    (d: F.m_of(h) + 1 <= F.max_mag() ∨ ¬(F.m_of(h) + 1 <= F.max_mag())) → F.UpCases(h, F.up_top(h, below, d))
 {
     λ d => match d {
-        Inl(room) => Inl(UpIs(Finite(False, Succ(F.m_of(h)), F.e_of(h), F.up_last_ok(h, below, room)), refl, refl, F.up_step_H(h),
+        Inl(room) => Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_last_ok(h, below, room)), refl, refl, F.up_step_H(h),
             λ odd => F.m_of(h).even_succ_of_not_even(odd), λ ev => F.m_of(h).not_even_succ_of_even(ev))),
         Inr(full) => {
             let c = F.cell(h, below);
@@ -652,37 +652,37 @@ theorem Format::up_top_cases(self F: Format, h: Nat, below: h < F.limit_h(), top
     }
 }
 
-theorem Format::up_inner_cases(self F: Format, h: Nat, below: h < F.limit_h(), inner: Succ(F.e_of(h)) <= F.span):
-    (d: Succ(Succ(F.m_of(h))) <= F.top() ∨ ¬(Succ(Succ(F.m_of(h))) <= F.top())) → F.UpCases(h, F.up_inner(h, below, inner, d))
+theorem Format::up_inner_cases(self F: Format, h: Nat, below: h < F.limit_h(), inner: F.e_of(h) + 1 <= F.span):
+    (d: F.m_of(h) + 2 <= F.top() ∨ ¬(F.m_of(h) + 2 <= F.top())) → F.UpCases(h, F.up_inner(h, below, inner, d))
 {
     λ d => match d {
-        Inl(room) => Inl(UpIs(Finite(False, Succ(F.m_of(h)), F.e_of(h), F.up_step_ok(h, below, room, inner)), refl, refl, F.up_step_H(h),
+        Inl(room) => Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_step_ok(h, below, room, inner)), refl, refl, F.up_step_H(h),
             λ odd => F.m_of(h).even_succ_of_not_even(odd), λ ev => F.m_of(h).not_even_succ_of_even(ev))),
         Inr(full) => {
             let c = F.cell(h, below);
             let t: (F.top() = F.half() * 2) = F.top_double();
-            let mt: (Succ(F.m_of(h)) = F.top()) = omega(c.left, full);
-            let pe = Nat::pow(2, Succ(F.e_of(h)));
-            let pd: (Nat::pow(2, Succ(Succ(F.e_of(h)))) = pe * 2) = refl;
-            let at: ((F.half() * Nat::pow(2, Succ(F.e_of(h)))) * 2 = Succ(F.m_of(h)) * pe) = ring(mt, t);
-            Inl(UpIs(Finite(False, F.half(), Succ(F.e_of(h)), F.up_carry_ok(h, inner)), refl, refl, Int::cong_ofnat(at), λ _ => F.half_even(),
+            let mt: (F.m_of(h) + 1 = F.top()) = omega(c.left, full);
+            let pe = Nat::pow(2, F.e_of(h) + 1);
+            let pd: (Nat::pow(2, F.e_of(h) + 2) = pe * 2) = refl;
+            let at: ((F.half() * Nat::pow(2, F.e_of(h) + 1)) * 2 = (F.m_of(h) + 1) * pe) = ring(mt, t);
+            Inl(UpIs(Finite(False, F.half(), F.e_of(h) + 1, F.up_carry_ok(h, inner)), refl, refl, Int::cong_ofnat(at), λ _ => F.half_even(),
                 λ ev _ => F.m_of(h).not_even_succ_of_even(ev)(j(sym(mt), λ y _ => Nat::Even(y), F.frac.even_pow_two()))))
         },
     }
 }
 
 theorem Format::up_cases(self F: Format, h: Nat, below: h < F.limit_h()): F.UpCases(h, F.up(h)) {
-    match Succ(h).le_dec(F.limit_h()) as λ d => F.UpCases(h, F.up_at(h, d)) {
-        Inl(b) => match Succ(F.e_of(h)).le_dec(F.span) as λ d1 => F.UpCases(h, F.up_in(h, b, d1)) {
-            Inl(inner) => F.up_inner_cases(h, b, inner)(Succ(Succ(F.m_of(h))).le_dec(F.top())),
-            Inr(top_b) => F.up_top_cases(h, b, top_b)(Succ(F.m_of(h)).le_dec(F.max_mag())),
+    match (h + 1).le_dec(F.limit_h()) as λ d => F.UpCases(h, F.up_at(h, d)) {
+        Inl(b) => match (F.e_of(h) + 1).le_dec(F.span) as λ d1 => F.UpCases(h, F.up_in(h, b, d1)) {
+            Inl(inner) => F.up_inner_cases(h, b, inner)((F.m_of(h) + 2).le_dec(F.top())),
+            Inr(top_b) => F.up_top_cases(h, b, top_b)((F.m_of(h) + 1).le_dec(F.max_mag())),
         },
         Inr(no) => false_elim(no(below)),
     }
 }
 
 theorem Format::up_over(self F: Format, h: Nat, over: F.limit_h() <= h): F.up(h) = None {
-    match Succ(h).le_dec(F.limit_h()) {
+    match (h + 1).le_dec(F.limit_h()) {
         Inl(b) => false_elim(omega(b)),
         Inr(_) => refl,
     }
@@ -722,15 +722,15 @@ theorem Finite::lt_of_cut({F: Format}, g: Finite(F), x: Rat, h: Nat, st: Bool, a
 
 // Below the cell's next grid point, a float is at most the cell's float.
 theorem Format::gap_H(self F: Format, h: Nat, below: h < F.limit_h(), g: Finite(F),
-    lt: g.H() < (Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int()): g.H() <= (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h)))).int()
+    lt: g.H() < ((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int()): g.H() <= (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1)).int()
 {
-    let P = Nat::pow(2, Succ(F.e_of(h)));
+    let P = Nat::pow(2, F.e_of(h) + 1);
     match g.neg.eq_dec(False) {
         Inl(p) => {
             let pos = Finite::H_pos(g, p);
             let gc = F.canonical_elim(g.mag, g.bexp, g.ok);
             let c = F.cell(h, below);
-            let u: (g.units() * 2 = g.mag * Nat::pow(2, Succ(g.bexp))) = g.mag.mul_assoc(Nat::pow(2, g.bexp), 2);
+            let u: (g.units() * 2 = g.mag * Nat::pow(2, g.bexp + 1)) = g.mag.mul_assoc(Nat::pow(2, g.bexp), 2);
             let gap = F.grid_gap(g.mag, g.bexp, F.m_of(h), F.e_of(h), gc.left, gc.right.right.left, c.left, c.right.right.left, omega);
             omega
         },
@@ -744,16 +744,16 @@ theorem Format::gap_H(self F: Format, h: Nat, below: h < F.limit_h(), g: Finite(
 }
 
 theorem Format::down_H_le(self F: Format, h: Nat): (F.down(h)).H() <= h.int() {
-    match Succ(h).le_dec(F.limit_h()) as λ _ => (F.down(h)).H() <= h.int() {
+    match (h + 1).le_dec(F.limit_h()) as λ _ => (F.down(h)).H() <= h.int() {
         Inl(below) => { let e = F.down_H(h, below); let fl = F.m_floor(h); omega },
         Inr(over) => {
             let d = F.down_over(h, Nat::le_of_not_lt(h, F.limit_h(), over));
-            let P2 = Nat::pow(2, Succ(F.span));
+            let P2 = Nat::pow(2, F.span + 1);
             let mx = Finite::max_H(F);
-            let lim: (Succ(F.max_mag()) * P2 = P2 + F.max_mag() * P2) = F.max_mag().mul_succ_left(P2);
+            let lim: ((F.max_mag() + 1) * P2 = P2 + F.max_mag() * P2) = F.max_mag().mul_succ_left(P2);
             let a: ((F.max_mag() * Nat::pow(2, F.span)) * 2 = F.max_mag() * P2) = F.max_mag().mul_assoc(Nat::pow(2, F.span), 2);
             let lh: (F.limit_h() <= h) = Nat::le_of_not_lt(h, F.limit_h(), over);
-            let ld: (F.limit_h() = Succ(F.max_mag()) * P2) = refl;
+            let ld: (F.limit_h() = (F.max_mag() + 1) * P2) = refl;
             let at_max: ((Finite::max_finite(F)).H() <= h.int()) = omega;
             j(sym(d), λ y _ => y.H() <= h.int(), at_max)
         },
@@ -763,12 +763,12 @@ theorem Format::down_H_le(self F: Format, h: Nat): (F.down(h)).H() <= h.int() {
 theorem bit_le_one(b: Bool): Nat::of_bit(b) <= 1 { match b { False => trivial, True => trivial } }
 
 theorem Format::max_H_lt_limit(self F: Format): (Finite::max_finite(F)).H() < F.limit_h().int() {
-    let P2 = Nat::pow(2, Succ(F.span));
+    let P2 = Nat::pow(2, F.span + 1);
     let mx = Finite::max_H(F);
-    let lim: (Succ(F.max_mag()) * P2 = P2 + F.max_mag() * P2) = F.max_mag().mul_succ_left(P2);
+    let lim: ((F.max_mag() + 1) * P2 = P2 + F.max_mag() * P2) = F.max_mag().mul_succ_left(P2);
     let a: ((F.max_mag() * Nat::pow(2, F.span)) * 2 = F.max_mag() * P2) = F.max_mag().mul_assoc(Nat::pow(2, F.span), 2);
-    let ld: (F.limit_h() = Succ(F.max_mag()) * P2) = refl;
-    let pp: (0 < P2) = Nat::pow_pos(a := 2, n := Succ(F.span));
+    let ld: (F.limit_h() = (F.max_mag() + 1) * P2) = refl;
+    let pp: (0 < P2) = Nat::pow_pos(a := 2, n := F.span + 1);
     omega
 }
 
@@ -777,7 +777,7 @@ theorem Format::down_is_below(self F: Format, x: Rat, h: Nat, st: Bool, a: F.App
     let d = F.down(h);
     And(Finite::le_of_cut(d, x, h, st, a, F.down_H_le(h)), λ g gle => {
         let hg = Finite::le_x(g, x, h, st, a, gle);
-        match Succ(h).le_dec(F.limit_h()) {
+        match (h + 1).le_dec(F.limit_h()) {
             Inl(below) => {
                 let e = F.down_H(h, below);
                 let fl = F.m_floor(h);
@@ -800,7 +800,7 @@ theorem Format::up_is_above(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
     let at = up.at;
     And(Finite::ge_of_cut(up.u, x, h, st, a, omega), λ g xle => {
         let hg = Finite::x_le(g, x, h, st, a, xle);
-        let far: ((Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int() <= g.H()) = match Int::le_dec((Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int(), g.H()) {
+        let far: (((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int() <= g.H()) = match Int::le_dec(((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int(), g.H()) {
             Inl(y) => y,
             Inr(n) => { let gap = F.gap_H(h, below, g, omega(n)); false_elim(omega) },
         };
@@ -820,8 +820,8 @@ theorem Format::exceeds_top(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
 {
     let e = F.down_H(h, below);
     let mx = Finite::max_H(F);
-    let same: (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
-        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, Succ(w)), es), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, Succ(F.span)), mm),
+    let same: (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
+        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, w + 1), es), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, F.span + 1), mm),
             sym(F.max_mag().mul_assoc(Nat::pow(2, F.span), 2))));
     λ g => { let le = Finite::H_le_max(g); Finite::lt_of_cut(g, x, h, st, a, omega) }
 }
@@ -834,7 +834,7 @@ theorem Finite::above_of_exact({F: Format}, g: Finite(F), x: Rat, h: Nat, st: Bo
 }
 
 theorem Format::down_pos(self F: Format, h: Nat): (F.down(h)).neg = False {
-    match Succ(h).le_dec(F.limit_h()) { Inl(_) => refl, Inr(_) => refl }
+    match (h + 1).le_dec(F.limit_h()) { Inl(_) => refl, Inr(_) => refl }
 }
 
 theorem Format::grid_zero(self F: Format): F.grid(0) ≈ 0 { Dyadic::zero_mant(F.qmin() - 1) }
@@ -916,7 +916,7 @@ theorem Format::overflow_up_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Ap
 theorem Format::up_or_over_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st),
     inexact: (F.down(h)).H() < h.int() + Nat::of_bit(st).int()): RoundsTo(F, TowardPos, x, F.up_or_over(h, F.up(h)))
 {
-    match Succ(h).le_dec(F.limit_h()) as λ _ => RoundsTo(F, TowardPos, x, F.up_or_over(h, F.up(h))) {
+    match (h + 1).le_dec(F.limit_h()) as λ _ => RoundsTo(F, TowardPos, x, F.up_or_over(h, F.up(h))) {
         Inl(below) => match F.up_cases(h, below) {
             Inl(up) => j(sym(up.is), λ o _ => RoundsTo(F, TowardPos, x, F.up_or_over(h, o)),
                 Inl(F.up_is_above(x, h, st, a, below, F.up(h), up, inexact))),
@@ -938,7 +938,7 @@ theorem Format::toward_pos_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.App
     let hu = F.down_H_units(h);
     match st as λ s => F.Approx(x, h, s) → RoundsTo(F, TowardPos, x, F.round_h(TowardPos, h, s)) {
         True => λ a1 => F.up_or_over_ok(x, h, True, a1, omega),
-        False => λ a0 => match Succ((F.down(h)).units() * 2).le_dec(h) {
+        False => λ a0 => match ((F.down(h)).units() * 2 + 1).le_dec(h) {
             Inl(lt) => F.up_or_over_ok(x, h, False, a0, omega(lt)),
             Inr(nlt) => Inl(Finite::above_of_exact(F.down(h), x, h, False, a0, refl, omega(nlt))),
         },
@@ -979,11 +979,11 @@ theorem Finite::val_nonpos_of_neg({F: Format}, f: Finite(F), s: f.neg = True): f
 
 theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue()): (Finite::max_finite(F)).H() < F.ovf_h().int() {
     let mb = F.max_mag_bounds();
-    let eq: (Succ(F.max_mag()) = F.top()) = mb.right.right.right(F.specials.inf_free(has));
+    let eq: (F.max_mag() + 1 = F.top()) = mb.right.right.right(F.specials.inf_free(has));
     let ps = Nat::pow(2, F.span);
     let mx = Finite::max_H(F);
-    let s: (F.top() + F.top() - 1 = Succ(F.max_mag() + F.max_mag())) = omega;
-    let o2: (F.ovf_h() = Succ(F.max_mag() + F.max_mag()) * ps) = Nat::cong(λ (w: Nat) => w * ps, s);
+    let s: (F.top() + F.top() - 1 = F.max_mag() + F.max_mag() + 1) = omega;
+    let o2: (F.ovf_h() = (F.max_mag() + F.max_mag() + 1) * ps) = Nat::cong(λ (w: Nat) => w * ps, s);
     let pp: (0 < ps) = Nat::pow_pos(a := 2, n := F.span);
     linarith(o2)
 }
@@ -1009,8 +1009,8 @@ theorem Format::all_top(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x,
 {
     let fl = F.m_floor(h);
     let mx = Finite::max_H(F);
-    let same: (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
-        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, Succ(w)), es), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, Succ(F.span)), mm),
+    let same: (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
+        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, w + 1), es), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, F.span + 1), mm),
             sym(F.max_mag().mul_assoc(Nat::pow(2, F.span), 2))));
     λ g => { let le = Finite::H_le_max(g); Finite::le_of_cut(g, x, h, st, a, omega) }
 }
@@ -1086,19 +1086,19 @@ theorem Format::mid_sum(self F: Format, d, u: Finite(F), M: Int, mm: M + M = d.H
 // `U`, the midpoint `M` between them, and `h`'s offset `r` into the cell.
 theorem Format::mid_arith(self F: Format, h: Nat, below: h < F.limit_h(), o: Option<Finite(F)>, up: UpIs(F, h, o)):
     (F.down(h)).H() <= h.int() ∧ h.int() < up.u.H()
-        ∧ (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) + Nat::pow(2, F.e_of(h))).int() + (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) + Nat::pow(2, F.e_of(h))).int() = (F.down(h)).H() + up.u.H()
-        ∧ (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) + Nat::pow(2, F.e_of(h))).int() = (F.down(h)).H() + Nat::pow(2, F.e_of(h)).int()
+        ∧ (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) + Nat::pow(2, F.e_of(h))).int() + (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) + Nat::pow(2, F.e_of(h))).int() = (F.down(h)).H() + up.u.H()
+        ∧ (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) + Nat::pow(2, F.e_of(h))).int() = (F.down(h)).H() + Nat::pow(2, F.e_of(h)).int()
         ∧ (h - (F.down(h)).units() * 2).int() + (F.down(h)).H() = h.int()
         ∧ 0 < Nat::pow(2, F.e_of(h))
 {
-    let P = Nat::pow(2, Succ(F.e_of(h)));
+    let P = Nat::pow(2, F.e_of(h) + 1);
     let Q = Nat::pow(2, F.e_of(h));
     let pq: (P = Q * 2) = refl;
     let qp: (0 < Q) = Nat::pow_pos(a := 2, n := F.e_of(h));
     let dH = F.down_H(h, below);
     let hu = F.down_H_units(h);
     let fl = F.m_floor(h);
-    let us: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
+    let us: ((F.m_of(h) + 1) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
     let at = up.at;
     let du: ((F.down(h)).units() * 2 <= h) = omega;
     And(omega, And(omega, And(omega, And(omega, And(omega, qp)))))
@@ -1409,12 +1409,12 @@ theorem Float::sign_is_neg({F: Format}, x: Float(F), s: Bool, h: x.SignIs(s)): (
 fn Format::PosOpt(self F: Format, o: Option<Finite(F)>) → Type { match o { Some(u) => u.neg = False, None => True } }
 
 theorem Format::up_pos(self F: Format, h: Nat): F.PosOpt(F.up(h)) {
-    match Succ(h).le_dec(F.limit_h()) as λ _ => F.PosOpt(F.up(h)) {
+    match (h + 1).le_dec(F.limit_h()) as λ _ => F.PosOpt(F.up(h)) {
         Inl(below) => match F.up_cases(h, below) {
             Inl(up) => j(sym(up.is), λ o _ => F.PosOpt(o), up.pos),
             Inr(none) => j(sym(none.left), λ o _ => F.PosOpt(o), trivial),
         },
-        Inr(nb) => j(sym(F.up_over(h, Nat::lt_of_not_le(F.limit_h(), Succ(h), nb))), λ o _ => F.PosOpt(o), trivial),
+        Inr(nb) => j(sym(F.up_over(h, Nat::lt_of_not_le(F.limit_h(), h + 1, nb))), λ o _ => F.PosOpt(o), trivial),
     }
 }
 
@@ -1523,8 +1523,8 @@ theorem Format::dy_approx(self F: Format, n: Nat, e: Int): F.Approx(Dyadic(n.int
         Dyadic::same_sym(j(ce, λ v _ => Dyadic(n.int() * Nat::pow(2, up).int(), c) ≈ Dyadic(n.int(), v), Dyadic::align(n.int(), c, up)));
     let gs = λ (mm: Nat) => Dyadic::same_sym(j(cg, λ v _ => Dyadic(mm.int() * D.int(), c) ≈ Dyadic(mm.int(), v), Dyadic::align(mm.int(), c, dn)));
     let lo: (h * D <= N) = Nat::shr_mul_le(dn, N);
-    let hi: (N < Succ(h) * D) = Nat::lt_succ_shr_mul(dn, N);
-    match Succ(h * D).le_dec(N) {
+    let hi: (N < (h + 1) * D) = Nat::lt_succ_shr_mul(dn, N);
+    match (h * D + 1).le_dec(N) {
         Inr(nlt) => {
             let eq: (h * D = N) = omega(nlt);
             let at: (Dyadic(N.int(), c) ≈ Dyadic((h * D).int(), c)) = j(sym(eq), λ v _ => Dyadic(N.int(), c) ≈ Dyadic(v.int(), c), Dyadic(N.int(), c).same_refl());
@@ -1533,11 +1533,11 @@ theorem Format::dy_approx(self F: Format, n: Nat, e: Int): F.Approx(Dyadic(n.int
         },
         Inl(lt) => {
             let gh: (Dyadic(h.int(), g) ≈ Dyadic((h * D).int(), c)) = gs(h);
-            let gh1: (Dyadic((Succ(h)).int(), g) ≈ Dyadic((Succ(h) * D).int(), c)) = gs(Succ(h));
+            let gh1: (Dyadic((h + 1).int(), g) ≈ Dyadic(((h + 1) * D).int(), c)) = gs(h + 1);
             let below: (Dyadic(h.int(), g) < Dyadic(n.int(), e)) =
                 Dyadic::lt_respects(Dyadic::same_sym(gh), Dyadic::same_sym(xs), Dyadic::lt_of_mant_lt((h * D).int(), N.int(), c, omega(lt)));
-            let above: (Dyadic(n.int(), e) < Dyadic((Succ(h)).int(), g)) =
-                Dyadic::lt_respects(Dyadic::same_sym(xs), Dyadic::same_sym(gh1), Dyadic::lt_of_mant_lt(N.int(), (Succ(h) * D).int(), c, omega));
+            let above: (Dyadic(n.int(), e) < Dyadic((h + 1).int(), g)) =
+                Dyadic::lt_respects(Dyadic::same_sym(xs), Dyadic::same_sym(gh1), Dyadic::lt_of_mant_lt(N.int(), ((h + 1) * D).int(), c, omega));
             And(below, above)
         },
     }
@@ -1614,8 +1614,8 @@ theorem Format::approx_div(self F: Format, y: Rat, a: Nat, na: y.num = a.int(), 
     let Q = F.rat_q();
     let B = y.den * P;
     let mb: ((q * P) * y.den = q * B) = ring;
-    let mb1: ((Succ(q) * P) * y.den = Succ(q) * B) = ring;
-    let sb: (Succ(q) * B = B + q * B) = q.mul_succ_left(B);
+    let mb1: (((q + 1) * P) * y.den = (q + 1) * B) = ring;
+    let sb: ((q + 1) * B = B + q * B) = q.mul_succ_left(B);
     λ r => match r {
         Zero => λ parts _ => {
             let eqn: (a * Q = (q * P) * y.den) = omega;
@@ -1623,11 +1623,11 @@ theorem Format::approx_div(self F: Format, y: Rat, a: Nat, na: y.num = a.int(), 
         },
         Succ(_) => λ parts bound => {
             let l1: ((q * P) * y.den < a * Q) = omega;
-            let l2: (a * Q < (Succ(q) * P) * y.den) = omega;
+            let l2: (a * Q < ((q + 1) * P) * y.den) = omega;
             let i1: (((q * P) * y.den).int() < (a * Q).int()) = omega;
-            let i2: ((a * Q).int() < ((Succ(q) * P) * y.den).int()) = omega;
+            let i2: ((a * Q).int() < (((q + 1) * P) * y.den).int()) = omega;
             And(j(sym(na), λ v _ => (q.int() * P.int()) * y.den.int() < v * Q.int(), i1),
-                j(sym(na), λ v _ => v * Q.int() < ((Succ(q)).int() * P.int()) * y.den.int(), i2))
+                j(sym(na), λ v _ => v * Q.int() < ((q + 1).int() * P.int()) * y.den.int(), i2))
         },
     }
 }
@@ -1668,27 +1668,27 @@ fn Float::Same({F: Format}, a, b: Float(F)) → Type {
 }
 
 // A canonical pair is determined by its value `m · 2^b`.
-theorem Format::canon_lt_absurd(self F: Format, m1, b1, m2, b2: Nat, fit1: Succ(m1) <= F.top(), norm2: b2 = 0 ∨ F.half() <= m2,
+theorem Format::canon_lt_absurd(self F: Format, m1, b1, m2, b2: Nat, fit1: m1 + 1 <= F.top(), norm2: b2 = 0 ∨ F.half() <= m2,
     lt: b1 < b2, eq: m1 * Nat::pow(2, b1) = m2 * Nat::pow(2, b2)): False
 {
     let t: (F.top() = F.half() * 2) = F.top_double();
     let hm: (F.half() <= m2) = match norm2 { Inl(z) => false_elim(omega(z, lt)), Inr(y) => y };
     let p1 = Nat::pow(2, b1);
-    let p11 = Nat::pow(2, Succ(b1));
+    let p11 = Nat::pow(2, b1 + 1);
     let p2 = Nat::pow(2, b2);
-    let fit: (Succ(m1) * p1 <= F.top() * p1) = Nat::mul_le_mono_r(p1, Succ(m1), F.top(), fit1);
-    let unf: (Succ(m1) * p1 = p1 + m1 * p1) = m1.mul_succ_left(p1);
+    let fit: ((m1 + 1) * p1 <= F.top() * p1) = Nat::mul_le_mono_r(p1, m1 + 1, F.top(), fit1);
+    let unf: ((m1 + 1) * p1 = p1 + m1 * p1) = m1.mul_succ_left(p1);
     let pd: (p11 = p1 * 2) = refl;
     let dbl: (F.top() * p1 = F.half() * p11) = ring(t, pd);
-    let mono: (p11 <= p2) = Nat::pow_le_pow_r(2, Succ(b1), b2, trivial, lt);
+    let mono: (p11 <= p2) = Nat::pow_le_pow_r(2, b1 + 1, b2, trivial, lt);
     let k1: (F.half() * p11 <= F.half() * p2) = F.half().mul_le_mono_l(p11, p2, mono);
     let k2: (F.half() * p2 <= m2 * p2) = Nat::mul_le_mono_r(p2, F.half(), m2, hm);
     let pp: (0 < p1) = Nat::pow_pos(a := 2, n := b1);
     omega
 }
 
-theorem Format::canon_eq(self F: Format, m1, b1, m2, b2: Nat, fit1: Succ(m1) <= F.top(), norm1: b1 = 0 ∨ F.half() <= m1,
-    fit2: Succ(m2) <= F.top(), norm2: b2 = 0 ∨ F.half() <= m2, eq: m1 * Nat::pow(2, b1) = m2 * Nat::pow(2, b2)): m1 = m2 ∧ b1 = b2
+theorem Format::canon_eq(self F: Format, m1, b1, m2, b2: Nat, fit1: m1 + 1 <= F.top(), norm1: b1 = 0 ∨ F.half() <= m1,
+    fit2: m2 + 1 <= F.top(), norm2: b2 = 0 ∨ F.half() <= m2, eq: m1 * Nat::pow(2, b1) = m2 * Nat::pow(2, b2)): m1 = m2 ∧ b1 = b2
 {
     match b1.lt_trichotomy(b2) {
         Inl(lt) => false_elim(F.canon_lt_absurd(m1, b1, m2, b2, fit1, norm2, lt, eq)),
@@ -1697,13 +1697,13 @@ theorem Format::canon_eq(self F: Format, m1, b1, m2, b2: Nat, fit1: Succ(m1) <= 
                 let p = Nat::pow(2, b1);
                 let e2: (m1 * p = m2 * p) = rewrite(sym(same), in := eq);
                 let pp: (0 < p) = Nat::pow_pos(a := 2, n := b1);
-                let u1: (Succ(m1) * p = p + m1 * p) = m1.mul_succ_left(p);
-                let u2: (Succ(m2) * p = p + m2 * p) = m2.mul_succ_left(p);
+                let u1: ((m1 + 1) * p = p + m1 * p) = m1.mul_succ_left(p);
+                let u2: ((m2 + 1) * p = p + m2 * p) = m2.mul_succ_left(p);
                 let me: (m1 = m2) = match m1.lt_trichotomy(m2) {
-                    Inl(l) => { let k = Nat::mul_le_mono_r(p, Succ(m1), m2, l); false_elim(omega) },
+                    Inl(l) => { let k = Nat::mul_le_mono_r(p, m1 + 1, m2, l); false_elim(omega) },
                     Inr(r2) => match r2 {
                         Inl(e) => e,
-                        Inr(g) => { let k = Nat::mul_le_mono_r(p, Succ(m2), m1, g); false_elim(omega) },
+                        Inr(g) => { let k = Nat::mul_le_mono_r(p, m2 + 1, m1, g); false_elim(omega) },
                     },
                 };
                 And(me, same)
@@ -1775,9 +1775,9 @@ theorem Format::near_split_pair(self F: Format, h: Nat, below: h < F.limit_h(), 
     let d = F.down(h);
     let dH = F.down_H(h, below);
     let fl = F.m_floor(h);
-    let P = Nat::pow(2, Succ(F.e_of(h)));
-    let us: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
-    let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(F.e_of(h)));
+    let P = Nat::pow(2, F.e_of(h) + 1);
+    let us: ((F.m_of(h) + 1) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := F.e_of(h) + 1);
     let at = up.at;
     let du: (d.val() < up.u.val()) = Finite::lt_of_H_lt(d, up.u, omega);
     let fm = Finite::mag_of_same(f, d, fd, F.down_pos(h));
@@ -1803,7 +1803,7 @@ theorem Format::near_split(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx
     let below_d = F.down_is_below(x, h, st, a);
     let top = λ (all: (k: Finite(F)) → k.val() <= x) =>
         F.near_split_same(f, g, d, Finite::nearest_top_unique(x, d, f, below_d, all, nf), Finite::nearest_top_unique(x, d, g, below_d, all, ng));
-    match Succ(h).le_dec(F.limit_h()) {
+    match (h + 1).le_dec(F.limit_h()) {
         Inl(below) => match F.up_cases(h, below) {
             Inl(up) => match Int::le_dec(h.int() + Nat::of_bit(st).int(), d.H()) {
                 Inl(ex) => {
@@ -2156,7 +2156,7 @@ theorem Format::next_up_at_h(self F: Format, f: Finite(F), h: Nat, hf: f.H() = h
             let at = up.at;
             j(sym(up.is), λ o _ => Finite::IsNextUp(f, o), And(Finite::lt_of_H_lt(f, up.u, omega), λ g lt => {
                 let hg = Finite::H_lt_of_lt(f, g, lt);
-                let far: ((Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int() <= g.H()) = match Int::le_dec((Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int(), g.H()) {
+                let far: (((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int() <= g.H()) = match Int::le_dec(((F.m_of(h) + 1) * Nat::pow(2, F.e_of(h) + 1)).int(), g.H()) {
                     Inl(y) => y,
                     Inr(n) => { let gap = F.gap_H(h, below, g, omega(n)); false_elim(omega) },
                 };
@@ -2165,29 +2165,29 @@ theorem Format::next_up_at_h(self F: Format, f: Finite(F), h: Nat, hf: f.H() = h
         },
         Inr(c) => {
             let mxh = Finite::max_H(F);
-            let same: (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
-                trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, Succ(w)), c.right.left), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, Succ(F.span)), c.right.right),
+            let same: (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
+                trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, w + 1), c.right.left), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, F.span + 1), c.right.right),
                     sym(F.max_mag().mul_assoc(Nat::pow(2, F.span), 2))));
             j(sym(c.left), λ o _ => Finite::IsNextUp(f, o), λ g => { let le = Finite::H_le_max(g); Finite::le_of_H_le(g, f, omega) })
         },
     }
 }
 
-theorem Format::next_up_of_neg(self F: Format, f: Finite(F), t: f.neg = True, k: Nat, u: f.units() = Succ(k)):
-    Finite::IsNextUp(f, Some(-(F.down(Succ(k * 2)))))
+theorem Format::next_up_of_neg(self F: Format, f: Finite(F), t: f.neg = True, k: Nat, u: f.units() = k + 1):
+    Finite::IsNextUp(f, Some(-(F.down(k * 2 + 1))))
 {
-    let d = F.down(Succ(k * 2));
-    let dh = F.down_H_le(Succ(k * 2));
+    let d = F.down(k * 2 + 1);
+    let dh = F.down_H_le(k * 2 + 1);
     let fh = Finite::H_neg(f, t);
     let nh = Finite::H_pos(-f, Finite::neg_pos(f, t));
     let nu: ((-f).units() = f.units()) = refl;
-    let a: F.Approx(F.grid(Succ(k * 2).int()), Succ(k * 2), False) = (F.grid(Succ(k * 2).int())).same_refl();
-    let bl = F.down_is_below(F.grid(Succ(k * 2).int()), Succ(k * 2), False, a);
+    let a: F.Approx(F.grid((k * 2 + 1).int()), k * 2 + 1, False) = (F.grid((k * 2 + 1).int())).same_refl();
+    let bl = F.down_is_below(F.grid((k * 2 + 1).int()), k * 2 + 1, False, a);
     let lo = Finite::unflip_gt(d.val(), f, Finite::lt_of_H_lt(d, -f, omega));
     And(Rat::lt_respects(f.val().same_refl(), Rat::same_sym(Finite::val_neg(d)), lo), λ g lt => {
         let flip = Rat::lt_respects(Rat::same_sym(Finite::val_neg(g)), Rat::same_sym(Finite::val_neg(f)), Rat::neg_lt(x := f.val(), y := g.val(), h := lt));
         let gh = Finite::H_lt_of_lt(-g, -f, flip);
-        let le = Rat::le_respects(Rat::same_sym((-g).val_grid()), (F.grid(Succ(k * 2).int())).same_refl(), F.grid_le((-g).H(), Succ(k * 2).int(), omega));
+        let le = Rat::le_respects(Rat::same_sym((-g).val_grid()), (F.grid((k * 2 + 1).int())).same_refl(), F.grid_le((-g).H(), (k * 2 + 1).int(), omega));
         let gd = Finite::unflip_le(d.val(), g, bl.right(-g, le));
         Rat::le_respects(Rat::same_sym(Finite::val_neg(d)), g.val().same_refl(), gd)
     })
@@ -2216,7 +2216,7 @@ theorem Finite::next_down_spec({F: Format}, f: Finite(F)): Finite::IsNextDown(f,
 // The spacing: above a nonnegative float the next one is one quantum
 // `2^(bexp + qmin)` further, that is `2^(bexp + 1)` half-units.
 theorem Finite::next_up_spacing({F: Format}, f, s: Finite(F), pos: f.neg = False, is: f.next_up() = Some(s)):
-    s.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int()
+    s.H() = f.H() + Nat::pow(2, f.bexp + 1).int()
 {
     let h = f.units() * 2;
     let fh = Finite::H_pos(f, pos);
@@ -2235,24 +2235,24 @@ theorem Finite::next_up_spacing({F: Format}, f, s: Finite(F), pos: f.neg = False
             let l1 = Finite::H_le_of_le(f, F.down(h), Rat::le_of_same(e));
             let l2 = Finite::H_le_of_le(F.down(h), f, Rat::le_of_same(Rat::same_sym(e)));
             let be: (F.e_of(h) = f.bexp) = trans(sym(db.right.right), sym(parts.right));
-            let P = Nat::pow(2, Succ(F.e_of(h)));
-            let pe: (P = Nat::pow(2, Succ(f.bexp))) = Nat::cong(λ (w: Nat) => Nat::pow(2, Succ(w)), be);
-            let step: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
+            let P = Nat::pow(2, F.e_of(h) + 1);
+            let pe: (P = Nat::pow(2, f.bexp + 1)) = Nat::cong(λ (w: Nat) => Nat::pow(2, w + 1), be);
+            let step: ((F.m_of(h) + 1) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
             let at = up.at;
-            j(su, λ t _ => t.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int(), omega)
+            j(su, λ t _ => t.H() = f.H() + Nat::pow(2, f.bexp + 1).int(), omega)
         },
-        Inr(c) => Option::none_ne_some(s, trans(sym(c.left), is2), s.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int()),
+        Inr(c) => Option::none_ne_some(s, trans(sym(c.left), is2), s.H() = f.H() + Nat::pow(2, f.bexp + 1).int()),
     }
 }
 
 // In values: the gap is one quantum.
 theorem Finite::next_up_gap({F: Format}, f, s: Finite(F), pos: f.neg = False, is: f.next_up() = Some(s)):
-    s.val() ≈ f.val() + F.grid(Nat::pow(2, Succ(f.bexp)).int())
+    s.val() ≈ f.val() + F.grid(Nat::pow(2, f.bexp + 1).int())
 {
     let sp = Finite::next_up_spacing(f, s, pos, is);
-    let g = F.grid_add(f.H(), Nat::pow(2, Succ(f.bexp)).int());
-    let fg = Rat::add_respects(x := f.val(), x2 := F.grid(f.H()), y := F.grid(Nat::pow(2, Succ(f.bexp)).int()), y2 := F.grid(Nat::pow(2, Succ(f.bexp)).int()), hx := f.val_grid(), hy := (F.grid(Nat::pow(2, Succ(f.bexp)).int())).same_refl());
-    Rat::same_trans(s.val_grid(), Rat::same_sym(Rat::same_trans(fg, j(sym(sp), λ v _ => F.grid(f.H()) + F.grid(Nat::pow(2, Succ(f.bexp)).int()) ≈ F.grid(v), g))))
+    let g = F.grid_add(f.H(), Nat::pow(2, f.bexp + 1).int());
+    let fg = Rat::add_respects(x := f.val(), x2 := F.grid(f.H()), y := F.grid(Nat::pow(2, f.bexp + 1).int()), y2 := F.grid(Nat::pow(2, f.bexp + 1).int()), hx := f.val_grid(), hy := (F.grid(Nat::pow(2, f.bexp + 1).int())).same_refl());
+    Rat::same_trans(s.val_grid(), Rat::same_sym(Rat::same_trans(fg, j(sym(sp), λ v _ => F.grid(f.H()) + F.grid(Nat::pow(2, f.bexp + 1).int()) ≈ F.grid(v), g))))
 }
 
 // ---------------------------------------------------------------------------

@@ -486,7 +486,7 @@ theorem Stack::lent_address<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
     (a.add(index).toNat() < Nat::pow(2, 47)) ∧ (data.read(memory, a.add(index)) = xs.nth(index.toNat())) {
     let readable = lent(memory, wrote);
     let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
-    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
         BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
     ⟨j(sym(address), λ x _ => x.toNat() < Nat::pow(2, 47), omega(value, readable.left, inside)),
@@ -501,7 +501,7 @@ theorem Stack::lent_four<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
     wrote: stack.Wrote(i, entry, memory), inside: index.toNat() + 3 < xs.len()): a.add(index).toNat() + 4 <= Nat::pow(2, 47) {
     let readable = lent(memory, wrote);
     let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
-    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
         BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
     j(sym(address), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47), omega(value, readable.left, inside))

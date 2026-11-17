@@ -96,7 +96,7 @@ theorem nat_map_get_zero<A>(m: NatMap<A>): nat_map_get(m, 0) = m.here_of() {
     match m { MEmpty => refl, MNode(_, _, _) => refl }
 }
 
-theorem nat_map_get_succ<A>(m: NatMap<A>, j: Nat): nat_map_get(m, Succ(j)) = NatMap::pick(j.low_bit(), nat_map_get(m.even_of(), j.half()), nat_map_get(m.odd_of(), j.half())) {
+theorem nat_map_get_succ<A>(m: NatMap<A>, j: Nat): nat_map_get(m, j + 1) = NatMap::pick(j.low_bit(), nat_map_get(m.even_of(), j.half()), nat_map_get(m.odd_of(), j.half())) {
     match m { MEmpty => sym(NatMap::pick_same(j.low_bit(), None)), MNode(_, _, _) => refl }
 }
 
@@ -119,10 +119,10 @@ theorem nat_map_bits_inj(j, i: Nat, hb: j.low_bit() = i.low_bit(), hh: j.half() 
 }
 
 // A low bit that is a successor is `1`.
-theorem nat_map_low_bit_one(j, a: Nat, h: j.low_bit() = Succ(a)): j.low_bit() = 1 {
-    let le: (Succ(a) <= 1) = j(h, λ y _ => y <= 1, nat_map_low_bit_le_one(j));
+theorem nat_map_low_bit_one(j, a: Nat, h: j.low_bit() = a + 1): j.low_bit() = 1 {
+    let le: (a + 1 <= 1) = j(h, λ y _ => y <= 1, nat_map_low_bit_le_one(j));
     let zero: (a = 0) = Nat::le_antisym(a, 0, le, trivial);
-    trans(h, Nat::cong(λ (y: Nat) => Succ(y), zero))
+    trans(h, Nat::cong(λ (y: Nat) => y + 1, zero))
 }
 
 theorem nat_map_pick_rebuild_same<A>(b: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>, h: Nat, x: A):
@@ -137,7 +137,7 @@ theorem nat_map_rebuild_here<A>(b: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatM
 
 theorem nat_map_pick_rebuild_other<A>(b, c: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>, h: Nat):
     (b = 0 → c = 0 → nat_map_get(even, h) = nat_map_get(m.even_of(), h)) →
-    ((a, d: Nat) → b = Succ(a) → c = Succ(d) → nat_map_get(odd, h) = nat_map_get(m.odd_of(), h)) →
+    ((a, d: Nat) → b = a + 1 → c = d + 1 → nat_map_get(odd, h) = nat_map_get(m.odd_of(), h)) →
     NatMap::pick(c, nat_map_get(NatMap::rebuild(b, m, even, odd).even_of(), h), nat_map_get(NatMap::rebuild(b, m, even, odd).odd_of(), h))
         = NatMap::pick(c, nat_map_get(m.even_of(), h), nat_map_get(m.odd_of(), h)) {
     match b {
@@ -155,8 +155,8 @@ theorem nat_map_get_set_same<A>(m: NatMap<A>, k: Nat, x: A): nat_map_get(nat_map
             let odd = nat_map_set(m.odd_of(), h, x);
             let ie: (nat_map_get(even, h) = Some(x)) = nat_map_get_set_same(m.even_of(), h, x);
             let io: (nat_map_get(odd, h) = Some(x)) = nat_map_get_set_same(m.odd_of(), h, x);
-            trans(nat_map_get_succ(nat_map_set(m, Succ(j), x), j),
-                trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(j.low_bit(), nat_map_get(n.even_of(), h), nat_map_get(n.odd_of(), h)), nat_map_set::unfold(m, Succ(j), x)),
+            trans(nat_map_get_succ(nat_map_set(m, j + 1, x), j),
+                trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(j.low_bit(), nat_map_get(n.even_of(), h), nat_map_get(n.odd_of(), h)), nat_map_set::unfold(m, j + 1, x)),
                     nat_map_pick_rebuild_same(j.low_bit(), m, even, odd, h, x, ie, io)))
         },
     }
@@ -177,18 +177,18 @@ theorem nat_map_get_set_other<A>(m: NatMap<A>, k: Nat, x: A): (i: Nat) → k ≠
             let even = nat_map_set(m.even_of(), h, x);
             let odd = nat_map_set(m.odd_of(), h, x);
             match i {
-                Zero => λ ne => trans(nat_map_get_zero(nat_map_set(m, Succ(j), x)),
-                    trans(cong_fn(λ (n: NatMap<A>) => n.here_of(), nat_map_set::unfold(m, Succ(j), x)),
+                Zero => λ ne => trans(nat_map_get_zero(nat_map_set(m, j + 1, x)),
+                    trans(cong_fn(λ (n: NatMap<A>) => n.here_of(), nat_map_set::unfold(m, j + 1, x)),
                         trans(nat_map_rebuild_here(j.low_bit(), m, even, odd), sym(nat_map_get_zero(m))))),
                 Succ(l) => λ ne => {
                     let g = l.half();
-                    let apart: (j ≠ l) = λ e => ne(Nat::cong(λ (y: Nat) => Succ(y), e));
+                    let apart: (j ≠ l) = λ e => ne(Nat::cong(λ (y: Nat) => y + 1, e));
                     let ce = λ (b0: j.low_bit() = 0) (c0: l.low_bit() = 0) =>
                         nat_map_get_set_other(m.even_of(), h, x, g, λ (hg: h = g) => apart(nat_map_bits_inj(j, l, trans(b0, sym(c0)), hg)));
-                    let co = λ (a: Nat) (d: Nat) (b1: j.low_bit() = Succ(a)) (c1: l.low_bit() = Succ(d)) =>
+                    let co = λ (a: Nat) (d: Nat) (b1: j.low_bit() = a + 1) (c1: l.low_bit() = d + 1) =>
                         nat_map_get_set_other(m.odd_of(), h, x, g, λ (hg: h = g) => apart(nat_map_bits_inj(j, l, trans(nat_map_low_bit_one(j, a, b1), sym(nat_map_low_bit_one(l, d, c1))), hg)));
-                    trans(nat_map_get_succ(nat_map_set(m, Succ(j), x), l),
-                        trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(l.low_bit(), nat_map_get(n.even_of(), g), nat_map_get(n.odd_of(), g)), nat_map_set::unfold(m, Succ(j), x)),
+                    trans(nat_map_get_succ(nat_map_set(m, j + 1, x), l),
+                        trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(l.low_bit(), nat_map_get(n.even_of(), g), nat_map_get(n.odd_of(), g)), nat_map_set::unfold(m, j + 1, x)),
                             trans(nat_map_pick_rebuild_other(j.low_bit(), l.low_bit(), m, even, odd, g, ce, co), sym(nat_map_get_succ(m, l)))))
                 },
             }
@@ -303,7 +303,7 @@ fn Array::to_list<A>(self a: Array<A>) → List<A> { nat_map_dense(a.slots) }
 
 theorem Array::nth_empty<A>(i: Nat): Array::empty<A>().nth(i) = None { nat_map_get_empty<A>(i) }
 
-theorem Array::len_snoc<A>(a: Array<A>, x: A): a.snoc(x).len() = Succ(a.len()) { refl }
+theorem Array::len_snoc<A>(a: Array<A>, x: A): a.snoc(x).len() = a.len() + 1 { refl }
 
 theorem Array::nth_snoc_last<A>(a: Array<A>, x: A): a.snoc(x).nth(a.count) = Some(x) { nat_map_get_set_same(a.slots, a.count, x) }
 

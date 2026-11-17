@@ -1,0 +1,32 @@
+// An implicit read off `n + 1`: a width written the everyday way, met by a
+// successor, a numeral, another `_ + k`, or a call that computes to a
+// successor. `Nat::add` recurses on its second argument, so `?n + 1` is
+// `Succ(?n)` after one step and the unifier takes that step on the pattern
+// side (issues/unify-plus-one-pattern.md). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import bitvec; import bool; import logic; import nat;
+
+fn plus_one_head({n: Nat}, x: BitVec(n + 1)) → Bool { x.head_bit() }
+fn plus_two_width({n: Nat}, x: BitVec(n + 2)) → Nat { n }
+
+// Against a successor, as a match on the width leaves it.
+fn at_succ(k: Nat, x: BitVec(Succ(k))) → Bool { plus_one_head(x) }
+// Against a numeral.
+fn at_numeral(x: BitVec(8)) → Bool { plus_one_head(x) }
+theorem two_below_eight(x: BitVec(8)): plus_two_width(x) = 6 { refl }
+// Against another sum whose second argument is a successor or a larger numeral.
+fn at_sum_succ(m, k: Nat, x: BitVec(m + Succ(k))) → Bool { plus_one_head(x) }
+fn at_sum_two(m: Nat, x: BitVec(m + 2)) → Bool { plus_one_head(x) }
+theorem sum_two_reads_m(m: Nat, x: BitVec(m + 2)): plus_two_width(x) = m { refl }
+// Against a call that computes to a successor.
+fn bumped(k: Nat) → Nat { Succ(k) }
+fn at_computed(k: Nat, x: BitVec(bumped(k))) → Bool { plus_one_head(x) }
+// In a checking position: the result width `n + 1` meets the arm's `Succ(k)`.
+fn grow({n: Nat}, x: BitVec(n)) → BitVec(n + 1) { x.cons_bit(False) }
+fn checked({w: Nat}) → BitVec(w) {
+    match w { Zero => BitVec::nil(), Succ(_) => grow(BitVec::zero()) }
+}
+
+// Negative control: zero is no successor, so nothing fixes `n`.
+// expect-error: could not infer the implicit argument `n`
+fn at_zero(x: BitVec(0)) → Bool { plus_one_head(x) }

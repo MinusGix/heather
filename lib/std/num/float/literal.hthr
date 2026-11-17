@@ -192,8 +192,8 @@ fn Format::sc_over(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: N
 }
 
 fn Format::sc_div(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat,
-    fits: Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
-        ∨ ¬(Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))) → Float(F)
+    fits: F.sc_num(base, mant, exp, j, c) + 1 <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
+        ∨ ¬(F.sc_num(base, mant, exp, j, c) + 1 <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))) → Float(F)
 {
     match fits {
         Inl(_) => F.sc_quot(mode, base, bp, mant, exp, j, c, (F.sc_num(base, mant, exp, j, c)).ldiv_fuel(F.sc_den(base, exp, j, c), F.sc_fuel(c))),
@@ -353,9 +353,9 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
             let rl: (r < D) = N.ldiv_rem_lt(D);
             let a = F.sc_approx(base, bp, mant, exp, j, c, q, r, pa, rl);
             let lc: (D * L = L * D) = Nat::mul_comm(D, L);
-            let sq: (Succ(q) * D = D + q * D) = q.mul_succ_left(D);
-            let lt: (L * D < Succ(q) * D) = omega(big, lc, sq, pa, rl);
-            let lq: (L < Succ(q)) = Nat::lt_of_mul_lt_mul_r(L, Succ(q), D, lt);
+            let sq: ((q + 1) * D = D + q * D) = q.mul_succ_left(D);
+            let lt: (L * D < (q + 1) * D) = omega(big, lc, sq, pa, rl);
+            let lq: (L < q + 1) = Nat::lt_of_mul_lt_mul_r(L, q + 1, D, lt);
             let st: Bool = match r { Zero => False, Succ(_) => True };
             let yx: (W.grid(L.int()) <= x) = W.cut_le(x, q, st, a, L.int(), omega(lq));
             let y = W.grid(L.int());
@@ -363,8 +363,8 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
             let lp: (L = (F.top() * P) * 2) = F.sc_fuel_pow(c);
             let tw: (W.top() = F.top()) = refl;
             let mb = W.max_mag_bounds();
-            let m1: (Succ(W.max_mag()) * P <= W.top() * P) = Nat::mul_le_mono_r(P, Succ(W.max_mag()), W.top(), mb.right.left);
-            let l0: (W.limit_h() = Succ(W.max_mag()) * (P * 2)) = refl;
+            let m1: ((W.max_mag() + 1) * P <= W.top() * P) = Nat::mul_le_mono_r(P, W.max_mag() + 1, W.top(), mb.right.left);
+            let l0: (W.limit_h() = (W.max_mag() + 1) * (P * 2)) = refl;
             let lim: (W.limit_h() <= L) = linarith(lp, tw, m1, l0);
             let o0: (W.ovf_h() = (W.top() + W.top() - 1) * P) = refl;
             let o1: ((W.top() + W.top() - 1) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.top() + W.top() - 1, W.top() + W.top(), (W.top() + W.top()).sub_le(1));
@@ -386,8 +386,8 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
 }
 
 theorem Format::sc_div_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span,
-    fits: Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
-        ∨ ¬(Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))):
+    fits: F.sc_num(base, mant, exp, j, c) + 1 <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
+        ∨ ¬(F.sc_num(base, mant, exp, j, c) + 1 <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))):
     RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_div(mode, base, bp, mant, exp, j, c, fits))
 {
     let N = F.sc_num(base, mant, exp, j, c);
@@ -395,7 +395,7 @@ theorem Format::sc_div_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, 
     let fuel = F.sc_fuel(c);
     match fits {
         Inl(lt) => {
-            let lt2: (N < D * Nat::pow(2, fuel)) = j(Nat::pow_sq_eq(2, fuel), λ v _ => Succ(N) <= D * v, lt);
+            let lt2: (N < D * Nat::pow(2, fuel)) = j(Nat::pow_sq_eq(2, fuel), λ v _ => N + 1 <= D * v, lt);
             F.sc_quot_ok(mode, base, bp, mant, exp, j, c, jc, N.ldiv_fuel(D, fuel), Nat::ldiv_fuel_bounded(fuel, N, D, lt2))
         },
         Inr(nl) => F.sc_over_ok(mode, base, bp, mant, exp, j, c, jc, omega(nl), F.span.le_dec(j + c)),
@@ -407,7 +407,7 @@ theorem Format::sc_at_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, m
 {
     match jc {
         Inl(le) => F.sc_div_ok(mode, base, bp, mant, exp, j, c, le,
-            Succ(F.sc_num(base, mant, exp, j, c)).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
+            (F.sc_num(base, mant, exp, j, c) + 1).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
         Inr(_) => F.round_rat_correct(mode, Rat::scaled(base, bp, mant, exp)),
     }
 }

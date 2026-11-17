@@ -42,7 +42,7 @@ theorem neg_third(): (-3)⁻¹ ≈ Rat(-OfNat(1), 3) { refl }
 theorem quarter(): Rat::Same(2 ^ (-2) * 4, 1) { refl }
 theorem square(x: Rat): x ^ 2 ≈ x * x { x.pow_two() }
 theorem nat_exponent(x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
-theorem neutral_negative(x: Rat, h: x.Apart(0), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ { x.pow_negSucc_inv(k) }
+theorem neutral_negative(x: Rat, h: x.Apart(0), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(k + 1))⁻¹ { x.pow_negSucc_inv(k) }
 // `^` binds tighter than negation.
 theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) { refl }
 theorem any_proof(x: Rat, h, h2: x.Apart(0)): x.inv(h := h) = x.inv(h := h2) { refl }

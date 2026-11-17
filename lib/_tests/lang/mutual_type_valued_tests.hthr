@@ -59,7 +59,7 @@ fn LcPastArgs<O>(ts: Args<O>, d: Nat) → Type {
 // The members compute: each statement below is its value's type only by
 // unfolding the group.
 theorem lc_closed(): Lc<Nat>(Node(0, ACons(1, Bv(0), ACons(0, Fv(3), ANil))), 0) {
-    And(Succ(0).le_refl(), And(trivial, trivial))
+    And(1.le_refl(), And(trivial, trivial))
 }
 theorem occurs_second(): Occurs<Nat>(Node(0, ACons(0, Bv(0), ACons(0, Fv(3), ANil))), 3) {
     Inr(Inl(refl))
@@ -76,7 +76,7 @@ theorem not_occurs_bv(): ¬Occurs<Nat>(Bv(0), 0) { λ h => h }
 // the depth.
 theorem lc_mono<O>(t: Tm<O>, d, e: Nat, h: Lc(t, d), le: d <= e): Lc(t, e) {
     match t {
-        Bv(i) => Succ(i).le_trans(d, e, h, le),
+        Bv(i) => (i + 1).le_trans(d, e, h, le),
         Fv(_) => trivial,
         Node(_, ts) => lc_args_mono(ts, d, e, h, le),
     }

@@ -26,8 +26,8 @@ theorem hint_local(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = 
 // The shape of `Format::down_of_le`'s two hand-built steps
 // (lib/std/num/float/eft.hthr), with the two lemmas as hints: a `trans` of a
 // `cong` and an instance, and the same again under a product.
-theorem down_of_le_steps(h, k, b, e: Nat, s: Succ(b) = (b - e) + Succ(e), hk: h = k * Nat::pow(2, Succ(b))): h = (k * Nat::pow(2, b - e)) * Nat::pow(2, Succ(e)) {
-    by grind_with([Nat::pow_add(2, b - e, Succ(e)), sym(k.mul_assoc(Nat::pow(2, b - e), Nat::pow(2, Succ(e))))])
+theorem down_of_le_steps(h, k, b, e: Nat, s: b + 1 = (b - e) + (e + 1), hk: h = k * Nat::pow(2, b + 1)): h = (k * Nat::pow(2, b - e)) * Nat::pow(2, e + 1) {
+    by grind_with([Nat::pow_add(2, b - e, e + 1), sym(k.mul_assoc(Nat::pow(2, b - e), Nat::pow(2, e + 1)))])
 }
 // A checking position: the goal comes from a `let`'s annotation, and from
 // the codomain of a λ.
@@ -63,7 +63,7 @@ theorem regroup(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int:
 // `Cons(a, ys)` and `[] ++ ys` against `xs` (the second only from the
 // right side's pattern, `g(ys)`); a checking position; and a negative
 // control, where no term of the graph makes `Cons(a, ys)` the list.
-theorem neg_add_succ(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(Succ(k))) = -a + NegSucc(k) {
+theorem neg_add_succ(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k + 1)) = -a + NegSucc(k) {
     by grind_using(["Int::add_isucc", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
 }
 theorem neg_add_step(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k).isucc()) = -a + Int::negOfNat(k).ipred() {
@@ -134,8 +134,8 @@ theorem set_set_hit_other<A, C>(m: Memory<A, C>, x, y, z: A, d, e: C, yx: m.spac
 }
 // A premise no local is, by a hint that is no equation (a derived order
 // fact).
-theorem premise_hint(f, g: Nat → Nat, n: Nat, k: (i: Nat) → Succ(i).Le(n) → f(i) = g(i), a, b: Nat, ab: Succ(a).Le(b), bn: b.Le(n)): f(a) = g(a) {
-    by grind_with([Succ(a).le_trans(b, n, ab, bn)])
+theorem premise_hint(f, g: Nat → Nat, n: Nat, k: (i: Nat) → (i + 1).Le(n) → f(i) = g(i), a, b: Nat, ab: (a + 1).Le(b), bn: b.Le(n)): f(a) = g(a) {
+    by grind_with([(a + 1).le_trans(b, n, ab, bn)])
 }
 // The report names the locals the premises cite.
 theorem premise_reported(f, g: Nat → Nat, n: Nat, k: (i: Nat) → i < n → f(i) = g(i), a: Nat, h: a < n): f(a) = g(a) { by grind_report([], []) }
@@ -193,17 +193,17 @@ record Pt { x: Nat, y: Nat }
 theorem record_inj(a, b, c, d: Nat, h: Pt(a, b) = Pt(c, d)): b = d { by grind() }
 theorem inj_nested(a, b: Nat, xs: List<Nat>, h: Some(Cons(a, xs)) = Some(Cons(b, xs))): a = b { by grind() }
 theorem read_twice(r: Nat → Option<Nat>, x, l, m: Nat, h1: r(x) = Some(l), h2: r(x) = Some(m)): l = m { by grind() }
-theorem inj_by_lemma(r: Nat → Option<Nat>, k: (x: Nat) → r(x) = r(Succ(x)), x, l, m: Nat, h1: r(x) = Some(l), h2: r(Succ(x)) = Some(m)): l = m { by grind() }
+theorem inj_by_lemma(r: Nat → Option<Nat>, k: (x: Nat) → r(x) = r(x + 1), x, l, m: Nat, h1: r(x) = Some(l), h2: r(x + 1) = Some(m)): l = m { by grind() }
 theorem bool_squeeze(n: Bool, h1: n = True, h2: n = False): False { by grind() }
 theorem literal_squeeze(n: Nat, h1: n = 3, h2: n = 4): False { by grind() }
 theorem squeeze_equation(n: Bool, a, b: Nat, h1: n = True, h2: n = False): a = b { by grind() }
 theorem diseq_equation(a, b: Nat, f: Nat → Nat, h: f(a) ≠ f(b), e: a = b): 0 = 1 { by grind() }
 theorem goal_ctors<A>(x: A): Some(x) ≠ None { by grind() }
 theorem goal_binder(f: Nat → Nat, k: (n: Nat) → f(n) = n): (m: Nat) → f(f(m)) = m { by grind() }
-theorem succ_cong(a, b: Nat, h: a = b): Succ(a) = Succ(b) { by grind() }
-theorem succ_inj(a, b: Nat, h: Succ(a) = Succ(b)): a = b { by grind() }
-theorem succ_zero(a: Nat, h: Succ(a) = 0): False { by grind() }
-theorem succ_pattern(f: Nat → Nat, k: (n: Nat) → f(Succ(n)) = n, a, b: Nat, h: b = Succ(a)): f(b) = a { by grind() }
+theorem succ_cong(a, b: Nat, h: a = b): a + 1 = b + 1 { by grind() }
+theorem succ_inj(a, b: Nat, h: a + 1 = b + 1): a = b { by grind() }
+theorem succ_zero(a: Nat, h: a + 1 = 0): False { by grind() }
+theorem succ_pattern(f: Nat → Nat, k: (n: Nat) → f(n + 1) = n, a, b: Nat, h: b = a + 1): f(b) = a { by grind() }
 // The report names the local the field equation came from.
 theorem inj_reported(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): a = b { by grind_report([], []) }
 

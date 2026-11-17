@@ -260,23 +260,23 @@ fn ITree::iter_next<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), x
 // What is left of a pass, `t`, followed by the loop grows with one more unit
 // of fuel, when the loop does from every state.
 theorem ITree::iter_pass_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E),
-    ih: (a2: A) → ITree::Below(E, ITree::iter(E, n, body, a2), ITree::iter(E, Succ(n), body, a2)),
+    ih: (a2: A) → ITree::Below(E, ITree::iter(E, n, body, a2), ITree::iter(E, n + 1, body, a2)),
     t: ITree<Step<A, B>>(E)):
     ITree::Below<B>(E, ITree::bind<Step<A, B>, B>(E, t, λ x => ITree::iter_next(E, n, body, x)),
-        ITree::bind<Step<A, B>, B>(E, t, λ x => ITree::iter_next(E, Succ(n), body, x)))
+        ITree::bind<Step<A, B>, B>(E, t, λ x => ITree::iter_next(E, n + 1, body, x)))
 {
-    let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, n, body, x), ITree::iter_next(E, Succ(n), body, x)) =
+    let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, n, body, x), ITree::iter_next(E, n + 1, body, x)) =
         λ x => match x {
-            Continue(a2) => SameTau(ITree::iter(E, Succ(n), body, a2), refl, ih(a2)),
+            Continue(a2) => SameTau(ITree::iter(E, n + 1, body, a2), refl, ih(a2)),
             Break(_) => refl,
         };
     ITree::below_bind(E, t, t, λ x => ITree::iter_next(E, n, body, x),
-        λ x => ITree::iter_next(E, Succ(n), body, x), ITree::below_refl(E, t), step)
+        λ x => ITree::iter_next(E, n + 1, body, x), ITree::below_refl(E, t), step)
 }
 
 // One more unit of fuel grows a loop.
 theorem ITree::iter_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
-    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, Succ(n), body, a))
+    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, n + 1, body, a))
 {
     match n {
         Zero => trivial,
@@ -287,18 +287,18 @@ theorem ITree::iter_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>
 // One more unit of fuel, and a body that grows at every state, grow a loop.
 theorem ITree::iter_below<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), body2: A → ITree<Step<A, B>>(E),
     grows: (a: A) → ITree::Below(E, body(a), body2(a))): (a: A) →
-    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, Succ(n), body2, a))
+    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, n + 1, body2, a))
 {
     match n {
         Zero => λ a => trivial,
         Succ(m) => λ a => {
-            let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, m, body, x), ITree::iter_next(E, Succ(m), body2, x)) =
+            let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, m, body, x), ITree::iter_next(E, m + 1, body2, x)) =
                 λ x => match x {
-                    Continue(a2) => SameTau(ITree::iter(E, Succ(m), body2, a2), refl, ITree::iter_below(E, m, body, body2, grows, a2)),
+                    Continue(a2) => SameTau(ITree::iter(E, m + 1, body2, a2), refl, ITree::iter_below(E, m, body, body2, grows, a2)),
                     Break(_) => refl,
                 };
             ITree::below_bind(E, body(a), body2(a), λ x => ITree::iter_next(E, m, body, x),
-                λ x => ITree::iter_next(E, Succ(m), body2, x), grows(a), step)
+                λ x => ITree::iter_next(E, m + 1, body2, x), grows(a), step)
         },
     }
 }
@@ -380,19 +380,19 @@ theorem ITree::mrec_layer_below<R>(D: Events, E: Events,
 // One more unit of fuel grows a recursion: each call is unrolled once more.
 theorem ITree::mrec_grows<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
     n: Nat, t: ITree<R>(Events::sum(D, E))):
-    ITree::Below(E, ITree::mrec(D, E, body, n, t), ITree::mrec(D, E, body, Succ(n), t))
+    ITree::Below(E, ITree::mrec(D, E, body, n, t), ITree::mrec(D, E, body, n + 1, t))
 {
     match n {
         Zero => trivial,
         Succ(m) => {
             let ih: (d: D.Cmd) → (k: D.Resp(d) → ITree<R>(Events::sum(D, E))) →
                 ITree::Below<R>(E, Tau(ITree::mrec(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k))),
-                    Tau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k)))) =
-                λ d k => SameTau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k)), refl,
+                    Tau(ITree::mrec(D, E, body, m + 1, ITree::bind(Events::sum(D, E), body(d), k)))) =
+                λ d k => SameTau(ITree::mrec(D, E, body, m + 1, ITree::bind(Events::sum(D, E), body(d), k)), refl,
                     ITree::mrec_grows(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k)));
             ITree::mrec_layer_below(D, E,
                 λ d k => Tau(ITree::mrec(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k))),
-                λ d k => Tau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k))), ih, t)
+                λ d k => Tau(ITree::mrec(D, E, body, m + 1, ITree::bind(Events::sum(D, E), body(d), k))), ih, t)
         },
     }
 }
@@ -408,7 +408,7 @@ theorem IsTrace::up<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p),
 {
     match d {
         Zero => it,
-        Succ(d2) => IsTrace::of_below(E, p(n + d2), p(Succ(n + d2)), tr, g(n + d2), IsTrace::up(E, p, g, n, d2, tr, it)),
+        Succ(d2) => IsTrace::of_below(E, p(n + d2), p(n + d2 + 1), tr, g(n + d2), IsTrace::up(E, p, g, n, d2, tr, it)),
     }
 }
 

@@ -23,7 +23,7 @@ import nat;
 // Left: a shift by `k` is `ofNat` of the value times `2^k`.
 
 // Dropping the top bit of `ofNat` at one more bit is `ofNat` at the width.
-theorem BitVec::init_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := Succ(n)).init() = BitVec::ofNat(x) {
+theorem BitVec::init_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n + 1).init() = BitVec::ofNat(x) {
     match n {
         Zero => λ x => refl,
         Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, refl, ih(x.half()), a := BitVec::odd_bit(x), b := BitVec::odd_bit(x)),
@@ -34,7 +34,7 @@ theorem BitVec::shift_left_one_ofNat(n, x: Nat): BitVec::ofNat(x, n := n).shift_
     match n {
         Zero => refl,
         Succ(k) => trans(BitVec::cons_bit_cong(k, refl, BitVec::init_ofNat(k, x), a := False, b := False),
-            sym(trans(BitVec::ofNat_cong(Succ(k), sym(x.twice().add_left_zero())), BitVec::ofNat_digit(k, False, x)))),
+            sym(trans(BitVec::ofNat_cong(k + 1, sym(x.twice().add_left_zero())), BitVec::ofNat_digit(k, False, x)))),
     }
 }
 
@@ -44,7 +44,7 @@ theorem BitVec::shift_left_eq_ofNat(n: Nat, x: BitVec(n), k: Nat): x.shift_left(
         Succ(j) => {
             let p = Nat::pow(2, j);
             let prev: (x.shift_left(j) = BitVec::ofNat(x.toNat() * p)) = BitVec::shift_left_eq_ofNat(n, x, j);
-            let scaled: ((x.toNat() * p).twice() = x.toNat() * Nat::pow(2, Succ(j))) =
+            let scaled: ((x.toNat() * p).twice() = x.toNat() * Nat::pow(2, j + 1)) =
                 sym(trans(Nat::cong(λ (y: Nat) => x.toNat() * y, BitVec::pow_two_succ_twice(j)), x.toNat().mul_twice(p)));
             trans(@cong(λ (w: BitVec(n)) => w.shift_left_one(), x.shift_left(j), BitVec::ofNat(x.toNat() * p), prev),
                 trans(BitVec::shift_left_one_ofNat(n, x.toNat() * p), BitVec::ofNat_cong(n, scaled)))
@@ -113,8 +113,8 @@ theorem BitVec::toNat_shift_right_lt(n: Nat, x: BitVec(n), k: Nat):
     let v = x.toNat();
     let p = Nat::pow(2, k);
     rewrite(BitVec::toNat_shift_right(n, x, k),
-        j(v.div_mul_add_mod(p), λ y _ => Succ(y) <= v.div(p) * p + p,
-            (v.div(p) * p).add_le_mono_l(Succ(v.mod(p)), p, v.mod_lt(p))))
+        j(v.div_mul_add_mod(p), λ y _ => y + 1 <= v.div(p) * p + p,
+            (v.div(p) * p).add_le_mono_l(v.mod(p) + 1, p, v.mod_lt(p))))
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ fn BitVec::low_mask({n: Nat}, k: Nat) → BitVec(n) {
 }
 
 // `2^(k+1) - 1` is a set bit below twice `2^k - 1`.
-theorem BitVec::pow_two_pred_digit(k: Nat): Nat::pow(2, Succ(k)) - 1 = Nat::of_bit(True) + Nat::twice(Nat::pow(2, k) - 1) {
+theorem BitVec::pow_two_pred_digit(k: Nat): Nat::pow(2, k + 1) - 1 = Nat::of_bit(True) + Nat::twice(Nat::pow(2, k) - 1) {
     let p = Nat::pow(2, k);
     let digit: (q: Nat) → 1 <= q → (q.twice() - 1 = Nat::of_bit(True) + Nat::twice(q - 1)) = λ q => match q as λ c => 1 <= c → (c.twice() - 1 = Nat::of_bit(True) + Nat::twice(c - 1)) {
         Zero => λ h => false_elim(h),
@@ -148,8 +148,8 @@ theorem BitVec::low_mask_eq_ofNat(n: Nat): (k: Nat) → BitVec::low_mask(k, n :=
     match n {
         Zero => λ k => refl,
         Succ(m, ih) => λ k => match k {
-            Zero => sym(BitVec::ofNat_zero(Succ(m))),
-            Succ(j) => sym(trans(BitVec::ofNat_cong(Succ(m), BitVec::pow_two_pred_digit(j)),
+            Zero => sym(BitVec::ofNat_zero(m + 1)),
+            Succ(j) => sym(trans(BitVec::ofNat_cong(m + 1, BitVec::pow_two_pred_digit(j)),
                 trans(BitVec::ofNat_digit(m, True, Nat::pow(2, j) - 1),
                     BitVec::cons_bit_cong(m, refl, sym(ih(j)), a := True, b := True)))),
         },
@@ -176,21 +176,21 @@ theorem BitVec::toNat_band_low_mask(n: Nat): (k: Nat) → (x: BitVec(n)) → x.b
     match n {
         Zero => λ k x => sym((0).mod_of_lt(Nat::pow(2, k), (2).one_le_pow(k, trivial))),
         Succ(m, ih) => λ k x => match k {
-            Zero => trans(@cong(λ (w: BitVec(Succ(m))) => w.toNat(), x.band(BitVec::zero()), BitVec::zero(), BitVec::band_zero_r(Succ(m), x)),
-                trans(BitVec::zero_toNat(Succ(m)), sym(x.toNat().mod_one()))),
+            Zero => trans(@cong(λ (w: BitVec(m + 1)) => w.toNat(), x.band(BitVec::zero()), BitVec::zero(), BitVec::band_zero_r(m + 1, x)),
+                trans(BitVec::zero_toNat(m + 1), sym(x.toNat().mod_one()))),
             Succ(j) => {
                 let h = x.head_bit();
                 let t = x.tail_bits().toNat();
                 let p = Nat::pow(2, j);
                 calc {
-                    x.band(BitVec::low_mask(Succ(j))).toNat()
+                    x.band(BitVec::low_mask(j + 1)).toNat()
                         = Nat::of_bit(h && True) + x.tail_bits().band(BitVec::low_mask(j)).toNat().twice() := refl,
                         = Nat::of_bit(h) + x.tail_bits().band(BitVec::low_mask(j)).toNat().twice() :=
                             Nat::cong(λ (v: Nat) => v + x.tail_bits().band(BitVec::low_mask(j)).toNat().twice(),
                                 @cong(λ (c: Bool) => Nat::of_bit(c), h && True, h, h.and_true_r())),
                         = Nat::of_bit(h) + t.mod(p).twice() := Nat::cong(λ (v: Nat) => Nat::of_bit(h) + v.twice(), ih(j, x.tail_bits())),
                         = (Nat::of_bit(h) + t.twice()).mod(p.twice()) := sym(Nat::of_bit_twice_mod(h, t, p)),
-                        = x.toNat().mod(Nat::pow(2, Succ(j))) := Nat::cong(λ (d: Nat) => x.toNat().mod(d), sym(BitVec::pow_two_succ_twice(j))),
+                        = x.toNat().mod(Nat::pow(2, j + 1)) := Nat::cong(λ (d: Nat) => x.toNat().mod(d), sym(BitVec::pow_two_succ_twice(j))),
                 }
             },
         },
@@ -274,7 +274,7 @@ theorem BitVec::shift_right_shift_left(n, k: Nat, x: BitVec(n)):
     let p = Nat::pow(2, k);
     let d = x.toNat().div(p) * p;
     let under: (d <= x.toNat()) = j(x.toNat().div_mul_add_mod(p), λ s _ => d <= s, d.le_add_l(x.toNat().mod(p)));
-    let fits: (d < Nat::pow(2, n)) = Nat::le_trans(Succ(d), Succ(x.toNat()), Nat::pow(2, n),
+    let fits: (d < Nat::pow(2, n)) = Nat::le_trans(d + 1, x.toNat() + 1, Nat::pow(2, n),
         Nat::le_succ_succ(d, x.toNat(), under), BitVec::toNat_lt_pow(n, x));
     BitVec::toNat_inj(n, trans(BitVec::toNat_shift_left_mod(n, x.shift_right(k), k),
         trans(Nat::cong(λ (q: Nat) => (q * p).mod(Nat::pow(2, n)), BitVec::toNat_shift_right(n, x, k)),

@@ -145,8 +145,8 @@ theorem Memory::get_set_from_outside<A, C>(k: Nat): (m: Memory<A, C>) → (a: A)
         Zero => λ m a i cs x outside => refl,
         Succ(_, ih) => λ m a i cs x outside => {
             let first = m.set(m.space.offset(a, i), head(cs));
-            let rest: (first.set_from(a, Succ(i), tail(cs)).get(x) = first.get(x)) =
-                ih(first, a, Succ(i), tail(cs), x, λ p low high => outside(p, { omega }, { omega }));
+            let rest: (first.set_from(a, i + 1, tail(cs)).get(x) = first.get(x)) =
+                ih(first, a, i + 1, tail(cs), x, λ p low high => outside(p, { omega }, { omega }));
             trans(rest, m.get_set_other(m.space.offset(a, i), x, head(cs), outside(i, { omega }, { omega })))
         },
     }
@@ -167,13 +167,13 @@ theorem Memory::get_set_from<A, C>(k: Nat): (m: Memory<A, C>) → SpaceLaws<A>(m
         Succ(j, ih) => λ m laws a i cs distinct => {
             let at = m.space.offset(a, i);
             let first = m.set(at, head(cs));
-            let here: (first.set_from(a, Succ(i), tail(cs)).get(at) = head(cs)) =
-                trans(Memory::get_set_from_outside(j, first, a, Succ(i), tail(cs), at,
+            let here: (first.set_from(a, i + 1, tail(cs)).get(at) = head(cs)) =
+                trans(Memory::get_set_from_outside(j, first, a, i + 1, tail(cs), at,
                         λ q low high => distinct(i, q, { omega }, { omega }, { omega })),
                     m.get_set_same(laws, at, head(cs)));
-            let later: (first.set_from(a, Succ(i), tail(cs)).get_from(a, Succ(i), j) = tail(cs)) =
-                ih(first, laws, a, Succ(i), tail(cs), λ p q low order high => distinct(p, q, { omega }, order, { omega }));
-            let both: (cons(first.set_from(a, Succ(i), tail(cs)).get(at), first.set_from(a, Succ(i), tail(cs)).get_from(a, Succ(i), j)) =
+            let later: (first.set_from(a, i + 1, tail(cs)).get_from(a, i + 1, j) = tail(cs)) =
+                ih(first, laws, a, i + 1, tail(cs), λ p q low order high => distinct(p, q, { omega }, order, { omega }));
+            let both: (cons(first.set_from(a, i + 1, tail(cs)).get(at), first.set_from(a, i + 1, tail(cs)).get_from(a, i + 1, j)) =
                 cons(head(cs), tail(cs))) = rewrite(here, later, refl);
             both
         },
@@ -194,10 +194,10 @@ theorem Memory::get_from_set_span_apart<A, C>(l: Nat): (m: Memory<A, C>) → (a:
         Succ(n, ih) => λ m a k cs b j apart => {
             let here: (m.set_span(a, cs).get(m.space.offset(b, j)) = m.get(m.space.offset(b, j))) =
                 m.get_set_span_outside(a, cs, m.space.offset(b, j), λ p below => apart(p, j, below, { omega }, { omega }));
-            let later: (m.set_span(a, cs).get_from(b, Succ(j), n) = m.get_from(b, Succ(j), n)) =
-                ih(m, a, k, cs, b, Succ(j), λ p q below low high => apart(p, q, below, { omega }, { omega }));
-            let both: (cons(m.set_span(a, cs).get(m.space.offset(b, j)), m.set_span(a, cs).get_from(b, Succ(j), n)) =
-                cons(m.get(m.space.offset(b, j)), m.get_from(b, Succ(j), n))) = rewrite(here, later, refl);
+            let later: (m.set_span(a, cs).get_from(b, j + 1, n) = m.get_from(b, j + 1, n)) =
+                ih(m, a, k, cs, b, j + 1, λ p q below low high => apart(p, q, below, { omega }, { omega }));
+            let both: (cons(m.set_span(a, cs).get(m.space.offset(b, j)), m.set_span(a, cs).get_from(b, j + 1, n)) =
+                cons(m.get(m.space.offset(b, j)), m.get_from(b, j + 1, n))) = rewrite(here, later, refl);
             both
         },
     }
@@ -217,10 +217,10 @@ theorem Memory::get_from_agree<A, B, C>(k: Nat): (m: Memory<A, C>) → (n: Memor
         Zero => λ m n a b i same => refl,
         Succ(j, ih) => λ m n a b i same => {
             let here: (m.get(m.space.offset(a, i)) = n.get(n.space.offset(b, i))) = same(i, { omega }, { omega });
-            let later: (m.get_from(a, Succ(i), j) = n.get_from(b, Succ(i), j)) =
-                ih(m, n, a, b, Succ(i), λ p low high => same(p, { omega }, { omega }));
-            let both: (cons(m.get(m.space.offset(a, i)), m.get_from(a, Succ(i), j)) =
-                cons(n.get(n.space.offset(b, i)), n.get_from(b, Succ(i), j))) = rewrite(here, later, refl);
+            let later: (m.get_from(a, i + 1, j) = n.get_from(b, i + 1, j)) =
+                ih(m, n, a, b, i + 1, λ p low high => same(p, { omega }, { omega }));
+            let both: (cons(m.get(m.space.offset(a, i)), m.get_from(a, i + 1, j)) =
+                cons(n.get(n.space.offset(b, i)), n.get_from(b, i + 1, j))) = rewrite(here, later, refl);
             both
         },
     }
@@ -244,16 +244,16 @@ theorem Memory::get_set_from_list<A, C>(xs: List<C>): (m: Memory<A, C>) → Spac
             Zero => λ found at distinct => {
                 let at_i = m.space.offset(a, i);
                 let first = m.set(at_i, x);
-                let kept: (first.set_from(a, Succ(i), rest.to_vector()).get(at_i) = first.get(at_i)) =
-                    Memory::get_set_from_outside(rest.len(), first, a, Succ(i), rest.to_vector(), at_i,
+                let kept: (first.set_from(a, i + 1, rest.to_vector()).get(at_i) = first.get(at_i)) =
+                    Memory::get_set_from_outside(rest.len(), first, a, i + 1, rest.to_vector(), at_i,
                         λ q low high => distinct(i, q, { omega }, { omega }, { omega }));
                 let stored: (x = c) = inj(found);
-                let hit: (first.set_from(a, Succ(i), rest.to_vector()).get(at_i) = c) =
+                let hit: (first.set_from(a, i + 1, rest.to_vector()).get(at_i) = c) =
                     trans(kept, trans(m.get_set_same(laws, at_i, x), stored));
                 let here: (i = p) = omega(at);
-                j(here, λ y _ => first.set_from(a, Succ(i), rest.to_vector()).get(m.space.offset(a, y)) = c, hit)
+                j(here, λ y _ => first.set_from(a, i + 1, rest.to_vector()).get(m.space.offset(a, y)) = c, hit)
             },
-            Succ(r) => λ found at distinct => Memory::get_set_from_list(rest, m.set(m.space.offset(a, i), x), laws, a, Succ(i), r, p, c,
+            Succ(r) => λ found at distinct => Memory::get_set_from_list(rest, m.set(m.space.offset(a, i), x), laws, a, i + 1, r, p, c,
                 found, omega(at), λ p q low order high => distinct(p, q, { omega }, order, { omega })),
         },
     }
@@ -297,7 +297,7 @@ theorem Memory::agrees_set_from<A, C>(k: Nat): (m, n: Memory<A, C>) → Agrees<A
             let at: (n.space.offset(a, i) = m.space.offset(a, i)) = rewrite(agree.space, refl);
             let moved: Agrees<A, C>(m.set(m.space.offset(a, i), head(cs)), n.set(n.space.offset(a, i), head(cs))) =
                 rewrite(at, Memory::agrees_set(m, n, agree, m.space.offset(a, i), head(cs)));
-            ih(m.set(m.space.offset(a, i), head(cs)), n.set(n.space.offset(a, i), head(cs)), moved, a, Succ(i), tail(cs))
+            ih(m.set(m.space.offset(a, i), head(cs)), n.set(n.space.offset(a, i), head(cs)), moved, a, i + 1, tail(cs))
         },
     }
 }
@@ -335,15 +335,15 @@ theorem Memory::set_from_set_outside<A, C>(k: Nat): (m: Memory<A, C>) → SpaceL
             let swapped: Agrees<A, C>(m.set(y, d).set(at, head(cs)), m.set(at, head(cs)).set(y, d)) =
                 Memory::agrees_symm(m.set(at, head(cs)).set(y, d), m.set(y, d).set(at, head(cs)),
                     m.set_set_comm(laws, at, y, head(cs), d, outside(i, { omega }, { omega })));
-            let carried: Agrees<A, C>(m.set(y, d).set(at, head(cs)).set_from(a, Succ(i), tail(cs)),
-                    m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs))) =
-                Memory::agrees_set_from(j, m.set(y, d).set(at, head(cs)), m.set(at, head(cs)).set(y, d), swapped, a, Succ(i), tail(cs));
-            let moved: Agrees<A, C>(m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs)),
-                    m.set(at, head(cs)).set_from(a, Succ(i), tail(cs)).set(y, d)) =
-                ih(m.set(at, head(cs)), laws, a, Succ(i), tail(cs), y, d, λ p low high => outside(p, { omega }, { omega }));
-            Memory::agrees_trans(m.set(y, d).set(at, head(cs)).set_from(a, Succ(i), tail(cs)),
-                m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs)),
-                m.set(at, head(cs)).set_from(a, Succ(i), tail(cs)).set(y, d), carried, moved)
+            let carried: Agrees<A, C>(m.set(y, d).set(at, head(cs)).set_from(a, i + 1, tail(cs)),
+                    m.set(at, head(cs)).set(y, d).set_from(a, i + 1, tail(cs))) =
+                Memory::agrees_set_from(j, m.set(y, d).set(at, head(cs)), m.set(at, head(cs)).set(y, d), swapped, a, i + 1, tail(cs));
+            let moved: Agrees<A, C>(m.set(at, head(cs)).set(y, d).set_from(a, i + 1, tail(cs)),
+                    m.set(at, head(cs)).set_from(a, i + 1, tail(cs)).set(y, d)) =
+                ih(m.set(at, head(cs)), laws, a, i + 1, tail(cs), y, d, λ p low high => outside(p, { omega }, { omega }));
+            Memory::agrees_trans(m.set(y, d).set(at, head(cs)).set_from(a, i + 1, tail(cs)),
+                m.set(at, head(cs)).set(y, d).set_from(a, i + 1, tail(cs)),
+                m.set(at, head(cs)).set_from(a, i + 1, tail(cs)).set(y, d), carried, moved)
         },
     }
 }
@@ -359,15 +359,15 @@ theorem Memory::set_from_set_span_apart<A, C>(l: Nat): (m: Memory<A, C>) → Spa
             let past: Agrees<A, C>(m.set_span(a, cs).set(at, head(ds)), m.set(at, head(ds)).set_span(a, cs)) =
                 Memory::agrees_symm(m.set(at, head(ds)).set_span(a, cs), m.set_span(a, cs).set(at, head(ds)),
                     Memory::set_from_set_outside(k, m, laws, a, 0, cs, at, head(ds), λ p low high => apart(p, j, high, { omega }, { omega })));
-            let carried: Agrees<A, C>(m.set_span(a, cs).set(at, head(ds)).set_from(b, Succ(j), tail(ds)),
-                    m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds))) =
-                Memory::agrees_set_from(n, m.set_span(a, cs).set(at, head(ds)), m.set(at, head(ds)).set_span(a, cs), past, b, Succ(j), tail(ds));
-            let rest: Agrees<A, C>(m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds)),
-                    m.set(at, head(ds)).set_from(b, Succ(j), tail(ds)).set_span(a, cs)) =
-                ih(m.set(at, head(ds)), laws, a, k, cs, b, Succ(j), tail(ds), λ p q below low high => apart(p, q, below, { omega }, { omega }));
-            Memory::agrees_trans(m.set_span(a, cs).set(at, head(ds)).set_from(b, Succ(j), tail(ds)),
-                m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds)),
-                m.set(at, head(ds)).set_from(b, Succ(j), tail(ds)).set_span(a, cs), carried, rest)
+            let carried: Agrees<A, C>(m.set_span(a, cs).set(at, head(ds)).set_from(b, j + 1, tail(ds)),
+                    m.set(at, head(ds)).set_span(a, cs).set_from(b, j + 1, tail(ds))) =
+                Memory::agrees_set_from(n, m.set_span(a, cs).set(at, head(ds)), m.set(at, head(ds)).set_span(a, cs), past, b, j + 1, tail(ds));
+            let rest: Agrees<A, C>(m.set(at, head(ds)).set_span(a, cs).set_from(b, j + 1, tail(ds)),
+                    m.set(at, head(ds)).set_from(b, j + 1, tail(ds)).set_span(a, cs)) =
+                ih(m.set(at, head(ds)), laws, a, k, cs, b, j + 1, tail(ds), λ p q below low high => apart(p, q, below, { omega }, { omega }));
+            Memory::agrees_trans(m.set_span(a, cs).set(at, head(ds)).set_from(b, j + 1, tail(ds)),
+                m.set(at, head(ds)).set_span(a, cs).set_from(b, j + 1, tail(ds)),
+                m.set(at, head(ds)).set_from(b, j + 1, tail(ds)).set_span(a, cs), carried, rest)
         },
     }
 }
@@ -469,10 +469,10 @@ theorem Memory::refused_from_none<A, C>(k: Nat): (m: Memory<A, C>) → (allowed:
     match k {
         Zero => λ m allowed a i all => refl,
         Succ(j, ih) => λ m allowed a i all => {
-            let later: (m.refused_from(allowed, a, Succ(i), j) = None) =
-                ih(m, allowed, a, Succ(i), λ p low high => all(p, { omega }, { omega }));
+            let later: (m.refused_from(allowed, a, i + 1, j) = None) =
+                ih(m, allowed, a, i + 1, λ p low high => all(p, { omega }, { omega }));
             j(sym(all(i, { omega }, { omega })), λ s _ =>
-                (match s { True => m.refused_from(allowed, a, Succ(i), j), False => Some(m.space.offset(a, i)) }) = None<A>, later)
+                (match s { True => m.refused_from(allowed, a, i + 1, j), False => Some(m.space.offset(a, i)) }) = None<A>, later)
         },
     }
 }
@@ -499,7 +499,7 @@ theorem Memory::refused_from_some<A, C>(k: Nat): (m: Memory<A, C>) → (allowed:
         Zero => λ m allowed a i x none => absurd(none),
         Succ(j, ih) => λ m allowed a i x => (match set: allowed(m.perms(m.space.offset(a, i))) {
             True => λ found => {
-                let later: FirstRefused<A, C>(m, allowed, a, Succ(i), j, x) = ih(m, allowed, a, Succ(i), x, found);
+                let later: FirstRefused<A, C>(m, allowed, a, i + 1, j, x) = ih(m, allowed, a, i + 1, x, found);
                 FirstRefused(index := later.index, low := omega(later.low), high := omega(later.high), at := later.at,
                     clear := later.clear, before := λ q low below => (match Nat::eq_dec(q, i) {
                         Inl(here) => rewrite(here, set),
@@ -783,7 +783,7 @@ fn Memory::buffer<C>(cap: Nat, fill: C) → Memory<Nat, C> {
 }
 
 theorem Perm::below_data(cap, i: Nat, inside: i < cap): Perm::below(cap, i) = Perm::data() {
-    let fits: (Succ(i).leb(cap) = True) = bool::eq_true_of_is_true(Succ(i).leb(cap), Succ(i).leb_complete(cap, inside));
+    let fits: ((i + 1).leb(cap) = True) = bool::eq_true_of_is_true((i + 1).leb(cap), (i + 1).leb_complete(cap, inside));
     j(sym(fits), λ s _ => (match s { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl)
 }
 
