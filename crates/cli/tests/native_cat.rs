@@ -304,7 +304,7 @@ fn structured_regions_run() {
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
     for (source, reason) in [
-        ("huge_cat", "`huge_cat` needs a data segment of 2147487744 bytes for its words, buffers, scratch range and saved RSP, past the I/O profile's limit of 1073741824 (`io_data_limit`)"),
+        ("huge_cat", "`huge_cat` needs a data segment of 2147487744 bytes for its words, buffers, scratch range, saved RSP and stack, past the I/O profile's limit of 1073741824 (`io_data_limit`)"),
         ("stats", "`stats` is refused at statement 1, a call: `stat` is not compiled yet"),
         ("narrow_long_leaf", "`narrow_long_leaf` is refused at statement 1, a computation: the leaf needs 41 registers, one per input and per node, and the pool holds 12; it does not compile a node at a time because a node is not at width 64"),
         ("narrow_mixed_leaf", "`narrow_mixed_leaf` is refused at statement 1, a computation: node 2 of the leaf is not at width 64"),
