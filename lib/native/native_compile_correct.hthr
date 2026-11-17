@@ -880,26 +880,7 @@ theorem Source::compile_bare(self src: Source, low: BitVec(64), homes: Homes, ba
         False => None,
         True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
     }) {
-    let plain: Option<Prog> = match src.allocation_ok(homes) {
-        False => None,
-        True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-    };
-    j(sym(bare), λ ps _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
-        False => None,
-        True => match ps {
-            Nil => match src.functions {
-                Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-                Cons(_, _) => src.compile_calls(low, homes),
-            },
-            Cons(_, _) => src.compile_calls(low, homes),
-        },
-    }) = plain, j(sym(none), λ fs _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
-        False => None,
-        True => match fs {
-            Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-            Cons(_, _) => src.compile_calls(low, homes),
-        },
-    }) = plain, refl))
+    simp_only(Source::compile, bare, none)
 }
 
 // The converse, for a reader that has the program: homes that pass the
@@ -938,30 +919,7 @@ theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Home
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes), 0, names) = Some(Compiled(procs, after)),
     whole: procs.deep_exit(src.layout(low, homes)).links(src.functions, homes.places, after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile_calls(low, homes) = Some(program) {
-    let layout = src.layout(low, homes);
-    let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
-        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
-    let finished = j(sym(whole), λ o _ => (match o as λ _ => Option<Prog> {
-            None => None,
-            Some(x) => match x.laid_out() { False => None, True => Some(x) },
-        }) = Some(program), laid_here);
-    let after_main = j(sym(code), λ o _ => (match o {
-            None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                None => None,
-                Some(x) => match x.laid_out() { False => None, True => Some(x) },
-            },
-        }) = Some(program), finished);
-    j(sym(emitted), λ o _ => (match o {
-            None => None,
-            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
-                None => None,
-                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                    None => None,
-                    Some(x) => match x.laid_out() { False => None, True => Some(x) },
-                },
-            },
-        }) = Some(program), after_main)
+    simp_only(Source::compile_calls, emitted, code, whole, eq_true_of_is_true(program.laid_out(), laid))
 }
 
 // The same with procedures (`Source::compile_calls`): the converse
@@ -1022,13 +980,7 @@ theorem Procedure::code_of(self proc: Procedure, p, entry, body, out: Prog, layo
     fits: proc.fits(layout) = True, entered: proc.entry_code(p, layout, index) = entry,
     emitted: proc.body.emit(entry, layout, proc.results, names) = Some(Compiled(body, after)), left: proc.exit_code(body, layout) = out):
     proc.code(p, layout, index, names) = Some(Compiled(out, after)) {
-    j(sym(fits), λ f _ => (match f as λ _ => Option<Compiled> {
-            False => None,
-            True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) },
-        }) = Some(Compiled(out, after)),
-        j(sym(entered), λ e _ => (match proc.body.emit(e, layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
-            j(sym(emitted), λ o _ => (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
-                j(left, λ x _ => Some(Compiled(proc.exit_code(body, layout), after)) = Some(Compiled(x, after)), refl))))
+    simp_only(Procedure::code, fits, entered, emitted, left)
 }
 
 // The procedures' code from the first's and the rest's.
@@ -1453,26 +1405,20 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
 
 // Each procedure from `index` on is in a program its code is in, procedure
 // `i` of them at label `index + i`.
-theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p: Prog) → (index, names: Nat) → (d: Compiled) →
-    procs.procedures_code(p, layout, index, names) = Some(d) → (whole: Prog) → d.prog.Within(whole) →
+theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout, p: Prog, index, names: Nat, d: Compiled,
+    code: procs.procedures_code(p, layout, index, names) = Some(d), whole: Prog, w: d.prog.Within(whole)):
     p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
-    match procs {
-        Nil => λ p index names d code whole w => subst(code,
-            ⟨p.within_self(), λ i proc none => absurd(none)⟩),
-        Cons(first, rest) => λ p index names d => (match first.code(p, layout, index, names) as λ o => first.code(p, layout, index, names) = o →
-                (match o { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) }) = Some(d) →
-                (whole: Prog) → d.prog.Within(whole) →
-                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
-            None => λ _ none => absurd(none),
-            Some(c) => λ code others whole w => {
-                let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
-                let here = first.code_hosted(p, layout, index, names, c, code, whole, Prog::within_trans(later.left, w));
-                ⟨Prog::within_trans(here.right, later.left), λ i => match i {
-                    Zero => λ proc same => subst(same, here.left),
-                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => Hosted(proc, layout, x, whole), later.right(k, proc, found)),
-                }⟩
-            },
-        })(refl),
+    induct List::procedures_code(procs, p, layout, index, names) {
+        Nil => subst(code, ⟨p.within_self(), λ i proc none => absurd(none)⟩),
+        Cons::None => absurd(code),
+        Cons::Some => {
+            let later = ih(d, code, whole, w);
+            let here = proc.code_hosted(p, layout, index, names, c, h, whole, Prog::within_trans(later.left, w));
+            ⟨Prog::within_trans(here.right, later.left), λ i => match i {
+                Zero => λ found same => subst(same, here.left),
+                Succ(k) => λ found there => j(Nat::add_succ_left(index, k), λ x _ => Hosted(found, layout, x, whole), later.right(k, found, there)),
+            }⟩
+        },
     }
 }
 
@@ -1511,7 +1457,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                         let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) = subst(same, linked);
                         let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
                         let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
-                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, coded, program, w_d);
+                        let hosted = src.procedures.procedures_hosted(layout, exit0(c.prog), 0, c.names, d, coded, program, w_d);
                         CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
                             λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
                             d.prog, w_base, laid, base, d.names, linked_p)
