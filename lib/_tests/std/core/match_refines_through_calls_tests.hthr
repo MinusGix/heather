@@ -101,8 +101,8 @@ theorem passed_h(w: Nat, k: fits(w) = False → Nat): Nat {
     match h: fits(w) { False => k(h), True => 0 }
 }
 
-// One passed beside `h` in a call stays as written too: the callee states
-// both about the test as written.
+// One passed beside `h` in a call is read as written there: the callee
+// states both about the test as written.
 theorem passed_beside(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → Nat): Nat {
     match fit: fits(w) { False => 0, True => k(fit, same) }
 }
@@ -232,11 +232,11 @@ theorem loose_or(n, k: Nat, other: Loose(n, k)): Loose(n, k) {
     }
 }
 
-// A hypothesis an arm passes beside the equation is read as written in
-// every arm, and the arm that needed it at its case is told so.
+// A hypothesis one arm passes beside the equation and another needs at its
+// case: each use is read on its own
+// (docs/language/matching/arm-readings-design.md).
 fn taken(n, a, out: Nat, one: first(n) = Some(a), ran: staged(n) = Some(out)) → Nat { a }
 
-// expect-error: because an arm passes it beside `one` in one call
 theorem beside_told(n, out: Nat, ran: staged(n) = Some(out)): Nat {
     match one: first(n) {
         None => absurd(ran),

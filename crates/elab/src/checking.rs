@@ -215,6 +215,20 @@ impl Checking<'_> {
         if let Some(quoted) = Host(self).quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
         }
+        // A call made only of facts about a scrutinee is taken as written
+        // if it checks as written (docs/language/matching/arm-readings-design.md §3.4).
+        if let Some(written) = crate::readings::Readings(self).as_written(cx, e, Some((expected, lvl))) {
+            return self.elab_check_skel_slots_written(&written, e, expected, lvl, hint, skel, capture_slots);
+        }
+        // A name an enclosing match gave two readings is the one this
+        // position asks for (docs/language/matching/arm-readings-design.md).
+        if let ExprKind::Var(name) = &e.kind
+            && cx.readings.iter_inner().any(|r| &r.name == name)
+            && let Ok((t, got, _)) = self.probe(|| self.elab_infer(cx, e))
+            && let Some((t, _)) = crate::readings::Readings(self).reread(cx, &t, &got, expected, lvl)
+        {
+            return Ok(t);
+        }
         // A branch of a tactic's split (`host::Leaves`).
         if let ExprKind::Var(name) = &e.kind
             && let Some(k) = host::leaf_index(name)
@@ -552,7 +566,7 @@ impl Checking<'_> {
                 arms,
                 eqbind,
                 generated,
-            } => {
+            } => (|| {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
                 // docs/elaborator/goal-motive-synthesis-design.md): abstract the
                 // scrutinee out of the expected type so the motive is
@@ -600,17 +614,34 @@ impl Checking<'_> {
                 // which is what `h` is passed to, `g: (b = False) → A` at
                 // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md,
                 // issues/case-split-refines-hypotheses-under-calls.md).
-                let refined = Generalize(self).refined_hypotheses(
+                let mut refined = Generalize(self).refined_hypotheses(
                     cx, arms, (&scrut_t, &scrut_ty, &scrut_lvl), dec, expected, eqbind.as_deref(), e.span,
                 );
-                let unrefined = positions.clone();
-                for &p in &refined.positions {
-                    if !positions.contains(&p) {
-                        positions.push(p);
+                let unrefined = std::mem::take(&mut positions);
+                let kept_cx;
+                let cx = if refined.kept.is_empty() {
+                    cx
+                } else {
+                    let mut with = cx.clone();
+                    crate::readings::Readings::register_kept(&mut with, &refined.kept);
+                    kept_cx = with;
+                    &kept_cx
+                };
+                // Lowered at most twice: a hypothesis generalized because an
+                // arm names it, whose refined reading no arm then used, is
+                // left out the second time (arm-readings-design §3.4).
+                let mut again = false;
+                loop {
+                    let mut positions = unrefined.clone();
+                    for &p in &refined.positions {
+                        if !positions.contains(&p) {
+                            positions.push(p);
+                        }
                     }
-                }
-                positions.sort_unstable();
-                if !positions.is_empty() {
+                    positions.sort_unstable();
+                    if positions.is_empty() {
+                        break;
+                    }
                     // A hypothesis read through a call is spelled with the
                     // scrutinee, which the syntactic rung finds first; the
                     // goal is spelled so too, at the motive it gets alone,
@@ -631,18 +662,29 @@ impl Checking<'_> {
                     // syntactic rung, which checks nothing; if the motive
                     // that makes is ill-formed, the match refines what it
                     // did before (goal-motive-synthesis-design §4.7).
+                    let mut kept: Vec<usize> = Vec::new();
                     if !refined.retyped.is_empty()
                         && !matching::MotiveSynthesisElab::motive_well_formed(self.0, cx, &motive, &scrut_ty, &scrut_lvl)
                     {
-                        positions.retain(|p| !refined.retyped.iter().any(|(q, _)| q == p) || unrefined.contains(p));
+                        kept = positions.iter().copied().filter(|p| refined.retyped.iter().any(|(q, _)| q == p) && !unrefined.contains(p)).collect();
+                        positions.retain(|p| !kept.contains(p));
                         (gen_ty, gen_lvl) = Generalize(self).generalize_expected(cx, &positions, expected, lvl);
                         motive = matching::synthesize_motive(
                             self.0, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
                         );
                     }
+                    // A refined hypothesis keeps its written reading in the
+                    // arm, and the equation its `refl` one
+                    // (docs/language/matching/arm-readings-design.md).
+                    let mut shadowed: Vec<&str> = Vec::new();
+                    for arm in arms.iter() {
+                        arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
+                    }
+                    let mut gcx = cx.clone();
+                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
+                    crate::readings::Readings::register_kept(&mut gcx, &kept);
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
-                    let mut gcx = cx.clone();
                     if let Some(dec) = guard {
                         gcx.generalized = Some(Rc::new(generalize::Generalization {
                             dec,
@@ -668,10 +710,55 @@ impl Checking<'_> {
                             &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
                         ),
                     };
-                    let elim = match eqbind {
-                        None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run)?,
-                        Some(h) => run(&gcx, Some(h)).map_err(|error| refined.explain(h, error))?,
-                    };
+                    // A recursion's own match generalizes for its calls
+                    // as well, which no use of a name shows.
+                    let droppable = !again
+                        && eqbind.is_some()
+                        && !generalize::arms_call_self(cx, arms.as_slice())
+                        && !generalize::arms_have_hole(arms.as_slice())
+                        && registered.iter().any(|r| matches!(r.kind, crate::readings::ReadingKind::Written(_)));
+                    let (elim, unused) = if !droppable {
+                        let elim = match eqbind {
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            Some(h) => run(&gcx, Some(h)),
+                        };
+                        (elim, Vec::new())
+                    } else { self.probe_unless(|| {
+                        let elim = match eqbind {
+                            None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run),
+                            Some(h) => run(&gcx, Some(h)),
+                        };
+                        let m = cx.names.len();
+                        let mut unused: Vec<usize> = Vec::new();
+                        if !again && elim.is_ok() {
+                            for reading in &registered {
+                                if let crate::readings::ReadingKind::Written(q) = reading.kind
+                                    && reading.uses.get() == 0
+                                    && expected.abstract_local(&Term::Var(heather_kernel::term::LocalVar((m - 1 - q) as u32))).is_none()
+                                {
+                                    unused.push(q);
+                                }
+                            }
+                            // One a kept hypothesis's type mentions stays.
+                            while let Some(i) = unused.iter().position(|&q| {
+                                positions.iter().any(|&p| p > q && !unused.contains(&p) && generalize::mentions_binder(cx, p, q))
+                            }) {
+                                unused.remove(i);
+                            }
+                        }
+                        let keep = unused.is_empty();
+                        ((elim, unused), keep)
+                    }) };
+                    if !unused.is_empty() {
+                        refined.positions.retain(|p| !unused.contains(p));
+                        refined.retyped.retain(|(p, _)| !unused.contains(p));
+                        again = true;
+                        continue;
+                    }
+                    let elim = elim?;
+                    // What this match generalizes it reads: a copy an
+                    // enclosing match bound is used by being refined again.
+                    positions.iter().for_each(|&p| crate::readings::Readings::note_use(cx, p));
                     return Ok(Generalize(self).instantiate_generalized(cx, elim, gen_ty, &positions));
                 }
                 // An alias whose type is about the scrutinee rides along as a
@@ -699,7 +786,7 @@ impl Checking<'_> {
                     };
                     let elim = match eqbind {
                         None => Inference(self).elab_match_pending(cx, &scrut_ty, &run)?,
-                        Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error))?,
+                        Some(h) => run(cx, Some(h))?,
                     };
                     return Ok(Generalize(self).instantiate_aliases(cx, elim, gen_ty, &dependents));
                 }
@@ -726,9 +813,12 @@ impl Checking<'_> {
                 };
                 match eqbind {
                     None => Inference(self).elab_match_pending(cx, &scrut_ty, &run),
-                    Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error)),
+                    Some(h) => run(cx, Some(h)),
                 }
-            }
+            })()
+            // An arm refused at a use of a hypothesis the match could not
+            // refine says so (arm-readings-design §3.5).
+            .map_err(|error| crate::readings::Readings(self).explain(error)),
             // `absurd(p)`: from an equation between distinct constructors,
             // anything — so it needs the expected type
             // (docs/inductives/inductive-tier0-lowering.md §6.1).
