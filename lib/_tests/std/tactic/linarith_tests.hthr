@@ -109,7 +109,7 @@ theorem int_negated(a, b: Int, h: ¬(b * a < a * b + OfNat(1))): False { linarit
 theorem int_numeral_factor(x: Int, h: x <= OfNat(1)): OfNat(2) * (OfNat(3) * x) <= OfNat(6) { linarith(h) }
 theorem int_cancelled(x, y, z: Int, h: z <= OfNat(0)): x * (y - y) + z <= OfNat(0) { linarith(h) }
 theorem nat_distributed(a, b, c: Nat, h: (a + 1) * b <= c): b * a + b <= c { linarith(h) }
-theorem nat_succ(n, m, k: Nat, h: Succ(n) * m < k): n * m + m < k { linarith(h) }
+theorem nat_succ(n, m, k: Nat, h: (n + 1) * m < k): n * m + m < k { linarith(h) }
 // In checking position inside a block, and at an open atom (a function's
 // value).
 theorem int_let(f: Int → Int, x, y: Int, h: f(x) * f(y) <= y): f(y) * f(x) <= y {

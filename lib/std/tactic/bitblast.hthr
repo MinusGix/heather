@@ -161,11 +161,11 @@ theorem Nat::half_mul_two(self x: Nat): (x * 2).half() = x {
     rewrite(twice, x.half_double())
 }
 
-theorem Nat::half_succ_mul_two(self x: Nat): Succ(x * 2).half() = x {
+theorem Nat::half_succ_mul_two(self x: Nat): (x * 2 + 1).half() = x {
     match x {
         Zero => refl,
         Succ(y) => {
-            let twice: (Succ(Succ(y) * 2) = Succ(Succ(Succ(y * 2)))) = omega;
+            let twice: ((y + 1) * 2 + 1 = y * 2 + 3) = omega;
             rewrite(twice, Nat::cong_succ(y.half_succ_mul_two()))
         },
     }
@@ -176,8 +176,8 @@ theorem Nat::low_bit_mul_two(self x: Nat): (x * 2).low_bit() = 0 {
     trans(h, omega)
 }
 
-theorem Nat::low_bit_succ_mul_two(self x: Nat): Succ(x * 2).low_bit() = 1 {
-    let h: (Succ(x * 2) - Succ(x * 2).half() * 2 = Succ(x * 2) - x * 2) = rewrite(x.half_succ_mul_two(), refl);
+theorem Nat::low_bit_succ_mul_two(self x: Nat): (x * 2 + 1).low_bit() = 1 {
+    let h: (x * 2 + 1 - (x * 2 + 1).half() * 2 = x * 2 + 1 - x * 2) = rewrite(x.half_succ_mul_two(), refl);
     trans(h, omega)
 }
 
@@ -190,9 +190,9 @@ theorem Lit::code_true(self l: Lit, v: Nat → Bool): lit_true(l.code(), v) = l.
             trans(parts, v(x).xor_false_r())
         },
         Neg(x) => {
-            let neg: (lit_negative(Succ(x * 2)) = True) = cong_fn(λ (n: Nat) => match n { Zero => False, Succ(_) => True }, x.low_bit_succ_mul_two());
-            let parts: (v(Succ(x * 2).half()).xor(lit_negative(Succ(x * 2))) = v(x).xor(True)) =
-                trans(cong_fn(λ (n: Nat) => v(n).xor(lit_negative(Succ(x * 2))), x.half_succ_mul_two()), cong_fn(λ (b: Bool) => v(x).xor(b), neg));
+            let neg: (lit_negative(x * 2 + 1) = True) = cong_fn(λ (n: Nat) => match n { Zero => False, Succ(_) => True }, x.low_bit_succ_mul_two());
+            let parts: (v((x * 2 + 1).half()).xor(lit_negative(x * 2 + 1)) = v(x).xor(True)) =
+                trans(cong_fn(λ (n: Nat) => v(n).xor(lit_negative(x * 2 + 1)), x.half_succ_mul_two()), cong_fn(λ (b: Bool) => v(x).xor(b), neg));
             trans(parts, v(x).xor_true_r())
         },
     }
@@ -256,7 +256,7 @@ theorem and_gate_holds(p, qa, qb, na, nb: Bool, hp: p = qa && qb, hna: na = !qa,
 
 // A literal below `x` has the same value at `v` as at the nodes `m` holds.
 theorem below_agree(l: Lit, x: Nat, v: Nat → Bool, m: NatMap<Bool>, agree: (y: Nat) → y < x → v(y) = node_of(m, y), lb: l.below(x) = True): l.value(v) = l.value(λ y => node_of(m, y)) {
-    l.value_agree(v, λ y => node_of(m, y), agree(l.node(), Nat::le_of_leb(Succ(l.node()), x, lb)))
+    l.value_agree(v, λ y => node_of(m, y), agree(l.node(), Nat::le_of_leb(l.node() + 1, x, lb)))
 }
 
 theorem and_clauses_hold(ok: Bool, x: Nat, a, b: Lit, v: Nat → Bool, m: NatMap<Bool>, agree: (y: Nat) → y < x → v(y) = node_of(m, y), below: ok = (a.below(x) && b.below(x))): v(x) = and_value(ok, m, a, b) → all_hold(and_clauses(ok, x, a, b), v) = True {
@@ -433,11 +433,11 @@ theorem Lit::not_node(self l: Lit): l.not().node() = l.node() {
 
 theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_gate(a, b), λ v => a.value(v) && b.value(v)) {
     let g = c.push_grows(good, GAnd(a, b));
-    let ok: (a.below(c.size) && b.below(c.size) = True) = Bool::and_true_of(a.below(c.size), b.below(c.size), Nat::leb_true(Succ(a.node()), c.size, va), Nat::leb_true(Succ(b.node()), c.size, vb));
-    ⟨g, ⟨Nat::le_refl(Succ(c.size)), λ d later env => {
+    let ok: (a.below(c.size) && b.below(c.size) = True) = Bool::and_true_of(a.below(c.size), b.below(c.size), Nat::leb_true(a.node() + 1, c.size, va), Nat::leb_true(b.node() + 1, c.size, vb));
+    ⟨g, ⟨Nat::le_refl(c.size + 1), λ d later env => {
         let cd = c.grows_trans(c.push(GAnd(a, b)).fst, d, g, later);
         let here: (Pos(c.size).value(d.at(env)) = Pos(c.size).value(c.push(GAnd(a, b)).fst.at(env))) =
-            c.push(GAnd(a, b)).fst.grows_value(d, later, Pos(c.size), Nat::le_refl(Succ(c.size)), env);
+            c.push(GAnd(a, b)).fst.grows_value(d, later, Pos(c.size), Nat::le_refl(c.size + 1), env);
         let made: (c.push(GAnd(a, b)).fst.at(env)(c.size) = and_value(True, values(env, c.gates), a, b)) =
             trans(c.push_value(good, GAnd(a, b), env), cong_fn(λ (t: Bool) => and_value(t, values(env, c.gates), a, b), ok));
         trans(trans(here, made), sym(Bool::and_cong(c.grows_value(d, cd, a, va, env), c.grows_value(d, cd, b, vb, env))))
@@ -453,11 +453,11 @@ theorem Lit::constant_means(self l: Lit): Lit::Means(l.constant(), l) {
     match l {
         Pos(x) => match x {
             Zero => λ t e v z => trans(z, Option::some_inj(False, t, e)),
-            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Pos(Succ(y)).value(v) = t),
+            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Pos(y + 1).value(v) = t),
         },
         Neg(x) => match x {
             Zero => λ t e v z => trans(cong_fn(λ (b: Bool) => !b, z), Option::some_inj(True, t, e)),
-            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Neg(Succ(y)).value(v) = t),
+            Succ(y) => λ t e v z => Option::none_ne_some(t, e, Neg(y + 1).value(v) = t),
         },
     }
 }
@@ -560,7 +560,7 @@ theorem Circ::and_ok(): Circ::BinOk(λ c a b => c.and(a, b), λ x y => x && y) {
 theorem Circ::or_ok(): Circ::BinOk(λ c a b => c.or(a, b), λ x y => x || y) { λ c good a b va vb => c.or_makes(good, a, b, va, vb) }
 theorem Circ::xor_ok(): Circ::BinOk(λ c a b => c.xor(a, b), λ x y => x.xor(y)) { λ c good a b va vb => c.xor_makes(good, a, b, va, vb) }
 
-fn Circ::cons_word({n: Nat}, h: Lit, rest: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; Succ(n)]> { Pair(rest.fst, cons(h, rest.snd)) }
+fn Circ::cons_word({n: Nat}, h: Lit, rest: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n + 1]> { Pair(rest.fst, cons(h, rest.snd)) }
 
 fn Circ::zip({n: Nat}, self c: Circ, op: Circ → Lit → Lit → Pair<Circ, Lit>, xs, ys: [Lit; n]) → Pair<Circ, [Lit; n]> {
     (match n as λ k => Circ → [Lit; k] → [Lit; k] → Pair<Circ, [Lit; k]> {
@@ -691,7 +691,7 @@ fn input_lit_with(inside: Bool, k: Nat) → Lit {
 
 fn input_lit(K, k: Nat) → Lit { input_lit_with(Succ(k).leb(K), k) }
 
-theorem input_lit_with_value(inside: Bool, k: Nat, v: Nat → Bool, z: v(0) = False): input_lit_with(inside, k).value(v) = inside && v(Succ(k)) {
+theorem input_lit_with_value(inside: Bool, k: Nat, v: Nat → Bool, z: v(0) = False): input_lit_with(inside, k).value(v) = inside && v(k + 1) {
     match inside {
         False => z,
         True => refl,
@@ -703,11 +703,11 @@ theorem input_lit_value(K, k: Nat, v: Nat → Bool, z: v(0) = False): input_lit(
 }
 
 theorem input_lit_valid(K, k, size: Nat, kin: K < size): input_lit(K, k).node() < size {
-    (match Succ(k).leb(K) as λ i => Succ(k).leb(K) = i → input_lit_with(i, k).node() < size {
+    (match (k + 1).leb(K) as λ i => (k + 1).leb(K) = i → input_lit_with(i, k).node() < size {
         False => λ e => { let p: (0 < size) = omega; p },
         True => λ e => {
-            let le: (Succ(k) <= K) = Nat::le_of_leb(Succ(k), K, e);
-            let p: (Succ(k) < size) = omega;
+            let le: (k + 1 <= K) = Nat::le_of_leb(k + 1, K, e);
+            let p: (k + 1 < size) = omega;
             p
         },
     })(refl)
@@ -740,8 +740,8 @@ theorem var_word_value(n, K, o, w: Nat, v: Nat → Bool, z: v(0) = False): word_
     match n {
         Zero => refl,
         Succ(k) => match w {
-            Zero => word_zero_value(Succ(k), v, z),
-            Succ(r) => BitVec::cons_bit_cong(k, input_lit_value(K, o, v, z), var_word_value(k, K, Succ(o), r, v, z)),
+            Zero => word_zero_value(k + 1, v, z),
+            Succ(r) => BitVec::cons_bit_cong(k, input_lit_value(K, o, v, z), var_word_value(k, K, o + 1, r, v, z)),
         },
     }
 }
@@ -750,8 +750,8 @@ theorem var_word_valid(n, K, o, w, size: Nat, kin: K < size): word_valid(var_wor
     match n {
         Zero => trivial,
         Succ(k) => match w {
-            Zero => { let p: (0 < size) = omega; word_repeat_valid(Succ(k), Pos(0), size, p) },
-            Succ(r) => ⟨input_lit_valid(K, o, size, kin), var_word_valid(k, K, Succ(o), r, size, kin)⟩,
+            Zero => { let p: (0 < size) = omega; word_repeat_valid(k + 1, Pos(0), size, p) },
+            Succ(r) => ⟨input_lit_valid(K, o, size, kin), var_word_valid(k, K, o + 1, r, size, kin)⟩,
         },
     }
 }
@@ -976,7 +976,7 @@ theorem Circ::add_cell_makes(self c: Circ, good: c.Good(), a, b, cin: Lit, va: a
     }⟩⟩⟩
 }
 
-fn Circ::adder_next({n: Nat}, cell: Pair<Circ, Pair<Lit, Lit>>, rest: Circ → [Lit; n] → [Lit; n] → Lit → Pair<Circ, [Lit; n]>, xs, ys: [Lit; n]) → Pair<Circ, [Lit; Succ(n)]> {
+fn Circ::adder_next({n: Nat}, cell: Pair<Circ, Pair<Lit, Lit>>, rest: Circ → [Lit; n] → [Lit; n] → Lit → Pair<Circ, [Lit; n]>, xs, ys: [Lit; n]) → Pair<Circ, [Lit; n + 1]> {
     Circ::cons_word(cell.snd.fst, rest(cell.fst, xs, ys, cell.snd.snd))
 }
 
@@ -1082,21 +1082,21 @@ theorem Circ::borrower_makes(n: Nat, c: Circ, good: c.Good(), xs, ys: [Lit; n], 
 // ---------------------------------------------------------------------------
 // Shifts by a constant move literals; the bit shifted in is node 0.
 
-fn word_init({n: Nat}, ws: [Lit; Succ(n)]) → [Lit; n] {
+fn word_init({n: Nat}, ws: [Lit; n + 1]) → [Lit; n] {
     (match n as λ k => [Lit; Succ(k)] → [Lit; k] {
         Zero => λ ws => [],
         Succ(_, ih) => λ ws => cons(head(ws), ih(tail(ws))),
     })(ws)
 }
 
-theorem word_init_value(n: Nat, ws: [Lit; Succ(n)], v: Nat → Bool): word_value(word_init(ws), v) = word_value(ws, v).init() {
+theorem word_init_value(n: Nat, ws: [Lit; n + 1], v: Nat → Bool): word_value(word_init(ws), v) = word_value(ws, v).init() {
     match n {
         Zero => refl,
         Succ(k) => BitVec::cons_bit_cong(k, refl, word_init_value(k, tail(ws), v)),
     }
 }
 
-theorem word_init_valid(n: Nat, ws: [Lit; Succ(n)], size: Nat, valid: word_valid(ws, size)): word_valid(word_init(ws), size) {
+theorem word_init_valid(n: Nat, ws: [Lit; n + 1], size: Nat, valid: word_valid(ws, size)): word_valid(word_init(ws), size) {
     match n {
         Zero => trivial,
         Succ(k) => ⟨valid.left, word_init_valid(k, tail(ws), size, valid.right)⟩,
@@ -1416,7 +1416,7 @@ theorem window_ext(n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k
         Zero => refl,
         Succ(k) => match w {
             Zero => refl,
-            Succ(r) => BitVec::cons_bit_cong(k, same(o), window_ext(k, b1, b2, same, Succ(o), r)),
+            Succ(r) => BitVec::cons_bit_cong(k, same(o), window_ext(k, b1, b2, same, o + 1, r)),
         },
     }
 }
@@ -1456,8 +1456,8 @@ fn Circ::inputs(K: Nat) → Circ {
     }
 }
 
-theorem Circ::inputs_good(K: Nat): Circ::inputs(K).Good() ∧ ((Circ::inputs(K).size = Succ(K)) ∧
-    ((env: Nat → Nat → Bool) → (k: Nat) → k < K → Circ::inputs(K).at(env)(Succ(k)) = env(0, k))) {
+theorem Circ::inputs_good(K: Nat): Circ::inputs(K).Good() ∧ ((Circ::inputs(K).size = K + 1) ∧
+    ((env: Nat → Nat → Bool) → (k: Nat) → k < K → Circ::inputs(K).at(env)(k + 1) = env(0, k))) {
     match K {
         Zero => ⟨Circ::empty_good(), ⟨refl, λ env k lt => { let no: (False) = omega(lt); false_elim(no) }⟩⟩,
         Succ(m) => {
@@ -1465,18 +1465,18 @@ theorem Circ::inputs_good(K: Nat): Circ::inputs(K).Good() ∧ ((Circ::inputs(K).
             let c = Circ::inputs(m);
             let g = c.push_grows(prev.left, GInput(0, m));
             ⟨g.left, ⟨Nat::cong_succ(prev.right.left), λ env k lt =>
-                (match Succ(k).leb(m) as λ t => Succ(k).leb(m) = t → c.push(GInput(0, m)).fst.at(env)(Succ(k)) = env(0, k) {
+                (match (k + 1).leb(m) as λ t => (k + 1).leb(m) = t → c.push(GInput(0, m)).fst.at(env)(k + 1) = env(0, k) {
                     True => λ e => {
-                        let below: (k < m) = Nat::le_of_leb(Succ(k), m, e);
-                        let small: (Succ(k) < c.size) = omega(below, prev.right.left);
-                        trans(g.right.right(env, Succ(k), small), prev.right.right(env, k, below))
+                        let below: (k < m) = Nat::le_of_leb(k + 1, m, e);
+                        let small: (k + 1 < c.size) = omega(below, prev.right.left);
+                        trans(g.right.right(env, k + 1, small), prev.right.right(env, k, below))
                     },
                     False => λ e => {
-                        let nle: ¬(Succ(k) <= m) = λ h => absurd(trans(sym(e), Nat::leb_true(Succ(k), m, h)));
+                        let nle: ¬(k + 1 <= m) = λ h => absurd(trans(sym(e), Nat::leb_true(k + 1, m, h)));
                         let km: (m = k) = omega(nle, lt);
-                        let top: (c.push(GInput(0, m)).fst.at(env)(Succ(m)) = env(0, m)) =
+                        let top: (c.push(GInput(0, m)).fst.at(env)(m + 1) = env(0, m)) =
                             j(prev.right.left, λ z _ => c.push(GInput(0, m)).fst.at(env)(z) = env(0, m), c.push_value(prev.left, GInput(0, m), env));
-                        j(km, λ z _ => c.push(GInput(0, m)).fst.at(env)(Succ(z)) = env(0, z), top)
+                        j(km, λ z _ => c.push(GInput(0, m)).fst.at(env)(z + 1) = env(0, z), top)
                     },
                 })(refl)
             ⟩⟩
@@ -1534,10 +1534,10 @@ theorem window_of(n: Nat, bits: Nat → Bool, o: Nat, x: BitVec(n), at: (i: Nat)
         Succ(k) => {
             let zero: (o = o + 0) = omega;
             let first: (bits(o) = x.head_bit()) = trans(cong_fn(bits, zero), at(0, omega));
-            let rest = window_of(k, bits, Succ(o), x.tail_bits(), λ i lt => {
-                let moved: (Succ(o) + i = o + Succ(i)) = omega;
-                let inside: (Succ(i) < Succ(k)) = omega(lt);
-                trans(cong_fn(bits, moved), at(Succ(i), inside))
+            let rest = window_of(k, bits, o + 1, x.tail_bits(), λ i lt => {
+                let moved: (o + 1 + i = o + (i + 1)) = omega;
+                let inside: (i + 1 < k + 1) = omega(lt);
+                trans(cong_fn(bits, moved), at(i + 1, inside))
             });
             BitVec::cons_bit_cong(k, first, rest)
         },

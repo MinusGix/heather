@@ -73,7 +73,7 @@ theorem known_true(n: Nat): True { known }
 // A clash of constructors in scope proves anything.
 theorem known_clash(c: Out, none: Some(c) = None): Within([], c.code) { known }
 theorem known_clash_field<A>(x: A, e: Some(Some(x)) = Some(None)): 1 = 2 { known }
-theorem known_clash_nat(n: Nat, e: Succ(n) = 0): n = 5 { known }
+theorem known_clash_nat(n: Nat, e: n + 1 = 0): n = 5 { known }
 
 // The arm of a refused test, by computation.
 theorem known_refused(w: Nat, p: List<Nat>, names: Nat, c: Out, same: (match fits(w) { False => None, True => Some(Out(Cons(w, p), names)) }) = Some(c)): Within(p, c.code) {

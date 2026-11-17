@@ -333,7 +333,7 @@ theorem holds_formula_from(cs: List<List<Nat>>, v: Nat → Bool, k: Nat, f: NatM
         Nil => hf,
         Cons(c, rest) => {
             let parts = clause_true(c, v).and_true_parts(all_true(rest, v), all);
-            holds_formula_from(rest, v, Succ(k), nat_map_set(f, k, c), holds_set(f, v, hf, k, c, parts.left), parts.right)
+            holds_formula_from(rest, v, k + 1, nat_map_set(f, k, c), holds_set(f, v, hf, k, c, parts.left), parts.right)
         },
     }
 }

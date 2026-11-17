@@ -250,7 +250,7 @@ theorem RingPoly::pow_add(x: Int, a: Nat, b: Nat): RingPoly::pow(x, a + b) = Rin
 }
 
 theorem RingPoly::cmp_nat_succ(o: RingOrder, x, y: Nat):
-    RingPoly::SameNat(o, x, y) → RingPoly::SameNat(o, Succ(x), Succ(y))
+    RingPoly::SameNat(o, x, y) → RingPoly::SameNat(o, x + 1, y + 1)
 {
     match o {
         RLess => λ h => refl,
@@ -770,7 +770,7 @@ theorem RingPoly::term_eval_rel(c: Int, m: List<Nat>, rest: RingPoly, xs: List<A
                     ≈ A.unit + rest.eval_rel(xs) := rel_cong(A.zero_mul(RingPoly::mono_rel(m, xs))),
                     ≈ rest.eval_rel(xs) := A.unit_l(rest.eval_rel(xs)),
             }),
-            Succ(k) => A.rel_refl(A.of_int(OfNat(Succ(k))) * RingPoly::mono_rel(m, xs) + rest.eval_rel(xs)),
+            Succ(k) => A.rel_refl(A.of_int(OfNat(k + 1)) * RingPoly::mono_rel(m, xs) + rest.eval_rel(xs)),
         },
         NegSucc(k) => A.rel_refl(A.of_int(NegSucc(k)) * RingPoly::mono_rel(m, xs) + rest.eval_rel(xs)),
     }
@@ -1067,7 +1067,7 @@ theorem RingExpr::of_nat_mul(xs: List<A>, a, b: Nat):
     A.of_int_mul(OfNat(a), OfNat(b))
 }
 
-theorem RingExpr::of_nat_succ(xs: List<A>, a: Nat): A.of_int(OfNat(Succ(a))) ≈ A.of_int(OfNat(a)) + A.of_int(OfNat(1)) {
+theorem RingExpr::of_nat_succ(xs: List<A>, a: Nat): A.of_int(OfNat(a + 1)) ≈ A.of_int(OfNat(a)) + A.of_int(OfNat(1)) {
     A.of_int_add(OfNat(a), OfNat(1))
 }
 
