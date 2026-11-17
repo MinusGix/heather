@@ -769,40 +769,40 @@ fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
     then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
 }
 
-// RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
-fn Prog::arg_count(self p: Prog, layout: Layout, index, past: Nat) → Prog {
-    let loaded = then(then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Load(WordLoad(Rdx, Rbx))), Load(WordLoad(R9, Rdx)));
-    then(then(loaded.word_to(layout, index, Rcx), Block([CmpRR(Rcx, R9)])), Jcc(AE, past))
+// One byte of an argument's string: RDX the byte at RSI, out at its NUL,
+// stored at RDI while the count in R8 is below the capacity in R9; the
+// count, RSI and RDI one further.
+fn Build::arg_byte(self b: Build, out: Label) → Build {
+    b.load_byte(Rdx, Rsi).test(Rdx).leave(E, out)
+     .cmp(R8, R9).unless(AE, λ b => b.store_byte(Rdi, Rdx))
+     .next(Rsi).next(Rdi).next(R8)
 }
 
-// RSI argv[index], read at RSP + 8 (index + 1); R8 the count from zero, R9
-// the capacity, RDI the buffer.
-fn Prog::arg_pointer(self p: Prog, layout: Layout, buf, cap, head: Nat) → Prog {
-    let slot = then(p, Block([MovRR(Rbx, Rcx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rdx), AddRI8(Rbx, BitVec::ofNat(8))]));
-    then(then(slot, Load(WordLoad(Rsi, Rbx))), Block([MovRI(R8, BitVec::ofNat(0)), MovRI(R9, BitVec::ofNat(cap)), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+// The argument numbered in RCX, the saved RSP in RDX: RSI is argv[RCX],
+// read at RSP + 8 (RCX + 1), its bytes up to the NUL copied into buffer
+// `buf`, and RAX its length.
+fn Build::arg_string(self b: Build, buf, cap: Nat) → Build {
+    b.mov(Rbx, Rcx).plus(Rbx, Rbx).plus(Rbx, Rbx).plus(Rbx, Rbx).plus(Rbx, Rdx).step(Rbx, 8)
+     .load(Rsi, Rbx)
+     .set(R8, 0).set(R9, cap).point(Rdi, b.cx.layout.buffer_at(buf))
+     .repeat(λ out b => b.arg_byte(out))
+     .mov(Rax, R8)
 }
 
-// The string's bytes up to its NUL: RDX each, stored at RDI while R8 is
-// below the capacity, RSI, RDI and R8 stepped, a JMP back to `head`.
-fn Prog::arg_copy(self p: Prog, head, done, skip: Nat) → Prog {
-    let tested = then(then(then(p, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
-    let stored = then(then(then(tested, Block([CmpRR(R8, R9)])), Jcc(AE, skip)), StoreByte(ByteStore(Rdi, Rdx))).label(skip);
-    then(then(stored, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+// RAX the length of argument `index`, its bytes copied into buffer `buf`,
+// or minus one where there is none: RDX is the saved RSP and R9 argc.
+fn Build::arg_copy(self b: Build, index, buf, cap: Nat) → Build {
+    b.point(Rbx, b.cx.layout.stack_at()).load(Rdx, Rbx).load(R9, Rdx)
+     .word(index, Rcx).cmp(Rcx, R9)
+     .either(AE, λ b => b.point(Rax, missing_word()), λ b => b.arg_string(buf, cap))
 }
 
 // Argument `index` copied into buffer `buf`, its length or minus one into
-// word `len`: the count tested, the string copied, then the length (R8, or
-// minus one from `past`) stored at `out`.
+// word `len`.
+fn Build::arg(self b: Build, index, buf, len, cap: Nat) → Build { b.arg_copy(index, buf, cap).keep(len, Rax) }
+
 fn Prog::args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, cap, names: Nat) → Compiled {
-    let head = Succ(names);
-    let skip = Succ(head);
-    let done = Succ(skip);
-    let past = Succ(done);
-    let after = Succ(past);
-    let copied = p.arg_count(layout, index, past).arg_pointer(layout, buf, cap, head).arg_copy(head, done, skip);
-    let found = then(then(copied.label(done), Block([MovRR(Rax, R8)])), Jmp(after));
-    let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(after);
-    Compiled(missing.word_from(layout, out, len, Rax), after)
+    Emission(layout, [], out).from(names).arg(index, buf, len, cap).onto(p)
 }
 
 fn Prog::arg(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, names: Nat) → Option<Compiled> {
