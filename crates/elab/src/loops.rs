@@ -235,6 +235,28 @@ impl<'a> Lift<'a> {
         self.tys.infer_local(self.decl, &[], &selected, e)
     }
 
+    /// The declaration's solver parameters, which a lifted loop takes
+    /// first: a body's operators may resolve through them.
+    fn solver_params(&self) -> Vec<Param> { self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect() }
+
+    /// The declaration's implicit parameters that the types of a loop's
+    /// captures or state mention (`{n: u64}` of a receiver at `Bytes(n)`),
+    /// captured too, first: a lifted loop takes them as it takes any
+    /// capture, so its calls and its own recursion pass them.
+    fn implicit_captures<'t>(&self, captures: &mut Vec<(String, Ty)>, tys: impl Iterator<Item = &'t Ty>) {
+        let tys: Vec<Ty> = tys.cloned().chain(captures.iter().map(|(_, t)| t.clone())).collect();
+        let found: Vec<(String, Ty)> = self
+            .decl
+            .params
+            .iter()
+            .filter(|p| p.implicit && p.solver.is_none() && p.default.is_none())
+            .filter(|p| !captures.iter().any(|(n, _)| *n == p.name))
+            .filter(|p| tys.iter().any(|t| measure::mentions_ty(t, &p.name)))
+            .map(|p| (p.name.clone(), p.ty.clone()))
+            .collect();
+        captures.splice(0..0, found);
+    }
+
     /// The receiver of a `mut self` method when it is among a loop's state
     /// with at most one other local beside it (the position of that local
     /// in `vars`): such a loop is lifted as a `mut self` method of the
@@ -494,6 +516,7 @@ impl<'a> Lift<'a> {
             };
             captures.push((b.name.clone(), t));
         }
+        self.implicit_captures(&mut captures, state_tys.iter());
         let (step, state, step_designed, state_designed) = self.names("step");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
         let single = vars.len() == 1;
@@ -501,7 +524,7 @@ impl<'a> Lift<'a> {
         let s = "#s";
         // The step's telescope: the declaration's solver parameters, the
         // captures, the state, the element.
-        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        let mut params: Vec<Param> = self.solver_params();
         params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
         let mut body = body.clone();
         let end = body.result.span;
@@ -648,6 +671,7 @@ impl Lift<'_> {
             };
             captures.push((b.name.clone(), t));
         }
+        self.implicit_captures(&mut captures, state_tys.iter());
         // At a `mut self` receiver with one other local, the loop is a
         // method of the receiver's type returning that local.
         if let Some((r, Some(k))) = self.receiver_in(&vars) {
@@ -665,7 +689,7 @@ impl Lift<'_> {
             self.push_state(&state, &vars, &state_tys, span);
             self.designations.push((state_designed, state.clone()));
         }
-        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        let mut params: Vec<Param> = self.solver_params();
         params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
         params.extend(vars.iter().zip(&state_tys).map(|(v, t)| param(v, t.clone(), span)));
         let args = |at: Span| -> Vec<Expr> {
@@ -748,9 +772,10 @@ impl Lift<'_> {
         let _ = self.names("run");
         let run = self.method_name();
         let method = run.rsplit("::").next().unwrap_or(&run).to_string();
-        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
-        params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+        let mut params: Vec<Param> = self.solver_params();
+        // The captures first: the receiver's type may mention one (`Bytes(n)`).
         params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+        params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
         params.push(param(o, o_ty.clone(), span));
         let dot = |args: Vec<Expr>, at: Span| Expr {
             kind: ExprKind::Dot { recv: Box::new(var(&r.name, at)), name: method.clone(), tyargs: vec![], args: Some(args), named: vec![] },
@@ -951,6 +976,17 @@ impl Lift<'_> {
                 }
             }
         }
+        // An upper bound that reads the loop's state (`0..s.len()` with `s`
+        // stored to) is read once, before the loop, as Rust reads a range:
+        // the lifted loop takes it as a capture of its own, so its test and
+        // its measure stay about one value while the state changes.
+        let (hi, hi_entry) = if vars.iter().any(|v| measure::mentions_context(&hi, v)) {
+            self.next_if += 1;
+            let bound = format!("__hi_for{}", self.next_if);
+            (var(&bound, hi.span), Some((bound, hi)))
+        } else {
+            (hi, None)
+        };
         // Captures: what the body or the upper bound reads.
         let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
         let mut captures: Vec<(String, Ty)> = Vec::new();
@@ -972,6 +1008,20 @@ impl Lift<'_> {
             };
             captures.push((b.name.clone(), t));
         }
+        self.implicit_captures(&mut captures, state_tys.iter());
+        if let Some((bound, _)) = &hi_entry {
+            captures.push((bound.clone(), word.clone()));
+        }
+        // At the entry the bound's capture is the bound itself.
+        let entry_args = |at: Span| -> Vec<Expr> {
+            captures
+                .iter()
+                .map(|(n, _)| match &hi_entry {
+                    Some((bound, read)) if bound == n => read.clone(),
+                    _ => var(n, at),
+                })
+                .collect()
+        };
         // The receiver of a `mut self` method among the state, with at most
         // one other local beside it.
         let receiver = self.receiver_in(&vars);
@@ -990,15 +1040,16 @@ impl Lift<'_> {
             self.designations.push((state_designed, state.clone()));
         }
         let i = var(&x.name, span);
-        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        let mut params: Vec<Param> = self.solver_params();
         let mut again = body.clone();
         let end = again.result.span;
         let next = op("+", vec![i.clone(), num(1, end)], end);
         let capture_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
         let (result, recur, done, entry, shape) = match &receiver {
             Some((r, other)) => {
-                params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+                // The captures first: the receiver's type may mention one (`Bytes(n)`).
                 params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+                params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
                 let other = other.map(|k| (vars[k], state_tys[k].clone()));
                 if let Some((o, t)) = &other {
                     params.push(param(o, t.clone(), span));
@@ -1022,7 +1073,7 @@ impl Lift<'_> {
                     None => (i.clone(), word.clone()),
                 };
                 let done = call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), value], span);
-                let mut first = capture_args(span);
+                let mut first = entry_args(span);
                 first.extend(other.iter().map(|(o, _)| var(o, span)));
                 first.push(lo.clone());
                 // With the receiver alone, the loop is the receiver after
@@ -1048,7 +1099,7 @@ impl Lift<'_> {
                 on.extend(vars.iter().map(|v| var(v, end)));
                 on.push(next);
                 let recur = call(var(base_name(&run), end), on, end);
-                let mut first = capture_args(span);
+                let mut first = entry_args(span);
                 first.extend(vars.iter().map(|v| var(v, span)));
                 first.push(lo.clone());
                 self.methods.push(run_designed.clone());
