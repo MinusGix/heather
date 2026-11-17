@@ -1,0 +1,89 @@
+// Probes of the two readings a hypothesis has in a case split's arm
+// (docs/language/matching/arm-readings-design.md,
+// issues/match-eqbind-generalizes-passed-hypotheses.md): with the scrutinee
+// as written, or with the arm's constructor in its place, whichever the
+// position it is used at asks for. Each pair below is one proof spelled two
+// ways that the rules this replaced told apart.
+// Tests, not library: nothing imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import bool; import nat; import list; import option;
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+
+inductive Shape { Leaf(w: Nat), Skip }
+
+fn Shape::emits(self s: Shape, p: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Leaf(w) => match fits(w) { False => None, True => Some(Cons(w, p)) },
+        Skip => Some(p),
+    }
+}
+
+// A callee stated about the test as written, taking the equation and the
+// hypothesis in one call: both are read as written.
+theorem beside_written(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → Nat): Nat {
+    match fit: fits(w) { False => 0, True => k(fit, same) }
+}
+
+// One arm passes the hypothesis beside the equation, another needs it
+// refined: each use is read on its own.
+theorem beside_and_refined(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → c = Cons(w, p)): c = Cons(w, p) {
+    match fit: fits(w) { False => absurd(same), True => k(fit, same) }
+}
+
+// The same arm, both readings of one hypothesis.
+theorem both_in_one_arm(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → Nat): c = Cons(w, p) {
+    match fit: fits(w) {
+        False => absurd(same),
+        True => { let n = k(fit, same); sym(Option::some_inj(Cons(w, p), c, same)) },
+    }
+}
+
+// A chain through the equation, and the hypothesis that already is the
+// chain's result once refined: neither spelling is an error.
+theorem chain_by_trans(a, b: Nat, e: fits(a) = fits(b), k: (v: Bool) → fits(a) = v → Nat): Nat {
+    match h: fits(b) { False => k(False, trans(e, h)), True => k(True, trans(e, h)) }
+}
+theorem chain_refined(a, b: Nat, e: fits(a) = fits(b), k: (v: Bool) → fits(a) = v → Nat): Nat {
+    match h: fits(b) { False => k(False, e), True => k(True, e) }
+}
+
+// A hypothesis that takes the equation, on a computed test and on a
+// variable.
+theorem takes_equation(w: Nat, k: fits(w) = False → Nat): Nat {
+    match h: fits(w) { False => k(h), True => 0 }
+}
+fn pick<A>(b: Bool, f: (b = True) → A, g: (b = False) → A) → A {
+    match h: b { True => f(h), False => g(h) }
+}
+
+// The equation where both sides are the constructor is `refl`: a
+// hypothesis refined in head position takes it.
+theorem equation_as_refl(w: Nat, same: fits(w) = True, k: (v: Bool) → v = True → fits(w) = v → Nat): Nat {
+    match h: fits(w) { False => absurd(same), True => k(True, same, h) }
+}
+
+// Transport written by hand along the equation still checks: the
+// hypothesis under `j` is checked at the written motive's instance.
+theorem by_hand(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), spare: fits(w) = True → Nat): Nat {
+    match fit: fits(w) { False => absurd(same), True => spare(fit) }
+}
+
+// Nested: a hypothesis refined by two splits is usable at each of its three
+// spellings.
+fn both(a, b: Nat) → Bool { match fits(a) { False => False, True => fits(b) } }
+theorem nested(a, b: Nat, ok: both(a, b) = True, k0: both(a, b) = True → Nat, k1: fits(a) = True → fits(b) = True → Nat): Nat {
+    match fa: fits(a) {
+        False => absurd(ok),
+        True => match fb: fits(b) {
+            False => absurd(ok),
+            True => k0(ok) + k1(fa, fb),
+        },
+    }
+}
+
+// A use neither reading fits is refused at the use.
+// expect-error: is expected here
+theorem neither(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: Leaf(w).emits(p) = None → Nat): Nat {
+    match fit: fits(w) { False => 0, True => k(same) }
+}

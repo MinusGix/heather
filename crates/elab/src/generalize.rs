@@ -219,7 +219,7 @@ impl Generalize<'_> {
             }
         }
         Refined {
-            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None))),
+            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h)))),
             retyped: Vec::new(),
         }
     }
@@ -308,14 +308,13 @@ impl Generalize<'_> {
         // while refining nothing. One the goal mentions must go with the
         // goal, whose motive abstracts the scrutinee under it.
         let named = arm_names(arms);
-        let beside = convoy.and_then(|(_, h)| h).map_or_else(Vec::new, |h| passed_beside(arms, h));
-        let takes_h = |q: usize| {
-            convoy.is_some_and(|(scrutinee, _)| {
-                cx.gamma.entries.get(q).is_some_and(|entry| {
-                    takes_equation_about(&entry.ty.shift_local((m - q) as u32), scrutinee)
-                })
-            }) || beside.iter().any(|n| n == &cx.names[q])
-        };
+        // Nothing is left as written for what the arm's source passes it
+        // to or with: the arm has both readings, and each use takes the one
+        // its position asks for (docs/language/matching/arm-readings-design.md).
+        // A hypothesis called what the equation is called is shadowed by it
+        // in every arm: the name an arm writes is the equation.
+        let equation = convoy.and_then(|(_, h)| h);
+        let takes_h = |q: usize| equation.is_some_and(|h| h == &cx.names[q]);
         let machinery = |q: usize| machinery(cx, q);
         let mut refined: Vec<usize> = about
             .iter()
@@ -523,7 +522,7 @@ fn machinery(cx: &Cx, q: usize) -> bool {
 }
 
 /// Every variable a pattern binds, however deep.
-fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
+pub(crate) fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
     match pat {
         Pat::Var { name, .. } => out.push(name),
         Pat::Ctor { args, .. } => args.iter().for_each(|arg| pattern_names(arg, out)),

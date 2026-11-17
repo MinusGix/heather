@@ -202,6 +202,7 @@ mod iwf_family;
 mod iwf_w;
 mod gendefs;
 mod generalize;
+mod readings;
 mod goal_combinators;
 mod goals;
 pub mod host;
@@ -1476,6 +1477,16 @@ impl application::ImplicitApplicationElab for Elaborator {
 
     fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, argument)
+    }
+
+    fn argument_readings(&self, cx: &Cx, term: &Term) -> Vec<(Term, Type)> {
+        let mut readings = readings::Readings(self).written(cx, term);
+        readings.extend(readings::Readings(self).equation(cx, term));
+        readings
+    }
+
+    fn argument_type_converts(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level) -> bool {
+        self.conv_types(cx, got, expected, level)
     }
 
     fn infer_polymorphic_argument(

@@ -215,6 +215,15 @@ impl Checking<'_> {
         if let Some(quoted) = Host(self).quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
         }
+        // A name an enclosing match gave two readings is the one this
+        // position asks for (docs/language/matching/arm-readings-design.md).
+        if let ExprKind::Var(name) = &e.kind
+            && cx.readings.iter_inner().any(|r| &r.name == name)
+            && let Ok((t, got, _)) = self.probe(|| self.elab_infer(cx, e))
+            && let Some((t, _)) = crate::readings::Readings(self).reread(cx, &t, &got, expected, lvl)
+        {
+            return Ok(t);
+        }
         // A branch of a tactic's split (`host::Leaves`).
         if let ExprKind::Var(name) = &e.kind
             && let Some(k) = host::leaf_index(name)
@@ -632,9 +641,17 @@ impl Checking<'_> {
                             self.0, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
                         );
                     }
+                    // A refined hypothesis keeps its written reading in the
+                    // arm, and the equation its `refl` one
+                    // (docs/language/matching/arm-readings-design.md).
+                    let mut shadowed: Vec<&str> = Vec::new();
+                    for arm in arms.iter() {
+                        arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
+                    }
+                    let mut gcx = cx.clone();
+                    crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
-                    let mut gcx = cx.clone();
                     if let Some(dec) = guard {
                         gcx.generalized = Some(Rc::new(generalize::Generalization {
                             dec,
