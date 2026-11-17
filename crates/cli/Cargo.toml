@@ -20,6 +20,8 @@ heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 heather-elab-lib = { path = "../elab-lib" }
 heather-cache = { path = "../cache" }
+# The solver of certified bit-level decisions (`heather sat`, `src/sat.rs`).
+heather-sat = { path = "../sat" }
 
 # Heather's own scanner, compiled and linked (`crates/linked`): what
 # `HEATHER_LEXER=linked` hands the lexer (`src/main.rs`,

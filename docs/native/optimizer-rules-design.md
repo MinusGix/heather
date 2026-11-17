@@ -572,18 +572,21 @@ the matcher, for the rules whose conclusion is a node.
   is: `compile-x86`'s reads and its certificate are modules that import
   the program, so they get the program's rules with no text naming them.
 - **`examples/x86-native/own_rule.hthr`** is a program that declares
-  `or_zero` and is compiled with it: the `or` is gone from its code, and
-  stays without the rule (`crates/cli/tests/native_own_rule.rs`).
+  `sub_self` (first `or_zero`, which the standard set now has, then
+  `add_sub_left`, which the search of §9.4 now finds from `add_sub`) and
+  is compiled with it: the subtraction and the add are gone from its
+  code, and stay without the rule (`crates/cli/tests/native_own_rule.rs`).
 
 - **`compile-x86 --explain-optimizer`** prints, for each function, a line
   for each rule the replays it kept used (§8): the conclusion at the
   instance, the rule's name, and the premises it stood on.
 
   ```
-  function 0: 6 rules used
+  function 0: 7 rules used
     t5 = t4 < t1 = 1   by below_yes   (t4 within 0 ..= 0, t1 within 1 ..= u64::MAX)
     t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
-    t10 = t8 | 0 = t8   by or_zero
+    t9 = t1 - t1 = 0   by sub_self
+    t10 = t8 + 0 = t8   by add_zero
   ```
 
   A line is read off the clause the rule makes at the plan's numbers, the
@@ -690,15 +693,64 @@ the matcher, for the rules whose conclusion is a node.
   derives each range before a step reads it, `explain` and `pending`),
   which is the statement about a whole plan.
 
-- **A set of rules is a module** (§6). `function_ir_identities.hthr` has
-  the plain identities of words as `rule theorem`s (`or_zero`, `zero_or`,
-  `zero_add`, `sub_zero`, `xor_self`, `and_zero`, `add_sub`, `sub_add`,
-  the shifts by no places). They are not among the library's placed
-  rules: a program that imports the module is compiled with them, as with
-  its own, and one that does not is as it was
-  (`examples/x86-native/rule_set.hthr`). Whether a default set is on for
-  every compilation is not decided; `own_rule.hthr`'s control would need
-  another rule than `or_zero` then.
+- **A set of rules is a module, and the standard set is on** (§6; Minus,
+  2026-11-16: on by default, "we'll want a big standard list").
+  `function_ir_identities.hthr` has the plain identities of words as
+  `rule theorem`s (`or_zero`, `zero_or`, `zero_add`, `sub_zero`,
+  `xor_self`, `and_zero`, `add_sub`, `sub_add`, the shifts by no places).
+  They are not among the library's placed rules: `compile-x86` imports the
+  module into every compilation's reads and certificate
+  (`OPTIMIZE_IMPORTS`, `verified.rs`), so they are registered there as a
+  program's own rules are (`examples/x86-native/rule_set.hthr`). A rule
+  added to the module is in every compilation with nothing else written.
+  The library's own tests do not import it, so their plans and what their
+  proofs cost do not move with the list.
+- **A rewrite gives way to a decision, and never writes a bit's move.**
+  With the set on, `x | 0 = x` fitted an or of two clear bits before the
+  rule that decides it (`or_of_clear`) was asked, and left a move of a bit:
+  the walk knew nothing of that bit, the tests that read it stayed
+  undecided, and the lowering has no code for a bit's move, so it refused
+  the function and the compile kept the one before the walk (the linked
+  SHA-256 grew). `Seen::matched` now asks first whether a rule decides the
+  node's bit (`Seen::settles`) and does not apply a rule whose node is a
+  bit's move (`Node::moves_bit`); `bits_kept` in
+  `function_ir_identities_tests.hthr` holds both. A copy of a bit in the
+  lowering would retire the second. `HEATHER_OPTIMIZE_TRACE=1` makes
+  `compile-x86` say what each search found and each test of a function
+  made answered, and prints a function the lowering refused, which is how
+  a stage the compile declined is seen.
+- **Saturation, the first version: a search through a word's other
+  spellings** (§9.4; Minus, 2026-11-16: "Let's start on saturation").
+  A rule's node is over words the function already has, so a word is a
+  class and the nodes the rules give for it are the class's members, with
+  no graph beside the walk. At a node the walk closes the node under every
+  rewriting rule that reads no range (`spellings_closed`), then does the
+  same with each word the node reads spelled each other way the rules give
+  (`Seen::spellings_reading`), and writes the lightest spelling
+  (`Node::weight`: a move, then a constant, then the rest) with the steps
+  that derive it: `Drop`, a `Derive` for each rule on the way, `Emit`
+  (`Seen::searched`). The replayer and the report are as they were; the
+  report says each step, `t9 = t1 + t8 = t8 + t1   by add_comm` and then
+  `t10 = (t8 + t1) - t1 = t8   by add_sub`.
+  - The standard set has `add_comm`, `and_comm`, `or_comm`, `xor_comm`. A
+    node with its operands turned gains nothing, so no walk writes one
+    (`Node::turned`, `matched_among`); the search follows them. A rule is
+    then stated one way round: `zero_or` and the example's first
+    `add_sub_left` are found from `or_zero` and `add_sub`.
+  - It is asked for: `learn_plan(spellings := n)`, `find_learned(spellings
+    := n)`, with `n` the spellings followed from one node (`Tables.spellings`,
+    zero by default). `compile-x86` asks with eight; the library's plan
+    tests do not, so what their proofs cost has not moved
+    (`turned_left`, `turned_searched` in `function_ir_identities_tests.hthr`).
+  - What it is not yet, against §9.4. No word is made, so a rule whose
+    other side needs a new word (associativity, folding two constants) has
+    nowhere to put it: that wants helper nodes put by an inlining stage
+    before the replay, as the word loads are. Two words that are equal are
+    one class only after a copy walk has read through the move between
+    them, not during a search; the library's e-graph and its congruence
+    are for that, and are not used here. Rules that read a range are taken
+    as the plain walk takes them, first fit. The weight is three classes
+    and not what the lowering emits.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose

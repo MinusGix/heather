@@ -236,6 +236,11 @@ pub enum TypeError {
     /// A local substitution does not match its source Γ / target Δ shape
     /// (tail kind, tail length, base, or entry count).
     SubstMismatch,
+    /// A binding checked to be committed as a constant with a universe
+    /// variable in scope. A constant is closed in universe variables, as in
+    /// global ones (DESIGN.md, "Constants are addressed from the start of
+    /// Ψ"), so the signature grows only at an empty L.
+    SignatureUnderUniverses,
 }
 
 type R<T = ()> = Result<T, TypeError>;
@@ -302,7 +307,8 @@ pub fn check_global_ctx_extension(
 /// [`check_global_ctx_extension`] for an extension of the **signature**:
 /// `prefix` has no variable, and each binding of `extension` is checked as
 /// the constant it will be committed as ([`GlobalCtx::commit`]), over the
-/// prefix and the constants before it.
+/// prefix and the constants before it. Refused unless `univs` is 0
+/// ([`TypeError::SignatureUnderUniverses`]).
 pub fn check_signature_extension(
     prefix: &GlobalCtx,
     extension: &[GlobalBinding],
@@ -321,6 +327,10 @@ fn check_global_bindings<'a>(
     univs: u32,
     commit: bool,
 ) -> R<GlobalCtx> {
+    let mut bindings = bindings.into_iter().peekable();
+    if commit && univs != 0 && bindings.peek().is_some() {
+        return Err(TypeError::SignatureUnderUniverses);
+    }
     for b in bindings {
         let env = binding_env(&prefix, univs);
         check_global_binding_declaration(tc, &env, b)?;

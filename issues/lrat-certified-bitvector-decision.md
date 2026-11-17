@@ -90,3 +90,15 @@ before a generator is worth writing.
   (3) the tactic, which must emit the stages as declarations of their own;
   (4) the UTF-8 word-to-spec bridges in `examples/utf8/utf8_check.hthr` as
   the first customer.
+- 2026-11-16: the solver is CaDiCaL (Minus chose it after the evaluation in
+  the levers thread: native LRAT for every technique, MIT, maintained, what
+  Lean's `bv_decide` runs). Vendored unedited as `vendor/cadical` (release
+  3.0.1), compiled by `crates/sat` (`heather-sat`), which collects the proof
+  in memory through CaDiCaL's tracer, trims it to what the empty clause
+  depends on and renumbers it into the formula's own numbering;
+  `heather sat <file.cnf>` prints it, and `scripts/lrat-probes` uses it by
+  default. Its proofs are far shorter than the naive solver's on adders
+  (8-bit addition commuting: a few stages instead of 83) and comparable on
+  multipliers, which stay hard for any SAT solver. Gotcha: the tracer's ids
+  for the input clauses skip where the input has units, so `heather-sat`
+  maps them by the order and contents of the clauses reported, never by id.

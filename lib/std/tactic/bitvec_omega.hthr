@@ -199,14 +199,14 @@ theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a
 theorem unsigned_le_true(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = bool::True): a.toNat() <= b.toNat() {
     match same: b.unsigned_lt_bit(a) {
         False => unsigned_false(n, b, a, same),
-        True => absurd(trans(sym(h), @cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::True, same))),
+        True => absurd(h),
     }
 }
 
 theorem unsigned_le_false(n: Nat, a, b: BitVec(n), h: a.unsigned_le_bit(b) = bool::False): b.toNat() < a.toNat() {
     match same: b.unsigned_lt_bit(a) {
         True => unsigned_true(n, b, a, same),
-        False => absurd(trans(sym(@cong(λ (c: Bool) => !c, b.unsigned_lt_bit(a), bool::False, same)), h)),
+        False => absurd(h),
     }
 }
 

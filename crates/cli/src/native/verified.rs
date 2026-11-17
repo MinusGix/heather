@@ -484,10 +484,11 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     Ok(())
 }
 
-/// What the optimizer needs besides: its stage, the plans' types, and the
-/// search.
+/// What the optimizer needs besides: its stage, the plans' types, the
+/// search, and the standard set of rules (`function_ir_identities`), which
+/// is so registered in every compilation beside the program's own.
 const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
-    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
+    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "function_ir_identities", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
 /// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
@@ -620,6 +621,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 }}
 "));
     let mut modules = vec![source, placed];
+    // `HEATHER_OPTIMIZE_TRACE=1`: what each search found and each test of a
+    // function made answered, so a stage that was declined is seen.
+    let trace = std::env::var_os("HEATHER_OPTIMIZE_TRACE").is_some();
     let (mut stated, mut statements) = (String::new(), String::new());
     let mut placements = Vec::with_capacity(m);
     for k in 0..m {
@@ -633,7 +637,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False => [0] }} }}
 ", uses(modules));
             fork.define(&module, &text);
-            Ok(read(fork, &module, item)? == [1])
+            let yes = read(fork, &module, item)? == [1];
+            if trace { eprintln!("optimize: function {k} `{question}`: {}", if yes { "yes" } else { "no" }); }
+            Ok(yes)
         };
         // The stages `searches` name, in turn from the function `from`: each
         // search is asked of the function the one before it made, and what
@@ -652,6 +658,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
                 fork.define(&find, &text);
                 let unread = || format!("function {k}'s `{search}` did not read back");
                 let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
+                if trace { eprintln!("optimize: function {k} `{search}` ({tag}{at}): {}", if found == "None" { "nothing" } else { "a plan" }); }
                 if found == "None" { continue; }
                 let (plan, function) = match found.split_once('\n') {
                     Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
@@ -683,7 +690,12 @@ fn {name}() → Function {{
 fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {function}.plan()) }}
 ", uses(modules));
             fork.define(&module, &text);
-            match read(fork, &module, &item)?.split_first() {
+            let answer = read(fork, &module, &item)?;
+            if trace {
+                eprintln!("optimize: function {k} lowering `{item}`: {}", if answer.first() == Some(&1) { "placed" } else { "refused" });
+                if answer.first() != Some(&1) && let Some(last) = made.last() { eprintln!("optimize: refused: {}", last.function); }
+            }
+            match answer.split_first() {
                 Some((0, [])) => Ok(None),
                 Some((1, places)) => Ok(Some(places.to_vec())),
                 _ => Err(format!("`{prefix}_opt_{item}` did not read back")),
@@ -693,6 +705,11 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         let mut placement = None;
         let wanted = format!("{earlier}, Wanted::usual()");
         let replay = |search: &str| (Stage::Replay, search.to_string());
+        // The walks search (`spellings := 8`, `Seen::searched`): at a node
+        // they follow the rules through up to eight other spellings of its
+        // word and of each word it reads, and write the cheapest. The
+        // library's own plan tests walk without it, so what their proofs
+        // cost does not move.
         // With no test: inlined and tidied, within the search's room or
         // not at all.
         let mut tidied = run(&mut fork, &mut modules, "t", &original, None,
@@ -706,7 +723,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             let last = tested[0].function.clone();
             tested.extend(run(&mut fork, &mut modules, "p", &named(&tested), Some(last),
                 &[(Stage::Inline, format!("find_inlined_past({wanted})")), replay("find_copied_past()"), replay("find_swept_past()"),
-                    replay("find_learned_past()"), replay("find_copied_past()"), replay("find_swept_past()")])?);
+                    replay("find_learned_past(spellings := 8)"), replay("find_copied_past()"), replay("find_swept_past()")])?);
             if fits(&mut fork, &modules, &tested, "tested_")? && let Some(places) = lowers(&mut fork, &modules, &tested, "tested_")? {
                 made = tested;
                 placement = Some(places);
@@ -717,7 +734,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
         if made.is_empty() {
             let mut learned = tidied.clone();
             learned.extend(run(&mut fork, &mut modules, "l", &named(&tidied), tidied.last().map(|last| last.function.clone()),
-                &[replay("find_learned()")])?);
+                &[replay("find_learned(spellings := 8)")])?);
             if learned.len() > tidied.len() {
                 let last = learned.last().map(|last| last.function.clone());
                 learned.extend(run(&mut fork, &mut modules, "m", &named(&learned), last, &[replay("find_copied()"), replay("find_swept()")])?);
@@ -745,8 +762,8 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                 worded.extend(put);
                 let last = worded.last().map(|last| last.function.clone());
                 worded.extend(run(&mut fork, &mut modules, "x", &named(&worded), last,
-                    &[replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
-                        replay(&format!("find_learned{past}()")), replay(&format!("find_swept{past}()"))])?);
+                    &[replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()")),
+                        replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &worded, "worded_")? {
                     made = worded;
                     placement = Some(places);
@@ -778,7 +795,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             if stored.len() > made.len() {
                 let last = stored.last().map(|last| last.function.clone());
                 stored.extend(run(&mut fork, &mut modules, "z", &named(&stored), last,
-                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}()")), replay(&format!("find_copied{past}()")),
+                    &[replay(&format!("find_swept{past}()")), replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")),
                         replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &stored, "stored_")? {
                     made = stored;

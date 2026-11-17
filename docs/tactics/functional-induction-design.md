@@ -46,14 +46,19 @@ theorem f::induct(fixed…, motive: (varying…) → Type,
   first constructor match, which must be the body's first test
   (`Recursion::Structural`). A function with nothing to read gets no
   principle, and the reason is recorded with the step equations' refusals.
+- **A match on a call's result is a test** (§1.1): `match first.emits(p) {
+  None => …, Some(c) => … }` splits its case in two, as a `match` on a
+  parameter does, so a compiler written as a pipeline of partial steps has a
+  case per step's outcome.
 - **Cases.** One per leaf, in the branch equations' order, named by the
   leaf's path: `case_True`, `case_False_True`, `case_Cons`. A case
   quantifies the varying parameters, the fields and hypotheses on the way
   (a constructor test substitutes the constructor for its parameter, as an
   induction on it would, and drops the equation), the leaf's equation `eq`,
-  and an induction hypothesis `ih`, `ih2`, … at each recursive call the
-  leaf makes outright (not under a `λ` or a match arm, whose variables the
-  case does not bind).
+  and an induction hypothesis `ih`, `ih2`, … at each recursive call a
+  result test on the way matches on (`first.emits(p)`) and then at each the
+  leaf makes outright (not under a `λ` or a match arm the case does not
+  split, whose variables it does not bind).
 - **Fixed and varying.** A parameter every recursive call passes unchanged
   and no test matches is *fixed*: a parameter of the principle ahead of the
   motive, so the motive does not quantify it and every IH is at the same
@@ -78,6 +83,59 @@ theorem f::induct(fixed…, motive: (varying…) → Type,
 
 The principle is a theorem like any other, applied by hand where that reads
 better (`up_by_principle` in `lib/_tests/std/tactic/induct_tests.hthr`).
+
+### 1.1 Tests on a result
+
+A compiler is a pipeline of partial steps, not a tree of tests on its
+parameters (issues/induct-through-result-matches.md):
+
+```
+fn St::emits(self s: St, p: List<Nat>, names: Nat) → Option<Out> {
+    match s {
+        Seq(first, rest) => match first.emits(p, names) {
+            None => None,
+            Some(c) => rest.emits(c.code, c.names),
+        },
+        …
+```
+
+`branch_equations` reads a `match` on any term of an inductive type (a
+call, a `let` bound to one, a field an earlier arm bound) as a test, one
+leaf per arm, when it is not a parameter's (that is the constructor test
+above it):
+
+- **The case** binds the arm's fields and `h: g(ā) = C(ȳ)`, the call stated
+  as the body spells it, outside the `let`s. A `match got:` names it `got`,
+  and an arm that passes `got` on is stated with the hypothesis in its place.
+  The paths name the arms: `Seq::None`, `Seq::Some`, `If::True::Some::None`.
+  A hypothesis the body left unnamed (a result's, or a `Bool` test's) is
+  `h`, `h2`, … in the order the case binds it, whatever the equations call
+  it (they number names apart across the whole body).
+- **The IHs.** The matched call is a recursive call too, so `Seq::Some`
+  has `ih` at `first.emits(p, names)` and `ih2` at `rest.emits(c.code,
+  c.names)`, which mentions the field the case binds.
+- **The equations** come with it: `St::emits::Seq::Some(s, p, names, first,
+  rest, h₀, c, h): s.emits(p, names) = rest.emits(c.code, c.names)`, where
+  `native_compile_correct.hthr` had `Stmt::emits_then_of` by hand.
+- **The type** of the matched term is the elaborator's (`infer_local`,
+  spelled and checked again), so a call of any function, generic or not,
+  with arguments over the parameters and the fields on the way, is read.
+- **The proof** of the arm's equation rewrites along `h` itself, as
+  `Bool::taken_true` does: `j(h, λ w q => M = M[w], refl)` where `M[w]` is
+  the same `match` at `w` (the convoy's equation passed as `q`), which at
+  `C(ȳ)` computes to the arm.
+- **Written as calls.** `o.and_then(λ v => k)` and `o.map(λ v => k)` on an
+  `Option` or a `Result`, a postfix `?` (which lowers to `Result`'s), and
+  `b.guard(o)` on a `Bool` are read as the `match` the callee is, with the
+  same cases (`Some`/`None`, `Ok`/`Err`, `True`/`False`) and an equation
+  proved by the callee computing at the constructor. They are recognised by
+  name; one that does something else is refused by the checker and the
+  body read as before. Any other combinator is a leaf: write the `match`.
+- **What keeps a function's old equations.** A `match` with a `_` arm stays a
+  leaf (its condition is every other constructor's failure). Where reading
+  the results makes more than sixteen leaves, or the checker refuses an
+  equation of the reading, the body is read without them, as before, and a
+  reference to an equation only that reading has reports why.
 
 ## 2. The `induct` step
 
@@ -171,7 +229,8 @@ a designated name that would map to a *different* minted name
 ## 5. What it does not do
 
 - **Mutual recursion**, and recursion through a higher-order argument
-  (`xs.map(λ x => f(x))`): the leaf's calls under a `λ` get no IH.
+  (`xs.map(λ x => f(x))`): the leaf's calls under a `λ` get no IH, nor do
+  those under a `match` with a `_` arm (§1.1).
 - **A structural function whose first test is not the match on the
   decreasing parameter**: no principle; the refusal is recorded.
 - **Functional induction on a call nested in the goal at arguments that are

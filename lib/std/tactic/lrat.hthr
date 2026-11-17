@@ -165,15 +165,8 @@ theorem agrees_set(a: NatMap<Bool>, v: Nat → Bool, x: Nat, b: Bool, ag: Agrees
 // A literal's value under `a` is its value under `v`.
 theorem under_agrees(l: Nat, a: NatMap<Bool>, v: Nat → Bool, ag: Agrees(a, v), t: Bool, got: lit_under(l, a) = Some(t)): lit_true(l, v) = t {
     match e: nat_map_get(a, lit_var(l)) {
-        None => {
-            let none: (lit_under(l, a) = None) = cong_fn(λ (o: Option<Bool>) => lit_value(l, o), e);
-            Option::none_ne_some(t, trans(sym(none), got), lit_true(l, v) = t)
-        },
-        Some(b) => {
-            let some: (lit_under(l, a) = Some(b.xor(lit_negative(l)))) = cong_fn(λ (o: Option<Bool>) => lit_value(l, o), e);
-            let vb: (v(lit_var(l)) = b) = ag(lit_var(l), b, e);
-            trans(cong_fn(λ (x: Bool) => x.xor(lit_negative(l)), vb), Option::some_inj(b.xor(lit_negative(l)), t, trans(sym(some), got)))
-        },
+        None => Option::none_ne_some(t, got, lit_true(l, v) = t),
+        Some(b) => trans(cong_fn(λ (x: Bool) => x.xor(lit_negative(l)), ag(lit_var(l), b, e)), Option::some_inj(b.xor(lit_negative(l)), t, got)),
     }
 }
 

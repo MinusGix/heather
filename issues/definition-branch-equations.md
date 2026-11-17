@@ -5,7 +5,7 @@ labels: [proofs,elaboration,native]
 area: language
 milestone: [lang-proof-modularity]
 created: 2026-11-14
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 Brief §5 of the optimizer side threads (2026-11-14): to use a function in a
@@ -51,10 +51,11 @@ Probes: `lib/_tests/std/core/branch_equations_tests.hthr`.
 
 ## Open
 
-- `match` on something other than a parameter of a written inductive
-  type (a call, a field), whose type the generator cannot read off the
-  source; a nested pattern; an indexed family; and the `_` arm, whose
-  condition is every other constructor's failure.
+- A nested pattern; an indexed family; and the `_` arm, whose condition is
+  every other constructor's failure. (A `match` on a call's result or a
+  field, typed by the elaborator, is read since 2026-11-16:
+  [[induct-through-result-matches]],
+  `docs/tactics/functional-induction-design.md` §1.1.)
 - `f::True`/`f::False` beside `f::step`/`f::done` for a `decreases` body,
   so the two schemes are one (the loops' generator,
   `measure::step_equations`, would become this one after `f::unfold`).

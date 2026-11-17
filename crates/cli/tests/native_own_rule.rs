@@ -27,10 +27,6 @@ fn compile(root: &Path, source: &Path, function: &str, assembly: &Path, explain:
     (bytes(assembly), String::from_utf8(result.stdout).unwrap())
 }
 
-/// `OR r64, r64` (REX.W 09 /r), which is what `x | 0` lowers to where
-/// nothing says it is `x`.
-fn has_or(bytes: &[u8]) -> bool { bytes.windows(2).any(|w| w == [0x48, 0x09]) }
-
 #[test]
 fn a_programs_own_rule_is_applied() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -38,11 +34,10 @@ fn a_programs_own_rule_is_applied() {
     let dir = root.join(format!("target/native-own-rule-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let source = root.join("examples/x86-native/own_rule.hthr");
-    let (with_rule, explained) = compile(&root, &source, "first_or_zero", &dir.join("with.s"), "--explain-optimizer");
-    assert!(!has_or(&with_rule), "the program's rule `or_zero` was not applied: {with_rule:02x?}");
+    let (with_rule, explained) = compile(&root, &source, "first_and_nothing", &dir.join("with.s"), "--explain-optimizer");
     // The report says so in the rule's words, by its name, beside the
     // library's rules the replay used.
-    assert!(explained.lines().any(|line| line.contains(" | 0 = ") && line.ends_with("   by or_zero")), "{explained}");
+    assert!(explained.lines().any(|line| line.contains(" - t") && line.ends_with(" = 0   by sub_self")), "{explained}");
     assert!(explained.contains("   by narrow_back   ("), "{explained}");
     assert!(!explained.contains("not applied"), "{explained}");
     // The certificate's stages are over the registered rules, the
@@ -50,19 +45,19 @@ fn a_programs_own_rule_is_applied() {
     let certificate = std::fs::read_to_string(dir.join("with.certificate.hthr")).unwrap();
     assert!(certificate.contains("registered(RuleEntry)"), "the certificate names the registered rules");
 
-    // The control: the same program without its rule keeps the `or`.
+    // The control: the same program without its rule keeps the
+    // subtraction and the add.
     let text = std::fs::read_to_string(&source).unwrap();
-    let from = text.find("rule theorem or_zero").expect("the rule");
+    let from = text.find("rule theorem sub_self").expect("the rule");
     let to = text.find("// The first byte of a span").expect("the function");
     let plain = dir.join("own_rule.hthr");
     std::fs::write(&plain, format!("{}{}", &text[..from], &text[to..])).unwrap();
-    let (without_rule, plain_explained) = compile(&root, &plain, "first_or_zero", &dir.join("without.s"), "--explain-optimizer=all");
-    assert!(!plain_explained.contains("by or_zero"), "{plain_explained}");
+    let (without_rule, plain_explained) = compile(&root, &plain, "first_and_nothing", &dir.join("without.s"), "--explain-optimizer=all");
+    assert!(!plain_explained.contains("by sub_self"), "{plain_explained}");
     // With `=all` the report also names the rules whose nodes fit a node
     // and that were not applied there: the test of the length against
     // zero is one no range decides.
     assert!(plain_explained.lines().any(|line| line.starts_with("  not applied at ") && line.ends_with(": below_yes, below_no")), "{plain_explained}");
-    assert!(has_or(&without_rule), "without the rule the `or` stays: {without_rule:02x?}");
     assert!(with_rule.len() < without_rule.len());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -94,29 +89,24 @@ fn a_programs_own_learner_is_asked() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A set of rules is a module (`examples/x86-native/rule_set.hthr`,
-/// docs/native/optimizer-rules-design.md §6): a program that imports
-/// `function_ir_identities` is compiled with its rules, and one rule's
-/// result is what the next reads.
+/// The standard set of rules (`lib/native/function_ir/function_ir_identities.hthr`,
+/// docs/native/optimizer-rules-design.md §6) is registered in every
+/// compilation: `examples/x86-native/rule_set.hthr` names no rule and is
+/// compiled with them, one rule's result read by the next. Its sum is
+/// written the way round `add_sub` does not fit, and the search through a
+/// word's other spellings (§9.4, `Seen::searched`) follows `add_comm` to
+/// the one it does: the report says both steps.
 #[test]
-fn an_imported_rule_set_is_applied() {
+fn the_standard_rule_set_is_applied() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = root.join(format!("target/native-rule-set-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let source = root.join("examples/x86-native/rule_set.hthr");
-    let (with_set, explained) = compile(&root, &source, "tangled", &dir.join("with.s"), "--explain-optimizer");
-    for rule in ["add_sub", "xor_self", "or_zero"] {
+    assert!(!std::fs::read_to_string(&source).unwrap().contains("import function_ir_identities"));
+    let (_, explained) = compile(&root, &source, "tangled", &dir.join("with.s"), "--explain-optimizer");
+    for rule in ["add_comm", "add_sub", "xor_self", "or_zero"] {
         assert!(explained.lines().any(|line| line.ends_with(&format!("   by {rule}"))), "{rule}: {explained}");
     }
-
-    // The control: the same program without the import.
-    let text = std::fs::read_to_string(&source).unwrap();
-    assert!(text.contains("import function_ir_identities;\n"));
-    let plain = dir.join("rule_set.hthr");
-    std::fs::write(&plain, text.replace("import function_ir_identities;\n", "")).unwrap();
-    let (without_set, plain_explained) = compile(&root, &plain, "tangled", &dir.join("without.s"), "--explain-optimizer");
-    assert!(!plain_explained.contains("by add_sub"), "{plain_explained}");
-    assert!(with_set.len() < without_set.len(), "{with_set:02x?} {without_set:02x?}");
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -57,3 +57,17 @@ rule theorem sub_add({w: Nat}, a, b: BitVec(w)): (a - b) + b = a { BitVec::sub_a
 rule theorem shift_left_none({w: Nat}, x: BitVec(w)): x << 0 = x { refl }
 
 rule theorem shift_right_none({w: Nat}, x: BitVec(w)): x >> 0 = x { refl }
+
+// The operands of a sum, a mask, a join and an xor either way round. No
+// walk writes one of these for a node, since it gains nothing
+// (`Node::turned`): a search through a word's other spellings follows them
+// to the rules that fit the other way round (`Seen::searched`,
+// function_ir_learn), so `add_sub` is found at `(b + a) - b` and `or_zero`
+// at `0 | x`.
+rule theorem add_comm({w: Nat}, a, b: BitVec(w)): a + b = b + a { BitVec::add_comm(w, a, b) }
+
+rule theorem and_comm({w: Nat}, a, b: BitVec(w)): a & b = b & a { BitVec::band_comm(w, a, b) }
+
+rule theorem or_comm({w: Nat}, a, b: BitVec(w)): a | b = b | a { BitVec::bor_comm(w, a, b) }
+
+rule theorem xor_comm({w: Nat}, a, b: BitVec(w)): a.bxor(b) = b.bxor(a) { BitVec::bxor_comm(w, a, b) }
