@@ -670,7 +670,7 @@ impl Checking<'_> {
                     };
                     let elim = match eqbind {
                         None => Inference(self).elab_match_pending(&gcx, &scrut_ty, &run)?,
-                        Some(h) => run(&gcx, Some(h))?,
+                        Some(h) => run(&gcx, Some(h)).map_err(|error| refined.explain(h, error))?,
                     };
                     return Ok(Generalize(self).instantiate_generalized(cx, elim, gen_ty, &positions));
                 }
@@ -699,7 +699,7 @@ impl Checking<'_> {
                     };
                     let elim = match eqbind {
                         None => Inference(self).elab_match_pending(cx, &scrut_ty, &run)?,
-                        Some(h) => run(cx, Some(h))?,
+                        Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error))?,
                     };
                     return Ok(Generalize(self).instantiate_aliases(cx, elim, gen_ty, &dependents));
                 }
@@ -726,7 +726,7 @@ impl Checking<'_> {
                 };
                 match eqbind {
                     None => Inference(self).elab_match_pending(cx, &scrut_ty, &run),
-                    Some(h) => run(cx, Some(h)),
+                    Some(h) => run(cx, Some(h)).map_err(|error| refined.explain(h, error)),
                 }
             }
             // `absurd(p)`: from an equation between distinct constructors,

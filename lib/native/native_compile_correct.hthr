@@ -1497,52 +1497,29 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
     let layout = src.layout(low, homes);
     let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     let laid = src.calls_laid(low, homes, program, compiled);
-    (match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) as λ o => src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = o →
-            (match o {
-                None => None,
-                Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
-                    None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                        None => None,
-                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+    match emitted: src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+        None => absurd(compiled),
+        Some(c) => match coded: src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
+            None => absurd(compiled),
+            Some(d) => match linked: d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                None => absurd(compiled),
+                Some(whole) => match whole.laid_out() {
+                    False => absurd(compiled),
+                    True => {
+                        let base = d.prog.deep_exit(layout);
+                        let same: (Some(whole) = Some(program)) = compiled;
+                        let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) = subst(same, linked);
+                        let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
+                        let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
+                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, coded, program, w_d);
+                        CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
+                            λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
+                            d.prog, w_base, laid, base, d.names, linked_p)
                     },
                 },
-            }) = Some(program) → CallsBuilt(src, low, homes, program) {
-        None => λ _ none => absurd(none),
-        Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
-                src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
-                    None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                        None => None,
-                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
-                    },
-                }) = Some(program) → CallsBuilt(src, low, homes, program) {
-            None => λ _ none => absurd(none),
-            Some(d) => λ code => {
-                let base = d.prog.deep_exit(layout);
-                (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
-                        (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
-                        CallsBuilt(src, low, homes, program) {
-                    None => λ _ none => absurd(none),
-                    Some(whole) => λ linked => (match whole.laid_out() as λ b => (match b as λ _ => Option<Prog> { False => None, True => Some(whole) }) = Some(program) →
-                            CallsBuilt(src, low, homes, program) {
-                        False => λ none => absurd(none),
-                        True => λ same => {
-                            let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
-                                subst(same, linked);
-                            let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
-                            let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
-                            let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
-                            let r: CallsBuilt(src, low, homes, program) = CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
-                                λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
-                                d.prog, w_base, laid, base, d.names, linked_p);
-                            r
-                        },
-                    }),
-                })(refl)
             },
-        })(refl),
-    })(refl, compiled)
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
