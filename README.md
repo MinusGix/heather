@@ -11,7 +11,7 @@ for the code that runs.
 The examples below are taken from files in this repository, and a test
 keeps them in step.
 
-## A function and its theorems
+## Example
 
 <!-- checked: examples/readme/words.hthr -->
 ```rust
@@ -41,8 +41,9 @@ theorem clamp_twice(x: u64, {lo, hi: u64}, ordered: lo <= hi): clamp(clamp(x, lo
 }
 ```
 
-`split_all` takes a case for each branch of `clamp`, and `bv_omega` settles
-the arithmetic on machine words in each case.
+`split_all` splits a proof into one case for each branch of `clamp`.
+`bv_omega` then proves each case: it is a decision procedure for linear
+arithmetic on fixed-width integers.
 
 `runtime fn` marks a function to be compiled:
 
@@ -63,51 +64,11 @@ heather compile-x86 examples/readme/words.hthr clamp -o clamp.s
 3:  ret
 ```
 
-Before writing the file, the kernel checks that this code returns what
-`clamp` returns. The compiler is written in Heather and proved correct
+With the assembly comes a proof about a formal model of x86-64: run on that
+model with `x`, `lo` and `hi` in the argument registers, this code returns
+`clamp(x, lo, hi)`. The kernel checks the proof before the file is written.
+The compiler is written in Heather and proved correct
 ([what the proof covers](docs/native/compiler-theorem.md)).
-
-## Loops
-
-A function over a span of bytes compiles to a function of a pointer and a
-length, and its tail recursion compiles to a loop. This one counts lines:
-
-<!-- checked: examples/readme/lines.hthr -->
-```rust
-// How many of the span's bytes from `i` are newlines, added to `count`.
-runtime fn List::newlines(self span: List<u8>, length, i, count: u64) → u64
-    decreases (length - i).toNat() {
-    if h: i < length {
-        if span.byte_within(length, i) = 10 {
-            span.newlines(length, i + 1, count + 1)
-        } else {
-            span.newlines(length, i + 1, count)
-        }
-    } else {
-        count
-    }
-}
-
-// At most one newline a byte.
-theorem List::newlines_at_most(self span: List<u8>, length, i, count: u64,
-    started: i <= length, room: count.toNat() + (length - i).toNat() < 2 ^ 64):
-    span.newlines(length, i, count) <= count + (length - i) {
-    induct List::newlines(span, length, i, count); all_goals { bv_omega }
-}
-
-// `wc -l`: the newlines among the span's first `length` bytes.
-runtime fn List::count_lines(self span: List<u8>, length: u64) → u64 {
-    span.newlines(length, 0, 0)
-}
-
-theorem List::count_lines_at_most(self span: List<u8>, length: u64): span.count_lines(length) <= length {
-    let bound = span.newlines_at_most(length, 0, 0, bv_omega, bv_omega);
-    bv_omega
-}
-```
-
-`induct` is induction along the function's own recursion: one case for each
-branch, with the claim already known for the recursive call.
 
 ## Writing to memory
 
@@ -156,91 +117,64 @@ theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.
     sort_in_place(s, n).after = s.insertion_sort(BitVec::unsigned_le) { … }
 ```
 
-`.after` is the buffer when the function returns. The first theorem says it
-is sorted and a permutation of the input. The second says it is exactly what
-the library's functional insertion sort computes.
+A function that writes returns a `Mutated`: the buffer `after` the call, and
+the call's `value`. The first theorem says the buffer is left sorted and a
+permutation of the input. The second says it is exactly what the library's
+functional insertion sort computes.
 [`examples/sort/`](examples/sort/README.md) has the proofs and wraps the
 compiled code in a command-line tool.
 
 ## SHA-256
 
-`lib/native/crypto/` is SHA-256 written in Heather. The hashing state is a
-record laid out over bytes:
+`lib/native/crypto/` is SHA-256 written in Heather. Its state is a record
+laid out over bytes, and its methods compile to code that updates those
+bytes in place:
 
 <!-- checked: lib/native/crypto/sha256_context.hthr -->
 ```rust
-laid(endian := BigEndian) record Sha256 { hash: [u32; 8], working: [u32; 8], schedule: [u32; 64], count: u64 }
-
-// What Rust must agree on with the compiled code: how many bytes a
-// context is, and where the digest is once the message has ended (the
-// hash value's thirty-two bytes). Numerals, because Rust's copies are
-// generated from them (`crates/linked/generated/CONSTANTS.tsv`), and each
-// is held to the declaration below.
-def SHA256_CONTEXT_BYTES: Nat = 328;
-def SHA256_DIGEST_AT: Nat = 0;
-
-theorem Sha256::bytes_is(): Sha256::stored().layout.size = SHA256_CONTEXT_BYTES { refl }
-theorem Sha256::digest_at_is(): Sha256::hash_part().offset = SHA256_DIGEST_AT { refl }
-
-// The context a span holds.
-fn Sha256::of(ctx: List<u8>) → Sha256 { Sha256::stored().get(ctx, 0) }
-
-// One word of each array.
-fn Sha256::hash_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::hash_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }
-fn Sha256::working_word(i: Nat, inside: i < 8) → Part<Sha256, u32>(Sha256::stored()) { Sha256::working_part().then(Part::element(Stored::u32_be(), 8, i, inside)) }
-fn Sha256::schedule_word(i: Nat, inside: i < 64) → Part<Sha256, u32>(Sha256::stored()) { Sha256::schedule_part().then(Part::element(Stored::u32_be(), 64, i, inside)) }
-
-// Where a word is: four bytes for each word before it, past where its
-// array begins, which is the word the bodies add to.
-theorem Sha256::hash_word_at(i: Nat, inside: i < 8): Sha256::hash_word(i, inside).offset = i * 4 + Sha256::hash_at.toNat() { refl }
-theorem Sha256::working_word_at(i: Nat, inside: i < 8): Sha256::working_word(i, inside).offset = i * 4 + Sha256::working_at.toNat() { refl }
-theorem Sha256::schedule_word_at(i: Nat, inside: i < 64): Sha256::schedule_word(i, inside).offset = i * 4 + Sha256::schedule_at.toNat() { refl }
-theorem Sha256::count_word_at(): Sha256::count_part().offset = Sha256::count_at.toNat() { refl }
-
-// What compiled code reads and stores there, as the context.
-
-// Schedule word `i`, read by the accessor four bytes a word past where
-// the schedule begins.
-theorem Sha256::schedule_read(ctx: List<u8>, cn, at: u64, i: Nat, here: i < 64, place: at.toNat() = i * 4 + Sha256::schedule_at.toNat(), inside: at.toNat() + 4 <= cn.toNat()):
-    ctx.u32_be_within(cn, at) = vector_index(Sha256::of(ctx).schedule, i, here).zero_extend(32) {
-    ctx.u32_be_within_part(cn, at, Sha256::schedule_word(i, here), 0, refl, place, inside)
+laid(endian := BigEndian) record Sha256 {
+    hash: [u32; 8],
+    working: [u32; 8],
+    schedule: [u32; 64],
+    count: u64
 }
 ```
 
-Its methods compile to functions that read and write those bytes in place:
-
-<!-- checked: lib/native/crypto/sha256_stream.hthr -->
+<!-- checked: lib/native/crypto/sha256_compression.hthr -->
 ```rust
-runtime fn Sha256::init(mut self s: Sha256) → u64 {
-    s.hash := [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
-    s.count := 0;
-    0
+// The hash value with the working variables added, word by word (step 4).
+runtime fn Sha256::end(mut self s: Sha256) → u64 {
+    for i in 0..8 {
+        s.hash[i] := s.hash[i] + s.working[i];
+    }
+    8
 }
 
-runtime fn Sha256::absorb(mut self s: Sha256, message: List<u8>, mn, j, fill: u64) → u64
-    decreases (mn - j).toNat() {
-    if h: j < mn {
-        let filled = s.push(fill, message.byte_within(mn, j).zero_extend(56));
-        s.absorb(message, mn, j + 1, filled)
-    } else {
-        fill
-    }
+runtime fn Sha256::run(mut self s: Sha256) → u64 {
+    s.expand();
+    s.begin();
+    s.rounds();
+    s.end()
 }
 ```
 
-The library proves that hashing a message this way gives the digest that
-FIPS 180-4 specifies:
+Hashing a message gives the digest that FIPS 180-4 specifies:
 
 <!-- checked: lib/native/crypto/sha256_stream_agreement.hthr -->
 ```rust
-theorem Sha256::digest_spec(s: Sha256, message: List<u8>, mn: u64, sized: message.len() = mn.toNat()):
-    Sha256::digest(Sha256::finish(Sha256::update(Sha256::init(s).after, message, mn).after).after)
-        = Sha2::sha256().digest(message) { … }
+fn Sha256::digest_of(self s: Sha256, message: List<u8>, mn: u64) → List<u8> {
+    let mut s = s;
+    s.init();
+    s.update(message, mn);
+    s.finish();
+    s.digest()
+}
+
+theorem Sha256::digest_of_spec(self s: Sha256, message: List<u8>, mn: u64, sized: message.len() = mn.toNat()):
+    s.digest_of(message, mn) = Sha2::sha256().digest(message) { … }
 ```
 
-A second theorem, `Sha256::linked_digest`, says the same of the bytes the
-compiled code leaves in memory. Rust links that code through
-`crates/linked`:
+Rust links the compiled code through `crates/linked`:
 
 <!-- checked: crates/linked/src/sha256.rs -->
 ```rust
