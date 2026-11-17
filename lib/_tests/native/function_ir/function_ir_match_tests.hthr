@@ -7,6 +7,7 @@ import function_ir_match;
 import function_ir_replay;
 import function_ir_rule;
 import function_ir_rules;
+import bool;
 import list;
 import nat;
 import nat_map;
@@ -14,41 +15,42 @@ import option;
 
 fn no_nodes() → NatMap<Node> { NatMap::empty() }
 fn no_ranges() → NatMap<Range> { NatMap::empty() }
+fn no_bits() → NatMap<Bool> { NatMap::empty() }
 
 // `x + 0` where the zero's constant was passed: the add is a move of `x`.
-theorem add_zero_found(): matched_among(matchable(), Add(64, 7, 5, 6), nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges()) =
+theorem add_zero_found(): matched_among(matchable(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) =
     Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }
 
 // The constant is not zero: the shape fits, and the rule's clause at the
 // numbers is not what was passed.
-theorem add_one_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), nat_map_set(no_nodes(), 6, Const(64, 6, 1)), no_ranges()) = None { refl }
+theorem add_one_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 1)), no_ranges(), no_bits())) = None { refl }
 
 // Nothing made the right operand.
-theorem add_unknown_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }
+theorem add_unknown_not_found(): matched_among(matchable(), Add(64, 7, 5, 6), Walked(no_nodes(), no_ranges(), no_bits())) = None { refl }
 
 // A word narrowed to a byte and widened again, known to be a byte: the
 // range read is the guard's number, and the word is one whose range the
 // plan derives first.
-theorem narrow_back_found(): matched_among(matchable(), Resize(8, 64, 4, 3), nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
-    nat_map_set(no_ranges(), 2, Range(0, 200))) = Some(Matched(15, [2, 8, 200, 4, 3], Move(64, 4, 2), [2])) { refl }
+theorem narrow_back_found(): matched_among(matchable(), Resize(8, 64, 4, 3), Walked(nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
+    nat_map_set(no_ranges(), 2, Range(0, 200)), no_bits())) = Some(Matched(15, [2, 8, 200, 4, 3], Move(64, 4, 2), [2])) { refl }
 
 // The word may not fit the narrow width: the guard refuses.
-theorem narrow_back_guarded(): matched_among(matchable(), Resize(8, 64, 4, 3), nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
-    nat_map_set(no_ranges(), 2, Range(0, 300))) = None { refl }
+theorem narrow_back_guarded(): matched_among(matchable(), Resize(8, 64, 4, 3), Walked(nat_map_set(no_nodes(), 3, Resize(64, 8, 3, 2)),
+    nat_map_set(no_ranges(), 2, Range(0, 300)), no_bits())) = None { refl }
 
 // Four nodes deep: each operand followed to what made it.
 fn swapped() → NatMap<Node> {
     nat_map_set(nat_map_set(nat_map_set(no_nodes(), 4, ByteSwap(32, 4, 9)), 3, Resize(32, 64, 3, 4)), 2, Resize(64, 32, 2, 3))
 }
 
-theorem swap_twice_found(): matched_among(matchable(), ByteSwap(32, 1, 2), swapped(), no_ranges()) =
+theorem swap_twice_found(): matched_among(matchable(), ByteSwap(32, 1, 2), Walked(swapped(), no_ranges(), no_bits())) =
     Some(Matched(44, [9, 1, 2, 3, 4], Move(32, 1, 9), [])) { refl }
 
 // A width the statement does not have.
-theorem swap_wide_not_found(): matched_among(matchable(), ByteSwap(64, 1, 2), swapped(), no_ranges()) = None { refl }
+theorem swap_wide_not_found(): matched_among(matchable(), ByteSwap(64, 1, 2), Walked(swapped(), no_ranges(), no_bits())) = None { refl }
 
 // A rule whose conclusion is no node is not one the matcher applies.
-theorem range_rule_not_matched(): matched_among([within_add_entry.at(4)], Add(64, 7, 5, 6), no_nodes(), no_ranges()) = None { refl }
+theorem range_rule_not_matched(): matched_among([within_add_entry.at(4)], Add(64, 7, 5, 6), Walked(no_nodes(), no_ranges(), no_bits())) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Rules that give a range
@@ -57,27 +59,121 @@ fn bytes() → NatMap<Range> { nat_map_set(nat_map_set(no_ranges(), 1, Range(0, 
 
 // A sum: the ranges read are the rule's numbers, and both words are ones
 // whose ranges the plan derives first.
-theorem sum_ranged(): ranged_among(ranging(), Add(64, 3, 1, 2), no_nodes(), bytes(), None) =
+theorem sum_ranged(): ranged_among(ranging(), Add(64, 3, 1, 2), Walked(no_nodes(), bytes(), no_bits()), None) =
     Some(Ranged(4, [1, 2, 0, 255, 3, 9, 3], Range(3, 264), [1, 2])) { refl }
 
 // A constant, and a narrow word widened: its bound is computed from the
 // width, and no number of the rule.
-theorem const_ranged(): ranged_among(ranging(), Const(64, 3, 7), no_nodes(), no_ranges(), None) = Some(Ranged(2, [7, 3], Range(7, 7), [])) { refl }
+theorem const_ranged(): ranged_among(ranging(), Const(64, 3, 7), Walked(no_nodes(), no_ranges(), no_bits()), None) = Some(Ranged(2, [7, 3], Range(7, 7), [])) { refl }
 
-theorem widened_ranged(): ranged_among(ranging(), Resize(8, 64, 3, 2), no_nodes(), no_ranges(), None) = Some(Ranged(6, [8, 2, 3], Range(0, 255), [])) { refl }
+theorem widened_ranged(): ranged_among(ranging(), Resize(8, 64, 3, 2), Walked(no_nodes(), no_ranges(), no_bits()), None) = Some(Ranged(6, [8, 2, 3], Range(0, 255), [])) { refl }
 
 // Two rules fit a mask: the narrower range is taken, the first where they
 // are the same.
-theorem mask_right(): ranged_among(ranging(), BitAnd(64, 3, 4, 2), no_nodes(), bytes(), None) = Some(Ranged(18, [4, 2, 9, 3], Range(0, 9), [2])) { refl }
+theorem mask_right(): ranged_among(ranging(), BitAnd(64, 3, 4, 2), Walked(no_nodes(), bytes(), no_bits()), None) = Some(Ranged(18, [4, 2, 9, 3], Range(0, 9), [2])) { refl }
 
-theorem mask_left(): ranged_among(ranging(), BitAnd(64, 3, 2, 1), no_nodes(), bytes(), None) = Some(Ranged(17, [2, 1, 9, 3], Range(0, 9), [2])) { refl }
+theorem mask_left(): ranged_among(ranging(), BitAnd(64, 3, 2, 1), Walked(no_nodes(), bytes(), no_bits()), None) = Some(Ranged(17, [2, 1, 9, 3], Range(0, 9), [2])) { refl }
 
-theorem mask_same(): ranged_among(ranging(), BitAnd(64, 3, 1, 1), no_nodes(), bytes(), None) = Some(Ranged(17, [1, 1, 255, 3], Range(0, 255), [1])) { refl }
+theorem mask_same(): ranged_among(ranging(), BitAnd(64, 3, 1, 1), Walked(no_nodes(), bytes(), no_bits()), None) = Some(Ranged(17, [1, 1, 255, 3], Range(0, 255), [1])) { refl }
 
 // Nothing where the guard fails (the sum may wrap), where no rule says
 // more than that the word is a word, or at another width.
-theorem wrapping_unranged(): ranged_among(ranging(), Add(64, 3, 1, 4), no_nodes(), bytes(), None) = None { refl }
+theorem wrapping_unranged(): ranged_among(ranging(), Add(64, 3, 1, 4), Walked(no_nodes(), bytes(), no_bits()), None) = None { refl }
 
-theorem any_unranged(): ranged_among(ranging(), BitAnd(64, 3, 4, 5), no_nodes(), bytes(), None) = None { refl }
+theorem any_unranged(): ranged_among(ranging(), BitAnd(64, 3, 4, 5), Walked(no_nodes(), bytes(), no_bits()), None) = None { refl }
 
-theorem narrow_unranged(): ranged_among(ranging(), Add(32, 3, 1, 2), no_nodes(), bytes(), None) = None { refl }
+theorem narrow_unranged(): ranged_among(ranging(), Add(32, 3, 1, 2), Walked(no_nodes(), bytes(), no_bits()), None) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Rules that decide a bit
+
+fn apart() → NatMap<Range> { nat_map_set(nat_map_set(no_ranges(), 1, Range(0, 3)), 2, Range(9, 18446744073709551615)) }
+
+// A comparison whose operands' ranges lie apart: the ranges read are the
+// rule's numbers. It is no rewrite: the comparison stays.
+theorem below_decided(): decided_among(matchable(), UnsignedLessThan(64, 4, 1, 2), Walked(no_nodes(), apart(), no_bits())) =
+    Some(Matched(7, [1, 2, 3, 9, 4], Const(1, 4, 1), [1, 2])) { refl }
+
+theorem below_not_rewritten(): matched_among(matchable(), UnsignedLessThan(64, 4, 1, 2), Walked(no_nodes(), apart(), no_bits())) = None { refl }
+
+theorem not_below_decided(): decided_among(matchable(), UnsignedLessThan(64, 4, 2, 1), Walked(no_nodes(), apart(), no_bits())) =
+    Some(Matched(8, [2, 1, 9, 3, 4], Const(1, 4, 0), [2, 1])) { refl }
+
+theorem overlapping_undecided(): decided_among(matchable(), UnsignedLessThan(64, 4, 1, 1), Walked(no_nodes(), apart(), no_bits())) = None { refl }
+
+// An or of bits the walk decided: a premise `a = 1` is read in the bits,
+// which no node made a constant.
+fn bits() → NatMap<Bool> { nat_map_set(nat_map_set(no_bits(), 1, False), 2, True) }
+
+theorem or_set_decided(): decided_among(matchable(), BitOr(1, 3, 1, 2), Walked(no_nodes(), no_ranges(), bits())) =
+    Some(Matched(38, [1, 2, 3], Const(1, 3, 1), [])) { refl }
+
+theorem or_clear_decided(): decided_among(matchable(), BitOr(1, 3, 1, 1), Walked(no_nodes(), no_ranges(), bits())) =
+    Some(Matched(36, [1, 1, 3], Const(1, 3, 0), [])) { refl }
+
+theorem or_unknown_undecided(): decided_among(matchable(), BitOr(1, 3, 1, 4), Walked(no_nodes(), no_ranges(), bits())) = None { refl }
+
+// An add is not a rewrite of a decision's kind.
+theorem rewrite_not_decided(): decided_among(matchable(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) = None { refl }
+
+// ---------------------------------------------------------------------------
+// The kind of node a rule is read at
+
+// A rule is tried only at a node of the kind that writes the word its
+// conclusion is about: an add for `x + 0 = x`, a comparison for a test
+// decided, an add for a sum's range.
+theorem add_zero_head(): add_zero_entry.at(0).head = Some(2) { refl }
+theorem below_yes_head(): below_yes_entry.at(7).head = Some(10) { refl }
+theorem within_add_head(): within_add_entry.at(4).head = Some(2) { refl }
+theorem add_zero_fits_add(): add_zero_entry.at(0).fits(Add(64, 7, 5, 6)) = True { refl }
+theorem add_zero_skips_sub(): add_zero_entry.at(0).fits(Sub(64, 7, 5, 6)) = False { refl }
+
+// ---------------------------------------------------------------------------
+// What a test says in the arm taken
+
+// `l < r` taken, with `r` at most 16: `l` is at most 15. The rule states
+// `r.within(0, Succ(b))`, and the range read gives `b`.
+fn taken() → Walked { Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 16)), nat_map_set(no_bits(), 4, True)) }
+
+theorem below_left_told(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2), taken()) =
+    Some(Told(9, [1, 2, 15, 4], 1, Range(0, 15), [2])) { refl }
+
+// The rule is read at the comparison, whose bit its premises test.
+theorem below_left_anchor(): below_left_entry.at_test(9).anchor = Some(3) { refl }
+theorem below_left_head(): below_left_entry.at_test(9).head = Some(10) { refl }
+
+// The other arm's rule says nothing here: the bit is one.
+theorem above_left_untold(): above_left_entry.at_test(11).told_at(UnsignedLessThan(64, 4, 1, 2), taken()) = None { refl }
+
+// Nor does the rule where the bit is not known.
+theorem unknown_bit_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2),
+    Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 16)), no_bits())) = None { refl }
+
+// A right operand that may only be zero has nothing before it.
+theorem below_zero_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(64, 4, 1, 2),
+    Walked(no_nodes(), nat_map_set(no_ranges(), 2, Range(0, 0)), nat_map_set(no_bits(), 4, True))) = None { refl }
+
+// A literal in a node is read as itself: a rule about 64-bit words is not
+// tried further at a 32-bit node.
+theorem narrow_compare_untold(): below_left_entry.at_test(9).told_at(UnsignedLessThan(32, 4, 1, 2), taken()) = None { refl }
+
+// A learner's proposal is a rule and numbers, and is an instance only
+// where the rule's clause at them is what the walk has: here one that
+// proposes `add_zero` at every add, with the add's own numbers.
+fn adds_zero() → Learner {
+    Learner(λ _ at => match at { Add(w, o, l, r) => Some(Proposed(add_zero_entry, [w, l, o, r])), _ => None })
+}
+
+theorem proposal_found(): proposed_among([adds_zero()], library(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) =
+    Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }
+
+// The same proposal where the constant is one: the clause's premise is not
+// what was passed, so a learner that proposes too much is not believed.
+theorem proposal_unfounded(): proposed_among([adds_zero()], library(), Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 1)), no_ranges(), no_bits())) = None { refl }
+
+// A rule the table does not have has no place to name.
+theorem proposal_unplaced(): proposed_among([adds_zero()], [], Add(64, 7, 5, 6), Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) = None { refl }
+
+// The next learner is asked where one proposes nothing that holds.
+theorem proposal_next(): proposed_among([Learner(λ _ _ => None), adds_zero()], library(), Add(64, 7, 5, 6),
+    Walked(nat_map_set(no_nodes(), 6, Const(64, 6, 0)), no_ranges(), no_bits())) = Some(Matched(0, [64, 5, 7, 6], Move(64, 7, 5), [])) { refl }

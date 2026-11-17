@@ -337,17 +337,18 @@ fn a_projection_that_converts_is_still_accepted() {
 /// A mismatch the conversion decides but the display cannot state: the
 /// hypothesis is spelled per arm (`match r { … => dbl(p) … }`), the goal
 /// outside the match (`dbl(payload(r))`), and the kernel has no commuting
-/// conversion between the two. Neither the claim nor silence: the verdict
-/// stays the gate's, its span moves to the expression, and the note shows the
-/// side that spells (the second instance in
-/// `issues/elab-accepts-projection-through-opaque-theorem.md`).
+/// conversion between the two. `Step` is recursive (`More`), so the display
+/// does not resugar the case analysis over it as a `match`. Neither the
+/// claim nor silence: the verdict stays the gate's, its span moves to the
+/// expression, and the note shows the side that spells (the second instance
+/// in `issues/elab-accepts-projection-through-opaque-theorem.md`).
 #[test]
 fn an_unspellable_mismatch_moves_the_kernel_report_to_the_site() {
     let src = "
-inductive Step { Go(next: Nat), Stop(result: Nat) }
-fn payload(s: Step) -> Nat { match s { Go(p) => p, Stop(p) => p } }
+inductive Step { Go(next: Nat), Stop(result: Nat), More(rest: Step) }
+fn payload(s: Step) -> Nat { match s { Go(p) => p, Stop(p) => p, More(t) => payload(t) } }
 fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
-theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }): w = dbl(payload(r)) {
+theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p), More(t) => dbl(payload(t)) }): w = dbl(payload(r)) {
     h
 }
 ";
@@ -359,6 +360,30 @@ theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }
         "{rendered}"
     );
     let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "h");
+}
+
+/// The same mismatch over a non-recursive `Step` now spells: the case
+/// analysis prints as the `match` it came from, so the elaborator states the
+/// mismatch at `h` itself (`issues/induct-case-goal-report.md` item 3).
+#[test]
+fn a_match_over_fielded_constructors_spells_the_mismatch() {
+    let src = "
+inductive Step { Go(next: Nat), Stop(result: Nat) }
+fn payload(s: Step) -> Nat { match s { Go(p) => p, Stop(p) => p } }
+fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }): w = dbl(payload(r)) {
+    h
+}
+";
+    let r = reject(src);
+    let rendered = r.render(src);
+    assert!(
+        rendered.contains("`w = match r { Go(next) => dbl(next), Stop(result) => dbl(result) }`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("but `w = dbl(payload(r))` is expected here"), "{rendered}");
+    let ElabError::Elab { span, .. } = r else { panic!("expected an elaborator error: {r}") };
     assert_eq!(&src[span.start as usize..span.end as usize], "h");
 }
 

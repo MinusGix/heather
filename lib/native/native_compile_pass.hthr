@@ -134,7 +134,7 @@ theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env,
                 None => λ _ => later,
                 Some(w) => λ at => match fits: Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
                     True => {
-                        let both = Bool::is_true_and(Succ(f.value).leb(Nat::pow(2, w)), Succ(f.value).leb(Nat::pow(2, 64)), j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                        let both = Bool::both(j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let narrow: (f.value < Nat::pow(2, w)) = Succ(f.value).leb_sound(Nat::pow(2, w), both.left);
                         let word: (f.value < Nat::pow(2, 64)) = Succ(f.value).leb_sound(Nat::pow(2, 64), both.right);
                         let value: (after(w, f.id).toNat() = f.value) = trans(cong_fn<BitVec(w), Nat>(λ x => x.toNat(), held.left(w)),
@@ -208,20 +208,15 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
             None => λ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
             Some(d) => λ e => {
                 let same: (d = c) = Option::some_inj(d, c, e);
-                let parts = Bool::is_true_and(t.homes.nodes_apart(better, out) && t.homes.all_apart(nodes_writes(better), out),
-                    nodes_live_in(better, out).within(nodes_live_in(nodes, out)), j(sym(passed), λ b _ => b.IsTrue(), trivial));
+                let parts = Bool::both(j(sym(passed), λ b _ => b.IsTrue(), trivial));
                 let agree = env.computes_optimised(nodes, out);
                 let held = λ (s: MachineState<X86Memory(t.r.profile)>) (h: t.Held(out, env.computes(better), s.gprs, s.memory)) =>
                     t.held_agree(out, env.computes(better), env.computes(nodes), s.gprs, s.memory, h, agree.left, agree.right.left, agree.right.right);
                 let after: t.At(prog_len(d.prog), out, tree, env.computes(better)) = j(sym(same), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(better)),
-                    t.goes_weaken(prog_len(c.prog), tree,
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(nodes), s.gprs, s.memory),
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(better), s.gprs, s.memory), next, held));
+                    t.goes_weaken(next, held));
                 let ran = t.goes_computes(out, env, p, better, names, d, at, j(sym(same), λ x _ => x.prog.Within(t.program), within), tree, parts.left, after);
-                t.goes_weaken(prog_len(p), tree,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(better, out), env, s.gprs, s.memory),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(nodes, out), env, s.gprs, s.memory), ran,
-                    λ s h => t.held_sub(nodes_live_in(better, out), nodes_live_in(nodes, out), env, s.gprs, s.memory, h,
+                t.goes_weaken(ran,
+                    λ s h => t.held_sub(h,
                         nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
             },
         }),

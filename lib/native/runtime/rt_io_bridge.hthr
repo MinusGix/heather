@@ -128,11 +128,11 @@ fn ELoop::quote(self p: ELoop, q: IoQ) → Expr {
 fn io_quoting() → Tac<IoQ> {
     let ts <- runtime_type_handles();
     let rq <- runtime_quoting(ts);
-    let etm <- runtime_type_of("io_w_etm").bind(λ h => runtime_ctors_at(h));
-    let effect <- runtime_type_of("io_w_effect").bind(λ h => runtime_ctors_at(h));
-    let eloop <- runtime_type_of("io_w_eloop").bind(λ h => runtime_ctors_at(h));
-    let part <- runtime_type_of("io_w_part").bind(λ h => runtime_ctors_at(h));
-    let parts <- runtime_type_of("io_w_parts").bind(λ h => runtime_ctors_at(h));
+    let etm <- runtime_type_of(name_of(io_w_etm)).bind(λ h => runtime_ctors_at(h));
+    let effect <- runtime_type_of(name_of(io_w_effect)).bind(λ h => runtime_ctors_at(h));
+    let eloop <- runtime_type_of(name_of(io_w_eloop)).bind(λ h => runtime_ctors_at(h));
+    let part <- runtime_type_of(name_of(io_w_part)).bind(λ h => runtime_ctors_at(h));
+    let parts <- runtime_type_of(name_of(io_w_parts)).bind(λ h => runtime_ctors_at(h));
     pure(IoQ(rq, etm, effect, eloop, part, parts))
 }
 
@@ -144,11 +144,11 @@ record BridgeNames { agrees: Expr, test: Expr, pass: Expr, rest: Expr, world_of:
     env_at: Expr, ctx_end: Expr, pair: Expr, unit: Expr, after: Expr, value: Expr, rfl: Expr, eutt_refl: Expr, none: Expr }
 
 fn bridge_names() → Tac<BridgeNames> {
-    pure(BridgeNames(<- runtime_global("Io::while_agrees_by"), <- runtime_global("ELoop::test_fn"), <- runtime_global("ELoop::pass_fn"),
-        <- runtime_global("ELoop::rest_fn"), <- runtime_global("Io::world_of"), <- runtime_global("ELoop::env_after"),
-        <- runtime_global("ELoop::world_after"), <- runtime_global("ELoop::env_at"), <- runtime_global("ETm::ctx_end"),
-        <- runtime_global("Pair::of"), <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))), <- runtime_global("Io::state_first"), <- runtime_global("Io::state_rest"),
-        <- runtime_global("tactic::rfl"), <- runtime_global("Eutt::refl"), <- runtime_global("Events::none")))
+    pure(BridgeNames(<- runtime_global(name_of(Io::while_agrees_by)), <- runtime_global(name_of(ELoop::test_fn)), <- runtime_global(name_of(ELoop::pass_fn)),
+        <- runtime_global(name_of(ELoop::rest_fn)), <- runtime_global(name_of(Io::world_of)), <- runtime_global(name_of(ELoop::env_after)),
+        <- runtime_global(name_of(ELoop::world_after)), <- runtime_global(name_of(ELoop::env_at)), <- runtime_global(name_of(ETm::ctx_end)),
+        <- runtime_global(name_of(Pair::of)), <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))), <- runtime_global(name_of(Io::state_first)), <- runtime_global(name_of(Io::state_rest)),
+        <- runtime_global("tactic::rfl"), <- runtime_global(name_of(Eutt::refl)), <- runtime_global(name_of(Events::none))))
 }
 
 // Component `i` of `n` of a state `z`: `z.value` holds the locals nested,
@@ -247,17 +247,20 @@ fn bridge_env(nm: BridgeNames, params: List<LocalRef>) → Expr { bridge_pairs(n
 
 fn bridge_lams(xs: List<LocalRef>, e: Expr) → Expr { match xs { Nil => e, Cons(x, rest) => Lam(x, bridge_lams(rest, e)) } }
 
-// The byte strings of a reading as terms, `rt_bytes([…])` each, in order.
-fn bridge_consts(q: IoQ, cs: List<List<Nat>>) → Tac<List<Expr>> {
+// The buffers a reading makes for itself as terms, in order: a byte
+// string `rt_bytes([…])`, a zeroed local `List::replicate(zero_byte(), n)`,
+// each as `Source::start` holds its buffer.
+fn bridge_consts(q: IoQ, cs: List<ConstInit>) → Tac<List<Expr>> {
     match cs {
         Nil => pure([]),
         Cons(_, _) => {
-            let found <- lookup("rt_bytes");
-            let f <- match found {
-                Accepted(g) => pure(Global(g)),
-                Refused(_) => lookup("rt_io::rt_bytes").or_fail("rt: `rt_bytes` (`rt_io`) is not in scope: ").bind(λ g => pure(Global(g))),
-            };
-            pure(cs.map(λ bs => ap(f, [q.rt.nat_list(bs)])))
+            let bytes <- lookup("rt_io::rt_bytes").or_fail("rt: `rt_bytes` (`rt_io`) is not reachable: ");
+            let replicate <- lookup(name_of(List::replicate)).or_fail("rt: `List::replicate`: ");
+            let zero <- lookup("native_source::zero_byte").or_fail("rt: `zero_byte` (`native_source`) is not reachable: ");
+            pure(cs.map(λ c => match c {
+                Written(bs) => App(Global(bytes), q.rt.nat_list(bs)),
+                Zeros(n) => App(App(App(Global(replicate), Blank), Global(zero)), NatLit(n)),
+            }))
         },
     }
 }

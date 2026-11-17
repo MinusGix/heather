@@ -288,6 +288,53 @@ tier 1 alike), `Fin(Succ k)`, `Empty`, `Nat`. `Empty` is a real case and
 falls out: nothing is missing, the `_` is dropped, and `match e { _ => x }` on
 an empty type is `match e { }`, i.e. `elim_Empty`.
 
+### 4.1 A `_` arm sees its constructor (2026-11-16)
+
+A written arm spells its constructor, so it can name the value it matched:
+`Then(a, b) => all(Then(a, b), …)`. A `_` arm could not. Its goal was
+specialised per constructor, but the scrutinee kept its unrefined type, and
+`_ => other(s)` was refused at `p(Compute(_))`. Proofs instead spelled every
+constructor out with its fields, only to put them back together
+(issues/wildcard-arm-sees-its-constructor.md).
+
+Now, when the motive depends on the scrutinee, a `_` arm that names the
+scrutinee becomes one arm for each constructor no earlier arm names. Each new
+arm binds that constructor's fields under `#w…` names, which the source
+cannot spell, and opens with `let s: TypeOf(s) = C(fields);`. The annotation
+is elaborated before the `let` binds, so it is the scrutinee's own type, and
+checking `C(fields)` there fills in the type's parameters
+(`Patterns::rebind_default`). A constructor that is the only one no arm names
+keeps §4's `__else_…` field names, which `known` reads. "The scrutinee" is a
+local variable, or the alias of a field of an enclosing arm, which is what
+the structural lowerings bind a field as.
+
+Where it does not apply, the old expansion stays as it was:
+
+- **A non-dependent motive.** `_ => s` already has the type it needs. It
+  keeps §5's shared body and the value it returns, so a `runtime fn` returns
+  `s` and not a rebuilt copy. A hypothesis about `s` that the arm reads
+  makes the motive dependent, because it is generalized into it, so
+  `_ => use(s, h)` is rebound with `h`.
+- **A body that does not name the scrutinee.** It means the same term either
+  way.
+- **An indexed or forded family.** The constructor's indices are not the
+  variable's, so `C(fields)` would not have `TypeOf(s)`.
+- **A constructor that only deep arms name.** Its rows reach the `_` as
+  columns of a generated inner `match`, and those are not rebound to that
+  match's constructors. That constructor keeps the plain `_`, after the new
+  arms.
+- **A body with a `?goal` that would be copied more than once** (§10.3).
+
+A new arm that is never reached is reported as the `_` it came from, and
+only when none of that `_`'s arms is reached. The probes are in
+`lib/_tests/lang/wildcard_arm_tests.hthr`. They cover a variable, a type
+parameter with a nullary constructor, a refined hypothesis, an enclosing
+arm's field, and two negative controls: a field name the arm did not bind,
+and the deep-pattern case.
+
+A binding arm `other => …` (or `r @ _`) would give a computed scrutinee the
+same thing. That is new syntax, so it is left as a follow-up.
+
 ## 5. Decision 3: the sharing rule
 
 The issue's cost note is the requirement: expansion must not be eight copies of

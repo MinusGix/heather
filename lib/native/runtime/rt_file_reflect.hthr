@@ -71,10 +71,10 @@ fn FileNames::names(at: Option<Nat>, g: Nat) → Bool { match at { None => False
 
 fn rt_file_names() → Tac<FileNames> {
     let mutated <- rt_global("Mutated");
-    let put <- rt_global("List::put_within");
-    let with_byte <- rt_global("List::with_byte_within");
-    let window <- rt_global_here("List::window");
-    let put_window <- rt_global_here("List::put_window");
+    let put <- rt_global(name_of(List::put_within));
+    let with_byte <- rt_global(name_of(List::with_byte_within));
+    let window <- rt_global_here(name_of(List::window));
+    let put_window <- rt_global_here(name_of(List::put_window));
     pure(FileNames(mutated, put, with_byte, window, put_window))
 }
 

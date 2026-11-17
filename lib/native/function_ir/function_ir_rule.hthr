@@ -108,9 +108,11 @@ fn rule_of_bool(x: Bool) → Bool { x }
 // The shape of a rule's clause, for finding where it applies
 // (function_ir_match)
 
-// One number of a node or a fact of the clause: the rule's number `k`, or
-// something computed from them (a literal, a sum).
-inductive PatternSlot { Numbered(k: Nat), Computed }
+// One number of a node or a fact of the clause: the rule's number `k`,
+// something computed from them (a sum), the number after the rule's
+// number `k` (`Succ(b)`: the one computed number a value read gives the
+// rule's number back from), or a literal.
+inductive PatternSlot { Numbered(k: Nat), Computed, After(k: Nat), Exactly(n: Nat) }
 
 // One fact of the clause: a node by its constructor's place in `Node`,
 // which of its numbers is its output, and its numbers; a range; or a fact
@@ -853,7 +855,7 @@ fn rule_exprs(hs: List<Handle>) → List<Expr> { match hs { Nil => [], Cons(h, r
 
 // The constructors a shape is written with.
 record RuleShapes {
-    numbered: Expr, computed: Expr, no_slots: Expr, slot_then: Expr,
+    numbered: Expr, computed: Expr, after: Expr, exactly: Expr, no_slots: Expr, slot_then: Expr,
     makes: Expr, ranges: Expr, unread: Expr, no_shapes: Expr, shape_then: Expr, pattern: Expr,
 }
 
@@ -865,6 +867,8 @@ fn rule_shapes() → Tac<RuleShapes> {
     let patterns <- rule_ctors(name_of(rule_of_pattern));
     let numbered <- rule_ctor(slot, "Numbered");
     let computed <- rule_ctor(slot, "Computed");
+    let after <- rule_ctor(slot, "After");
+    let exactly <- rule_ctor(slot, "Exactly");
     let no_slots <- rule_ctor(slots, "Nil");
     let slot_then <- rule_ctor(slots, "Cons");
     let makes <- rule_ctor(shape, "Makes");
@@ -873,38 +877,86 @@ fn rule_shapes() → Tac<RuleShapes> {
     let no_shapes <- rule_ctor(shapes, "Nil");
     let shape_then <- rule_ctor(shapes, "Cons");
     let pattern <- rule_ctor(patterns, "RulePattern");
-    pure(RuleShapes(numbered, computed, no_slots, slot_then, makes, ranges, unread, no_shapes, shape_then, pattern))
+    pure(RuleShapes(numbered, computed, after, exactly, no_slots, slot_then, makes, ranges, unread, no_shapes, shape_then, pattern))
 }
 
-// A number of the clause as a slot: the rule's own where it is written
-// `num(numbers, k)`.
-fn rule_slot(cx: RuleCx, to: RuleShapes, e: Expr) → Tac<Expr> {
+// The `k` of a handle that is `num(numbers, k)`.
+fn rule_numbered(cx: RuleCx, h: Handle) → Tac<Option<Nat>> {
+    view(h).bind(λ v => match v {
+        HGlobal(g, _, args) => match rule_same(g, cx.ops.num) {
+            False => pure(None),
+            True => match args {
+                Cons(_, more) => match more {
+                    Cons(k, _) => view(k).bind(λ kv => match kv { HLit(i) => pure(Some(i)), _ => pure(None) }),
+                    Nil => pure(None),
+                },
+                Nil => pure(None),
+            },
+        },
+        _ => pure(None),
+    })
+}
+
+// The `k` of an expression that is `num(numbers, k)`, as the generator
+// wrote it or as the host hands it back.
+fn rule_number(cx: RuleCx, e: Expr) → Tac<Option<Nat>> {
     match e {
         App(f, k) => match f {
             App(g, _) => match g {
                 Global(r) => match rule_same(r, cx.ops.num) {
-                    True => match k { NatLit(i) => pure(App(to.numbered, NatLit(i))), _ => pure(to.computed) },
-                    False => pure(to.computed),
+                    True => match k { NatLit(i) => pure(Some(i)), _ => pure(None) },
+                    False => pure(None),
                 },
-                _ => pure(to.computed),
+                _ => pure(None),
             },
-            _ => pure(to.computed),
+            _ => pure(None),
         },
-        Hd(h) => view(h).bind(λ v => match v {
-            HGlobal(g, _, args) => match rule_same(g, cx.ops.num) {
-                False => pure(to.computed),
-                True => match args {
-                    Cons(_, more) => match more {
-                        Cons(k, _) => view(k).bind(λ kv => match kv { HLit(i) => pure(App(to.numbered, NatLit(i))), _ => pure(to.computed) }),
-                        Nil => pure(to.computed),
-                    },
-                    Nil => pure(to.computed),
-                },
-            },
-            _ => pure(to.computed),
-        }),
-        _ => pure(to.computed),
+        Hd(h) => rule_numbered(cx, h),
+        _ => pure(None),
     }
+}
+
+// What an expression is `Succ` of, where it is that: the host shows the
+// application as the constructor's global at one argument.
+fn rule_before(e: Expr) → Tac<Option<Expr>> {
+    match e {
+        Hd(h) => lookup("Succ").bind(λ found => match found {
+            Refused(_) => pure(None),
+            Accepted(succ) => view(h).bind(λ v => match v {
+                HGlobal(g, _, args) => match args {
+                    Cons(inner, rest) => match rest { Nil => pure(rule_same(g, succ).then(Some(Hd(inner)))), Cons(_, _) => pure(None) },
+                    Nil => pure(None),
+                },
+                _ => pure(None),
+            }),
+        }),
+        _ => pure(None),
+    }
+}
+
+// The numeral an expression is, where it is one.
+fn rule_literal(e: Expr) → Tac<Option<Nat>> {
+    match e {
+        NatLit(n) => pure(Some(n)),
+        Hd(h) => view(h).bind(λ v => match v { HLit(n) => pure(Some(n)), _ => pure(None) }),
+        _ => pure(None),
+    }
+}
+
+// A number of the clause as a slot: the rule's own where it is written
+// `num(numbers, k)`, a literal, and the one after a rule's own where it is
+// `Succ` of that.
+fn rule_slot(cx: RuleCx, to: RuleShapes, e: Expr) → Tac<Expr> {
+    rule_number(cx, e).bind(λ own => match own {
+        Some(i) => pure(App(to.numbered, NatLit(i))),
+        None => rule_literal(e).bind(λ literal => match literal {
+            Some(n) => pure(App(to.exactly, NatLit(n))),
+            None => rule_before(e).bind(λ inner => match inner {
+                None => pure(to.computed),
+                Some(x) => rule_number(cx, x).bind(λ k => match k { Some(i) => pure(App(to.after, NatLit(i))), None => pure(to.computed) }),
+            }),
+        }),
+    })
 }
 
 fn rule_slots(cx: RuleCx, to: RuleShapes, es: List<Expr>) → Tac<List<Expr>> {

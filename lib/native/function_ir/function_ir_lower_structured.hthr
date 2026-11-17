@@ -171,9 +171,9 @@ theorem emits_seq<M>(site: Site<M>, values: Valuation(), prog: Prog, file: File,
     first, out: Emitted, first_emits: Emits<M>(site, values, prog, file, first_facts, first),
     second_emits: Emits<M>(site, values, first.prog, first.file, second_facts, out)):
     Emits<M>(site, values, prog, file, first_facts ∧ second_facts, out) {
-    ⟨prog.within_trans(first.prog, out.prog, first_emits.left, second_emits.left),
+    ⟨Prog::within_trans(first_emits.left, second_emits.left),
      λ within => {
-        let first_runs = first_emits.right(first.prog.within_trans(out.prog, site.program, second_emits.left, within));
+        let first_runs = first_emits.right(Prog::within_trans(second_emits.left, within));
         site.runs_trans(prog_len(prog), prog_len(first.prog), prog_len(out.prog),
             λ (g: Gprs) => file.Represents(values, g) ∧ (first_facts ∧ second_facts),
             λ (g: Gprs) => first.file.Represents(values, g) ∧ second_facts,
@@ -266,22 +266,22 @@ theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), v
     let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, else_name),
         prog.within_then(0, Block([TestRR(register, register)])));
     let to_second = prog.within_step(jumped, else_name, Block([]),
-        prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
+        prog.within_step(yes.prog, 0, Jmp(join_name), Prog::within_trans(to_branch, yes_emits.left)));
     let holds = StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
     let pre = λ (g: Gprs) => file.Represents(values, g) ∧ holds;
     let post = λ (g: Gprs) => yes.file.meet(no.file, file.known).Represents(values, g);
     let known = KnownHold(values, file.known);
-    ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
+    ⟨prog.within_step(no.prog, join_name, Block([]), Prog::within_trans(to_second, no_emits.left)),
      λ within => {
         let program = site.program;
         let labels = asm_labels(program);
         let unique = program.laid_out_unique(laid);
         let lands = program.laid_out_lands(laid);
         let no_in = no.prog.within_before(join_name, Block([]), program, within);
-        let second_in = second.within_trans(no.prog, program, no_emits.left, no_in);
+        let second_in = Prog::within_trans(no_emits.left, no_in);
         let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
         let yes_in = yes.prog.within_before(0, Jmp(join_name), program, jumped_in);
-        let branched_in = branched.within_trans(yes.prog, program, yes_emits.left, yes_in);
+        let branched_in = Prog::within_trans(yes_emits.left, yes_in);
         let tested_in = prog.test_label(register).within_before(0, Jcc(E, else_name), program, branched_in);
         let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
             λ to _ => JumpsForward(prog_len(prog.test_label(register)), 6,
@@ -850,9 +850,9 @@ fn Planned::met(self yes: Planned, no: Planned, known: List<Known>) → Planned 
 // and nothing else is known to follow.
 fn Node::planned_file(self node: Node, place: Place, file: File) → File {
     match node {
-        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Spilling(_) => file },
-        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Spilling(_) => file },
-        TableRead(_, output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Spilling(_) => file },
+        BufferLoad(output, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Short(_) => file, Spilling(_) => file },
+        BufferStore(output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Short(_) => file, Spilling(_) => file },
+        TableRead(_, output, _, _, _) => match place { Into(destination) => file.write(destination, Some(Held(output, Word))), Folded => file, Saving(_) => file, CallSlots(_) => file, Short(_) => file, Spilling(_) => file },
         _ => file,
     }
 }
@@ -865,7 +865,7 @@ fn Node::planned_wide(self node: Node, place: Place, file: File) → Option<File
     match node {
         WideLoad(bytes, output, _, _) => match bytes.same(4) {
             False => None,
-            True => match place { Into(destination) => Some(file.write(destination, Some(Held(output, Narrow(32))))), Folded => None, Saving(_) => None, CallSlots(_) => None, Spilling(_) => None },
+            True => match place { Into(destination) => Some(file.write(destination, Some(Held(output, Narrow(32))))), Folded => None, Saving(_) => None, CallSlots(_) => None, Short(_) => None, Spilling(_) => None },
         },
         _ => None,
     }

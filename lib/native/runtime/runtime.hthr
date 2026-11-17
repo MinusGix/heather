@@ -1023,11 +1023,11 @@ fn runtime_type_of(name: String) → Tac<Handle> {
 }
 
 fn runtime_type_handles() → Tac<RtTypes> {
-    pure(RtTypes(<- runtime_type_of("runtime_w_ty"), <- runtime_type_of("runtime_w_tm"), <- runtime_type_of("runtime_w_op"),
-        <- runtime_type_of("runtime_w_fun"), <- runtime_type_of("runtime_w_sig"), <- runtime_type_of("runtime_w_world"),
-        <- runtime_type_of("runtime_w_verdict"), <- runtime_type_of("runtime_w_function"), <- runtime_type_of("runtime_w_tys"),
-        <- runtime_type_of("runtime_w_nats"), <- runtime_type_of("runtime_w_sigs"), <- runtime_type_of("runtime_w_words"),
-        <- runtime_type_of("runtime_w_word"), <- runtime_type_of("runtime_w_srcs"), <- runtime_type_of("runtime_w_functions")))
+    pure(RtTypes(<- runtime_type_of(name_of(runtime_w_ty)), <- runtime_type_of(name_of(runtime_w_tm)), <- runtime_type_of(name_of(runtime_w_op)),
+        <- runtime_type_of(name_of(runtime_w_fun)), <- runtime_type_of(name_of(runtime_w_sig)), <- runtime_type_of(name_of(runtime_w_world)),
+        <- runtime_type_of(name_of(runtime_w_verdict)), <- runtime_type_of(name_of(runtime_w_function)), <- runtime_type_of(name_of(runtime_w_tys)),
+        <- runtime_type_of(name_of(runtime_w_nats)), <- runtime_type_of(name_of(runtime_w_sigs)), <- runtime_type_of(name_of(runtime_w_words)),
+        <- runtime_type_of(name_of(runtime_w_word)), <- runtime_type_of(name_of(runtime_w_srcs)), <- runtime_type_of(name_of(runtime_w_functions))))
 }
 
 fn runtime_at(es: List<Expr>, i: Nat) → Expr { es.nth(i).unwrap_or(Blank) }
@@ -1248,8 +1248,8 @@ fn runtime_table(name: String) → Tac<List<Nat>> {
     let value <- body(world).or_fail("runtime: the callee `" ++ name ++ "`'s table: ");
     let v <- view(value);
     let parts: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
-    let lent_callees <- runtime_ref("Setup::lent_callees");
-    let callees_nil <- runtime_ref("Setup::callees_nil");
+    let lent_callees <- runtime_ref(name_of(Setup::lent_callees));
+    let callees_nil <- runtime_ref(name_of(Setup::callees_nil));
     match parts.nth(2) {
         Some(callees) => runtime_entries(4096, lent_callees.id, 7, callees_nil.id, callees),
         None => runtime_fail("the callee `" ++ name ++ "`'s `world` is not a table"),
@@ -1265,8 +1265,8 @@ fn runtime_frame(c: Nat, n: String) → Tac<LinkFrame> {
         Accepted(ws) => {
             let reads <- runtime_table(n);
             let value <- body(ws).or_fail("runtime: the callee `" ++ n ++ "`'s writing callees: ");
-            let cons <- runtime_ref("FTm::sems_cons");
-            let nil <- runtime_ref("FTm::sems_nil");
+            let cons <- runtime_ref("runtime_file::FTm::sems_cons");
+            let nil <- runtime_ref("runtime_file::FTm::sems_nil");
             let writes <- runtime_entries(4096, cons.id, 7, nil.id, value);
             pure(LinkFrame(c, n, reads ++ writes, reads ++ writes, Some(reads.len())))
         },
@@ -1277,7 +1277,7 @@ fn runtime_self<A>(a: A) → a = a { refl }
 
 // A global's name, spelled as the elaborator spells a call of it.
 fn runtime_name_of(g: Nat) → Tac<String> {
-    let same <- runtime_global("runtime_self");
+    let same <- runtime_global(name_of(runtime_self));
     let t <- infer(ap(same, [Blank, Global(GlobalRef(g))])).or_fail("runtime: a callee: ");
     let v <- view(t);
     match v {
@@ -1373,18 +1373,18 @@ fn runtime_conjoined(both: Expr, parts: List<Expr>, last: Expr) → Tac<Expr> {
 
 fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<Linked> {
     let fn_ctors <- runtime_ctors_at(ts.functions);
-    let uncurried <- runtime_global("Compile::uncurried");
-    let linked <- runtime_global("Compile::linked");
-    let table <- runtime_global("Compile::table");
-    let part <- runtime_global("Compile::part");
-    let arity_of <- runtime_global("Compile::arity");
-    let arity_at <- runtime_global("link_arity");
-    let both <- runtime_global("link_both");
-    let every <- runtime_global("link_every_table");
-    let files_nil <- runtime_global("link_files_nil");
-    let files_cons <- runtime_global("link_files_cons");
-    let sources <- runtime_global("link_sources_at");
-    let linked_files <- runtime_global("program_linked_files");
+    let uncurried <- runtime_global(name_of(Compile::uncurried));
+    let linked <- runtime_global(name_of(Compile::linked));
+    let table <- runtime_global(name_of(Compile::table));
+    let part <- runtime_global(name_of(Compile::part));
+    let arity_of <- runtime_global(name_of(Compile::arity));
+    let arity_at <- runtime_global(name_of(link_arity));
+    let both <- runtime_global(name_of(link_both));
+    let every <- runtime_global(name_of(link_every_table));
+    let files_nil <- runtime_global(name_of(link_files_nil));
+    let files_cons <- runtime_global(name_of(link_files_cons));
+    let sources <- runtime_global(name_of(link_sources_at));
+    let linked_files <- runtime_global(name_of(program_linked_files));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
     let types <- runtime_types(insts);
@@ -1474,7 +1474,7 @@ fn runtime_measured_word(mu: Handle) → Tac<Handle> {
     let v <- view(mu);
     let refused = "a measured runtime fn must `decreases` a 64-bit word's `toNat` (its loop is given `2^64 - 1` passes)";
     match v {
-        HGlobal(g, _, args) => runtime_ref("BitVec::toNat").bind(λ (to_nat: GlobalRef) => match g.id.same(to_nat.id) {
+        HGlobal(g, _, args) => runtime_ref(name_of(BitVec::toNat)).bind(λ (to_nat: GlobalRef) => match g.id.same(to_nat.id) {
             True => match args.rev() { Cons(x, _) => pure(x), Nil => runtime_fail(refused) },
             False => runtime_fail(refused),
         }),
@@ -1553,7 +1553,7 @@ fn runtime_params_at(ts: List<Handle>, under: Option<LocalRef>, i: Nat) → Tac<
 // whatever its sides.
 fn runtime_verdict() → Tac<Expr> {
     let rfl <- runtime_global("tactic::rfl");
-    let yes <- runtime_global("runtime_w_true");
+    let yes <- runtime_global("runtime::runtime_w_true");
     pure(ap(rfl, [Blank, yes]))
 }
 
@@ -1561,16 +1561,16 @@ fn runtime_verdict() → Tac<Expr> {
 // function itself (design §16.11).
 fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, count: Expr, reprs: List<ReprEntry>,
     w0: Ty, wrest: List<Ty>, res: Ty, c: Nat, zero, succ: Tm) → Tac<Expr> {
-    let compile <- runtime_global("Setup::compile_fuel");
+    let compile <- runtime_global(name_of(Setup::compile_fuel));
     let rfl <- runtime_global("tactic::rfl");
-    let succ_g <- runtime_global("runtime_succ");
-    let nat_h <- runtime_type_of("runtime_w_nat");
+    let succ_g <- runtime_global(name_of(runtime_succ));
+    let nat_h <- runtime_type_of(name_of(runtime_w_nat));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let verdict <- runtime_verdict();
     let ws = Cons(w0, wrest);
     let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 1), [Ty::quote(w0, q), Ty::quotes(wrest, q), Tm::quote(zero, q), Tm::quote(succ, q)])]);
     // Both equations hold at every file (the function reads none).
-    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
     let b0 <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
     let xs <- runtime_params(ts.word, ws, Some(b0.ref), 0);
     // Each word is read at its parameter's code (a repr's `abs`), as the
@@ -1625,21 +1625,21 @@ fn runtime_places<A>(lent: Nat, words: List<A>) → List<A> {
 // (`lib/_tests/native/runtime/runtime_spans_tests.hthr`'s `count_guarded`).
 fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, count: Expr,
     reprs: List<ReprEntry>, lent: Nat, ws: List<Ty>, res: Ty, body: Tm) → Tac<Expr> {
-    let compile <- runtime_global("Setup::compile_measured");
+    let compile <- runtime_global(name_of(Setup::compile_measured));
     let rfl <- runtime_global("tactic::rfl");
-    let sym_g <- runtime_global("Setup::eq_sym");
-    let trans_g <- runtime_global("Setup::eq_trans");
-    let cong_g <- runtime_global("Setup::eq_cong");
-    let lt_succ <- runtime_global("Setup::lt_succ");
-    let lt_pow <- runtime_global("Setup::below_pow");
-    let on_words <- runtime_global("Ty::on_words");
-    let guarded_g <- runtime_global("Setup::Guarded");
-    let spans_g <- runtime_global("Setup::GuardedSpans");
-    let span_g <- runtime_global("Setup::guarded_spans");
-    let span_at <- runtime_global("Setup::span_at");
-    let no_span <- runtime_global("runtime_w_bytes");
-    let bytes_h <- runtime_type_of("runtime_w_bytes");
-    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let cong_g <- runtime_global(name_of(Setup::eq_cong));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let lt_pow <- runtime_global(name_of(Setup::below_pow));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let guarded_g <- runtime_global(name_of(Setup::Guarded));
+    let spans_g <- runtime_global(name_of(Setup::GuardedSpans));
+    let span_g <- runtime_global(name_of(Setup::guarded_spans));
+    let span_at <- runtime_global(name_of(Setup::span_at));
+    let no_span <- runtime_global(name_of(runtime_w_bytes));
+    let bytes_h <- runtime_type_of(name_of(runtime_w_bytes));
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
     let buffers <- runtime_ctors_at(buffers_h);
     let rec <- runtime_global(name ++ "::rec");
     let ext <- runtime_global(name ++ "::ext");
@@ -1732,15 +1732,15 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
 // nothing, `Setup::lent_callees` for one lent spans.
 fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, table_e, rt_e, count: Expr, reprs: List<ReprEntry>) → Tac<Expr> {
     let rfl <- runtime_global("tactic::rfl");
-    let typed_refl <- runtime_global("Setup::typed_refl");
+    let typed_refl <- runtime_global(name_of(Setup::typed_refl));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let verdict <- runtime_verdict();
-    let shapes <- runtime_type_of("runtime_w_shape").bind(λ h => runtime_ctors_at(h));
+    let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
     let typed = ap(typed_refl, [Blank, Global(f)]);
-    let at_every <- runtime_global("Setup::at_every");
-    let lent_every <- runtime_global("Setup::lent_every");
+    let at_every <- runtime_global(name_of(Setup::at_every));
+    let lent_every <- runtime_global(name_of(Setup::lent_every));
     match rfun.shape() {
-        Plain => runtime_global("Setup::compile").bind(λ compile => {
+        Plain => runtime_global(name_of(Setup::compile)).bind(λ compile => {
             // The pin: the function itself at every file, or it at each
             // file's spans.
             let pinned: Expr = match rfun.lent {
@@ -1776,11 +1776,11 @@ fn runtime_repr_infos(word: Handle, word_repr, rfl: Expr, reprs: List<ReprEntry>
 // `RecInfo::word_repr`, its round trips `refl` at each word and each value.
 fn runtime_tys(word: Handle, reprs: List<ReprEntry>) → Tac<Expr> {
     match reprs {
-        Nil => runtime_global("RecInfo::none"),
+        Nil => runtime_global(name_of(RecInfo::none)),
         Cons(_, _) => {
-            let cons <- runtime_global("RecInfo::cons");
-            let none <- runtime_global("RecInfo::none");
-            let word_repr <- runtime_global("RecInfo::word_repr");
+            let cons <- runtime_global(name_of(RecInfo::cons));
+            let none <- runtime_global(name_of(RecInfo::none));
+            let word_repr <- runtime_global(name_of(RecInfo::word_repr));
             let rfl <- runtime_global("tactic::rfl");
             let entries <- runtime_repr_infos(word, word_repr, rfl, reprs);
             let table = entries.foldr(λ e acc => ap(cons, [e, acc]), none);
@@ -1865,20 +1865,20 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     // unifier, which does not unfold the reflection's meaning.
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
-    let pair <- runtime_global("Pair::of");
+    let pair <- runtime_global(name_of(Pair::of));
     let callees = runtime_callees(pair, Hd(trivial_h), funs);
-    let world_of <- runtime_global("World::of");
+    let world_of <- runtime_global(name_of(World::of));
     let tys_e <- runtime_tys(ts.word, reprs);
-    let setup <- runtime_global("Setup::default");
+    let setup <- runtime_global(name_of(Setup::default));
     let verdicts <- runtime_ctors_at(ts.verdict);
-    let judge <- runtime_global("Fun::judge");
-    let meaning <- runtime_global("Fun::meaning");
-    let code_of <- runtime_global("Setup::code");
-    let program_eval <- runtime_global("program_eval");
-    let program_eval_over <- runtime_global("program_eval_over");
-    let eval_sources <- runtime_global("program_linked_files_sources");
-    let sources <- runtime_global("link_sources_at");
-    let count <- runtime_global("runtime_count");
+    let judge <- runtime_global(name_of(Fun::judge));
+    let meaning <- runtime_global(name_of(Fun::meaning));
+    let code_of <- runtime_global(name_of(Setup::code));
+    let program_eval <- runtime_global(name_of(program_eval));
+    let program_eval_over <- runtime_global(name_of(program_eval_over));
+    let eval_sources <- runtime_global(name_of(program_linked_files_sources));
+    let sources <- runtime_global(name_of(link_sources_at));
+    let count <- runtime_global(name_of(runtime_count));
     let word_list <- runtime_ctors_at(ts.words);
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let rt_e = Fun::quote(rfun, q);
@@ -1886,11 +1886,11 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     // The table at each file. A function lent nothing has its world's own;
     // one lent spans has each of its functions at each file's spans, and
     // its world is that table at the empty file.
-    let fixed <- runtime_global("World::fixed");
-    let lent_callees <- runtime_global("Setup::lent_callees");
-    let callees_nil <- runtime_global("Setup::callees_nil");
-    let typed_once <- runtime_global("Setup::typed_once");
-    let no_file <- runtime_global("runtime_w_buffers");
+    let fixed <- runtime_global(name_of(World::fixed));
+    let lent_callees <- runtime_global(name_of(Setup::lent_callees));
+    let callees_nil <- runtime_global(name_of(Setup::callees_nil));
+    let typed_once <- runtime_global(name_of(Setup::typed_once));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
     let lent_table = runtime_file_callees(lent_callees, typed_once, callees_nil, tys_e, q, funs, sigs, lents);
     let world_e: Expr = match rfun.lent {
         Zero => ap(world_of, [tys_e, sigs_e, callees]),
@@ -1913,7 +1913,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             ap(rfl, [Blank, runtime_at(verdicts, 0)]))];
     let made: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
-        Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
+        Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     let own_types = runtime_param_types(ts.word, reprs, rfun.params);
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance, linked at every file.
@@ -1968,9 +1968,9 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // program evaluated over the file, against the function at the
         // file's spans).
         Succ(_) => {
-            let buffers_h <- runtime_type_of("runtime_w_buffers");
-            let world_at <- runtime_global("World::at");
-            let span <- runtime_global("List::span");
+            let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
+            let world_at <- runtime_global(name_of(World::at));
+            let span <- runtime_global(name_of(List::span));
             let b <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
             let xs <- runtime_params_at(own_types, Some(b.ref), 0);
             let own = runtime_lent_args(span, Local(b.ref), 0, rfun.lent, runtime_locals(xs));
@@ -2072,10 +2072,10 @@ def runtime_w_start: Option<Nat> = None;
 record FtQ { tm: List<Expr>, views: List<Expr>, view: List<Expr>, start: List<Expr> }
 
 fn runtime_file_quoting() → Tac<FtQ> {
-    let tms <- runtime_type_of("runtime_w_ftm").bind(λ h => runtime_ctors_at(h));
-    let views <- runtime_type_of("runtime_w_views").bind(λ h => runtime_ctors_at(h));
-    let view <- runtime_type_of("runtime_w_view").bind(λ h => runtime_ctors_at(h));
-    let start <- runtime_type_of("runtime_w_start").bind(λ h => runtime_ctors_at(h));
+    let tms <- runtime_type_of(name_of(runtime_w_ftm)).bind(λ h => runtime_ctors_at(h));
+    let views <- runtime_type_of(name_of(runtime_w_views)).bind(λ h => runtime_ctors_at(h));
+    let view <- runtime_type_of(name_of(runtime_w_view)).bind(λ h => runtime_ctors_at(h));
+    let start <- runtime_type_of(name_of(runtime_w_start)).bind(λ h => runtime_ctors_at(h));
     pure(FtQ(tms, views, view, start))
 }
 
@@ -2153,21 +2153,21 @@ record SpanE { tys: Expr, sigs: Expr, world: Expr, reads: Expr, fsigs: Expr, wri
 // and the words that are not a span's place; a recursion is handed the
 // places the loop was entered with, and is keyed by the spans it is at.
 fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: SpanE, body_e: Expr, ws: List<Ty>, res: Ty, lent: Nat) → Tac<Expr> {
-    let compile <- runtime_span_ref("FFun::compile_measured");
-    let family <- runtime_span_ref("FFun::GuardedSpans");
-    let from_family <- runtime_span_ref("FFun::guarded_spans");
-    let measure_at <- runtime_span_ref("FFun::measure_at");
-    let on_words <- runtime_span_ref("FFun::on_words");
-    let recast <- runtime_span_ref("FTm::recast");
+    let compile <- runtime_span_ref("runtime_file::FFun::compile_measured");
+    let family <- runtime_span_ref("runtime_file::FFun::GuardedSpans");
+    let from_family <- runtime_span_ref("runtime_file::FFun::guarded_spans");
+    let measure_at <- runtime_span_ref("runtime_file::FFun::measure_at");
+    let on_words <- runtime_span_ref("runtime_file::FFun::on_words");
+    let recast <- runtime_span_ref(name_of(FTm::recast));
     let rfl <- runtime_global("tactic::rfl");
-    let sym_g <- runtime_global("Setup::eq_sym");
-    let trans_g <- runtime_global("Setup::eq_trans");
-    let cong_g <- runtime_global("Setup::eq_cong");
-    let lt_succ <- runtime_global("Setup::lt_succ");
-    let lt_pow <- runtime_global("Setup::below_pow");
-    let span_at <- runtime_global("Setup::span_at");
-    let bytes_h <- runtime_type_of("runtime_w_bytes");
-    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let cong_g <- runtime_global(name_of(Setup::eq_cong));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let lt_pow <- runtime_global(name_of(Setup::below_pow));
+    let span_at <- runtime_global(name_of(Setup::span_at));
+    let bytes_h <- runtime_type_of(name_of(runtime_w_bytes));
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
     let buffers <- runtime_ctors_at(buffers_h);
     let rec <- runtime_global(name ++ "::rec");
     let companion <- lookup(name ++ "::ext");
@@ -2267,16 +2267,16 @@ record SpanLinked { program: Expr, srcs: Expr, arities: Expr, stills: Expr }
 
 fn runtime_span_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<SpanLinked> {
     let fn_ctors <- runtime_ctors_at(ts.functions);
-    let bool_list <- runtime_type_of("runtime_w_bools").bind(λ h => runtime_ctors_at(h));
-    let bools <- runtime_type_of("runtime_w_true").bind(λ h => runtime_ctors_at(h));
-    let linked <- runtime_global("Compile::linked");
-    let arity_of <- runtime_global("Compile::arity");
-    let source <- runtime_span_ref("Compile::span_source");
-    let s_linked <- runtime_span_ref("CompileSpan::linked");
-    let s_arity <- runtime_span_ref("CompileSpan::arity");
-    let s_source <- runtime_span_ref("CompileSpan::source");
-    let all_nil <- runtime_span_ref("span_all_nil");
-    let all_cons <- runtime_span_ref("span_all_cons");
+    let bool_list <- runtime_type_of(name_of(runtime_w_bools)).bind(λ h => runtime_ctors_at(h));
+    let bools <- runtime_type_of(name_of(runtime_w_true)).bind(λ h => runtime_ctors_at(h));
+    let linked <- runtime_global(name_of(Compile::linked));
+    let arity_of <- runtime_global(name_of(Compile::arity));
+    let source <- runtime_span_ref("runtime_file::Compile::span_source");
+    let s_linked <- runtime_span_ref("runtime_file::CompileSpan::linked");
+    let s_arity <- runtime_span_ref("runtime_file::CompileSpan::arity");
+    let s_source <- runtime_span_ref("runtime_file::CompileSpan::source");
+    let all_nil <- runtime_span_ref("runtime_file::span_all_nil");
+    let all_cons <- runtime_span_ref("runtime_file::span_all_cons");
     let n = insts.len();
     let at = λ (i: Nat) => insts.nth(i).unwrap_or(Pair(Blank, Blank));
     let writes: Nat → Bool = λ i => match l.reads.nth(i).unwrap_or(None) { Some(_) => True, None => False };
@@ -2299,15 +2299,15 @@ fn runtime_span_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, E
 // one that only reads, `CompileSpan::spanned` for one that writes), the
 // last function's first, as `program_spanned` reads them.
 fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: SpanLinked) → Tac<Expr> {
-    let c_spanned <- runtime_span_ref("Compile::spanned");
-    let s_spanned <- runtime_span_ref("CompileSpan::spanned");
-    let c_table <- runtime_span_ref("Compile::span_table");
-    let reads_table <- runtime_span_ref("CompileSpan::reads_table");
-    let writes_table <- runtime_span_ref("CompileSpan::writes_table");
-    let every <- runtime_span_ref("span_every");
-    let still_at <- runtime_span_ref("link_still");
-    let arity_at <- runtime_global("link_arity");
-    let both <- runtime_global("link_both");
+    let c_spanned <- runtime_span_ref("runtime_file::Compile::spanned");
+    let s_spanned <- runtime_span_ref("runtime_file::CompileSpan::spanned");
+    let c_table <- runtime_span_ref("runtime_file::Compile::span_table");
+    let reads_table <- runtime_span_ref("runtime_file::CompileSpan::reads_table");
+    let writes_table <- runtime_span_ref("runtime_file::CompileSpan::writes_table");
+    let every <- runtime_span_ref("runtime_file::span_every");
+    let still_at <- runtime_span_ref("runtime_file::link_still");
+    let arity_at <- runtime_global(name_of(link_arity));
+    let both <- runtime_global(name_of(link_both));
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let n = insts.len();
@@ -2470,7 +2470,7 @@ fn SpanWriting::written(self cx: SpanWriting, span: Expr, env: List<Expr>, g: Li
         // A branch that names its condition's equation: the equation is
         // erased, and the meaning is the convoyed `match`.
         IfEq(c, yes, no) => {
-            let convoy <- runtime_global("Tm::convoy");
+            let convoy <- runtime_global(name_of(Tm::convoy));
             let c_e <- cx.var(env, c);
             let yes_e <- cx.written(span, env, g, under, yes);
             let no_e <- cx.written(span, env, g, under, no);
@@ -2598,46 +2598,46 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     let ftms <- runtime_file_quoting();
-    let ffun_h <- runtime_type_of("runtime_w_ffun");
+    let ffun_h <- runtime_type_of(name_of(runtime_w_ffun));
     let ffuns <- runtime_ctors_at(ffun_h);
-    let bools_h <- runtime_type_of("runtime_w_bools");
-    let bytes_h <- runtime_type_of("runtime_w_bytes");
-    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let bools_h <- runtime_type_of(name_of(runtime_w_bools));
+    let bytes_h <- runtime_type_of(name_of(runtime_w_bytes));
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
     let buffers <- runtime_ctors_at(buffers_h);
     let word_list <- runtime_ctors_at(ts.words);
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let verdict <- runtime_verdict();
-    let yes <- runtime_global("runtime_w_true");
-    let lowers <- runtime_global("Setup::lowers");
-    let world_of <- runtime_global("World::of");
-    let tys_e <- runtime_global("RecInfo::none");
-    let lent_callees <- runtime_global("Setup::lent_callees");
-    let callees_nil <- runtime_global("Setup::callees_nil");
-    let typed_once <- runtime_global("Setup::typed_once");
-    let no_file <- runtime_global("runtime_w_buffers");
-    let span_at <- runtime_global("Setup::span_at");
-    let sems_cons <- runtime_span_ref("FTm::sems_cons");
-    let sems_nil <- runtime_span_ref("FTm::sems_nil");
-    let fworld <- runtime_span_ref("FWorld::of");
-    let meaning <- runtime_span_ref("FFun::meaning");
-    let end_of <- runtime_span_ref("FTm::end_of");
-    let program_run <- runtime_span_ref("program_run");
-    let answers <- runtime_span_ref("program_spanned_answers");
-    let span_file <- runtime_span_ref("span_file");
-    let span_sources <- runtime_span_ref("span_sources");
-    let span_pair <- runtime_span_ref("span_pair");
-    let ty_sem <- runtime_global("Ty::sem");
-    let lit <- runtime_global("Tm::lit");
-    let op_sem <- runtime_global("Op::sem");
+    let yes <- runtime_global(name_of(runtime_w_true));
+    let lowers <- runtime_global(name_of(Setup::lowers));
+    let world_of <- runtime_global(name_of(World::of));
+    let tys_e <- runtime_global(name_of(RecInfo::none));
+    let lent_callees <- runtime_global(name_of(Setup::lent_callees));
+    let callees_nil <- runtime_global(name_of(Setup::callees_nil));
+    let typed_once <- runtime_global(name_of(Setup::typed_once));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let span_at <- runtime_global(name_of(Setup::span_at));
+    let sems_cons <- runtime_span_ref("runtime_file::FTm::sems_cons");
+    let sems_nil <- runtime_span_ref("runtime_file::FTm::sems_nil");
+    let fworld <- runtime_span_ref("runtime_file::FWorld::of");
+    let meaning <- runtime_span_ref(name_of(FFun::meaning));
+    let end_of <- runtime_span_ref("rt_file_loop::FTm::end_of");
+    let program_run <- runtime_span_ref("function_ir_run::program_run");
+    let answers <- runtime_span_ref("function_ir_link::program_spanned_answers");
+    let span_file <- runtime_span_ref("runtime_file::span_file");
+    let span_sources <- runtime_span_ref("runtime_file::span_sources");
+    let span_pair <- runtime_span_ref("runtime_file::span_pair");
+    let ty_sem <- runtime_global(name_of(Ty::sem));
+    let lit <- runtime_global(name_of(Tm::lit));
+    let op_sem <- runtime_global(name_of(Op::sem));
     // What a function written out is spelled with, looked up only where
     // one is (`rt_held` is then in scope).
     let held_name: String → Tac<Expr> = λ n => match meant { True => runtime_held_ref(n), False => pure(Blank) };
-    let byte_within <- lookup("List::byte_within").bind(λ c => pure(match c { Accepted(g) => Some(Global(g)), Refused(_) => None }));
-    let once <- held_name("HWorld::once");
-    let answer <- held_name("HWorld::answer");
-    let after <- held_name("HWorld::after");
-    let either <- held_name("HWorld::either");
+    let byte_within <- lookup(name_of(List::byte_within)).bind(λ c => pure(match c { Accepted(g) => Some(Global(g)), Refused(_) => None }));
+    let once <- held_name("rt_held::HWorld::once");
+    let answer <- held_name("rt_held::HWorld::answer");
+    let after <- held_name("rt_held::HWorld::after");
+    let either <- held_name("rt_held::HWorld::either");
     let params_e = Ty::quotes(rfun.params, q);
     let res_e = Ty::quote(rfun.result, q);
     let body_e = FTm::quote(rfun.body, q, ftms);
@@ -2652,7 +2652,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let sigs_e = RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q)));
     let fsigs_e <- shared(RtQ::seq(q.sigs, write_sigs.map(λ s => Sig::quote(s.snd, q))));
     let own_words = rfun.params.drop(1);
-    let every <- runtime_span_ref("FFun::source_every");
+    let every <- runtime_span_ref("runtime_file::FFun::source_every");
     // A function written out, each part a function of the callees (the
     // readers, then the writers).
     let written_out: Tac<Option<SpanWritten>> = match meant {
@@ -2660,7 +2660,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         True => {
             let cs <- runtime_callees_of(reads ++ writes);
             let n = reads.len();
-            let at <- runtime_held_ref("HWorld::at");
+            let at <- runtime_held_ref("rt_held::HWorld::at");
             let cx: Option<Expr> → List<Expr> → SpanWriting = λ again es => SpanWriting(name, q, tys_e, World(RecInfo::none, sigs, Sig::sems_default(RecInfo::none, sigs)), es.take(n),
                 read_sigs.map(λ p => p.fst), es.drop(n), write_sigs, ts.word, bytes_h, ty_sem, lit, op_sem, once, answer, after, either, again, byte_within);
             let reads_of: List<Expr> → Expr = λ es => runtime_file_callees_of(lent_callees, typed_once, callees_nil, tys_e, q, es.take(n), sigs, read_sigs.map(λ p => p.fst));
@@ -2668,12 +2668,12 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
             let world_t <- runtime_over_callees(cs, "`" ++ name ++ "`'s world", λ es _ => pure(ap(world_of, [tys_e, sigs_e, ap(reads_of(es), [no_file])])));
             let writes_t <- runtime_over_callees(cs, "`" ++ name ++ "`'s writing callees", λ es _ =>
                 pure(runtime_span_writers_of(sems_cons, sems_nil, typed_once, tys_e, q, es.drop(n), write_sigs)));
-            let zero <- runtime_global("runtime_w_word");
+            let zero <- runtime_global(name_of(runtime_w_word));
             let mutated <- runtime_global("Mutated");
             let span_c <- assume(Hd(bytes_h), "span", None).or_fail("runtime: a span: ");
             let xs_c <- runtime_own_params(ts.word, bytes_h, lent, own_words.len(), Some(span_c.ref), 0);
             let t <- as_type(Pi(span_c.ref, xs_c.foldr(λ x acc => Pi(x, acc), ap(mutated, [Hd(bytes_h), Hd(ts.word)])))).or_fail("runtime: `" ++ name ++ "`'s type over its span: ");
-            let named <- runtime_held_ref("HWorld::written");
+            let named <- runtime_held_ref("rt_held::HWorld::written");
             // A loop is written a pass at a time: the body as a function
             // of the passes after it (`FFun::rounds`).
             let fe_h <- runtime_over_callees(cs, "`" ++ name ++ "` written out over its span", λ es under => {
@@ -2700,8 +2700,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                 },
             };
             let stop_e <- stopped;
-            let rounds <- match measured { True => runtime_span_ref("FFun::rounds"), False => pure(Blank) };
-            let passes_n <- match measured { True => runtime_global("Fun::meas_passes"), False => pure(Blank) };
+            let rounds <- match measured { True => runtime_span_ref("rt_file_loop::FFun::rounds"), False => pure(Blank) };
+            let passes_n <- match measured { True => runtime_global(name_of(Fun::meas_passes)), False => pure(Blank) };
             // Under a name, at its type: where the function meets itself
             // through other definitions, the kernel meets at the name. A
             // loop's name is `FFun::rounds`, as its instance spells it.
@@ -2709,7 +2709,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                 False => ap(named, [Hd(t), ap(fe_h, es)]),
                 True => ap(rounds, [Hd(t), passes_n, ap(fe_h, es), stop_e]),
             };
-            let source_at <- runtime_span_ref("FTm::source_at");
+            let source_at <- runtime_span_ref("runtime_file::FTm::source_at");
             // The pin, at every callee: the reflection's meaning in the
             // world of those callees is the function written out at them.
             let stmt: List<Expr> → LocalRef → Tac<Expr> = λ es under => {
@@ -2727,8 +2727,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                 False => runtime_at_each(at, cs, [], None, stmt, λ es =>
                     ap(every, [Hd(t), fe_of(es), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(t), fe_of(es)])])),
                 True => {
-                    let passes_t <- runtime_span_ref("FFun::Passes");
-                    let uncurry <- runtime_span_ref("FFun::uncurry");
+                    let passes_t <- runtime_span_ref("rt_file_loop::FFun::Passes");
+                    let uncurry <- runtime_span_ref("rt_file_loop::FFun::uncurry");
                     let read_at: List<Expr> → Expr → Expr → Expr = λ es g rest =>
                         ap(source_at, [Hd(t), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(t), fe_of(es)]), g, rest]);
                     let stated: List<Expr> → Option<LocalRef> → Tac<Pair<LocalRef, Expr>> = λ es under => {
@@ -2784,8 +2784,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     // The lowering, checked here so that a refusal names the function: the
     // instance checks it again, by the kernel.
     let lowered: Tac<Expr> = match measured {
-        False => runtime_span_ref("FFun::lower").bind(λ g => pure(ap(g, [rt_e, world_e, fsigs_e, base]))),
-        True => runtime_span_ref("FFun::lower_measured").bind(λ g => pure(ap(g, [ks_e, w0_e, wrest_e, body_e, res_e, world_e, fsigs_e, base, NatLit(lent)]))),
+        False => runtime_span_ref("rt_file_lower::FFun::lower").bind(λ g => pure(ap(g, [rt_e, world_e, fsigs_e, base]))),
+        True => runtime_span_ref("rt_file_loop::FFun::lower_measured").bind(λ g => pure(ap(g, [ks_e, w0_e, wrest_e, body_e, res_e, world_e, fsigs_e, base, NatLit(lent)]))),
     };
     let lowered_e <- lowered;
     let accepted <- defeq(ap(lowers, [lowered_e]), yes);
@@ -2794,22 +2794,22 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         False => runtime_span_refused(name, "its lowering refused it (the stores of a function over a span are bytes under its length word, and its calls pass each callee its words)"),
     };
     let code: Tac<Expr> = match measured {
-        False => runtime_span_ref("FFun::code").bind(λ g => pure(ap(g, [rt_e, world_e, fsigs_e]))),
-        True => runtime_span_ref("FFun::measured_code").bind(λ g => pure(ap(g, [ks_e, w0_e, wrest_e, res_e, body_e, NatLit(lent), world_e, fsigs_e]))),
+        False => runtime_span_ref("runtime_file::FFun::code").bind(λ g => pure(ap(g, [rt_e, world_e, fsigs_e]))),
+        True => runtime_span_ref("runtime_file::FFun::measured_code").bind(λ g => pure(ap(g, [ks_e, w0_e, wrest_e, res_e, body_e, NatLit(lent), world_e, fsigs_e]))),
     };
     let code_e <- code;
     let instance: Tac<Expr> = match measured {
-        False => runtime_span_ref("FFun::compile").bind(λ compile =>
+        False => runtime_span_ref("runtime_file::FFun::compile").bind(λ compile =>
             pure(ap(compile, [ft_e, rt_e, world_e, reads_e, fsigs_e, writes_e, fe, e.typed,
                 match out { None => ap(every, [ft_e, fe, tys_e, NatLit(lent), params_e, res_e, e.typed]), Some(o) => o.pinned }, verdict]))),
         True => match out {
             None => runtime_span_measured(name, f, q, ts, e, body_e, rfun.params, rfun.result, lent),
             // A loop written out: the passes its code counts.
             Some(o) => {
-                let compile <- runtime_span_ref("FFun::compile_counted");
-                let stops_t <- runtime_span_ref("FFun::Stops");
-                let spent <- runtime_span_ref("FFun::spent");
-                let source_at <- runtime_span_ref("FTm::source_at");
+                let compile <- runtime_span_ref("runtime_file::FFun::compile_counted");
+                let stops_t <- runtime_span_ref("rt_file_loop::FFun::Stops");
+                let spent <- runtime_span_ref("rt_file_loop::FFun::spent");
+                let source_at <- runtime_span_ref("runtime_file::FTm::source_at");
                 let rest_s <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
                 let g_s <- assume(Hd(ft), "g", Some(rest_s.ref)).or_fail("runtime: a function over a span: ");
                 let stops_h <- as_type(ap(stops_t, [Hd(ft), NatLit(lent + lent), params_e, res_e, tys_e,
@@ -2833,7 +2833,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let writes_t <- infer(writes_e).or_fail("runtime: `" ++ name ++ "`'s writing callees: ");
     // Published with the function of the record beside it
     // (`HWorld::of_record`): the linker finds a callee's tables by that.
-    let of_record <- held_name("HWorld::of_record");
+    let of_record <- held_name("rt_held::HWorld::of_record");
     let written: List<Decl> = match meant { False => [], True => [Decl(AsValue, own, [], Hd(ft), ap(of_record, [Hd(ft), Blank, Global(f), fe]))] };
     let head: List<Decl> = [
         Decl(AsValue, name ++ "::rt", [], Hd(ffun_h), rt_e),
@@ -2860,7 +2860,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     };
     let made: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
-        Decl(AsInstance("CompileSpan", [Hd(ft)], [own]), name ++ "::compile", [], Hd(instance_t), instance_e)];
+        Decl(AsInstance("runtime_file::CompileSpan", [Hd(ft)], [own]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     // The program: this function and every runtime fn it reaches, each from
     // its own instance, linked over the run at every file.
     let insts <- runtime_instances(l.order, l.names, f.id, fe, instance_e);
@@ -2885,9 +2885,9 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let runs: Tac<Expr> = match out {
         None => pure(answered),
         Some(o) => {
-            let at <- runtime_held_ref("HWorld::at");
-            let uncurry <- runtime_span_ref("FFun::uncurry");
-            let source_at <- runtime_span_ref("FTm::source_at");
+            let at <- runtime_held_ref("rt_held::HWorld::at");
+            let uncurry <- runtime_span_ref("rt_file_loop::FFun::uncurry");
+            let source_at <- runtime_span_ref("runtime_file::FTm::source_at");
             let trans <- runtime_global("trans");
             let sourced: List<Expr> → Expr = λ es => ap(end_of, [Local(rest1.ref), ap(uncurry, [tys_e, params_e, res_e,
                 ap(source_at, [Hd(o.ty), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(o.ty), o.compiled(es)]), o.compiled(es), Local(rest1.ref)]),
@@ -2925,7 +2925,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         Some(o) => match measured {
             False => pure(None),
             True => {
-                let source_at <- runtime_span_ref("FTm::source_at");
+                let source_at <- runtime_span_ref("runtime_file::FTm::source_at");
                 let rest_c <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
                 let g_c <- assume(Hd(ft), "g", Some(rest_c.ref)).or_fail("runtime: a function over a span: ");
                 let at_c <- runtime_held(Lam(rest_c.ref, Lam(g_c.ref, ap(source_at, [Hd(ft), tys_e, NatLit(lent), params_e, res_e, e.typed, Local(g_c.ref), Local(rest_c.ref)]))),
@@ -3095,14 +3095,14 @@ record HeldNames { plain: Expr, reader_of: Expr, apart: Expr, writer_of: Expr, m
     reader_at: Expr, writer_at: Expr, index_entry: Expr, store_entry: Expr, indexes_array: Expr, stores_array: Expr, byte_entry: Expr, stores_bytes_array: Expr }
 
 fn runtime_held_names() → Tac<HeldNames> {
-    pure(HeldNames(<- runtime_held_ref("Reader::plain"), <- runtime_held_ref("Reader::of"), <- runtime_held_ref("Writer::apart"), <- runtime_held_ref("Writer::of"),
-        <- runtime_held_ref("HWorld::marked"), <- runtime_held_ref("HWorld::none"), <- runtime_held_ref("HWorld::more"), <- runtime_held_ref("HWorld::bound"),
-        <- runtime_held_ref("HWorld::owed"), <- runtime_held_ref("Sound::of"), <- runtime_held_ref("FFun::held_agrees"), <- runtime_held_ref("Stored::read_entry"),
-        <- runtime_held_ref("Stored::write_entry"), <- runtime_held_ref("HWorld::reads_field"), <- runtime_held_ref("HWorld::writes_field"), <- runtime_held_ref("FTm::held"),
-        <- runtime_held_ref("FTm::kept"), <- runtime_held_ref("Ty::bind_onto"), <- runtime_held_ref("Stored::Holds"), <- runtime_held_ref("Agrees"),
-        <- runtime_held_ref("Reader::indexed"), <- runtime_held_ref("Writer::indexed"), <- runtime_held_ref("Stored::index_entry"), <- runtime_held_ref("Stored::store_entry"),
-        <- runtime_held_ref("HWorld::indexes_array"), <- runtime_held_ref("HWorld::stores_array"), <- runtime_held_ref("Part::byte_entry"),
-        <- runtime_held_ref("HWorld::stores_bytes_array")))
+    pure(HeldNames(<- runtime_held_ref("rt_held::Reader::plain"), <- runtime_held_ref("rt_held::Reader::of"), <- runtime_held_ref("rt_held::Writer::apart"), <- runtime_held_ref("rt_held::Writer::of"),
+        <- runtime_held_ref("rt_held::HWorld::marked"), <- runtime_held_ref("rt_held::HWorld::none"), <- runtime_held_ref("rt_held::HWorld::more"), <- runtime_held_ref("rt_held::HWorld::bound"),
+        <- runtime_held_ref("rt_held::HWorld::owed"), <- runtime_held_ref("rt_held::Sound::of"), <- runtime_held_ref("rt_held::FFun::held_agrees"), <- runtime_held_ref("rt_held_fields::Stored::read_entry"),
+        <- runtime_held_ref("rt_held_fields::Stored::write_entry"), <- runtime_held_ref("rt_held_fields::HWorld::reads_field"), <- runtime_held_ref("rt_held_fields::HWorld::writes_field"), <- runtime_held_ref("rt_held::FTm::held"),
+        <- runtime_held_ref("rt_held::FTm::kept"), <- runtime_held_ref(name_of(Ty::bind_onto)), <- runtime_held_ref("rt_held::Stored::Holds"), <- runtime_held_ref("Agrees"),
+        <- runtime_held_ref("rt_held::Reader::indexed"), <- runtime_held_ref("rt_held::Writer::indexed"), <- runtime_held_ref("rt_held_fields::Stored::index_entry"), <- runtime_held_ref("rt_held_fields::Stored::store_entry"),
+        <- runtime_held_ref("rt_held_fields::HWorld::indexes_array"), <- runtime_held_ref("rt_held_fields::HWorld::stores_array"), <- runtime_held_ref("rt_held_fields::Part::byte_entry"),
+        <- runtime_held_ref("rt_held_fields::HWorld::stores_bytes_array")))
 }
 
 // A function of the record that the function calls, as its mark: how
@@ -3110,8 +3110,8 @@ fn runtime_held_names() → Tac<HeldNames> {
 // A span the callee only reads is the file's, in the place the caller
 // took it (`span_of(j)`), and the word in its place is not read.
 fn runtime_held_run(record, words_t: Expr, c: HeldCall, rest: LocalRef, span_of: Nat → Expr) → Tac<Expr> {
-    let runs <- runtime_held_ref("Writer::runs");
-    let operand <- runtime_held_ref("FTm::operand");
+    let runs <- runtime_held_ref("rt_held::Writer::runs");
+    let operand <- runtime_held_ref("rt_held::FTm::operand");
     let a <- assume(record, "held", Some(rest)).or_fail("runtime: a record: ");
     let ws <- assume(words_t, "words", Some(a.ref)).or_fail("runtime: a call's words: ");
     pure(ap(runs, [record, NatLit(c.operands), Lam(a.ref, Lam(ws.ref,
@@ -3256,14 +3256,14 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let env = runtime_at_places(lent, runtime_locals(all0), 0, λ _ => zero).foldl(λ acc x => ap(n.bound, [Blank, Blank, x, acc]), ap(n.bound, [Blank, Blank, zero, end]));
     // The function of the record: one that only reads it answers its
     // value beside the record as it was.
-    let unchanged <- runtime_held_ref("HWorld::unchanged");
+    let unchanged <- runtime_held_ref("rt_held::HWorld::unchanged");
     let applied = ap(Global(f), Cons(Local(t0.ref), runtime_locals(xs0)));
     let spec = match r.changes { True => applied, False => ap(unchanged, [Blank, Blank, Local(t0.ref), applied]) };
     let code = ap(parts.compiled, Cons(Local(own0.ref), Cons(Local(length0), runtime_locals(xs0))));
     let g_e = ap(n.bind_onto, [parts.params, parts.no_tys]);
     // The body's code is its result's by a proof that computes: the pin
     // is read along it.
-    let same <- runtime_global("runtime_self");
+    let same <- runtime_global(name_of(runtime_self));
     // The pin, by conversion, and where that runs out with each function
     // of the record it calls a parameter. At the callees themselves the comparison reaches the
     // function's side first, and a loop called at a numeral is unfolded
@@ -3278,11 +3278,11 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // Stated beside the hypothesis the theorem ends in, so that the
     // statement lives under the theorem's last binder and a parameter
     // opened from it is bound where the proof stands.
-    let beside <- runtime_held_ref("HWorld::beside");
+    let beside <- runtime_held_ref("rt_held::HWorld::beside");
     let pin0 <- as_type(Equation(ap(beside, [Blank, Blank, Local(holds0.ref), ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)])]), spelled))
         .or_fail("runtime: `" ++ name ++ "`'s pin: ");
     let pin_all <- runtime_held_reverted(name, pin0, r.calls);
-    let stated <- runtime_held_ref("HWorld::stated");
+    let stated <- runtime_held_ref("rt_held::HWorld::stated");
     let pin_leaf <- runtime_held_under(stated, rfl, pin_all, r.calls.len());
     let pin = ap(stated, Cons(Hd(pin_all), Cons(pin_leaf, r.calls.rev().map(λ c => Global(c.run)))));
     // The pin at the callees themselves is tried first: it is the cheaper
@@ -3301,8 +3301,8 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let pin_proof <- by_pin;
     // The byte meaning is the function written out, at every callee and
     // so at the program's own.
-    let at <- runtime_held_ref("HWorld::at");
-    let bytes_of <- runtime_held_ref("FFun::bytes");
+    let at <- runtime_held_ref("rt_held::HWorld::at");
+    let bytes_of <- runtime_held_ref("rt_held::FFun::bytes");
     let reflects <- runtime_at_each(at, parts.callees, [], Some(holds0.ref), λ es _ =>
         as_type(Equation(ap(bytes_of, [parts.rt, parts.world_of(es, file), env, Local(own0.ref)]),
             ap(parts.compiled_of(es), Cons(Local(own0.ref), Cons(Local(length0), runtime_locals(xs0))))))
@@ -3326,15 +3326,15 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     let n = s.n;
     let ts = s.ts;
     let k = r.operands;
-    let tail_kept <- runtime_held_ref("FTm::tail_kept");
-    let guarded_t <- runtime_held_ref("FFun::HeldGuarded");
-    let counted <- runtime_held_ref("FFun::counted_held");
-    let bare <- runtime_held_ref("Agrees::bare");
-    let operand <- runtime_held_ref("FTm::operand");
-    let sym_g <- runtime_global("Setup::eq_sym");
-    let trans_g <- runtime_global("Setup::eq_trans");
-    let lt_succ <- runtime_global("Setup::lt_succ");
-    let lt_pow <- runtime_global("Setup::below_pow");
+    let tail_kept <- runtime_held_ref("rt_held_loop::FTm::tail_kept");
+    let guarded_t <- runtime_held_ref("rt_held_loop::FFun::HeldGuarded");
+    let counted <- runtime_held_ref("rt_held_loop::FFun::counted_held");
+    let bare <- runtime_held_ref("rt_held_loop::Agrees::bare");
+    let operand <- runtime_held_ref("rt_held::FTm::operand");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let lt_pow <- runtime_global(name_of(Setup::below_pow));
     let rec <- runtime_global(name ++ "::rec");
     let companion <- lookup(name ++ "::ext");
     let found: Tac<Expr> = match companion {
@@ -3453,12 +3453,12 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     // a pass on one side before the other arrives at the iteration, and
     // past the few spines it keeps (`Passed::KEPT`) the two meet only at
     // the count's end.
-    let at <- runtime_held_ref("HWorld::at");
-    let uncurry <- runtime_held_ref("FFun::uncurry");
-    let recast <- runtime_held_ref("FTm::recast");
-    let rounds <- runtime_held_ref("FFun::rounds");
-    let along <- runtime_held_ref("Agrees::along");
-    let passes_n <- runtime_global("Fun::meas_passes");
+    let at <- runtime_held_ref("rt_held::HWorld::at");
+    let uncurry <- runtime_held_ref("rt_file_loop::FFun::uncurry");
+    let recast <- runtime_held_ref(name_of(FTm::recast));
+    let rounds <- runtime_held_ref("rt_file_loop::FFun::rounds");
+    let along <- runtime_held_ref("rt_held::Agrees::along");
+    let passes_n <- runtime_global(name_of(Fun::meas_passes));
     let q <- runtime_quoting(ts);
     let w64 = Ty::quote(Word(64), q);
     let g <- assume(c.ty, "g", Some(holds0.ref)).or_fail("runtime: a function over a span: ");
@@ -3480,10 +3480,10 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
 fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts) → Tac<List<Decl>> {
     let n <- runtime_held_names();
     let ts <- runtime_type_handles();
-    let bytes_h <- runtime_type_of("runtime_w_bytes");
+    let bytes_h <- runtime_type_of(name_of(runtime_w_bytes));
     let rfl <- runtime_global("tactic::rfl");
-    let yes <- runtime_global("runtime_w_true");
-    let zero <- runtime_global("runtime_w_word");
+    let yes <- runtime_global(name_of(runtime_w_true));
+    let zero <- runtime_global(name_of(runtime_w_word));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let end = Hd(trivial_h);
     let by_refl = ap(rfl, [Blank, Blank]);
@@ -3491,10 +3491,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let whole = Global(r.stored);
     // The marks and what they owe are at a rest of a file, the spans the
     // function only reads: a callee that reads spans reads the same ones.
-    let buffers_h <- runtime_type_of("runtime_w_buffers");
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
     let files <- runtime_ctors_at(buffers_h);
-    let no_file <- runtime_global("runtime_w_buffers");
-    let span_at <- runtime_global("Setup::span_at");
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let span_at <- runtime_global(name_of(Setup::span_at));
     let rest0 <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
     let span_of: Nat → Expr = λ j => ap(span_at, [Local(rest0.ref), NatLit(j)]);
     let entry: Expr → HeldAccess → Expr = λ of a => ap(of, [record, a.ty, whole, a.codec, a.instance, a.part]);
@@ -3520,7 +3520,7 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // A computation that is a function of the record is marked with that
     // function.
     let called: List<Option<HeldCall>> = r.cfuns.map(λ g => r.calls.filter(λ c => c.bytes.same(g)).head());
-    let word_list <- runtime_type_of("runtime_w_words");
+    let word_list <- runtime_type_of(name_of(runtime_w_words));
     let runs <- runtime_held_each(called, λ c => match c {
         None => pure(None),
         // Held, a closed term: the marks are read again under each
@@ -3557,9 +3557,9 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
             Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
         }));
     let q <- runtime_quoting(ts);
-    let at_all <- runtime_held_ref("HWorld::at");
-    let ran_names = HeldRan(<- runtime_held_ref("HWorld::Var"), <- runtime_held_ref("HWorld::Scope"), <- runtime_held_ref("HWorld::EnvAt"),
-        <- runtime_held_ref("HWorld::word_at"), <- runtime_held_ref("HWorld::called_at"), <- runtime_held_ref("HWorld::ran"), Hd(bytes_h), q.nats, rfl, at_all);
+    let at_all <- runtime_held_ref("rt_held::HWorld::at");
+    let ran_names = HeldRan(<- runtime_held_ref("rt_held::HWorld::Var"), <- runtime_held_ref("rt_held::HWorld::Scope"), <- runtime_held_ref("rt_held::HWorld::EnvAt"),
+        <- runtime_held_ref("rt_held::HWorld::word_at"), <- runtime_held_ref("rt_held::HWorld::called_at"), <- runtime_held_ref("rt_held::HWorld::ran"), Hd(bytes_h), q.nats, rfl, at_all);
     let hw_of: List<Expr> → Expr = λ es => ap(n.marked, [record, parts.world_of(es, Local(rest0.ref)), readers_e, writers_e]);
     let rans <- runtime_held_each(List::range(called.len()), λ j => match called.nth(j).unwrap_or(None) {
         None => pure(None),

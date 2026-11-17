@@ -4,7 +4,7 @@ use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalSubst, Term, Type};
 
 use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 
@@ -412,7 +412,8 @@ impl Checking<'_> {
                     && named.is_empty() =>
             {
                 let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF_DEFAULT);
-                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
+                let is_default = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_DEFAULT);
+                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, is_default, expected, lvl, e.span)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
@@ -477,7 +478,16 @@ impl Checking<'_> {
                         goal_combinators::check_refl_leaf(self, cx, body, &goal, e.span)?;
                         // A leaf that fails says which case it failed in, as
                         // the source tests it.
-                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots).map_err(|error| match error {
+                        // A hole in the block is this case's own goal.
+                        let leaf = || self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots);
+                        let checked = if crate::count_holes_expr(body) > 0 {
+                            let names: Vec<&str> = cx.names.iter().collect();
+                            let key = format!("{}|{}", goal_combinators::case_path(self, cx, e.span).unwrap_or_default(), names.join(","));
+                            self.attempt.goal_arena.in_leaf(key, leaf)
+                        } else {
+                            leaf()
+                        };
+                        checked.map_err(|error| match error {
                             crate::ElabError::Elab { msg, span } if !msg.contains("in the case") => match goal_combinators::case_path(self, cx, e.span) {
                                 Some(cases) => crate::ElabError::Elab { msg: format!("{msg}\n  in the `split_all` case {cases}"), span },
                                 None => crate::ElabError::Elab { msg, span },
@@ -576,28 +586,52 @@ impl Checking<'_> {
                     (None, Some(dec)) => Generalize(self).varying_params(cx, arms, dec),
                     (None, None) => Vec::new(),
                 };
-                // With `match h:` the convoy's equation is stated about the
-                // computed scrutinee itself, and an arm that passes `h` to a
-                // hypothesis needs that hypothesis about the same term, so
-                // neither is refined (design §5.1). A local scrutinee still
-                // refines what the arms name and the goal mentions, but not
-                // a hypothesis that takes an equation about it: that one is
-                // what `h` is passed to, `g: (b = False) → A` at
-                // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md).
-                let refines = eqbind.is_none() || matches!(scrut_t, Term::Var(_));
-                let convoy = eqbind.is_some();
-                for p in refines.then(|| Generalize(self).refined_hypotheses(cx, arms, &scrut_t, dec, expected, convoy)).unwrap_or_default() {
+                // The hypotheses the match refines, with `match h:` as
+                // without: what the arms name and the goal mentions, but not
+                // a hypothesis that takes an equation about the scrutinee,
+                // which is what `h` is passed to, `g: (b = False) → A` at
+                // `False => g(h)` (issues/match-eqbind-refines-hypothesis-it-is-passed-to.md,
+                // issues/case-split-refines-hypotheses-under-calls.md).
+                let refined = Generalize(self).refined_hypotheses(
+                    cx, arms, (&scrut_t, &scrut_ty, &scrut_lvl), dec, expected, eqbind.as_deref(), e.span,
+                );
+                let unrefined = positions.clone();
+                for &p in &refined.positions {
                     if !positions.contains(&p) {
                         positions.push(p);
                     }
                 }
                 positions.sort_unstable();
                 if !positions.is_empty() {
-                    let (gen_ty, gen_lvl) =
-                        Generalize(self).generalize_expected(cx, &positions, expected, lvl);
-                    let motive = matching::synthesize_motive(
+                    // A hypothesis read through a call is spelled with the
+                    // scrutinee, which the syntactic rung finds first; the
+                    // goal is spelled so too, at the motive it gets alone,
+                    // or the rung that finds the hypothesis would leave a
+                    // goal only a later rung reaches as it is.
+                    let goal = if refined.retyped.is_empty() {
+                        expected.clone()
+                    } else {
+                        matching::synthesize_motive(self.0, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span)
+                            .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())))
+                    };
+                    let (mut gen_ty, mut gen_lvl) =
+                        Generalize(self).generalize_retyped(cx, &positions, &refined.retyped, &goal, lvl);
+                    let mut motive = matching::synthesize_motive(
                         self.0, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
                     );
+                    // A hypothesis read through a call is abstracted by the
+                    // syntactic rung, which checks nothing; if the motive
+                    // that makes is ill-formed, the match refines what it
+                    // did before (goal-motive-synthesis-design §4.7).
+                    if !refined.retyped.is_empty()
+                        && !matching::MotiveSynthesisElab::motive_well_formed(self.0, cx, &motive, &scrut_ty, &scrut_lvl)
+                    {
+                        positions.retain(|p| !refined.retyped.iter().any(|(q, _)| q == p) || unrefined.contains(p));
+                        (gen_ty, gen_lvl) = Generalize(self).generalize_expected(cx, &positions, expected, lvl);
+                        motive = matching::synthesize_motive(
+                            self.0, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
+                        );
+                    }
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();

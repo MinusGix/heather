@@ -210,6 +210,44 @@ record Known {
     consts: List<Pair<List<Nat>, Nat>> := [],
 }
 
+// A buffer a program makes for itself, read as a parameter after the
+// function's own: a byte string it writes, by its bytes (`Written`, §5 D3), or a
+// local that starts as `n` zero bytes, `List::replicate(0, n)` (§5 D2).
+inductive ConstInit { Written(bs: List<Nat>), Zeros(count: Nat) }
+
+// The byte strings among the buffers found, each at the level `0`: what
+// `Known::const_level` looks a string up in while they are being found.
+fn ConstInit::strings(found: List<Pair<ConstInit, Handle>>) → List<Pair<List<Nat>, Nat>> {
+    match found {
+        Nil => [],
+        Cons(c, rest) => match c.fst { Written(bs) => Cons(Pair(bs, 0), ConstInit::strings(rest)), Zeros(_) => ConstInit::strings(rest) },
+    }
+}
+
+// The byte strings among the buffers placed, each at its level
+// (`Known::consts`).
+fn ConstInit::string_levels(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) → List<Pair<List<Nat>, Nat>> {
+    match placed {
+        Nil => [],
+        Cons(c, rest) => match c.fst.fst {
+            Written(bs) => Cons(Pair(bs, c.snd), ConstInit::string_levels(rest)),
+            Zeros(_) => ConstInit::string_levels(rest),
+        },
+    }
+}
+
+// The zeroed locals among the buffers placed, each its term's handle at
+// its level: the reading meets the term as that variable (`RSt::handles`).
+fn ConstInit::zeroed_handles(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) → List<Pair<Nat, Nat>> {
+    match placed {
+        Nil => [],
+        Cons(c, rest) => match c.fst.fst {
+            Written(_) => ConstInit::zeroed_handles(rest),
+            Zeros(_) => Cons(Pair(c.fst.snd.id, c.snd), ConstInit::zeroed_handles(rest)),
+        },
+    }
+}
+
 fn Known::within(self k: Known, sc: SelfCall) → Known {
     Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts)
 }
@@ -677,6 +715,24 @@ fn rt_const_bytes(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Option<List<N
     }
 }
 
+// `List::replicate`'s arguments when they make a zeroed buffer: its byte
+// the literal 0 and its count a numeral, the count. `None` otherwise.
+fn rt_const_zeros(k: Known, st: RSt, args: List<Handle>) → Tac<Option<Nat>> {
+    match args.rev() {
+        Cons(n, more) => match more {
+            Cons(b, _) => rt_const_byte(64, k, st, b).bind(λ byte => match byte {
+                Some(v) => match v.same(0) {
+                    True => numeral(Hd(n)).bind(λ c => match c { Accepted(count) => pure(Some(count)), Refused(_) => pure(None) }),
+                    False => pure(None),
+                },
+                None => pure(None),
+            }),
+            Nil => pure(None),
+        },
+        Nil => pure(None),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The walk. One function, by fuel (a reflection is a `Tac`, not structural
 // recursion on a term the reflector holds): `operand` asks for a variable.
@@ -775,7 +831,7 @@ fn Known::elements_at(named: List<FieldTerm>, x: Nat, field: String) → Option<
 
 // The word element `i` lies at, as a term.
 fn ElementTerm::place(self e: ElementTerm, i: Nat) → Tac<Expr> {
-    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    let of_nat <- lookup("bitvec::BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
     pure(App(App(Global(of_nat), NatLit(64)), NatLit(e.base + i * e.stride)))
 }
 
@@ -790,8 +846,8 @@ fn ElementTerm::reads(self e: ElementTerm, i: Nat) → Tac<Pair<Handle, Handle>>
 // The accessor's checked read of the element at the word `i`, at the
 // element's type.
 fn ElementTerm::reads_at(self e: ElementTerm, i: Handle) → Tac<ElementRead> {
-    let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
-    let bitvec <- lookup("BitVec").bind(λ c => rt_accepted("`BitVec`", c));
+    let of_nat <- lookup("bitvec::BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+    let bitvec <- lookup("bitvec::BitVec").bind(λ c => rt_accepted("`BitVec`", c));
     let word_t <- as_type(App(Global(bitvec), NatLit(64))).bind(λ c => rt_accepted("a word's type", c));
     let x <- assume(Hd(word_t), "index", Some(e.under)).bind(λ c => rt_accepted("an index's local", c));
     let word: Nat → Expr = λ n => App(App(Global(of_nat), NatLit(64)), NatLit(n));
@@ -2137,21 +2193,21 @@ fn rt_reflect_funs(fuel: Nat, k: Known, gs: List<Nat>) → Tac<List<Fun>> {
 // The primitives the reflector knows, by name, resolved where it runs (the
 // caller imports `bitvec`, `bool` and `list`).
 fn rt_prim_names() → List<Pair<String, Prim>> {
-    [Pair("BitVec::add", PWord(0)), Pair("BitVec::sub", PWord(1)), Pair("BitVec::band", PWord(2)),
-     Pair("BitVec::bor", PWord(3)), Pair("BitVec::bxor", PWord(4)), Pair("BitVec::eq_bit", PWord(5)),
-     Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
-     Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
-     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("BitVec::sign_extend", PSext), Pair("List::foldl", PFoldl),
-     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat),
-     Pair("BitVec::truncate", PTrunc), Pair("BitVec::shift_left", PShift(0)), Pair("BitVec::shift_right", PShift(1)),
-     Pair("BitVec::arithmetic_shift_right", PShift(2)), Pair("List::byte_within", PWithin)]
+    [Pair("bitvec::BitVec::add", PWord(0)), Pair("bitvec::BitVec::sub", PWord(1)), Pair("bitvec::BitVec::band", PWord(2)),
+     Pair("bitvec::BitVec::bor", PWord(3)), Pair("bitvec::BitVec::bxor", PWord(4)), Pair("bitvec::BitVec::eq_bit", PWord(5)),
+     Pair("bitvec::BitVec::unsigned_lt_bit", PWord(6)), Pair("bitvec::BitVec::signed_lt_bit", PWord(7)),
+     Pair(name_of(Bool::and), PConj), Pair(name_of(Bool::or), PDisj), Pair(name_of(Bool::not), PNeg),
+     Pair("bitvec::BitVec::ofNat", POfNat), Pair("bitvec::BitVec::zero_extend", PZext), Pair("bitvec::BitVec::sign_extend", PSext), Pair(name_of(List::foldl), PFoldl),
+     Pair(name_of(List::byte_at), PGet), Pair(name_of(List::with_byte), PSet), Pair("bitvec::BitVec::toNat", PToNat),
+     Pair("bitvec::BitVec::truncate", PTrunc), Pair("bitvec::BitVec::shift_left", PShift(0)), Pair("bitvec::BitVec::shift_right", PShift(1)),
+     Pair("bitvec::BitVec::arithmetic_shift_right", PShift(2)), Pair(name_of(List::byte_within), PWithin)]
 }
 
 // The rewritings among the primitives (`PComplement`, `PRotate`), each
 // known where its operation is in scope: a module that does not import
 // `bitvec_rotate` has no `rotr` to call.
 fn rt_derived_names() → List<Pair<String, Prim>> {
-    [Pair("BitVec::complement", PComplement), Pair("BitVec::rotr", PRotate(0)), Pair("BitVec::rotl", PRotate(1))]
+    [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1))]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -2185,9 +2241,9 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_prims_present(rt_derived_names()).bind(λ derived =>
     rt_globals(funs).bind(λ gs =>
     rt_recs(recs).bind(λ rs =>
-    rt_global("BitVec").bind(λ bv =>
-    rt_global("Bool").bind(λ bo =>
-    rt_global("List").bind(λ li =>
+    rt_global("bitvec::BitVec").bind(λ bv =>
+    rt_global(name_of(Bool)).bind(λ bo =>
+    rt_global(name_of(List)).bind(λ li =>
     rt_global("Nat").bind(λ na =>
     pure(Known(base ++ derived, gs, rs, discover, bv, bo, li, None, na, None, [], 0, None, []))))))))))
 }
