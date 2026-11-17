@@ -396,7 +396,6 @@ fn Circ::and_gate(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.push(GAnd(a, 
 // Whether two literals are one: `a ∧ a` is `a` and `a ∧ ¬a` is false, so
 // neither needs a gate.
 
-
 fn Lit::same(self a, b: Lit) → Bool {
     match a {
         Pos(x) => match b { Pos(y) => x.same(y), Neg(_) => False },
@@ -469,7 +468,6 @@ theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node
         trans(trans(here, made), sym(Bool::and_cong(c.grows_value(d, cd, a, va, env), c.grows_value(d, cd, b, vb, env))))
     }⟩⟩
 }
-
 
 theorem Lit::same_value(self a, b: Lit, e: a.same(b) = True, v: Nat → Bool): a.value(v) = b.value(v) {
     match a {
