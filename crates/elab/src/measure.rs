@@ -2948,9 +2948,11 @@ impl<'a> Rewrite<'a> {
     /// value, unless that reads the recursion. [`Respell`] binds the same
     /// for a `let` it walks through, so an obligation it re-emits selects
     /// the binders `f#body`'s did.
-    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr) -> Binder {
+    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr, opaque: bool) -> Binder {
         let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
-        let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+        // An opaque `let` is a binder of its type to every query after it:
+        // its value (a proof found once) is not elaborated again by each.
+        let value = (!opaque && !self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
         Binder { name: name.to_string(), ty: inferred, value }
     }
 
@@ -2965,7 +2967,7 @@ impl<'a> Rewrite<'a> {
             } => {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
-                let binder = self.let_binder(name, ty, expr);
+                let binder = self.let_binder(name, ty, expr, *opaque);
                 let expr = self.expr(expr);
                 self.scope.push(binder);
                 Stmt::Let {
@@ -3811,7 +3813,7 @@ impl Respell<'_> {
                 let (scope_n, env_n) = (self.rw.scope.len(), self.let_env.len());
                 let mut out = Ok(());
                 for st in &b.stmts {
-                    let Stmt::Let { name, ty, expr, .. } = st else {
+                    let Stmt::Let { name, ty, expr, opaque, .. } = st else {
                         out = Err("a destructuring or `code` binding in the body".to_string());
                         break;
                     };
@@ -3833,7 +3835,7 @@ impl Respell<'_> {
                             _ => None,
                         })
                         .collect();
-                    let binder = self.rw.let_binder(name, ty, expr);
+                    let binder = self.rw.let_binder(name, ty, expr, *opaque);
                     self.rw.scope.push(binder);
                     let after = self.rw.scope.len();
                     // Each value is read before the statement's own

@@ -843,7 +843,7 @@ impl Lift<'_> {
             let inner = match &ty.kind { TyKind::Squash(p) => (**p).clone(), _ => ty.clone() };
             let head = Expr { kind: ExprKind::TyApp { head: Box::new(var("bitvec_omega::found_fact", end)), args: vec![inner] }, span: end };
             let found = call(head, vec![], end);
-            again.stmts.push(Stmt::Let { name: next.clone(), ty: Some(ty), expr: found, span: end, opaque: false });
+            again.stmts.push(Stmt::Let { name: next.clone(), ty: Some(ty), expr: found, span: end, opaque: true });
         }
         let done = || call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), var(o, span)], span);
         let branch = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);

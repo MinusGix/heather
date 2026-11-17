@@ -136,24 +136,34 @@ impl Checking<'_> {
         }))
     }
 
-    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, prop: &Rc<Type>, level: &Level) -> R<Option<Term>> {
+    #[allow(clippy::too_many_arguments)]
+    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, expected: &Type, prop: &Rc<Type>, level: &Level, lvl: &Level) -> R<Squashed> {
         if let ExprKind::App { head, .. } = &e.kind
             && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
         {
-            return Ok(None);
+            return Ok(Squashed::Neither);
         }
         let search = matches!(&e.kind, ExprKind::Hole(_))
             || (crate::surface::count_holes_expr(e) == 0 && crate::defaults::is_discharge(e));
         if !search {
-            let squashed = self.probe(|| match self.elab_infer(cx, e) {
-                Ok((_, got, _)) => self.whnf(cx, &got, e.span).ok().map(|w| matches!(w, Type::Squash { .. })),
-                Err(_) => None,
+            // The inference that tells a squashed argument from a payload is
+            // kept when it answers squashed at the expected type: elaborating
+            // it again would run its own arguments' searches again, and an
+            // argument nested `k` deep in squashed positions would run its
+            // search `2^k` times. `None`: `e` is a proof of `P` itself.
+            let squashed = self.probe_unless(|| match self.elab_infer(cx, e) {
+                Ok((tm, got, _)) => match self.whnf(cx, &got, e.span).ok() {
+                    Some(Type::Squash { .. }) if self.conv_types(cx, &got, expected, lvl) => (Some(Squashed::Whole(tm)), true),
+                    Some(Type::Squash { .. }) | None => (Some(Squashed::Neither), false),
+                    Some(_) => (None, false),
+                },
+                Err(_) => (Some(Squashed::Neither), false),
             });
-            if squashed != Some(false) {
-                return Ok(None);
+            if let Some(squashed) = squashed {
+                return Ok(squashed);
             }
         }
-        self.elab_check(cx, e, prop, level).map(Some)
+        self.elab_check(cx, e, prop, level).map(Squashed::Payload)
     }
 
     /// [`Self::elab_check_hinted`] plus, where the caller has one, the
@@ -418,10 +428,12 @@ impl Checking<'_> {
         if let Some(released) = self.release_squashed_facts(cx, e, expected, lvl) {
             return released;
         }
-        if let Type::Squash { level, ty } = expected
-            && let Some(payload) = self.check_condition_squashed(cx, e, ty, level)?
-        {
-            return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) });
+        if let Type::Squash { level, ty } = expected {
+            match self.check_condition_squashed(cx, e, expected, ty, level, lvl)? {
+                Squashed::Payload(payload) => return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) }),
+                Squashed::Whole(whole) => return Ok(whole),
+                Squashed::Neither => {}
+            }
         }
         if let ExprKind::App {
             head,
@@ -1943,4 +1955,15 @@ impl Checking<'_> {
         let _rollback = matching::MatchRollback::new(self.0);
         self.elab_infer(cx, &call).is_ok()
     }
+}
+
+/// How an argument at a squashed position `∥P∥` was elaborated
+/// ([`Checking::check_condition_squashed`]).
+enum Squashed {
+    /// A proof of `P`, to be squashed.
+    Payload(Term),
+    /// Already a term of the expected `∥P∥`, inferred once and kept.
+    Whole(Term),
+    /// Neither: the ordinary checking routes take it.
+    Neither,
 }
