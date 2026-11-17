@@ -333,18 +333,45 @@ theorem circuit_refuted(env: Nat → Nat → Bool, gs: List<Gate>, out: Lit, ste
 // Building circuits. A circuit under construction knows its size, so that
 // adding a gate never counts the list.
 
-record Circ { gates: List<Gate>, size: Nat }
+// Gates already built, by their inputs' numbers: the and of `a` and `b` is
+// node `x` when `table_find(t, a.code(), b.code())` is `Some(x)`. Building
+// an and gate twice is never needed, so equal subcircuits are one.
+fn table_row_of(o: Option<NatMap<Nat>>) → NatMap<Nat> {
+    match o {
+        None => MEmpty,
+        Some(r) => r,
+    }
+}
 
-fn Circ::empty() → Circ { Circ([GFalse], 1) }
+fn table_row(t: NatMap<NatMap<Nat>>, i: Nat) → NatMap<Nat> { table_row_of(nat_map_get(t, i)) }
+
+fn table_find(t: NatMap<NatMap<Nat>>, i, j: Nat) → Option<Nat> { nat_map_get(table_row(t, i), j) }
+
+fn table_note(t: NatMap<NatMap<Nat>>, i, j, x: Nat) → NatMap<NatMap<Nat>> { nat_map_set(t, i, nat_map_set(table_row(t, i), j, x)) }
+
+record Circ { gates: List<Gate>, size: Nat, table: NatMap<NatMap<Nat>> }
+
+fn Circ::empty() → Circ { Circ([GFalse], 1, MEmpty) }
 
 // The circuit's values at the inputs `env`.
 fn Circ::at(self c: Circ, env: Nat → Nat → Bool) → Nat → Bool { valuation(env, c.gates) }
 
-fn Circ::push(self c: Circ, g: Gate) → Pair<Circ, Lit> { Pair(Circ(Cons(g, c.gates), Succ(c.size)), Pos(c.size)) }
+fn Circ::push(self c: Circ, g: Gate) → Pair<Circ, Lit> { Pair(Circ(Cons(g, c.gates), Succ(c.size), c.table), Pos(c.size)) }
 
-// A circuit as built: its size is its gates' count, and node 0 is false.
+// What the table says of node `x`: it is the and of `a` and `b`, all three
+// nodes of `c`.
+fn Circ::Entry(self c: Circ, a, b: Lit, x: Nat) → Type {
+    (x < c.size) ∧ ((a.node() < c.size) ∧ ((b.node() < c.size) ∧ ((env: Nat → Nat → Bool) → c.at(env)(x) = a.value(c.at(env)) && b.value(c.at(env)))))
+}
+
+fn Circ::Shares(self c: Circ) → Type {
+    (a, b: Lit) → (x: Nat) → table_find(c.table, a.code(), b.code()) = Some(x) → c.Entry(a, b, x)
+}
+
+// A circuit as built: its size is its gates' count, node 0 is false, and
+// its table is right.
 fn Circ::Good(self c: Circ) → Type {
-    (c.size = c.gates.len()) ∧ ((1 <= c.size) ∧ ((env: Nat → Nat → Bool) → c.at(env)(0) = False))
+    (c.size = c.gates.len()) ∧ ((1 <= c.size) ∧ (((env: Nat → Nat → Bool) → c.at(env)(0) = False) ∧ c.Shares()))
 }
 
 // `d` is `c` with gates added: the nodes of `c` keep their values.
@@ -352,8 +379,69 @@ fn Circ::Grows(self c, d: Circ) → Type {
     d.Good() ∧ ((c.size <= d.size) ∧ ((env: Nat → Nat → Bool) → (y: Nat) → y < c.size → d.at(env)(y) = c.at(env)(y)))
 }
 
+// What noting a gate leaves: every other entry, and the one it adds.
+theorem table_find_note(t: NatMap<NatMap<Nat>>, i, j, x, k, l: Nat):
+    Or<table_find(table_note(t, i, j, x), k, l) = table_find(t, k, l), And<i = k, And<j = l, table_find(table_note(t, i, j, x), k, l) = Some(x)>>> {
+    let r = nat_map_set(table_row(t, i), j, x);
+    match i.eq_dec(k) {
+        Inr(ne) => Inl(cong_fn(λ (o: Option<NatMap<Nat>>) => nat_map_get(table_row_of(o), l), nat_map_get_set_other(t, i, r, k, ne))),
+        Inl(ik) => {
+            let here: (table_row(table_note(t, i, j, x), i) = r) = cong_fn(table_row_of, nat_map_get_set_same(t, i, r));
+            match j.eq_dec(l) {
+                Inl(jl) => {
+                    let hit: (table_find(table_note(t, i, j, x), i, l) = Some(x)) =
+                        trans(cong_fn(λ (q: NatMap<Nat>) => nat_map_get(q, l), here), j(jl, λ z _ => nat_map_get(r, z) = Some(x), nat_map_get_set_same(table_row(t, i), j, x)));
+                    Inr(And(ik, And(jl, j(ik, λ z _ => table_find(table_note(t, i, j, x), z, l) = Some(x), hit))))
+                },
+                Inr(ne) => {
+                    let miss: (table_find(table_note(t, i, j, x), i, l) = table_find(t, i, l)) =
+                        trans(cong_fn(λ (q: NatMap<Nat>) => nat_map_get(q, l), here), nat_map_get_set_other(table_row(t, i), j, x, l, ne));
+                    Inl(j(ik, λ z _ => table_find(table_note(t, i, j, x), z, l) = table_find(t, z, l), miss))
+                },
+            }
+        },
+    }
+}
+
+// Two literals with one number are one literal.
+theorem Lit::code_inj(self a, b: Lit): a.code() = b.code() → a = b {
+    match a {
+        Pos(x) => match b {
+            Pos(y) => λ (e: x * 2 = y * 2) => {
+                let same: (x = y) = omega(e);
+                cong_fn(λ (n: Nat) => Pos(n), same)
+            },
+            Neg(y) => λ (e: x * 2 = Succ(y * 2)) => {
+                let no: (False) = omega(e);
+                false_elim(no)
+            },
+        },
+        Neg(x) => match b {
+            Pos(y) => λ (e: Succ(x * 2) = y * 2) => {
+                let no: (False) = omega(e);
+                false_elim(no)
+            },
+            Neg(y) => λ (e: Succ(x * 2) = Succ(y * 2)) => {
+                let same: (x = y) = omega(e);
+                cong_fn(λ (n: Nat) => Neg(n), same)
+            },
+        },
+    }
+}
+
+// An entry of `c` is one of any `d` that keeps the nodes of `c`.
+theorem Circ::entry_keeps(self c, d: Circ, le: c.size <= d.size, keeps: (env: Nat → Nat → Bool) → (y: Nat) → y < c.size → d.at(env)(y) = c.at(env)(y), a, b: Lit, x: Nat, e: c.Entry(a, b, x)): d.Entry(a, b, x) {
+    ⟨Nat::lt_of_lt_of_le(x, c.size, d.size, e.left, le), ⟨Nat::lt_of_lt_of_le(a.node(), c.size, d.size, e.right.left, le), ⟨Nat::lt_of_lt_of_le(b.node(), c.size, d.size, e.right.right.left, le), λ env =>
+        trans(keeps(env, x, e.left), trans(e.right.right.right(env),
+            sym(Bool::and_cong(a.value_agree(d.at(env), c.at(env), keeps(env, a.node(), e.right.left)), b.value_agree(d.at(env), c.at(env), keeps(env, b.node(), e.right.right.left))))))⟩⟩⟩
+}
+
+theorem Circ::shares_keeps(self c, d: Circ, same: d.table = c.table, le: c.size <= d.size, keeps: (env: Nat → Nat → Bool) → (y: Nat) → y < c.size → d.at(env)(y) = c.at(env)(y), sh: c.Shares()): d.Shares() {
+    λ a b x found => c.entry_keeps(d, le, keeps, a, b, x, sh(a, b, x, trans(cong_fn(λ (t: NatMap<NatMap<Nat>>) => table_find(t, a.code(), b.code()), sym(same)), found)))
+}
+
 theorem Circ::empty_good(): Circ::empty().Good() {
-    ⟨refl, ⟨trivial, λ env => node_of_set_same(MEmpty, 0, False)⟩⟩
+    ⟨refl, ⟨trivial, ⟨λ env => node_of_set_same(MEmpty, 0, False), λ a b x found => Option::none_ne_some(x, found, Circ::empty().Entry(a, b, x))⟩⟩⟩
 }
 
 theorem Circ::grows_refl(self c: Circ, good: c.Good()): c.Grows(c) {
@@ -370,12 +458,18 @@ theorem Circ::grows_value(self c, d: Circ, g: c.Grows(d), l: Lit, valid: l.node(
     l.value_agree(d.at(env), c.at(env), g.right.right(env, l.node(), valid))
 }
 
+// A literal of `c` is one of every circuit grown from `c`.
+theorem Circ::grows_valid(self c, d: Circ, g: c.Grows(d), l: Lit, valid: l.node() < c.size): l.node() < d.size {
+    Nat::lt_of_lt_of_le(l.node(), c.size, d.size, valid, g.right.left)
+}
+
 theorem Circ::push_grows(self c: Circ, good: c.Good(), g: Gate): c.Grows(c.push(g).fst) {
     let len: (c.gates.len() = c.size) = sym(good.left);
     let keeps: ((env: Nat → Nat → Bool) → (y: Nat) → y < c.size → c.push(g).fst.at(env)(y) = c.at(env)(y)) =
         λ env y lt => node_of_set_other(values(env, c.gates), c.gates.len(), gate_value(env, values(env, c.gates), c.gates.len(), g), y, λ same => Nat::lt_irrefl(y)(j(sym(trans(sym(same), len)), λ z _ => y < z, lt)));
-    ⟨⟨Nat::cong_succ(good.left), ⟨trivial, λ env => trans(keeps(env, 0, good.right.left), good.right.right(env))⟩⟩,
-        ⟨Nat::le_succ_r(c.size, c.size, Nat::le_refl(c.size)), keeps⟩⟩
+    let le: (c.size <= Succ(c.size)) = Nat::le_succ_r(c.size, c.size, Nat::le_refl(c.size));
+    ⟨⟨Nat::cong_succ(good.left), ⟨trivial, ⟨λ env => trans(keeps(env, 0, good.right.left), good.right.right.left(env)), c.shares_keeps(c.push(g).fst, refl, le, keeps, good.right.right.right)⟩⟩⟩,
+        ⟨le, keeps⟩⟩
 }
 
 // The new node's value is the gate's.
@@ -391,7 +485,28 @@ fn Circ::Makes(self c: Circ, r: Pair<Circ, Lit>, f: (Nat → Bool) → Bool) →
     c.Grows(r.fst) ∧ ((r.snd.node() < r.fst.size) ∧ ((d: Circ) → r.fst.Grows(d) → (env: Nat → Nat → Bool) → r.snd.value(d.at(env)) = f(d.at(env))))
 }
 
-fn Circ::and_gate(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.push(GAnd(a, b)) }
+fn Circ::noted(self c: Circ, a, b: Lit, x: Nat) → Circ { Circ(c.gates, c.size, table_note(c.table, a.code(), b.code(), x)) }
+
+// A new and gate, noted in the table.
+fn Circ::and_gate(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { Pair(c.push(GAnd(a, b)).fst.noted(a, b, c.size), Pos(c.size)) }
+
+// The and of `a` and `b`, found in the table or built.
+fn Circ::and_found(self c: Circ, o: Option<Nat>, a, b: Lit) → Pair<Circ, Lit> {
+    match o {
+        None => c.and_gate(a, b),
+        Some(x) => Pair(c, Pos(x)),
+    }
+}
+
+fn Circ::and_new(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.and_found(table_find(c.table, a.code(), b.code()), a, b) }
+
+// The inputs in order of their numbers, so that `a ∧ b` finds `b ∧ a`.
+fn Circ::and_ordered(self c: Circ, swap: Bool, a, b: Lit) → Pair<Circ, Lit> {
+    match swap {
+        True => c.and_new(b, a),
+        False => c.and_new(a, b),
+    }
+}
 
 // Whether two literals are one: `a ∧ a` is `a` and `a ∧ ¬a` is false, so
 // neither needs a gate.
@@ -408,7 +523,7 @@ fn Circ::and_same(self c: Circ, same, opposite: Bool, a, b: Lit) → Pair<Circ, 
         True => Pair(c, a),
         False => match opposite {
             True => Pair(c, Pos(0)),
-            False => c.and_gate(a, b),
+            False => c.and_ordered(Succ(b.code()).leb(a.code()), a, b),
         },
     }
 }
@@ -456,17 +571,75 @@ theorem Lit::not_node(self l: Lit): l.not().node() = l.node() {
     match l { Pos(_) => refl, Neg(_) => refl }
 }
 
-theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_gate(a, b), λ v => a.value(v) && b.value(v)) {
+// The new gate's node is the and of its inputs.
+theorem Circ::and_gate_value(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size, env: Nat → Nat → Bool):
+    c.push(GAnd(a, b)).fst.at(env)(c.size) = a.value(c.push(GAnd(a, b)).fst.at(env)) && b.value(c.push(GAnd(a, b)).fst.at(env)) {
+    let p = c.push(GAnd(a, b)).fst;
     let g = c.push_grows(good, GAnd(a, b));
     let ok: (a.below(c.size) && b.below(c.size) = True) = Bool::and_true_of(a.below(c.size), b.below(c.size), Nat::leb_true(Succ(a.node()), c.size, va), Nat::leb_true(Succ(b.node()), c.size, vb));
-    ⟨g, ⟨Nat::le_refl(Succ(c.size)), λ d later env => {
-        let cd = c.grows_trans(c.push(GAnd(a, b)).fst, d, g, later);
-        let here: (Pos(c.size).value(d.at(env)) = Pos(c.size).value(c.push(GAnd(a, b)).fst.at(env))) =
-            c.push(GAnd(a, b)).fst.grows_value(d, later, Pos(c.size), Nat::le_refl(Succ(c.size)), env);
-        let made: (c.push(GAnd(a, b)).fst.at(env)(c.size) = and_value(True, values(env, c.gates), a, b)) =
-            trans(c.push_value(good, GAnd(a, b), env), cong_fn(λ (t: Bool) => and_value(t, values(env, c.gates), a, b), ok));
-        trans(trans(here, made), sym(Bool::and_cong(c.grows_value(d, cd, a, va, env), c.grows_value(d, cd, b, vb, env))))
+    let made: (p.at(env)(c.size) = and_value(True, values(env, c.gates), a, b)) =
+        trans(c.push_value(good, GAnd(a, b), env), cong_fn(λ (t: Bool) => and_value(t, values(env, c.gates), a, b), ok));
+    trans(made, sym(Bool::and_cong(c.grows_value(p, g, a, va, env), c.grows_value(p, g, b, vb, env))))
+}
+
+// Noting the new gate keeps the table right.
+theorem Circ::and_noted_grows(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.push(GAnd(a, b)).fst.Grows(c.and_gate(a, b).fst) {
+    let p = c.push(GAnd(a, b)).fst;
+    let n = c.and_gate(a, b).fst;
+    let g = c.push_grows(good, GAnd(a, b));
+    let fresh: n.Entry(a, b, c.size) =
+        ⟨Nat::le_refl(Succ(c.size)), ⟨c.grows_valid(p, g, a, va), ⟨c.grows_valid(p, g, b, vb), λ env => c.and_gate_value(good, a, b, va, vb, env)⟩⟩⟩;
+    let shares: n.Shares() = λ a1 b1 y found => match table_find_note(p.table, a.code(), b.code(), c.size, a1.code(), b1.code()) {
+        Inl(kept) => {
+            let old: p.Entry(a1, b1, y) = g.left.right.right.right(a1, b1, y, trans(sym(kept), found));
+            old
+        },
+        Inr(hit) => {
+            let ea: (a = a1) = a.code_inj(a1)(hit.left);
+            let eb: (b = b1) = b.code_inj(b1)(hit.right.left);
+            let ey: (c.size = y) = Option::some_inj(c.size, y, trans(sym(hit.right.right), found));
+            j(ey, λ z _ => n.Entry(a1, b1, z), j(eb, λ z _ => n.Entry(a1, z, c.size), j(ea, λ z _ => n.Entry(z, b, c.size), fresh)))
+        },
+    };
+    ⟨⟨g.left.left, ⟨g.left.right.left, ⟨g.left.right.right.left, shares⟩⟩⟩, ⟨Nat::le_refl(p.size), λ env y _ => refl⟩⟩
+}
+
+theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_gate(a, b), λ v => a.value(v) && b.value(v)) {
+    let p = c.push(GAnd(a, b)).fst;
+    let n = c.and_gate(a, b).fst;
+    let g = c.push_grows(good, GAnd(a, b));
+    let pn = c.and_noted_grows(good, a, b, va, vb);
+    ⟨c.grows_trans(p, n, g, pn), ⟨Nat::le_refl(Succ(c.size)), λ d later env => {
+        let pd = p.grows_trans(n, d, pn, later);
+        let cd = c.grows_trans(p, d, g, pd);
+        let here: (Pos(c.size).value(d.at(env)) = Pos(c.size).value(p.at(env))) = p.grows_value(d, pd, Pos(c.size), Nat::le_refl(Succ(c.size)), env);
+        let pa: (a.value(p.at(env)) = a.value(d.at(env))) = trans(c.grows_value(p, g, a, va, env), sym(c.grows_value(d, cd, a, va, env)));
+        let pb: (b.value(p.at(env)) = b.value(d.at(env))) = trans(c.grows_value(p, g, b, vb, env), sym(c.grows_value(d, cd, b, vb, env)));
+        trans(trans(here, c.and_gate_value(good, a, b, va, vb, env)), Bool::and_cong(pa, pb))
     }⟩⟩
+}
+
+// A gate the table names is the and it was noted for.
+theorem Circ::and_found_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size, o: Option<Nat>, e: table_find(c.table, a.code(), b.code()) = o):
+    c.Makes(c.and_found(o, a, b), λ v => a.value(v) && b.value(v)) {
+    (match o as λ q => table_find(c.table, a.code(), b.code()) = q → c.Makes(c.and_found(q, a, b), λ v => a.value(v) && b.value(v)) {
+        None => λ _ => c.and_gate_makes(good, a, b, va, vb),
+        Some(x) => λ e => {
+            let en = good.right.right.right(a, b, x, e);
+            ⟨c.grows_refl(good), ⟨en.left, λ d later env =>
+                trans(later.right.right(env, x, en.left), trans(en.right.right.right(env), sym(Bool::and_cong(c.grows_value(d, later, a, va, env), c.grows_value(d, later, b, vb, env)))))⟩⟩
+        },
+    })(e)
+}
+
+theorem Circ::and_ordered_makes(self c: Circ, good: c.Good(), swap: Bool, a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.and_ordered(swap, a, b), λ v => a.value(v) && b.value(v)) {
+    match swap {
+        True => {
+            let m = c.and_found_makes(good, b, a, vb, va, table_find(c.table, b.code(), a.code()), refl);
+            ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), b.value(d.at(env)).and_comm(a.value(d.at(env))))⟩⟩
+        },
+        False => c.and_found_makes(good, a, b, va, vb, table_find(c.table, a.code(), b.code()), refl),
+    }
 }
 
 theorem Lit::same_value(self a, b: Lit, e: a.same(b) = True, v: Nat → Bool): a.value(v) = b.value(v) {
@@ -494,9 +667,9 @@ theorem Circ::and_same_makes(self c: Circ, good: c.Good(), same, opposite: Bool,
         False => λ sv => (match opposite as λ o => (o = True → (v: Nat → Bool) → a.value(v) = !b.value(v)) → c.Makes(c.and_same(False, o, a, b), λ v => a.value(v) && b.value(v)) {
             True => λ ov => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => {
                 let v = d.at(env);
-                trans(later.left.right.right(env), sym(trans(Bool::and_cong(ov(refl, v), refl), Bool::not_and_self(b.value(v)))))
+                trans(later.left.right.right.left(env), sym(trans(Bool::and_cong(ov(refl, v), refl), Bool::not_and_self(b.value(v)))))
             }⟩⟩,
-            False => λ ov => c.and_gate_makes(good, a, b, va, vb),
+            False => λ ov => c.and_ordered_makes(good, Succ(b.code()).leb(a.code()), a, b, va, vb),
         })(ov),
     })(sv)
 }
@@ -528,20 +701,20 @@ theorem Circ::and_with_makes(self c: Circ, good: c.Good(), ka, kb: Option<Bool>,
     (match ka as λ k => Lit::Means(k, a) → c.Makes(c.and_with(k, kb, a, b), λ v => a.value(v) && b.value(v)) {
         Some(t) => λ ma => (match t as λ s => Lit::Means(Some(s), a) → c.Makes(c.and_with(Some(s), kb, a, b), λ v => a.value(v) && b.value(v)) {
             False => λ ma => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => {
-                let z = later.left.right.right(env);
+                let z = later.left.right.right.left(env);
                 trans(z, sym(cong_fn(λ (x: Bool) => x && b.value(d.at(env)), ma(False, refl, d.at(env), z))))
             }⟩⟩,
             True => λ ma => ⟨c.grows_refl(good), ⟨vb, λ d later env =>
-                sym(cong_fn(λ (x: Bool) => x && b.value(d.at(env)), ma(True, refl, d.at(env), later.left.right.right(env))))⟩⟩,
+                sym(cong_fn(λ (x: Bool) => x && b.value(d.at(env)), ma(True, refl, d.at(env), later.left.right.right.left(env))))⟩⟩,
         })(ma),
         None => λ ma => (match kb as λ k => Lit::Means(k, b) → c.Makes(c.and_with(None, k, a, b), λ v => a.value(v) && b.value(v)) {
             Some(t) => λ mb => (match t as λ s => Lit::Means(Some(s), b) → c.Makes(c.and_with(None, Some(s), a, b), λ v => a.value(v) && b.value(v)) {
                 False => λ mb => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => {
-                    let z = later.left.right.right(env);
+                    let z = later.left.right.right.left(env);
                     trans(z, sym(trans(cong_fn(λ (x: Bool) => a.value(d.at(env)) && x, mb(False, refl, d.at(env), z)), a.value(d.at(env)).and_false_r())))
                 }⟩⟩,
                 True => λ mb => ⟨c.grows_refl(good), ⟨va, λ d later env =>
-                    sym(trans(cong_fn(λ (x: Bool) => a.value(d.at(env)) && x, mb(True, refl, d.at(env), later.left.right.right(env))), a.value(d.at(env)).and_true_r()))⟩⟩,
+                    sym(trans(cong_fn(λ (x: Bool) => a.value(d.at(env)) && x, mb(True, refl, d.at(env), later.left.right.right.left(env))), a.value(d.at(env)).and_true_r()))⟩⟩,
             })(mb),
             None => λ mb => c.and_fresh_makes(good, a, b, va, vb),
         })(mb),
@@ -558,11 +731,6 @@ theorem Circ::or_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c
         trans(c.and(a.not(), b.not()).snd.not_value(d.at(env)),
             trans(cong_fn(λ (x: Bool) => !x, r.right.right(d, later, env)),
                 trans(cong_fn(λ (x: Bool) => !x, Bool::and_cong(a.not_value(d.at(env)), b.not_value(d.at(env)))), Bool::not_and_not(a.value(d.at(env)), b.value(d.at(env))))))⟩⟩
-}
-
-// A literal of `c` is one of every circuit grown from `c`.
-theorem Circ::grows_valid(self c, d: Circ, g: c.Grows(d), l: Lit, valid: l.node() < c.size): l.node() < d.size {
-    Nat::lt_of_lt_of_le(l.node(), c.size, d.size, valid, g.right.left)
 }
 
 theorem Circ::xor_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.xor(a, b), λ v => a.value(v).xor(b.value(v))) {
@@ -836,7 +1004,7 @@ fn Circ::equal({n: Nat}, self c: Circ, xs, ys: [Lit; n]) → Pair<Circ, Lit> {
 theorem Circ::equal_makes(n: Nat, c: Circ, good: c.Good(), xs, ys: [Lit; n], vx: word_valid(xs, c.size), vy: word_valid(ys, c.size)):
     c.Makes(c.equal(xs, ys), λ v => word_value(xs, v).eq_bit(word_value(ys, v))) {
     match n {
-        Zero => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => cong_fn(λ (b: Bool) => !b, later.left.right.right(env))⟩⟩,
+        Zero => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => cong_fn(λ (b: Bool) => !b, later.left.right.right.left(env))⟩⟩,
         Succ(k) => {
             let r1 = c.xor(head(xs), head(ys));
             let m1 = c.xor_makes(good, head(xs), head(ys), vx.left, vy.left);
@@ -875,26 +1043,26 @@ fn Circ::BlastsLit(K: Nat, build: Circ → Pair<Circ, Lit>, f: (Nat → Bool) �
 theorem Circ::blasts_word_eq(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f, g: (Nat → Bool) → BitVec(n), h: Circ::BlastsWord(K, b, f), e: (v: Nat → Bool) → v(0) = False → f(v) = g(v)): Circ::BlastsWord(K, b, g) {
     λ c good kin => {
         let m = h(c, good, kin);
-        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env), later.left.right.right(env)))⟩⟩
+        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env), later.left.right.right.left(env)))⟩⟩
     }
 }
 
 theorem Circ::blasts_lit_eq(K: Nat, b: Circ → Pair<Circ, Lit>, f, g: (Nat → Bool) → Bool, h: Circ::BlastsLit(K, b, f), e: (v: Nat → Bool) → v(0) = False → f(v) = g(v)): Circ::BlastsLit(K, b, g) {
     λ c good kin => {
         let m = h(c, good, kin);
-        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env), later.left.right.right(env)))⟩⟩
+        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env), later.left.right.right.left(env)))⟩⟩
     }
 }
 
 // A word that needs no gates.
 theorem Circ::pure_blasts(n, K: Nat, ws: [Lit; n], f: (Nat → Bool) → BitVec(n), valid: (size: Nat) → K < size → word_valid(ws, size), value: (v: Nat → Bool) → v(0) = False → word_value(ws, v) = f(v)):
     Circ::BlastsWord(K, λ c => Pair(c, ws), f) {
-    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right(env))⟩⟩
+    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right.left(env))⟩⟩
 }
 
 theorem Circ::pure_lit_blasts(K: Nat, l: Lit, f: (Nat → Bool) → Bool, valid: (size: Nat) → K < size → l.node() < size, value: (v: Nat → Bool) → v(0) = False → l.value(v) = f(v)):
     Circ::BlastsLit(K, λ c => Pair(c, l), f) {
-    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right(env))⟩⟩
+    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right.left(env))⟩⟩
 }
 
 fn Circ::not_word({n: Nat}, r: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n]> { Pair(r.fst, word_not(r.snd)) }
@@ -1282,7 +1450,7 @@ theorem Circ::map_blasts(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f: (Nat �
     λ c good kin => {
         let m = h(c, good, kin);
         ⟨m.left, ⟨tvalid(b(c).snd, b(c).fst.size, m.left.left.right.left, m.right.left), λ d later env =>
-            trans(tvalue(b(c).snd, d.at(env), later.left.right.right(env)), cong_fn(g, m.right.right(d, later, env)))⟩⟩
+            trans(tvalue(b(c).snd, d.at(env), later.left.right.right.left(env)), cong_fn(g, m.right.right(d, later, env)))⟩⟩
     }
 }
 
@@ -1355,7 +1523,7 @@ fn Circ::Lit2Ok({m1, m2: Nat}, op: Circ → [Lit; m1] → [Lit; m2] → Pair<Cir
 }
 
 theorem Circ::makes_word_eq(n: Nat, c: Circ, r: Pair<Circ, [Lit; n]>, f, g: (Nat → Bool) → BitVec(n), h: c.MakesWord(r, f), e: (v: Nat → Bool) → v(0) = False → f(v) = g(v)): c.MakesWord(r, g) {
-    ⟨h.left, ⟨h.right.left, λ d later env => trans(h.right.right(d, later, env), e(d.at(env), later.left.right.right(env)))⟩⟩
+    ⟨h.left, ⟨h.right.left, λ d later env => trans(h.right.right(d, later, env), e(d.at(env), later.left.right.right.left(env)))⟩⟩
 }
 
 // A word moved without gates.
@@ -1363,14 +1531,14 @@ theorem Circ::moved_ok(m, n: Nat, t: [Lit; m] → [Lit; n], g: BitVec(m) → Bit
     tvalid: (ws: [Lit; m]) → (size: Nat) → 0 < size → word_valid(ws, size) → word_valid(t(ws), size),
     tvalue: (ws: [Lit; m]) → (v: Nat → Bool) → v(0) = False → word_value(t(ws), v) = g(word_value(ws, v))):
     Circ::WordOk(λ c xs => Pair(c, t(xs)), g) {
-    λ c good xs vx => ⟨c.grows_refl(good), ⟨tvalid(xs, c.size, good.right.left, vx), λ d later env => tvalue(xs, d.at(env), later.left.right.right(env))⟩⟩
+    λ c good xs vx => ⟨c.grows_refl(good), ⟨tvalid(xs, c.size, good.right.left, vx), λ d later env => tvalue(xs, d.at(env), later.left.right.right.left(env))⟩⟩
 }
 
 theorem Circ::moved2_ok(m1, m2, n: Nat, t: [Lit; m1] → [Lit; m2] → [Lit; n], g: BitVec(m1) → BitVec(m2) → BitVec(n),
     tvalid: (xs: [Lit; m1]) → (ys: [Lit; m2]) → (size: Nat) → 0 < size → word_valid(xs, size) → word_valid(ys, size) → word_valid(t(xs, ys), size),
     tvalue: (xs: [Lit; m1]) → (ys: [Lit; m2]) → (v: Nat → Bool) → v(0) = False → word_value(t(xs, ys), v) = g(word_value(xs, v), word_value(ys, v))):
     Circ::Word2Ok(λ c xs ys => Pair(c, t(xs, ys)), g) {
-    λ c good xs ys vx vy => ⟨c.grows_refl(good), ⟨tvalid(xs, ys, c.size, good.right.left, vx, vy), λ d later env => tvalue(xs, ys, d.at(env), later.left.right.right(env))⟩⟩
+    λ c good xs ys vx vy => ⟨c.grows_refl(good), ⟨tvalid(xs, ys, c.size, good.right.left, vx, vy), λ d later env => tvalue(xs, ys, d.at(env), later.left.right.right.left(env))⟩⟩
 }
 
 fn Circ::apply_word({m, n: Nat}, r: Pair<Circ, [Lit; m]>, op: Circ → [Lit; m] → Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n]> { op(r.fst, r.snd) }
@@ -1538,7 +1706,7 @@ theorem Circ::bit_blasts(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f: (Nat �
     λ c good kin => {
         let p = h(c, good, kin);
         ⟨p.left, ⟨word_at_valid(n, b(c).snd, k, b(c).fst.size, p.left.left.right.left, p.right.left), λ d later env =>
-            trans(word_at_value(n, b(c).snd, k, d.at(env), later.left.right.right(env)), cong_fn(λ (x: BitVec(n)) => x.bit_at(k), p.right.right(d, later, env)))⟩⟩
+            trans(word_at_value(n, b(c).snd, k, d.at(env), later.left.right.right.left(env)), cong_fn(λ (x: BitVec(n)) => x.bit_at(k), p.right.right(d, later, env)))⟩⟩
     }
 }
 
@@ -1594,7 +1762,7 @@ theorem Circ::slt_ok(n: Nat): Circ::Lit2Ok(λ c xs ys => c.signed_less(xs, ys), 
         let p5 = r4.fst.xor_makes(p4.left.left, sd, r4.snd, r1.fst.grows_valid(r4.fst, g14, sd, vd), p4.right.left);
         ⟨c.grows_trans(r1.fst, r5.fst, p1.left, r1.fst.grows_trans(r4.fst, r5.fst, g14, p5.left)), ⟨p5.right.left, λ d later env => {
             let v = d.at(env);
-            let z: (v(0) = False) = later.left.right.right(env);
+            let z: (v(0) = False) = later.left.right.right.left(env);
             let from4 = r4.fst.grows_trans(r5.fst, d, p5.left, later);
             let from3 = r3.fst.grows_trans(r4.fst, d, p4.left, from4);
             let from2 = r2.fst.grows_trans(r3.fst, d, p3.left, from3);
@@ -1687,7 +1855,7 @@ fn Circ::multiplier({n, m: Nat}, self c: Circ, xs: [Lit; n], ys: [Lit; m]) → P
 theorem Circ::multiplier_makes(n, m: Nat, c: Circ, good: c.Good(), xs: [Lit; n], ys: [Lit; m], vx: word_valid(xs, c.size), vy: word_valid(ys, c.size)):
     c.MakesWord(c.multiplier(xs, ys), λ v => BitVec::mul_acc(word_value(xs, v), word_value(ys, v))) {
     match m {
-        Zero => ⟨c.grows_refl(good), ⟨word_repeat_valid(n, Pos(0), c.size, good.right.left), λ d later env => word_zero_value(n, d.at(env), later.left.right.right(env))⟩⟩,
+        Zero => ⟨c.grows_refl(good), ⟨word_repeat_valid(n, Pos(0), c.size, good.right.left), λ d later env => word_zero_value(n, d.at(env), later.left.right.right.left(env))⟩⟩,
         Succ(k) => {
             let row = c.zip(λ c a b => c.and(a, b), word_repeat(head(ys), n := n), xs);
             let prow = Circ::zip_makes(n, c, good, λ c a b => c.and(a, b), λ x y => x && y, Circ::and_ok(), word_repeat(head(ys), n := n), xs, word_repeat_valid(n, head(ys), c.size, vy.left), vx);
@@ -1700,7 +1868,7 @@ theorem Circ::multiplier_makes(n, m: Nat, c: Circ, good: c.Good(), xs: [Lit; n],
                 word_valid_grows(n, row.snd, row.fst.size, rest.fst.size, prow.right.left, prest.left.right.left), prest.right.left, prest.left.left.right.left);
             ⟨c.grows_trans(row.fst, sum.fst, prow.left, row.fst.grows_trans(rest.fst, sum.fst, prest.left, psum.left)), ⟨psum.right.left, λ d later env => {
                 let v = d.at(env);
-                let z: (v(0) = False) = later.left.right.right(env);
+                let z: (v(0) = False) = later.left.right.right.left(env);
                 let from_rest = rest.fst.grows_trans(sum.fst, d, psum.left, later);
                 let from_row = row.fst.grows_trans(rest.fst, d, prest.left, from_rest);
                 let e_row: (word_value(row.snd, v) = BitVec::select(head(ys).value(v), word_value(xs, v))) =
