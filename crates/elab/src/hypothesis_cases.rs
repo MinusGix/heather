@@ -10,18 +10,22 @@
 //! - `subst(emitted, rest)` when it equates one constructor's applications
 //!   with a local in a field (`Some(Out(w, n)) = Some(c)`), which replaces
 //!   `c` and ends the inversion;
-//! - otherwise `match e: test { C(x̄) => <next step>, … }` on the test it is
-//!   stuck on, found as `split_all` finds the test a goal is stuck on
-//!   (`goal_combinators::split_stuck`), with `emitted` refined in every arm
-//!   by the case split's own reading of hypotheses through calls
-//!   (`docs/elaborator/goal-motive-synthesis-design.md` §4.7);
+//! - otherwise a split of `Π(emitted). goal` on the test it is stuck on,
+//!   found as `split_all` finds the test a goal is stuck on
+//!   (`goal_combinators::split_stuck`), elaborated with the motive that
+//!   search built and applied to `emitted`: `(match e: test { C(x̄) => λ
+//!   emitted => <next step>, … })(emitted)`. In each case `emitted` is the
+//!   reduct the test was found in with the test replaced, so a structural
+//!   recursion's later call reads as the call (`yes.emits(…)`) and the next
+//!   step splits on it in turn;
 //! - the rest of the block, once `emitted` is stuck on nothing, or once
 //!   the splits `cases h as e1, e2` names have all been taken.
 //!
-//! So the proof built is the hand proof, nested motive-less matches, and the
-//! kernel checks it as it checks that. Each step is an unspellable call
-//! (`heather_syntax::CASES_HYPOTHESIS`) checked in its arm, where the arm's
-//! refinement has already happened, as `split_all`'s steps are.
+//! So the proof built is the hand proof, nested matches, and the kernel
+//! checks it as it checks that. Each step is an unspellable call
+//! (`heather_syntax::CASES_HYPOTHESIS`) checked in its arm, as `split_all`'s
+//! steps are; the split itself is elaborated by the checker
+//! (`checking.rs`, [`Stepped::Split`]).
 
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
@@ -108,8 +112,8 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
     if last.as_deref().is_some_and(|last| last.rsplit('.').next() == Some(&fingerprint)) {
         return err(
             format!(
-                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}` \
-                 (a hypothesis passed beside the split's equation in one call is kept as written)"
+                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}`, \
+                 so taking it again would not either"
             ),
             hypothesis.span,
         );
