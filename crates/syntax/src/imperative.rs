@@ -242,11 +242,7 @@ fn form_has_exit(form: &Expr) -> bool {
 }
 
 /// Does a loop body `return` (a [`has_exit`] whose exit is a `return`)?
-fn body_returns(b: &Block) -> bool {
-    b.stmts.iter().any(|s| matches!(exit_of(s), Some((m, _, _)) if m == RETURN)
-        || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(|form| matches!(&form.kind,
-            ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(&a.body.kind, ExprKind::Block(b) if body_returns(b)))))))
-}
+fn body_returns(b: &Block) -> bool { b.stmts.iter().any(stmt_returns) }
 
 fn is_exit_stmt(s: &Stmt) -> bool {
     exit_of(s).is_some() || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(form_has_exit))
@@ -306,6 +302,78 @@ fn tail(mut stmts: Vec<Stmt>, env: &[String], vars: &[String], end: Span, next: 
         let mut spliced = if body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl) { Vec::new() } else { body.stmts.clone() };
         spliced.extend(after.iter().cloned());
         let lowered = tail(spliced, &env, vars, body.span, next)?;
+        arm.body = Expr { span: arm.body.span, kind: ExprKind::Block(Box::new(lowered)) };
+    }
+    pre.result = Box::new(form);
+    Ok(pre)
+}
+
+/// Does this statement `return`, itself or in a statement form's body
+/// (outside any loop, whose exits are its own)?
+fn stmt_returns(s: &Stmt) -> bool {
+    matches!(exit_of(s), Some((m, _, _)) if m == RETURN)
+        || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(|form| matches!(&form.kind,
+            ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(&a.body.kind, ExprKind::Block(b) if body_returns(b))))))
+}
+
+/// A function's body, which may `return` outside any loop (§5.5): a
+/// statement form that returns takes the rest of the body into each of
+/// its arms, as a loop body's exits do ([`tail`]), so `if c { return e; }
+/// rest` is `match decide_bit<c>() { True => e, False => rest }`. The
+/// arms are then a branch that ends the body, which updates the body's
+/// locals (§19.1) and, in a `mut self` method, the receiver as it stands
+/// there. `ret` writes a `return`'s value as the body's result: the value
+/// itself, or `Mutated(x, e)` over a `mut self` receiver. A body that
+/// does not return is [`lower_block`]'s.
+pub(crate) fn lower_body(b: Block, ret: &dyn Fn(Expr) -> Expr, next: &mut usize) -> R<Block> {
+    if !b.stmts.iter().any(stmt_returns) { return lower_block(b, next); }
+    let Block { stmts, result, ons, span } = b;
+    let mut out = body_tail(stmts, *result, &[], ret, span, next)?;
+    out.ons = ons;
+    out.span = span;
+    Ok(out)
+}
+
+/// [`lower_body`]'s split: the statements before the first exit lowered in
+/// `env`, then the exit, whose arms each end as the body does.
+fn body_tail(mut stmts: Vec<Stmt>, result: Expr, env: &[String], ret: &dyn Fn(Expr) -> Expr, end: Span, next: &mut usize) -> R<Block> {
+    let Some(i) = stmts.iter().position(is_exit_stmt) else {
+        let (mut b, env) = lower_in_env(Block { stmts, result: Box::new(result), ons: Vec::new(), span: end }, env, next)?;
+        claim_tail(&mut b.result, &env, next)?;
+        return Ok(b);
+    };
+    let rest = stmts.split_off(i);
+    let (mut pre, env) = lower_in_env(Block { stmts, result: Box::new(unit(end)), ons: Vec::new(), span: end }, env, next)?;
+    let head = &rest[0];
+    let after = &rest[1..];
+    if let Some((m, value, span)) = exit_of(head) {
+        if m != RETURN {
+            let word = if m == BREAK { "break" } else { "continue" };
+            return fail(span, format!("`{word}` is outside any loop"));
+        }
+        pre.result = Box::new(ret(value.expect("`return` has a value").clone()));
+        return Ok(pre);
+    }
+    let Stmt::Let { expr, .. } = head else { unreachable!("an exit statement is a `let`") };
+    let mut form = unmark(expr, STMT).expect("a statement form").clone();
+    let ExprKind::Match { arms, .. } = &mut form.kind else {
+        return fail(form.span, "a statement form is an `if` or a `match`");
+    };
+    for arm in arms.iter_mut() {
+        let ExprKind::Block(body) = &arm.body.kind else {
+            return fail(arm.body.span, "a statement `match` arm is a braced block of statements: `P => { x := e }`");
+        };
+        let empty = body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl);
+        let mut body = body.clone();
+        statement_tail(&mut body);
+        if !empty && !is_unit(&body.result) {
+            return fail(body.result.span,
+                "a statement body ends in a statement, not a value: this `if`/`match` returns from the \
+                 function, so its branches have no result");
+        }
+        let mut spliced = if empty { Vec::new() } else { body.stmts };
+        spliced.extend(after.iter().cloned());
+        let lowered = body_tail(spliced, result.clone(), &env, ret, body.span, next)?;
         arm.body = Expr { span: arm.body.span, kind: ExprKind::Block(Box::new(lowered)) };
     }
     pre.result = Box::new(form);
@@ -834,7 +902,8 @@ fn find_residue(e: &Expr, error: &mut Option<ParseError>) {
                 *error = Some(ParseError {
                     span,
                     msg: if m == RETURN {
-                        "`return` is supported inside a `for` for now, not elsewhere in a function".into()
+                        "`return` leaves a function from its body's statements, a statement `if`/`match` among \
+                         them or a `for`; not from a λ or a block in value position".into()
                     } else {
                         format!("`{word}` is outside any loop")
                     },

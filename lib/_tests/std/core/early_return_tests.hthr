@@ -1,0 +1,146 @@
+// Probes of `return` outside a loop (docs/language/sequencing-surface-design.md
+// §5.5, §22): a statement `if`/`match` that returns takes the rest of the
+// body into each arm that falls through, so `if c { return e; } rest` is
+// `match decide_bit<c>() { True => e, False => rest }`. Each at literal and
+// neutral inputs, at an open element type, in a `mut self` method and a
+// `decreases` one, beside `?`, and with negative controls (the parse-time
+// refusals are in crates/syntax/tests/imperative_statements.rs). Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import list; import omega; import result; import tactic;
+
+// A guard that returns, then straight-line code.
+fn guarded(n: Nat, d: Nat) → Nat {
+    if n = 0 { return d; }
+    let m = n + 1;
+    m + m
+}
+theorem guarded_zero(d: Nat): guarded(0, d) = d { refl }
+theorem guarded_lit(): guarded(3, 7) = 8 { refl }
+// A neutral input past the guard: the test decides on the constructor.
+theorem guarded_succ(k, d: Nat): guarded(Succ(k), d) = Succ(Succ(k)) + Succ(Succ(k)) { refl }
+// The branch equations are the arms: the `False` one is the rest.
+theorem guarded_by_equation(n, d: Nat, h: ¬(n = 0)): guarded(n, d) = (n + 1) + (n + 1) { simp_only(guarded::False) }
+
+// `let mut` locals before, between and after the returns: each arm goes on
+// with the locals as the statements before it left them.
+fn clamped(x: Nat) → Nat {
+    let mut y = x;
+    if 10 < y { return 10; }
+    if y < 2 { y := 2; }
+    y := y + 1;
+    if 9 < y { return y * 2; }
+    y
+}
+theorem clamped_big(): clamped(40) = 10 { refl }
+theorem clamped_small(): clamped(0) = 3 { refl }
+theorem clamped_nine(): clamped(9) = 20 { refl }
+theorem clamped_five(): clamped(5) = 6 { refl }
+
+// A return nested in a statement `if` that otherwise assigns.
+fn nested(a: Bool, b: Bool) → Nat {
+    let mut r = 1;
+    if a {
+        r := 2;
+        if b { return r + 10; }
+        r := r + 1;
+    }
+    r
+}
+theorem nested_tt(): nested(True, True) = 12 { refl }
+theorem nested_tf(): nested(True, False) = 3 { refl }
+theorem nested_f(b: Bool): nested(False, b) = 1 { refl }
+
+// A statement `match` arm that returns, at an open element type and a
+// neutral list.
+fn head_or<A>(xs: List<A>, d: A) → A {
+    match xs {
+        Cons(x, _) => { return x; },
+        Nil => {},
+    }
+    d
+}
+theorem head_or_cons<A>(x: A, xs: List<A>, d: A): head_or(Cons(x, xs), d) = x { refl }
+theorem head_or_nil<A>(d: A): head_or(Nil, d) = d { refl }
+
+// A body that is only a `return`.
+fn returned(k: Nat) → Nat { return k + 1; }
+theorem returned_is(k: Nat): returned(k) = k + 1 { refl }
+
+// In checking position: the returned numeral is checked at the result type.
+fn as_option(n: Nat) → Option<Nat> {
+    if n = 0 { return None; }
+    Some(n)
+}
+theorem as_option_zero(): as_option(0) = None { refl }
+theorem as_option_succ(k: Nat): as_option(Succ(k)) = Some(Succ(k)) { refl }
+
+// Beside `?`: `return e` is the function's whole result, as `?`'s exit is.
+fn small(n: Nat) → Result<Nat, Nat> { if n < 10 { Ok(n) } else { Err(n) } }
+fn bound_then_return(a: Nat, c: Bool) → Result<Nat, Nat> {
+    let k = small(a)?;
+    if c { return Err(0); }
+    Ok(k + 1)
+}
+theorem bound_then_return_ok(): bound_then_return(2, False) = Ok(3) { refl }
+theorem bound_then_return_returns(): bound_then_return(2, True) = Err(0) { refl }
+theorem bound_then_return_err(c: Bool): bound_then_return(20, c) = Err(20) { refl }
+fn return_then_bound(a: Nat, c: Bool) → Result<Nat, Nat> {
+    if c { return Err(0); }
+    let k = small(a)?;
+    Ok(k + 1)
+}
+theorem return_then_bound_returns(a: Nat): return_then_bound(a, True) = Err(0) { refl }
+theorem return_then_bound_err(): return_then_bound(20, False) = Err(20) { refl }
+
+// A measured recursion whose guard returns: the recursive call is in the
+// rest, which the guard's `False` arm holds, so it decreases there.
+fn count_down(n: Nat) → Nat decreases n {
+    if n = 0 { return 0; }
+    count_down(n - 1)
+}
+theorem count_down_lit(): count_down(3) = 0 { refl }
+
+// In a `mut self` method `return e` leaves with the receiver as the
+// statements before it threaded it.
+record Counter { n: Nat, log: List<Nat> }
+fn Counter::tick(mut self c: Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, Cons(by, c.log));
+    c.n
+}
+fn Counter::tick_upto(mut self c: Counter, k: Nat) → Nat {
+    if k = 0 { return 0; }
+    c.tick(k);
+    if 5 < c.n { return 99; }
+    c.tick(1)
+}
+theorem tick_upto_zero(c: Counter): Counter::tick_upto(c, 0) = Mutated(c, 0) { refl }
+theorem tick_upto_big(): Counter::tick_upto(Counter(4, []), 3) = Mutated(Counter(7, [3]), 99) { refl }
+theorem tick_upto_small(): Counter::tick_upto(Counter(1, []), 1) = Mutated(Counter(3, [1, 1]), 3) { refl }
+
+// A `mut self` recursion whose own call ends the body stays a tail call
+// after a returning guard (§19.3).
+fn Counter::tick_down(mut self c: Counter, k: Nat) → Nat decreases k {
+    if k = 0 { return c.n; }
+    c.tick(1);
+    c.tick_down(k - 1)
+}
+theorem tick_down_lit(): Counter::tick_down(Counter(0, []), 2) = Mutated(Counter(2, [1, 1]), 2) { refl }
+
+// Negative controls.
+// The returned value is checked at the result type.
+// expect-error: is a constructor of `Bool`, which is not the expected type here
+fn returns_bool(n: Nat) → Nat {
+    if n = 0 { return True; }
+    n
+}
+// The returning arm is the function's value: the rest does not run.
+theorem guarded_zero_not_rest(): ¬(guarded(0, 7) = 2) { decide }
+
+// `if h: c { return e; }` names the failed test in the rest, its `False` arm.
+fn pred_of(n: Nat) → Nat {
+    if h: n = 0 { return 0; }
+    let positive: (0 < n) = omega;
+    n - 1
+}
+theorem pred_of_lit(): pred_of(5) = 4 { refl }
