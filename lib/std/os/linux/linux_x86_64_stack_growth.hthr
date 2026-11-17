@@ -1,0 +1,413 @@
+// Linux's stack as it grows, and a start that checks its room by touching
+// it (docs/native/system-contract-design.md §4.1;
+// issues/io-stack-below-rsp-not-mapped.md).
+//
+// Linux maps a process's stack as the process touches it. An access below
+// what is mapped faults, and the kernel either extends the stack's mapping
+// down to the faulting page or ends the process with a signal (the stack
+// limit, RLIMIT_STACK; memory; the gap it keeps to the mapping below). So a
+// program that needs `room` bytes of stack can find out, where it starts,
+// whether it has them: it stores a byte into each page of the room, from
+// the top down. If Linux refuses any of them the process is gone before it
+// has made a system call, and if all complete the room is mapped and is the
+// stack's (`StackGrown`).
+//
+// The rule is about one store, to an address no more than a page below what
+// is already known of the stack (`StackTouch`). The stride is what makes it
+// a rule about the stack: a store within a page of the stack lands in the
+// stack's own page or in the page under it, which Linux keeps free of other
+// mappings (the guard gap), so it cannot complete by landing in somebody
+// else's memory. This is the stack probing compilers emit against stack
+// clashes. The address is also kept at or above RSP, which kernels before
+// 5.0 require of an access that is to grow the stack.
+//
+// A store keeps a memory's permissions and this step changes them, so it is
+// not one of `LinuxStep`. A claim about a start that touches (`StackTouched`)
+// says: the process steps to the store; whatever memory Linux leaves by
+// extending the stack there, it steps on to the next; and after the last it
+// reaches a state where `then` holds. A process Linux ended at a touch has
+// no later state and the claim says nothing of it, as no claim here says
+// anything of a process ended by a signal.
+//
+// The profile of a run names what it relies on of the permissions, in its
+// memory's type, and a touched start is how a run comes to rely on more:
+// `Alike` relates a state to the same state seen under another profile.
+// That alike states step alike is not proved here; the access records never
+// read a memory's `relied`.
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_image;
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_block;
+import x86_64_byte_memory;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_store;
+import memory;
+import bitvec;
+import bitvec_nat;
+import list;
+import logic;
+import nat;
+import omega;
+import option;
+
+// ---------------------------------------------------------------------------
+// The rule
+
+// What Linux leaves when it extends the stack for an access at `top - depth`:
+// the `depth` bytes below `top` are data (readable and writable, and not
+// executable: the file's PT_GNU_STACK header asks for that), no cell has
+// changed, and no permission has but from the page of the access up to
+// `top`. `top` is where RSP was as the process started, an address of the
+// stack's mapping: the argument count is there. What a fresh page holds is
+// not said; the cells there are whatever the memory has.
+record StackGrown(x: X86Profile, top, depth: Nat, before, after: X86Memory(x)) {
+    cells: after.cells = before.cells,
+    data: DataAt(after.perms, io_stack_low(top, depth), depth),
+    kept: (a: BitVec(64)) → ((a.toNat() + depth + 4096 <= top) ∨ (top <= a.toNat())) → after.perms(a) = before.perms(a),
+}
+
+// A state at a store that touches the stack, and what is claimed of it. The
+// stack is known to reach `known` bytes below `top`; the store, the next
+// instruction, is to `top - depth`, no more than a page below that and at
+// or above RSP, and what it writes lies below `top`. For every memory Linux
+// may leave by extending the stack there, `then` holds of the state with
+// that memory: the same registers and the same instruction, which now
+// completes.
+record StackTouch(x: X86Profile, top, known, depth: Nat, store: MemoryStore, at: MachineState<X86Memory(x)>,
+    then: MachineState<X86Memory(x)> → Type) {
+    near: depth <= known + 4096,
+    inside: memory_store_width(store) <= depth,
+    reached: DataAt(at.memory.perms, io_stack_low(top, known), known),
+    fetched: FetchedFrom(x.fetch(), at.memory, InstructionBytes(at.rip, memory_store_bytes(store))),
+    address: read_gpr(memory_store_base(store), at.gprs) = io_stack_low(top, depth),
+    above: read_gpr(Rsp, at.gprs).toNat() <= top - depth,
+    grown: (m: X86Memory(x)) → StackGrown(x, top, depth, at.memory, m) → then(MachineState(at.gprs, at.flags, at.rip, m)),
+}
+
+// A start that touches the stack `deltas` further each time, from `known`
+// bytes below `top`: steps to a touch, and after it the rest; after the last,
+// steps to a state where `then` holds.
+fn StackTouched(x: X86Profile, top: Nat, store: MemoryStore, then: MachineState<X86Memory(x)> → Type, deltas: List<Nat>) →
+    Nat → MachineState<X86Memory(x)> → Type {
+    match deltas {
+        Nil => λ known t => Exists<MachineState<X86Memory(x)>>(λ at => LinuxSteps(x.linux(), t, at) ∧ then(at)),
+        Cons(step, rest) => λ known t => Exists<MachineState<X86Memory(x)>>(λ at => LinuxSteps(x.linux(), t, at) ∧
+            StackTouch(x, top, known, known + step, store, at, StackTouched(x, top, store, then, rest, known + step))),
+    }
+}
+
+// Steps before a touched start are part of it.
+theorem stack_touched_back(x: X86Profile, top: Nat, store: MemoryStore, then: MachineState<X86Memory(x)> → Type, deltas: List<Nat>):
+    (known: Nat) → (p, q: MachineState<X86Memory(x)>) → LinuxSteps(x.linux(), p, q) →
+    StackTouched(x, top, store, then, deltas, known, q) → StackTouched(x, top, store, then, deltas, known, p) {
+    match deltas {
+        Nil => λ known p q steps touched =>
+            Exists(touched.witness, ⟨linux_steps_trans(x.linux(), p, q, touched.witness, steps, touched.proof.left), touched.proof.right⟩),
+        Cons(step, rest) => λ known p q steps touched =>
+            Exists(touched.witness, ⟨linux_steps_trans(x.linux(), p, q, touched.witness, steps, touched.proof.left), touched.proof.right⟩),
+    }
+}
+
+// A touched start that ends where `then` holds ends where anything `then`
+// gives holds.
+theorem stack_touched_mono(x: X86Profile, top: Nat, store: MemoryStore, then, wider: MachineState<X86Memory(x)> → Type,
+    weaken: (t: MachineState<X86Memory(x)>) → then(t) → wider(t), deltas: List<Nat>):
+    (known: Nat) → (t: MachineState<X86Memory(x)>) → StackTouched(x, top, store, then, deltas, known, t) →
+    StackTouched(x, top, store, wider, deltas, known, t) {
+    match deltas {
+        Nil => λ known t touched => Exists(touched.witness, ⟨touched.proof.left, weaken(touched.witness, touched.proof.right)⟩),
+        Cons(step, rest) => λ known t touched => {
+            let at = touched.witness;
+            let touch = touched.proof.right;
+            Exists(at, ⟨touched.proof.left, StackTouch(near := touch.near, inside := touch.inside, reached := touch.reached,
+                fetched := touch.fetched, address := touch.address, above := touch.above,
+                grown := λ m grew => stack_touched_mono(x, top, store, then, wider, weaken, rest, known + step,
+                    MachineState(at.gprs, at.flags, at.rip, m), touch.grown(m, grew)))⟩)
+        },
+    }
+}
+
+// One state under two profiles: the registers, the flags, the cells and the
+// permissions are the same, and each memory carries what its own profile
+// relies on.
+record Alike(x, y: X86Profile, t: MachineState<X86Memory(x)>, u: MachineState<X86Memory(y)>) {
+    gprs: u.gprs = t.gprs,
+    flags: u.flags = t.flags,
+    rip: u.rip = t.rip,
+    cells: u.memory.cells = t.memory.cells,
+    perms: u.memory.perms = t.memory.perms,
+}
+
+// ---------------------------------------------------------------------------
+// How far each touch goes
+
+// The next touch: the room left, or a page of it.
+fn stack_stride(room: Nat) → Nat { room - (room - 4096) }
+
+// The strides that cover `room` bytes, a page at a time and then the rest.
+// `fuel` bounds the count; `room` of it is enough (`stack_strides_total`).
+fn stack_strides(fuel, room: Nat) → List<Nat> {
+    match fuel {
+        Zero => Nil,
+        Succ(rest) => match room {
+            Zero => Nil,
+            Succ(_) => Cons(stack_stride(room), stack_strides(rest, room - stack_stride(room))),
+        },
+    }
+}
+
+fn stride_total(deltas: List<Nat>) → Nat {
+    match deltas { Nil => 0, Cons(step, rest) => step + stride_total(rest) }
+}
+
+// Each stride moves, and by no more than a page.
+fn Strides(deltas: List<Nat>) → Type {
+    match deltas { Nil => True, Cons(step, rest) => ((0 < step) ∧ (step <= 4096)) ∧ Strides(rest) }
+}
+
+theorem stack_strides_ok(fuel: Nat): (room: Nat) → Strides(stack_strides(fuel, room)) {
+    match fuel {
+        Zero => λ room => trivial,
+        Succ(rest) => λ room => match room {
+            Zero => trivial,
+            Succ(k) => {
+                let moves: (0 < Succ(k) - (Succ(k) - 4096)) = omega();
+                let page: (Succ(k) - (Succ(k) - 4096) <= 4096) = omega();
+                ⟨⟨moves, page⟩, stack_strides_ok(rest, Succ(k) - stack_stride(Succ(k)))⟩
+            },
+        },
+    }
+}
+
+theorem stack_strides_total(fuel: Nat): (room: Nat) → room <= fuel → stride_total(stack_strides(fuel, room)) = room {
+    match fuel {
+        Zero => λ room enough => omega(enough),
+        Succ(rest) => λ room => match room {
+            Zero => λ _ => refl,
+            Succ(k) => λ enough => {
+                let stride: (stack_stride(Succ(k)) = Succ(k) - (Succ(k) - 4096)) = refl;
+                let left = stack_strides_total(rest, Succ(k) - stack_stride(Succ(k)), omega(enough, stride));
+                let unfold: (stride_total(stack_strides(Succ(rest), Succ(k))) =
+                        stack_stride(Succ(k)) + stride_total(stack_strides(rest, Succ(k) - stack_stride(Succ(k))))) = refl;
+                omega(left, stride, unfold)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The entry code that touches
+
+// RDI a copy of RSP, where the command line is; RSP moved below the whole
+// room, so that every touch is at or above it; RBX the address the touches
+// count down from.
+fn stack_touch_enter(room: Nat) → List<Instruction> {
+    [MovRR(Rdi, Rsp), MovRI(Rbx, BitVec::ofNat(room)), SubRR(Rsp, Rbx), MovRR(Rbx, Rdi)]
+}
+
+// One touch: RBX a stride lower, and a byte stored there.
+fn stack_touch_block(step: Nat) → List<Instruction> { [MovRI(Rcx, BitVec::ofNat(step)), SubRR(Rbx, Rcx)] }
+fn stack_touch_store() → ByteStore { ByteStore(Rbx, Rax) }
+fn stack_touch_bytes(step: Nat) → List<BitVec(8)> {
+    canonical_block_bytes(stack_touch_block(step)) ++ byte_store_bytes(stack_touch_store())
+}
+
+// RSP back at the top of the room, which is now the stack's.
+fn stack_touch_leave() → List<Instruction> { [MovRR(Rsp, Rdi)] }
+
+fn stack_touches_bytes(deltas: List<Nat>, tail: List<BitVec(8)>) → List<BitVec(8)> {
+    match deltas { Nil => tail, Cons(step, rest) => stack_touch_bytes(step) ++ stack_touches_bytes(rest, tail) }
+}
+
+theorem stack_touches_bytes_append(deltas: List<Nat>, tail, more: List<BitVec(8)>):
+    stack_touches_bytes(deltas, tail) ++ more = stack_touches_bytes(deltas, tail ++ more) {
+    match deltas {
+        Nil => refl,
+        Cons(step, rest) => trans(stack_touch_bytes(step).append_assoc(stack_touches_bytes(rest, tail), more),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => stack_touch_bytes(step) ++ l, stack_touches_bytes_append(rest, tail, more))),
+    }
+}
+
+// The whole of it: the code a file whose stack is the system's starts with.
+fn stack_touched_entry(room: Nat) → List<BitVec(8)> {
+    canonical_block_bytes(stack_touch_enter(room)) ++
+        stack_touches_bytes(stack_strides(room, room), canonical_block_bytes(stack_touch_leave()))
+}
+
+// ---------------------------------------------------------------------------
+// A byte of the stack
+
+// A byte stored `depth` below `top` is writable where the stack reaches it…
+theorem X86Profile::stack_byte_writable(self x: X86Profile, size, top, depth: Nat, placed: StackPlaced(size, top, depth), some: 0 < depth,
+    m: X86Memory(x), data: DataAt(m.perms, io_stack_low(top, depth), depth), w: BitVec(64), here: w = io_stack_low(top, depth)):
+    x.at(m).Allows(Perm::writes, w, 1) {
+    j(sym(here), λ b _ => x.at(m).Allows(Perm::writes, b, 1), λ p inside => {
+        let value = io_stack_offset(size, top, depth, placed, p, omega(inside, some));
+        let plain = x.perm_canonical(m, next_rip(io_stack_low(top, depth), p), omega(value, inside, some, placed.canonical, placed.above));
+        j(sym(trans(plain, data(p, omega(inside, some)))), λ q _ => Perm::writes(q) = True, refl)
+    })
+}
+
+// …and leaves every cell that is under the stack's room or at or above
+// `top`.
+theorem X86Profile::stack_byte_outside(self x: X86Profile, size, top, depth: Nat, placed: StackPlaced(size, top, depth), some: 0 < depth,
+    m: X86Memory(x), w: BitVec(64), here: w = io_stack_low(top, depth), byte: BitVec(8), y: BitVec(64),
+    away: (y.toNat() + depth < top) ∨ (top <= y.toNat())): x.store(m, w, [byte]).cells(y) = m.cells(y) {
+    j(sym(here), λ b _ => x.store(m, b, [byte]).cells(y) = m.cells(y),
+        x.store_outside(m, io_stack_low(top, depth), [byte], y, λ p inside => {
+            let short: (p < 1) = inside;
+            let value = io_stack_offset(size, top, depth, placed, p, omega(short, some));
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(io_stack_low(top, depth), p), y, λ same => {
+                let values = cong_fn<BitVec(64), Nat>(λ b => b.toNat(), same);
+                match away {
+                    Inl(under) => false_elim(omega(values, value, short, under, placed.above)),
+                    Inr(over) => false_elim(omega(values, value, short, over, some, placed.above)),
+                }
+            })
+        }))
+}
+
+// ---------------------------------------------------------------------------
+// The touches, run
+
+// A process between touches. Its memory is still as the file was loaded
+// below the segment's end, the command line is where RSP was (`rsp0`, kept
+// in RDI), RSP is below the whole room, RBX is at the lowest byte touched,
+// and the stack is data down to there. `done` is the code already run.
+record Touching(x: X86Profile, size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>, rsp0: BitVec(64),
+    known: Nat, done: List<BitVec(8)>, t: MachineState<X86Memory(x)>) {
+    loaded: t.memory.LoadedFrom(size, file),
+    argv: ArgvAt(x.data().above(top), t.memory, rsp0, args),
+    rdi: read_gpr(Rdi, t.gprs) = rsp0,
+    rsp: read_gpr(Rsp, t.gprs) = io_stack_low(top, room),
+    rbx: read_gpr(Rbx, t.gprs) = io_stack_low(top, known),
+    stack: DataAt(t.memory.perms, io_stack_low(top, known), known),
+    rip: t.rip = next_rip(io_entry(), done.len()),
+}
+
+// The code of one touch, in a memory that has the whole code: its block
+// where `done` ends, and its store thirteen bytes on.
+theorem stack_touch_code(x: X86Profile, m: X86Memory(x), whole, done, next: List<BitVec(8)>, step: Nat,
+    eq: whole = done ++ (stack_touch_bytes(step) ++ next), all: CodeResident(x.fetch(), m, whole, io_entry())):
+    CodeResident(x.fetch(), m, canonical_block_bytes(stack_touch_block(step)), next_rip(io_entry(), done.len())) ∧
+    CodeResident(x.fetch(), m, byte_store_bytes(stack_touch_store()), next_rip(next_rip(io_entry(), done.len()), 13)) {
+    let here = next_rip(io_entry(), done.len());
+    let from = resident_split(x.fetch(), m, done, stack_touch_bytes(step) ++ next, io_entry(),
+        j(eq, λ w _ => CodeResident(x.fetch(), m, w, io_entry()), all)).right;
+    let this = resident_split(x.fetch(), m, stack_touch_bytes(step), next, here, from).left;
+    resident_split(x.fetch(), m, canonical_block_bytes(stack_touch_block(step)), byte_store_bytes(stack_touch_store()), here, this)
+}
+
+// A process at the touches' code, with the strides that cover what is left
+// of the room, is a touched start: each touch is one the rule speaks of, and
+// after the last the process is where `finish` takes over, the stack data
+// down the whole room.
+theorem stack_touches_run(x: X86Profile, size: Nat, file: List<BitVec(8)>, top, room: Nat, placed: StackPlaced(size, top, room + 4096),
+    args: List<List<BitVec(8)>>, rsp0: BitVec(64), whole, tail: List<BitVec(8)>,
+    resident: (m: X86Memory(x)) → m.LoadedFrom(size, file) → CodeResident(x.fetch(), m, whole, io_entry()),
+    then: MachineState<X86Memory(x)> → Type,
+    finish: (done: List<BitVec(8)>) → whole = done ++ tail → (t: MachineState<X86Memory(x)>) →
+        Touching(x, size, file, top, room, args, rsp0, room, done, t) →
+        Exists<MachineState<X86Memory(x)>>(λ at => LinuxSteps(x.linux(), t, at) ∧ then(at)),
+    deltas: List<Nat>):
+    (known: Nat) → (done: List<BitVec(8)>) → (t: MachineState<X86Memory(x)>) →
+    Touching(x, size, file, top, room, args, rsp0, known, done, t) → Strides(deltas) → known + stride_total(deltas) = room →
+    whole = done ++ stack_touches_bytes(deltas, tail) →
+    StackTouched(x, top, StoreByte(stack_touch_store()), then, deltas, known, t) {
+    match deltas {
+        Nil => λ known done t inv _ covers eq => {
+            let all: (known = room) = omega(covers);
+            finish(done, eq, t, j(all, λ k _ => Touching(x, size, file, top, room, args, rsp0, k, done, t), inv))
+        },
+        Cons(step, rest) => λ known done t inv strides covers eq => {
+            let io = x.linux();
+            let depth = known + step;
+            let block = stack_touch_block(step);
+            let store = stack_touch_store();
+            let next = stack_touches_bytes(rest, tail);
+            let here = next_rip(io_entry(), done.len());
+            let moves: (0 < step) = strides.left.left;
+            let page: (step <= 4096) = strides.left.right;
+            let sum: (known + (step + stride_total(rest)) = room) = covers;
+            let within: (depth <= room) = omega(sum);
+            let placed_here: StackPlaced(size, top, depth) = StackPlaced(omega(placed.above, within), placed.canonical);
+            let placed_room: StackPlaced(size, top, room) = StackPlaced(omega(placed.above), placed.canonical);
+            let some: (0 < depth) = omega(moves);
+            let at_t = stack_touch_code(x, t.memory, whole, done, next, step, eq, resident(t.memory, inv.loaded));
+            let a = execute_block_normal<X86Memory(x)>(block, t);
+            let ran = block_steps(x.fetch(), x.data(), block, t,
+                j(sym(inv.rip), λ r _ => CodeResident(x.fetch(), t.memory, canonical_block_bytes(block), r), at_t.left), refl);
+            let same: (a.memory = t.memory) = ran.right.right;
+            let a_rip: (a.rip = next_rip(here, 13)) = trans(ran.right.left, cong_fn<BitVec(64), BitVec(64)>(λ r => next_rip(r, 13), inv.rip));
+            let lower: (top - known - step = top - depth) = omega();
+            let rbx: (read_gpr(Rbx, a.gprs) = io_stack_low(top, depth)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ b => b.sub(BitVec::ofNat(step)), inv.rbx),
+                    trans(BitVec::ofNat_sub(64, top - known, step, omega(within, placed.above)),
+                        cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), lower)));
+            let rsp_low = io_stack_low_toNat(size, top, room, placed_room);
+            let rsp: (read_gpr(Rsp, a.gprs).toNat() <= top - depth) =
+                j(sym(inv.rsp), λ r _ => r.toNat() <= top - depth, omega(rsp_low, within));
+            let grown: ((m: X86Memory(x)) → StackGrown(x, top, depth, a.memory, m) →
+                    StackTouched(x, top, StoreByte(store), then, rest, depth, MachineState(a.gprs, a.flags, a.rip, m))) = λ m grew => {
+                let g = MachineState(a.gprs, a.flags, a.rip, m);
+                let loaded: m.LoadedFrom(size, file) = λ y below => {
+                    let old = j(sym(same), λ n _ => (n.cells(y) = io_cell(file, y.toNat())) ∧ (n.perms(y) = io_perm(size, file.len(), y.toNat())),
+                        inv.loaded(y, below));
+                    let end: (io_data_end(size) = 0x410000 + size) = refl;
+                    ⟨trans(cong_fn<BitVec(64) → BitVec(8), BitVec(8)>(λ c => c(y), grew.cells), old.left),
+                     trans(grew.kept(y, Inl(omega(below, within, placed.above))), old.right)⟩
+                };
+                let at_m = stack_touch_code(x, m, whole, done, next, step, eq, resident(m, loaded));
+                let fetched: FetchedFrom(x.fetch(), m, InstructionBytes(a.rip, byte_store_bytes(store))) =
+                    FetchedFrom(resident_readable(x.fetch(), m, byte_store_bytes(store), a.rip,
+                        j(sym(a_rip), λ r _ => CodeResident(x.fetch(), m, byte_store_bytes(store), r), at_m.right)));
+                let writable = x.stack_byte_writable(size, top, depth, placed_here, some, m, grew.data, read_gpr(Rbx, a.gprs), rbx);
+                let b = byte_store_after(linux_writes(io), store, g);
+                let stored = byte_store_step(x.fetch(), linux_writes(io), store, g, refl, fetched, writable);
+                let byte = imm_byte0(read_gpr(Rax, a.gprs));
+                let loaded_b: b.memory.LoadedFrom(size, file) = λ y below => {
+                    let old = loaded(y, below);
+                    ⟨trans(x.stack_byte_outside(size, top, depth, placed_here, some, m, read_gpr(Rbx, a.gprs), rbx, byte, y,
+                            Inl(omega(below, within, placed.above))), old.left), old.right⟩
+                };
+                let kept: ReadsKept(x.data().above(top), t.memory, x.data().above(top), b.memory) = λ y found_byte got => {
+                    let found = x.data().above_read(top, t.memory, y, found_byte, got);
+                    let high: (top.leb(y.toNat()) = True) = Nat::leb_true(top, y.toNat(), found.left);
+                    let read_a: (x.read(a.memory, y) = Some(found_byte)) = j(sym(same), λ n _ => x.read(n, y) = Some(found_byte), found.right);
+                    let read_m: (x.read(m, y) = x.read(a.memory, y)) = x.alike_read(x, m, a.memory, y,
+                        cong_fn<BitVec(64) → BitVec(8), BitVec(8)>(λ c => c(y), grew.cells), grew.kept(y, Inr(found.left)));
+                    let read_b: (x.read(b.memory, y) = x.read(m, y)) = x.read_agree(m, b.memory.cells, y,
+                        x.stack_byte_outside(size, top, depth, placed_here, some, m, read_gpr(Rbx, a.gprs), rbx, byte, y, Inr(found.left)));
+                    j(sym(high), λ c _ => (match c { True => x.read(b.memory, y), False => None<BitVec(8)> }) = Some(found_byte),
+                        trans(read_b, trans(read_m, read_a)))
+                };
+                let done2 = done ++ stack_touch_bytes(step);
+                let rip_b: (b.rip = next_rip(io_entry(), done2.len())) =
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ r => next_rip(r, 3), a_rip),
+                        trans(rip_compose(here, 13, 3),
+                            trans(rip_compose(io_entry(), done.len(), 16), rip_count(io_entry(), sym(done.len_append(stack_touch_bytes(step)))))));
+                let eq2: (whole = done2 ++ next) = trans(eq, sym(done.append_assoc(stack_touch_bytes(step), next)));
+                let inv_b: Touching(x, size, file, top, room, args, rsp0, depth, done2, b) = Touching(
+                    loaded := loaded_b,
+                    argv := argv_at_kept(x.data().above(top), t.memory, x.data().above(top), b.memory, kept, rsp0, args, inv.argv),
+                    rdi := inv.rdi, rsp := inv.rsp, rbx := rbx, stack := grew.data, rip := rip_b);
+                let left: (depth + stride_total(rest) = room) = omega(sum);
+                stack_touched_back(x, top, StoreByte(store), then, rest, depth, g, b, linux_steps_store(io, g, b, stored),
+                    stack_touches_run(x, size, file, top, room, placed, args, rsp0, whole, tail, resident, then, finish, rest,
+                        depth, done2, b, inv_b, strides.right, left, eq2))
+            };
+            let fetched_a: FetchedFrom(x.fetch(), a.memory, InstructionBytes(a.rip, byte_store_bytes(store))) =
+                FetchedFrom(resident_readable(x.fetch(), a.memory, byte_store_bytes(store), a.rip,
+                    resident_state(x.fetch(), byte_store_bytes(store), t.memory, next_rip(here, 13), a, same, a_rip, at_t.right)));
+            Exists(a, ⟨linux_steps_of_fetched(io, t, a, ran.left), StackTouch(
+                near := omega(page),
+                inside := omega(moves),
+                reached := j(sym(same), λ n _ => DataAt(n.perms, io_stack_low(top, known), known), inv.stack),
+                fetched := fetched_a, address := rbx, above := rsp, grown := grown)⟩)
+        },
+    }
+}

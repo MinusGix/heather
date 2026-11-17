@@ -42,6 +42,7 @@ import native_contract;
 import linux_x86_64_io;
 import linux_x86_64_byte_memory;
 import linux_x86_64_image;
+import linux_x86_64_stack_growth;
 import linux_x86_64_sim;
 import linux_x86_64_sim_paid;
 import linux_x86_64_determinism;
@@ -58,7 +59,10 @@ import x86_64_byte_memory;
 import x86_64_stack;
 import x86_64_fetch;
 import x86_64_fetched_code;
+import x86_64_store;
 import bitvec;
+import bitvec_nat;
+import memory;
 import list;
 import logic;
 import nat;
@@ -354,26 +358,176 @@ theorem Source::elf_segment_file_runs(self src: Source, size: Nat, within: size 
 }
 
 // ---------------------------------------------------------------------------
+// The system's stack, checked where the program starts
+// (linux_x86_64_stack_growth, docs/native/system-contract-design.md §4.1)
+
+// What a file whose entry code touches its stack asks of the system:
+// `LinuxStart` less its `stack` field. Nothing is asked of what lies below
+// RSP: the entry code stores into each page of the `room` bytes there before
+// anything else runs, and Linux either makes them the stack's or ends the
+// process (`StackTouch`). `placed` asks a page more above the segment than
+// the room, the page a touch may reach into.
+record SystemStart(size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>,
+    s: MachineState<X86Memory(X86Profile::io(size))>) {
+    loaded: s.memory.LoadedFrom(size, file),
+    entry: s.rip = io_entry(),
+    placed: StackPlaced(size, top, room + 4096),
+    rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    argv: ArgvAt(X86Profile::io(size).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
+}
+
+// What is claimed of such a process: it touches its stack's room, a page at
+// a time (`StackTouched`), and the state it then reaches, seen as one that
+// relies on the room (`Alike`), simulates `p`.
+fn TouchedRuns(size, top, room: Nat, p: Program<BitVec(64)>(Events::linux())) → MachineState<X86Memory(X86Profile::io(size))> → Type {
+    StackTouched(X86Profile::io(size), top, StoreByte(stack_touch_store()),
+        λ (at: MachineState<X86Memory(X86Profile::io(size))>) => Exists<MachineState<X86Memory(X86Profile::process(size, top, room))>>(λ u =>
+            Alike(X86Profile::io(size), X86Profile::process(size, top, room), at, u) ∧
+            SimProgram(X86Profile::process(size, top, room).linux(), p, u)),
+        stack_strides(room, room), 0)
+}
+
+// The theorem of the file `write-elf --stack system` writes: the entry code
+// that touches the source's stack room, then the program.
+theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
+    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    note: List<BitVec(8)>,
+    short: 288 + ((stack_touched_entry(src.need(homes, bodies)) ++ assemble(no_fills(), program, Nil)).len() + note.len()) <= 65535,
+    small: src.depth < Nat::pow(2, 64), top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
+    start: SystemStart(size, io_elf_file(stack_touched_entry(src.need(homes, bodies)) ++ assemble(no_fills(), program, Nil), note, size), top,
+        src.need(homes, bodies), args, s)):
+    TouchedRuns(size, top, src.need(homes, bodies), src.denote(args))(s) {
+    let x = X86Profile::io(size);
+    let room = src.need(homes, bodies);
+    let y = X86Profile::process(size, top, room);
+    let io = x.linux();
+    let prog = assemble(no_fills(), program, Nil);
+    let whole = stack_touched_entry(room) ++ prog;
+    let file = io_elf_file(whole, note, size);
+    let length = 288 + (whole.len() + note.len());
+    let header = io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + whole.len(), note.len());
+    let long = io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + whole.len(), note.len());
+    let deltas = stack_strides(room, room);
+    let enter = stack_touch_enter(room);
+    let leave = stack_touch_leave();
+    let tail = canonical_block_bytes(leave) ++ prog;
+    let rsp0 = read_gpr(Rsp, s.gprs);
+    let placed = start.placed;
+    let room_above: (io_data_end(size) + room <= top) = omega(placed.above);
+    let placed_room: StackPlaced(size, top, room) = StackPlaced(room_above, placed.canonical);
+    let resident: ((m: X86Memory(x)) → m.LoadedFrom(size, file) → CodeResident(x.fetch(), m, whole, io_entry())) = λ m loaded =>
+        m.loaded_entry_before(size, within, header, whole, note, long, omega(short), loaded);
+    let eq: (whole = canonical_block_bytes(enter) ++ stack_touches_bytes(deltas, tail)) =
+        trans(canonical_block_bytes(enter).append_assoc(stack_touches_bytes(deltas, canonical_block_bytes(leave)), prog),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => canonical_block_bytes(enter) ++ l,
+                stack_touches_bytes_append(deltas, canonical_block_bytes(leave), prog)));
+    let then: (MachineState<X86Memory(x)> → Type) = λ at => Exists<MachineState<X86Memory(y)>>(λ u =>
+        Alike(x, y, at, u) ∧ SimProgram(y.linux(), src.denote(args), u));
+    // The code that enters: RDI the command line, RSP below the room, RBX
+    // where the touches start.
+    let parts = resident_split(x.fetch(), s.memory, canonical_block_bytes(enter), stack_touches_bytes(deltas, tail), io_entry(),
+        j(eq, λ w _ => CodeResident(x.fetch(), s.memory, w, io_entry()), resident(s.memory, start.loaded)));
+    let s1 = execute_block_normal<X86Memory(x)>(enter, s);
+    let ran = block_steps(x.fetch(), x.data(), enter, s,
+        j(sym(start.entry), λ r _ => CodeResident(x.fetch(), s.memory, canonical_block_bytes(enter), r), parts.left), refl);
+    let same: (s1.memory = s.memory) = ran.right.right;
+    let top_word: (rsp0 = BitVec::ofNat(top)) = trans(sym(BitVec::ofNat_toNat(64, rsp0)), cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), start.rsp));
+    let nothing: (top = top - 0) = omega();
+    let inv: Touching(x, size, file, top, room, args, rsp0, 0, canonical_block_bytes(enter), s1) = Touching(
+        loaded := j(sym(same), λ n _ => n.LoadedFrom(size, file), start.loaded),
+        argv := j(sym(same), λ n _ => ArgvAt(x.data().above(top), n, rsp0, args), start.argv),
+        rdi := refl,
+        rsp := trans(cong_fn<BitVec(64), BitVec(64)>(λ b => b.sub(BitVec::ofNat(room)), top_word), BitVec::ofNat_sub(64, top, room, omega(placed.above))),
+        rbx := trans(top_word, cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), nothing)),
+        stack := λ i inside => false_elim(omega(inside)),
+        rip := trans(ran.right.left, cong_fn<BitVec(64), BitVec(64)>(λ r => next_rip(r, 19), start.entry)));
+    // After the last touch: RSP back at the top, and the state as a process
+    // that relies on the room is where the compiled program starts.
+    let finish: ((done: List<BitVec(8)>) → whole = done ++ tail → (t: MachineState<X86Memory(x)>) →
+            Touching(x, size, file, top, room, args, rsp0, room, done, t) →
+            Exists<MachineState<X86Memory(x)>>(λ at => LinuxSteps(io, t, at) ∧ then(at))) = λ done cut t touched => {
+        let here = next_rip(io_entry(), done.len());
+        let code = resident_split(x.fetch(), t.memory, done, tail, io_entry(),
+            j(cut, λ w _ => CodeResident(x.fetch(), t.memory, w, io_entry()), resident(t.memory, touched.loaded))).right;
+        let two = resident_split(x.fetch(), t.memory, canonical_block_bytes(leave), prog, here, code);
+        let t2 = execute_block_normal<X86Memory(x)>(leave, t);
+        let left = block_steps(x.fetch(), x.data(), leave, t,
+            j(sym(touched.rip), λ r _ => CodeResident(x.fetch(), t.memory, canonical_block_bytes(leave), r), two.left), refl);
+        let kept: (t2.memory = t.memory) = left.right.right;
+        let t2_rip: (t2.rip = next_rip(here, 3)) = trans(left.right.left, cong_fn<BitVec(64), BitVec(64)>(λ r => next_rip(r, 3), touched.rip));
+        let um: X86Memory(y) = X86Memory(cells := t.memory.cells, perms := t.memory.perms, relied := ⟨t.memory.relied, touched.stack⟩);
+        let u = MachineState(t2.gprs, t2.flags, t2.rip, um);
+        let alike: Alike(x, y, t2, u) = Alike(gprs := refl, flags := refl, rip := refl,
+            cells := cong_fn<X86Memory(x), BitVec(64) → BitVec(8)>(λ n => n.cells, sym(kept)),
+            perms := cong_fn<X86Memory(x), BitVec(64) → Perm>(λ n => n.perms, sym(kept)));
+        let stack = DataRegion::process_stack(size, top, room, placed_room).stack();
+        let low = io_stack_low_toNat(size, top, room, placed_room);
+        let r = DataRegion::process_data(size, within, top, room);
+        let floor: (r.low.toNat() + r.size = io_data_end(size)) = refl;
+        let reaches: (io_stack_low(top, room).toNat() + room = top) = omega(low, room_above);
+        let ceiling: (stack.low.toNat() + stack.size = top) = reaches;
+        let over: (io_data_low().toNat() + size <= io_stack_low(top, room).toNat()) = omega(floor, low, room_above);
+        let canonical: (io_stack_low(top, room).toNat() + room <= Nat::pow(2, 47)) = omega(low, room_above, placed.canonical);
+        let loaded_u: um.LoadedFrom(size, file) = touched.loaded;
+        let resident_u: CodeResident(y.fetch(), um, prog, u.rip) =
+            code_resident_alike(x, y, t.memory, um, λ a _ => ⟨refl, refl⟩, prog, t2.rip,
+                j(sym(t2_rip), λ r _ => CodeResident(x.fetch(), t.memory, prog, r), two.right));
+        let at_top: (read_gpr(Rsp, u.gprs).toNat() = top) = trans(cong_fn<BitVec(64), Nat>(λ b => b.toNat(), touched.rdi), start.rsp);
+        let above: ReadsKept(x.data().above(top), t.memory, y.data().above(stack.low.toNat() + stack.size), um) = λ a byte got => {
+            let found = x.data().above_read(top, t.memory, a, byte, got);
+            let high: ((stack.low.toNat() + stack.size).leb(a.toNat()) = True) =
+                Nat::leb_true(stack.low.toNat() + stack.size, a.toNat(), j(sym(ceiling), λ n _ => n <= a.toNat(), found.left));
+            let read: (y.read(um, a) = x.read(t.memory, a)) = y.alike_read(x, um, t.memory, a, refl, refl);
+            j(sym(high), λ b _ => (match b { True => y.read(um, a), False => None<BitVec(8)> }) = Some(byte), trans(read, found.right))
+        };
+        let argv_u: ArgvAt(y.data().above(stack.low.toNat() + stack.size), um, read_gpr(Rdi, u.gprs), args) =
+            j(sym(touched.rdi), λ w _ => ArgvAt(y.data().above(stack.low.toNat() + stack.size), um, w, args),
+                argv_at_kept(x.data().above(top), t.memory, y.data().above(stack.low.toNat() + stack.size), um, above, rsp0, args, touched.argv));
+        let paid = src.runs_after(r, homes, bodies, fits, program, compiled, Nil, u.rip, u, refl, resident_u, refl,
+            um.loaded_data(size, within, top, room, file, loaded_u),
+            stack, refl, over, canonical,
+            DataRegion::process_stack_entry(size, top, room, placed_room, u.gprs, at_top), Nat::le_refl(room), small, args, argv_u);
+        Exists(t2, ⟨linux_steps_of_fetched(io, t, t2, left.left), Exists(u, ⟨alike, Program::sim_of_paid(y.linux(), src.denote(args), u, paid)⟩)⟩)
+    };
+    let total = stack_strides_total(room, room, Nat::le_refl(room));
+    let covers: (0 + stride_total(deltas) = room) = omega(total);
+    let touches = stack_touches_run(x, size, file, top, room, placed, args, rsp0, whole, tail, resident, then, finish, deltas,
+        0, canonical_block_bytes(enter), s1, inv, stack_strides_ok(room, room), covers, eq);
+    stack_touched_back(x, top, StoreByte(stack_touch_store()), then, deltas, 0, s, s1, linux_steps_of_fetched(io, s, s1, ran.left), touches)
+}
+
+// ---------------------------------------------------------------------------
 // The file's theorem over its contract (native_contract,
 // docs/native/system-contract-design.md §2)
 
-// The memory a process under the contract has, and what the contract asks
-// of the system at its start: the premise of the file's theorem.
-fn Contract::profile(self c: Contract, top: Nat) → X86Profile {
-    match c.stack { FromSystem => X86Profile::process(c.size, top, c.room), FromSegment => X86Profile::io(c.size) }
-}
-fn Contract::Start(self c: Contract, file: List<BitVec(8)>, top: Nat, args: List<List<BitVec(8)>>) → MachineState<X86Memory(c.profile(top))> → Type {
-    match c.stack as λ k => MachineState<X86Memory(Contract(k, c.size, c.room).profile(top))> → Type {
-        FromSystem => λ s => LinuxStart(c.size, file, top, c.room, args, s),
+// What the contract asks of the system at a process's start, the premise of
+// the file's theorem, and what the theorem then says of the process. Either
+// way the process is one of `X86Profile::io`: its memory's type relies on
+// the data segment and nothing else.
+fn Contract::Start(self c: Contract, file: List<BitVec(8)>, top: Nat, args: List<List<BitVec(8)>>) → MachineState<X86Memory(X86Profile::io(c.size))> → Type {
+    match c.stack {
+        FromSystem => λ s => SystemStart(c.size, file, top, c.room, args, s),
         FromSegment => λ s => SegmentStart(c.size, file, args, s),
     }
 }
+fn Contract::Runs(self c: Contract, top: Nat, p: Program<BitVec(64)>(Events::linux())) → MachineState<X86Memory(X86Profile::io(c.size))> → Type {
+    match c.stack {
+        FromSystem => TouchedRuns(c.size, top, c.room, p),
+        FromSegment => λ s => SimProgram(X86Profile::io(c.size).linux(), p, s),
+    }
+}
 
-// A source's contract, its entry code and what its segment must hold, by
-// where its stack is from.
+// A source's contract, its entry code's bytes, its file's code and what its
+// segment must hold, by where its stack is from.
 fn Source::contract(self src: Source, stack: StackFrom, size: Nat, homes: Homes, bodies: List<Frame>) → Contract { Contract(stack, size, src.need(homes, bodies)) }
-fn Source::entry_code(self src: Source, stack: StackFrom, homes: Homes, bodies: List<Frame>) → List<Instruction> {
-    match stack { FromSystem => stack_from_system(), FromSegment => src.segment_entry(homes, bodies) }
+fn Source::entry_bytes(self src: Source, stack: StackFrom, homes: Homes, bodies: List<Frame>) → List<BitVec(8)> {
+    match stack {
+        FromSystem => stack_touched_entry(src.need(homes, bodies)),
+        FromSegment => canonical_block_bytes(src.segment_entry(homes, bodies)),
+    }
+}
+fn Source::code(self src: Source, stack: StackFrom, homes: Homes, bodies: List<Frame>, program: Prog) → List<BitVec(8)> {
+    src.entry_bytes(stack, homes, bodies) ++ assemble(no_fills(), program, Nil)
 }
 fn Source::segment_use(self src: Source, stack: StackFrom, homes: Homes, bodies: List<Frame>) → Nat {
     match stack {
@@ -382,18 +536,20 @@ fn Source::segment_use(self src: Source, stack: StackFrom, homes: Homes, bodies:
     }
 }
 
-// The theorem of a written file, whichever its stack: a process the system
-// started as the file's contract says simulates the source run with its
-// command line.
+// The theorem of a written file, whichever its stack: of a process the
+// system started as the file's contract says, what the contract's `Runs`
+// says. With its own stack that is that it simulates the source run with
+// its command line; with the system's, that it does once it has touched
+// its stack's room.
 theorem Source::elf_runs(self src: Source, stack: StackFrom, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
     compiled: src.compile(io_data_low(), homes, bodies) = Some(program), small: src.depth < Nat::pow(2, 64), top: Nat, args: List<List<BitVec(8)>>):
     (fits: src.segment_use(stack, homes, bodies) <= size) →
-    (short: 288 + (entered(src.entry_code(stack, homes, bodies), program).len() + src.contract(stack, size, homes, bodies).note().len()) <= 65535) →
-    (s: MachineState<X86Memory(src.contract(stack, size, homes, bodies).profile(top))>) →
-    src.contract(stack, size, homes, bodies).Start(io_elf_file(entered(src.entry_code(stack, homes, bodies), program), src.contract(stack, size, homes, bodies).note(), size), top, args)(s) →
-    SimProgram(src.contract(stack, size, homes, bodies).profile(top).linux(), src.denote(args), s) {
+    (short: 288 + (src.code(stack, homes, bodies, program).len() + src.contract(stack, size, homes, bodies).note().len()) <= 65535) →
+    (s: MachineState<X86Memory(X86Profile::io(size))>) →
+    src.contract(stack, size, homes, bodies).Start(io_elf_file(src.code(stack, homes, bodies, program), src.contract(stack, size, homes, bodies).note(), size), top, args)(s) →
+    src.contract(stack, size, homes, bodies).Runs(top, src.denote(args))(s) {
     match stack {
-        FromSystem => λ fits short s start => src.elf_file_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSystem, size, homes, bodies).note(), short, small, top, args, s, start),
+        FromSystem => λ fits short s start => src.elf_touched_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSystem, size, homes, bodies).note(), short, small, top, args, s, start),
         FromSegment => λ fits short s start => src.elf_segment_file_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSegment, size, homes, bodies).note(), short, small, args, s, start),
     }
 }

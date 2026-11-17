@@ -204,12 +204,14 @@ theorem ByteReadAccess::above_read<M>(self data: ByteReadAccess<M>, floor: Nat, 
 
 // Every byte one access reads at one memory, another reads alike at
 // another: the command line read through the first is read through the
-// second.
-fn ReadsKept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M) → Type {
+// second. The two memories need not be of one type: a process seen under
+// two profiles is two memories with the same cells
+// (linux_x86_64_stack_growth).
+fn ReadsKept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N) → Type {
     (a: BitVec(64)) → (byte: BitVec(8)) → data.read(memory, a) = Some(byte) → other.read(later, a) = Some(byte)
 }
 
-theorem word_bytes_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem word_bytes_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     address, word: BitVec(64), at: WordBytesAt(data, memory, address, word)): WordBytesAt(other, later, address, word) {
     ⟨at.left, λ t byte found => kept(next_rip(address, t), byte, at.right(t, byte, found))⟩
 }
@@ -223,14 +225,14 @@ theorem cstring_from_kept(path: List<BitVec(8)>): (source, target: Nat → Optio
     }
 }
 
-theorem cstring_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem cstring_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     address: BitVec(64), path: List<BitVec(8)>, at: CStringAt(data, memory, address, path)): CStringAt(other, later, address, path) {
     cstring_from_kept(path, λ i => data.read(memory, bitvec_nat::word_of_nat(64, address.toNat() + i)),
         λ i => other.read(later, bitvec_nat::word_of_nat(64, address.toNat() + i)),
         λ i b got => kept(bitvec_nat::word_of_nat(64, address.toNat() + i), b, got), at)
 }
 
-theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem argv_from_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     rsp: BitVec(64), args: List<List<BitVec(8)>>): (k: Nat) → ArgvFrom(data, memory, rsp, args, k) → ArgvFrom(other, later, rsp, args, k) {
     match args {
         Nil => λ k at => word_bytes_at_kept(data, memory, other, later, kept, argv_slot(rsp, k), BitVec::zero(), at),
@@ -241,7 +243,7 @@ theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAcc
     }
 }
 
-theorem argv_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem argv_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     rsp: BitVec(64), args: List<List<BitVec(8)>>, at: ArgvAt(data, memory, rsp, args)): ArgvAt(other, later, rsp, args) {
     ⟨at.left, ⟨word_bytes_at_kept(data, memory, other, later, kept, rsp, bitvec_nat::word_of_nat(64, args.len()), at.right.left),
         argv_from_kept(data, memory, other, later, kept, rsp, args, 1, at.right.right)⟩⟩

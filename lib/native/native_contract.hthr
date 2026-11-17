@@ -28,16 +28,29 @@ inductive Presumes {
     // The machine is the x86-64 the model describes (the vendors' manuals).
     Processor,
     // The file's PT_LOAD headers are honoured, the data segment `size` bytes
-    // (ELF gABI). `LinuxStart.loaded`, `SegmentStart.loaded`.
+    // (ELF gABI). `SystemStart.loaded`, `SegmentStart.loaded`.
     FileLoaded(size: Nat),
     // Execution starts at the header's entry address (ELF gABI). `.entry`.
     EntryAddress,
     // The command line is at RSP as the process starts (x86-64 psABI,
     // process initialization). `.argv`.
     CommandLine,
-    // `room` bytes below RSP as the process starts are usable: Linux grants
-    // it when the stack limit leaves that much. `LinuxStart.stack`.
+    // RSP as the process starts is `gap` bytes or more above the data
+    // segment's end, and in the lower half of the address space: nothing
+    // written says where a system puts its stack. `SystemStart.placed`; with
+    // the program's own stack the gap is none, and it is the command line
+    // that lies above the segment (`SegmentStart.argv`).
+    StackAbove(gap: Nat),
+    // `room` bytes below RSP as the process starts are usable. The program
+    // tests it: its entry code stores into each page of them before anything
+    // else runs (`stack_touched_entry`, linux_x86_64_stack_growth), so no
+    // premise of the file's theorem says it.
     StackRoom(room: Nat),
+    // A store within a page below the stack either extends the stack or
+    // ends the process with a signal (Linux: mmap(2) on MAP_GROWSDOWN,
+    // getrlimit(2) on RLIMIT_STACK). What the test above rests on
+    // (`StackTouch`, `StackGrown`).
+    StackGrowth,
     // System calls follow the Linux x86-64 convention and answer as the
     // model allows (`LinuxCmd::Answers`, `LinuxAnswered`).
     CallsAnswered,
@@ -52,7 +65,9 @@ fn Presumes::basis(self line: Presumes) → Basis {
         FileLoaded(_) => Standard,
         EntryAddress => Standard,
         CommandLine => Standard,
-        StackRoom(_) => Presumed,
+        StackAbove(_) => Presumed,
+        StackRoom(_) => Checked,
+        StackGrowth => Standard,
         CallsAnswered => Standard,
         NoFatalSignal => Presumed,
     }
@@ -62,13 +77,17 @@ fn Presumes::basis(self line: Presumes) → Basis {
 // the stack room its program needs.
 record Contract { stack: StackFrom, size: Nat, room: Nat }
 
-// Every line of it. The first lines are the fields of the premise its
-// theorem takes (`Contract::Start`); the last two are what the model of the
-// run itself takes for granted, which no premise states.
+// Every line of it. The lines down to the stack's place are the fields of
+// the premise its theorem takes (`Contract::Start`). The stack's room is no
+// field: the program tests it, by the rule the line after it names, which
+// the theorem's conclusion is stated through (`Contract::Runs`). The last
+// two are what the model of the run itself takes for granted, which no
+// premise states.
 fn Contract::lines(self c: Contract) → List<Presumes> {
     match c.stack {
-        FromSystem => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackRoom(c.room), CallsAnswered, NoFatalSignal],
-        FromSegment => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, CallsAnswered, NoFatalSignal],
+        FromSystem => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackAbove(c.room + 4096), StackRoom(c.room), StackGrowth,
+            CallsAnswered, NoFatalSignal],
+        FromSegment => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackAbove(0), CallsAnswered, NoFatalSignal],
     }
 }
 
@@ -84,6 +103,8 @@ fn Presumes::spelled(self line: Presumes) → List<Nat> {
         StackRoom(room) => [4, line.basis().number(), room],
         CallsAnswered => [5, line.basis().number(), 0],
         NoFatalSignal => [6, line.basis().number(), 0],
+        StackAbove(gap) => [7, line.basis().number(), gap],
+        StackGrowth => [8, line.basis().number(), 0],
     }
 }
 fn spelled_lines(lines: List<Presumes>) → List<Nat> {
@@ -134,7 +155,9 @@ fn Presumes::words(self line: Presumes) → List<BitVec(8)> {
         FileLoaded(size) => text_join([b"the file is loaded as its two PT_LOAD headers say, its data segment ", number_text(size), b" zero bytes (ELF gABI)"]),
         EntryAddress => b"execution starts at the header's entry address (ELF gABI)",
         CommandLine => b"the command line is at the stack pointer as the process starts (x86-64 psABI)",
-        StackRoom(room) => text_join([number_text(room), b" bytes below the stack pointer as the process starts are usable (Linux grants it when the stack limit leaves that much)"]),
+        StackAbove(gap) => text_join([b"the stack pointer as the process starts is ", number_text(gap), b" bytes or more above the data segment's end, in the lower half of the address space"]),
+        StackRoom(room) => text_join([number_text(room), b" bytes below the stack pointer as the process starts are usable: the program stores into each page of them as it starts, and ends there with a signal if one is refused"]),
+        StackGrowth => b"a store within a page below the stack extends the stack or ends the process with a signal (Linux: mmap(2), getrlimit(2))",
         CallsAnswered => b"system calls follow the Linux x86-64 convention and answer as their manual pages allow",
         NoFatalSignal => b"no fatal signal is delivered, the kernel's out-of-memory kill included",
     }

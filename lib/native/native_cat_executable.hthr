@@ -10,12 +10,11 @@
 //
 // Outside the proof: that Linux maps the file as `X86Memory::io_load` says
 // (the RX file at 0x400000, the zero segment at 0x410000) below the
-// segment's end (`X86Memory::LoadedFrom`), maps `depth` bytes of stack
-// below the entry RSP where `StackPlaced` says (cat's words are a frame
-// there, eight bytes a word, and it pushes nothing more), puts
-// the command line on the stack above it (`ArgvAt`; cat reads none of it),
-// and starts it at `io_entry()`, and that its system calls answer as
-// `LinuxRun` allows.
+// segment's end (`X86Memory::LoadedFrom`), starts it at `io_entry()` with
+// RSP a page and cat's room above the segment (`StackPlaced`) and the
+// command line there (`ArgvAt`; cat reads none of it), extends the stack
+// at each touch or ends the process (`StackTouch`), and that its system
+// calls answer as `LinuxRun` allows.
 import native_cat;
 import native_cat_spec;
 import native_cat_compiled;
@@ -27,12 +26,15 @@ import linux_x86_64_io;
 import linux_x86_64_byte_memory;
 import linux_x86_64_determinism;
 import linux_x86_64_image;
+import linux_x86_64_stack_growth;
+import native_compile_elf;
 import linux_x86_64_sim;
 import itree;
 import itree_trace;
 import x86_64;
 import x86_64_asm;
 import x86_64_byte_memory;
+import x86_64_store;
 import bitvec;
 import list;
 import nat;
@@ -42,20 +44,15 @@ import nat;
 fn cat_source() → Source { cat(cat_capacity()) }
 fn cat_file() → List<BitVec(8)> { io_elf_file(cat_bytes(), cat_note(), cat_size()) }
 
-fn cat_file_header() → List<BitVec(8)> {
-    io_elf_header(BitVec::ofNat(288 + (cat_bytes().len() + cat_note().len())), BitVec::ofNat((288 + (cat_bytes().len() + cat_note().len())).shr(8)), cat_size(),
-        288 + cat_bytes().len(), cat_note().len())
-}
-
-theorem cat_file_sends(top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
-    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), cat_file()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
-    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
-    valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
-    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(cat_size(), top, depth).linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
-    sent_to(BitVec::ofNat(1), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr) {
-    cat_native_sends(cat_file_header(),
-        io_elf_header_length(BitVec::ofNat(288 + (cat_bytes().len() + cat_note().len())), BitVec::ofNat((288 + (cat_bytes().len() + cat_note().len())).shr(8)), cat_size(),
-            288 + cat_bytes().len(), cat_note().len()),
-        top, depth, placed, s, entry, rsp, loaded, deep, args, argv, tr, produces, valid, returns, run, ran, responses)
+// A process Linux started from the file as its contract says
+// (`SystemStart`: loaded, at its entry, the command line at RSP, and nothing
+// asked of the stack below) touches the stack room cat needs, and is then
+// one whose every run that exits 0 sent to stdout what it read from stdin.
+theorem cat_file_sends(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(cat_size()))>,
+    start: SystemStart(cat_size(), cat_file(), top, cat_room(), args, s)):
+    StackTouched(X86Profile::io(cat_size()), top, StoreByte(stack_touch_store()),
+        λ (at: MachineState<X86Memory(X86Profile::io(cat_size()))>) => Exists<MachineState<X86Memory(X86Profile::process(cat_size(), top, cat_room()))>>(λ u =>
+            Alike(X86Profile::io(cat_size()), X86Profile::process(cat_size(), top, cat_room()), at, u) ∧ CatSends(top, args)(u)),
+        stack_strides(cat_room(), cat_room()), 0, s) {
+    cat_native_sends(top, args, s, start)
 }

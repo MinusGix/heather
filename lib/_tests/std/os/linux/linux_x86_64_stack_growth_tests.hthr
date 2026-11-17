@@ -1,0 +1,44 @@
+// The entry code that touches a stack's room
+// (lib/std/os/linux/linux_x86_64_stack_growth.hthr), pinned by `refl`: how a
+// room is cut into strides, at a room of less than a page, of whole pages
+// and of none; what the code is, a touch at a time; and that the strides
+// always cover the room and never pass a page. Tests, not library: nothing
+// outside lib/_tests imports this module.
+import linux_x86_64_stack_growth;
+import x86_64;
+import x86_64_asm;
+import x86_64_block;
+import x86_64_store;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// A page at a time from the top, and then what is left.
+theorem strides_small(): stack_strides(184, 184) = [184] { refl }
+theorem strides_pages(): stack_strides(8192, 8192) = [4096, 4096] { refl }
+theorem strides_rest(): stack_strides(10000, 10000) = [4096, 4096, 1808] { refl }
+theorem strides_none(): stack_strides(0, 0) = Nil { refl }
+theorem strides_megabyte(): (stack_strides(1048576, 1048576).len() = 256) ∧ (stride_total(stack_strides(1048576, 1048576)) = 1048576) { ⟨refl, refl⟩ }
+
+// A room of no bytes has no touch: the entry code is its first block and
+// its last.
+theorem entry_untouched(): stack_touched_entry(0) = canonical_block_bytes(stack_touch_enter(0)) ++ canonical_block_bytes(stack_touch_leave()) { refl }
+
+// Nineteen bytes to enter, sixteen a touch, three to leave.
+theorem entry_small(): stack_touched_entry(184).len() = 38 { refl }
+theorem entry_pages(): stack_touched_entry(10000).len() = 70 { refl }
+
+// A touch: `mov rcx, stride; sub rbx, rcx; mov byte [rbx], al`.
+theorem touch_is(): stack_touch_bytes(184) =
+    [0x48, 0xb9, 184, 0, 0, 0, 0, 0, 0, 0, 0x48, 0x29, 0xcb, 0x40, 0x88, 0x03] { refl }
+
+// The store is one the machine's store step takes: a plain base.
+theorem touch_store_plain(): store_base_plain(stack_touch_store().base) = True { refl }
+
+// Whatever the room, the strides cover it and none is longer than a page.
+theorem strides_cover(room: Nat): stride_total(stack_strides(room, room)) = room { stack_strides_total(room, room, Nat::le_refl(room)) }
+theorem strides_short(room: Nat): Strides(stack_strides(room, room)) { stack_strides_ok(room, room) }
+
+// Negative control: a stride longer than a page is no stride.
+theorem long_stride_refused(): ¬Strides([4097]) { λ ok => Nat::leb_complete(4097, 4096, ok.left.right) }
