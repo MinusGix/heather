@@ -1893,7 +1893,7 @@ fn CReal::PowOk(x: CReal, n: Int) → Type {
 fn CReal::pow_parts(x: CReal, n: Int) → (x.PowOk(n) → CReal) {
     match n {
         OfNat(m) => λ _ => x.npow(m),
-        NegSucc(k) => λ h => x.inv(h := h).npow(Succ(k)),
+        NegSucc(k) => λ h => x.inv(h := h).npow(k + 1),
     }
 }
 

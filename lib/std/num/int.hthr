@@ -41,7 +41,7 @@ fn Int::negOfNat(n: Nat) → Int { match n { Zero => OfNat(0), Succ(k) => NegSuc
 fn Int::neg(self a: Int) → Int {
     match a {
         OfNat(n) => Int::negOfNat(n),
-        NegSucc(n) => OfNat(Succ(n)),
+        NegSucc(n) => OfNat(n + 1),
     }
 }
 
@@ -58,7 +58,7 @@ fn Int::toNat(self a: Int) → Nat { match a { OfNat(n) => n, NegSucc(_) => 0 } 
 // halves are atoms that `omega` reasons about through that equation.
 fn Int::pos_part(self a: Int) → Nat { a.toNat() }
 
-fn Int::neg_part(self a: Int) → Nat { match a { OfNat(_) => 0, NegSucc(k) => Succ(k) } }
+fn Int::neg_part(self a: Int) → Nat { match a { OfNat(_) => 0, NegSucc(k) => k + 1 } }
 
 theorem Int::toNat_ofNat(n: Nat): OfNat(n).toNat() = n { refl }
 
@@ -84,7 +84,7 @@ theorem Int::neg_ofNat_succ(n: Nat): -OfNat(n + 1) = NegSucc(n) { refl }
 // TODO(minus) rename to succ/pred as we only used isucc/ipred due to nat
 fn Int::isucc(self a: Int) → Int {
     match a {
-        OfNat(n) => OfNat(Succ(n)),
+        OfNat(n) => OfNat(n + 1),
         NegSucc(n) => match n { Zero => OfNat(0), Succ(k) => NegSucc(k) },
     }
 }
@@ -92,7 +92,7 @@ fn Int::isucc(self a: Int) → Int {
 fn Int::ipred(self a: Int) → Int {
     match a {
         OfNat(n) => match n { Zero => NegSucc(0), Succ(k) => OfNat(k) },
-        NegSucc(n) => NegSucc(Succ(n)),
+        NegSucc(n) => NegSucc(n + 1),
     }
 }
 
@@ -148,7 +148,7 @@ theorem Int::neg_ipred(self a: Int): -a.ipred() = (-a).isucc() {
 fn Int::subNatNat(m, n: Nat) → Int {
     match m {
         Zero => Int::negOfNat(n),
-        Succ(k) => match n { Zero => OfNat(Succ(k)), Succ(l) => Int::subNatNat(k, l) },
+        Succ(k) => match n { Zero => OfNat(k + 1), Succ(l) => Int::subNatNat(k, l) },
     }
 }
 
@@ -156,11 +156,11 @@ fn Int::add(self a: Int, b: Int) → Int {
     match a {
         OfNat(m) => match b {
             OfNat(n) => OfNat(m + n),
-            NegSucc(n) => Int::subNatNat(m, Succ(n)),
+            NegSucc(n) => Int::subNatNat(m, n + 1),
         },
         NegSucc(m) => match b {
-            OfNat(n) => Int::subNatNat(n, Succ(m)),
-            NegSucc(n) => NegSucc(Succ(m + n)),
+            OfNat(n) => Int::subNatNat(n, m + 1),
+            NegSucc(n) => NegSucc(m + n + 1),
         },
     }
 }
@@ -408,11 +408,11 @@ fn Int::mul(self a: Int, b: Int) → Int {
     match a {
         OfNat(m) => match b {
             OfNat(n) => OfNat(m * n),
-            NegSucc(n) => Int::negOfNat(m * Succ(n)),
+            NegSucc(n) => Int::negOfNat(m * (n + 1)),
         },
         NegSucc(m) => match b {
-            OfNat(n) => Int::negOfNat(Succ(m) * n),
-            NegSucc(n) => OfNat(Succ(m) * Succ(n)),
+            OfNat(n) => Int::negOfNat((m + 1) * n),
+            NegSucc(n) => OfNat((m + 1) * (n + 1)),
         },
     }
 }
@@ -431,19 +431,19 @@ designation * at Int := Int::mul
 inductive DivMod { MkIntDivMod(quotient: Int, remainder: Int) }
 
 fn Int::divmod_nonneg(dividend: Nat, divisor_pred: Nat) → DivMod {
-    match dividend.ldiv(Succ(divisor_pred)) {
+    match dividend.ldiv(divisor_pred + 1) {
         MkDivMod(quotient, remainder) =>
             MkIntDivMod(OfNat(quotient), OfNat(remainder)),
     }
 }
 
 fn Int::divmod_negative(dividend_pred: Nat, divisor_pred: Nat) → DivMod {
-    match Succ(dividend_pred).ldiv(Succ(divisor_pred)) {
+    match (dividend_pred + 1).ldiv(divisor_pred + 1) {
         MkDivMod(quotient, remainder) => match remainder {
             Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
             Succ(_) => MkIntDivMod(
                 NegSucc(quotient),
-                OfNat(Succ(divisor_pred) - remainder),
+                OfNat(divisor_pred + 1 - remainder),
             ),
         },
     }
@@ -487,7 +487,7 @@ designation / at Int := Int::div
 designation % at Int := Int::mod
 
 fn Int::natAbs(self a: Int) → Nat {
-    match a { OfNat(n) => n, NegSucc(n) => Succ(n) }
+    match a { OfNat(n) => n, NegSucc(n) => n + 1 }
 }
 
 fn Int::abs(self a: Int) → Int { OfNat(a.natAbs()) }

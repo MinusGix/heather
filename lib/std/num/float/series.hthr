@@ -368,7 +368,7 @@ fn Interval::small(self T: Interval, p: Nat) → Bool {
 fn Series::settle(self s: Series, b: SeriesBox, k, p, fuel: Nat) → Interval {
     match fuel {
         Zero => Interval::widen(b.term, b.sum, p),
-        Succ(f) => match b.term.small(p) { True => Interval::widen(b.term, b.sum, p), False => s.settle(s.box_step(b, k, p), Succ(k), p, f) },
+        Succ(f) => match b.term.small(p) { True => Interval::widen(b.term, b.sum, p), False => s.settle(s.box_step(b, k, p), k + 1, p, f) },
     }
 }
 

@@ -116,7 +116,7 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
 
 // `⌊e · lg / 2^16⌋`; with `lg ≈ 2^16 · log₂ base` it is about `⌊e · log₂ base⌋`.
 fn Int::scale_floor(self e: Int, lg: Nat) → Int {
-    match e { OfNat(k) => ((k * lg).shr(16)).int(), NegSucc(k) => -((Succ(k) * lg + 65535).shr(16)).int() }
+    match e { OfNat(k) => ((k * lg).shr(16)).int(), NegSucc(k) => -(((k + 1) * lg + 65535).shr(16)).int() }
 }
 
 // The window's width in binades past the first: three, or the whole format.
@@ -147,7 +147,7 @@ fn Format::sc_den(self F: Format, base: Nat, exp: Int, j, c: Nat) → Nat {
 
 // Quotient bits enough to pass the window's overflow limit: `2^fuel` is
 // `top · 2^(c+1)`.
-fn Format::sc_fuel(self F: Format, c: Nat) → Nat { Succ(F.prec() + c) }
+fn Format::sc_fuel(self F: Format, c: Nat) → Nat { F.prec() + c + 1 }
 
 fn Format::low_ok(self F: Format, j, h: Nat) → Option<j = 0 ∨ F.top() <= h> {
     match j.le_dec(0) {
@@ -159,7 +159,7 @@ fn Format::low_ok(self F: Format, j, h: Nat) → Option<j = 0 ∨ F.top() <= h> 
 fn Format::high_ok(self F: Format, j, c, h: Nat) → Option<F.span <= j + c ∨ h < F.top() * Nat::pow(2, c)> {
     match F.span.le_dec(j + c) {
         Inl(t) => Some(Inl(t)),
-        Inr(_) => match Succ(h).le_dec(F.top() * Nat::pow(2, c)) { Inl(t) => Some(Inr(t)), Inr(_) => None },
+        Inr(_) => match (h + 1).le_dec(F.top() * Nat::pow(2, c)) { Inl(t) => Some(Inr(t)), Inr(_) => None },
     }
 }
 
@@ -204,7 +204,7 @@ fn Format::sc_div(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Na
 fn Format::sc_at(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span ∨ ¬(j + c <= F.span)) → Float(F) {
     match jc {
         Inl(_) => F.sc_div(mode, base, bp, mant, exp, j, c,
-            Succ(F.sc_num(base, mant, exp, j, c)).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
+            (F.sc_num(base, mant, exp, j, c) + 1).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
         Inr(_) => F.round_rat(mode, Rat::scaled(base, bp, mant, exp)),
     }
 }
