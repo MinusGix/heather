@@ -6,9 +6,11 @@
 // The tactic reads the goal into a `BVPred` (`lib/std/tactic/bitblast.hthr`)
 // over its atoms: each local word and each local Boolean the claim mentions,
 // laid into one bit stream, words first. A definition the reader does not
-// know is unfolded once and read again. The predicate's clauses go to the
-// solver (`sat`, the `Sat` request); its refutation comes back as a proof the
-// kernel replays, and `BVPred::unsat_sound` turns it into the predicate at
+// know is unfolded once and read again. The predicate is normalized
+// (`lib/std/tactic/bv_normalize.hthr`: chains sorted and merged, so
+// `x + y = y + x` is a constant), and its clauses go to the solver (`sat`,
+// the `Sat` request); its refutation comes back as a proof the kernel
+// replays, and `BVPred::norm_unsat_sound` turns it into the predicate at
 // the laid-out atoms. Each word atom is then read back from its window of the
 // stream (`window_lay_here`, `window_lay_past`) and put in place of the window
 // by congruence, one atom at a time, over the claim's sides abstracted over
@@ -29,6 +31,7 @@ import nat;
 import bitvec;
 import lrat;
 import bitblast;
+import bv_normalize;
 
 // ---------------------------------------------------------------------------
 // Spellings of the predicate's constructors the tactic can name: a
@@ -475,14 +478,15 @@ fn BVPred::quote(self p: BVPred, q: BVQuote) → Expr {
 // The layout and the proof.
 
 record BVLemmas {
-    clauses: Handle, unsat: Handle, lay_word: Handle, lay_bool: Handle, no_bits: Handle,
+    clauses: Handle, norm: Handle, unsat: Handle, lay_word: Handle, lay_bool: Handle, no_bits: Handle,
     here: Handle, past: Handle, ok: Handle, trans: Handle, cong: Handle, congr: Handle, same: Handle,
     eq: Handle, iff: Handle, tru: Handle,
 }
 
 fn bv_lemmas() → Tac<BVLemmas> {
     let clauses <- bv_resolve("bitblast::BVPred::clauses");
-    let unsat <- bv_resolve("bitblast::BVPred::unsat_sound");
+    let norm <- bv_resolve("bv_normalize::BVPred::norm");
+    let unsat <- bv_resolve("bv_normalize::BVPred::norm_unsat_sound");
     let lay_word <- bv_resolve("bitblast::lay_word");
     let lay_bool <- bv_resolve("bitblast::lay_bool");
     let no_bits <- bv_resolve("bitblast::no_bits");
@@ -496,7 +500,7 @@ fn bv_lemmas() → Tac<BVLemmas> {
     let eq <- bv_resolve("bitblast::layout_eq");
     let iff <- bv_resolve("bitblast::layout_iff");
     let tru <- bv_resolve("bitblast::layout_true");
-    pure(BVLemmas(clauses, unsat, lay_word, lay_bool, no_bits, here, past, ok, trans, cong, congr, same, eq, iff, tru))
+    pure(BVLemmas(clauses, norm, unsat, lay_word, lay_bool, no_bits, here, past, ok, trans, cong, congr, same, eq, iff, tru))
 }
 
 // The stream from Boolean `j` on.
@@ -671,7 +675,7 @@ fn bv_decide() → Tac<Expr> {
     let q <- bv_quotes();
     let l <- bv_lemmas();
     let pe = pred.quote(q);
-    let verdict <- sat(bv_app(l.clauses, [pe, NatLit(k)]), Succ(k)).or_fail("bv_decide: ");
+    let verdict <- sat(bv_app(l.clauses, [bv_app(l.norm, [pe]), NatLit(k)]), Succ(k)).or_fail("bv_decide: ");
     match verdict {
         Satisfiable(model) => fail(bv_counterexample(g.locals, ws, bs, wbits, model), []),
         Unsatisfiable(r) => {

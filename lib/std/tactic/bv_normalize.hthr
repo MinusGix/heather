@@ -1,0 +1,827 @@
+// Normalizing a predicate over words before it is bit-blasted
+// (docs/tactics/bv-decide-design.md). A chain of one associative and
+// commutative operation (`+`, with `-` as `+` of a negation, `*`, `&`, `|`,
+// `bxor`) is flattened, its operands sorted, and neighbours merged: constants
+// folded, `x & x` and `x | x` to `x`, `x bxor x` and `x + -x` cancelled, units
+// dropped. Double complements and negations cancel, and an equation whose
+// sides normalize to one expression is true. So `x + y = y + x`,
+// `x + y + z = x + (y + z)` and `x - y + y = x` reach the solver as
+// constants.
+//
+// Nothing here is trusted: `BVPred::norm_eval` says the normalized predicate
+// means what the predicate did, at every input, so a refutation of its
+// clauses proves the original (`BVPred::norm_unsat_sound`). The order the
+// operands are sorted in is any order: a sort is a permutation whatever it
+// compares.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import bitvec;
+import bitvec_nat;
+import bitvec_ring;
+import bitvec_resize;
+import lrat;
+import bitblast;
+
+// ---------------------------------------------------------------------------
+// Structural equality.
+
+fn BVExpr::same(self a, b: BVExpr) → Bool {
+    match a {
+        BVar(o, w) => match b { BVar(o2, w2) => o.same(o2) && w.same(w2), _ => False },
+        BConst(x) => match b { BConst(y) => x.same(y), _ => False },
+        BNot(x) => match b { BNot(y) => x.same(y), _ => False },
+        BAnd(x1, x2) => match b { BAnd(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BOr(x1, x2) => match b { BOr(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BXor(x1, x2) => match b { BXor(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BAdd(x1, x2) => match b { BAdd(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BShl(x, k) => match b { BShl(y, l) => x.same(y) && k.same(l), _ => False },
+        BShr(x, k) => match b { BShr(y, l) => x.same(y) && k.same(l), _ => False },
+        BSub(x1, x2) => match b { BSub(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BNeg(x) => match b { BNeg(y) => x.same(y), _ => False },
+        BMul(x1, x2) => match b { BMul(y1, y2) => x1.same(y1) && x2.same(y2), _ => False },
+        BFrom(x, m, s) => match b { BFrom(y, m2, s2) => x.same(y) && (m.same(m2) && s.same(s2)), _ => False },
+        BSext(x, m) => match b { BSext(y, m2) => x.same(y) && m.same(m2), _ => False },
+        BConcat(l, m1, h, m2) => match b { BConcat(l2, m3, h2, m4) => l.same(l2) && (m1.same(m3) && (h.same(h2) && m2.same(m4))), _ => False },
+    }
+}
+
+theorem BVExpr::same_sound(self a: BVExpr): (b: BVExpr) → a.same(b) = True → a = b {
+    match a {
+        BVar(o, w) => λ b => match b {
+            BVar(o2, w2) => λ e => {
+                let p = o.same(o2).and_true_parts(w.same(w2), e);
+                cong_args<Nat, Nat, BVExpr>(λ u v => BVar(u, v), o.same_sound(o2, p.left), w.same_sound(w2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BConst(x) => λ b => match b {
+            BConst(y) => λ e => cong_fn(λ (u: Nat) => BConst(u), x.same_sound(y, e)),
+            _ => λ e => absurd(e),
+        },
+        BNot(x) => λ b => match b {
+            BNot(y) => λ e => cong_fn(λ (u: BVExpr) => BNot(u), x.same_sound(y, e)),
+            _ => λ e => absurd(e),
+        },
+        BAnd(x1, x2) => λ b => match b {
+            BAnd(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BAnd(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BOr(x1, x2) => λ b => match b {
+            BOr(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BOr(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BXor(x1, x2) => λ b => match b {
+            BXor(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BXor(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BAdd(x1, x2) => λ b => match b {
+            BAdd(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BAdd(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BShl(x, k) => λ b => match b {
+            BShl(y, l) => λ e => {
+                let p = x.same(y).and_true_parts(k.same(l), e);
+                cong_args<BVExpr, Nat, BVExpr>(λ u v => BShl(u, v), x.same_sound(y, p.left), k.same_sound(l, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BShr(x, k) => λ b => match b {
+            BShr(y, l) => λ e => {
+                let p = x.same(y).and_true_parts(k.same(l), e);
+                cong_args<BVExpr, Nat, BVExpr>(λ u v => BShr(u, v), x.same_sound(y, p.left), k.same_sound(l, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BSub(x1, x2) => λ b => match b {
+            BSub(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BSub(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BNeg(x) => λ b => match b {
+            BNeg(y) => λ e => cong_fn(λ (u: BVExpr) => BNeg(u), x.same_sound(y, e)),
+            _ => λ e => absurd(e),
+        },
+        BMul(x1, x2) => λ b => match b {
+            BMul(y1, y2) => λ e => {
+                let p = x1.same(y1).and_true_parts(x2.same(y2), e);
+                cong_args<BVExpr, BVExpr, BVExpr>(λ u v => BMul(u, v), x1.same_sound(y1, p.left), x2.same_sound(y2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BFrom(x, m, s) => λ b => match b {
+            BFrom(y, m2, s2) => λ e => {
+                let p = x.same(y).and_true_parts(m.same(m2) && s.same(s2), e);
+                let q = m.same(m2).and_true_parts(s.same(s2), p.right);
+                trans(cong_fn(λ (u: BVExpr) => BFrom(u, m, s), x.same_sound(y, p.left)),
+                    cong_args<Nat, Nat, BVExpr>(λ u v => BFrom(y, u, v), m.same_sound(m2, q.left), s.same_sound(s2, q.right)))
+            },
+            _ => λ e => absurd(e),
+        },
+        BSext(x, m) => λ b => match b {
+            BSext(y, m2) => λ e => {
+                let p = x.same(y).and_true_parts(m.same(m2), e);
+                cong_args<BVExpr, Nat, BVExpr>(λ u v => BSext(u, v), x.same_sound(y, p.left), m.same_sound(m2, p.right))
+            },
+            _ => λ e => absurd(e),
+        },
+        BConcat(l, m1, h, m2) => λ b => match b {
+            BConcat(l2, m3, h2, m4) => λ e => {
+                let p = l.same(l2).and_true_parts(m1.same(m3) && (h.same(h2) && m2.same(m4)), e);
+                let q = m1.same(m3).and_true_parts(h.same(h2) && m2.same(m4), p.right);
+                let r = h.same(h2).and_true_parts(m2.same(m4), q.right);
+                trans(cong_args<BVExpr, Nat, BVExpr>(λ u v => BConcat(u, v, h, m2), l.same_sound(l2, p.left), m1.same_sound(m3, q.left)),
+                    cong_args<BVExpr, Nat, BVExpr>(λ u v => BConcat(l2, m3, u, v), h.same_sound(h2, r.left), m2.same_sound(m4, r.right)))
+            },
+            _ => λ e => absurd(e),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The order operands are sorted in: an expression's preorder numbers,
+// compared lexicographically, with a negation just after what it negates
+// (its numbers, then 1 for the sign) so that `t` and `-t` are neighbours.
+// Constants come first. The order is untrusted: any order sorts soundly.
+
+fn BVExpr::code(self e: BVExpr) → List<Nat> {
+    match e {
+        BConst(x) => [0, x],
+        BVar(o, w) => [1, o, w],
+        BNot(a) => Cons(2, a.code()),
+        BAnd(a, b) => Cons(3, a.code() ++ b.code()),
+        BOr(a, b) => Cons(4, a.code() ++ b.code()),
+        BXor(a, b) => Cons(5, a.code() ++ b.code()),
+        BAdd(a, b) => Cons(6, a.code() ++ b.code()),
+        BShl(a, k) => Cons(7, Cons(k, a.code())),
+        BShr(a, k) => Cons(8, Cons(k, a.code())),
+        BSub(a, b) => Cons(9, a.code() ++ b.code()),
+        BNeg(a) => Cons(10, a.code()),
+        BMul(a, b) => Cons(11, a.code() ++ b.code()),
+        BFrom(a, m, s) => Cons(12, Cons(m, Cons(s, a.code()))),
+        BSext(a, m) => Cons(13, Cons(m, a.code())),
+        BConcat(l, m1, h, m2) => Cons(14, Cons(m1, Cons(m2, l.code() ++ h.code()))),
+    }
+}
+
+fn BVExpr::key(self e: BVExpr) → List<Nat> {
+    match e {
+        BNeg(a) => a.code() ++ [1],
+        _ => e.code() ++ [0],
+    }
+}
+
+fn lex_before(a, b: List<Nat>) → Bool {
+    match a {
+        Nil => match b { Nil => False, Cons(_, _) => True },
+        Cons(x, r) => match b {
+            Nil => False,
+            Cons(y, s) => Succ(x).leb(y) || (x.same(y) && lex_before(r, s)),
+        },
+    }
+}
+
+fn BVExpr::before(self a, b: BVExpr) → Bool { lex_before(a.key(), b.key()) }
+
+fn BVExpr::insert(t: BVExpr, ts: List<BVExpr>) → List<BVExpr> {
+    match ts {
+        Nil => [t],
+        Cons(u, r) => u.before(t).select(Cons(u, BVExpr::insert(t, r)), Cons(t, ts)),
+    }
+}
+
+fn BVExpr::sort(ts: List<BVExpr>) → List<BVExpr> {
+    match ts {
+        Nil => Nil,
+        Cons(t, r) => BVExpr::insert(t, BVExpr::sort(r)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chains of one associative and commutative operation.
+
+inductive AC { AAdd, AMul, AAnd, AOr, AXor }
+
+fn AC::op(self k: AC, n: Nat, x, y: BitVec(n)) → BitVec(n) {
+    match k {
+        AAdd => x.add(y),
+        AMul => x.mul(y),
+        AAnd => x.band(y),
+        AOr => x.bor(y),
+        AXor => x.bxor(y),
+    }
+}
+
+fn AC::unit(self k: AC, n: Nat) → BitVec(n) {
+    match k {
+        AAdd => BitVec::ofNat(0),
+        AMul => BitVec::ofNat(1),
+        AAnd => BitVec::all_ones(),
+        AOr => BitVec::zero(),
+        AXor => BitVec::zero(),
+    }
+}
+
+// The chain with no operands left.
+fn AC::unit_expr(self k: AC) → BVExpr {
+    match k {
+        AAdd => BConst(0),
+        AMul => BConst(1),
+        AAnd => BNot(BConst(0)),
+        AOr => BConst(0),
+        AXor => BConst(0),
+    }
+}
+
+theorem AC::unit_expr_eval(self k: AC, n: Nat, bits: Nat → Bool): k.unit_expr().eval(n, bits) = k.unit(n) {
+    match k {
+        AAdd => refl,
+        AMul => refl,
+        AAnd => trans(cong_fn(λ (x: BitVec(n)) => x.complement(), BitVec::ofNat_zero(n)), BitVec::complement_zero(n)),
+        AOr => BitVec::ofNat_zero(n),
+        AXor => BitVec::ofNat_zero(n),
+    }
+}
+
+theorem AC::op_assoc(self k: AC, n: Nat, x, y, z: BitVec(n)): k.op(n, k.op(n, x, y), z) = k.op(n, x, k.op(n, y, z)) {
+    match k {
+        AAdd => BitVec::add_assoc(n, x, y, z),
+        AMul => BitVec::mul_assoc(n, x, y, z),
+        AAnd => BitVec::band_assoc(n, x, y, z),
+        AOr => BitVec::bor_assoc(n, x, y, z),
+        AXor => BitVec::bxor_assoc(n, x, y, z),
+    }
+}
+
+theorem AC::op_comm(self k: AC, n: Nat, x, y: BitVec(n)): k.op(n, x, y) = k.op(n, y, x) {
+    match k {
+        AAdd => BitVec::add_comm(n, x, y),
+        AMul => BitVec::mul_comm(n, x, y),
+        AAnd => BitVec::band_comm(n, x, y),
+        AOr => BitVec::bor_comm(n, x, y),
+        AXor => BitVec::bxor_comm(n, x, y),
+    }
+}
+
+theorem AC::unit_r(self k: AC, n: Nat, x: BitVec(n)): k.op(n, x, k.unit(n)) = x {
+    match k {
+        AAdd => BitVec::add_zero(n, x),
+        AMul => BitVec::mul_one(n, x),
+        AAnd => BitVec::band_all_ones_r(n, x),
+        AOr => BitVec::bor_zero_r(n, x),
+        AXor => BitVec::bxor_zero_r(n, x),
+    }
+}
+
+theorem AC::unit_l(self k: AC, n: Nat, x: BitVec(n)): k.op(n, k.unit(n), x) = x { trans(k.op_comm(n, k.unit(n), x), k.unit_r(n, x)) }
+
+// `x · a · b` is `x · b · a`.
+theorem AC::op_swap(self k: AC, n: Nat, x, a, b: BitVec(n)): k.op(n, k.op(n, x, a), b) = k.op(n, k.op(n, x, b), a) {
+    trans(k.op_assoc(n, x, a, b), trans(cong_fn(λ (y: BitVec(n)) => k.op(n, x, y), k.op_comm(n, a, b)), sym(k.op_assoc(n, x, b, a))))
+}
+
+// The operands of `e`'s chain of `k`, before `rest`. A difference is a sum
+// with its subtrahend negated.
+fn AC::flat(self k: AC, e: BVExpr, rest: List<BVExpr>) → List<BVExpr> {
+    match e {
+        BAdd(a, b) => match k { AAdd => k.flat(a, k.flat(b, rest)), _ => Cons(e, rest) },
+        BSub(a, b) => match k { AAdd => k.flat(a, Cons(BNeg(b), rest)), _ => Cons(e, rest) },
+        BMul(a, b) => match k { AMul => k.flat(a, k.flat(b, rest)), _ => Cons(e, rest) },
+        BAnd(a, b) => match k { AAnd => k.flat(a, k.flat(b, rest)), _ => Cons(e, rest) },
+        BOr(a, b) => match k { AOr => k.flat(a, k.flat(b, rest)), _ => Cons(e, rest) },
+        BXor(a, b) => match k { AXor => k.flat(a, k.flat(b, rest)), _ => Cons(e, rest) },
+        _ => Cons(e, rest),
+    }
+}
+
+// `x` combined with each operand of `ts` in turn.
+fn AC::fold(self k: AC, n: Nat, bits: Nat → Bool, x: BitVec(n), ts: List<BVExpr>) → BitVec(n) {
+    match ts {
+        Nil => x,
+        Cons(t, r) => k.fold(n, bits, k.op(n, x, t.eval(n, bits)), r),
+    }
+}
+
+theorem AC::fold_cong(self k: AC, n: Nat, bits: Nat → Bool, x, y: BitVec(n), ts: List<BVExpr>, e: x = y): k.fold(n, bits, x, ts) = k.fold(n, bits, y, ts) {
+    cong_fn(λ (z: BitVec(n)) => k.fold(n, bits, z, ts), e)
+}
+
+theorem AC::flat_fold(self k: AC, n: Nat, bits: Nat → Bool, e: BVExpr): (x: BitVec(n)) → (rest: List<BVExpr>) →
+    k.fold(n, bits, x, k.flat(e, rest)) = k.fold(n, bits, k.op(n, x, e.eval(n, bits)), rest) {
+    match e {
+        BAdd(a, b) => match k {
+            AAdd => λ x rest => trans(AAdd.flat_fold(n, bits, a, x, AAdd.flat(b, rest)), trans(AAdd.flat_fold(n, bits, b, AAdd.op(n, x, a.eval(n, bits)), rest),
+                AAdd.fold_cong(n, bits, AAdd.op(n, AAdd.op(n, x, a.eval(n, bits)), b.eval(n, bits)), AAdd.op(n, x, BAdd(a, b).eval(n, bits)), rest, AAdd.op_assoc(n, x, a.eval(n, bits), b.eval(n, bits))))),
+            _ => λ x rest => refl,
+        },
+        BSub(a, b) => match k {
+            AAdd => λ x rest => {
+                let va = a.eval(n, bits);
+                let vb = b.eval(n, bits);
+                let step: (AAdd.op(n, AAdd.op(n, x, va), vb.neg()) = AAdd.op(n, x, va.sub(vb))) =
+                    trans(AAdd.op_assoc(n, x, va, vb.neg()), cong_fn(λ (y: BitVec(n)) => x.add(y), sym(BitVec::sub_eq_add_neg(n, va, vb))));
+                trans(AAdd.flat_fold(n, bits, a, x, Cons(BNeg(b), rest)), AAdd.fold_cong(n, bits, AAdd.op(n, AAdd.op(n, x, va), vb.neg()), AAdd.op(n, x, va.sub(vb)), rest, step))
+            },
+            _ => λ x rest => refl,
+        },
+        BMul(a, b) => match k {
+            AMul => λ x rest => trans(AMul.flat_fold(n, bits, a, x, AMul.flat(b, rest)), trans(AMul.flat_fold(n, bits, b, AMul.op(n, x, a.eval(n, bits)), rest),
+                AMul.fold_cong(n, bits, AMul.op(n, AMul.op(n, x, a.eval(n, bits)), b.eval(n, bits)), AMul.op(n, x, BMul(a, b).eval(n, bits)), rest, AMul.op_assoc(n, x, a.eval(n, bits), b.eval(n, bits))))),
+            _ => λ x rest => refl,
+        },
+        BAnd(a, b) => match k {
+            AAnd => λ x rest => trans(AAnd.flat_fold(n, bits, a, x, AAnd.flat(b, rest)), trans(AAnd.flat_fold(n, bits, b, AAnd.op(n, x, a.eval(n, bits)), rest),
+                AAnd.fold_cong(n, bits, AAnd.op(n, AAnd.op(n, x, a.eval(n, bits)), b.eval(n, bits)), AAnd.op(n, x, BAnd(a, b).eval(n, bits)), rest, AAnd.op_assoc(n, x, a.eval(n, bits), b.eval(n, bits))))),
+            _ => λ x rest => refl,
+        },
+        BOr(a, b) => match k {
+            AOr => λ x rest => trans(AOr.flat_fold(n, bits, a, x, AOr.flat(b, rest)), trans(AOr.flat_fold(n, bits, b, AOr.op(n, x, a.eval(n, bits)), rest),
+                AOr.fold_cong(n, bits, AOr.op(n, AOr.op(n, x, a.eval(n, bits)), b.eval(n, bits)), AOr.op(n, x, BOr(a, b).eval(n, bits)), rest, AOr.op_assoc(n, x, a.eval(n, bits), b.eval(n, bits))))),
+            _ => λ x rest => refl,
+        },
+        BXor(a, b) => match k {
+            AXor => λ x rest => trans(AXor.flat_fold(n, bits, a, x, AXor.flat(b, rest)), trans(AXor.flat_fold(n, bits, b, AXor.op(n, x, a.eval(n, bits)), rest),
+                AXor.fold_cong(n, bits, AXor.op(n, AXor.op(n, x, a.eval(n, bits)), b.eval(n, bits)), AXor.op(n, x, BXor(a, b).eval(n, bits)), rest, AXor.op_assoc(n, x, a.eval(n, bits), b.eval(n, bits))))),
+            _ => λ x rest => refl,
+        },
+        _ => λ x rest => refl,
+    }
+}
+
+theorem AC::insert_fold(self k: AC, n: Nat, bits: Nat → Bool, t: BVExpr, ts: List<BVExpr>): (x: BitVec(n)) →
+    k.fold(n, bits, x, BVExpr::insert(t, ts)) = k.fold(n, bits, k.op(n, x, t.eval(n, bits)), ts) {
+    match ts {
+        Nil => λ x => refl,
+        Cons(u, r) => λ x => {
+            match e: u.before(t) {
+                True => (
+                    trans(k.insert_fold(n, bits, t, r, k.op(n, x, u.eval(n, bits))),
+                        k.fold_cong(n, bits, k.op(n, k.op(n, x, u.eval(n, bits)), t.eval(n, bits)), k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r,
+                            k.op_swap(n, x, u.eval(n, bits), t.eval(n, bits))))),
+                False => (refl),
+            }
+        },
+    }
+}
+
+theorem AC::sort_fold(self k: AC, n: Nat, bits: Nat → Bool, ts: List<BVExpr>): (x: BitVec(n)) → k.fold(n, bits, x, BVExpr::sort(ts)) = k.fold(n, bits, x, ts) {
+    match ts {
+        Nil => λ x => refl,
+        Cons(t, r) => λ x => trans(k.insert_fold(n, bits, t, BVExpr::sort(r), x), k.sort_fold(n, bits, r, k.op(n, x, t.eval(n, bits)))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Merging neighbours of a sorted chain.
+
+// Whether `t` changes nothing in the chain: `0` in a sum, `1` in a product,
+// `0` in an or or an exclusive or.
+fn AC::is_unit(self k: AC, t: BVExpr) → Bool {
+    match t {
+        BConst(c) => match k {
+            AAdd => c.same(0),
+            AMul => c.same(1),
+            AAnd => False,
+            AOr => c.same(0),
+            AXor => c.same(0),
+        },
+        _ => False,
+    }
+}
+
+theorem AC::is_unit_ok(self k: AC, n: Nat, bits: Nat → Bool, t: BVExpr, e: k.is_unit(t) = True, x: BitVec(n)): k.op(n, x, t.eval(n, bits)) = x {
+    (match t as λ s => k.is_unit(s) = True → k.op(n, x, s.eval(n, bits)) = x {
+        BConst(c) => (match k as λ q => q.is_unit(BConst(c)) = True → q.op(n, x, BConst(c).eval(n, bits)) = x {
+            AAdd => λ e => j(sym(c.same_sound(0, e)), λ z _ => x.add(BitVec::ofNat(z)) = x, BitVec::add_zero(n, x)),
+            AMul => λ e => j(sym(c.same_sound(1, e)), λ z _ => x.mul(BitVec::ofNat(z)) = x, BitVec::mul_one(n, x)),
+            AAnd => λ e => absurd(e),
+            AOr => λ e => j(sym(c.same_sound(0, e)), λ z _ => x.bor(BitVec::ofNat(z)) = x,
+                trans(cong_fn(λ (y: BitVec(n)) => x.bor(y), BitVec::ofNat_zero(n)), BitVec::bor_zero_r(n, x))),
+            AXor => λ e => j(sym(c.same_sound(0, e)), λ z _ => x.bxor(BitVec::ofNat(z)) = x,
+                trans(cong_fn(λ (y: BitVec(n)) => x.bxor(y), BitVec::ofNat_zero(n)), BitVec::bxor_zero_r(n, x))),
+        }),
+        _ => λ e => absurd(e),
+    })(e)
+}
+
+// What two neighbours make: `None` when no rule applies, `Some(None)` when
+// they cancel, `Some(Some(w))` when they are `w`.
+fn AC::cancel(c: Bool) → Option<Option<BVExpr>> { c.select(Some(None), None) }
+
+fn AC::merge(self k: AC, t, u: BVExpr) → Option<Option<BVExpr>> {
+    match k {
+        AAdd => match u {
+            BConst(b) => match t {
+                BConst(a) => Some(Some(BConst(a + b))),
+                _ => None,
+            },
+            BNeg(v) => AC::cancel(t.same(v)),
+            _ => None,
+        },
+        AMul => match t {
+            BConst(a) => match u {
+                BConst(b) => Some(Some(BConst(a * b))),
+                _ => None,
+            },
+            _ => None,
+        },
+        AAnd => t.same(u).select(Some(Some(t)), None),
+        AOr => t.same(u).select(Some(Some(t)), None),
+        AXor => AC::cancel(t.same(u)),
+    }
+}
+
+// What a merge's answer promises of `x · t · u`.
+fn AC::Merges(self k: AC, n: Nat, bits: Nat → Bool, t, u: BVExpr, m: Option<Option<BVExpr>>) → Type {
+    match m {
+        None => True,
+        Some(o) => match o {
+            None => (x: BitVec(n)) → k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)) = x,
+            Some(w) => (x: BitVec(n)) → k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)) = k.op(n, x, w.eval(n, bits)),
+        },
+    }
+}
+
+// `x · t · t` is `x · t` where the operation is idempotent.
+theorem AC::idem_merges(self k: AC, n: Nat, bits: Nat → Bool, t, u: BVExpr, idem: (y: BitVec(n)) → k.op(n, y, y) = y): k.Merges(n, bits, t, u, t.same(u).select(Some(Some(t)), None)) {
+    match e: t.same(u) {
+        True => (
+            j(t.same_sound(u, e), λ z _ => (x: BitVec(n)) → k.op(n, k.op(n, x, t.eval(n, bits)), z.eval(n, bits)) = k.op(n, x, t.eval(n, bits)),
+                λ x => trans(k.op_assoc(n, x, t.eval(n, bits), t.eval(n, bits)), cong_fn(λ (y: BitVec(n)) => k.op(n, x, y), idem(t.eval(n, bits)))))),
+        False => (trivial),
+    }
+}
+
+// `x · t · u` is `x` where `t · u` is the unit.
+theorem AC::cancel_merges(self k: AC, n: Nat, bits: Nat → Bool, t, u: BVExpr, c: Bool, gone: c = True → (x: BitVec(n)) → k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)) = x):
+    k.Merges(n, bits, t, u, AC::cancel(c)) {
+    (match c as λ s => (s = True → (x: BitVec(n)) → k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)) = x) → k.Merges(n, bits, t, u, AC::cancel(s)) {
+        True => λ gone => gone(refl),
+        False => λ _ => trivial,
+    })(gone)
+}
+
+theorem AC::merge_ok(self k: AC, n: Nat, bits: Nat → Bool, t, u: BVExpr): k.Merges(n, bits, t, u, k.merge(t, u)) {
+    match k {
+        AAdd => match u {
+            BConst(b) => match t {
+                BConst(a) => λ x => trans(BitVec::add_assoc(n, x, BitVec::ofNat(a), BitVec::ofNat(b)), cong_fn(λ (y: BitVec(n)) => x.add(y), BitVec::ofNat_add(n, a, b))),
+                _ => trivial,
+            },
+            BNeg(v) => AAdd.cancel_merges(n, bits, t, BNeg(v), t.same(v), λ e x => {
+                let vt = t.eval(n, bits);
+                let back: (v.eval(n, bits) = vt) = cong_fn(λ (z: BVExpr) => z.eval(n, bits), sym(t.same_sound(v, e)));
+                trans(BitVec::add_assoc(n, x, vt, v.eval(n, bits).neg()),
+                    trans(cong_fn(λ (y: BitVec(n)) => x.add(y), trans(cong_fn(λ (z: BitVec(n)) => vt.add(z.neg()), back), BitVec::add_neg(n, vt))), BitVec::add_zero(n, x)))
+            }),
+            _ => trivial,
+        },
+        AMul => match t {
+            BConst(a) => match u {
+                BConst(b) => λ x => trans(BitVec::mul_assoc(n, x, BitVec::ofNat(a), BitVec::ofNat(b)), cong_fn(λ (y: BitVec(n)) => x.mul(y), BitVec::ofNat_mul(n, a, b))),
+                _ => trivial,
+            },
+            _ => trivial,
+        },
+        AAnd => AAnd.idem_merges(n, bits, t, u, BitVec::band_self(n)),
+        AOr => AOr.idem_merges(n, bits, t, u, BitVec::bor_self(n)),
+        AXor => AXor.cancel_merges(n, bits, t, u, t.same(u), λ e x => {
+            let vt = t.eval(n, bits);
+            let back: (u.eval(n, bits) = vt) = cong_fn(λ (z: BVExpr) => z.eval(n, bits), sym(t.same_sound(u, e)));
+            trans(BitVec::bxor_assoc(n, x, vt, u.eval(n, bits)),
+                trans(cong_fn(λ (y: BitVec(n)) => x.bxor(y), trans(cong_fn(λ (z: BitVec(n)) => vt.bxor(z), back), BitVec::xor_self(n, vt))), BitVec::bxor_zero_r(n, x)))
+        }),
+    }
+}
+
+// `x` with the held operand, if any.
+fn AC::with(self k: AC, n: Nat, bits: Nat → Bool, x: BitVec(n), held: Option<BVExpr>) → BitVec(n) {
+    match held {
+        None => x,
+        Some(t) => k.op(n, x, t.eval(n, bits)),
+    }
+}
+
+// One step of `merged`: `t` held and `u` next, `go` the rest merged from
+// what is held after them.
+fn AC::merge_step(m: Option<Option<BVExpr>>, t, u: BVExpr, go: Option<BVExpr> → List<BVExpr>) → List<BVExpr> {
+    match m {
+        None => Cons(t, go(Some(u))),
+        Some(o) => go(o),
+    }
+}
+
+// The sorted chain `ts` after `held`, its neighbours merged and its units
+// dropped.
+fn AC::merged(self k: AC, held: Option<BVExpr>, ts: List<BVExpr>) → List<BVExpr> {
+    match ts {
+        Nil => match held {
+            None => Nil,
+            Some(t) => [t],
+        },
+        Cons(u, r) => match held {
+            None => k.is_unit(u).select(k.merged(None, r), k.merged(Some(u), r)),
+            Some(t) => AC::merge_step(k.merge(t, u), t, u, λ o => k.merged(o, r)),
+        },
+    }
+}
+
+theorem AC::merge_step_fold(self k: AC, n: Nat, bits: Nat → Bool, m: Option<Option<BVExpr>>, t, u: BVExpr, r: List<BVExpr>, go: Option<BVExpr> → List<BVExpr>,
+    mg: k.Merges(n, bits, t, u, m), ih: (o: Option<BVExpr>) → (x: BitVec(n)) → k.fold(n, bits, x, go(o)) = k.fold(n, bits, k.with(n, bits, x, o), r), x: BitVec(n)):
+    k.fold(n, bits, x, AC::merge_step(m, t, u, go)) = k.fold(n, bits, k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r) {
+    (match m as λ q => k.Merges(n, bits, t, u, q) → k.fold(n, bits, x, AC::merge_step(q, t, u, go)) = k.fold(n, bits, k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r) {
+        None => λ _ => ih(Some(u), k.op(n, x, t.eval(n, bits))),
+        Some(o) => (match o as λ q => k.Merges(n, bits, t, u, Some(q)) → k.fold(n, bits, x, go(q)) = k.fold(n, bits, k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r) {
+            None => λ mg => trans(ih(None, x), k.fold_cong(n, bits, x, k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r, sym(mg(x)))),
+            Some(w) => λ mg => trans(ih(Some(w), x), k.fold_cong(n, bits, k.op(n, x, w.eval(n, bits)), k.op(n, k.op(n, x, t.eval(n, bits)), u.eval(n, bits)), r, sym(mg(x)))),
+        }),
+    })(mg)
+}
+
+theorem AC::merged_fold(self k: AC, n: Nat, bits: Nat → Bool, ts: List<BVExpr>): (held: Option<BVExpr>) → (x: BitVec(n)) →
+    k.fold(n, bits, x, k.merged(held, ts)) = k.fold(n, bits, k.with(n, bits, x, held), ts) {
+    match ts {
+        Nil => λ held x => match held {
+            None => refl,
+            Some(_) => refl,
+        },
+        Cons(u, r) => λ held x => match held {
+            None => {
+                match e: k.is_unit(u) {
+                    True => (
+                        trans(k.merged_fold(n, bits, r, None, x), k.fold_cong(n, bits, x, k.op(n, x, u.eval(n, bits)), r, sym(k.is_unit_ok(n, bits, u, e, x))))),
+                    False => (k.merged_fold(n, bits, r, Some(u), x)),
+                }
+            },
+            Some(t) => k.merge_step_fold(n, bits, k.merge(t, u), t, u, r, λ o => k.merged(o, r), k.merge_ok(n, bits, t, u), λ o y => k.merged_fold(n, bits, r, o, y), x),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rebuilding a chain.
+
+// `a · t`, a negated operand of a sum as a difference.
+fn AC::join(self k: AC, a, t: BVExpr) → BVExpr {
+    match k {
+        AAdd => match t {
+            BNeg(v) => BSub(a, v),
+            _ => BAdd(a, t),
+        },
+        AMul => BMul(a, t),
+        AAnd => BAnd(a, t),
+        AOr => BOr(a, t),
+        AXor => BXor(a, t),
+    }
+}
+
+theorem AC::join_eval(self k: AC, n: Nat, bits: Nat → Bool, a, t: BVExpr): k.join(a, t).eval(n, bits) = k.op(n, a.eval(n, bits), t.eval(n, bits)) {
+    match k {
+        AAdd => match t {
+            BNeg(v) => BitVec::sub_eq_add_neg(n, a.eval(n, bits), v.eval(n, bits)),
+            _ => refl,
+        },
+        AMul => refl,
+        AAnd => refl,
+        AOr => refl,
+        AXor => refl,
+    }
+}
+
+fn AC::build(self k: AC, acc: BVExpr, ts: List<BVExpr>) → BVExpr {
+    match ts {
+        Nil => acc,
+        Cons(t, r) => k.build(k.join(acc, t), r),
+    }
+}
+
+theorem AC::build_eval(self k: AC, n: Nat, bits: Nat → Bool, ts: List<BVExpr>): (acc: BVExpr) → k.build(acc, ts).eval(n, bits) = k.fold(n, bits, acc.eval(n, bits), ts) {
+    match ts {
+        Nil => λ acc => refl,
+        Cons(t, r) => λ acc => trans(k.build_eval(n, bits, r, k.join(acc, t)),
+            k.fold_cong(n, bits, k.join(acc, t).eval(n, bits), k.op(n, acc.eval(n, bits), t.eval(n, bits)), r, k.join_eval(n, bits, acc, t))),
+    }
+}
+
+fn AC::rebuilt(self k: AC, ts: List<BVExpr>) → BVExpr {
+    match ts {
+        Nil => k.unit_expr(),
+        Cons(t, r) => k.build(t, r),
+    }
+}
+
+theorem AC::rebuilt_eval(self k: AC, n: Nat, bits: Nat → Bool, ts: List<BVExpr>): k.rebuilt(ts).eval(n, bits) = k.fold(n, bits, k.unit(n), ts) {
+    match ts {
+        Nil => k.unit_expr_eval(n, bits),
+        Cons(t, r) => trans(k.build_eval(n, bits, r, t), k.fold_cong(n, bits, t.eval(n, bits), k.op(n, k.unit(n), t.eval(n, bits)), r, sym(k.unit_l(n, t.eval(n, bits))))),
+    }
+}
+
+// `e`'s chain of `k`, flattened, sorted, merged and rebuilt.
+fn AC::chain(self k: AC, e: BVExpr) → BVExpr { k.rebuilt(k.merged(None, BVExpr::sort(k.flat(e, Nil)))) }
+
+theorem AC::chain_eval(self k: AC, n: Nat, bits: Nat → Bool, e: BVExpr): k.chain(e).eval(n, bits) = e.eval(n, bits) {
+    let u = k.unit(n);
+    let fs = k.flat(e, Nil);
+    trans(k.rebuilt_eval(n, bits, k.merged(None, BVExpr::sort(fs))),
+    trans(k.merged_fold(n, bits, BVExpr::sort(fs), None, u),
+    trans(k.sort_fold(n, bits, fs, u),
+    trans(k.flat_fold(n, bits, e, u, Nil), k.unit_l(n, e.eval(n, bits))))))
+}
+
+// ---------------------------------------------------------------------------
+// Normal forms.
+
+fn BVExpr::not_of(self a: BVExpr) → BVExpr {
+    match a {
+        BNot(b) => b,
+        _ => BNot(a),
+    }
+}
+
+fn BVExpr::neg_of(self a: BVExpr) → BVExpr {
+    match a {
+        BNeg(b) => b,
+        _ => BNeg(a),
+    }
+}
+
+fn BVExpr::norm(self e: BVExpr) → BVExpr {
+    match e {
+        BVar(_, _) => e,
+        BConst(_) => e,
+        BNot(a) => a.norm().not_of(),
+        BAnd(a, b) => AAnd.chain(BAnd(a.norm(), b.norm())),
+        BOr(a, b) => AOr.chain(BOr(a.norm(), b.norm())),
+        BXor(a, b) => AXor.chain(BXor(a.norm(), b.norm())),
+        BAdd(a, b) => AAdd.chain(BAdd(a.norm(), b.norm())),
+        BShl(a, k) => BShl(a.norm(), k),
+        BShr(a, k) => BShr(a.norm(), k),
+        BSub(a, b) => AAdd.chain(BSub(a.norm(), b.norm())),
+        BNeg(a) => a.norm().neg_of(),
+        BMul(a, b) => AMul.chain(BMul(a.norm(), b.norm())),
+        BFrom(a, m, s) => BFrom(a.norm(), m, s),
+        BSext(a, m) => BSext(a.norm(), m),
+        BConcat(lo, m1, hi, m2) => BConcat(lo.norm(), m1, hi.norm(), m2),
+    }
+}
+
+theorem BVExpr::not_of_eval(self a: BVExpr, n: Nat, bits: Nat → Bool): a.not_of().eval(n, bits) = a.eval(n, bits).complement() {
+    match a {
+        BNot(b) => sym(BitVec::complement_complement(n, b.eval(n, bits))),
+        _ => refl,
+    }
+}
+
+theorem BVExpr::neg_of_eval(self a: BVExpr, n: Nat, bits: Nat → Bool): a.neg_of().eval(n, bits) = a.eval(n, bits).neg() {
+    match a {
+        BNeg(b) => sym(BitVec::neg_neg(n, b.eval(n, bits))),
+        _ => refl,
+    }
+}
+
+theorem BVExpr::norm_eval(self e: BVExpr, n: Nat, bits: Nat → Bool): e.norm().eval(n, bits) = e.eval(n, bits) {
+    match e {
+        BVar(_, _) => refl,
+        BConst(_) => refl,
+        BNot(a) => trans(a.norm().not_of_eval(n, bits), cong_fn(λ (x: BitVec(n)) => x.complement(), a.norm_eval(n, bits))),
+        BAnd(a, b) => trans(AAnd.chain_eval(n, bits, BAnd(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.band(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BOr(a, b) => trans(AOr.chain_eval(n, bits, BOr(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bor(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BXor(a, b) => trans(AXor.chain_eval(n, bits, BXor(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bxor(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BAdd(a, b) => trans(AAdd.chain_eval(n, bits, BAdd(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.add(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BShl(a, k) => cong_fn(λ (x: BitVec(n)) => x.shift_left(k), a.norm_eval(n, bits)),
+        BShr(a, k) => cong_fn(λ (x: BitVec(n)) => x.shift_right(k), a.norm_eval(n, bits)),
+        BSub(a, b) => trans(AAdd.chain_eval(n, bits, BSub(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.sub(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BNeg(a) => trans(a.norm().neg_of_eval(n, bits), cong_fn(λ (x: BitVec(n)) => x.neg(), a.norm_eval(n, bits))),
+        BMul(a, b) => trans(AMul.chain_eval(n, bits, BMul(a.norm(), b.norm())), cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.mul(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        BFrom(a, m, s) => cong_fn(λ (x: BitVec(m)) => x.bits_from(s, n := n), a.norm_eval(m, bits)),
+        BSext(a, m) => cong_fn(λ (x: BitVec(m)) => x.sign_bits(n := n), a.norm_eval(m, bits)),
+        BConcat(lo, m1, hi, m2) => cong_args<BitVec(m1), BitVec(m2), BitVec(n)>(λ x y => x.join_bits(y, n := n), lo.norm_eval(m1, bits), hi.norm_eval(m2, bits)),
+    }
+}
+
+// An equation whose sides are one expression is true.
+fn BVPred::eq_of(n: Nat, a, b: BVExpr) → BVPred { a.same(b).select(PConst(True), PEq(n, a, b)) }
+
+fn BVPred::not_of(self q: BVPred) → BVPred {
+    match q {
+        PConst(b) => PConst(!b),
+        PNot(r) => r,
+        _ => PNot(q),
+    }
+}
+
+fn BVPred::and_of(self q, r: BVPred) → BVPred {
+    match q {
+        PConst(b) => match b { False => PConst(False), True => r },
+        _ => match r {
+            PConst(b) => match b { False => PConst(False), True => q },
+            _ => PAnd(q, r),
+        },
+    }
+}
+
+fn BVPred::or_of(self q, r: BVPred) → BVPred {
+    match q {
+        PConst(b) => match b { False => r, True => PConst(True) },
+        _ => match r {
+            PConst(b) => match b { False => q, True => PConst(True) },
+            _ => POr(q, r),
+        },
+    }
+}
+
+fn BVPred::norm(self p: BVPred) → BVPred {
+    match p {
+        PConst(_) => p,
+        PEq(n, a, b) => BVPred::eq_of(n, a.norm(), b.norm()),
+        PUlt(n, a, b) => PUlt(n, a.norm(), b.norm()),
+        PNot(q) => q.norm().not_of(),
+        PAnd(q, r) => q.norm().and_of(r.norm()),
+        POr(q, r) => q.norm().or_of(r.norm()),
+        PIff(q, r) => PIff(q.norm(), r.norm()),
+        PSlt(n, a, b) => PSlt(n, a.norm(), b.norm()),
+        PBit(n, a, k) => PBit(n, a.norm(), k),
+        PVar(_) => p,
+        PXor(q, r) => PXor(q.norm(), r.norm()),
+    }
+}
+
+theorem BVPred::eq_of_eval(n: Nat, a, b: BVExpr, bits: Nat → Bool): BVPred::eq_of(n, a, b).eval(bits) = a.eval(n, bits).eq_bit(b.eval(n, bits)) {
+    match e: a.same(b) {
+        True => (
+            j(a.same_sound(b, e), λ z _ => True = a.eval(n, bits).eq_bit(z.eval(n, bits)), sym(BitVec::eq_bit_self(n, a.eval(n, bits))))),
+        False => (refl),
+    }
+}
+
+theorem BVPred::not_of_eval(self q: BVPred, bits: Nat → Bool): q.not_of().eval(bits) = !q.eval(bits) {
+    match q {
+        PConst(_) => refl,
+        PNot(r) => sym(r.eval(bits).not_not()),
+        _ => refl,
+    }
+}
+
+theorem BVPred::and_of_eval(self q, r: BVPred, bits: Nat → Bool): q.and_of(r).eval(bits) = q.eval(bits) && r.eval(bits) {
+    match q {
+        PConst(b) => match b { False => refl, True => refl },
+        _ => match r {
+            PConst(b) => match b { False => sym(q.eval(bits).and_false_r()), True => sym(q.eval(bits).and_true_r()) },
+            _ => refl,
+        },
+    }
+}
+
+theorem BVPred::or_of_eval(self q, r: BVPred, bits: Nat → Bool): q.or_of(r).eval(bits) = q.eval(bits) || r.eval(bits) {
+    match q {
+        PConst(b) => match b { False => refl, True => refl },
+        _ => match r {
+            PConst(b) => match b {
+                False => sym(q.eval(bits).or_false_r()),
+                True => sym(match q.eval(bits) as λ v => (v || True) = True { False => refl, True => refl }),
+            },
+            _ => refl,
+        },
+    }
+}
+
+theorem BVPred::norm_eval(self p: BVPred, bits: Nat → Bool): p.norm().eval(bits) = p.eval(bits) {
+    match p {
+        PConst(_) => refl,
+        PEq(n, a, b) => trans(BVPred::eq_of_eval(n, a.norm(), b.norm(), bits),
+            cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.eq_bit(y), a.norm_eval(n, bits), b.norm_eval(n, bits))),
+        PUlt(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.unsigned_lt_bit(y), a.norm_eval(n, bits), b.norm_eval(n, bits)),
+        PNot(q) => trans(q.norm().not_of_eval(bits), cong_fn(λ (x: Bool) => !x, q.norm_eval(bits))),
+        PAnd(q, r) => trans(q.norm().and_of_eval(r.norm(), bits), Bool::and_cong(q.norm_eval(bits), r.norm_eval(bits))),
+        POr(q, r) => trans(q.norm().or_of_eval(r.norm(), bits), Bool::or_cong(q.norm_eval(bits), r.norm_eval(bits))),
+        PIff(q, r) => cong_args<Bool, Bool, Bool>(λ x y => BitVec::bool_eq(x, y), q.norm_eval(bits), r.norm_eval(bits)),
+        PSlt(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.signed_lt_bit(y), a.norm_eval(n, bits), b.norm_eval(n, bits)),
+        PBit(n, a, k) => cong_fn(λ (x: BitVec(n)) => x.bit_at(k), a.norm_eval(n, bits)),
+        PVar(_) => refl,
+        PXor(q, r) => cong_args<Bool, Bool, Bool>(λ x y => x.xor(y), q.norm_eval(bits), r.norm_eval(bits)),
+    }
+}
+
+// What a refutation of the normalized predicate's clauses proves: the
+// predicate itself at every input of `K` bits.
+theorem BVPred::norm_unsat_sound(self p: BVPred, K: Nat, unsat: (v: Nat → Bool) → all_true(p.norm().clauses(K), v) = False, bits: Nat → Bool):
+    p.eval(λ k => Succ(k).leb(K) && bits(k)) = True {
+    trans(sym(p.norm_eval(λ k => Succ(k).leb(K) && bits(k))), p.norm().unsat_sound(K, unsat, bits))
+}

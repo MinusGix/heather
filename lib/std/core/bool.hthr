@@ -22,6 +22,10 @@ fn Bool::xor(self a, b: Bool) → Bool { match a { False => b, True => !b } }
 
 // TODO: xor theorems
 
+// `yes` when `c`, else `no`: a choice written as a call, so that a proof can
+// rewrite `c` in it (a `match` written twice elaborates to two terms).
+fn Bool::select<A>(self c: Bool, yes: A, no: A) → A { match c { False => no, True => yes } }
+
 // Two bits whose exclusive or is clear are one bit.
 theorem Bool::eq_of_not_xor(a, b: Bool, same: !(a.xor(b)) = True): a = b {
     match a { False => match b { False => refl, True => absurd(same) }, True => match b { False => absurd(same), True => refl } }

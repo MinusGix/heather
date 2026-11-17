@@ -1104,6 +1104,43 @@ theorem BitVec::bxor_comm(n: Nat): (x, y: BitVec(n)) → x.bxor(y) = y.bxor(x) {
     }
 }
 
+theorem BitVec::band_assoc(n: Nat): (x, y, z: BitVec(n)) → x.band(y).band(z) = x.band(y.band(z)) {
+    match n {
+        Zero => λ x y z => refl,
+        Succ(k, ih) => λ x y z => BitVec::cons_bit_cong(k, Bool::and_assoc(x.head_bit(), y.head_bit(), z.head_bit()),
+            ih(x.tail_bits(), y.tail_bits(), z.tail_bits())),
+    }
+}
+
+theorem BitVec::bxor_assoc(n: Nat): (x, y, z: BitVec(n)) → x.bxor(y).bxor(z) = x.bxor(y.bxor(z)) {
+    match n {
+        Zero => λ x y z => refl,
+        Succ(k, ih) => λ x y z => BitVec::cons_bit_cong(k, Bool::xor_assoc(x.head_bit(), y.head_bit(), z.head_bit()),
+            ih(x.tail_bits(), y.tail_bits(), z.tail_bits())),
+    }
+}
+
+theorem BitVec::band_self(n: Nat): (x: BitVec(n)) → x.band(x) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, Bool::and_self(x.head_bit()), ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::bor_self(n: Nat): (x: BitVec(n)) → x.bor(x) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, match x.head_bit() as λ h => (h || h) = h { False => refl, True => refl }, ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::complement_complement(n: Nat): (x: BitVec(n)) → x.complement().complement() = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, x.head_bit().not_not(), ih(x.tail_bits())),
+    }
+}
+
 theorem BitVec::cong_increment(n: Nat, {x, y: BitVec(n)}, p: x = y):
         x.increment() = y.increment() {
     rewrite(p, refl)
@@ -2410,6 +2447,27 @@ theorem BitVec::band_zero_r(n: Nat): (x: BitVec(n)) → x.band(BitVec::zero()) =
         Zero => λ x => refl,
         Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, match x.head_bit() as λ h => (h && False) = False { False => refl, True => refl },
             ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::band_all_ones_r(n: Nat): (x: BitVec(n)) → x.band(BitVec::all_ones()) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, x.head_bit().and_true_r(), ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::bxor_zero_r(n: Nat): (x: BitVec(n)) → x.bxor(BitVec::zero()) = x {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, x.head_bit().xor_false_r(), ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::complement_zero(n: Nat): BitVec::zero(n := n).complement() = BitVec::all_ones() {
+    match n {
+        Zero => refl,
+        Succ(k, ih) => BitVec::cons_bit_cong(k, refl, ih, a := True, b := True),
     }
 }
 
