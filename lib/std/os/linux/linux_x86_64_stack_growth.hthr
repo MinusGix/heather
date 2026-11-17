@@ -175,9 +175,9 @@ theorem stack_strides_ok(fuel: Nat): (room: Nat) → Strides(stack_strides(fuel,
         Succ(rest) => λ room => match room {
             Zero => trivial,
             Succ(k) => {
-                let moves: (0 < Succ(k) - (Succ(k) - 4096)) = omega();
-                let page: (Succ(k) - (Succ(k) - 4096) <= 4096) = omega();
-                ⟨⟨moves, page⟩, stack_strides_ok(rest, Succ(k) - stack_stride(Succ(k)))⟩
+                let moves: (0 < (k + 1) - ((k + 1) - 4096)) = omega();
+                let page: ((k + 1) - ((k + 1) - 4096) <= 4096) = omega();
+                ⟨⟨moves, page⟩, stack_strides_ok(rest, (k + 1) - stack_stride(k + 1))⟩
             },
         },
     }
@@ -189,10 +189,10 @@ theorem stack_strides_total(fuel: Nat): (room: Nat) → room <= fuel → stride_
         Succ(rest) => λ room => match room {
             Zero => λ _ => refl,
             Succ(k) => λ enough => {
-                let stride: (stack_stride(Succ(k)) = Succ(k) - (Succ(k) - 4096)) = refl;
-                let left = stack_strides_total(rest, Succ(k) - stack_stride(Succ(k)), omega(enough, stride));
-                let unfold: (stride_total(stack_strides(Succ(rest), Succ(k))) =
-                        stack_stride(Succ(k)) + stride_total(stack_strides(rest, Succ(k) - stack_stride(Succ(k))))) = refl;
+                let stride: (stack_stride(k + 1) = (k + 1) - ((k + 1) - 4096)) = refl;
+                let left = stack_strides_total(rest, (k + 1) - stack_stride(k + 1), omega(enough, stride));
+                let unfold: (stride_total(stack_strides(rest + 1, k + 1)) =
+                        stack_stride(k + 1) + stride_total(stack_strides(rest, (k + 1) - stack_stride(k + 1)))) = refl;
                 omega(left, stride, unfold)
             },
         },
