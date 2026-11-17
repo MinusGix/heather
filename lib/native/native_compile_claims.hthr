@@ -45,28 +45,6 @@ import native_compile_segments;
 import bitvec_nat;
 
 // ---------------------------------------------------------------------------
-// The register file after a word is fetched: RBX written, nothing else
-
-theorem Target::rbx_file(self t: Target, env: Env, id: Nat, g: Gprs): t.rbx_gprs(env, id, g) = write_gpr(Rbx, t.rbx_word(env, id), g) {
-    (match t.homes.home(id) as λ h =>
-        (match h { InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)), InReg(_) => write_gpr(Rbx, env.word(id), g) }) =
-            write_gpr(Rbx, match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }, g) {
-        InSlot(_) => refl,
-        InReg(_) => refl,
-    })
-}
-
-theorem Target::rbx_known_file(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs):
-    t.rbx_known_gprs(known, env, id, g) = write_gpr(Rbx, t.rbx_known(known, env, id), g) {
-    (match known.known(id) as λ o =>
-        (match o { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }) =
-            write_gpr(Rbx, match o { None => t.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g) {
-        None => t.rbx_file(env, id, g),
-        Some(_) => refl,
-    })
-}
-
-// ---------------------------------------------------------------------------
 // Fragments
 
 record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
@@ -155,7 +133,7 @@ theorem Fragment::goes_from(self code: Fragment, r: Run, p: Prog, tree: ITree<Bi
             let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m));
             let after: t.GoesR(prog_len(p.known_to(t.layout(), r.known, id, register)), tree, q) = t.goes_weaken(next, λ s held => held(s.flags, s.rip));
             λ s here resident holds => t.goes_known_to(r.live, r.env, p, r.known, id, register, holds.left.left, holds.left.right, within, tree, q, after)(s, here, resident,
-                ⟨holds.right.left, j(sym(t.rbx_known_file(r.known, r.env, id, s.gprs)), λ file _ => q(write_gpr(register, r.env.word(id), file), s.memory), holds.right.right)⟩)
+                ⟨holds.right.left, holds.right.right⟩)
         },
         Keep(_, _) => λ _ _ s here resident holds => false_elim(holds),
         Both(first, rest) => λ within next => {

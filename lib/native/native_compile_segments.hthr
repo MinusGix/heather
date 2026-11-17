@@ -60,71 +60,13 @@ fn Target::rbx_word(self t: Target, env: Env, id: Nat) → BitVec(64) {
     match t.homes.home(id) { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }
 }
 
-// The registers once a slot's address is in RBX: added up there from RSP,
-// so RBX is written twice, its offset in the frame and then its address.
-fn Target::slot_gprs(self t: Target, id: Nat, g: Gprs) → Gprs { write_gpr(Rbx, t.slot(id), write_gpr(Rbx, BitVec::ofNat(8 * id), g)) }
-
-theorem Target::slot_gprs_other(self t: Target, id: Nat, g: Gprs, x: Gpr, apart: Rbx.same(x) = False): read_gpr(x, t.slot_gprs(id, g)) = read_gpr(x, g) {
-    trans(read_gpr_other(Rbx, x, t.slot(id), write_gpr(Rbx, BitVec::ofNat(8 * id), g), apart), read_gpr_other(Rbx, x, BitVec::ofNat(8 * id), g, apart))
-}
+// The registers once a slot's address is in RBX. It is added up there from
+// RSP, so RBX is written twice; the register file is canonical, so that is
+// RBX written once.
+fn Target::slot_gprs(self t: Target, id: Nat, g: Gprs) → Gprs { write_gpr(Rbx, t.slot(id), g) }
 
 // The registers once a word is in a register, RBX written on the way.
-fn Target::rbx_gprs(self t: Target, env: Env, id: Nat, g: Gprs) → Gprs {
-    match t.homes.home(id) {
-        InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)),
-        InReg(_) => write_gpr(Rbx, env.word(id), g),
-    }
-}
-
-// Every register but RBX is as it was…
-theorem Target::rbx_gprs_other(self t: Target, env: Env, id: Nat, g: Gprs, x: Gpr, apart: Rbx.same(x) = False):
-    read_gpr(x, t.rbx_gprs(env, id, g)) = read_gpr(x, g) {
-    (match t.homes.home(id) as λ h => read_gpr(x, match h {
-        InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)),
-        InReg(_) => write_gpr(Rbx, env.word(id), g),
-    }) = read_gpr(x, g) {
-        InSlot(sk) => trans(read_gpr_other(Rbx, x, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g), apart), read_gpr_other(Rbx, x, BitVec::ofNat(8 * sk), g, apart)),
-        InReg(_) => read_gpr_other(Rbx, x, env.word(id), g, apart),
-    })
-}
-
-// …and RBX holds `rbx_word`.
-theorem Target::rbx_gprs_rbx(self t: Target, env: Env, id: Nat, g: Gprs): read_gpr(Rbx, t.rbx_gprs(env, id, g)) = t.rbx_word(env, id) {
-    (match t.homes.home(id) as λ h => read_gpr(Rbx, match h {
-        InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)),
-        InReg(_) => write_gpr(Rbx, env.word(id), g),
-    }) = (match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }) {
-        InSlot(_) => refl,
-        InReg(_) => refl,
-    })
-}
-
-// A claim of the registers once a word is read, shown for each way RBX is
-// written on the way: twice for a slot, once otherwise. A register written
-// twice is not the register written once (`Gprs` is a function, and Heather
-// has no function extensionality), so a claim that reads other registers
-// through the writes by evaluation is shown at each shape
-// (issues/native-gprs-writes-not-canonical.md).
-theorem Target::rbx_cases(self t: Target, env: Env, id: Nat, g: Gprs, P: Gprs → Type,
-    twice: (a, b: BitVec(64)) → P(write_gpr(Rbx, a, write_gpr(Rbx, b, g))), once: (a: BitVec(64)) → P(write_gpr(Rbx, a, g))):
-    P(t.rbx_gprs(env, id, g)) {
-    (match t.homes.home(id) as λ h => P(match h {
-        InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), g)),
-        InReg(_) => write_gpr(Rbx, env.word(id), g),
-    }) {
-        InSlot(sk) => twice(t.slot(sk), BitVec::ofNat(8 * sk)),
-        InReg(_) => once(env.word(id)),
-    })
-}
-
-// No word lives in RBX, and it is not RSP: the claim between statements
-// holds of them.
-theorem Target::held_rbx(self t: Target, live: List<Nat>, held_env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, held_env, g, m),
-    env: Env, id: Nat): t.Held(live, held_env, t.rbx_gprs(env, id, g), m) {
-    t.held_regs(live, held_env, g, t.rbx_gprs(env, id, g), m, held, λ k inside _ =>
-        t.rbx_gprs_other(env, id, g, home_register(k), trans(Rbx.same_comm(home_register(k)), home_register_apart(Rbx, trivial, k))),
-        t.rbx_gprs_other(env, id, g, Rsp, refl))
-}
+fn Target::rbx_gprs(self t: Target, env: Env, id: Nat, g: Gprs) → Gprs { write_gpr(Rbx, t.rbx_word(env, id), g) }
 
 // A word's code, by its home.
 theorem Prog::word_to_slot(self p: Prog, layout: Layout, id, k: Nat, register: Gpr, slot: layout.homes.home(id) = InSlot(k)):
@@ -374,10 +316,7 @@ theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: 
             (read_gpr(Rbx, u.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
             ((read_word(t.site().data, u.memory, read_gpr(Rbx, u.gprs)) = Some(word)) ∧ post(word_load_after(WordLoad(register, Rbx), word, u)))), loaded);
     λ s here resident held => {
-        let rbx: (t.rbx_gprs(env, id, s.gprs) = t.slot_gprs(k, s.gprs)) = j(sym(slot), λ h _ => (match h {
-            InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), s.gprs)),
-            InReg(_) => write_gpr(Rbx, env.word(id), s.gprs),
-        }) = t.slot_gprs(k, s.gprs), refl);
+        let rbx: (t.rbx_word(env, id) = t.slot(k)) = j(sym(slot), λ h _ => (match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }) = t.slot(k), refl);
         let words = held.left.witness;
         let placed = held.left.proof.left;
         let read = t.read_slot(env.with_words(words), placed.witness, s.memory, placed.proof.right.right.right.right.right.left, placed.proof.right.left, k, inside);
@@ -387,7 +326,7 @@ theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: 
         let goal = λ (x: BitVec(64)) => (x.toNat() + 8 <= Nat::pow(2, 47)) ∧ ((read_word(t.site().data, s.memory, x) = Some(env.word(id))) ∧
             q(write_gpr(register, env.word(id), write_gpr(Rbx, x, write_gpr(Rbx, a0, s.gprs))), s.memory));
         let at_slot: goal(t.slot(k)) = ⟨read.left, ⟨trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), word)),
-            j(rbx, λ x _ => q(write_gpr(register, env.word(id), x), s.memory), held.right)⟩⟩;
+            j(rbx, λ x _ => q(write_gpr(register, env.word(id), write_gpr(Rbx, x, s.gprs)), s.memory), held.right)⟩⟩;
         let there: goal(a0.add(read_gpr(Rsp, s.gprs))) = j(sym(address), λ x _ => goal(x), at_slot);
         moved(s, here, resident, Exists(env.word(id), there))
     }
@@ -407,13 +346,10 @@ theorem Target::goes_word_to_reg(self t: Target, live: List<Nat>, env: Env, p: P
     let moved = t.goes_block(p, 0, [MovRR(Rbx, home_register(k)), MovRR(register, Rbx)], w, tree,
         λ u => q(u.gprs, u.memory), n);
     λ s here resident held => {
-        let rbx: (t.rbx_gprs(env, id, s.gprs) = write_gpr(Rbx, env.word(id), s.gprs)) = j(sym(at), λ h _ => (match h {
-            InSlot(sk) => write_gpr(Rbx, t.slot(sk), write_gpr(Rbx, BitVec::ofNat(8 * sk), s.gprs)),
-            InReg(_) => write_gpr(Rbx, env.word(id), s.gprs),
-        }) = write_gpr(Rbx, env.word(id), s.gprs), refl);
+        let rbx: (t.rbx_word(env, id) = env.word(id)) = j(sym(at), λ h _ => (match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }) = env.word(id), refl);
         let value: (read_gpr(home_register(k), s.gprs) = env.word(id)) = t.held_reg_word(live, env, s.gprs, s.memory, held.left, id, holds, k, at);
         moved(s, here, resident, j(sym(value), λ x _ => q(write_gpr(register, x, write_gpr(Rbx, x, s.gprs)), s.memory),
-            j(rbx, λ x _ => q(write_gpr(register, env.word(id), x), s.memory), held.right)))
+            j(rbx, λ x _ => q(write_gpr(register, env.word(id), write_gpr(Rbx, x, s.gprs)), s.memory), held.right)))
     }
 }
 
@@ -436,33 +372,7 @@ fn Target::rbx_known(self t: Target, known: List<Fact>, env: Env, id: Nat) → B
     match known.known(id) { None => t.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }
 }
 
-fn Target::rbx_known_gprs(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs) → Gprs {
-    match known.known(id) { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }
-}
-
-theorem Target::rbx_known_other(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs, x: Gpr, apart: Rbx.same(x) = False):
-    read_gpr(x, t.rbx_known_gprs(known, env, id, g)) = read_gpr(x, g) {
-    (match known.known(id) as λ o => read_gpr(x, match o { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }) = read_gpr(x, g) {
-        None => t.rbx_gprs_other(env, id, g, x, apart),
-        Some(v) => read_gpr_other(Rbx, x, BitVec::ofNat(v), g, apart),
-    })
-}
-
-theorem Target::rbx_known_cases(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs, P: Gprs → Type,
-    twice: (a, b: BitVec(64)) → P(write_gpr(Rbx, a, write_gpr(Rbx, b, g))), once: (a: BitVec(64)) → P(write_gpr(Rbx, a, g))):
-    P(t.rbx_known_gprs(known, env, id, g)) {
-    (match known.known(id) as λ o => P(match o { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }) {
-        None => t.rbx_cases(env, id, g, P, twice, once),
-        Some(v) => once(BitVec::ofNat(v)),
-    })
-}
-
-theorem Target::held_rbx_known(self t: Target, live: List<Nat>, held_env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, held_env, g, m),
-    known: List<Fact>, env: Env, id: Nat): t.Held(live, held_env, t.rbx_known_gprs(known, env, id, g), m) {
-    t.held_regs(live, held_env, g, t.rbx_known_gprs(known, env, id, g), m, held, λ k inside _ =>
-        t.rbx_known_other(known, env, id, g, home_register(k), trans(Rbx.same_comm(home_register(k)), home_register_apart(Rbx, trivial, k))),
-        t.rbx_known_other(known, env, id, g, Rsp, refl))
-}
+fn Target::rbx_known_gprs(self t: Target, known: List<Fact>, env: Env, id: Nat, g: Gprs) → Gprs { write_gpr(Rbx, t.rbx_known(known, env, id), g) }
 
 // A word a statement reads into a register: known, with the number the
 // environment has, or live.
@@ -550,7 +460,7 @@ theorem Target::goes_known_to(self t: Target, live: List<Nat>, env: Env, p: Prog
             (match o { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }).Within(t.program) →
             t.GoesR(prog_len(match o { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }), tree, q) →
             t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-                q(write_gpr(register, env.word(id), match o { None => t.rbx_gprs(env, id, g), Some(v) => write_gpr(Rbx, BitVec::ofNat(v), g) }), m)) {
+                q(write_gpr(register, env.word(id), write_gpr(Rbx, match o { None => t.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g)), m)) {
         None => λ holds w n => t.goes_word_to(live, env, p, id, register, inside, holds, w, tree, q, n),
         Some(v) => λ known_v w n => {
             let moved = t.goes_block(p, 0, [MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)], w, tree,
@@ -637,14 +547,14 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                         let g1 = t.slot_gprs(sk, s.gprs);
                         let w = read_gpr(register, s.gprs);
                         let m1 = t.r.profile.store(s.memory, a, word_bytes(w));
-                        let value: (read_gpr(register, g1) = w) = t.slot_gprs_other(sk, s.gprs, register, rbx);
+                        let value: (read_gpr(register, g1) = w) = read_gpr_other(Rbx, register, t.slot(sk), s.gprs, rbx);
                         let set = t.held_slot_set(live, after, env, id, w, s.gprs, s.memory, held.left, sub, sk, slot, fits);
                         let set1: t.Held(after, env.set_word(id, w), g1, m1) = t.held_regs(after, env.set_word(id, w), s.gprs, g1, m1, set,
-                            λ k _ _ => t.slot_gprs_other(sk, s.gprs, home_register(k), trans(Rbx.same_comm(home_register(k)), home_register_apart(Rbx, trivial, k))),
-                            t.slot_gprs_other(sk, s.gprs, Rsp, refl));
+                            λ k _ _ => read_gpr_other(Rbx, home_register(k), t.slot(sk), s.gprs, trans(Rbx.same_comm(home_register(k)), home_register_apart(Rbx, trivial, k))),
+                            read_gpr_other(Rbx, Rsp, t.slot(sk), s.gprs, refl));
                         ⟨t.held_rsp(live, env, s.gprs, s.memory, held.left),
                          j(sym(value), λ v _ => q(g1, t.r.profile.store(s.memory, a, word_bytes(v))),
-                            held.right(g1, m1, set1, λ x _ apart_x => t.slot_gprs_other(sk, s.gprs, x, apart_x)))⟩
+                            held.right(g1, m1, set1, λ x _ apart_x => read_gpr_other(Rbx, x, t.slot(sk), s.gprs, apart_x)))⟩
                     })
             },
             InReg(k) => {
@@ -775,7 +685,7 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
     let loaded = t.goes_bit_to(live, env, p, condition, Rax, inside, holds, w_bits, tree, q,
         t.goes_weaken(flagged, λ u held => held));
     t.goes_weaken(loaded,
-        λ s held => ⟨held, ⟨t.held_rbx(live, env, s.gprs, s.memory, held, env, condition), bit_tests_zero(env.number(condition))⟩⟩)
+        λ s held => ⟨held, ⟨held, bit_tests_zero(env.number(condition))⟩⟩)
 }
 
 // exit(status), every exit with the word meeting the tree.

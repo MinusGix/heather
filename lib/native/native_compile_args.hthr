@@ -732,10 +732,6 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
                 ((read_word(t.site().data, w.memory, read_gpr(Rbx, w.gprs)) = Some(word)) ∧ post_rsp(word_load_after(WordLoad(Rdx, Rbx), word, w)))),
             saved)(s, here, resident,
             Exists(rsp, ⟨stack.left, ⟨stack.right, Exists(word_of_nat(64, argc), ⟨argc_word.left, ⟨argc_word.right,
-                ⟨held, t.rbx_cases(env, index, word_load_after(WordLoad(R9, Rdx), word_of_nat(64, argc), word_load_after(WordLoad(Rdx, Rbx), rsp,
-                        execute_block_normal([MovRI(Rbx, layout.stack_at())], s))).gprs,
-                    λ (g1: Gprs) => Q3(write_gpr(Rcx, env.word(index), g1), m0),
-                    λ _ _ => ⟨⟨placed_v.left, stacked⟩, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩,
-                    λ _ => ⟨⟨placed_v.left, stacked⟩, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩)⟩⟩⟩)⟩⟩))
+                ⟨held, ⟨⟨placed_v.left, stacked⟩, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩)⟩⟩))
     }
 }
