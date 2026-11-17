@@ -99,8 +99,8 @@ theorem neg_has_cited(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi,
 // whole-body `npow::unfold` (that is not `refl` at an open exponent), only
 // one equation per arm.
 // expect-error(kernel): `Interval::npow` is an interface definition of `interval`
-theorem npow_succ_refl(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { refl }
-theorem npow_succ_cited(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { Interval::npow_unfold_Succ(I, k, p) }
+theorem npow_succ_refl(I: Interval, k, p: Nat): I.npow(k + 1, p) = I.npow(k, p).mul(I, p) { refl }
+theorem npow_succ_cited(I: Interval, k, p: Nat): I.npow(k + 1, p) = I.npow(k, p).mul(I, p) { Interval::npow_unfold_Succ(I, k, p) }
 theorem cube(): Interval::point(Dyadic(2, 0)).npow(3, 8) = Interval::point(Dyadic(8, 0)) { refl }
 
 // `unfolding` names interface definitions only.

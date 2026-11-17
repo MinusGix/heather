@@ -90,10 +90,10 @@ theorem down_spec({F: Format}, f: Finite(F)): Finite::IsNextDown(f, f.next_down(
 theorem up_least({F: Format}, f, s, g: Finite(F), is: f.next_up() = Some(s), lt: f.val() < g.val()): s.val() <= g.val() {
     (j(is, λ o _ => Finite::IsNextUp(f, o), f.next_up_spec())).right(g, lt)
 }
-theorem spacing({F: Format}, f, s: Finite(F), pos: f.neg = False, is: f.next_up() = Some(s)): s.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int() {
+theorem spacing({F: Format}, f, s: Finite(F), pos: f.neg = False, is: f.next_up() = Some(s)): s.H() = f.H() + Nat::pow(2, f.bexp + 1).int() {
     Finite::next_up_spacing(f, s, pos, is)
 }
-theorem gap(f, s: Finite(e4m3()), pos: f.neg = False, is: f.next_up() = Some(s)): s.val() ≈ f.val() + e4m3().grid(Nat::pow(2, Succ(f.bexp)).int()) {
+theorem gap(f, s: Finite(e4m3()), pos: f.neg = False, is: f.next_up() = Some(s)): s.val() ≈ f.val() + e4m3().grid(Nat::pow(2, f.bexp + 1).int()) {
     Finite::next_up_gap(f, s, pos, is)
 }
 

@@ -72,7 +72,7 @@ theorem c_op_nat(m, n: Nat): m + n = n + m { nat::Nat::add_comm(m, n) }
 theorem c_op_int_mul(a, b: Int): a * b = b * a { int::Int::mul_comm(a, b) }
 theorem c_op_le_int(a: Int): a <= a { int::Int::le_refl(a) }
 theorem c_op_lt_int(a: Int): a < int::Int::isucc(a) { int::Int::lt_isucc_self(a) }
-theorem c_op_lt_nat(n: Nat): n < Succ(n) { nat::Nat::lt_succ_self(n) }
+theorem c_op_lt_nat(n: Nat): n < n + 1 { nat::Nat::lt_succ_self(n) }
 
 // the instances, reached by resolution: the commutative monoid's generic law,
 // the monoid fold at `List<Int>`, the group's inverse-uniqueness, and `Cmp`

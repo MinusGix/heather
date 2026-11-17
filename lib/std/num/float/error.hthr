@@ -68,11 +68,11 @@ theorem Mode::conj_conj(self m: Mode): m.conj().conj() = m {
 // Ulps.
 
 // One ulp of `f` is `2^(bexp + 1)` half-units.
-theorem Finite::ulp_grid({F: Format}, self f: Finite(F)): f.ulp().rat() ≈ F.grid(Nat::pow(2, Succ(f.bexp)).int()) {
-    let al = Dyadic::align(1, F.qmin() - 1, Succ(f.bexp));
+theorem Finite::ulp_grid({F: Format}, self f: Finite(F)): f.ulp().rat() ≈ F.grid(Nat::pow(2, f.bexp + 1).int()) {
+    let al = Dyadic::align(1, F.qmin() - 1, f.bexp + 1);
     let qd: (f.q() = F.qmin() + f.bexp.int()) = refl;
-    let ex: (F.qmin() - 1 + Succ(f.bexp).int() = f.q()) = omega;
-    let one: (OfNat(1) * Nat::pow(2, Succ(f.bexp)).int() = Nat::pow(2, Succ(f.bexp)).int()) = Nat::pow(2, Succ(f.bexp)).int().one_mul();
+    let ex: (F.qmin() - 1 + (f.bexp + 1).int() = f.q()) = omega;
+    let one: (OfNat(1) * Nat::pow(2, f.bexp + 1).int() = Nat::pow(2, f.bexp + 1).int()) = Nat::pow(2, f.bexp + 1).int().one_mul();
     let moved = rewrite(ex, one, in := al);
     Dyadic::same_sym(moved)
 }
@@ -91,7 +91,7 @@ fn Format::err_at(self F: Format, mode: Mode, x: Rat) → Rat { F.grid(Nat::pow(
 // Below the limit, the cut `h` (and `h + 1` when sticky) lies in the cell of
 // the greatest float below, which is `2^(bexp + 1)` half-units wide.
 theorem Format::cut_in_cell(self F: Format, h: Nat, st: Bool, below: h < F.limit_h()):
-    (F.down(h)).H() <= h.int() ∧ h.int() + Nat::of_bit(st).int() <= (F.down(h)).H() + Nat::pow(2, Succ((F.down(h)).bexp)).int()
+    (F.down(h)).H() <= h.int() ∧ h.int() + Nat::of_bit(st).int() <= (F.down(h)).H() + Nat::pow(2, (F.down(h)).bexp + 1).int()
 {
     let be = (F.down_below(h, below)).right.right;
     let e = F.down_H(h, below);
@@ -99,22 +99,22 @@ theorem Format::cut_in_cell(self F: Format, h: Nat, st: Bool, below: h < F.limit
     let fl1 = fl.left;
     let fl2 = fl.right;
     let b = bit_le_one(st);
-    let P = Nat::pow(2, Succ(F.e_of(h)));
-    let pe: (Nat::pow(2, Succ((F.down(h)).bexp)) = P) = Nat::cong(λ (w: Nat) => Nat::pow(2, Succ(w)), be);
-    let step: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
+    let P = Nat::pow(2, F.e_of(h) + 1);
+    let pe: (Nat::pow(2, (F.down(h)).bexp + 1) = P) = Nat::cong(λ (w: Nat) => Nat::pow(2, w + 1), be);
+    let step: ((F.m_of(h) + 1) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
     And(omega, omega)
 }
 
 // The step up is the cell's other end.
 theorem Format::up_H(self F: Format, h: Nat, below: h < F.limit_h(), o: Option<Finite(F)>, up: UpIs(F, h, o)):
-    up.u.H() = (F.down(h)).H() + Nat::pow(2, Succ((F.down(h)).bexp)).int()
+    up.u.H() = (F.down(h)).H() + Nat::pow(2, (F.down(h)).bexp + 1).int()
 {
     let be = (F.down_below(h, below)).right.right;
     let e = F.down_H(h, below);
     let at = up.at;
-    let P = Nat::pow(2, Succ(F.e_of(h)));
-    let pe: (Nat::pow(2, Succ((F.down(h)).bexp)) = P) = Nat::cong(λ (w: Nat) => Nat::pow(2, Succ(w)), be);
-    let step: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
+    let P = Nat::pow(2, F.e_of(h) + 1);
+    let pe: (Nat::pow(2, (F.down(h)).bexp + 1) = P) = Nat::cong(λ (w: Nat) => Nat::pow(2, w + 1), be);
+    let step: ((F.m_of(h) + 1) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
     omega
 }
 
@@ -124,8 +124,8 @@ theorem Format::top_H(self F: Format, h: Nat, below: h < F.limit_h(), top: F.e_o
 {
     let e = F.down_H(h, below);
     let mx = Finite::max_H(F);
-    let same: (F.m_of(h) * Nat::pow(2, Succ(F.e_of(h))) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
-        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, Succ(w)), top.left), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, Succ(F.span)), top.right),
+    let same: (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) = (F.max_mag() * Nat::pow(2, F.span)) * 2) =
+        trans(Nat::cong(λ (w: Nat) => F.m_of(h) * Nat::pow(2, w + 1), top.left), trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, F.span + 1), top.right),
             sym(F.max_mag().mul_assoc(Nat::pow(2, F.span), 2))));
     omega
 }
@@ -134,12 +134,12 @@ theorem Format::top_H(self F: Format, h: Nat, below: h < F.limit_h(), top: F.e_o
 // one of them does.
 theorem Format::nbr_in_cell(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), below: h < F.limit_h(), r: Finite(F),
     nb: Finite::Below(x, r) ∨ Finite::Above(x, r)):
-    (F.down(h)).H() <= r.H() ∧ r.H() <= (F.down(h)).H() + Nat::pow(2, Succ((F.down(h)).bexp)).int()
+    (F.down(h)).H() <= r.H() ∧ r.H() <= (F.down(h)).H() + Nat::pow(2, (F.down(h)).bexp + 1).int()
 {
     let d = F.down(h);
     let bd = F.down_is_below(x, h, st, a);
     let c = F.cut_in_cell(h, st, below);
-    let pp: (0 < Nat::pow(2, Succ(d.bexp))) = Nat::pow_pos(a := 2, n := Succ(d.bexp));
+    let pp: (0 < Nat::pow(2, d.bexp + 1)) = Nat::pow_pos(a := 2, n := d.bexp + 1);
     match nb {
         Inl(br) => {
             let e = Finite::below_unique(x, r, d, br, bd);
@@ -150,7 +150,7 @@ theorem Format::nbr_in_cell(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
         Inr(ar) => {
             let lo = Finite::H_le_of_le(d, r, Rat::le_trans(bd.left, ar.left));
             let c2 = c.right;
-            let hi = match F.up_cases(h, below) as λ _ => r.H() <= d.H() + Nat::pow(2, Succ(d.bexp)).int() {
+            let hi = match F.up_cases(h, below) as λ _ => r.H() <= d.H() + Nat::pow(2, d.bexp + 1).int() {
                 Inl(up) => {
                     let uh = F.up_H(h, below, F.up(h), up);
                     let xu = Finite::ge_of_cut(up.u, x, h, st, a, omega);
@@ -170,9 +170,9 @@ theorem Format::nbr_in_cell(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
 
 // A neighbour of `x` is within one cell width of it.
 theorem Format::nbr_err(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), below: h < F.limit_h(), r: Finite(F),
-    nb: Finite::Below(x, r) ∨ Finite::Above(x, r)): (r.val() - x).abs() <= F.grid(Nat::pow(2, Succ((F.down(h)).bexp)).int())
+    nb: Finite::Below(x, r) ∨ Finite::Above(x, r)): (r.val() - x).abs() <= F.grid(Nat::pow(2, (F.down(h)).bexp + 1).int())
 {
-    let P = Nat::pow(2, Succ((F.down(h)).bexp)).int();
+    let P = Nat::pow(2, (F.down(h)).bexp + 1).int();
     let n = F.nbr_in_cell(x, h, st, a, below, r, nb);
     let n1 = n.left;
     let n2 = n.right;
@@ -199,9 +199,9 @@ theorem Format::nearest_err(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
     let d = F.down(h);
     let bd = F.down_is_below(x, h, st, a);
     let half = F.grid(Nat::pow(2, d.bexp).int());
-    let P = Nat::pow(2, Succ(d.bexp)).int();
+    let P = Nat::pow(2, d.bexp + 1).int();
     let dd = Finite::dist_below(d, x, bd.left);
-    let dbl: (Nat::pow(2, d.bexp).int() + Nat::pow(2, d.bexp).int() = P) = { let pd: (Nat::pow(2, Succ(d.bexp)) = Nat::pow(2, d.bexp) * 2) = refl; omega };
+    let dbl: (Nat::pow(2, d.bexp).int() + Nat::pow(2, d.bexp).int() = P) = { let pd: (Nat::pow(2, d.bexp + 1) = Nat::pow(2, d.bexp) * 2) = refl; omega };
     let halves: (half + half ≈ F.grid(P)) = rewrite(dbl, in := F.grid_add(Nat::pow(2, d.bexp).int(), Nat::pow(2, d.bexp).int()));
     let c2 = (F.cut_in_cell(h, st, below)).right;
     let half_nn: (0 <= half) = Rat::le_respects(F.grid_zero(), half.same_refl(), F.grid_le(0, Nat::pow(2, d.bexp).int(), omega));
@@ -300,17 +300,17 @@ theorem Format::rounding_error(self F: Format, mode: Mode, x: Rat, r: Finite(F),
 // of one for the nearest modes.
 theorem Format::err_le_ulp(self F: Format, mode: Mode, x: Rat): F.err_at(mode, x) <= F.ulp_at(x) {
     let b = (F.down(F.rat_h(x))).bexp;
-    let le: (Nat::pow(2, mode.err_exp(b)) <= Nat::pow(2, Succ(b))) = match mode {
-        NearestEven => Nat::pow_le_pow_r(2, b, Succ(b), trivial, omega),
-        NearestAway => Nat::pow_le_pow_r(2, b, Succ(b), trivial, omega),
-        TowardPos => Nat::pow(2, Succ(b)).le_refl(), TowardNeg => Nat::pow(2, Succ(b)).le_refl(), TowardZero => Nat::pow(2, Succ(b)).le_refl(),
+    let le: (Nat::pow(2, mode.err_exp(b)) <= Nat::pow(2, b + 1)) = match mode {
+        NearestEven => Nat::pow_le_pow_r(2, b, b + 1, trivial, omega),
+        NearestAway => Nat::pow_le_pow_r(2, b, b + 1, trivial, omega),
+        TowardPos => Nat::pow(2, b + 1).le_refl(), TowardNeg => Nat::pow(2, b + 1).le_refl(), TowardZero => Nat::pow(2, b + 1).le_refl(),
     };
-    Rat::le_respects((F.err_at(mode, x)).same_refl(), Rat::same_sym((F.down(F.rat_h(x))).ulp_grid()), F.grid_le(Nat::pow(2, mode.err_exp(b)).int(), Nat::pow(2, Succ(b)).int(), omega(le)))
+    Rat::le_respects((F.err_at(mode, x)).same_refl(), Rat::same_sym((F.down(F.rat_h(x))).ulp_grid()), F.grid_le(Nat::pow(2, mode.err_exp(b)).int(), Nat::pow(2, b + 1).int(), omega(le)))
 }
 
 theorem Format::err_half_ulp(self F: Format, even: Bool, x: Rat): F.err_at(Mode::nearest(even), x) + F.err_at(Mode::nearest(even), x) ≈ F.ulp_at(x) {
     let b = (F.down(F.rat_h(x))).bexp;
-    let dbl: (Nat::pow(2, b).int() + Nat::pow(2, b).int() = Nat::pow(2, Succ(b)).int()) = { let pd: (Nat::pow(2, Succ(b)) = Nat::pow(2, b) * 2) = refl; omega };
+    let dbl: (Nat::pow(2, b).int() + Nat::pow(2, b).int() = Nat::pow(2, b + 1).int()) = { let pd: (Nat::pow(2, b + 1) = Nat::pow(2, b) * 2) = refl; omega };
     let halves: (F.grid(Nat::pow(2, b).int()) + F.grid(Nat::pow(2, b).int()) ≈ F.ulp_at(x)) =
         Rat::same_trans(j(dbl, λ v _ => F.grid(Nat::pow(2, b).int()) + F.grid(Nat::pow(2, b).int()) ≈ F.grid(v), F.grid_add(Nat::pow(2, b).int(), Nat::pow(2, b).int())),
             Rat::same_sym((F.down(F.rat_h(x))).ulp_grid()));
@@ -352,23 +352,23 @@ theorem Format::grid_scale(self F: Format, c: Nat, n: Int): Rat::ofInt(c.int()) 
 
 // The error at a full significand's cell is at most `u` of any value above
 // that significand's least value.
-theorem Format::err_le_u(self F: Format, mode: Mode, b: Nat, y: Rat, h: F.grid((F.half() * Nat::pow(2, Succ(b))).int()) <= y):
+theorem Format::err_le_u(self F: Format, mode: Mode, b: Nat, y: Rat, h: F.grid((F.half() * Nat::pow(2, b + 1)).int()) <= y):
     F.grid(Nat::pow(2, mode.err_exp(b)).int()) <= F.u(mode) * y
 {
-    let near: (F.top() * Nat::pow(2, b) = F.half() * Nat::pow(2, Succ(b))) = {
+    let near: (F.top() * Nat::pow(2, b) = F.half() * Nat::pow(2, b + 1)) = {
         let t: (F.top() = F.half() * 2) = F.top_double();
-        let pd: (Nat::pow(2, Succ(b)) = Nat::pow(2, b) * 2) = refl;
+        let pd: (Nat::pow(2, b + 1) = Nat::pow(2, b) * 2) = refl;
         ring(t, pd)
     };
-    let scaled = λ (c: Nat) (k: Nat) (ck: c * Nat::pow(2, k) = F.half() * Nat::pow(2, Succ(b))) =>
+    let scaled = λ (c: Nat) (k: Nat) (ck: c * Nat::pow(2, k) = F.half() * Nat::pow(2, b + 1)) =>
         Rat::le_respects(Rat::same_sym(F.grid_scale(c, Nat::pow(2, k).int())), y.same_refl(),
             j(sym(Int::cong_ofnat(ck)), λ v _ => F.grid(v) <= y, h));
     match mode {
         NearestEven => Rat::le_div_of_mul_le(F.top(), scaled(F.top(), b, near)),
         NearestAway => Rat::le_div_of_mul_le(F.top(), scaled(F.top(), b, near)),
-        TowardPos => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), Succ(b), refl)),
-        TowardNeg => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), Succ(b), refl)),
-        TowardZero => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), Succ(b), refl)),
+        TowardPos => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), b + 1, refl)),
+        TowardNeg => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), b + 1, refl)),
+        TowardZero => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), b + 1, refl)),
     }
 }
 
@@ -392,17 +392,17 @@ theorem Finite::normal_mag({F: Format}, d: Finite(F), pos: d.neg = False, big: (
 // In the normal range the cell's float has a full significand, so the
 // value is at least that significand's least value at the cell's spacing.
 theorem Format::normal_cell(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), normal: (Finite::min_normal(F)).val() <= x):
-    F.grid((F.half() * Nat::pow(2, Succ((F.down(h)).bexp))).int()) <= x
+    F.grid((F.half() * Nat::pow(2, (F.down(h)).bexp + 1)).int()) <= x
 {
     let d = F.down(h);
     let bd = F.down_is_below(x, h, st, a);
     let hm = Finite::normal_mag(d, F.down_pos(h), bd.right(Finite::min_normal(F), normal));
     let dh = Finite::H_pos(d, F.down_pos(h));
     let du: (d.units() = d.mag * Nat::pow(2, d.bexp)) = refl;
-    let e: ((d.mag * Nat::pow(2, d.bexp)) * 2 = d.mag * Nat::pow(2, Succ(d.bexp))) = d.mag.mul_assoc(Nat::pow(2, d.bexp), 2);
-    let le: (F.half() * Nat::pow(2, Succ(d.bexp)) <= d.mag * Nat::pow(2, Succ(d.bexp))) = Nat::mul_le_mono_r(Nat::pow(2, Succ(d.bexp)), F.half(), d.mag, hm);
-    let at_d = Rat::le_respects((F.grid((F.half() * Nat::pow(2, Succ(d.bexp))).int())).same_refl(), Rat::same_sym(d.val_grid()),
-        F.grid_le((F.half() * Nat::pow(2, Succ(d.bexp))).int(), d.H(), omega));
+    let e: ((d.mag * Nat::pow(2, d.bexp)) * 2 = d.mag * Nat::pow(2, d.bexp + 1)) = d.mag.mul_assoc(Nat::pow(2, d.bexp), 2);
+    let le: (F.half() * Nat::pow(2, d.bexp + 1) <= d.mag * Nat::pow(2, d.bexp + 1)) = Nat::mul_le_mono_r(Nat::pow(2, d.bexp + 1), F.half(), d.mag, hm);
+    let at_d = Rat::le_respects((F.grid((F.half() * Nat::pow(2, d.bexp + 1)).int())).same_refl(), Rat::same_sym(d.val_grid()),
+        F.grid_le((F.half() * Nat::pow(2, d.bexp + 1)).int(), d.H(), omega));
     Rat::le_trans(at_d, bd.left)
 }
 
@@ -517,7 +517,7 @@ fn Format::gamma(self F: Format, mode: Mode, n: Nat) → Rat { Rat(n.int(), Succ
 
 // With the room `D = u_den - n` named, `γ(n)` is `n / D`.
 theorem Format::gamma_at(self F: Format, mode: Mode, n: Nat, D: Pos<Nat>, e: F.u_den(mode) = D + n): F.gamma(mode, n) ≈ Rat(n.int(), D) {
-    let room: (Succ(F.u_den(mode) - Succ(n)) = D) = omega(e, D_pos);
+    let room: (F.u_den(mode) - (n + 1) + 1 = D) = omega(e, D_pos);
     (F.gamma(mode, n)).same_of_parts(Rat(n.int(), D), refl, room)
 }
 
@@ -527,16 +527,16 @@ theorem Format::gamma_nonneg(self F: Format, mode: Mode, n: Nat): 0 <= F.gamma(m
 // left after `m + n`: cross-multiplied, the right side exceeds the left by
 // `A·B·(m·n·C + (m + n)·m·n)` with `A = C + n`, `B = C + m`.
 theorem gamma_add_core(m, n, K: Nat):
-    Rat(m.int(), Succ(K) + n) + Rat(n.int(), Succ(K) + m) + Rat(m.int(), Succ(K) + n) * Rat(n.int(), Succ(K) + m) <= Rat((m + n).int(), Succ(K))
+    Rat(m.int(), K + 1 + n) + Rat(n.int(), K + 1 + m) + Rat(m.int(), K + 1 + n) * Rat(n.int(), K + 1 + m) <= Rat((m + n).int(), K + 1)
 {
     let M = m.int();
     let N = n.int();
-    let C = Succ(K).int();
+    let C = (K + 1).int();
     let A = C + N;
     let B = C + M;
     let key: (((M * B + N * A) * (A * B) + (M * N) * (A * B)) * C + (A * B) * ((M * N) * C + ((M + N) * M) * N) = (M + N) * ((A * B) * (A * B))) = ring;
     let nn: (0 <= (A * B) * ((M * N) * C + ((M + N) * M) * N)) = {
-        let t: ((((Succ(K) + n) * (Succ(K) + m)) * ((m * n) * Succ(K) + ((m + n) * m) * n)).int() = (A * B) * ((M * N) * C + ((M + N) * M) * N)) = refl;
+        let t: ((((K + 1 + n) * (K + 1 + m)) * ((m * n) * (K + 1) + ((m + n) * m) * n)).int() = (A * B) * ((M * N) * C + ((M + N) * M) * N)) = refl;
         omega(t)
     };
     let le: (((M * B + N * A) * (A * B) + (M * N) * (A * B)) * C <= (M + N) * ((A * B) * (A * B))) = omega(key, nn);
@@ -547,10 +547,10 @@ theorem gamma_add_core(m, n, K: Nat):
 theorem Format::gamma_add(self F: Format, mode: Mode, m, n: Nat, ok: m + n < F.u_den(mode)):
     F.gamma(mode, m) + F.gamma(mode, n) + F.gamma(mode, m) * F.gamma(mode, n) <= F.gamma(mode, m + n)
 {
-    let K = F.u_den(mode) - Succ(m + n);
-    let gm = F.gamma_at(mode, m, Succ(K) + n, omega);
-    let gn = F.gamma_at(mode, n, Succ(K) + m, omega);
-    let gmn = F.gamma_at(mode, m + n, Succ(K), omega);
+    let K = F.u_den(mode) - (m + n + 1);
+    let gm = F.gamma_at(mode, m, K + 1 + n, omega);
+    let gn = F.gamma_at(mode, n, K + 1 + m, omega);
+    let gmn = F.gamma_at(mode, m + n, K + 1, omega);
     let lhs = Rat::add_respects(Rat::add_respects(gm, gn), Rat::mul_respects(gm, gn));
     Rat::le_respects(Rat::same_sym(lhs), Rat::same_sym(gmn), gamma_add_core(m, n, K))
 }
@@ -559,17 +559,17 @@ theorem Format::gamma_add(self F: Format, mode: Mode, m, n: Nat, ok: m + n < F.u
 theorem Format::gamma_mono(self F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok: n < F.u_den(mode)): F.gamma(mode, m) <= F.gamma(mode, n) {
     let t = n - m;
     let st = m.sub_add_cancel(n, mn);
-    let K = F.u_den(mode) - Succ(n);
-    let gm = F.gamma_at(mode, m, Succ(K) + t, omega(st));
-    let gn = F.gamma_at(mode, n, Succ(K), omega);
+    let K = F.u_den(mode) - (n + 1);
+    let gm = F.gamma_at(mode, m, K + 1 + t, omega(st));
+    let gn = F.gamma_at(mode, n, K + 1, omega);
     let M = m.int();
     let T = t.int();
-    let C = Succ(K).int();
-    let nn: (0 <= M * T + (T * C + T * T)) = { let e: ((m * t + (t * Succ(K) + t * t)).int() = M * T + (T * C + T * T)) = refl; omega(e) };
+    let C = (K + 1).int();
+    let nn: (0 <= M * T + (T * C + T * T)) = { let e: ((m * t + (t * (K + 1) + t * t)).int() = M * T + (T * C + T * T)) = refl; omega(e) };
     let le: (M * C <= (M + T) * (C + T)) = linarith(nn);
-    let core: (Rat(M, Succ(K) + t) <= Rat((m + t).int(), Succ(K))) = le;
-    let nt: (Rat((m + t).int(), Succ(K)) ≈ Rat(n.int(), Succ(K))) = Rat((m + t).int(), Succ(K)).same_of_parts(Rat(n.int(), Succ(K)), Int::cong_ofnat(trans(m.add_comm(t), st)), refl);
-    Rat::le_respects(Rat::same_sym(gm), Rat::same_sym(gn), Rat::le_respects(Rat::same_refl(Rat(M, Succ(K) + t)), nt, core))
+    let core: (Rat(M, K + 1 + t) <= Rat((m + t).int(), K + 1)) = le;
+    let nt: (Rat((m + t).int(), K + 1) ≈ Rat(n.int(), K + 1)) = Rat((m + t).int(), K + 1).same_of_parts(Rat(n.int(), K + 1), Int::cong_ofnat(trans(m.add_comm(t), st)), refl);
+    Rat::le_respects(Rat::same_sym(gm), Rat::same_sym(gn), Rat::le_respects(Rat::same_refl(Rat(M, K + 1 + t)), nt, core))
 }
 
 // One rounding is within `γ(1)`: `u <= u / (1 - u)`.
@@ -580,10 +580,10 @@ theorem Format::u_le_gamma(self F: Format, mode: Mode): F.u(mode) <= F.gamma(mod
         TowardPos => F.two_le_half(), TowardNeg => F.two_le_half(), TowardZero => F.two_le_half(),
     };
     let K = F.u_den(mode) - 2;
-    let g = F.gamma_at(mode, 1, Succ(K), omega);
+    let g = F.gamma_at(mode, 1, K + 1, omega);
     let d1: ((Rat(1, F.u_den(mode))).den.int() = F.u_den(mode).int()) = refl;
-    let d2: ((Rat(1, Succ(K))).den.int() = Succ(K).int()) = refl;
-    let le: (Rat(1, F.u_den(mode)) <= Rat(1, Succ(K))) = omega(d1, d2);
+    let d2: ((Rat(1, K + 1)).den.int() = (K + 1).int()) = refl;
+    let le: (Rat(1, F.u_den(mode)) <= Rat(1, K + 1)) = omega(d1, d2);
     Rat::le_respects(Rat::same_refl(F.u(mode)), Rat::same_sym(g), le)
 }
 
@@ -629,7 +629,7 @@ theorem Format::gamma_prod_of(self F: Format, mode: Mode, ds: List<Rat>):
             let hd = Rat::le_trans(al.left, F.u_le_gamma(mode));
             let step = F.theta_mul(mode, t.len(), 1, omega(okc), ih, hd);
             let back: (1 + (P - 1) ≈ P) = Rat::same_trans(Rat::add_comm(1, P - 1), P.sub_add_cancel(1));
-            Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::mul_respects(back, (1 + d).same_refl()), Rat::same_refl(1))), Rat::same_refl(F.gamma(mode, Succ(t.len()))), step)
+            Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::mul_respects(back, (1 + d).same_refl()), Rat::same_refl(1))), Rat::same_refl(F.gamma(mode, t.len() + 1)), step)
         },
     }
 }

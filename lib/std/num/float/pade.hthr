@@ -133,7 +133,7 @@ theorem Series::pade_w_next(n, k: Nat):
             let r = calc {
                 Series::pade_w(n + 1, j) * (Rat::ofInt(OfNat((n + 1) + j + 1)) * Rat::inv_succ((n + 1) + (n + 1) + j + 1))
                     ≈ (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * (Rat::inv_succ(n + n + j + 1) * Rat::inv_succ(n + n + j + 2)))) * (Rat::ofInt(OfNat((n + 1) + j + 1)) * Rat::inv_succ((n + 1) + (n + 1) + j + 1)) := Rat::mul_same_r(ih),
-                ≈ (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1))) * (Rat::ofInt(OfNat(n + Succ(j) + 1)) * (Rat::inv_succ(n + n + Succ(j) + 1) * Rat::inv_succ(n + n + Succ(j) + 2))) := ring,
+                ≈ (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1))) * (Rat::ofInt(OfNat(n + (j + 1) + 1)) * (Rat::inv_succ(n + n + (j + 1) + 1) * Rat::inv_succ(n + n + (j + 1) + 2))) := ring,
             };
             r
         },
@@ -156,7 +156,7 @@ theorem Series::pade_w_skip(n, k: Nat):
             let r = calc {
                 Series::pade_w(n + 2, 0 + j) * (Rat::ofInt(OfNat((n + 2) + (0 + j) + 1)) * Rat::inv_succ((n + 2) + (n + 2) + (0 + j) + 1))
                     ≈ (Series::pade_w(n, 2 + j) * (Rat::inv_succ(n + n + (2 + j) + 1) * Rat::inv_succ(n + n + (2 + j) + 2))) * (Rat::ofInt(OfNat((n + 2) + (0 + j) + 1)) * Rat::inv_succ((n + 2) + (n + 2) + (0 + j) + 1)) := Rat::mul_same_r(ih),
-                ≈ (Series::pade_w(n, 2 + j) * (Rat::ofInt(OfNat(n + (2 + j) + 1)) * Rat::inv_succ(n + n + (2 + j) + 1))) * (Rat::inv_succ(n + n + (2 + Succ(j)) + 1) * Rat::inv_succ(n + n + (2 + Succ(j)) + 2)) := ring,
+                ≈ (Series::pade_w(n, 2 + j) * (Rat::ofInt(OfNat(n + (2 + j) + 1)) * Rat::inv_succ(n + n + (2 + j) + 1))) * (Rat::inv_succ(n + n + (2 + (j + 1)) + 1) * Rat::inv_succ(n + n + (2 + (j + 1)) + 2)) := ring,
             };
             r
         },
@@ -172,7 +172,7 @@ theorem Series::exp_term_two(x: Rat, k: Nat): x * x * Series::exp(x).term(0 + k)
             let r = calc {
                 x * x * (Series::exp(x).term(0 + j) * (x * Rat::inv_succ(0 + j))) ≈ (x * x * Series::exp(x).term(0 + j)) * (x * Rat::inv_succ(0 + j)) := ring,
                 ≈ (Series::exp(x).term(2 + j) * (Rat::ofInt(OfNat(j + 1)) * Rat::ofInt(OfNat(j + 2)))) * (x * Rat::inv_succ(0 + j)) := Rat::mul_same_r(ih),
-                ≈ (Series::exp(x).term(2 + j) * (x * Rat::inv_succ(2 + j))) * (Rat::ofInt(OfNat(Succ(j) + 1)) * Rat::ofInt(OfNat(Succ(j) + 2))) := ring,
+                ≈ (Series::exp(x).term(2 + j) * (x * Rat::inv_succ(2 + j))) * (Rat::ofInt(OfNat(j + 1 + 1)) * Rat::ofInt(OfNat(j + 1 + 2))) := ring,
             };
             r
         },
@@ -240,7 +240,7 @@ theorem Series::pade_zero_term(x: Rat, k: Nat): Series::pade_rem(x, 0).term(k) �
             let ih = Series::pade_zero_term(x, i);
             let r = calc {
                     Series::pade_rem(x, 0).term(i) * (x * Rat::inv_succ(i) * (Rat::ofInt(OfNat(0 + i + 1)) * Rat::inv_succ(0 + 0 + i + 1))) ≈ (Series::exp(x).term(i) * Rat::inv_succ(i)) * (x * Rat::inv_succ(i) * (Rat::ofInt(OfNat(0 + i + 1)) * Rat::inv_succ(0 + 0 + i + 1))) := Rat::mul_same_r(ih),
-                    ≈ (Series::exp(x).term(i) * (x * Rat::inv_succ(i))) * Rat::inv_succ(Succ(i)) := ring,
+                    ≈ (Series::exp(x).term(i) * (x * Rat::inv_succ(i))) * Rat::inv_succ(i + 1) := ring,
                 };
             r
         },
@@ -259,7 +259,7 @@ theorem Series::pade_one_exp(x: Rat, k: Nat): x * x * Series::pade_rem(x, 1).ter
             let r = calc {
                     x * x * (Series::pade_rem(x, 1).term(0 + i) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1)))) ≈ (x * x * Series::pade_rem(x, 1).term(0 + i)) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1))) := ring,
                     ≈ (Series::exp(x).term(2 + i) * Rat::ofInt(OfNat(i + 1)) * Rat::inv_succ(i + 2)) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1))) := Rat::mul_same_r(ih),
-                    ≈ (Series::exp(x).term(2 + i) * (x * Rat::inv_succ((2 + i)))) * Rat::ofInt(OfNat(Succ(i) + 1)) * Rat::inv_succ(Succ(i) + 2) := ring,
+                    ≈ (Series::exp(x).term(2 + i) * (x * Rat::inv_succ((2 + i)))) * Rat::ofInt(OfNat(i + 1 + 1)) * Rat::inv_succ(i + 1 + 2) := ring,
                 };
             r
         },
