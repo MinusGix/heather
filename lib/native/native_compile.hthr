@@ -496,29 +496,6 @@ fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
     then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
 }
 
-// The copy's counter and its two walks set, RDI past the offset in R9,
-// and its loop's label.
-fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf)), AddRR(Rdi, R9)])).label(head)
-}
-
-// The `count` bytes in RAX copied from the scratch range to the buffer's
-// past the offset in R9: R8 counts up to RAX, RSI and RDI walk the two
-// ranges, RDX carries each byte.
-fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
-    let set = p.copy_head(layout, buf, head);
-    let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
-    let moved = then(then(tested, LoadByte(ByteLoad(Rdx, Rsi))), StoreByte(ByteStore(Rdi, Rdx)));
-    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
-}
-
-// After the read: the bytes copied in unless it failed (RAX negative), then
-// the result put in its word's home.
-fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
-    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(Succ(names))))));
-    tested.copy_in(layout, buf, Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).label(Succ(Succ(Succ(Succ(names))))).word_from(layout, out, result, Rax)
-}
-
 // AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
 fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
 
@@ -532,7 +509,9 @@ record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
 // Code to add after a program: items, a word fetched to a register (from
 // its home, or as its number where known), a register kept in a word's home
 // (where the word is live after), `body` skipped where the flags meet `cc`
-// (its label the name after `names`), and a loop: `enter` once, then `body`
+// (its label the name after `names`), one of two ways (`taken` where the
+// flags meet `cc`, at the name after `names`; `straight` otherwise, with a
+// jump over `taken` to the name after that), and a loop: `enter` once, then `body`
 // again and again, until either leaves it (`Leave`, a jump where the flags
 // meet `cc` to the label `to`; the loop's head is the name after `names`
 // and its way out the one after that). What a fragment needs before it is
@@ -544,6 +523,7 @@ inductive Fragment {
     Keep(id: Nat, register: Gpr),
     Both(first: Fragment, rest: Fragment),
     Unless(cc: ConditionCode, names: Nat, body: Fragment),
+    Either(cc: ConditionCode, names: Nat, straight: Fragment, taken: Fragment),
     Leave(cc: ConditionCode, to: Nat),
     Cycle(names: Nat, enter: Fragment, body: Fragment),
 }
@@ -556,6 +536,8 @@ fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
         Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
         Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
         Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
+        Either(cc, names, straight, taken) =>
+            At(taken.onto(cx, At(At(straight.onto(cx, At(p, 0, Jcc(cc, names + 1))), 0, Jmp(names + 2)), names + 1, Block([]))), names + 2, Block([])),
         Leave(cc, to) => At(p, 0, Jcc(cc, to)),
         Cycle(names, enter, body) => At(At(body.onto(cx, At(enter.onto(cx, p), names + 1, Block([]))), 0, Jmp(names + 1)), names + 2, Block([])),
     }
@@ -589,7 +571,9 @@ fn Build::plus(self b: Build, to, by: Gpr) → Build { b.ins(AddRR(to, by)) }
 fn Build::minus(self b: Build, to, by: Gpr) → Build { b.ins(SubRR(to, by)) }
 fn Build::cmp(self b: Build, left, right: Gpr) → Build { b.ins(CmpRR(left, right)) }
 fn Build::test(self b: Build, register: Gpr) → Build { b.ins(TestRR(register, register)) }
-fn Build::next(self b: Build, register: Gpr) → Build { b.ins(AddRI8(register, BitVec::ofNat(1))) }
+fn Build::step(self b: Build, register: Gpr, by: Nat) → Build { b.ins(AddRI8(register, BitVec::ofNat(by))) }
+fn Build::next(self b: Build, register: Gpr) → Build { b.step(register, 1) }
+fn Build::load(self b: Build, to, at: Gpr) → Build { b.item(Load(WordLoad(to, at))) }
 fn Build::load_byte(self b: Build, to, at: Gpr) → Build { b.item(LoadByte(ByteLoad(to, at))) }
 fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
 
@@ -602,6 +586,13 @@ fn Build::keep(self b: Build, id: Nat, register: Gpr) → Build { b.add(Keep(id,
 fn Build::unless(self b: Build, cc: ConditionCode, body: Build → Build) → Build {
     let inside = body(b.cx.from(b.names + 1)).cut();
     Build(b.cx, Both(b.cut().code, Unless(cc, b.names, inside.code)), [], inside.names)
+}
+
+// `taken` where the flags meet `cc`, `straight` otherwise.
+fn Build::either(self b: Build, cc: ConditionCode, taken, straight: Build → Build) → Build {
+    let ahead = straight(b.cx.from(b.names + 2)).cut();
+    let other = taken(b.cx.from(ahead.names)).cut();
+    Build(b.cx, Both(b.cut().code, Either(cc, b.names, ahead.code, other.code)), [], other.names)
 }
 
 // A loop's way out: only `Build::loop` makes one, and places it.
@@ -721,22 +712,6 @@ fn Prog::writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>,
 // close(fd); the result put in its word's home.
 fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat) → Prog {
     Emission(layout, known, out).from(0).close(fd, result).onto(p).prog
-}
-
-// The path copy's counter and its two walks set, and its loop's label.
-fn Prog::path_head(self p: Prog, layout: Layout, buf, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())])).label(head)
-}
-
-// The path's bytes copied from its buffer to the scratch range, up to the
-// count in RCX or its first NUL, out to `done` at either: R8 counts, RSI
-// and RDI walk the two ranges, RDX carries each byte.
-fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog {
-    let set = p.path_head(layout, buf, head);
-    let counted = then(then(set, Block([CmpRR(R8, Rcx)])), Jcc(E, done));
-    let tested = then(then(then(counted, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
-    let moved = then(tested, StoreByte(ByteStore(Rdi, Rdx)));
-    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
 }
 
 // openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,

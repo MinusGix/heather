@@ -20,6 +20,7 @@ import native_compile_facts;
 import native_compile_region;
 import native_compile_steps;
 import native_compile_segments;
+import native_compile_claims;
 import native_compile_calls;
 import native_compile_leaf;
 import native_compile_bytes;
@@ -76,52 +77,18 @@ theorem Prog::within_exits(self p: Prog, layout: Layout, known: List<Fact>, stat
     }
 }
 
-// The calls' code from its start: fixed runs of items between the words'
-// loads and stores, whose length is each word's home.
+// The calls' code from its start: a builder's code is added after the
+// program it is put onto (`Fragment::extends`).
 theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result, capacity, names: Nat):
     p.Within(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names).prog) {
-    let whole = p.reads(layout, known, out, fd, buf, at, len, result, capacity, names).prog;
-    let r0 = p.known_to(layout, known, at, R8);
-    let start = then(r0, Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
-    let r1 = then(start, Block([SubRR(R9, R8)]));
-    let r2 = r1.known_to(layout, known, len, Rdx);
-    let room = r2.clamp(Rdx, R9, Succ(Succ(names)));
-    let r3 = then(room, Block([MovRR(R9, R8), MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))]));
-    let r4 = r3.known_to(layout, known, fd, Rdi);
-    let asked = then(r4, Syscall);
-    let done = Succ(Succ(Succ(Succ(names))));
-    let copied = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, done)).copy_in(layout, buf, Succ(Succ(Succ(names))), done).label(done);
-    calc {
-        p <= r0 := p.within_known_to(layout, known, at, R8),
-        <= r1 := Exists(6, refl),
-        <= r2 := r1.within_known_to(layout, known, len, Rdx),
-        <= r3 := Exists(5, refl),
-        <= r4 := r3.within_known_to(layout, known, fd, Rdi),
-        <= copied := Exists(12, refl),
-        <= whole := copied.within_word_from(layout, out, result, Rax),
-    }
+    let cx = Emission(layout, known, out);
+    cx.from(names).read(fd, buf, at, len, result, capacity).cut().code.extends(cx, p)
 }
 
 theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result, capacity, names: Nat):
     p.Within(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names).prog) {
-    let whole = p.writes(layout, known, out, fd, buf, from, len, result, capacity, names).prog;
-    let w0 = p.known_to(layout, known, from, R8);
-    let start = then(w0, Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
-    let w1 = then(start, Block([SubRR(R9, R8)]));
-    let w2 = w1.known_to(layout, known, len, Rdx);
-    let room = w2.clamp(Rdx, R9, Succ(Succ(names)));
-    let w3 = then(room, Block([MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))]));
-    let w4 = w3.known_to(layout, known, fd, Rdi);
-    let asked = then(w4, Syscall);
-    calc {
-        p <= w0 := p.within_known_to(layout, known, from, R8),
-        <= w1 := Exists(6, refl),
-        <= w2 := w1.within_known_to(layout, known, len, Rdx),
-        <= w3 := Exists(5, refl),
-        <= w4 := w3.within_known_to(layout, known, fd, Rdi),
-        <= asked := w4.within_then(0, Syscall),
-        <= whole := asked.within_word_from(layout, out, result, Rax),
-    }
+    let cx = Emission(layout, known, out);
+    cx.from(names).write(fd, buf, from, len, result, capacity).cut().code.extends(cx, p)
 }
 
 theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, capacity, names: Nat):
@@ -145,31 +112,13 @@ theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, b
 
 theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result, capacity, names: Nat):
     p.Within(p.opens(layout, known, out, path, len, result, capacity, names).prog) {
-    let whole = p.opens(layout, known, out, path, len, result, capacity, names).prog;
-    let r0 = p.known_to(layout, known, len, Rcx);
-    let clamped = then(r0, Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rcx, R9, Succ(names));
-    let copied = clamped.path_copy(layout, path, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
-    let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
-    let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
-    let asked = then(then(ended, Block(asking)), Syscall);
-    calc {
-        p <= r0 := p.within_known_to(layout, known, len, Rcx),
-        <= asked := Exists(20, refl),
-        <= whole := asked.within_word_from(layout, out, result, Rax),
-    }
+    let cx = Emission(layout, known, out);
+    cx.from(names).open(path, len, result, capacity).cut().code.extends(cx, p)
 }
 
 theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat): p.Within(p.closes(layout, known, out, fd, result)) {
-    let whole = p.closes(layout, known, out, fd, result);
-    let c0 = then(p, Block([MovRI(Rax, BitVec::ofNat(3))]));
-    let c1 = c0.known_to(layout, known, fd, Rdi);
-    let asked = then(c1, Syscall);
-    calc {
-        p <= c0 := p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
-        <= c1 := c0.within_known_to(layout, known, fd, Rdi),
-        <= asked := c1.within_then(0, Syscall),
-        <= whole := asked.within_word_from(layout, out, result, Rax),
-    }
+    let cx = Emission(layout, known, out);
+    cx.from(0).close(fd, result).cut().code.extends(cx, p)
 }
 
 // What a statement compiles to starts where it was given its start.

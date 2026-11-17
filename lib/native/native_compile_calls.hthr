@@ -522,6 +522,11 @@ fn Fragment::read_back(layout: Layout, buf, names: Nat) → Fragment {
     Cycle(names + 2, Fragment::copy_enter(layout, buf, names + 4), Fragment::copy_in(names + 4))
 }
 
+// A read's code after its SYSCALL: the TEST, the copy, the result kept.
+fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
+    Both(Both(Place(0, Block([TestRR(Rax, Rax)])), Fragment::read_back(layout, buf, names)), Keep(result, Rax)).onto(Emission(layout, [], out), asked)
+}
+
 // What a round needs is the invariant: with `i` bytes copied and `n` to go
 // it leaves with the buffer filled from the offset and RAX the count, or
 // comes round with one more.
@@ -531,7 +536,7 @@ theorem Run::copy_round(self r: Run, words: List<Nat>, v: Nat → BitVec(8), kee
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(r.t.layout().scratch_offset() + k) = c,
     o, n: Nat, s: r.State(), resident: r.t.site().Resident(s.memory), i: Nat, left: i + n = bytes.len(),
     at: r.t.CopyAt(v, buf, a, bytes, i, vals, s.gprs, s.memory)):
-    Fragment::copy_in(Succ(o)).inside(r, Some(o),
+    Fragment::copy_in(Succ(o)).inside(r, λ _ _ _ _ => False, Some(o),
         λ u => r.t.Held(r.live, r.env.set_buffer(buf, fill_at(r.env.buffer(buf), a, bytes)), u.gprs, u.memory) ∧ (read_gpr(Rax, u.gprs) = word_of_nat(64, bytes.len())),
         λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = bytes.len()) ∧ r.t.CopyAt(v, buf, a, bytes, i2, vals, u.gprs, u.memory))))(s) {
     let t = r.t;
@@ -648,7 +653,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
         let clear = test_self_nonnegative(read_gpr(Rax, u.gprs), j(sym(value), λ x _ => x < Nat::pow(2, 63), small));
         // The TEST finds the count nonnegative, so the JS falls through to the walks set with nothing copied.
         t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested, tree,
-            enter.inside(r, Some(names + 3), copied, λ w => Exists<Nat>(λ k => copying(k, w.gprs, w.memory))), looped)(u, here, resident,
+            enter.inside(r, λ _ => copying, Some(names + 3), copied, λ w => Exists<Nat>(λ k => copying(k, w.gprs, w.memory))), looped)(u, here, resident,
             ⟨refl, ⟨⟨λ negative rip => absurd(trans(sym(clear), negative)),
                 λ fine rip => Exists(n, Exists(0, ⟨n.add_left_zero(),
                     ⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_past(buf, cap, found, a, a_cap, read_gpr(R9, u.gprs), held.right.right),
@@ -684,7 +689,7 @@ theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env:
         λ k s resident at => false_elim(at));
     // The TEST finds the negated errno negative, so the JS is taken.
     t.goes_weaken(t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested, tree,
-            enter.inside(r, Some(names + 3), skipped, λ w => Exists<Nat>(λ k => never(k, w.gprs, w.memory))), looped),
+            enter.inside(r, λ _ => never, Some(names + 3), skipped, λ w => Exists<Nat>(λ k => never(k, w.gprs, w.memory))), looped),
         λ u held => {
             let set = test_self_negative(read_gpr(Rax, u.gprs), j(sym(held.right), λ x _ => Nat::pow(2, 63) <= x.toNat(), errno_negative(e, error)));
             ⟨refl, ⟨⟨λ negative rip => ⟨held.left, trans(cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), held.right),
