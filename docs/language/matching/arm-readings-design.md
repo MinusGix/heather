@@ -1,0 +1,396 @@
+# A hypothesis has two readings in an arm
+
+Design for `issues/match-eqbind-generalizes-passed-hypotheses.md`
+(2026-11-17). **Status: proposed, nothing built.** It changes how case
+splits elaborate, so it is Minus's to decide; §9 lists the decisions.
+
+It replaces two syntactic exceptions in `generalize::select_refined`:
+
+- **the beside rule** (`passed_beside`,
+  `docs/elaborator/goal-motive-synthesis-design.md` §4.7): under
+  `match h:` at a computed scrutinee, a hypothesis an arm passes as an
+  argument of one call beside `h` is not refined;
+- **the takes-an-equation rule** (`takes_equation_about`,
+  `issues/match-eqbind-refines-hypothesis-it-is-passed-to.md`): under
+  `match h:`, a hypothesis whose type takes an equation about the
+  scrutinee is not refined.
+
+Both decide, before any arm is elaborated and by the shape of the source,
+that a hypothesis will be wanted as written. Both are right about the
+proofs they were written for and wrong one step away from them (§1).
+
+## 0. The rule
+
+> **In an arm of a case split, a hypothesis about the scrutinee can be used
+> at either spelling: with the scrutinee as written, or with the arm's
+> constructor in its place. The place it is used decides; where nothing
+> decides, it is the constructor's.**
+
+Nothing in that sentence mentions calls, argument positions or `h`. A
+reader who knows only that `e` *is* `C(x̄)` in the arm for `C(x̄)` would
+predict it. The rest of this note is why it is cheap to build, what it
+costs, and how far the same idea goes.
+
+Words used below. In the arm for `C(x̄)` of a split on `e`, with
+`w: P(e)` in scope before the split:
+
+- the **written reading** of `w` is `w: P(e)`;
+- the **refined reading** is `w: P(C(x̄))`.
+
+## 1. What is wrong with deciding by shape
+
+**It guesses before it knows.** Whether an arm wants `w` as written is a
+fact about the *type each use of `w` is checked against*. The beside rule
+approximates that by "`w` and `h` are arguments of one call somewhere in
+some arm". It is decided once for the whole match, so one arm's call
+unrefines `w` in every arm.
+
+**The error lands far from the cause.**
+`issues/named-match-third-level-kernel-rejects.md`, point 2: the last arm
+writes `subst(compiled, linked)`, which passes `compiled` beside `linked`,
+so `compiled` is not refined anywhere, and it is `None => absurd(compiled)`
+two lines up that fails (`absurd needs both sides of the equation to be
+constructor applications`). Nothing at the failing line mentions the call
+that caused it.
+
+**The natural proof is refused and the roundabout one accepted.**
+`Bisim::of_obs` (`lib/std/itree/coitree.hthr`):
+
+    fn Bisim::of_obs<R>(…, e: CoTree::obs(E, t) = CoTree::obs(E, u)) → Bisim<R>(E, t, u) {
+        match h: CoTree::obs(E, u) {
+            ORet(r) => BRet(r, prelude::trans(e, h), h),
+            …
+
+`BRet` wants `ht: obs(t) = ORet(r)`. Refined, `e` *is* that, and the arm
+would be `BRet(r, e, h)`. The beside rule keeps `e` as written because
+`trans(e, h)` passes it beside `h`; delete the `trans` and `e` is refined,
+write it and it is not. Neither spelling should be an error.
+
+**Equivalent spellings differ.** `lemma(h, w)` is beside; `let p =
+lemma2(w); lemma(h, p)` is not; `(lemma(h))(w)` is not; a method call's
+receiver is not. The takes-an-equation rule reads `g: (b = False) → A` and
+misses `g: Wrapper(b)` whose definition unfolds to the same arrow.
+
+**It is the same defect twice.** The 2026-11-14 round met `False => g(h)`
+and added one exception; the 2026-11-16 round met `lemma(…, slot, within,
+…)`, `trans(e, h)` and `j(s, …, spare)` and added another. The next
+idiom adds a third. The exceptions share one cause, and §3 removes the
+cause.
+
+## 2. What other systems do
+
+| System | A hypothesis about a computed scrutinee | Getting the other spelling |
+|---|---|---|
+| Lean 4, `match h : e with` | Not refined. Hypotheses are generalized only when the discriminant is a free variable; a term is abstracted in the expected type alone. Generalization is abandoned whole if the new motive is ill-typed. | By hand: `h ▸ w`, `rw [h] at w`, `simp [h] at *` |
+| Rocq, `destruct e eqn:h` | Not refined unless an occurrence clause names it (`in w`, `in *`). | `rewrite <- h in w`; ssreflect makes the choice explicit, `move: w; case h: e` |
+| Agda, `with e in eq` | Refined: every occurrence in the goal and the argument types is abstracted. "Not always type correct and may result in a (sometimes cryptic) type error." `eq` keeps `e` as written. | By hand: `subst`, `rewrite` |
+| Heather before #727 | Not refined under `match h:` at a computed scrutinee (Lean's rule) | The convoy written by hand, 204 written motives in the native compiler's proofs |
+| Heather since #727 | Refined (Agda's rule), minus the two exceptions | Rely on the exception firing |
+
+Each fixes **one** reading per hypothesis per arm and hands the other to
+the author as a transport. That is the fiddly step this project's proofs
+should not contain. Lean's `h ▸ w` is the nearest thing to a remedy: an
+elaborator that looks at the expected type and at `w`'s type and finds
+which way to rewrite. It is still written by the author at every use.
+
+One detail of Lean's implementation is the seed of this design. Its
+`match` generalizes by *adding binders* and says: "We do not clear the
+generalized variables, but they become inaccessible since they are
+shadowed by the pattern variables." Both readings are in scope in the
+term; the surface hides one. Heather's lowering does the same
+(`Generalize::wrap_arms` binds the refined copy under the hypothesis's own
+name, and the outer binder is still there).
+
+The semantic ideal is older: **smart case** (Altenkirch, "The case of the
+smart case", 2011; Abel's MiniAgda experiments, 2009). Each branch is
+checked under the *definitional* equation scrutinee ≡ pattern, so there
+are no two readings to choose between. It needs conversion under
+equational assumptions in the kernel, it is known to be undecidable at
+higher-order types, and Abel's position was that completeness is what one
+gives up. It is not proposed here (§8). The rule of §0 is what smart case
+looks like from the surface, delivered by the elaborator, with the kernel
+unchanged.
+
+Sources: Lean 4 `src/Lean/Elab/Match.lean` (doc comments on `generalize`
+and `withEqs`); the Rocq reference manual, "Reasoning with inductive
+types"; the Agda manual, "With-abstraction"; Altenkirch's Shonan 2011
+slides and the 2009 agda-list thread "Smart case".
+
+## 3. The design
+
+### 3.1 Both readings are already bound
+
+When a match refines `w`, its motive quantifies the refined copy,
+`λ z => (e = z) → Π(w: P(z)). G(z)`, each arm is wrapped in `λ w =>`, and
+the eliminator is applied back to the outer `w`. In the arm's context:
+
+    Γ, w: P(e), …        the context before the match   (written reading)
+    x̄                     the constructor's fields
+    h: e = C(x̄)           under `match h:`
+    w: P(C(x̄))            the wrapped binder             (refined reading)
+
+The outer `w` is a variable the arm's term may mention like any other. It
+needs no transport and no equation: using it is weakening. So the written
+reading costs **nothing** in the kernel's term. It only has to be
+reachable from the name.
+
+### 3.2 A name with two readings is resolved by the type it is used at
+
+`Cx` records, for each binder a match wrapped, the binder it was copied
+from (a chain under nested matches: innermost refinement first, the
+hypothesis as bound last).
+
+- **Checking position**, `w` against `T`: the innermost reading whose type
+  converts with `T`. This is a decided conversion per candidate, run only
+  for a name that has two readings and only when its innermost type is not
+  syntactically `T`. No other checking site pays anything
+  (`MismatchNotes`' rule, recording is not probing, stands).
+- **Argument of a call whose implicits are still open**: the refined
+  reading teaches the implicits, as any inferred argument does. The
+  application engine already owes each such argument one comparison with
+  its parameter under the call's final solutions (`OwedChecks::discharge`);
+  for a two-reading name that comparison is decided there, and the written
+  reading takes its place if it is the one that converts. If an argument
+  that has no second reading then clashes with an implicit a refined
+  reading taught, the application is elaborated once more with every
+  two-reading name as written. Two attempts at most, the second only on a
+  clash.
+- **Inference position** (`absurd(same)`, a `let` without a type, a
+  receiver): the refined reading. It is the informative one, and it is
+  what the plain `match` gives.
+- If no reading fits, the mismatch is reported **at the use**, with both
+  types: "`w` has type `P(C)` here (`P(e)` as written), but `T` is
+  expected".
+
+### 3.3 `h` has two readings too
+
+`h: e = C(x̄)` is itself a hypothesis about the scrutinee. Its refined
+reading is `C(x̄) = C(x̄)`, and that one has a canonical inhabitant,
+`refl`. So `h` checked against a type of that shape elaborates to `refl`.
+Its default reading is the written one: the refined one says nothing.
+
+This is what makes the readings *closed under calls*. If a callee takes
+the equation and a hypothesis, both arguments can be read refined
+together or written together:
+
+| Arm, as the author wrote it | Elaborates as |
+|---|---|
+| `False => g(h)`, `g: (b = False) → A` | both as written (§3.4), so the term is today's; `g` refined with `h` as `refl` also types |
+| `InSlot => t.goes_word_to_slot(…, slot, within, …)` | no implicit is open, so each argument is checked at the callee's parameter type: `slot` and `within` as written |
+| `ORet(r) => BRet(r, prelude::trans(e, h), h)` | `trans`'s ends are known from `BRet`: `e` refined is `obs(t) = ORet(r)`, `h` against `ORet(r) = ORet(r)` is `refl` |
+| `ORet(r) => BRet(r, e, h)` | `e` refined. The proof the beside rule could not accept next to the one above |
+| `j(s, λ b _ => …, spare)` | `spare` is checked at the written motive's instance: written |
+| `Some(whole) => … subst(compiled, linked) …` and `None => absurd(compiled)` | each use on its own: `absurd` infers, so `compiled` is refined there whatever the other arm writes; in `subst` it is refined too, and `linked` takes the reading `subst`'s motive asks for |
+
+No row consults the shape of another row. That is the whole claim.
+
+### 3.4 What is generalized: a hypothesis whose refined reading is used
+
+Today's selection is by name: a hypothesis about the scrutinee is
+generalized if some arm's source mentions its name or the goal mentions
+it (`select_refined`). With two readings the right criterion is by use:
+
+> A hypothesis is generalized into the motive when the goal mentions it,
+> or when an arm **uses its refined reading**.
+
+The name scan stays as the first guess (it is a sizing decision, as
+`generalize.rs`'s module doc says of `varying_params`). After the arms
+are elaborated, a hypothesis that was generalized on the guess and whose
+refined reading no arm used is dropped, and the match is lowered once
+more without it. So the kernel's term does not carry a `Π` nothing reads,
+and a `match` in a function body stays the term it was when it only ever
+passed its hypotheses along as written: `fn pick`'s `match h: b { True =>
+f(h), False => g(h) }` keeps `f` and `g` out of the motive when the
+written readings check, which is what `unify-through-match-arms` and the
+`f_unfold` walk rely on. The second lowering happens only where the guess
+was wrong, which today is exactly where one of the two exceptions fires
+(§6 has the count).
+
+For that to select the written readings of `g(h)` first, a two-reading
+name in **head** position of a call is tried as written before refined
+when every argument is `h` or a two-reading name. One sentence covers it:
+*a call made only of facts about the scrutinee is taken as written if it
+checks as written.* It is the single place the order is not "refined
+first", and it exists for the term's sake, not for typing: both orders
+type.
+
+### 3.5 A hypothesis that cannot be refined says so where it is used
+
+A refined reading can fail to exist: the abstraction is ill-typed
+(`goal-motive-synthesis-design.md` §4.6; Agda's "cryptic type error";
+Lean abandons the generalization). Today that is silent: the match falls
+back, the hypothesis stays as written, and some arm fails later for a
+reason it does not state.
+
+With readings in `Cx` the outcome is recorded per hypothesis. A use that
+fails at the written reading of such a hypothesis is reported with the
+reason: "`same` is read as written here: this match cannot refine it,
+because abstracting `fits(w)` leaves `h: z = True` where `fits(w) = True`
+is expected". That is the issue's third "done when".
+
+### 3.6 The same rule for every match
+
+Nothing in §3.1 and §3.2 needs `h`. A plain `match e` and a match on a
+variable wrap their arms the same way and leave the outer binder in
+scope, so the written reading is reachable there too. It is rarely
+wanted there (a result stated as written cannot be brought to the arm's
+refined goal without the equation), and it is never chosen when the
+refined reading fits, so nothing that checks today changes. The point is
+that the rule has no "under `match h:` at a computed scrutinee" clause.
+Only §3.3 is specific to the named form, because only there is there an
+`h`.
+
+Parameters a structural recursion generalizes (`varying_params`) are not
+readings: the arm's `m` is a different value from the outer one. Only
+positions `refined_hypotheses` adds have a written reading.
+
+## 4. Guarantees
+
+Stated so that a sweep can check them and a later change can be held to
+them.
+
+1. **Conservative over "refine nothing".** An arm that checks with every
+   hypothesis as written (the behaviour before #727, and Lean's) checks:
+   the written reading always exists, and every use that states its type
+   finds it. The exception is a use that states no type and is constrained
+   later (`let p = w; lemma(h, p)`): `p` is refined. §5 closes that.
+2. **Conservative over "refine what a plain match refines".** An arm that
+   checks under the plain `match`'s refinement checks under `match h:`,
+   `h` unused.
+3. **Local.** Which reading a use gets depends on that use's expected
+   type, and on nothing in another arm or another statement.
+4. **The term is canonical.** The motive generalizes exactly the
+   hypotheses the goal mentions or an arm uses refined.
+5. **Refusals are at the use**, with both readings shown and, where there
+   is only one, why.
+
+## 5. Stage 2: the arm's equation as a coercion
+
+Stage 1 gives a hypothesis *name* two readings. The same sentence is true
+of any term in the arm: a call's result stated about `e` where the arm's
+goal is about `C(x̄)`, or a `let`-bound fact. There the other reading is
+not already bound, and it is produced by transport along `h`.
+
+At the checking fallback (where `Tested::coerce` already turns a
+`When<T, P>` into its `T`), with `t: T_got` against `T_exp` inside an arm
+whose match has an equation:
+
+1. Prefilter, syntactic and linear: `e` occurs in one of the two types
+   and they are not syntactically equal. Otherwise nothing runs.
+2. Abstract `e` in `T_exp` to `M`. If `M(C(x̄))` converts with `T_got`, the
+   term is `subst(sym(h), t)`.
+3. Else abstract `e` in `T_got` to `M'`. If `M'(C(x̄))` converts with
+   `T_exp`, the term is `subst(h, t)`.
+4. Under nested matches, innermost equation first.
+
+This is Lean's `h ▸ t`, with the `h` found by the elaborator because the
+arm has exactly one candidate per enclosing match.
+
+What it buys beyond stage 1:
+
+- **Motive synthesis becomes monotone.** §4.5 of the motive design
+  records three library proofs that broke when a new rung specialised a
+  goal they had proved as written, found only after merge. With the
+  coercion, an arm that produces the goal as written is accepted at the
+  specialised goal, so *a rung that finds more can no longer break a
+  proof*. Every later improvement to the ladder (cumulative rungs,
+  `case-split-reaches-arguments-of-stuck-calls`) stops needing a library
+  rewrite to land.
+- Guarantee 1 loses its exception.
+- A mixed spelling, `P(e, C(x̄))`, is neither reading of `w` and is
+  reached by one transport.
+
+A plain `match` has no `h`, but it has the pending equation of
+`dependent-match-compiler-design.md` §4: in scope always, paid for when
+read. The coercion is one more reader. A plain match whose arm needs the
+transport is retried as a convoy, as `omega` already makes it do.
+
+Stage 2 is a separate change with its own sweep. It inserts `subst` terms
+where there was a refusal before, so it cannot change a term that checks
+today.
+
+## 6. Census
+
+Instrumented `select_refined` on master `fde9b6fa` and re-elaborated
+every library module. **(Running; this section is filled in before the
+PR leaves draft.)**
+
+## 7. What it costs, and what could go wrong
+
+- **Elaboration cost.** A conversion per candidate reading, at uses of
+  two-reading names whose type is not syntactically the expected one. A
+  second lowering of a match whose guess over-generalized. Both are on
+  paths the two exceptions occupy today; no hot path gains a probe.
+- **An application elaborated twice on a clash.** Bounded at two, and
+  only for applications that used a refined reading.
+- **`refl` for `h`** needs the expected type's two sides to convert.
+  One conversion, at uses of `h` whose written type did not fit.
+- **Ambiguity is benign.** Where both readings fit, the two terms are
+  propositionally equal by `h` and the choice changes no typing
+  downstream at that site; the order (refined first, §3.4's one
+  exception) makes it deterministic.
+- **Display.** A goal report shows a hypothesis at its refined reading
+  with the written one beside it when they differ. Without that the rule
+  is invisible exactly when it matters.
+- **Risk: generated consumers of a match's shape.** The `decreases`
+  rewrite, `f::step`/`f::done`, the runtime reflector (`Tm::convoy`'s
+  shape) read lowered matches. §3.4 keeps a match that passes its
+  hypotheses as written at the term it has today, so they should see no
+  change; the sweep is the check.
+- **Risk: the inference default flips a proof.** A proof that relied on
+  the beside rule in a position with no expected type would now read
+  refined. Guarantee 1's exception is the same case. The census says how
+  many exist.
+
+## 8. Alternatives
+
+- **Keep adding exceptions.** §1.
+- **Lean's rule** (refine nothing under `match h:`): brings back the
+  hand-written convoys #727 removed.
+- **Agda's rule** (refine everything, transport by hand): the three
+  idioms become `subst(sym(h), …)` at every such argument, and the
+  transport's motive is the callee's parameter type restated.
+- **Say it in the syntax**, `match h: e generalizing w` or ssreflect's
+  `move: w`: predictable, and it asks the author for what the types
+  already say. It could exist later as an override, like a written
+  motive.
+- **No generalization under `match h:`, every refined reading a
+  transport along `h`.** The motive becomes `(e = z) → G(z)` with no
+  selection at all, which is attractive. It loses on hypotheses that
+  depend on one another (`w₂: Q(w₁, e)` needs a transport over the pair,
+  where a `Π` telescope is just longer), and it puts a `subst` in terms
+  that have none today.
+- **Smart case in the kernel.** The real thing. It is a change to
+  conversion in the trusted base, undecidable in general, and the
+  opposite of `small-trusted-kernel-study`'s direction. The surface rule
+  here would stay true if it ever came, and the elaborator's work would
+  shrink to nothing.
+
+## 9. Decisions for Minus
+
+1. **The rule of §0** as the surface contract for case splits, replacing
+   both exceptions.
+2. **Refined in inference position** (§3.2). The alternative, written in
+   inference position, is Lean's behaviour with opt-in refinement and
+   breaks `absurd(same)`.
+3. **§3.4's use-based selection** with its one ordering exception, or
+   accept a `Π` nothing reads and no exception.
+4. **Stage 2** in this thread after stage 1, or filed.
+5. `split_all`'s `Cases` and the `cases h` tactic
+   (`issues/split-all-revise-hypotheses.md`, the case-split thread)
+   should register the same readings in `Cx`, so a tactic's arm and a
+   written arm obey one rule. Proposed as the follow-up that makes this
+   one mechanism and not two.
+
+## 10. Slices
+
+1. Readings in `Cx`; resolution at the checking fallback and in the
+   application engine; `h` as `refl`; delete `passed_beside` and
+   `takes_equation_about`. Probes in
+   `lib/_tests/std/core/match_readings_tests.hthr`: each row of §3.3's
+   table, both of §1's pairs, the nested chain, and refusals with their
+   messages. Whole-library sweep.
+2. Use-based selection (§3.4) and the per-hypothesis refusal note (§3.5).
+3. Display of both readings.
+4. Stage 2 (§5), with its sweep; then delete the proofs' remaining
+   hand transports where the sweep's review lint finds them.
