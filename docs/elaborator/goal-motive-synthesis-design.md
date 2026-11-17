@@ -331,6 +331,59 @@ hypothesis beside `h` (`trans(e, h)`, `j(s, …, spare)`) is unchanged.
 - `split_all`'s `Cases` builds its own motive (`host.rs`), as §5.1 of the
   match compiler's design says; `split-all-revise-hypotheses` stays open.
 
+### 4.8 A record is abstracted at its arguments
+
+`issues/named-match-third-level-kernel-rejects.md`, 2026-11-17. A record
+with value parameters is, in the goal, its lowering: `Found(n)` with a
+field `one: first(n) = Some(a)` is `Σ(a: Nat). first(n) = Some(a)`, and the
+`Σ` does not say it is `Found(n)`. Every rung read it as any other type, so
+`match one: first(n)` abstracted the test *inside the field's type*, and
+the `Some(a)` arm was to build `Σ(a′). Some(a) = Some(a′)`. That type
+displays as `Found` and is the lowering of no `Found(…)`: an arm that
+builds the record from `one`, or states its value at `Found(n)`, has a
+value of another type, and the refusal (the kernel's, since the elaborator
+compares nothing at a `let`'s annotation) could not show the difference.
+`Source::calls_built`, three named splits whose equations are the fields
+of the record it returns, is the proof that met it.
+
+A record's type is about the test where its **arguments** are. So at a
+computed scrutinee the goal is read with each declaration's lowering
+spelled as its reference, `El(D#tycode_fn ā)`
+(`MotiveSynthesisElab::fold_declarations`, the respelling of
+`docs/inductives/per-instantiation-type-codes-design.md` §4.1, which
+recovers `ā` by matching the lowering against the declaration's and proves
+it by lowering again), every rung runs on that spelling, the exposed goal
+of §4.3 is spelled so too, and the motive found is spelled back
+(`unfold_declarations`). A test in an argument is abstracted as before:
+`Holds(first(n))` is `Holds(Some(a))` in the arm. The binders a match
+refines by occurrence are read the same way
+(`Generalize::refined_by_occurrence`), so a hypothesis at the record goes
+with the goal.
+
+**A variable scrutinee is not respelled.** A variable occurs in a lowering
+only where an argument put it, so abstracting inside is abstracting the
+argument, and `match n` pays nothing for this section.
+
+**It changes what an arm is given.** Where the test was written in a
+record's field, an arm used to face the field at its constructor and could
+close it by `refl`; it now faces the record as written and passes the
+equation (`match h:`). Found by re-elaborating the library, as §4.5 says a
+change to this ladder must be.
+
+**What it does not reach.** A record that does not use one of its
+parameters: the unused argument is not in the lowering, the respelling
+declines, and the motive reads inside as before
+(`loose_or` in `lib/_tests/std/core/match_refines_through_calls_tests.hthr`
+pins the refusal).
+
+**A hypothesis left as written is said so.** §4.7 leaves a hypothesis an
+arm passes beside `h` as written in *every* arm, so `None =>
+absurd(compiled)` was refused because another arm wrote `subst(compiled,
+linked)`, and the refusal named neither. A refusal the elaborator makes
+inside a `match h:` now carries a note naming the hypotheses left as
+written for that reason and the way out, binding what the call takes
+first (`Refined::explain`).
+
 ## 5. Mechanism B: rebuilding the value around `z`
 
 `field_rewrap` reads a scrutinee as a constructor field and says what
