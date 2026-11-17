@@ -228,20 +228,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
     let request = Both(Place(0, Block(asking)), Fetch(fd, Rdi));
     let counted = Both(Place(0, Block([SubRR(R9, R8)])), Both(Fetch(len, Rdx), Both(Fragment::clamp(Rdx, R9, names + 1), request)));
     let code = Both(Fetch(from, R8), Both(Place(0, Block([MovRI(R9, BitVec::ofNat(cap))])), Both(Fragment::clamp(R8, R9, names), counted)));
-    let ready = code.onto(r.cx(), p);
-    let asked = then(ready, Syscall);
-    let w_asked = asked.word_from_within(layout, out, result, Rax, t.program, within);
-    // The SYSCALL, each answer stored to its word.
-    let after = λ (a: WriteResult) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(c, a) ∧
-        (t.Held(live, env, u.gprs, u.memory) ∧ (env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(env, a)));
-    let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, ready, 0, w_asked.proof, c, tree, after,
-        λ a u here resident held => t.goes_result(live, out, env, shape.answer(env, a), asked, result, in_result, sub, apart, within, tree(a), next(a, held.left),
-            u, here, resident, held.right));
-    let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
-        (t.site().Resident(s.memory) → (a: WriteResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ u =>
-            t.site().Resident(u.memory) ∧ after(a, u)));
-    let ran = code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(c, tree), call_pre, called);
-    t.goes_weaken(ran, λ s held => {
+    t.goes_weaken(r.goes_asked(code, p, shape, result, in_result, sub, apart, within, tree, next), λ s held => {
         let m = s.memory;
         let bound = BitVec::ofNat(cap, n := 64);
         let bound_is: (bound.toNat() = cap) = BitVec::toNat_ofNat(64, cap, t.cap_small(buf, cap, found));
@@ -250,7 +237,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
         let g2 = write_gpr(R9, bound, write_gpr(R8, env.word(from), write_gpr(Rbx, t.rbx_known(known, env, from), s.gprs)));
         ⟨⟨in_from, m_from⟩, ⟨held, λ f rip =>
         // The offset: the word clamped to the capacity.
-        Fragment::clamp_before(r, R8, R9, names, counted.before(r, call_pre), MachineState(g2, f, rip, m), λ offset is_offset f rip => {
+        Fragment::clamp_before(r, R8, R9, names, counted.before(r, r.Asks(shape, result)), MachineState(g2, f, rip, m), λ offset is_offset f rip => {
             let at_offset: (offset.toNat() = clamped) = trans(is_offset, eq2(λ (x: Nat) (y: Nat) => x.min(y), from_is, bound_is));
             let order: (offset.toNat() <= bound.toNat()) = j(sym(bound_is), λ n _ => offset.toNat() <= n,
                 j(sym(at_offset), λ n _ => n <= cap, env.number(from).min_le_r(cap)));
@@ -258,7 +245,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
             let g4 = write_gpr(Rdx, env.word(len), write_gpr(Rbx, t.rbx_known(known, env, len), write_gpr(R9, bound.sub(offset), write_gpr(R8, offset, g2))));
             ⟨⟨in_len, m_len⟩, ⟨held, λ f rip =>
             // The count: the length clamped to what is left past the offset.
-            Fragment::clamp_before(r, Rdx, R9, names + 1, request.before(r, call_pre), MachineState(g4, f, rip, m), λ count is_count f rip => {
+            Fragment::clamp_before(r, Rdx, R9, names + 1, request.before(r, r.Asks(shape, result)), MachineState(g4, f, rip, m), λ count is_count f rip => {
                 let at_count: (count.toNat() = env.number(len).min(cap - clamped)) = trans(is_count, eq2(λ (x: Nat) (y: Nat) => x.min(y), len_is, room));
                 let wanted = t.writes_request(env.with_words(held.witness), m, held.proof.left, buf, cap, found, env.number(from), env.number(len),
                     offset, count, at_offset, at_count);

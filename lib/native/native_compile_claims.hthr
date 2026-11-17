@@ -220,3 +220,39 @@ theorem Fragment::clamp_before(r: Run, value, bound: Gpr, names: Nat, post: r.St
         next(b, BitVec::min_bound(v, b, over), u.flags, u.rip)
       }⟩, refl⟩
 }
+
+// ---------------------------------------------------------------------------
+// A call to Linux whose answer is kept
+
+// What a SYSCALL needs where it asks `shape`'s call and RAX is then kept as
+// `result`: Linux is asked the call the source makes, and however it
+// answers, the words are held and the environment with RAX in `result` is
+// the one the source's answer gives.
+fn Run::Asks(self r: Run, shape: CallShape, result: Nat) → r.State() → Type {
+    λ s => LinuxRequests(r.t.io(), s, shape.cmd(r.env)) ∧
+        (r.t.site().Resident(s.memory) → (a: shape.cmd(r.env).Resp()) → LinuxCmd::Answers(shape.cmd(r.env), a) →
+            LinuxResumes(r.t.io(), s, shape.cmd(r.env), a, λ u => r.t.site().Resident(u.memory) ∧ (LinuxCmd::Answers(shape.cmd(r.env), a) ∧
+                (r.t.Held(r.live, r.env, u.gprs, u.memory) ∧ (r.env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(r.env, a))))))
+}
+
+// Code, a SYSCALL, and RAX kept as `result`: from a state where the code
+// leads to the request, the call is made and the run goes on with its
+// answer in the environment.
+theorem Run::goes_asked(self r: Run, code: Fragment, p: Prog, shape: CallShape, result: Nat,
+    inside: r.t.layout().word_fits(result).IsTrue(), sub: (i: Nat) → Mem(i, r.out) → i ≠ result → Mem(i, r.live), apart: r.t.homes.apart(result, r.out).IsTrue(),
+    within: then(code.onto(r.cx(), p), Syscall).word_from(r.t.layout(), r.out, result, Rax).Within(r.t.program),
+    tree: shape.cmd(r.env).Resp() → ITree<BitVec(64)>(Events::linux()),
+    next: (a: shape.cmd(r.env).Resp()) → LinuxCmd::Answers(shape.cmd(r.env), a) →
+        r.t.At(prog_len(then(code.onto(r.cx(), p), Syscall).word_from(r.t.layout(), r.out, result, Rax)), r.out, tree(a), shape.answer(r.env, a))):
+    r.t.Goes(prog_len(p), Vis(shape.cmd(r.env), tree), code.before(r, r.Asks(shape, result))) {
+    let t = r.t;
+    let ready = code.onto(r.cx(), p);
+    let asked = then(ready, Syscall);
+    let w_asked = asked.word_from_within(t.layout(), r.out, result, Rax, t.program, within);
+    let after = λ (a: shape.cmd(r.env).Resp()) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(shape.cmd(r.env), a) ∧
+        (t.Held(r.live, r.env, u.gprs, u.memory) ∧ (r.env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(r.env, a)));
+    let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, ready, 0, w_asked.proof, shape.cmd(r.env), tree, after,
+        λ a u here resident held => t.goes_result(r.live, r.out, r.env, shape.answer(r.env, a), asked, result, inside, sub, apart, within, tree(a), next(a, held.left),
+            u, here, resident, held.right));
+    code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(shape.cmd(r.env), tree), r.Asks(shape, result), called)
+}
