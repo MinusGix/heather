@@ -206,13 +206,27 @@ written readings check, which is what `unify-through-match-arms` and the
 was wrong, which today is exactly where one of the two exceptions fires
 (§6 has the count).
 
-For that to select the written readings of `g(h)` first, a two-reading
-name in **head** position of a call is tried as written before refined
-when every argument is `h` or a two-reading name. One sentence covers it:
-*a call made only of facts about the scrutinee is taken as written if it
+For that to select the written readings of `g(h)` first, a call whose
+head is a refined hypothesis and whose every argument is the equation or
+a refined hypothesis, the equation among them, is tried as written before
+refined (`Readings::as_written`). One sentence covers it: *a call that
+hands the equation to facts about the scrutinee is taken as written if it
 checks as written.* It is the single place the order is not "refined
 first", and it exists for the term's sake, not for typing: both orders
 type.
+
+**As built, and narrower than the sentence above.** The second lowering
+happens only at a match with an equation, and never where an arm calls
+the declaration being elaborated. The first version applied it to every
+match and changed a recursive `fn`'s term: `walk_expect`
+(`lib/_tests/std/analysis/continuous_time_tests.hthr`) stopped unfolding
+at `Succ(m)` by `refl`. A recursion's match generalizes its parameters
+for its calls as well as for its arms' names, and a name count does not
+see that. Nothing wants the written reading at a plain match anyway
+(§3.6), so the narrowing loses nothing known. Why the wider version broke
+that function in particular (the same shape over `Nat` was unharmed) was
+not run to ground, and is the first thing to understand before widening
+it.
 
 ### 3.5 A hypothesis that cannot be refined says so where it is used
 
@@ -341,12 +355,12 @@ and the refined copy shadows the equation. A hypothesis named like the
 equation cannot be named by an arm; the prototype says so in
 `select_refined`.
 
-**Prototype** (this branch, `crates/elab/src/readings.rs`): §3.1 to §3.3
-as written, both exceptions deleted, without §3.4's use-based selection
-and without §3.5's messages. `Cx::readings` records each refined copy's
-outer binder and the equation's name; the checking form and the
-application engine's inferred-argument branch ask it. It is small: the
-readings module, one field, two call sites.
+**Prototype** (this branch, `crates/elab/src/readings.rs`): §3.1 to §3.4
+as written, both exceptions deleted, without §3.5's messages. `Cx::readings`
+records each refined copy's outer binder and the equation's name; the
+checking form and the application engine's inferred-argument branch ask
+it; a match with an equation is lowered a second time when a hypothesis
+it generalized was never used refined.
 
 - `lib/_tests/std/core/match_readings_tests.hthr` checks: each row of
   §3.3, both spellings of §1's pairs (`chain_by_trans` and
@@ -357,7 +371,8 @@ readings module, one field, two call sites.
 - The probes that pinned the exceptions check unchanged: `pick_by` with
   `pick_by_true` by `refl`, the `taken_*` family, `passed_h`,
   `passed_beside`, `Bisim::of_obs`.
-- **The whole library re-elaborates with no proof changed** (fresh
+- **The whole library re-elaborated with no proof changed** at §3.1 to
+  §3.3 (fresh
   cache, no stale images, every `lib/**/*.hthr`): one file fails, and it
   is the file that fails the same way on master
   (`constructor_equation_tests.hthr`, an expectation that no longer
@@ -370,6 +385,15 @@ readings module, one field, two call sites.
   it elaborated stands unless it clashes with a solved implicit, and
   another reading replaces it only if it settles the parameter's type at
   its own.
+
+- `scripts/test --pr` at §3.1 to §3.3 found what §3.4 is for:
+  `goal_combinators::splits_a_convoy_whose_arm_uses_its_equation` proves
+  a fact about `fn pick`'s `match h: is_zero(n) { True => d, False =>
+  k(h) }` by `split_all`, and with `k` generalized and `h` read as `refl`
+  the split's leaves no longer had the shape its lemma states. §3.4 was
+  built for it, and the test passes.
+- Sweep and `scripts/test --pr` with §3.4 in: **(running; filled in
+  before this leaves draft).**
 
 ## 7. What it costs, and what could go wrong
 
