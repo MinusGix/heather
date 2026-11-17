@@ -81,20 +81,49 @@ fn Gpr::eq_dec(self a: Gpr, b: Gpr) → a = b ∨ ¬(a = b) {
 
 instance DecEq<Gpr> { eq_dec := Gpr::eq_dec }
 
-record Gprs { at: Gpr → BitVec(64) }
+// The register file: a word per register. It is data, so a register file is
+// its sixteen words whatever writes built it: two writes of one register are
+// the one write, and writes of two registers in either order are the same
+// file, by conversion (issues/native-gprs-writes-not-canonical.md).
+record Gprs {
+    rax: BitVec(64), rcx: BitVec(64), rdx: BitVec(64), rbx: BitVec(64),
+    rsp: BitVec(64), rbp: BitVec(64), rsi: BitVec(64), rdi: BitVec(64),
+    r8: BitVec(64), r9: BitVec(64), r10: BitVec(64), r11: BitVec(64),
+    r12: BitVec(64), r13: BitVec(64), r14: BitVec(64), r15: BitVec(64),
+}
 
-fn zero_gprs() → Gprs { Gprs(at := λ (register: Gpr) => BitVec::zero()) }
+fn Gprs::all(value: BitVec(64)) → Gprs {
+    Gprs(value, value, value, value, value, value, value, value, value, value, value, value, value, value, value, value)
+}
+
+fn zero_gprs() → Gprs { Gprs::all(BitVec::zero()) }
 
 fn read_gpr(register: Gpr, registers: Gprs) → BitVec(64) {
-    registers.at(register)
+    match register {
+        Rax => registers.rax, Rcx => registers.rcx, Rdx => registers.rdx, Rbx => registers.rbx,
+        Rsp => registers.rsp, Rbp => registers.rbp, Rsi => registers.rsi, Rdi => registers.rdi,
+        R8 => registers.r8, R9 => registers.r9, R10 => registers.r10, R11 => registers.r11,
+        R12 => registers.r12, R13 => registers.r13, R14 => registers.r14, R15 => registers.r15,
+    }
+}
+
+// The word a register holds once `register` is written: the value at that
+// register, what it held at every other.
+fn Gpr::written(self register: Gpr, at: Gpr, value, held: BitVec(64)) → BitVec(64) {
+    match register.same(at) { False => held, True => value }
 }
 
 fn write_gpr(register: Gpr, value: BitVec(64), registers: Gprs) → Gprs {
-    Gprs(at := λ (query: Gpr) =>
-        match register.same(query) {
-            False => registers.at(query),
-            True => value,
-        })
+    Gprs(
+        register.written(Rax, value, registers.rax), register.written(Rcx, value, registers.rcx),
+        register.written(Rdx, value, registers.rdx), register.written(Rbx, value, registers.rbx),
+        register.written(Rsp, value, registers.rsp), register.written(Rbp, value, registers.rbp),
+        register.written(Rsi, value, registers.rsi), register.written(Rdi, value, registers.rdi),
+        register.written(R8, value, registers.r8), register.written(R9, value, registers.r9),
+        register.written(R10, value, registers.r10), register.written(R11, value, registers.r11),
+        register.written(R12, value, registers.r12), register.written(R13, value, registers.r13),
+        register.written(R14, value, registers.r14), register.written(R15, value, registers.r15),
+    )
 }
 
 fn gpr_location(register: Gpr) → Location<Gprs, BitVec(64)> {
