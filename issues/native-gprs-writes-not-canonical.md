@@ -73,3 +73,11 @@ register file is stated by conversion.
   One proof (`in_place_settle`) lost an inferred motive: the goal no longer
   unfolds far enough to show the callee's test, so its match is written
   with its motive.
+- 2026-11-17: the native compiler's side retired. `Target::rbx_gprs`,
+  `rbx_known_gprs` and `slot_gprs` are each one write of RBX
+  (`write_gpr(Rbx, t.rbx_word(env, id), g)`), and `rbx_gprs_other`,
+  `rbx_gprs_rbx`, `rbx_cases`, `held_rbx`, `rbx_known_other`,
+  `rbx_known_cases`, `held_rbx_known`, `slot_gprs_other` and the bridging
+  `rbx_file`/`rbx_known_file` are deleted: `Held` after a write of RBX is
+  `Held` before it by conversion, and a read of another register cites
+  `read_gpr_other`. Left: `GprsAgree` in `function_ir_lower.hthr`.

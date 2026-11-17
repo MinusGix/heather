@@ -36,3 +36,4 @@ operand that is a clamped length or a buffer address is said.
 ## Log
 
 - 2026-11-17: filed from Minus's review of `lib/native/native_compile*.hthr` (`docs/library/program-and-proof-style.md`).
+- 2026-11-17: first cut in `lib/native/native_compile.hthr`: `Abi` (where a call's number, first three arguments and result go, `Abi::linux_syscall()`), and a record per call naming each argument's place as its manual page does (`Read`, `Write`, `Close`, `Openat`, from `abi.read()` and so on). The four emitters take their registers from these. Left: the theorems are still stated per call (`Run::goes_asked` takes the code and a `CallShape`); one theorem "for any call placed by this convention" needs the call's arguments as data, not as builder steps.

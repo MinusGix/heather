@@ -275,13 +275,13 @@ theorem Target::held_kind(self t: Target, live: List<Nat>, env: Env, kind: Optio
     match kind {
         None => held,
         Some(k) => match k {
-            Word => t.held_unused(live, env, ga, m, t.held_rbx(live, env, g, m, held, env, id), register, env.word(id), unused, apart),
+            Word => t.held_unused(live, env, ga, m, held, register, env.word(id), unused, apart),
             Bit => {
                 let inner = write_gpr(register, env.word(id), ga);
                 let loaded = write_gpr(Rbx, BitVec::ofNat(1), inner);
                 t.held_unused(live, env, loaded, m,
                     t.held_unused(live, env, inner, m,
-                        t.held_unused(live, env, ga, m, t.held_rbx(live, env, g, m, held, env, id), register, env.word(id), unused, apart),
+                        t.held_unused(live, env, ga, m, held, register, env.word(id), unused, apart),
                         Rbx, BitVec::ofNat(1), rbx, refl),
                     register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), unused, apart)
             },
@@ -341,12 +341,12 @@ theorem Target::kind_gprs_frame(self t: Target, env: Env, kind: Option<Kind>, id
     match kind {
         None => refl,
         Some(k) => match k {
-            Word => trans(read_gpr_other(register, query, env.word(id), ga, apart), t.rbx_gprs_other(env, id, g, query, from_rbx)),
+            Word => trans(read_gpr_other(register, query, env.word(id), ga, apart), read_gpr_other(Rbx, query, t.rbx_word(env, id), g, from_rbx)),
             Bit => {
                 let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), ga));
                 trans(read_gpr_other(register, query, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded, apart),
                     trans(read_gpr_other(Rbx, query, BitVec::ofNat(1), write_gpr(register, env.word(id), ga), from_rbx),
-                        trans(read_gpr_other(register, query, env.word(id), ga, apart), t.rbx_gprs_other(env, id, g, query, from_rbx))))
+                        trans(read_gpr_other(register, query, env.word(id), ga, apart), read_gpr_other(Rbx, query, t.rbx_word(env, id), g, from_rbx))))
             },
             Narrow(_) => refl,
             Low(_) => refl,
