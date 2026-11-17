@@ -14,18 +14,20 @@ const PREC = {
   BOOL_OR: 6,
   BOOL_AND: 7,
   RELATION: 8,
+  // `∑ k < n, e`: its body takes every rung above the relations.
+  BIG_OPERATOR: 9,
   // Bitwise and shift rungs, in Rust's order (issues/integer-operator-symbols.md).
   // `⊕` is Rust's `^` (issues/bitvec-xor-complement-symbols.md).
-  BIT_OR: 9,
-  BIT_XOR: 10,
-  BIT_AND: 11,
-  SHIFT: 12,
-  ADD: 13,
-  MUL: 14,
-  PREFIX: 15,
+  BIT_OR: 10,
+  BIT_XOR: 11,
+  BIT_AND: 12,
+  SHIFT: 13,
+  ADD: 14,
+  MUL: 15,
+  PREFIX: 16,
   // `-x ^ 2` is `-(x ^ 2)` and `x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, as in the compiler.
-  POWER: 16,
-  POSTFIX: 17,
+  POWER: 17,
+  POSTFIX: 18,
 };
 
 // Words that introduce a special form only before their fixed follower
@@ -491,7 +493,7 @@ module.exports = grammar({
     declaration_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._declaration_type,
     )),
-    declaration_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+    declaration_big_operator_type: $ => prec.right(PREC.BIG_OPERATOR, seq(
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._declaration_type),
       ',', field('body', $._declaration_type),
     )),
@@ -530,7 +532,7 @@ module.exports = grammar({
     annotation_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._annotation_type,
     )),
-    annotation_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+    annotation_big_operator_type: $ => prec.right(PREC.BIG_OPERATOR, seq(
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._annotation_type),
       ',', field('body', $._annotation_type),
     )),
@@ -624,8 +626,8 @@ module.exports = grammar({
       ',', field('body', $._expression),
     )),
     // `∑ k < n, e`: the body runs over arithmetic and stops at a relation,
-    // as in the compiler, so its precedence sits just above COMPARE.
-    big_operator_expression: $ => prec.right(PREC.BOOL_OR, seq(
+    // as in the compiler, so its precedence sits just above them.
+    big_operator_expression: $ => prec.right(PREC.BIG_OPERATOR, seq(
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._expression),
       ',', field('body', $._expression),
     )),
