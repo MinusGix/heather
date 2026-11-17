@@ -47,7 +47,7 @@ theorem creal_sum_of_inverses(x, y: CReal, hx: x.Apart(0), hy: y.Apart(0), hxy: 
 // kin, so `inv_succ` at an index computed from others clears too.
 theorem rat_halves_at_index(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n + n + 1) ≈ Rat::inv_succ(n) { ring }
 theorem rat_inv_succ_product(k, l: Nat): Rat::inv_succ(k) * Rat::inv_succ(l) ≈ Rat::inv_succ(k * (l + 1) + l) { ring }
-theorem rat_cast_succ(n: Nat, x: Rat): x * Rat::ofInt(OfNat(Succ(n))) ≈ x * Rat::ofInt(OfNat(n)) + x { ring }
+theorem rat_cast_succ(n: Nat, x: Rat): x * Rat::ofInt(OfNat(n + 1)) ≈ x * Rat::ofInt(OfNat(n)) + x { ring }
 theorem creal_cast(n: Nat, x: CReal): x * CReal::ofRat(Rat::ofInt(OfNat(n + 1))) ≈ x * CReal::ofRat(Rat::ofInt(OfNat(n))) + x { ring }
 // With hypotheses: they account for what clearing leaves.
 theorem rat_cleared_with(x, y, z: Rat, hy: y.Apart(0), h: x ≈ y * z): x * y⁻¹ ≈ z { ring(h) }
@@ -69,7 +69,7 @@ theorem creal_cast_sum_in_hyp(x, y: Rat, X, Y: CReal, h: X ≈ CReal::ofRat(x + 
 theorem rat_not_field_identity(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): x⁻¹ + y⁻¹ ≈ (x * y)⁻¹ { ring }
 // A cast read through is still a ring identity's: 2n + 1 is not n + 1.
 // expect-error: not an identity of commutative rings
-theorem rat_cast_not_identity(n: Nat, e: Rat): e * Rat::ofInt(OfNat(n + n + 1)) ≈ e * Rat::ofInt(OfNat(Succ(n))) { ring }
+theorem rat_cast_not_identity(n: Nat, e: Rat): e * Rat::ofInt(OfNat(n + n + 1)) ≈ e * Rat::ofInt(OfNat(n + 1)) { ring }
 // expect-error: left once both sides are multiplied by `y`
 theorem rat_cleared_no_combination(x, y, z: Rat, hy: y.Apart(0), h: x ≈ z): x * y⁻¹ ≈ z { ring(h) }
 // A cast of a sum read through still needs the combination to exist.

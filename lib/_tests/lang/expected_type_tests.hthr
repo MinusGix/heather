@@ -109,10 +109,10 @@ theorem single_len(b: u8): [b].len() = 1 { refl }
 
 theorem single_len_open<A>(a: A): [a, a].len() = 2 { refl }
 
-theorem lens_add(T: List<u8>, b: u8): T.len() + [b].len() = Succ(T.len()) { refl }
+theorem lens_add(T: List<u8>, b: u8): T.len() + [b].len() = T.len() + 1 { refl }
 
 // On the left of `++`, the literal takes the other operand's `++`.
-theorem literal_append(xs: List<u8>): ([BitVec::zero()] ++ xs).len() = Succ(xs.len()) { refl }
+theorem literal_append(xs: List<u8>): ([BitVec::zero()] ++ xs).len() = xs.len() + 1 { refl }
 
 theorem literal_append_open<A>(a: A, xs: List<A>): [a] ++ xs = Cons(a, xs) { refl }
 

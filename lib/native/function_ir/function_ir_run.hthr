@@ -172,7 +172,7 @@ theorem loop_run_len(step: Valuation() → Buffers() → State, parameters: List
     match remaining {
         Zero => λ state buffers same => same,
         Succ(rest) => λ state buffers same => {
-            let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
+            let after = step(pass_valuation(parameters, count, rest + 1, state), buffers);
             let next_len: (words_of(after.values, next).len() = parameters.len()) = trans(words_of_len(after.values, next), lengths);
             match after.values(1, exit).head_bit() {
                 False => loop_run_len(step, parameters, count, exit, next, lengths, rest, words_of(after.values, next), after.buffers, next_len),
@@ -198,16 +198,16 @@ theorem loop_run_runs(pass: Valuation() → Buffers() → Buffers() → Type, st
         Zero => λ state before _ => ⟨refl, ⟨refl, refl⟩⟩,
         Succ(rest) => λ state before same => {
             let parts = Bool::is_true_and(absent(count, parameters), distinct(parameters), apart);
-            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
-            let entered = pass_valuation(parameters, count, Succ(rest), state);
+            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)));
+            let entered = pass_valuation(parameters, count, rest + 1, state);
             let after = step(entered, before);
             let bound: (words_of(after.values, parameters) = state) = trans(
                 words_agree(parameters, entered, after.values, λ id m => kept(entered, before, 64, id, Inr(m))),
                 words_of_bind(counted, parameters, parts.right, state, sym(same)));
-            let at_count: (after.values(64, count) = BitVec::ofNat(Succ(rest))) = trans(kept(entered, before, 64, count, Inl(refl)),
+            let at_count: (after.values(64, count) = BitVec::ofNat(rest + 1)) = trans(kept(entered, before, 64, count, Inl(refl)),
                 trans(Valuation::bind_frame(counted, parameters, state, 64, count, parts.left),
-                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))), 64),
-                        word_value_word(BitVec::ofNat(Succ(rest))))));
+                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)), 64),
+                        word_value_word(BitVec::ofNat(rest + 1)))));
             let next_len: (words_of(after.values, next).len() = parameters.len()) = trans(words_of_len(after.values, next), lengths);
             Exists(after.values, Exists(after.buffers, ⟨bound, ⟨at_count, ⟨holds(entered, before),
                 match after.values(1, exit).head_bit() as λ b => match b as λ _ => Type {
@@ -592,7 +592,7 @@ theorem loop_run_quiet(run_step: Valuation() → Buffers() → State, step: Valu
     match remaining {
         Zero => λ state => refl,
         Succ(rest) => λ state => {
-            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let before = pass_valuation(parameters, count, rest + 1, state);
             let after = step(before);
             let ends = match after(1, exit).head_bit() as λ b =>
                     (match b as λ _ => LoopState {
@@ -787,7 +787,7 @@ fn loop_pass_run(step: Valuation() → Buffers() → State, parameters: List<Nat
 // What a loop's end is held to: `Good` of it, whatever the passes left,
 // and the recursion `run` where the measure is below them.
 fn LoopAgrees<S>(Good: Ending → Type, measure: List<BitVec(64)> → S → Nat,
-    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending, r: Nat, state: List<BitVec(64)>, s: S,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), r + 1) → Ending, r: Nat, state: List<BitVec(64)>, s: S,
     end: Ending) → Type {
     Good(end) ∧ ((h: Nat::Lt(measure(state, s), Succ(r))) → end = run(r, state, s, h))
 }
@@ -801,13 +801,13 @@ fn LoopAgrees<S>(Good: Ending → Type, measure: List<BitVec(64)> → S → Nat,
 theorem loop_run_agrees_measured<S>(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
     apart: distinct(parameters).IsTrue(), finish: LoopState → Ending, emb: S → Buffers(), Good: Ending → Type,
     measure: List<BitVec(64)> → S → Nat,
-    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), Succ(r)) → Ending,
+    run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), r + 1) → Ending,
     at_zero: (v: Valuation()) → (s: S) →
         LoopAgrees<S>(Good, measure, run, 0, words_of(v, parameters), s, finish(LoopState(LoopEnd(words_of(v, parameters), True), emb(s)))),
     at_pass: (r: Nat) → (v: Valuation()) → (s: S) →
         ((state: List<BitVec(64)>) → (s2: S) → state.len() = parameters.len() →
             LoopAgrees<S>(Good, measure, run, r, state, s2, finish(loop_run(step, parameters, count, exit, next, r, state, emb(s2))))) →
-        LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s,
+        LoopAgrees<S>(Good, measure, run, r + 1, words_of(v, parameters), s,
             loop_pass_run(step, parameters, count, exit, next, finish,
                 λ (state: List<BitVec(64)>) (file: Buffers()) => finish(loop_run(step, parameters, count, exit, next, r, state, file)), r, v, emb(s))),
     remaining: Nat):
@@ -822,9 +822,9 @@ theorem loop_run_agrees_measured<S>(step: Valuation() → Buffers() → State, p
         Succ(r) => λ state s fits => {
             let v = Valuation::bind(Valuation::zero(), parameters, state);
             let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
-            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), emb(s));
+            let after = step(pass_valuation(parameters, count, r + 1, words_of(v, parameters)), emb(s));
             let following = words_of(after.values, next);
-            let Held = λ (end: Ending) => LoopAgrees<S>(Good, measure, run, Succ(r), words_of(v, parameters), s, end);
+            let Held = λ (end: Ending) => LoopAgrees<S>(Good, measure, run, r + 1, words_of(v, parameters), s, end);
             let earlier = λ (st: List<BitVec(64)>) (s2: S) (st_fits: st.len() = parameters.len()) =>
                 loop_run_agrees_measured<S>(step, parameters, count, exit, next, apart, finish, emb, Good, measure, run, at_zero, at_pass, r, st, s2, st_fits);
             let at_v = (match after.values(1, exit).head_bit() as λ b =>
@@ -835,7 +835,7 @@ theorem loop_run_agrees_measured<S>(step: Valuation() → Buffers() → State, p
                 False => λ passed => passed,
                 True => λ passed => passed,
             })(at_pass(r, v, s, earlier));
-            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, Succ(r), st, s, finish(loop_run(step, parameters, count, exit, next, Succ(r), st, emb(s)))),
+            j(rebound, λ st _ => LoopAgrees<S>(Good, measure, run, r + 1, st, s, finish(loop_run(step, parameters, count, exit, next, r + 1, st, emb(s)))),
                 at_v)
         },
     }

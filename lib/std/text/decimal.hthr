@@ -53,7 +53,7 @@ theorem decimal_one(fuel, m: Nat, small: m <= 9): decimal_digits(fuel, m) = [dig
 }
 
 theorem decimal_more(fuel, m: Nat, big: 10 <= m):
-    decimal_digits(Succ(fuel), m) = decimal_digits(fuel, m.div(10)) ++ [digit(m.mod(10))] {
+    decimal_digits(fuel + 1, m) = decimal_digits(fuel, m.div(10)) ++ [digit(m.mod(10))] {
     j(sym(leb_no(m, 9, big)), λ b _ =>
         (match b { True => [digit(m)], False => decimal_digits(fuel, m.div(10)) ++ [digit(m.mod(10))] }) =
             decimal_digits(fuel, m.div(10)) ++ [digit(m.mod(10))], refl)
@@ -131,7 +131,7 @@ theorem tens_lead(j, m: Nat, lead: 1 <= tens(j, m.div(10))): 10 <= m {
 // Where the count's leading place is: not a zero, past the first.
 fn Leads(k, m: Nat) → Type { match k { Zero => True, Succ(_) => 1 <= tens(k, m) } }
 
-theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9 → Leads(k, m) → decimal_digits(fuel, m) = places(Succ(k), m) {
+theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9 → Leads(k, m) → decimal_digits(fuel, m) = places(k + 1, m) {
     match k {
         Zero => λ fuel m room top lead => {
             let single: (m <= 9) = top;

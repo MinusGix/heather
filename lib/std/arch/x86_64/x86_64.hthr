@@ -3038,7 +3038,7 @@ fn ShiftOp::by(self op: ShiftOp, x: BitVec(64), count: Nat) → BitVec(64) {
 }
 
 theorem ShiftOp::by_succ(self op: ShiftOp, x: BitVec(64), count: Nat):
-    op.apply(op.by(x, count)) = op.by(x, Succ(count))
+    op.apply(op.by(x, count)) = op.by(x, count + 1)
 {
     match op { OpShl => refl, OpShr => refl, OpSar => refl }
 }

@@ -49,7 +49,7 @@ theorem loop_run_ext(step, other: Valuation() → Buffers() → State, same: (v:
     match remaining {
         Zero => λ state buffers => refl,
         Succ(rest) => λ state buffers => {
-            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let entry = pass_valuation(parameters, count, rest + 1, state);
             let after = step(entry, buffers);
             let later = match after.values(1, exit).head_bit() as λ b =>
                     (match b as λ _ => LoopState {

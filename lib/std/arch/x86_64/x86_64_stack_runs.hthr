@@ -459,7 +459,7 @@ theorem Stack::code_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
     let e5: (data.read(memory, next_rip(start, 5)) = Some(b5)) = trans(stack.sees_code(memory, next_rip(start, 5), r5.left).left, r5.right.left);
     let e6: (data.read(memory, next_rip(start, 6)) = Some(b6)) = trans(stack.sees_code(memory, next_rip(start, 6), r6.left).left, r6.right.left);
     let e7: (data.read(memory, next_rip(start, 7)) = Some(b7)) = trans(s7.left, r7.right.left);
-    let top: (Succ(Nat::pow(2, 47)) <= Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let top: (Nat::pow(2, 47) + 1 <= Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
     let low = s0.right;
     let last: (next_rip(start, 7).toNat() = start.toNat() + 7) = BitVec::offset_toNat(64, start, 7, omega(low, top));
     let high = s7.right;
@@ -507,7 +507,7 @@ theorem Stack::table_word_at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
                 },
                 Succ(k) => {
                     let later = stack.table_word_at(memory, rest, k, next_rip(start, 8), parts.right, omega(inside));
-                    let moved: (next_rip(next_rip(start, 8), 8 * k) = next_rip(start, 8 * Succ(k))) =
+                    let moved: (next_rip(next_rip(start, 8), 8 * k) = next_rip(start, 8 * (k + 1))) =
                         trans(rip_compose(start, 8, 8 * k), rip_count(start, omega));
                     j(moved, λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, a) = Some(table_word(rest, k))), later)
                 },
@@ -861,7 +861,7 @@ theorem Prog::within_spills(registers: List<Gpr>): (prog: Prog) → (k: Nat) →
         Cons(register, rest) => λ prog k => {
             let item = At(prog, 0, Spill(StackStore(register, slot_offset(k))));
             Prog::within_trans(prog.within_then(0, Spill(StackStore(register, slot_offset(k)))),
-                Prog::within_spills(rest, item, Succ(k)))
+                Prog::within_spills(rest, item, k + 1))
         },
     }
 }
@@ -871,7 +871,7 @@ theorem Prog::within_reloads(registers: List<Gpr>): (prog: Prog) → (k: Nat) �
         Cons(register, rest) => λ prog k => {
             let item = At(prog, 0, Reload(StackLoad(register, slot_offset(k))));
             Prog::within_trans(prog.within_then(0, Reload(StackLoad(register, slot_offset(k)))),
-                Prog::within_reloads(rest, item, Succ(k)))
+                Prog::within_reloads(rest, item, k + 1))
         },
     }
 }
@@ -896,7 +896,7 @@ theorem Stack::stable_saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
         Nil => λ k _ _ memory own below word held => trivial,
         Cons(register, rest) => λ k above room =>
             stack.stable_and(from, stack.stable_word(from, d + 8 * k, above, { omega }, Some(read_gpr(register, gprs))),
-                stack.stable_saved(from, d, gprs, rest, Succ(k), { omega }, { omega })),
+                stack.stable_saved(from, d, gprs, rest, k + 1, { omega }, { omega })),
     }
 }
 
@@ -939,7 +939,7 @@ theorem Site::moves_spills<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
             let slot_small: (k < 16) = { omega };
             let slot_room: (i + 8 <= stack.size) = { omega };
             let kept = λ (memory: M) => frame(memory) ∧ (read_word(site.data, memory, stack.at(i)) = Some(read_gpr(register, gprs)));
-            let item_in = Prog::within_trans(Prog::within_spills(rest, item, Succ(k)), within);
+            let item_in = Prog::within_trans(Prog::within_spills(rest, item, k + 1), within);
             let first = site.moves_spill(stack, fits, item_in.witness, prog, 0, store, item_in.proof,
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ frame(s.memory),
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ kept(s.memory),
@@ -955,18 +955,18 @@ theorem Site::moves_spills<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
                     Exists(i, ⟨address, ⟨slot_room, ⟨held.left,
                         j(sym(address), λ a _ => kept(stack.writes.store(s.memory, a, word_bytes(word))), here)⟩⟩⟩)
                 });
-            let later = Site::moves_spills(site, stack, fits, d, gprs, rsp, rest, item, Succ(k), { omega }, { omega }, kept,
+            let later = Site::moves_spills(site, stack, fits, d, gprs, rsp, rest, item, k + 1, { omega }, { omega }, kept,
                 λ memory n low high w held => ⟨stable(memory, n, { omega }, { omega }, w, held.left),
                     trans(stack.apart(memory, n, i, { omega }, slot_room, Inr({ omega }), w), held.right)⟩,
                 within);
-            site.moves_trans(stack.writes, prog_len(prog), prog_len(item), prog_len(rest.spills(item, Succ(k))),
+            site.moves_trans(stack.writes, prog_len(prog), prog_len(item), prog_len(rest.spills(item, k + 1)),
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ frame(s.memory),
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ kept(s.memory),
                 λ (t: MachineState<M>) => (t.gprs = gprs) ∧ (frame(t.memory) ∧ stack.Saved(d, Cons(register, rest), k, gprs, t.memory)),
                 first,
-                site.moves_weaken(stack.writes, prog_len(item), prog_len(rest.spills(item, Succ(k))),
+                site.moves_weaken(stack.writes, prog_len(item), prog_len(rest.spills(item, k + 1)),
                     λ (s: MachineState<M>) => (s.gprs = gprs) ∧ kept(s.memory),
-                    λ (t: MachineState<M>) => (t.gprs = gprs) ∧ (kept(t.memory) ∧ stack.Saved(d, rest, Succ(k), gprs, t.memory)),
+                    λ (t: MachineState<M>) => (t.gprs = gprs) ∧ (kept(t.memory) ∧ stack.Saved(d, rest, k + 1, gprs, t.memory)),
                     λ (s: MachineState<M>) => (s.gprs = gprs) ∧ kept(s.memory),
                     λ (t: MachineState<M>) => (t.gprs = gprs) ∧ (frame(t.memory) ∧ stack.Saved(d, Cons(register, rest), k, gprs, t.memory)),
                     later, λ s held => held,
@@ -999,19 +999,19 @@ theorem Site::moves_reloads<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
             let word = read_gpr(register, saved);
             let next = write_gpr(register, word, gprs);
             let spares = Bool::is_true_and(!register.same(Rsp), rest.spare(Rsp), spare);
-            let item_in = Prog::within_trans(Prog::within_reloads(rest, item, Succ(k)), within);
+            let item_in = Prog::within_trans(Prog::within_reloads(rest, item, k + 1), within);
             let first = site.moves_reload(stack, fits, item_in.witness, prog, 0, load, item_in.proof,
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ (frame(s.memory) ∧ stack.Saved(d, Cons(register, rest), k, saved, s.memory)),
-                λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, Succ(k), saved, s.memory)),
+                λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, k + 1, saved, s.memory)),
                 λ s held => Exists(i, ⟨j(sym(held.left), λ g _ => stack_address(g, slot_offset(k)) = stack.at(i),
                         stack.slot_address(d, k, gprs, rsp, slot_small)),
                     ⟨slot_room, Exists(word, ⟨held.right.right.left,
                         ⟨cong_fn<Gprs, Gprs>(λ g => write_gpr(register, word, g), held.left), ⟨held.right.left, held.right.right.right⟩⟩⟩)⟩⟩));
-            let later = Site::moves_reloads(site, stack, fits, d, saved, rest, item, Succ(k), next, { omega }, { omega }, spares.right,
+            let later = Site::moves_reloads(site, stack, fits, d, saved, rest, item, k + 1, next, { omega }, { omega }, spares.right,
                 trans(write_spares(register, Rsp, word, gprs, spares.left), rsp), frame, within);
-            site.moves_trans(stack.writes, prog_len(prog), prog_len(item), prog_len(rest.reloads(item, Succ(k))),
+            site.moves_trans(stack.writes, prog_len(prog), prog_len(item), prog_len(rest.reloads(item, k + 1)),
                 λ (s: MachineState<M>) => (s.gprs = gprs) ∧ (frame(s.memory) ∧ stack.Saved(d, Cons(register, rest), k, saved, s.memory)),
-                λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, Succ(k), saved, s.memory)),
+                λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, k + 1, saved, s.memory)),
                 λ (t: MachineState<M>) => (t.gprs = restore(rest, saved, next)) ∧ frame(t.memory),
                 first, later)
         },

@@ -153,7 +153,7 @@ theorem linux_steps_peel<M>(io: LinuxIo<M>, taken: Nat): (k: Nat) → (left, rig
                         same, here.proof.left, there.proof.left),
                     here.proof.right, there.proof.right, call);
                 Exists(rest.witness, ⟨rest.proof.left, Exists(rest.proof.right.witness, ⟨rest.proof.right.proof.left,
-                    cong_fn(λ (x: Nat) => Succ(x), rest.proof.right.proof.right)⟩)⟩)
+                    cong_fn(λ (x: Nat) => x + 1, rest.proof.right.proof.right)⟩)⟩)
             },
         },
     }
@@ -179,8 +179,8 @@ theorem lists_read_alike(source: Nat → Option<BitVec(8)>, left: List<BitVec(8)
             Cons(y, ys) => λ length first second =>
                 List::cons_eq(xs, ys, x, y,
                     Option::some_inj(x, y, trans(sym(first(Zero, x, refl)), second(Zero, y, refl))),
-                    lists_read_alike(λ i => source(Succ(i)), xs, ys, Nat::succ_inj(xs.len(), ys.len(), length),
-                        λ i byte found => first(Succ(i), byte, found), λ i byte found => second(Succ(i), byte, found))),
+                    lists_read_alike(λ i => source(i + 1), xs, ys, Nat::succ_inj(xs.len(), ys.len(), length),
+                        λ i byte found => first(i + 1, byte, found), λ i byte found => second(i + 1, byte, found))),
         },
     }
 }
@@ -203,7 +203,7 @@ theorem c_strings_alike(left: List<BitVec(8)>): (right: List<BitVec(8)>) → (so
         Cons(x, xs) => λ right source here there => match right {
             Nil => false_elim(here.right.left(Option::some_inj(x, BitVec::ofNat(0), trans(sym(here.left), there)))),
             Cons(y, ys) => List::cons_eq(xs, ys, x, y, Option::some_inj(x, y, trans(sym(here.left), there.left)),
-                    c_strings_alike(xs, ys, λ i => source(Succ(i)), here.right.right, there.right.right)),
+                    c_strings_alike(xs, ys, λ i => source(i + 1), here.right.right, there.right.right)),
         },
     }
 }

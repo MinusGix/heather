@@ -384,10 +384,10 @@ theorem Format::round_dyadic_win_correct(self F: Format, mode: Mode, d: Dyadic):
             },
             NegSucc(m) => {
                 let d0 = Dyadic(NegSucc(m), exp);
-                let flip: (Rat::scaled(2, trivial, Succ(m), exp) ≈ (-d0).rat()) = Rat::same_refl(Rat::scaled(2, trivial, Succ(m), exp));
-                let e: (-d0.rat() ≈ Rat::scaled(2, trivial, Succ(m), exp)) = Rat::same_sym(Rat::same_trans(flip, d0.rat_neg()));
-                F.rounds_neg(mode, d0.rat(), F.round_hex(mode.conj(), Succ(m), exp),
-                    F.rounds_respects(mode.conj(), -d0.rat(), Rat::scaled(2, trivial, Succ(m), exp), e, F.round_hex(mode.conj(), Succ(m), exp), F.round_hex_correct(mode.conj(), Succ(m), exp)))
+                let flip: (Rat::scaled(2, trivial, m + 1, exp) ≈ (-d0).rat()) = Rat::same_refl(Rat::scaled(2, trivial, m + 1, exp));
+                let e: (-d0.rat() ≈ Rat::scaled(2, trivial, m + 1, exp)) = Rat::same_sym(Rat::same_trans(flip, d0.rat_neg()));
+                F.rounds_neg(mode, d0.rat(), F.round_hex(mode.conj(), m + 1, exp),
+                    F.rounds_respects(mode.conj(), -d0.rat(), Rat::scaled(2, trivial, m + 1, exp), e, F.round_hex(mode.conj(), m + 1, exp), F.round_hex_correct(mode.conj(), m + 1, exp)))
             },
         },
     }
@@ -609,7 +609,7 @@ theorem Format::round_enclosed_some(self F: Format, mode: Mode, e: Enclosed, ste
             Succ(tr1) => λ _ => j(sym(hit.proof), λ o _ => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.round_enclosed(mode, e, n + step, p + step, step, tr1) }) = Some(r),
                 Exists(hit.witness, refl)),
         }(lt),
-        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => Succ(t0) < tr → ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, tr) = Some(r) {
+        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => t0 + 1 < tr → ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, tr) = Some(r) {
             Zero => λ no => false_elim(omega(no)),
             Succ(tr1) => λ lt1 => match F.round_box(mode, e.at(n, p)) as λ o => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.round_enclosed(mode, e, n + step, p + step, step, tr1) }) = Some(r) {
                 Some(r0) => Exists(r0, refl),
@@ -629,7 +629,7 @@ theorem Format::round_enclosed_ends(self F: Format, mode: Mode, e: Enclosed, n, 
 {
     let k = off.proof.witness;
     let t = narrow(k).witness;
-    F.round_enclosed_some(mode, e, step, t, n, p, Succ(t), omega,
+    F.round_enclosed_some(mode, e, step, t, n, p, t + 1, omega,
         F.round_box_of_cell(mode, e.try_at(n, p, step, t), off.witness, k, off.proof.proof, e.try_has(step, t, n, p), narrow(k).proof))
 }
 
@@ -1087,7 +1087,7 @@ theorem Format::faithful_enclosed_some(self F: Format, e: Enclosed, step, t: Nat
             Succ(tr1) => λ _ => j(sym(hit.proof), λ o _ => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.faithful_enclosed(e, n + step, p + step, step, tr1) }) = Some(r),
                 Exists(hit.witness, refl)),
         }(lt),
-        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => Succ(t0) < tr → ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, tr) = Some(r) {
+        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => t0 + 1 < tr → ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, tr) = Some(r) {
             Zero => λ no => false_elim(omega(no)),
             Succ(tr1) => λ lt1 => match F.faithful_box(e.at(n, p)) as λ o => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.faithful_enclosed(e, n + step, p + step, step, tr1) }) = Some(r) {
                 Some(r0) => Exists(r0, refl),
@@ -1104,7 +1104,7 @@ theorem Format::faithful_enclosed_ends(self F: Format, e: Enclosed, n, p, step: 
     ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, F.faithful_tries(e, n, p, step, narrow)) = Some(r)
 {
     let t = narrow(F.gap_bits()).witness;
-    F.faithful_enclosed_some(e, step, t, n, p, Succ(t), omega, F.faithful_box_some(e.try_at(n, p, step, t), narrow(F.gap_bits()).proof))
+    F.faithful_enclosed_some(e, step, t, n, p, t + 1, omega, F.faithful_box_some(e.try_at(n, p, step, t), narrow(F.gap_bits()).proof))
 }
 
 // Over any ordered field: a passing box around `x` gives a faithful

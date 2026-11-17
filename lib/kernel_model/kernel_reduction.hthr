@@ -117,10 +117,10 @@ theorem Tm::cong_run(c: Nat, {a, b: Tm}, p: a = b): NRun(c, a) = NRun(c, b) { re
 theorem Tm::open_lc(self t: Tm): (d, k: Nat) → t.Lc(d) → d <= k → (u: Tm) → t.open_at(k, u) = t {
     match t {
         Bv(i) => λ d k h le u =>
-            j(sym(same_false_of_lt(i, k, Succ(i).le_trans(d, k, h, le))),
+            j(sym(same_false_of_lt(i, k, (i + 1).le_trans(d, k, h, le))),
               λ y p => Tm::bv_or(y, u, i) = Bv(i), refl),
         Fv(_) => λ d k h le u => refl,
-        Lam(b) => λ d k h le u => Tm::cong_lam(b.open_lc(Succ(d), Succ(k), h, le, u)),
+        Lam(b) => λ d k h le u => Tm::cong_lam(b.open_lc(d + 1, k + 1, h, le, u)),
         App(f, a) => λ d k h le u =>
             Tm::cong_app(f.open_lc(d, k, h.left, le, u), a.open_lc(d, k, h.right, le, u)),
         NZero => λ d k h le u => refl,
@@ -168,7 +168,7 @@ theorem Tm::inst_open_at(self t: Tm, sub: Nat → Tm, closed: (a: Nat) → sub(a
     match t {
         Bv(i) => λ k u => Tm::inst_bv_or(i.same(k), u, i, sub),
         Fv(a) => λ k u => sym(sub(a).open_lc(0, k, closed(a), k.nonneg(), u.inst(sub))),
-        Lam(b) => λ k u => Tm::cong_lam(b.inst_open_at(sub, closed, Succ(k), u)),
+        Lam(b) => λ k u => Tm::cong_lam(b.inst_open_at(sub, closed, k + 1, u)),
         App(f, a) => λ k u =>
             Tm::cong_app(f.inst_open_at(sub, closed, k, u), a.inst_open_at(sub, closed, k, u)),
         NZero => λ k u => refl,

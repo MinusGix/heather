@@ -68,7 +68,7 @@ theorem class_constant_witness(d: K): K.unit < d → K.unit < d + d {
     }
 }
 
-theorem class_range_product(x: K, n: Nat): (∏ j < n, x) * x ≈ (∏ j < Succ(n), x) { ring }
+theorem class_range_product(x: K, n: Nat): (∏ j < n, x) * x ≈ (∏ j < n + 1, x) { ring }
 
 // expect-error: differ by
 theorem class_constant_atom_not_identity(d: K):

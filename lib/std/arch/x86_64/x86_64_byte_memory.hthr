@@ -98,8 +98,8 @@ fn X86Profile::writes(self x: X86Profile) → ByteWrites<X86Memory(x)> {
 
 theorem X86Profile::perm_canonical(self x: X86Profile, m: X86Memory(x), a: BitVec(64), low: a.toNat() < Nat::pow(2, 47)):
     x.perm(m, a) = m.perms(a) {
-    let below: (Succ(a.toNat()).leb(Nat::pow(2, 47)) = True) =
-        bool::eq_true_of_is_true(Succ(a.toNat()).leb(Nat::pow(2, 47)), Succ(a.toNat()).leb_complete(Nat::pow(2, 47), low));
+    let below: ((a.toNat() + 1).leb(Nat::pow(2, 47)) = True) =
+        bool::eq_true_of_is_true((a.toNat() + 1).leb(Nat::pow(2, 47)), (a.toNat() + 1).leb_complete(Nat::pow(2, 47), low));
     j(sym(below), λ s _ => (match s { True => m.perms(a), False => Perm::none() }) = m.perms(a), refl)
 }
 
@@ -113,8 +113,8 @@ theorem X86Profile::read_at(self x: X86Profile, m: X86Memory(x), a: BitVec(64), 
 // profile gives no permission.
 theorem X86Profile::executable_canonical(self x: X86Profile, m: X86Memory(x), a: BitVec(64), exec: x.perm(m, a).execute = True):
     a.toNat() < Nat::pow(2, 47) {
-    match low: Succ(a.toNat()).leb(Nat::pow(2, 47)) {
-        True => Succ(a.toNat()).leb_sound(Nat::pow(2, 47), Bool::is_true_of_eq(low)),
+    match low: (a.toNat() + 1).leb(Nat::pow(2, 47)) {
+        True => (a.toNat() + 1).leb_sound(Nat::pow(2, 47), Bool::is_true_of_eq(low)),
         False => {
             let none: (x.perm(m, a) = Perm::none()) =
                 j(sym(low), λ s _ => (match s { True => m.perms(a), False => Perm::none() }) = Perm::none(), refl);
@@ -195,8 +195,8 @@ record DataRegion {
     data: (perms: BitVec(64) → Perm) → profile.relies(perms) → (i: Nat) → i < size → perms(next_rip(low, i)) = Perm::data(),
 }
 
-theorem canonical_below_top(): Succ(Nat::pow(2, 47)) <= Nat::pow(2, 64) {
-    Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial)
+theorem canonical_below_top(): Nat::pow(2, 47) + 1 <= Nat::pow(2, 64) {
+    Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial)
 }
 
 // Inside the region an offset is plain addition.

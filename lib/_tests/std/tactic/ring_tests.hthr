@@ -22,7 +22,7 @@ theorem applied(f: Int → Int, x, y: Int): (f(x) + f(y)) * f(x) = f(x) * f(x) +
 
 // Identities at `Nat`; `Succ(x)` is read as `x + 1`, and computes back to it.
 theorem nat_square(x, y: Nat): (x + y) * (x + y) = x * x + 2 * (x * y) + y * y { ring }
-theorem nat_succ(x: Nat): Succ(x) * Succ(x) = x * x + 2 * x + 1 { ring }
+theorem nat_succ(x: Nat): (x + 1) * (x + 1) = x * x + 2 * x + 1 { ring }
 theorem nat_closed(): 3 * 4 + 1 = 13 { ring }
 
 // Checking positions: a `let`, a `calc` step, a match arm (whose atoms are

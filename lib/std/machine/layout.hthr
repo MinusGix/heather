@@ -166,8 +166,8 @@ theorem Layout::bytes_stride(n: Nat): Layout::bytes(n).stride() = n {
 // Element `i` of an array ends at or before element `j` begins, for `i`
 // before `j`: no two elements share a byte.
 theorem Layout::array_elements_apart(self l: Layout, {i, j: Nat}, before: i < j): l.size + i * l.stride() <= j * l.stride() {
-    let step: Succ(i) * l.stride() <= j * l.stride() = l.stride().mul_le_mono_r(Succ(i), j, before);
-    let unrolled: (Succ(i) * l.stride() = l.stride() + i * l.stride()) = i.mul_succ_left(l.stride());
+    let step: (i + 1) * l.stride() <= j * l.stride() = l.stride().mul_le_mono_r(i + 1, j, before);
+    let unrolled: ((i + 1) * l.stride() = l.stride() + i * l.stride()) = i.mul_succ_left(l.stride());
     let fits: l.size <= l.stride() = l.stride_ge();
     omega(step, unrolled, fits)
 }
@@ -337,7 +337,7 @@ theorem Field::apart_from_nth(self f: Field, others: List<Field>):
 
 // Two fields of a sound table at different indices share no byte.
 theorem Layout::fits_apart_ordered(self whole: Layout, fields: List<Field>):
-    whole.Fits(fields) → (i, d: Nat) → (f, g: Field) → fields.nth(i) = Some(f) → fields.nth(d + Succ(i)) = Some(g) → f.Apart(g)
+    whole.Fits(fields) → (i, d: Nat) → (f, g: Field) → fields.nth(i) = Some(f) → fields.nth(d + (i + 1)) = Some(g) → f.Apart(g)
 {
     match fields {
         Nil => λ _ i d f g at _ => absurd(at),
@@ -352,11 +352,11 @@ theorem Layout::fits_apart(self whole: Layout, fields: List<Field>, fits: whole.
     at_i: fields.nth(i) = Some(f), at_k: fields.nth(k) = Some(g), distinct: i ≠ k): f.Apart(g)
 {
     match i.lt_trichotomy(k) {
-        Inl(below) => whole.fits_apart_ordered(fields, fits, i, k - Succ(i), f, g, at_i,
-            j(sym(Nat::sub_add_cancel(Succ(i), k, below)), λ x _ => fields.nth(x) = Some(g), at_k)),
+        Inl(below) => whole.fits_apart_ordered(fields, fits, i, k - (i + 1), f, g, at_i,
+            j(sym(Nat::sub_add_cancel(i + 1, k, below)), λ x _ => fields.nth(x) = Some(g), at_k)),
         Inr(Inl(same)) => false_elim(distinct(same)),
-        Inr(Inr(above)) => g.apart_symm(f, whole.fits_apart_ordered(fields, fits, k, i - Succ(k), g, f, at_k,
-            j(sym(Nat::sub_add_cancel(Succ(k), i, above)), λ x _ => fields.nth(x) = Some(f), at_i))),
+        Inr(Inr(above)) => g.apart_symm(f, whole.fits_apart_ordered(fields, fits, k, i - (k + 1), g, f, at_k,
+            j(sym(Nat::sub_add_cancel(k + 1, i, above)), λ x _ => fields.nth(x) = Some(f), at_i))),
     }
 }
 

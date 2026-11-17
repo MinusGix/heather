@@ -373,7 +373,7 @@ theorem OrderedField::npow_zero(c: K): OrderedField::npow(c, Zero) ≈ K.multipl
     K.rel_refl(K.multiplicative.unit)
 }
 
-theorem OrderedField::npow_succ(c: K, n: Nat): OrderedField::npow(c, Succ(n)) ≈ OrderedField::npow(c, n) * c {
+theorem OrderedField::npow_succ(c: K, n: Nat): OrderedField::npow(c, n + 1) ≈ OrderedField::npow(c, n) * c {
     K.rel_refl(OrderedField::npow(c, n) * c)
 }
 
@@ -449,7 +449,7 @@ theorem OrderedField::npow_bernoulli(c: K, hc: K.unit <= c, h1: c <= K.multiplic
             let t = OrderedField::npow(c, m);
             let q = K.multiplicative.unit + K.inv(c);
             let o = K.of_nat(m);
-            let o1 = K.of_nat(Succ(m));
+            let o1 = K.of_nat(m + 1);
             let ih: (t * (K.multiplicative.unit + o * q) <= K.multiplicative.unit) = OrderedField::npow_bernoulli(c, hc, h1, m);
             let pt: (K.unit <= t) = OrderedField::npow_nonneg(c, hc, m);
             let t1: (t <= K.multiplicative.unit) = OrderedField::npow_le_one(c, hc, h1, m);
@@ -518,7 +518,7 @@ theorem Contraction::affine(c, d: K, hc: K.unit <= c, h1: c < K.multiplicative.u
 
 // The `n`-th step of the orbit is within `cⁿ·D`.
 theorem Contraction::step(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: AbsLe(f(x) + K.inv(x), D), n: Nat):
-    AbsLe(Contraction::orbit(f, x, Succ(n)) + K.inv(Contraction::orbit(f, x, n)), OrderedField::npow(c, n) * D)
+    AbsLe(Contraction::orbit(f, x, n + 1) + K.inv(Contraction::orbit(f, x, n)), OrderedField::npow(c, n) * D)
 {
     match n {
         Zero => {
@@ -528,7 +528,7 @@ theorem Contraction::step(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: 
         },
         Succ(m) => {
             let a = Contraction::orbit(f, x, m);
-            let b = Contraction::orbit(f, x, Succ(m));
+            let b = Contraction::orbit(f, x, m + 1);
             let ih: AbsLe(b + K.inv(a), OrderedField::npow(c, m) * D) = Contraction::step(f, c, hf, x, D, hD, m);
             let k: AbsLe(f(b) + K.inv(f(a)), c * (OrderedField::npow(c, m) * D)) = hf.right.right(a, b, OrderedField::npow(c, m) * D, ih);
             let r: (c * (OrderedField::npow(c, m) * D) ≈ (OrderedField::npow(c, m) * c) * D) = ring;
@@ -706,7 +706,7 @@ theorem Contraction::fixed_point(f: K → K, c: K, hf: Contraction(f, c), x: K):
     };
     let shifted: Converges(λ (n: Nat) => f(Contraction::orbit(f, x, n)), l) = λ e pe => {
         let p = hl(e, pe);
-        Exists(p.witness, λ n from => p.proof(Succ(n), p.witness.le_succ_r(n, from)))
+        Exists(p.witness, λ n from => p.proof(n + 1, p.witness.le_succ_r(n, from)))
     };
     Exists(l, And(Converges::unique(λ (n: Nat) => f(Contraction::orbit(f, x, n)), f(l), l, images, shifted), hl))
 }

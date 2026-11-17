@@ -65,7 +65,7 @@ theorem StarN::one<A>(R: A → A → Type, a, b: A, step: R(a, b)): StarN(R, 1, 
 }
 
 theorem StarN::cons<A>(R: A → A → Type, n: Nat, a, b, c: A, step: R(a, b), rest: StarN(R, n, b, c)):
-    StarN(R, Succ(n), a, c) {
+    StarN(R, n + 1, a, c) {
     Exists(b, ⟨step, rest⟩)
 }
 
@@ -75,11 +75,11 @@ theorem StarN::cast<A>(R: A → A → Type, n: Nat, a, a2, b, b2: A, same_start:
     j(same_end, λ e _ => StarN(R, n, a2, e), j(same_start, λ s _ => StarN(R, n, s, b), run))
 }
 
-theorem StarN::snoc<A>(R: A → A → Type, n: Nat): (a, b, c: A) → StarN(R, n, a, b) → R(b, c) → StarN(R, Succ(n), a, c) {
+theorem StarN::snoc<A>(R: A → A → Type, n: Nat): (a, b, c: A) → StarN(R, n, a, b) → R(b, c) → StarN(R, n + 1, a, c) {
     match n {
         Zero => λ a b c same step => StarN::one(R, a, c, j(sym(same), λ s _ => R(s, c), step)),
         Succ(k, ih) => λ a b c run step =>
-            StarN::cons(R, Succ(k), a, run.witness, c, run.proof.left, ih(run.witness, b, c, run.proof.right, step)),
+            StarN::cons(R, k + 1, a, run.witness, c, run.proof.left, ih(run.witness, b, c, run.proof.right, step)),
     }
 }
 
@@ -141,11 +141,11 @@ theorem Star::one<A>(R: A → A → Type, a, b: A, step: R(a, b)): Star(R, a, b)
 }
 
 theorem Star::cons<A>(R: A → A → Type, a, b, c: A, step: R(a, b), rest: Star(R, b, c)): Star(R, a, c) {
-    Exists(Succ(rest.witness), StarN::cons(R, rest.witness, a, b, c, step, rest.proof))
+    Exists(rest.witness + 1, StarN::cons(R, rest.witness, a, b, c, step, rest.proof))
 }
 
 theorem Star::snoc<A>(R: A → A → Type, a, b, c: A, run: Star(R, a, b), step: R(b, c)): Star(R, a, c) {
-    Exists(Succ(run.witness), StarN::snoc(R, run.witness, a, b, c, run.proof, step))
+    Exists(run.witness + 1, StarN::snoc(R, run.witness, a, b, c, run.proof, step))
 }
 
 // A counted run, then any run.
@@ -176,7 +176,7 @@ theorem Plus::star<A>(R: A → A → Type, a, b: A, run: Plus(R, a, b)): Star(R,
 }
 
 // A run of `Succ(n)` steps is a plus run.
-theorem Plus::of_n<A>(R: A → A → Type, n: Nat, a, b: A, run: StarN(R, Succ(n), a, b)): Plus(R, a, b) {
+theorem Plus::of_n<A>(R: A → A → Type, n: Nat, a, b: A, run: StarN(R, n + 1, a, b)): Plus(R, a, b) {
     Exists(run.witness, ⟨run.proof.left, Exists(n, run.proof.right)⟩)
 }
 
@@ -330,7 +330,7 @@ theorem StarN::determined_prefix<A>(R: A → A → Type, det: Deterministic(R), 
     match m {
         Zero => λ n a b c left right => Inl(Exists(n, StarN::cast(R, n, a, b, c, c, left, refl, right))),
         Succ(k, ih) => λ n a b c left => match n {
-            Zero => λ same => Inr(Exists(Succ(k), StarN::cast(R, Succ(k), a, c, b, b, same, refl, left))),
+            Zero => λ same => Inr(Exists(k + 1, StarN::cast(R, k + 1, a, c, b, b, same, refl, left))),
             Succ(l) => λ run => {
                 let met = det(a, left.witness, run.witness, left.proof.left, run.proof.left);
                 ih(l, left.witness, b, c, left.proof.right,
@@ -800,10 +800,10 @@ theorem WellFounded::empty<I>(): WellFounded<I>(λ x y => False) {
 }
 
 // One fewer, on `Nat`.
-theorem WellFounded::nat_pred(): WellFounded<Nat>(λ j i => Succ(j) = i) {
+theorem WellFounded::nat_pred(): WellFounded<Nat>(λ j i => j + 1 = i) {
     λ n => match n {
         Zero => AccIntro(0, λ e => false_elim(Nat::succ_ne_zero(e.witness, e.proof))),
-        Succ(k, ih) => AccIntro(Succ(k), λ e => j(sym(Nat::succ_inj(e.witness, k, e.proof)), λ x _ => Acc<Nat>(λ j2 i2 => Succ(j2) = i2, x), ih)),
+        Succ(k, ih) => AccIntro(k + 1, λ e => j(sym(Nat::succ_inj(e.witness, k, e.proof)), λ x _ => Acc<Nat>(λ j2 i2 => j2 + 1 = i2, x), ih)),
     }
 }
 

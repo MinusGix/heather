@@ -106,8 +106,8 @@ fn store_word(buffers: Buffers(), buffer, index, bytes: Nat, word: BitVec(8 * by
 }
 
 // The first byte is stored at `index`, then the rest from the next.
-theorem store_bytes_succ(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); Succ(k)]):
-    store_bytes(Succ(k), buffers, buffer, index, bytes) = store_bytes(k, store_byte(buffers, buffer, index, head(bytes)), buffer, Succ(index), tail(bytes)) {
+theorem store_bytes_succ(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); k + 1]):
+    store_bytes(k + 1, buffers, buffer, index, bytes) = store_bytes(k, store_byte(buffers, buffer, index, head(bytes)), buffer, index + 1, tail(bytes)) {
     refl
 }
 
@@ -115,7 +115,7 @@ theorem store_bytes_succ(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: 
 theorem store_bytes_nil(k: Nat): (buffer, index: Nat) → (bytes: [BitVec(8); k]) → store_bytes(k, Nil, buffer, index, bytes) = Nil {
     match k as λ m => (buffer, index: Nat) → (bytes: [BitVec(8); m]) → store_bytes(m, Nil, buffer, index, bytes) = Nil {
         Zero => λ buffer index bytes => refl,
-        Succ(j, ih) => λ buffer index bytes => ih(buffer, Succ(index), tail(bytes)),
+        Succ(j, ih) => λ buffer index bytes => ih(buffer, index + 1, tail(bytes)),
     }
 }
 
@@ -324,7 +324,7 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
     match remaining {
         Zero => λ state => refl,
         Succ(rest) => λ state => {
-            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let before = pass_valuation(parameters, count, rest + 1, state);
             let after = step(before);
             let ends = match after(1, exit).head_bit() as λ b =>
                     (match b as λ _ => LoopState {

@@ -71,7 +71,7 @@ theorem CoTree::of_tree_traces<R>(E: Events, n: Nat, t: ITree<R>(E), tr: Trace<R
                 λ a rest => IsTrace(E, CoTree::approx(E, m, CoTree::of_tree(E, k(a))), rest),
                 λ a rest => IsTrace(E, k(a), rest),
                 λ a rest sub => CoTree::of_tree_traces(E, m, k(a), rest, sub), it),
-            Cut => λ it => CoTree::spin_cut(E, Succ(m), tr, it),
+            Cut => λ it => CoTree::spin_cut(E, m + 1, tr, it),
         },
     }
 }
@@ -81,20 +81,20 @@ theorem CoTree::of_tree_converges<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E))
     IsTrace(E, t, tr) → Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::of_tree(E, t)), tr)
 {
     match t {
-        Ret(_) => λ it => Converges(Succ(Zero), it),
+        Ret(_) => λ it => Converges(1, it),
         Tau(s) => λ it => {
             let c: Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::of_tree(E, s)), tr) = CoTree::of_tree_converges(E, s, tr, it);
-            Converges(Succ(c.n), c.h)
+            Converges(c.n + 1, c.h)
         },
         Vis(c, k) => λ (it: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest))) => match it {
             Prefix(at) => CoTree::converges_nil(E, CoTree::of_tree(E, Vis(c, k)), tr, at),
             Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::of_tree(E, Vis(c, k))), y),
-                Converges(Succ(Zero), Pending(refl))),
+                Converges(1, Pending(refl))),
             Answered(a, rest, at, sub) => {
                 let c1: Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::of_tree(E, k(a))), rest) =
                     CoTree::of_tree_converges(E, k(a), rest, sub);
                 j(sym(at), λ y q => Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::of_tree(E, Vis(c, k))), y),
-                    Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)))
+                    Converges(c1.n + 1, Answered(a, rest, refl, c1.h)))
             },
         },
         Cut => λ (it: CutTrace<R>(E, tr)) => CoTree::converges_nil(E, CoTree::of_tree<R>(E, Cut), tr, CutTrace::ended(E, tr, it)),
@@ -144,8 +144,8 @@ theorem CoTree::iter_traces<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), n
                 IsTrace::nil(E, ITree::iter_rest(E, Zero, body, t))),
         Succ(m) => {
             let grow: (s: ITree<Step<A, B>>(E)) → (tr1: Trace<B>(E)) → IsTrace(E, ITree::iter_rest(E, m, body, s), tr1) →
-                IsTrace(E, ITree::iter_rest(E, Succ(m), body, s), tr1) =
-                λ s tr1 it1 => IsTrace::of_below(E, ITree::iter_rest(E, m, body, s), ITree::iter_rest(E, Succ(m), body, s), tr1,
+                IsTrace(E, ITree::iter_rest(E, m + 1, body, s), tr1) =
+                λ s tr1 it1 => IsTrace::of_below(E, ITree::iter_rest(E, m, body, s), ITree::iter_rest(E, m + 1, body, s), tr1,
                     ITree::iter_pass_grows(E, m, body, λ a2 => ITree::iter_grows(E, m, body, a2), s), it1);
             match t {
                 Ret(x) => match x {
@@ -155,7 +155,7 @@ theorem CoTree::iter_traces<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), n
                 Tau(s) => λ it => grow(s, tr, CoTree::iter_traces(E, body, m, s, tr, it)),
                 Vis(c, k) => λ it => VisTrace::map(E, c, tr,
                     λ a rest => IsTrace(E, CoTree::approx(E, m, CoTree::iter_rest(E, body, k(a))), rest),
-                    λ a rest => IsTrace(E, ITree::iter_rest(E, Succ(m), body, k(a)), rest),
+                    λ a rest => IsTrace(E, ITree::iter_rest(E, m + 1, body, k(a)), rest),
                     λ a rest sub => grow(k(a), rest, CoTree::iter_traces(E, body, m, k(a), rest, sub)), it),
                 Cut => λ it => CoTree::iter_traces(E, body, m, Cut, tr, it),
             }
@@ -182,24 +182,24 @@ theorem CoTree::iter_pass_converges<A, B>(E: Events, body: A → ITree<Step<A, B
             Continue(a2) => λ it => {
                 let c: Converges<B>(E, λ k => CoTree::approx(E, k, CoTree::iter(E, λ a3 => CoTree::of_tree(E, body(a3)), a2)), tr) =
                     next(a2, tr, it);
-                Converges(Succ(c.n), c.h)
+                Converges(c.n + 1, c.h)
             },
-            Break(_) => λ it => Converges(Succ(Zero), it),
+            Break(_) => λ it => Converges(1, it),
         },
         Tau(s) => λ it => {
             let c: Converges<B>(E, λ k => CoTree::approx(E, k, CoTree::iter_rest(E, body, s)), tr) =
                 CoTree::iter_pass_converges(E, body, n, next, s, tr, it);
-            Converges(Succ(c.n), c.h)
+            Converges(c.n + 1, c.h)
         },
         Vis(c, k) => λ (it: VisTrace<B>(E, c, tr, λ a rest => IsTrace(E, ITree::iter_rest(E, n, body, k(a)), rest))) => match it {
             Prefix(at) => CoTree::converges_nil(E, CoTree::iter_rest(E, body, Vis(c, k)), tr, at),
             Pending(at) => j(sym(at), λ y q => Converges<B>(E, λ k2 => CoTree::approx(E, k2, CoTree::iter_rest(E, body, Vis(c, k))), y),
-                Converges(Succ(Zero), Pending(refl))),
+                Converges(1, Pending(refl))),
             Answered(a, rest, at, sub) => {
                 let c1: Converges<B>(E, λ k2 => CoTree::approx(E, k2, CoTree::iter_rest(E, body, k(a))), rest) =
                     CoTree::iter_pass_converges(E, body, n, next, k(a), rest, sub);
                 j(sym(at), λ y q => Converges<B>(E, λ k2 => CoTree::approx(E, k2, CoTree::iter_rest(E, body, Vis(c, k))), y),
-                    Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)))
+                    Converges(c1.n + 1, Answered(a, rest, refl, c1.h)))
             },
         },
         Cut => λ (it: CutTrace<B>(E, tr)) =>
@@ -222,7 +222,7 @@ theorem CoTree::iter_refines<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), 
     Program::Refines(E, CoTree::program(E, CoTree::iter(E, λ a2 => CoTree::of_tree(E, body(a2)), a)), Program::iter(E, body, a))
 {
     Program::refines_of_families(E, CoTree::program(E, CoTree::iter(E, λ a2 => CoTree::of_tree(E, body(a2)), a)),
-        Program::iter(E, body, a), λ n tr it => Converges(Succ(n), CoTree::iter_traces(E, body, n, body(a), tr, it)))
+        Program::iter(E, body, a), λ n tr it => Converges(n + 1, CoTree::iter_traces(E, body, n, body(a), tr, it)))
 }
 
 theorem CoTree::iter_refined<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
@@ -253,41 +253,41 @@ fn CoTree::BindConvergesAt<A, B>(E: Events, h: A → CoTree<B>(E), k: Nat, m: Na
 // depth allows, and grown back.
 theorem CoTree::bind_traces_obs<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E), m: Nat, tr: Trace<B>(E),
     ih: CoTree::BindTracesAt(E, h, m)):
-    (o: Obs<A>(E)) → CoTree::obs(E, t) = o → IsTrace(E, CoTree::approx(E, Succ(m), CoTree::bind(E, t, h)), tr) →
-    IsTrace(E, ITree::bind(E, CoTree::approx(E, Succ(m), t), λ r => CoTree::approx(E, Succ(m), h(r))), tr)
+    (o: Obs<A>(E)) → CoTree::obs(E, t) = o → IsTrace(E, CoTree::approx(E, m + 1, CoTree::bind(E, t, h)), tr) →
+    IsTrace(E, ITree::bind(E, CoTree::approx(E, m + 1, t), λ r => CoTree::approx(E, m + 1, h(r))), tr)
 {
-    let hs: (r: A) → ITree::Below(E, CoTree::approx(E, m, h(r)), CoTree::approx(E, Succ(m), h(r))) =
+    let hs: (r: A) → ITree::Below(E, CoTree::approx(E, m, h(r)), CoTree::approx(E, m + 1, h(r))) =
         λ r => CoTree::approx_grows(E, h(r), m);
     λ o => match o {
         ORet(r) => λ h0 it => j(sym(h0),
-            λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r2 => CoTree::approx(E, Succ(m), h(r2))), tr),
-            j(CoTree::obs_bind_at(E, t, h, ORet(r), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, Succ(m), y), tr), it)),
+            λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r2 => CoTree::approx(E, m + 1, h(r2))), tr),
+            j(CoTree::obs_bind_at(E, t, h, ORet(r), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr), it)),
         OTau(s) => λ h0 it => {
             let it1: IsTrace(E, CoTree::approx(E, m, CoTree::bind(E, s, h)), tr) =
-                j(CoTree::obs_bind_at(E, t, h, OTau(s), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, Succ(m), y), tr), it);
-            let it2: IsTrace(E, ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, Succ(m), h(r))), tr) =
+                j(CoTree::obs_bind_at(E, t, h, OTau(s), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr), it);
+            let it2: IsTrace(E, ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, m + 1, h(r))), tr) =
                 IsTrace::of_below(E, ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, m, h(r))),
-                    ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, Succ(m), h(r))), tr,
+                    ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, m + 1, h(r))), tr,
                     ITree::below_bind(E, CoTree::approx(E, m, s), CoTree::approx(E, m, s), λ r => CoTree::approx(E, m, h(r)),
-                        λ r => CoTree::approx(E, Succ(m), h(r)), ITree::below_refl(E, CoTree::approx(E, m, s)), hs),
+                        λ r => CoTree::approx(E, m + 1, h(r)), ITree::below_refl(E, CoTree::approx(E, m, s)), hs),
                     ih(s, tr, it1));
-            j(sym(h0), λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r => CoTree::approx(E, Succ(m), h(r))), tr),
+            j(sym(h0), λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r => CoTree::approx(E, m + 1, h(r))), tr),
                 it2)
         },
         OVis(c, k) => λ h0 it => {
             let it1: VisTrace<B>(E, c, tr, λ a rest => IsTrace(E, CoTree::approx(E, m, CoTree::bind(E, k(a), h)), rest)) =
-                j(CoTree::obs_bind_at(E, t, h, OVis(c, k), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, Succ(m), y), tr), it);
+                j(CoTree::obs_bind_at(E, t, h, OVis(c, k), h0), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr), it);
             let it2: VisTrace<B>(E, c, tr,
-                λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, Succ(m), h(r))), rest)) =
+                λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, m + 1, h(r))), rest)) =
                 VisTrace::map(E, c, tr, λ a rest => IsTrace(E, CoTree::approx(E, m, CoTree::bind(E, k(a), h)), rest),
-                    λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, Succ(m), h(r))), rest),
+                    λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, m + 1, h(r))), rest),
                     λ a rest sub => IsTrace::of_below(E, ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, m, h(r))),
-                        ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, Succ(m), h(r))), rest,
+                        ITree::bind(E, CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, m + 1, h(r))), rest,
                         ITree::below_bind(E, CoTree::approx(E, m, k(a)), CoTree::approx(E, m, k(a)), λ r => CoTree::approx(E, m, h(r)),
-                            λ r => CoTree::approx(E, Succ(m), h(r)), ITree::below_refl(E, CoTree::approx(E, m, k(a))), hs),
+                            λ r => CoTree::approx(E, m + 1, h(r)), ITree::below_refl(E, CoTree::approx(E, m, k(a))), hs),
                         ih(k(a), rest, sub)),
                     it1);
-            j(sym(h0), λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r => CoTree::approx(E, Succ(m), h(r))), tr),
+            j(sym(h0), λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r => CoTree::approx(E, m + 1, h(r))), tr),
                 it2)
         },
     }
@@ -310,32 +310,32 @@ theorem CoTree::bind_traces<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>
 theorem CoTree::bind_converges_obs<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E), k: Nat, m: Nat, tr: Trace<B>(E),
     ih: CoTree::BindConvergesAt(E, h, k, m)):
     (o: Obs<A>(E)) → CoTree::obs(E, t) = o →
-    IsTrace(E, ITree::bind(E, CoTree::approx(E, Succ(m), t), λ r => CoTree::approx(E, k, h(r))), tr) →
-    IsTrace(E, CoTree::approx(E, k + Succ(m), CoTree::bind(E, t, h)), tr)
+    IsTrace(E, ITree::bind(E, CoTree::approx(E, m + 1, t), λ r => CoTree::approx(E, k, h(r))), tr) →
+    IsTrace(E, CoTree::approx(E, k + (m + 1), CoTree::bind(E, t, h)), tr)
 {
     λ o => match o {
         ORet(r) => λ h0 it => {
             let it1: IsTrace(E, CoTree::approx(E, k, h(r)), tr) =
-                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r2 => CoTree::approx(E, k, h(r2))), tr), it);
-            j(sym(CoTree::obs_bind_at(E, t, h, ORet(r), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + Succ(m), y), tr),
-                IsTrace::up(E, λ n => CoTree::approx(E, n, h(r)), CoTree::approx_grows(E, h(r)), k, Succ(m), tr, it1))
+                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r2 => CoTree::approx(E, k, h(r2))), tr), it);
+            j(sym(CoTree::obs_bind_at(E, t, h, ORet(r), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + (m + 1), y), tr),
+                IsTrace::up(E, λ n => CoTree::approx(E, n, h(r)), CoTree::approx_grows(E, h(r)), k, m + 1, tr, it1))
         },
         OTau(s) => λ h0 it => {
             let it1: IsTrace(E, ITree::bind(E, CoTree::approx(E, m, s), λ r => CoTree::approx(E, k, h(r))), tr) =
-                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r => CoTree::approx(E, k, h(r))), tr), it);
+                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r => CoTree::approx(E, k, h(r))), tr), it);
             let it2: IsTrace(E, CoTree::approx(E, k + m, CoTree::bind(E, s, h)), tr) = ih(s, tr, it1);
-            j(sym(CoTree::obs_bind_at(E, t, h, OTau(s), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + Succ(m), y), tr), it2)
+            j(sym(CoTree::obs_bind_at(E, t, h, OTau(s), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + (m + 1), y), tr), it2)
         },
         OVis(c, k1) => λ h0 it => {
             let it1: VisTrace<B>(E, c, tr,
                 λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k1(a)), λ r => CoTree::approx(E, k, h(r))), rest)) =
-                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, Succ(m), y), λ r => CoTree::approx(E, k, h(r))), tr), it);
+                j(h0, λ y q => IsTrace(E, ITree::bind(E, CoTree::approx_obs(E, m + 1, y), λ r => CoTree::approx(E, k, h(r))), tr), it);
             let it2: VisTrace<B>(E, c, tr, λ a rest => IsTrace(E, CoTree::approx(E, k + m, CoTree::bind(E, k1(a), h)), rest)) =
                 VisTrace::map(E, c, tr,
                     λ a rest => IsTrace(E, ITree::bind(E, CoTree::approx(E, m, k1(a)), λ r => CoTree::approx(E, k, h(r))), rest),
                     λ a rest => IsTrace(E, CoTree::approx(E, k + m, CoTree::bind(E, k1(a), h)), rest),
                     λ a rest sub => ih(k1(a), rest, sub), it1);
-            j(sym(CoTree::obs_bind_at(E, t, h, OVis(c, k1), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + Succ(m), y), tr), it2)
+            j(sym(CoTree::obs_bind_at(E, t, h, OVis(c, k1), h0)), λ y q => IsTrace(E, CoTree::approx_obs(E, k + (m + 1), y), tr), it2)
         },
     }
 }
@@ -390,7 +390,7 @@ fn ITree::Into<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E)) → Type {
 }
 
 theorem ITree::into_ret<R>(E: Events, r: R): ITree::Into<R>(E, Ret(r), CRet(r)) {
-    λ tr it => Converges(Succ(Zero), it)
+    λ tr it => Converges(1, it)
 }
 
 theorem ITree::into_tau<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E), h: ITree::Into(E, t, c)):
@@ -398,7 +398,7 @@ theorem ITree::into_tau<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E), h: ITree:
 {
     λ tr it => {
         let d: Converges<R>(E, λ k => CoTree::approx(E, k, c), tr) = h(tr, it);
-        Converges(Succ(d.n), d.h)
+        Converges(d.n + 1, d.h)
     }
 }
 
@@ -408,11 +408,11 @@ theorem ITree::into_vis<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E), kc
     λ tr (it: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest))) => match it {
         Prefix(at) => CoTree::converges_nil(E, CVis(c, kc), tr, at),
         Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ k2 => CoTree::approx(E, k2, CVis(c, kc)), y),
-            Converges(Succ(Zero), Pending(refl))),
+            Converges(1, Pending(refl))),
         Answered(a, rest, at, sub) => {
             let d: Converges<R>(E, λ k2 => CoTree::approx(E, k2, kc(a)), rest) = h(a, rest, sub);
             j(sym(at), λ y q => Converges<R>(E, λ k2 => CoTree::approx(E, k2, CVis(c, kc)), y),
-                Converges(Succ(d.n), Answered(a, rest, refl, d.h)))
+                Converges(d.n + 1, Answered(a, rest, refl, d.h)))
         },
     }
 }
@@ -490,7 +490,7 @@ theorem ITree::into_iter<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), cbod
                     Continue(a2) => ITree::into_tau(E, ITree::iter(E, m, body, a2), CoTree::iter(E, cbody, a2), ITree::into_iter(E, body, cbody, hb, m, a2)),
                     Break(b) => ITree::into_ret(E, b),
                 };
-            ITree::into_bisim(E, ITree::iter(E, Succ(m), body, a),
+            ITree::into_bisim(E, ITree::iter(E, m + 1, body, a),
                 CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x)), CoTree::iter(E, cbody, a),
                 ITree::into_bind(E, body(a), cbody(a), λ x => ITree::iter_next(E, m, body, x),
                     λ x => CoTree::iter_next(E, cbody, x), hb(a), next),
@@ -598,7 +598,7 @@ record IterRestAt<A, B>(E: Events, body: Nat → A → ITree<Step<A, B>>(E), x: 
 // bodies is inside the fuelled loop whose body is that family at the same
 // fuel. By induction on the depth.
 theorem CoTree::onto_iter<A, B>(E: Events, body: Nat → A → ITree<Step<A, B>>(E),
-    grows: (n: Nat) → (a: A) → ITree::Below(E, body(n, a), body(Succ(n), a)),
+    grows: (n: Nat) → (a: A) → ITree::Below(E, body(n, a), body(n + 1, a)),
     cbody: A → CoTree<Step<A, B>>(E), hb: (a: A) → CoTree::Onto(E, cbody(a), λ n => body(n, a)), k: Nat):
     (a: A) → (tr: Trace<B>(E)) → IsTrace(E, CoTree::approx(E, k, CoTree::iter(E, cbody, a)), tr) →
     Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), tr)
@@ -607,50 +607,50 @@ theorem CoTree::onto_iter<A, B>(E: Events, body: Nat → A → ITree<Step<A, B>>
         Zero => λ a tr (it: CutTrace<B>(E, tr)) => j(sym(CutTrace::ended(E, tr, it)),
             λ y q => Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), y), Converges(Zero, Ended(refl))),
         Succ(m) => λ a tr it => {
-            let unfolded: IsTrace(E, CoTree::approx(E, Succ(m), CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x))), tr) =
-                IsTrace::of_same(E, CoTree::approx(E, Succ(m), CoTree::iter(E, cbody, a)),
-                    CoTree::approx(E, Succ(m), CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x))), tr,
-                    Bisim::approx(E, Succ(m), CoTree::iter(E, cbody, a), CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x)),
+            let unfolded: IsTrace(E, CoTree::approx(E, m + 1, CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x))), tr) =
+                IsTrace::of_same(E, CoTree::approx(E, m + 1, CoTree::iter(E, cbody, a)),
+                    CoTree::approx(E, m + 1, CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x))), tr,
+                    Bisim::approx(E, m + 1, CoTree::iter(E, cbody, a), CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x)),
                         CoTree::iter_unfold(E, cbody, a)), it);
-            let sp: BindSplit<Step<A, B>, B>(E, CoTree::approx(E, Succ(m), cbody(a)), λ x => CoTree::approx(E, Succ(m), CoTree::iter_next(E, cbody, x)), tr) =
-                IsTrace::split_bind(E, CoTree::approx(E, Succ(m), cbody(a)), λ x => CoTree::approx(E, Succ(m), CoTree::iter_next(E, cbody, x)), tr,
-                    CoTree::bind_traces(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x), Succ(m), tr, unfolded));
+            let sp: BindSplit<Step<A, B>, B>(E, CoTree::approx(E, m + 1, cbody(a)), λ x => CoTree::approx(E, m + 1, CoTree::iter_next(E, cbody, x)), tr) =
+                IsTrace::split_bind(E, CoTree::approx(E, m + 1, cbody(a)), λ x => CoTree::approx(E, m + 1, CoTree::iter_next(E, cbody, x)), tr,
+                    CoTree::bind_traces(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x), m + 1, tr, unfolded));
             let gb: (a2: A) → ITree::Grows(E, λ n => body(n, a2)) = λ a2 n => grows(n, a2);
-            let next: (x: Step<A, B>) → (rest: Trace<B>(E)) → IsTrace(E, CoTree::approx(E, Succ(m), CoTree::iter_next(E, cbody, x)), rest) →
+            let next: (x: Step<A, B>) → (rest: Trace<B>(E)) → IsTrace(E, CoTree::approx(E, m + 1, CoTree::iter_next(E, cbody, x)), rest) →
                     IterRestAt<A, B>(E, body, x, rest) =
-                λ x => match x as λ y => (rest: Trace<B>(E)) → IsTrace(E, CoTree::approx(E, Succ(m), CoTree::iter_next(E, cbody, y)), rest) →
+                λ x => match x as λ y => (rest: Trace<B>(E)) → IsTrace(E, CoTree::approx(E, m + 1, CoTree::iter_next(E, cbody, y)), rest) →
                         IterRestAt<A, B>(E, body, y, rest) {
                     Continue(a2) => λ rest sub => {
                         let c2: Converges<B>(E, λ n => ITree::iter(E, n, body(n), a2), rest) = CoTree::onto_iter(E, body, grows, cbody, hb, m, a2, rest, sub);
-                        IterRestAt(c2.n, λ m2 le => IsTrace::of_below(E, ITree::iter(E, m2, body(m2), a2), ITree::iter(E, m2, body(Succ(m2)), a2), rest,
-                            ITree::iter_body_below(E, m2, body(m2), body(Succ(m2)), λ a3 => grows(m2, a3), a2),
+                        IterRestAt(c2.n, λ m2 le => IsTrace::of_below(E, ITree::iter(E, m2, body(m2), a2), ITree::iter(E, m2, body(m2 + 1), a2), rest,
+                            ITree::iter_body_below(E, m2, body(m2), body(m2 + 1), λ a3 => grows(m2, a3), a2),
                             IsTrace::fuel_monotone(E, λ n => ITree::iter(E, n, body(n), a2),
-                                λ n => ITree::iter_below(E, n, body(n), body(Succ(n)), λ a3 => grows(n, a3), a2), c2.n, m2, le, rest, c2.h)))
+                                λ n => ITree::iter_below(E, n, body(n), body(n + 1), λ a3 => grows(n, a3), a2), c2.n, m2, le, rest, c2.h)))
                     },
                     Break(b) => λ rest sub => IterRestAt(Zero, λ m2 le => sub),
                 };
             match sp {
                 Inside(first, i, u, at) => {
-                    let c1: Converges<Step<A, B>>(E, λ n => body(n, a), first) = hb(a, Succ(m), first, i);
-                    let inner: IsTrace(E, ITree::bind(E, body(Succ(c1.n), a), λ x => ITree::iter_next(E, c1.n, body(Succ(c1.n)), x)),
+                    let c1: Converges<Step<A, B>>(E, λ n => body(n, a), first) = hb(a, m + 1, first, i);
+                    let inner: IsTrace(E, ITree::bind(E, body(c1.n + 1, a), λ x => ITree::iter_next(E, c1.n, body(c1.n + 1), x)),
                             Trace::seq(E, first, λ _ => TEnd)) =
-                        IsTrace::bind_at(E, body(Succ(c1.n), a), λ x => ITree::iter_next(E, c1.n, body(Succ(c1.n)), x), first, λ _ => TEnd,
-                            IsTrace::of_below(E, body(c1.n, a), body(Succ(c1.n), a), first, grows(c1.n, a), c1.h),
+                        IsTrace::bind_at(E, body(c1.n + 1, a), λ x => ITree::iter_next(E, c1.n, body(c1.n + 1), x), first, λ _ => TEnd,
+                            IsTrace::of_below(E, body(c1.n, a), body(c1.n + 1, a), first, grows(c1.n, a), c1.h),
                             λ r ret => false_elim(u(Trace::returns_of_with(E, first, r, ret))));
-                    j(sym(at), λ y q => Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), y), Converges(Succ(c1.n), inner))
+                    j(sym(at), λ y q => Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), y), Converges(c1.n + 1, inner))
                 },
                 Past(first, x, i, ret, rest, sub, at) => {
-                    let c1: Converges<Step<A, B>>(E, λ n => body(n, a), first) = hb(a, Succ(m), first, i);
+                    let c1: Converges<Step<A, B>>(E, λ n => body(n, a), first) = hb(a, m + 1, first, i);
                     let w: IterRestAt<A, B>(E, body, x, rest) = next(x, rest, sub);
-                    let inner: IsTrace(E, ITree::bind(E, body(Succ(c1.n + w.n), a), λ y => ITree::iter_next(E, c1.n + w.n, body(Succ(c1.n + w.n)), y)),
+                    let inner: IsTrace(E, ITree::bind(E, body(c1.n + w.n + 1, a), λ y => ITree::iter_next(E, c1.n + w.n, body(c1.n + w.n + 1), y)),
                             Trace::seq(E, first, λ _ => rest)) =
-                        IsTrace::bind_at(E, body(Succ(c1.n + w.n), a), λ y => ITree::iter_next(E, c1.n + w.n, body(Succ(c1.n + w.n)), y), first, λ _ => rest,
-                            IsTrace::fuel_monotone(E, λ n => body(n, a), gb(a), c1.n, Succ(c1.n + w.n),
+                        IsTrace::bind_at(E, body(c1.n + w.n + 1, a), λ y => ITree::iter_next(E, c1.n + w.n, body(c1.n + w.n + 1), y), first, λ _ => rest,
+                            IsTrace::fuel_monotone(E, λ n => body(n, a), gb(a), c1.n, c1.n + w.n + 1,
                                 Nat::le_succ_r(c1.n, c1.n + w.n, Nat::le_add_l(c1.n, w.n)), first, c1.h),
                             λ r2 ret2 => j(Trace::returns_with_unique(E, first, x, r2, ret, ret2),
-                                λ y q => IsTrace(E, ITree::iter_next(E, c1.n + w.n, body(Succ(c1.n + w.n)), y), rest),
+                                λ y q => IsTrace(E, ITree::iter_next(E, c1.n + w.n, body(c1.n + w.n + 1), y), rest),
                                 w.at(c1.n + w.n, Nat::le_add_r(c1.n, w.n))));
-                    j(sym(at), λ y q => Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), y), Converges(Succ(c1.n + w.n), inner))
+                    j(sym(at), λ y q => Converges<B>(E, λ n => ITree::iter(E, n, body(n), a), y), Converges(c1.n + w.n + 1, inner))
                 },
             }
         },

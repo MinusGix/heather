@@ -71,9 +71,9 @@ theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
                 Zero => λ _ _ _ => refl,
                 Succ(c) => match c {
                     Zero => λ _ _ _ => refl,
-                    Succ(d) => λ _ not_eintr big => match d as λ k4 => Not(Succ(Succ(Succ(Succ(k4)))) = eintr()) →
-                            (5 <= Succ(Succ(Succ(Succ(k4)))) → is_zero_bits(64, errno_word(Succ(Succ(Succ(Succ(k4))))).add(BitVec::ofNat(4))) = False) →
-                            is_zero_bits(64, errno_word(Succ(Succ(Succ(Succ(k4))))).add(BitVec::ofNat(4))) = False {
+                    Succ(d) => λ _ not_eintr big => match d as λ k4 => Not(k4 + 4 = eintr()) →
+                            (5 <= k4 + 4 → is_zero_bits(64, errno_word(k4 + 4).add(BitVec::ofNat(4))) = False) →
+                            is_zero_bits(64, errno_word(k4 + 4).add(BitVec::ofNat(4))) = False {
                         Zero => λ is_not _ => false_elim(is_not(refl)),
                         Succ(f) => λ _ big => big({ omega }),
                     }(not_eintr, big),
@@ -209,7 +209,7 @@ theorem cstring_from_kept(path: List<BitVec(8)>): (source, target: Nat → Optio
     match path {
         Nil => λ source target kept at => kept(0, BitVec::ofNat(0), at),
         Cons(byte, rest) => λ source target kept at => ⟨kept(0, byte, at.left), ⟨at.right.left,
-            cstring_from_kept(rest, λ i => source(Succ(i)), λ i => target(Succ(i)), λ i b got => kept(Succ(i), b, got), at.right.right)⟩⟩,
+            cstring_from_kept(rest, λ i => source(i + 1), λ i => target(i + 1), λ i b got => kept(i + 1, b, got), at.right.right)⟩⟩,
     }
 }
 
@@ -227,7 +227,7 @@ theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAcc
         Cons(arg, rest) => λ k at => Exists(at.witness, ⟨word_bytes_at_kept(data, memory, other, later, kept, argv_slot(rsp, k), at.witness, at.proof.left),
             ⟨at.proof.right.left, ⟨at.proof.right.right.left,
              ⟨cstring_at_kept(data, memory, other, later, kept, at.witness, arg, at.proof.right.right.right.left),
-              argv_from_kept(data, memory, other, later, kept, rsp, rest, Succ(k), at.proof.right.right.right.right)⟩⟩⟩⟩),
+              argv_from_kept(data, memory, other, later, kept, rsp, rest, k + 1, at.proof.right.right.right.right)⟩⟩⟩⟩),
     }
 }
 
@@ -266,7 +266,7 @@ theorem argv_from_nth<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), ar
                     Exists(at.witness, ⟨at.proof.left, ⟨at.proof.right.right.left, at.proof.right.right.right.left⟩⟩))
             },
             Succ(l) => λ arg found at => {
-                let later = argv_from_nth(data, memory, rsp, rest, Succ(from), l, arg, found, at.proof.right.right.right.right);
+                let later = argv_from_nth(data, memory, rsp, rest, from + 1, l, arg, found, at.proof.right.right.right.right);
                 j(Nat::add_succ_left(from, l), λ i _ => Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, i), pointer) ∧
                         ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧ CStringAt(data, memory, pointer, arg))), later)
             },
@@ -282,7 +282,7 @@ theorem cstring_byte(path: List<BitVec(8)>): (source: Nat → Option<BitVec(8)>)
         Cons(first, rest) => λ source at i => match i {
             Zero => λ byte same => j(Option::some_inj(first, byte, same), λ b _ => (source(0) = Some(b)) ∧ Not(b = BitVec::ofNat(0)),
                 ⟨at.left, at.right.left⟩),
-            Succ(l) => λ byte found => cstring_byte(rest, λ n => source(Succ(n)), at.right.right, l, byte, found),
+            Succ(l) => λ byte found => cstring_byte(rest, λ n => source(n + 1), at.right.right, l, byte, found),
         },
     }
 }
@@ -291,7 +291,7 @@ theorem cstring_end(path: List<BitVec(8)>): (source: Nat → Option<BitVec(8)>) 
     source(path.len()) = Some(BitVec::ofNat(0)) {
     match path {
         Nil => λ source at => at,
-        Cons(first, rest) => λ source at => cstring_end(rest, λ n => source(Succ(n)), at.right.right),
+        Cons(first, rest) => λ source at => cstring_end(rest, λ n => source(n + 1), at.right.right),
     }
 }
 

@@ -98,16 +98,16 @@ theorem CoTree::after_traces<R>(E: Events, d: Nat): (t: CoTree<R>(E)) → (o: Ob
         Zero => λ t o ht m tr it => j(sym(ht), λ y _ => IsTrace(E, CoTree::approx_obs(E, m, y), tr), it),
         Succ(d2) => λ t o ht m tr it => {
             let settled = λ (root: CoTree::obs(E, t) = o) =>
-                IsTrace::up(E, λ n => CoTree::approx(E, n, t), CoTree::approx_grows(E, t), m, Succ(d2), tr,
+                IsTrace::up(E, λ n => CoTree::approx(E, n, t), CoTree::approx_grows(E, t), m, d2 + 1, tr,
                     j(sym(root), λ y _ => IsTrace(E, CoTree::approx_obs(E, m, y), tr), it));
-            (match CoTree::obs(E, t) as λ o2 => CoTree::obs(E, t) = o2 → IsTrace(E, CoTree::approx(E, m + Succ(d2), t), tr) {
-                ORet(r) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, Succ(d2), t, ORet(r), h, trivial)), ht))),
+            (match CoTree::obs(E, t) as λ o2 => CoTree::obs(E, t) = o2 → IsTrace(E, CoTree::approx(E, m + (d2 + 1), t), tr) {
+                ORet(r) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, d2 + 1, t, ORet(r), h, trivial)), ht))),
                 OTau(u) => λ h => {
                     let deeper: IsTrace(E, CoTree::approx(E, m + d2, u), tr) = CoTree::after_traces(E, d2, u, o,
                         trans(sym(CoTree::after_succ(E, d2, t, u, h)), ht), m, tr, it);
-                    j(sym(h), λ y _ => IsTrace(E, CoTree::approx_obs(E, Succ(m + d2), y), tr), deeper)
+                    j(sym(h), λ y _ => IsTrace(E, CoTree::approx_obs(E, m + d2 + 1, y), tr), deeper)
                 },
-                OVis(c, k) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, Succ(d2), t, OVis(c, k), h, trivial)), ht))),
+                OVis(c, k) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, d2 + 1, t, OVis(c, k), h, trivial)), ht))),
             })(refl)
         },
     }
@@ -120,9 +120,9 @@ theorem LinuxSimCo::sim_node<M>(io: LinuxIo<M>, m: Nat,
     below: (u: CoTree<BitVec(64)>(Events::linux())) → (s2: MachineState<M>) → LinuxSimCo<M>(io, u, s2) →
         Sim(io, CoTree::approx(Events::linux(), m, u), s2),
     t: CoTree<BitVec(64)>(Events::linux()), s: MachineState<M>, o: Obs<BitVec(64)>(Events::linux()),
-    root: CoTree::obs(Events::linux(), t) = o, at_root: Sim(io, CoTree::approx_obs(Events::linux(), Succ(m), o), s)):
-    Sim(io, CoTree::approx(Events::linux(), Succ(m), t), s) {
-    j(sym(root), λ y _ => Sim(io, CoTree::approx_obs(Events::linux(), Succ(m), y), s), at_root)
+    root: CoTree::obs(Events::linux(), t) = o, at_root: Sim(io, CoTree::approx_obs(Events::linux(), m + 1, o), s)):
+    Sim(io, CoTree::approx(Events::linux(), m + 1, t), s) {
+    j(sym(root), λ y _ => Sim(io, CoTree::approx_obs(Events::linux(), m + 1, y), s), at_root)
 }
 
 // One level: the node the relation names, after its drops; a dropped
@@ -131,7 +131,7 @@ theorem LinuxSimCo::sim_succ<M>(io: LinuxIo<M>, m: Nat,
     below: (u: CoTree<BitVec(64)>(Events::linux())) → (s2: MachineState<M>) → LinuxSimCo<M>(io, u, s2) →
         Sim(io, CoTree::approx(Events::linux(), m, u), s2),
     t: CoTree<BitVec(64)>(Events::linux()), s: MachineState<M>, sim: LinuxSimCo<M>(io, t, s)):
-    Sim(io, CoTree::approx(Events::linux(), Succ(m), t), s) {
+    Sim(io, CoTree::approx(Events::linux(), m + 1, t), s) {
     match sim {
         SimExits(d, status, ht, at, steps, syscall, exits) => match CoTree::after_step(Events::linux(), d, t, ORet(status), ht) {
             Inl(root) => LinuxSimCo::sim_node(io, m, below, t, s, ORet(status), root, sim_ret(io, status, s, at, steps, syscall, exits)),
@@ -227,9 +227,9 @@ theorem LinuxSimCo::answered_meets<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Even
         linux_answered_respects<M>(io, c, b, junk, rcx, r11, at, ran_at, same),
         next(LinuxResumption(b, valid.left, junk, resumed.proof.left, rcx, r11)), resumed.proof.right.proof.proof, valid.right);
     let tr = rest.witness;
-    let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), Succ(rest.proof.left.n), OVis(c, k)), TAns(c, b, tr)) =
+    let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), rest.proof.left.n + 1, OVis(c, k)), TAns(c, b, tr)) =
         Answered(b, tr, refl, rest.proof.left.h);
-    Exists(TAns(c, b, tr), ⟨LinuxSimCo::produced_after(t, d, OVis(c, k), ht, TAns(c, b, tr), Succ(rest.proof.left.n), deep),
+    Exists(TAns(c, b, tr), ⟨LinuxSimCo::produced_after(t, d, OVis(c, k), ht, TAns(c, b, tr), rest.proof.left.n + 1, deep),
         ⟨rest.proof.right.left, cong_fn(λ (events: List<LinuxEvent>) => Cons(CallEvent(c, b), events), rest.proof.right.right)⟩⟩)
 }
 
@@ -274,16 +274,16 @@ theorem LinuxSimCo::segment_node<M>(io: LinuxIo<M>, event: LinuxEvent, more: Lis
         },
         SimSteps(d, t2, ht, s2, plus, next) => {
             let taken = plus.proof.right.witness;
-            let moved: LinuxStepsN(io, Succ(taken), left, s2) = Exists(plus.witness, ⟨plus.proof.left, plus.proof.right.proof⟩);
-            let peeled = linux_steps_peel(io, Succ(taken), k, left, right, s2, at, same, moved, steps, syscall);
+            let moved: LinuxStepsN(io, taken + 1, left, s2) = Exists(plus.witness, ⟨plus.proof.left, plus.proof.right.proof⟩);
+            let peeled = linux_steps_peel(io, taken + 1, k, left, right, s2, at, same, moved, steps, syscall);
             let m = peeled.proof.right.witness;
-            let counted: (m + Succ(taken) = k) = peeled.proof.right.proof.right;
+            let counted: (m + (taken + 1) = k) = peeled.proof.right.proof.right;
             let shorter: (m < k) = j(counted, λ y _ => m < y, m.le_add_l(taken));
             let rest = below(m, shorter, t2, s2, peeled.witness, peeled.proof.left, next, peeled.proof.right.proof.left);
             let tr = rest.witness;
-            let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), Succ(rest.proof.left.n), OTau(t2)), tr) =
+            let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), rest.proof.left.n + 1, OTau(t2)), tr) =
                 rest.proof.left.h;
-            Exists(tr, ⟨LinuxSimCo::produced_after(t, d, OTau(t2), ht, tr, Succ(rest.proof.left.n), deep), rest.proof.right⟩)
+            Exists(tr, ⟨LinuxSimCo::produced_after(t, d, OTau(t2), ht, tr, rest.proof.left.n + 1, deep), rest.proof.right⟩)
         },
         SimCalls(d, c, kk, ht, claim_at, claim_steps, claim_syscall, requests, next) => {
             let meet = linux_steps_meet(io, claim_steps.witness, k, left, right, claim_at, at, same, claim_steps.proof, steps,
@@ -305,7 +305,7 @@ theorem LinuxSimCo::segment<M>(io: LinuxIo<M>, event: LinuxEvent, more: List<Lin
             λ m (shorter: m < k) => false_elim(Nat::lt_of_lt_of_le(m, k, Zero, shorter, bound)), t, left, right, same, sim, steps),
         Succ(f) => λ k bound t left right same sim steps => LinuxSimCo::segment_node(io, event, more, outer, at, syscall, ran, valid, k,
             λ m (shorter: m < k) => LinuxSimCo::segment(io, event, more, outer, at, syscall, ran, valid, f, m,
-                Nat::lt_of_lt_of_le(m, k, Succ(f), shorter, bound)), t, left, right, same, sim, steps),
+                Nat::lt_of_lt_of_le(m, k, f + 1, shorter, bound)), t, left, right, same, sim, steps),
     }
 }
 

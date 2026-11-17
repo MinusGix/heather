@@ -172,7 +172,7 @@ fn List::read_or<A>(self xs: List<A>, k: Nat, d: A) → A {
 theorem List::put_here<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → xs.put(i, x, d).read_or(i, d) = x {
     match i {
         Zero => λ xs x d => match xs as λ ys => ys.put(Zero, x, d).read_or(Zero, d) = x { Nil => refl, Cons(_, _) => refl },
-        Succ(k) => λ xs x d => match xs as λ ys => ys.put(Succ(k), x, d).read_or(Succ(k), d) = x {
+        Succ(k) => λ xs x d => match xs as λ ys => ys.put(k + 1, x, d).read_or(k + 1, d) = x {
             Nil => List::put_here(k, Nil, x, d),
             Cons(_, rest) => List::put_here(k, rest, x, d),
         },
@@ -183,16 +183,16 @@ theorem List::put_other<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → (k: 
     match i {
         Zero => λ xs x d k => match k as λ k2 => k2 ≠ Zero → xs.put(Zero, x, d).read_or(k2, d) = xs.read_or(k2, d) {
             Zero => λ ne => false_elim(ne(refl)),
-            Succ(k2) => λ _ => match xs as λ ys => ys.put(Zero, x, d).read_or(Succ(k2), d) = ys.read_or(Succ(k2), d) {
+            Succ(k2) => λ _ => match xs as λ ys => ys.put(Zero, x, d).read_or(k2 + 1, d) = ys.read_or(k2 + 1, d) {
                 Nil => refl,
                 Cons(_, _) => refl,
             },
         },
-        Succ(i2) => λ xs x d k => match k as λ k2 => k2 ≠ Succ(i2) → xs.put(Succ(i2), x, d).read_or(k2, d) = xs.read_or(k2, d) {
-            Zero => λ _ => match xs as λ ys => ys.put(Succ(i2), x, d).read_or(Zero, d) = ys.read_or(Zero, d) { Nil => refl, Cons(_, _) => refl },
-            Succ(k2) => λ ne => match xs as λ ys => ys.put(Succ(i2), x, d).read_or(Succ(k2), d) = ys.read_or(Succ(k2), d) {
-                Nil => List::put_other(i2, Nil, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => Succ(n), e))),
-                Cons(_, rest) => List::put_other(i2, rest, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => Succ(n), e))),
+        Succ(i2) => λ xs x d k => match k as λ k2 => k2 ≠ i2 + 1 → xs.put(i2 + 1, x, d).read_or(k2, d) = xs.read_or(k2, d) {
+            Zero => λ _ => match xs as λ ys => ys.put(i2 + 1, x, d).read_or(Zero, d) = ys.read_or(Zero, d) { Nil => refl, Cons(_, _) => refl },
+            Succ(k2) => λ ne => match xs as λ ys => ys.put(i2 + 1, x, d).read_or(k2 + 1, d) = ys.read_or(k2 + 1, d) {
+                Nil => List::put_other(i2, Nil, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => n + 1, e))),
+                Cons(_, rest) => List::put_other(i2, rest, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => n + 1, e))),
             },
         },
     }

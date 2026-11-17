@@ -72,10 +72,10 @@ theorem wide_load_holds(buffers: Buffers(), values: Valuation(),
 fn byte_at(buffers: Buffers(), i: Nat) → BitVec(8) { buffer_bytes(buffers, 0).nth(i).unwrap_or(BitVec::zero()) }
 
 theorem be_read_is_swapped_load(buffers: Buffers(), index: Nat):
-    (byte_at(buffers, index).zero_extend(56) << 24 | byte_at(buffers, Succ(index)).zero_extend(56) << 16
-        | byte_at(buffers, Succ(Succ(index))).zero_extend(56) << 8 | byte_at(buffers, Succ(Succ(Succ(index)))).zero_extend(56))
+    (byte_at(buffers, index).zero_extend(56) << 24 | byte_at(buffers, index + 1).zero_extend(56) << 16
+        | byte_at(buffers, index + 2).zero_extend(56) << 8 | byte_at(buffers, index + 3).zero_extend(56))
         = buffer_word(buffers, 0, index, 4).byte_swap(4).zero_extend(32) {
-    BitVec::be_join_32_swap(byte_at(buffers, index), byte_at(buffers, Succ(index)), byte_at(buffers, Succ(Succ(index))), byte_at(buffers, Succ(Succ(Succ(index)))))
+    BitVec::be_join_32_swap(byte_at(buffers, index), byte_at(buffers, index + 1), byte_at(buffers, index + 2), byte_at(buffers, index + 3))
 }
 
 // be4(i): the big-endian word at `i`, as one load and a swap.

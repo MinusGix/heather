@@ -35,7 +35,7 @@ theorem to_list_eight(): nats_same(arr(8).to_list(), List::count_from(0, 8)) = T
 theorem to_list_hundred(): nats_same(arr(100).to_list(), List::count_from(0, 100)) = True { refl }
 theorem nth_hundred(): opt_nat_same(arr(100).nth(63), 63) = True { refl }
 theorem updated(): nats_same((arr(5).update(2, λ x => x + 40)).to_list(), [0, 1, 42, 3, 4]) = True { refl }
-theorem len_snoc_open(a: Array<Nat>, x: Nat): a.snoc(x).len() = Succ(a.len()) { Array::len_snoc(a, x) }
+theorem len_snoc_open(a: Array<Nat>, x: Nat): a.snoc(x).len() = a.len() + 1 { Array::len_snoc(a, x) }
 
 // The laws, at an open map and open keys.
 theorem set_then_get<A>(m: NatMap<A>, k: Nat, x: A): nat_map_get(nat_map_set(m, k, x), k) = Some(x) { nat_map_get_set_same(m, k, x) }

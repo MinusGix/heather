@@ -293,7 +293,7 @@ theorem nat_le_of_not_not_le(a, b: Nat, h: ¬¬(a <= b)): a <= b {
 }
 
 theorem nat_lt_of_not_not_lt(a, b: Nat, h: ¬¬(a < b)): a < b {
-    match Succ(a).le_dec(b) {
+    match (a + 1).le_dec(b) {
         Inl(proof) => proof,
         Inr(refute) => false_elim(h(refute)),
     }
@@ -403,8 +403,8 @@ fn IsNegative(value: Int) → Type {
     match value { OfNat(_) => False, NegSucc(_) => True }
 }
 
-theorem positive_int_nonzero(k: Nat): OfNat(Succ(k)) ≠ OfNat(0) {
-    (h: OfNat(Succ(k)) = OfNat(0)) ⊢
+theorem positive_int_nonzero(k: Nat): OfNat(k + 1) ≠ OfNat(0) {
+    (h: OfNat(k + 1) = OfNat(0)) ⊢
         j(h, λ y _ => IsPositiveOfNat(y), trivial)
 }
 
@@ -448,23 +448,23 @@ theorem div_upper_nonzero(dividend, divisor: Int,
 }
 
 theorem div_lower(dividend: Int, divisor_pred: Nat):
-    dividend.div(OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
+    dividend.div(OfNat(divisor_pred + 1)) * OfNat(divisor_pred + 1)
         <= dividend
 {
     div_lower_nonzero(
         dividend,
-        OfNat(Succ(divisor_pred)),
+        OfNat(divisor_pred + 1),
         positive_int_nonzero(divisor_pred))
 }
 
 theorem div_upper(dividend: Int, divisor_pred: Nat):
     dividend <
-        dividend.div(OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred)) +
-            OfNat(Succ(divisor_pred))
+        dividend.div(OfNat(divisor_pred + 1)) * OfNat(divisor_pred + 1) +
+            OfNat(divisor_pred + 1)
 {
     div_upper_nonzero(
         dividend,
-        OfNat(Succ(divisor_pred)),
+        OfNat(divisor_pred + 1),
         positive_int_nonzero(divisor_pred))
 }
 
@@ -512,41 +512,41 @@ theorem normalize_mod_zero(dividend, constant: Int, row, atoms: List<Int>,
 }
 
 theorem nat_div_lower(dividend, divisor_pred: Nat):
-    OfNat(dividend.div(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
+    OfNat(dividend.div(divisor_pred + 1)) * OfNat(divisor_pred + 1)
         <= OfNat(dividend)
 {
-    let quotient = dividend.div(Succ(divisor_pred));
-    let product = dividend.div(Succ(divisor_pred)) * Succ(divisor_pred);
-    let remainder = dividend.mod(Succ(divisor_pred));
-    rewrite(sym(Int::ofNat_mul(quotient, Succ(divisor_pred))),
+    let quotient = dividend.div(divisor_pred + 1);
+    let product = dividend.div(divisor_pred + 1) * (divisor_pred + 1);
+    let remainder = dividend.mod(divisor_pred + 1);
+    rewrite(sym(Int::ofNat_mul(quotient, divisor_pred + 1)),
       nat_le_to_int(
           product,
           dividend,
-          j(dividend.div_mul_add_mod(Succ(divisor_pred)),
+          j(dividend.div_mul_add_mod(divisor_pred + 1),
             λ right _ => product <= right,
             product.le_add_l(remainder))))
 }
 
 theorem nat_div_upper(dividend, divisor_pred: Nat):
     OfNat(dividend) <
-        OfNat(dividend.div(Succ(divisor_pred))) *
-            OfNat(Succ(divisor_pred)) + OfNat(Succ(divisor_pred))
+        OfNat(dividend.div(divisor_pred + 1)) *
+            OfNat(divisor_pred + 1) + OfNat(divisor_pred + 1)
 {
-    let quotient = dividend.div(Succ(divisor_pred));
-    let product = quotient * Succ(divisor_pred);
-    let remainder = dividend.mod(Succ(divisor_pred));
+    let quotient = dividend.div(divisor_pred + 1);
+    let product = quotient * (divisor_pred + 1);
+    let remainder = dividend.mod(divisor_pred + 1);
     rewrite(Int::ofNat_mul_add(
-          quotient, Succ(divisor_pred), Succ(divisor_pred)),
+          quotient, divisor_pred + 1, divisor_pred + 1),
       nat_lt_to_int(
           dividend,
-          product + Succ(divisor_pred),
-          j(dividend.div_mul_add_mod(Succ(divisor_pred)),
-            λ right _ => right < product + Succ(divisor_pred),
+          product + (divisor_pred + 1),
+          j(dividend.div_mul_add_mod(divisor_pred + 1),
+            λ right _ => right < product + (divisor_pred + 1),
 
                 product.add_le_mono_l(
-                Succ(remainder),
-                Succ(divisor_pred),
-                dividend.mod_lt(Succ(divisor_pred))))))
+                remainder + 1,
+                divisor_pred + 1,
+                dividend.mod_lt(divisor_pred + 1)))))
 }
 
 theorem nat_mod_expand(dividend, divisor: Nat):
@@ -1132,10 +1132,10 @@ fn cut_dvd(divisor, value: Int) → Type {
 
 theorem cutsat_div_nonnegative(dividend: Int, divisor_pred: Nat,
     h: OfNat(0) <= dividend):
-    OfNat(0) <= dividend.div(OfNat(Succ(divisor_pred)))
+    OfNat(0) <= dividend.div(OfNat(divisor_pred + 1))
 {
     match dividend as λ d => OfNat(0) <= d →
-        OfNat(0) <= d.div(OfNat(Succ(divisor_pred))) {
+        OfNat(0) <= d.div(OfNat(divisor_pred + 1)) {
         OfNat(_) => λ _ => trivial,
         NegSucc(_) => λ bad => false_elim(bad),
     }(h)
@@ -1150,29 +1150,29 @@ theorem cutsat_remainder_le_gap(gap, quotient, divisor, remainder: Int,
 
 theorem cutsat_quotient_product_nonnegative(quotient: Int, divisor_pred: Nat,
     quotient_nonnegative: OfNat(0) <= quotient):
-    OfNat(0) <= quotient * OfNat(Succ(divisor_pred))
+    OfNat(0) <= quotient * OfNat(divisor_pred + 1)
 {
-    rewrite(sym(OfNat(Succ(divisor_pred)).zero_mul()),
+    rewrite(sym(OfNat(divisor_pred + 1).zero_mul()),
 
-            OfNat(0).mul_le_mono_r(quotient, OfNat(Succ(divisor_pred)),
-            quotient_nonnegative, Int::zero_le_ofNat(Succ(divisor_pred))))
+            OfNat(0).mul_le_mono_r(quotient, OfNat(divisor_pred + 1),
+            quotient_nonnegative, Int::zero_le_ofNat(divisor_pred + 1)))
 }
 
 theorem cut_cooper_core(a_pred, period_pred: Nat, b, d, c, x, p, q, s: Int,
     hb: OfNat(0) <= b,
-    period_a: cut_dvd(OfNat(Succ(a_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(a_pred)) * d, c * OfNat(Succ(period_pred))),
-    lower: p <= OfNat(Succ(a_pred)) * x,
+    period_a: cut_dvd(OfNat(a_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(a_pred + 1) * d, c * OfNat(period_pred + 1)),
+    lower: p <= OfNat(a_pred + 1) * x,
     upper: b * x + q <= OfNat(0),
     carried: cut_dvd(d, c * x + s),
-    close: (k: Int) → OfNat(0) <= k → k < OfNat(Succ(period_pred)) →
-        b * p + OfNat(Succ(a_pred)) * q + b * k <= OfNat(0) →
-        cut_dvd(OfNat(Succ(a_pred)), p + k) →
-        cut_dvd(OfNat(Succ(a_pred)) * d,
-            c * p + OfNat(Succ(a_pred)) * s + c * k) → False): False
+    close: (k: Int) → OfNat(0) <= k → k < OfNat(period_pred + 1) →
+        b * p + OfNat(a_pred + 1) * q + b * k <= OfNat(0) →
+        cut_dvd(OfNat(a_pred + 1), p + k) →
+        cut_dvd(OfNat(a_pred + 1) * d,
+            c * p + OfNat(a_pred + 1) * s + c * k) → False): False
 {
-    let A = OfNat(Succ(a_pred));
-    let M = OfNat(Succ(period_pred));
+    let A = OfNat(a_pred + 1);
+    let M = OfNat(period_pred + 1);
     let gap = A * x + -p;
     let k = gap.mod(M);
     let t = gap.div(M);
@@ -1194,7 +1194,7 @@ theorem cut_cooper_core(a_pred, period_pred: Nat, b, d, c, x, p, q, s: Int,
         (p + k).mul_le_mono_l(A * x, b, pk_le, hb);
     have upper_x: (b * x <= -q) = omega(upper);
     have scaled_upper: (A * (b * x) <= A * (-q)) =
-        (b * x).mul_le_mono_l(-q, A, upper_x, Int::zero_le_ofNat(Succ(a_pred)));
+        (b * x).mul_le_mono_l(-q, A, upper_x, Int::zero_le_ofNat(a_pred + 1));
     have commute: (b * (A * x) = A * (b * x)) = calc {
         b * (A * x) = (b * A) * x := sym(b.mul_assoc(A, x)),
                     = (A * b) * x := Int::cong(λ (z: Int) => z * x, b.mul_comm(A)),
@@ -1266,18 +1266,18 @@ theorem cut_cooper_core(a_pred, period_pred: Nat, b, d, c, x, p, q, s: Int,
 
 theorem cut_cooper_right_core(b_pred, period_pred: Nat, a, d, c, x, p, q, s: Int,
     ha: OfNat(0) <= a,
-    period_b: cut_dvd(OfNat(Succ(b_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(b_pred)) * d, (-c) * OfNat(Succ(period_pred))),
+    period_b: cut_dvd(OfNat(b_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(b_pred + 1) * d, (-c) * OfNat(period_pred + 1)),
     lower: p <= a * x,
-    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0),
+    upper: OfNat(b_pred + 1) * x + q <= OfNat(0),
     carried: cut_dvd(d, c * x + s),
-    close: (k: Int) → OfNat(0) <= k → k < OfNat(Succ(period_pred)) →
-        a * q + OfNat(Succ(b_pred)) * p + a * k <= OfNat(0) →
-        cut_dvd(OfNat(Succ(b_pred)), q + k) →
-        cut_dvd(OfNat(Succ(b_pred)) * d,
-            (-c) * q + OfNat(Succ(b_pred)) * s + (-c) * k) → False): False
+    close: (k: Int) → OfNat(0) <= k → k < OfNat(period_pred + 1) →
+        a * q + OfNat(b_pred + 1) * p + a * k <= OfNat(0) →
+        cut_dvd(OfNat(b_pred + 1), q + k) →
+        cut_dvd(OfNat(b_pred + 1) * d,
+            (-c) * q + OfNat(b_pred + 1) * s + (-c) * k) → False): False
 {
-    let B = OfNat(Succ(b_pred));
+    let B = OfNat(b_pred + 1);
     have flip_b: (B * -x = -(B * x)) = B.mul_neg_r(x);
     have flip_a: (a * -x = -(a * x)) = a.mul_neg_r(x);
     have mirrored_lower: (q <= B * -x) = omega(upper, flip_b);
@@ -1304,7 +1304,7 @@ theorem below_zero({P: Int → Type}): Below(0, P) {
 }
 
 theorem below_succ(n: Nat, {P: Int → Type}, rest: Below(n, P), last: P(OfNat(n))):
-    Below(Succ(n), P)
+    Below(n + 1, P)
 {
     λ k low high => match k.lt_trichotomy(OfNat(n)) {
         Inl(below) => rest(k, low, below),
@@ -1340,27 +1340,27 @@ theorem cut_cooper_left_values(a_pred, b_pred, period_pred: Nat,
     lower_bound, upper_bound, carried_constant,
     cut_bound, selected_constant, carried_divisor, carried_out_constant: Int,
     lower_split: vl = rl + NegSucc(a_pred) * x,
-    upper_split: vu = ru + OfNat(Succ(b_pred)) * x,
+    upper_split: vu = ru + OfNat(b_pred + 1) * x,
     carried_split: vc = rc + c * x,
-    cut_split: vcut = OfNat(Succ(b_pred)) * rl + OfNat(Succ(a_pred)) * ru,
-    carried_out_split: vout = c * rl + OfNat(Succ(a_pred)) * rc,
-    cut_bound_eq: cut_bound = OfNat(Succ(b_pred)) * lower_bound + OfNat(Succ(a_pred)) * upper_bound,
+    cut_split: vcut = OfNat(b_pred + 1) * rl + OfNat(a_pred + 1) * ru,
+    carried_out_split: vout = c * rl + OfNat(a_pred + 1) * rc,
+    cut_bound_eq: cut_bound = OfNat(b_pred + 1) * lower_bound + OfNat(a_pred + 1) * upper_bound,
     selected_eq: selected_constant = -lower_bound,
-    carried_divisor_eq: carried_divisor = OfNat(Succ(a_pred)) * d,
+    carried_divisor_eq: carried_divisor = OfNat(a_pred + 1) * d,
     carried_out_constant_eq:
-        carried_out_constant = c * -lower_bound + OfNat(Succ(a_pred)) * carried_constant,
-    period_a: cut_dvd(OfNat(Succ(a_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(a_pred)) * d, c * OfNat(Succ(period_pred))),
+        carried_out_constant = c * -lower_bound + OfNat(a_pred + 1) * carried_constant,
+    period_a: cut_dvd(OfNat(a_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(a_pred + 1) * d, c * OfNat(period_pred + 1)),
     lower: vl <= lower_bound,
     upper: vu <= upper_bound,
     carried: cut_dvd(d, vc + carried_constant),
-    close: Below(Succ(period_pred), λ (k: Int) =>
-        vcut <= cut_bound + -OfNat(Succ(b_pred)) * k →
-        cut_dvd(OfNat(Succ(a_pred)), rl + (selected_constant + k)) →
+    close: Below(period_pred + 1, λ (k: Int) =>
+        vcut <= cut_bound + -OfNat(b_pred + 1) * k →
+        cut_dvd(OfNat(a_pred + 1), rl + (selected_constant + k)) →
         cut_dvd(carried_divisor, vout + (carried_out_constant + c * k)) → False)): False
 {
-    let A = OfNat(Succ(a_pred));
-    let B = OfNat(Succ(b_pred));
+    let A = OfNat(a_pred + 1);
+    let B = OfNat(b_pred + 1);
     let p = rl + -lower_bound;
     let q = ru + -upper_bound;
     let s = rc + carried_constant;
@@ -1373,7 +1373,7 @@ theorem cut_cooper_left_values(a_pred, b_pred, period_pred: Nat,
             omega(carried_split, known)
         });
     cut_cooper_core(a_pred, period_pred, B, d, c, x, p, q, s,
-        Int::zero_le_ofNat(Succ(b_pred)), period_a, period_c, core_lower, core_upper, core_carried,
+        Int::zero_le_ofNat(b_pred + 1), period_a, period_c, core_lower, core_upper, core_carried,
         λ k low high cut selected carried_out => {
             have e_p: (B * p = B * rl + B * -lower_bound) = B.mul_add_distr(rl, -lower_bound);
             have e_q: (A * q = A * ru + A * -upper_bound) = A.mul_add_distr(ru, -upper_bound);
@@ -1407,27 +1407,27 @@ theorem cut_cooper_right_values(a_pred, b_pred, period_pred: Nat,
     lower_bound, upper_bound, carried_constant,
     cut_bound, selected_constant, carried_divisor, carried_out_constant: Int,
     lower_split: vl = rl + NegSucc(a_pred) * x,
-    upper_split: vu = ru + OfNat(Succ(b_pred)) * x,
+    upper_split: vu = ru + OfNat(b_pred + 1) * x,
     carried_split: vc = rc + c * x,
-    cut_split: vcut = OfNat(Succ(b_pred)) * rl + OfNat(Succ(a_pred)) * ru,
-    carried_out_split: vout = (-c) * ru + OfNat(Succ(b_pred)) * rc,
-    cut_bound_eq: cut_bound = OfNat(Succ(b_pred)) * lower_bound + OfNat(Succ(a_pred)) * upper_bound,
+    cut_split: vcut = OfNat(b_pred + 1) * rl + OfNat(a_pred + 1) * ru,
+    carried_out_split: vout = (-c) * ru + OfNat(b_pred + 1) * rc,
+    cut_bound_eq: cut_bound = OfNat(b_pred + 1) * lower_bound + OfNat(a_pred + 1) * upper_bound,
     selected_eq: selected_constant = -upper_bound,
-    carried_divisor_eq: carried_divisor = OfNat(Succ(b_pred)) * d,
+    carried_divisor_eq: carried_divisor = OfNat(b_pred + 1) * d,
     carried_out_constant_eq:
-        carried_out_constant = (-c) * -upper_bound + OfNat(Succ(b_pred)) * carried_constant,
-    period_b: cut_dvd(OfNat(Succ(b_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(b_pred)) * d, (-c) * OfNat(Succ(period_pred))),
+        carried_out_constant = (-c) * -upper_bound + OfNat(b_pred + 1) * carried_constant,
+    period_b: cut_dvd(OfNat(b_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(b_pred + 1) * d, (-c) * OfNat(period_pred + 1)),
     lower: vl <= lower_bound,
     upper: vu <= upper_bound,
     carried: cut_dvd(d, vc + carried_constant),
-    close: Below(Succ(period_pred), λ (k: Int) =>
-        vcut <= cut_bound + -OfNat(Succ(a_pred)) * k →
-        cut_dvd(OfNat(Succ(b_pred)), ru + (selected_constant + k)) →
+    close: Below(period_pred + 1, λ (k: Int) =>
+        vcut <= cut_bound + -OfNat(a_pred + 1) * k →
+        cut_dvd(OfNat(b_pred + 1), ru + (selected_constant + k)) →
         cut_dvd(carried_divisor, vout + (carried_out_constant + (-c) * k)) → False)): False
 {
-    let A = OfNat(Succ(a_pred));
-    let B = OfNat(Succ(b_pred));
+    let A = OfNat(a_pred + 1);
+    let B = OfNat(b_pred + 1);
     let p = rl + -lower_bound;
     let q = ru + -upper_bound;
     let s = rc + carried_constant;
@@ -1440,7 +1440,7 @@ theorem cut_cooper_right_values(a_pred, b_pred, period_pred: Nat,
             omega(carried_split, known)
         });
     cut_cooper_right_core(b_pred, period_pred, A, d, c, x, p, q, s,
-        Int::zero_le_ofNat(Succ(a_pred)), period_b, period_c, core_lower, core_upper, core_carried,
+        Int::zero_le_ofNat(a_pred + 1), period_b, period_c, core_lower, core_upper, core_carried,
         λ k low high cut selected carried_out => {
             have e_p: (B * p = B * rl + B * -lower_bound) = B.mul_add_distr(rl, -lower_bound);
             have e_q: (A * q = A * ru + A * -upper_bound) = A.mul_add_distr(ru, -upper_bound);
@@ -1480,24 +1480,24 @@ theorem cut_cooper_left(index: Nat, atoms, lower_row, upper_row, carried_row,
     lower_split: lower_row = add_coeffs(lower_rest,
         scale(NegSucc(a_pred), basis(index, atoms))),
     upper_split: upper_row = add_coeffs(upper_rest,
-        scale(OfNat(Succ(b_pred)), basis(index, atoms))),
+        scale(OfNat(b_pred + 1), basis(index, atoms))),
     carried_split: carried_row = add_coeffs(carried_rest,
         scale(c, basis(index, atoms))),
-    cut_row_eq: cut_row = combo(OfNat(Succ(b_pred)), lower_rest, OfNat(Succ(a_pred)), upper_rest),
-    carried_out_row_eq: carried_out_row = combo(c, lower_rest, OfNat(Succ(a_pred)), carried_rest),
-    cut_bound_eq: cut_bound = OfNat(Succ(b_pred)) * lower_bound + OfNat(Succ(a_pred)) * upper_bound,
+    cut_row_eq: cut_row = combo(OfNat(b_pred + 1), lower_rest, OfNat(a_pred + 1), upper_rest),
+    carried_out_row_eq: carried_out_row = combo(c, lower_rest, OfNat(a_pred + 1), carried_rest),
+    cut_bound_eq: cut_bound = OfNat(b_pred + 1) * lower_bound + OfNat(a_pred + 1) * upper_bound,
     selected_eq: selected_constant = -lower_bound,
-    carried_divisor_eq: carried_divisor = OfNat(Succ(a_pred)) * d,
+    carried_divisor_eq: carried_divisor = OfNat(a_pred + 1) * d,
     carried_out_constant_eq:
-        carried_out_constant = c * -lower_bound + OfNat(Succ(a_pred)) * carried_constant,
-    period_a: cut_dvd(OfNat(Succ(a_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(a_pred)) * d, c * OfNat(Succ(period_pred))),
+        carried_out_constant = c * -lower_bound + OfNat(a_pred + 1) * carried_constant,
+    period_a: cut_dvd(OfNat(a_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(a_pred + 1) * d, c * OfNat(period_pred + 1)),
     lower: dot(lower_row, atoms) <= lower_bound,
     upper: dot(upper_row, atoms) <= upper_bound,
     carried: cut_dvd(d, dot(carried_row, atoms) + carried_constant),
-    close: Below(Succ(period_pred), λ (k: Int) =>
-        dot(cut_row, atoms) <= cut_bound + -OfNat(Succ(b_pred)) * k →
-        cut_dvd(OfNat(Succ(a_pred)), dot(lower_rest, atoms) + (selected_constant + k)) →
+    close: Below(period_pred + 1, λ (k: Int) =>
+        dot(cut_row, atoms) <= cut_bound + -OfNat(b_pred + 1) * k →
+        cut_dvd(OfNat(a_pred + 1), dot(lower_rest, atoms) + (selected_constant + k)) →
         cut_dvd(carried_divisor,
             dot(carried_out_row, atoms) + (carried_out_constant + c * k)) → False)): False
 {
@@ -1508,12 +1508,12 @@ theorem cut_cooper_left(index: Nat, atoms, lower_row, upper_row, carried_row,
         lower_bound, upper_bound, carried_constant,
         cut_bound, selected_constant, carried_divisor, carried_out_constant,
         trans(cong_dot(atoms, lower_split), dot_pivot(lower_rest, NegSucc(a_pred), index, atoms)),
-        trans(cong_dot(atoms, upper_split), dot_pivot(upper_rest, OfNat(Succ(b_pred)), index, atoms)),
+        trans(cong_dot(atoms, upper_split), dot_pivot(upper_rest, OfNat(b_pred + 1), index, atoms)),
         trans(cong_dot(atoms, carried_split), dot_pivot(carried_rest, c, index, atoms)),
         trans(cong_dot(atoms, cut_row_eq),
-            dot_combo(OfNat(Succ(b_pred)), lower_rest, OfNat(Succ(a_pred)), upper_rest, atoms)),
+            dot_combo(OfNat(b_pred + 1), lower_rest, OfNat(a_pred + 1), upper_rest, atoms)),
         trans(cong_dot(atoms, carried_out_row_eq),
-            dot_combo(c, lower_rest, OfNat(Succ(a_pred)), carried_rest, atoms)),
+            dot_combo(c, lower_rest, OfNat(a_pred + 1), carried_rest, atoms)),
         cut_bound_eq, selected_eq, carried_divisor_eq, carried_out_constant_eq,
         period_a, period_c, lower, upper, carried, close)
 }
@@ -1526,24 +1526,24 @@ theorem cut_cooper_right(index: Nat, atoms, lower_row, upper_row, carried_row,
     lower_split: lower_row = add_coeffs(lower_rest,
         scale(NegSucc(a_pred), basis(index, atoms))),
     upper_split: upper_row = add_coeffs(upper_rest,
-        scale(OfNat(Succ(b_pred)), basis(index, atoms))),
+        scale(OfNat(b_pred + 1), basis(index, atoms))),
     carried_split: carried_row = add_coeffs(carried_rest,
         scale(c, basis(index, atoms))),
-    cut_row_eq: cut_row = combo(OfNat(Succ(b_pred)), lower_rest, OfNat(Succ(a_pred)), upper_rest),
-    carried_out_row_eq: carried_out_row = combo(-c, upper_rest, OfNat(Succ(b_pred)), carried_rest),
-    cut_bound_eq: cut_bound = OfNat(Succ(b_pred)) * lower_bound + OfNat(Succ(a_pred)) * upper_bound,
+    cut_row_eq: cut_row = combo(OfNat(b_pred + 1), lower_rest, OfNat(a_pred + 1), upper_rest),
+    carried_out_row_eq: carried_out_row = combo(-c, upper_rest, OfNat(b_pred + 1), carried_rest),
+    cut_bound_eq: cut_bound = OfNat(b_pred + 1) * lower_bound + OfNat(a_pred + 1) * upper_bound,
     selected_eq: selected_constant = -upper_bound,
-    carried_divisor_eq: carried_divisor = OfNat(Succ(b_pred)) * d,
+    carried_divisor_eq: carried_divisor = OfNat(b_pred + 1) * d,
     carried_out_constant_eq:
-        carried_out_constant = (-c) * -upper_bound + OfNat(Succ(b_pred)) * carried_constant,
-    period_b: cut_dvd(OfNat(Succ(b_pred)), OfNat(Succ(period_pred))),
-    period_c: cut_dvd(OfNat(Succ(b_pred)) * d, (-c) * OfNat(Succ(period_pred))),
+        carried_out_constant = (-c) * -upper_bound + OfNat(b_pred + 1) * carried_constant,
+    period_b: cut_dvd(OfNat(b_pred + 1), OfNat(period_pred + 1)),
+    period_c: cut_dvd(OfNat(b_pred + 1) * d, (-c) * OfNat(period_pred + 1)),
     lower: dot(lower_row, atoms) <= lower_bound,
     upper: dot(upper_row, atoms) <= upper_bound,
     carried: cut_dvd(d, dot(carried_row, atoms) + carried_constant),
-    close: Below(Succ(period_pred), λ (k: Int) =>
-        dot(cut_row, atoms) <= cut_bound + -OfNat(Succ(a_pred)) * k →
-        cut_dvd(OfNat(Succ(b_pred)), dot(upper_rest, atoms) + (selected_constant + k)) →
+    close: Below(period_pred + 1, λ (k: Int) =>
+        dot(cut_row, atoms) <= cut_bound + -OfNat(a_pred + 1) * k →
+        cut_dvd(OfNat(b_pred + 1), dot(upper_rest, atoms) + (selected_constant + k)) →
         cut_dvd(carried_divisor,
             dot(carried_out_row, atoms) + (carried_out_constant + (-c) * k)) → False)): False
 {
@@ -1554,12 +1554,12 @@ theorem cut_cooper_right(index: Nat, atoms, lower_row, upper_row, carried_row,
         lower_bound, upper_bound, carried_constant,
         cut_bound, selected_constant, carried_divisor, carried_out_constant,
         trans(cong_dot(atoms, lower_split), dot_pivot(lower_rest, NegSucc(a_pred), index, atoms)),
-        trans(cong_dot(atoms, upper_split), dot_pivot(upper_rest, OfNat(Succ(b_pred)), index, atoms)),
+        trans(cong_dot(atoms, upper_split), dot_pivot(upper_rest, OfNat(b_pred + 1), index, atoms)),
         trans(cong_dot(atoms, carried_split), dot_pivot(carried_rest, c, index, atoms)),
         trans(cong_dot(atoms, cut_row_eq),
-            dot_combo(OfNat(Succ(b_pred)), lower_rest, OfNat(Succ(a_pred)), upper_rest, atoms)),
+            dot_combo(OfNat(b_pred + 1), lower_rest, OfNat(a_pred + 1), upper_rest, atoms)),
         trans(cong_dot(atoms, carried_out_row_eq),
-            dot_combo(-c, upper_rest, OfNat(Succ(b_pred)), carried_rest, atoms)),
+            dot_combo(-c, upper_rest, OfNat(b_pred + 1), carried_rest, atoms)),
         cut_bound_eq, selected_eq, carried_divisor_eq, carried_out_constant_eq,
         period_b, period_c, lower, upper, carried, close)
 }
@@ -1587,11 +1587,11 @@ theorem cut_constant_upper(row, atoms: List<Int>, bound: Int,
 // `d ∣ c` is false for a constant strictly between two multiples of `d`.
 theorem cut_constant_dvd(d_pred: Nat, c, quotient: Int, row, atoms: List<Int>,
     zero: row = zeros(atoms),
-    below: OfNat(Succ(d_pred)) * quotient < c,
-    above: c < OfNat(Succ(d_pred)) * quotient.isucc(),
-    h: cut_dvd(OfNat(Succ(d_pred)), dot(row, atoms) + c)): False
+    below: OfNat(d_pred + 1) * quotient < c,
+    above: c < OfNat(d_pred + 1) * quotient.isucc(),
+    h: cut_dvd(OfNat(d_pred + 1), dot(row, atoms) + c)): False
 {
-    let D = OfNat(Succ(d_pred));
+    let D = OfNat(d_pred + 1);
     have vanished: (dot(row, atoms) = OfNat(0)) =
         trans(cong_dot(atoms, zero), dot_zeros(atoms));
     have known: (dot(row, atoms) + c = D * h.witness) = h.proof;
@@ -1599,13 +1599,13 @@ theorem cut_constant_dvd(d_pred: Nat, c, quotient: Int, row, atoms: List<Int>,
     match h.witness.le_dec(quotient) {
         Inl(small) => {
             have scaled: (D * h.witness <= D * quotient) =
-                h.witness.mul_le_mono_l(quotient, D, small, Int::zero_le_ofNat(Succ(d_pred)));
+                h.witness.mul_le_mono_l(quotient, D, small, Int::zero_le_ofNat(d_pred + 1));
             omega(scaled, value, below)
         },
         Inr(large) => {
             have next: (quotient.isucc() <= h.witness) = quotient.lt_of_not_le(h.witness, large);
             have scaled: (D * quotient.isucc() <= D * h.witness) =
-                quotient.isucc().mul_le_mono_l(h.witness, D, next, Int::zero_le_ofNat(Succ(d_pred)));
+                quotient.isucc().mul_le_mono_l(h.witness, D, next, Int::zero_le_ofNat(d_pred + 1));
             omega(scaled, value, above)
         },
     }

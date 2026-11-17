@@ -309,7 +309,7 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
             let under = scan_below(i, length, below);
             let next = scan_step(state, byte.zero_extend(56));
             let kept = Accepted::after(state, Cons(byte, tail), i.toNat(), found);
-            let up: (i.add(1).toNat() = Succ(i.toNat())) = bv_omega;
+            let up: (i.add(1).toNat() = i.toNat() + 1) = bv_omega;
             let stepped: (scan_from(source, length, state, i, Accepted::word(found)) = scan_from(source, length, next, i.add(1), Accepted::word(kept))) =
                 trans(scan_from_steps(source, length, state, i, Accepted::word(found),
                         Bool::and_true_of(i.unsigned_lt_bit(length), !(state.band(255).eq_bit(FAIL) || state.eq_bit(DEAD)), under, scan_goes(state, live, on))),
@@ -322,7 +322,7 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
                 } else if next.eq_bit(DEAD) {
                     kept
                 } else {
-                    Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept))
+                    Accepted::longest(next, tail, i.toNat() + 1, Accepted::after(next, tail, i.toNat() + 1, kept))
                 }) {
                 True => λ failed => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
                         trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !(b || next.eq_bit(DEAD)), failed),
@@ -331,7 +331,7 @@ theorem scan_from_longest(source: List<u8>, length: u64, rest: List<u8>): (state
                         trans(cong_fn(λ (w: u64) => refusal_word(scan_accept(next), w), BitVec::add_sub_cancel(64, i, 1)),
                             sym(refusal_at(scan_accept(next), i))))),
                 False => λ live2 => (match next.eq_bit(DEAD) as λ b => next.eq_bit(DEAD) = b → scan_from(source, length, next, i.add(1), Accepted::word(kept))
-                    = Accepted::word(if b { kept } else { Accepted::longest(next, tail, Succ(i.toNat()), Accepted::after(next, tail, Succ(i.toNat()), kept)) }) {
+                    = Accepted::word(if b { kept } else { Accepted::longest(next, tail, i.toNat() + 1, Accepted::after(next, tail, i.toNat() + 1, kept)) }) {
                     True => λ dead => trans(scan_from_stops(source, length, next, i.add(1), Accepted::word(kept),
                             trans(cong_fn(λ (b: Bool) => i.add(1).unsigned_lt_bit(length) && !b, trans(cong_fn(λ (b: Bool) => b || next.eq_bit(DEAD), live2), dead)),
                                 i.add(1).unsigned_lt_bit(length).and_false_r())),

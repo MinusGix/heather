@@ -4,23 +4,23 @@
 // (docs/tactics/functional-induction-design.md §6). Tests, not library.
 import logic; import nat; import omega; import list; import induct_left_tests; import induct_right_tests;
 
-theorem foldl_counts_again(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = z + xs.len() {
-    induct List::foldl(xs, λ (k: Nat) (a: Nat) => Succ(k), z); all_goals { omega }
+theorem foldl_counts_again(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) => k + 1, z) = z + xs.len() {
+    induct List::foldl(xs, λ (k: Nat) (a: Nat) => k + 1, z); all_goals { omega }
 }
 
 // The principle and an equation by name.
-theorem foldl_cons(h: Nat, t: List<Nat>, z: Nat): List::Cons(h, t).foldl(λ (k: Nat) (a: Nat) => Succ(k), z) = t.foldl(λ (k: Nat) (a: Nat) => Succ(k), Succ(z)) {
-    List::foldl::Cons(List::Cons(h, t), λ (k: Nat) (a: Nat) => Succ(k), z, h, t, refl)
+theorem foldl_cons(h: Nat, t: List<Nat>, z: Nat): List::Cons(h, t).foldl(λ (k: Nat) (a: Nat) => k + 1, z) = t.foldl(λ (k: Nat) (a: Nat) => k + 1, z + 1) {
+    List::foldl::Cons(List::Cons(h, t), λ (k: Nat) (a: Nat) => k + 1, z, h, t, refl)
 }
 
 // Both modules' results, used together.
-theorem both(xs: List<Nat>): xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), 0) = xs.foldl(λ (k: Nat) (a: Nat) => Succ(k), 0) {
+theorem both(xs: List<Nat>): xs.foldl(λ (k: Nat) (a: Nat) => k + 1, 0) = xs.foldl(λ (k: Nat) (a: Nat) => k + 1, 0) {
     trans(foldl_counts_left(xs, 0), sym(foldl_counts_right(xs, 0)))
 }
 
 // Negative control: two modules' `spread` are different functions, so their
 // equations have different statements and `spread::Cons` is ambiguous.
 // expect-error: `spread::Cons` is ambiguous
-theorem spread_either(h: Nat, t: List<Nat>): induct_left_tests::spread(List::Cons(h, t)) = Succ(induct_left_tests::spread(t)) {
+theorem spread_either(h: Nat, t: List<Nat>): induct_left_tests::spread(List::Cons(h, t)) = induct_left_tests::spread(t) + 1 {
     spread::Cons(List::Cons(h, t), h, t, refl)
 }

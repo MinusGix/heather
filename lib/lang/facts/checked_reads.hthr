@@ -106,7 +106,7 @@ fn run_compiled(xs: List<Nat>, len: Nat, args: List<Nat>, code: List<Read>) → 
 
 // An in-bounds read's check passes.
 theorem read_checked_in(xs: List<Nat>, len, i: Nat, h: i < len): read_checked(xs, len, i) = Some(word_at(xs, i)) {
-    j(sym(Succ(i).leb_true(len, h)), λ b _ => (match b { True => Some(word_at(xs, i)), False => None }) = Some(word_at(xs, i)), refl)
+    j(sym((i + 1).leb_true(len, h)), λ b _ => (match b { True => Some(word_at(xs, i)), False => None }) = Some(word_at(xs, i)), refl)
 }
 
 // A compiled site reads what its checked read reads, wherever the arguments

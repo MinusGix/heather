@@ -85,7 +85,7 @@ theorem search_pass_at(n: Nat, b: Bool): big(n) = b → (x: Step<Nat, Nat>) → 
 {
     match b {
         True => λ c x h => Returns::ret(Events::none(), Break(n), x, h, λ y => Step::Within(λ _ => True, λ r => big(r) = True, y), c),
-        False => λ c x h => Returns::ret(Events::none(), Continue(Succ(n)), x, h, λ y => Step::Within(λ _ => True, λ r => big(r) = True, y), trivial),
+        False => λ c x h => Returns::ret(Events::none(), Continue(n + 1), x, h, λ y => Step::Within(λ _ => True, λ r => big(r) = True, y), trivial),
     }
 }
 theorem search_pass(n: Nat, x: Step<Nat, Nat>, h: Returns(Events::none(), search::body(n), x)):
@@ -155,9 +155,9 @@ theorem tri_is(n: Nat): tri(n) = CoTree::rec(Events::calls(Nat, Nat), Events::no
 theorem tri_body_safe(n: Nat): CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, tri::body(n), λ r => n <= r) {
     match n {
         Zero => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, λ r => 0 <= r, 0, omega),
-        Succ(m) => CoTree::safe_call_bind<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, λ r => Succ(m) <= r, m,
-            λ r => CRet(Succ(m) + r),
-            λ r _ => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r2 => d <= r2, λ r2 => Succ(m) <= r2, Succ(m) + r, omega)),
+        Succ(m) => CoTree::safe_call_bind<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, λ r => m + 1 <= r, m,
+            λ r => CRet(m + 1 + r),
+            λ r _ => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r2 => d <= r2, λ r2 => m + 1 <= r2, m + 1 + r, omega)),
     }
 }
 theorem tri_at_least(n: Nat, r: Nat, h: Returns(Events::none(), tri(n), r)): n <= r {

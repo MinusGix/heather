@@ -358,8 +358,8 @@ fn half(n: Nat) → Nat decreases n {
         False => Succ(half(n - 2)),
     }
 }
-theorem half_step(n: Nat, h: n.leb(1) = False): half(n) = Succ(half(n - 2)) {
-    j(h, λ b _ => half(n) = (match b { True => 0, False => Succ(half(n - 2)) }), half::unfold(n))
+theorem half_step(n: Nat, h: n.leb(1) = False): half(n) = half(n - 2) + 1 {
+    j(h, λ b _ => half(n) = (match b { True => 0, False => half(n - 2) + 1 }), half::unfold(n))
 }
 theorem half_seven(): half(7) = 3 { refl }
 // Through a Bool definition and its `let`s, at the top and inside a guard.
@@ -461,7 +461,7 @@ theorem mul_succ_checking(a, k: Nat, h: a * k <= 10): a <= 10 + a {
 }
 // Control: the successor adds a factor's worth, so dropping it is refused.
 // expect-error: `omega` got stuck
-theorem mul_succ_dropped(a, k: Nat): a * Succ(k) = a * k { omega }
+theorem mul_succ_dropped(a, k: Nat): a * (k + 1) = a * k { omega }
 
 // A call whose argument computes to a constructor is the call at the
 // constructor's fields, at an open element type and through a recursion.
@@ -480,7 +480,7 @@ theorem doubled_each_len<A>(xs: List<A>): doubled_each(xs).len() = 2 * xs.len() 
     }
 }
 theorem wrap_len_checking<A>(x: A, xs: List<A>, h: xs.len() < 5): wrap(x, xs).len() <= 5 {
-    let k: (wrap(x, xs).len() = Succ(xs.len())) = omega;
+    let k: (wrap(x, xs).len() = xs.len() + 1) = omega;
     omega
 }
 // Control: the constructor's field is one shorter, not as long.

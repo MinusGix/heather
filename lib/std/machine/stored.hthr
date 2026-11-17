@@ -202,7 +202,7 @@ theorem Stored::len_write_all<A>(self s: Stored<A>, n: Nat): (xs: [A; n]) → s.
             (s.write_to(head(xs), s.layout.stride()) ++ s.write_all(tail(xs))).len()
                 = s.write_to(head(xs), s.layout.stride()).len() + s.write_all(tail(xs)).len() := s.write_to(head(xs), s.layout.stride()).len_append(s.write_all(tail(xs))),
                 = s.layout.stride() + k * s.layout.stride() := rewrite(s.len_write_to(head(xs), s.layout.stride(), s.layout.stride_ge()), ih(tail(xs)), refl),
-                = Succ(k) * s.layout.stride() := sym(k.mul_succ_left(s.layout.stride())),
+                = (k + 1) * s.layout.stride() := sym(k.mul_succ_left(s.layout.stride())),
         },
     }
 }
@@ -360,7 +360,7 @@ theorem Stored::read_all_nth<A>(self s: Stored<A>, n: Nat): (bytes: List<u8>) �
                 first
             },
             Succ(j) => λ inside => {
-                let on: (bytes.drop(s.layout.stride()).drop(j * s.layout.stride()) = bytes.drop(Succ(j) * s.layout.stride())) =
+                let on: (bytes.drop(s.layout.stride()).drop(j * s.layout.stride()) = bytes.drop((j + 1) * s.layout.stride())) =
                     trans(bytes.drop_drop(s.layout.stride(), j * s.layout.stride()),
                         cong_fn<Nat, List<u8>>(λ m => bytes.drop(m), trans((j * s.layout.stride()).add_comm(s.layout.stride()), sym(j.mul_succ_left(s.layout.stride())))));
                 trans(ih(bytes.drop(s.layout.stride()), j, inside), cong_fn<List<u8>, Option<A>>(λ bs => Some(s.read(bs.take(s.layout.size))), on))

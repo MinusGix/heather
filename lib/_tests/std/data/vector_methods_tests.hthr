@@ -5,7 +5,7 @@
 // (docs/test-value-audit.md §4.5).
 import bool; import nat; import list; import logic; import vector;
 
-fn Vec::first<A>({n: Nat}, self v: [A; Succ(n)]) → A { head(v) }
+fn Vec::first<A>({n: Nat}, self v: [A; n + 1]) → A { head(v) }
 fn Vec::get<A>({n: Nat}, self v: [A; n], i: Nat, pad: A) → A { vector_get(v, i, pad) }
 fn Vec::at<A>({n: Nat}, self v: [A; n], i: Nat, inside: i < n) → A { vector_index(v, i, inside) }
 
@@ -22,9 +22,9 @@ theorem dot_let_lit(): dot_let() = 8 { refl }
 
 // A receiver at an open length and an open element type, and in a checking
 // position: the method is the function it was declared as.
-theorem open_first<A>(n: Nat, v: [A; Succ(n)]): v.first() = head(v) { refl }
+theorem open_first<A>(n: Nat, v: [A; n + 1]): v.first() = head(v) { refl }
 theorem open_get<A>(n: Nat, v: [A; n], i: Nat, pad: A): v.get(i, pad) = vector_get(v, i, pad) { refl }
-fn checked_at<A>({n: Nat}, v: [A; Succ(n)]) → A { v.at(0, omega) }
+fn checked_at<A>({n: Nat}, v: [A; n + 1]) → A { v.at(0, omega) }
 
 // A receiver whose type only the call's result names.
 theorem result_receiver(): snoc(abc(), 4).get(3, 0) = 4 { refl }
@@ -41,7 +41,7 @@ theorem sum_from_mid(): Vec::sum_from(abc(), 1) = 5 { refl }
 
 // A member of the vector namespace is declared once, as any member is.
 // expect-error: duplicate name `Vec::first`
-fn Vec::first<A>({n: Nat}, self v: [A; Succ(n)]) → A { head(v) }
+fn Vec::first<A>({n: Nat}, self v: [A; n + 1]) → A { head(v) }
 
 // A vector has no member the namespace does not declare: the call falls back
 // to the ambient name, which is not in scope.

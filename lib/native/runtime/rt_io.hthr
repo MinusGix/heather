@@ -200,7 +200,7 @@ fn Lent::words(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: Li
 theorem Lent::words_len(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>): Lent::words(tys, g, env, args).len() = args.len() {
     match args {
         Nil => refl,
-        Cons(_, more) => cong_fn(λ (n: Nat) => Succ(n), Lent::words_len(tys, g, env, more)),
+        Cons(_, more) => cong_fn(λ (n: Nat) => n + 1, Lent::words_len(tys, g, env, more)),
     }
 }
 

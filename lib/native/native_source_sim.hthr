@@ -18,6 +18,7 @@ import itree;
 import itree_trace;
 import itree_sim;
 import bool;
+import nat;
 import logic;
 
 // What follows a statement in `Then`: the rest on the environment it left,
@@ -84,7 +85,7 @@ theorem Flow::pass_leaves<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::l
 // `K` when the loop is done. The loop's fuel is the statement's.
 theorem Stmt::sim_repeat<B>(body: Stmt, again: Nat, call: Writers(), perform: Performs(), n: Nat,
     I: Nat → Env → ITree<B>(Events::linux_spec()) → Type, K: Flow → ITree<B>(Events::linux_spec()) → Type,
-    pass: (k: Nat) → (e: Env) → (w: ITree<B>(Events::linux_spec())) → I(Succ(k), e, w) →
+    pass: (k: Nat) → (e: Env) → (w: ITree<B>(Events::linux_spec())) → I(k + 1, e, w) →
         ITree::LinuxSimK(λ x w2 => ITree::StepK(Events::linux_spec(), I(k), K, x.pass(again), w2), body.denote(call, perform, n, e), w),
     env: Env, v: ITree<B>(Events::linux_spec()), i: I(n, env, v)):
     ITree::LinuxSimK(K, Repeat(body, again).denote(call, perform, n, env), v)

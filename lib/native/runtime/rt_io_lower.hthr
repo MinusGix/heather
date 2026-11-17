@@ -255,7 +255,7 @@ theorem locs_hold_at(tys: Nat → RecInfo, env: Env, g: List<Ty>): (locs: List<L
 theorem List::put_nth_here<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → xs.put(i, x, d).nth(i) = Some(x) {
     match i {
         Zero => λ xs x d => match xs as λ ys => ys.put(Zero, x, d).nth(Zero) = Some(x) { Nil => refl, Cons(_, _) => refl },
-        Succ(k) => λ xs x d => match xs as λ ys => ys.put(Succ(k), x, d).nth(Succ(k)) = Some(x) {
+        Succ(k) => λ xs x d => match xs as λ ys => ys.put(k + 1, x, d).nth(k + 1) = Some(x) {
             Nil => List::put_nth_here(k, Nil, x, d),
             Cons(_, rest) => List::put_nth_here(k, rest, x, d),
         },
@@ -268,19 +268,19 @@ theorem List::put_nth_other<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → 
     match i {
         Zero => λ xs x d k => match k as λ k2 => k2 ≠ Zero → (v: A) → xs.nth(k2) = Some(v) → xs.put(Zero, x, d).nth(k2) = Some(v) {
             Zero => λ ne => false_elim(ne(refl)),
-            Succ(k2) => λ _ => match xs as λ ys => (v: A) → ys.nth(Succ(k2)) = Some(v) → ys.put(Zero, x, d).nth(Succ(k2)) = Some(v) {
-                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(Zero, x, d).nth(Succ(k2)) = Some(v)),
+            Succ(k2) => λ _ => match xs as λ ys => (v: A) → ys.nth(k2 + 1) = Some(v) → ys.put(Zero, x, d).nth(k2 + 1) = Some(v) {
+                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(Zero, x, d).nth(k2 + 1) = Some(v)),
                 Cons(_, _) => λ v h => h,
             },
         },
-        Succ(i2) => λ xs x d k => match k as λ k2 => k2 ≠ Succ(i2) → (v: A) → xs.nth(k2) = Some(v) → xs.put(Succ(i2), x, d).nth(k2) = Some(v) {
-            Zero => λ _ => match xs as λ ys => (v: A) → ys.nth(Zero) = Some(v) → ys.put(Succ(i2), x, d).nth(Zero) = Some(v) {
-                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(Succ(i2), x, d).nth(Zero) = Some(v)),
+        Succ(i2) => λ xs x d k => match k as λ k2 => k2 ≠ i2 + 1 → (v: A) → xs.nth(k2) = Some(v) → xs.put(i2 + 1, x, d).nth(k2) = Some(v) {
+            Zero => λ _ => match xs as λ ys => (v: A) → ys.nth(Zero) = Some(v) → ys.put(i2 + 1, x, d).nth(Zero) = Some(v) {
+                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(i2 + 1, x, d).nth(Zero) = Some(v)),
                 Cons(_, _) => λ v h => h,
             },
-            Succ(k2) => λ ne => match xs as λ ys => (v: A) → ys.nth(Succ(k2)) = Some(v) → ys.put(Succ(i2), x, d).nth(Succ(k2)) = Some(v) {
-                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(Succ(i2), x, d).nth(Succ(k2)) = Some(v)),
-                Cons(_, rest) => List::put_nth_other(i2, rest, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => Succ(n), e))),
+            Succ(k2) => λ ne => match xs as λ ys => (v: A) → ys.nth(k2 + 1) = Some(v) → ys.put(i2 + 1, x, d).nth(k2 + 1) = Some(v) {
+                Nil => λ v never => Option::none_ne_some(v, never, Nil<A>().put(i2 + 1, x, d).nth(k2 + 1) = Some(v)),
+                Cons(_, rest) => List::put_nth_other(i2, rest, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => n + 1, e))),
             },
         },
     }
@@ -934,7 +934,7 @@ fn ETm::RegionRan(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, 
 theorem ETm::moved_sound(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, m: rt::Env(w.tys, g) → t.sem(w.tys), l: Lowered,
     one: t.Scalar(), ok: (l.region.byte_free() && l.region.calls_among(functions_below(w.sigs.len()))).IsTrue(),
     clear: Loc::clear(locs, l.region.writes()).IsTrue(), ran: ETm::RegionRan(t, w, g, locs, next, m, l)):
-    ETm::PlacedHolds(t, w, g, locs, next, m, Lowered(ETm::moved(t, l), l.next, Succ(l.next))) {
+    ETm::PlacedHolds(t, w, g, locs, next, m, Lowered(ETm::moved(t, l), l.next, l.next + 1)) {
     ⟨refl, λ call still agree env vals held below pos => {
         let among = functions_below(w.sigs.len());
         let checked = Bool::is_true_and(l.region.byte_free(), l.region.calls_among(among), ok);
@@ -960,9 +960,9 @@ theorem ETm::bit_kept_sound(w: rt::World, g: List<Ty>, locs: List<Loc>, next: Na
     ok: (l.region.byte_free() && l.region.calls_among(functions_below(w.sigs.len()))).IsTrue(),
     clear: Loc::clear(locs, l.region.writes()).IsTrue(), ran: ETm::RegionRan(Bit, w, g, locs, next, m, l), stays: ETm::bit_stays(next, l).IsTrue()):
     ETm::PlacedHolds(Bit, w, g, locs, next, m, l) {
-    let parts = Bool::is_true_and(ETm::ends_at(l.region, l.result), next.leb(l.result) && l.next.matches(Succ(l.result)), stays);
-    let fresh = Bool::is_true_and(next.leb(l.result), l.next.matches(Succ(l.result)), parts.right);
-    ⟨l.next.matches_eq(Succ(l.result), fresh.right), λ call still agree env vals held below pos => {
+    let parts = Bool::is_true_and(ETm::ends_at(l.region, l.result), next.leb(l.result) && l.next.matches(l.result + 1), stays);
+    let fresh = Bool::is_true_and(next.leb(l.result), l.next.matches(l.result + 1), parts.right);
+    ⟨l.next.matches_eq(l.result + 1, fresh.right), λ call still agree env vals held below pos => {
         let among = functions_below(w.sigs.len());
         let checked = Bool::is_true_and(l.region.byte_free(), l.region.calls_among(among), ok);
         let r = ran(call, agree, env, vals, held, below, pos);
@@ -1095,8 +1095,8 @@ fn ETm::CallHolds(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, next: N
     }
 }
 
-theorem ETm::next_below(locs: List<Loc>, next: Nat, below: LocsBelow(locs, next)): LocsBelow(Cons(InWord(next), locs), Succ(next)) {
-    ⟨next.lt_succ_self(), locs_below_mono(locs, next, Succ(next), Nat::le_succ_r(next, next, next.le_refl()), below)⟩
+theorem ETm::next_below(locs: List<Loc>, next: Nat, below: LocsBelow(locs, next)): LocsBelow(Cons(InWord(next), locs), next + 1) {
+    ⟨next.lt_succ_self(), locs_below_mono(locs, next, next + 1, Nat::le_succ_r(next, next, next.le_refl()), below)⟩
 }
 
 theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, args: List<Nat>, ids: List<Nat>):
@@ -1137,8 +1137,8 @@ theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>,
                                                 ⟨landed.left, ⟨⟨landed.right.right.left, ⟨landed.right.left,
                                                         locs_hold_same(w.tys, env, env2, g, Loc::forget_all(locs, b), vals, landed.right.right.right,
                                                             locs_hold_forget(w.tys, env, b, g, locs, vals, held))⟩⟩,
-                                                    ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, b, Succ(next),
-                                                        locs_below_mono(locs, next, Succ(next), Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩⟩
+                                                    ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, b, next + 1,
+                                                        locs_below_mono(locs, next, next + 1, Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩⟩
                                             },
                                         },
                                     },
@@ -1341,14 +1341,14 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
     let tail_ids = λ (ids: List<Nat>) => Some(ETm::lend_call(entry, next, ids, locs));
     let after_zero = λ (_: True) => ETm::word_ids(g, locs, args).and_then(tail_ids);
     let after_b = λ (b: Nat) => Tm::check_true(b.matches(0)).and_then(λ z => ETm::word_ids(g, locs, args).and_then(tail_ids));
-    Option::and_then_elim(P, trivial, Tm::check_true(Succ(f).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())),
+    Option::and_then_elim(P, trivial, Tm::check_true((f + 1).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())),
         λ _ => ETm::operand(g, locs, Bytes(cap), buf).and_then(after_b), λ ok _ =>
     Option::and_then_elim(P, trivial, ETm::operand(g, locs, Bytes(cap), buf), after_b, λ b e_b =>
     Option::and_then_elim(P, trivial, Tm::check_true(b.matches(0)), λ z => ETm::word_ids(g, locs, args).and_then(tail_ids), λ zero _ =>
     Option::and_then_elim(P, trivial, ETm::word_ids(g, locs, args), tail_ids, λ ids e_ids =>
         λ call lents env vals held below => {
             let tys = w.tys;
-            let parts = Bool::is_true_and(Succ(f).leb(ls.len()), Lent::at(ls, f).arity.matches(args.len()), ok);
+            let parts = Bool::is_true_and((f + 1).leb(ls.len()), Lent::at(ls, f).arity.matches(args.len()), ok);
             let bytes = Ty::cast(tys, Ty::at(g, buf), Bytes(cap), Env::get(tys, g, vals, buf));
             let words = Lent::words(tys, g, vals, args);
             let m = Lent::at(ls, f).run(bytes, words);
@@ -1388,8 +1388,8 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
                     locs_hold_same(tys, env, e2, g, Loc::forget_all(locs, 0), vals, same, locs_hold_forget(tys, env, 0, g, locs, vals, held))⟩⟩;
             ⟨j(sym(computed), λ e _ => LocsHold(tys, e, Ty::bind_onto(Lent::results(cap), g),
                     Cons(InWord(next), Cons(InBuffer(0), Loc::forget_all(locs, 0))), Pair(m.value, Pair(m.after, vals))), held2),
-                ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, 0, Succ(next),
-                    locs_below_mono(locs, next, Succ(next), Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩
+                ⟨next.lt_succ_self(), ⟨trivial, locs_below_forget(locs, 0, next + 1,
+                    locs_below_mono(locs, next, next + 1, Nat::le_succ_r(next, next, next.le_refl()), below))⟩⟩⟩
         }))))
 }
 
@@ -2133,8 +2133,8 @@ theorem Loc::below_sound(locs: List<Loc>, next: Nat): Loc::below(locs, next).IsT
         Nil => λ _ => trivial,
         Cons(l, rest) => match l {
             InWord(id) => λ h => {
-                let parts = Bool::is_true_and(Succ(id).leb(next), Loc::below(rest, next), h);
-                ⟨Succ(id).leb_sound(next, parts.left), Loc::below_sound(rest, next, parts.right)⟩
+                let parts = Bool::is_true_and((id + 1).leb(next), Loc::below(rest, next), h);
+                ⟨(id + 1).leb_sound(next, parts.left), Loc::below_sound(rest, next, parts.right)⟩
             },
             InBuffer(_) => λ h => ⟨trivial, Loc::below_sound(rest, next, h)⟩,
             Gone => λ h => ⟨trivial, Loc::below_sound(rest, next, h)⟩,
@@ -2557,7 +2557,7 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty
                 ⟨ih.left, λ call still agree lents env vals io held below pos => {
                     let ran = vh.right(call, still, agree, env, vals, held, below, pos);
                     let fresh: (c.result < c.next) = j(sym(vh.left), λ n _ => c.result < n, c.result.lt_succ_self());
-                    let le: (next <= c.next) = Nat::le_trans(next, c.result, c.next, ran.left, Nat::le_trans(c.result, Succ(c.result), c.next,
+                    let le: (next <= c.next) = Nat::le_trans(next, c.result, c.next, ran.left, Nat::le_trans(c.result, c.result + 1, c.next,
                         Nat::le_succ_r(c.result, c.result, c.result.le_refl()), fresh));
                     let r = ih.right(call, still, agree, lents, env.compute(call, c.region), Pair(Tm::sem(e, w, g, vals), vals), io, ran.right,
                         ⟨fresh, locs_below_mono(locs, next, c.next, le, below)⟩, Nat::lt_of_lt_of_le(0, next, c.next, pos, le));
@@ -2569,24 +2569,24 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty
             let P = λ (r: Option<ELowered>) => ETm::LowerHolds(ETm::Invoke(e, args, body), w, ls, g, locs, next, r);
             let g2 = Ty::bind_onto(e.results(), g);
             Option::and_then_elim(P, trivial, ETm::lower_call(e, g, locs, next, args),
-                λ k => body.lower(w, ls, g2, k.locs, Succ(next)).and_then(λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs))),
+                λ k => body.lower(w, ls, g2, k.locs, next + 1).and_then(λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs))),
                 λ k e_k =>
-            Option::and_then_elim(P, trivial, body.lower(w, ls, g2, k.locs, Succ(next)),
+            Option::and_then_elim(P, trivial, body.lower(w, ls, g2, k.locs, next + 1),
                 λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs)), λ lb e_lb => {
                 let ch = j(e_k, λ r _ => ETm::CallHolds(e, w, g, locs, next, args, r), ETm::call_sound(e, w, g, locs, next, args));
-                let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, g2, k.locs, Succ(next), r), body.lower_sound(w, ls, g2, k.locs, Succ(next)));
+                let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, g2, k.locs, next + 1, r), body.lower_sound(w, ls, g2, k.locs, next + 1));
                 ⟨ih.left, λ call still agree lents env vals io held below pos => {
                     let ans = ch(env, vals, io, held, below);
                     let after = Io::call(io, k.shape.cmd(env)).after;
                     let env2 = k.shape.answer(env, Io::call(io, k.shape.cmd(env)).value);
                     let vals2 = Effect::push(w.tys, e.results(), g, vals, ETm::applied(e, w, g, vals, io, args).value);
                     let r = ih.right(call, still, agree, lents, env2, vals2, after, ans.right.left, ans.right.right,
-                            Nat::lt_of_lt_of_le(0, next, Succ(next), pos, Nat::le_succ_r(next, next, next.le_refl())));
+                            Nat::lt_of_lt_of_le(0, next, next + 1, pos, Nat::le_succ_r(next, next, next.le_refl())));
                     j(ans.left, λ y _ => ETm::Lands(body.ty(w, g2), w.tys, lb.result, Stmt::thread(lb.stmt, call, env2, after), body.sem(w, ls, g2, vals2, y))
                             ∧ (Stmt::thread(lb.stmt, call, env2, after).value.KeepsAll(w.tys, body.ctx_end(w, g2), lb.locs, body.sem_end(w, ls, g2, vals2, y).value)
                                 ∧ (LocsBelow(lb.locs, lb.next) ∧ (next <= lb.next))),
                         ⟨r.left, ⟨r.right.left, ⟨r.right.right.left,
-                            Nat::le_trans(next, Succ(next), lb.next, Nat::le_succ_r(next, next, next.le_refl()), r.right.right.right)⟩⟩⟩)
+                            Nat::le_trans(next, next + 1, lb.next, Nat::le_succ_r(next, next, next.le_refl()), r.right.right.right)⟩⟩⟩)
                 }⟩
             }))
         },
@@ -2594,19 +2594,19 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty
             let P = λ (r: Option<ELowered>) => ETm::LowerHolds(ETm::Lend(f, cap, buf, args, body), w, ls, g, locs, next, r);
             let g2 = Ty::bind_onto(Lent::results(cap), g);
             Option::and_then_elim(P, trivial, ETm::lower_lend(w, ls, g, locs, next, f, cap, buf, args),
-                λ k => body.lower(w, ls, g2, k.locs, Succ(next)).and_then(λ lb => Some(ELowered(Then(Compute(k.region), lb.stmt), lb.result, lb.next, lb.locs))),
+                λ k => body.lower(w, ls, g2, k.locs, next + 1).and_then(λ lb => Some(ELowered(Then(Compute(k.region), lb.stmt), lb.result, lb.next, lb.locs))),
                 λ k e_k =>
-            Option::and_then_elim(P, trivial, body.lower(w, ls, g2, k.locs, Succ(next)),
+            Option::and_then_elim(P, trivial, body.lower(w, ls, g2, k.locs, next + 1),
                 λ lb => Some(ELowered(Then(Compute(k.region), lb.stmt), lb.result, lb.next, lb.locs)), λ lb e_lb => {
                 let ch = j(e_k, λ r _ => ETm::LendHolds(w, ls, g, locs, next, f, cap, buf, args, r), ETm::lend_sound(w, ls, g, locs, next, f, cap, buf, args));
-                let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, g2, k.locs, Succ(next), r), body.lower_sound(w, ls, g2, k.locs, Succ(next)));
+                let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, ls, g2, k.locs, next + 1, r), body.lower_sound(w, ls, g2, k.locs, next + 1));
                 ⟨ih.left, λ call still agree lents env vals io held below pos => {
                     let ans = ch(call, lents, env, vals, held, below);
                     let vals2 = Effect::push(w.tys, Lent::results(cap), g, vals, Lent::answer(w.tys, ls, g, vals, f, cap, buf, args));
                     let r = ih.right(call, still, agree, lents, env.compute(call, k.region), vals2, io, ans.left, ans.right,
-                        Nat::lt_of_lt_of_le(0, next, Succ(next), pos, Nat::le_succ_r(next, next, next.le_refl())));
+                        Nat::lt_of_lt_of_le(0, next, next + 1, pos, Nat::le_succ_r(next, next, next.le_refl())));
                     ⟨r.left, ⟨r.right.left, ⟨r.right.right.left,
-                        Nat::le_trans(next, Succ(next), lb.next, Nat::le_succ_r(next, next, next.le_refl()), r.right.right.right)⟩⟩⟩
+                        Nat::le_trans(next, next + 1, lb.next, Nat::le_succ_r(next, next, next.le_refl()), r.right.right.right)⟩⟩⟩
                 }⟩
             }))
         },

@@ -476,9 +476,9 @@ theorem Interval::pow_step_has(I: Interval, n: Nat, H: Interval, p: Nat, {x: Rat
 {
     let h = n.half();
     let sq: (H.mul(H, p).Has(x.npow(h + h))) = Interval::has_respects(H.mul(H, p), Rat::same_sym(x.npow_add(h, h)), Interval::mul_has(H, H, p, hh, hh));
-    match Succ(h + h).le_dec(n) {
-        Inl(le) => j(Succ(h + h).le_antisym(n, le, n.le_succ_half_add()), λ m _ => H.mul(H, p).mul(I, p).Has(x.npow(m)), Interval::mul_has(H.mul(H, p), I, p, sq, hx)),
-        Inr(nle) => j((h + h).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(h + h), nle)), λ m _ => H.mul(H, p).Has(x.npow(m)), sq),
+    match (h + h + 1).le_dec(n) {
+        Inl(le) => j((h + h + 1).le_antisym(n, le, n.le_succ_half_add()), λ m _ => H.mul(H, p).mul(I, p).Has(x.npow(m)), Interval::mul_has(H.mul(H, p), I, p, sq, hx)),
+        Inr(nle) => j((h + h).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, h + h + 1, nle)), λ m _ => H.mul(H, p).Has(x.npow(m)), sq),
     }
 }
 
@@ -487,7 +487,7 @@ theorem Interval::pow_sq_has(I: Interval, fuel, p: Nat, {x: Rat}, hx: I.Has(x)):
         Zero => λ n => Interval::npow_has(I, n, p, hx),
         Succ(f) => λ n => match n {
             Zero => Interval::point_has(Dyadic(1, 0)),
-            Succ(k) => Interval::pow_step_has(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p, hx, Interval::pow_sq_has(I, f, p, hx, Succ(k).half())),
+            Succ(k) => Interval::pow_step_has(I, k + 1, I.pow_sq((k + 1).half(), f, p), p, hx, Interval::pow_sq_has(I, f, p, hx, (k + 1).half())),
         },
     }
 }

@@ -14,7 +14,7 @@ import omega;
 // `x` doubled `n` times.
 fn Nat::doubled(self x: Nat, n: Nat) → Nat { match n { Zero => x, Succ(k) => x.doubled(k).twice() } }
 
-theorem Nat::doubled_succ(self x: Nat, k: Nat): x.doubled(Succ(k)) = x.doubled(k) + x.doubled(k) { x.doubled(k).twice_add_self() }
+theorem Nat::doubled_succ(self x: Nat, k: Nat): x.doubled(k + 1) = x.doubled(k) + x.doubled(k) { x.doubled(k).twice_add_self() }
 
 theorem Nat::doubled_eight(self x: Nat): x.doubled(8) = 256 * x {
     let d1 = x.doubled_succ(0);

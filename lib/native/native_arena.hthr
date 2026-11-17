@@ -160,7 +160,7 @@ fn arena_cells(bytes: List<BitVec(8)>, fuel, at: Nat) → Type {
 theorem arena_cells_within(bytes: List<BitVec(8)>, n: Nat): (at: Nat) → arena_cells(bytes, n, at) → at <= bytes.len() {
     match n {
         Zero => λ at none => j(sym(none), λ a _ => a <= bytes.len(), trivial),
-        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) → a <= bytes.len() {
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, f + 1, a) → a <= bytes.len() {
             Zero => λ _ => trivial,
             Succ(o) => λ ok => omega(ok.right.left),
         },
@@ -176,14 +176,14 @@ theorem arena_more_fuel(bytes: List<BitVec(8)>, n: Nat): (at: Nat) → arena_cel
                 Zero => And(refl, refl),
                 Succ(_) => And(trivial, refl),
             }),
-        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) → (m: Nat) → Succ(f) <= m →
-                arena_cells(bytes, m, a) ∧ (arena_lines(bytes, m, a) = arena_lines(bytes, Succ(f), a)) {
-            Zero => λ _ m _ => match m as λ k => arena_cells(bytes, k, Zero) ∧ (arena_lines(bytes, k, Zero) = arena_lines(bytes, Succ(f), Zero)) {
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, f + 1, a) → (m: Nat) → f + 1 <= m →
+                arena_cells(bytes, m, a) ∧ (arena_lines(bytes, m, a) = arena_lines(bytes, f + 1, a)) {
+            Zero => λ _ m _ => match m as λ k => arena_cells(bytes, k, Zero) ∧ (arena_lines(bytes, k, Zero) = arena_lines(bytes, f + 1, Zero)) {
                 Zero => And(refl, refl),
                 Succ(_) => And(trivial, refl),
             },
-            Succ(o) => λ ok m => match m as λ k => Succ(f) <= k →
-                    arena_cells(bytes, k, Succ(o)) ∧ (arena_lines(bytes, k, Succ(o)) = arena_lines(bytes, Succ(f), Succ(o))) {
+            Succ(o) => λ ok m => match m as λ k => f + 1 <= k →
+                    arena_cells(bytes, k, o + 1) ∧ (arena_lines(bytes, k, o + 1) = arena_lines(bytes, f + 1, o + 1)) {
                 Zero => λ never => false_elim(never),
                 Succ(g) => λ le => {
                     let rest = arena_more_fuel(bytes, f, cell_next(bytes.drop(o)), ok.right.right, g, le);
@@ -200,8 +200,8 @@ theorem arena_extend(bytes, more: List<BitVec(8)>, n: Nat): (at: Nat) → arena_
         arena_cells(bytes ++ more, n, at) ∧ (arena_lines(bytes ++ more, n, at) = arena_lines(bytes, n, at)) {
     match n {
         Zero => λ at none => And(none, refl),
-        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) →
-                arena_cells(bytes ++ more, Succ(f), a) ∧ (arena_lines(bytes ++ more, Succ(f), a) = arena_lines(bytes, Succ(f), a)) {
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, f + 1, a) →
+                arena_cells(bytes ++ more, f + 1, a) ∧ (arena_lines(bytes ++ more, f + 1, a) = arena_lines(bytes, f + 1, a)) {
             Zero => λ _ => And(trivial, refl),
             Succ(o) => λ ok => {
                 let xs = bytes.drop(o);

@@ -103,13 +103,13 @@ theorem attempt_idempotent<T, A>(source: List<T>, begin: Cursor<T>(source), r: R
 // An empty prefix does not change a failure's commitment.
 theorem commit_same<T>(source: List<T>, offset: Nat, error: Failure<T>(source)):
     commit_offsets(source, offset, offset, error) = error {
-    match Succ(offset).le_dec(offset) { Inl(impossible) => false_elim(offset.lt_irrefl(impossible)), Inr(_) => refl }
+    match (offset + 1).le_dec(offset) { Inl(impossible) => false_elim(offset.lt_irrefl(impossible)), Inr(_) => refl }
 }
 
 // A strictly consuming prefix makes a later failure committed.
 theorem commit_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), later: a.Lt(b)):
     commit_offsets(source, a, b, error) = committed(source, error) {
-    match Succ(a).le_dec(b) {
+    match (a + 1).le_dec(b) {
         Inl(_) => refl,
         Inr(no) => false_elim(no(later))
     }
@@ -118,13 +118,13 @@ theorem commit_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), l
 // A prefix without strictly positive movement leaves commitment unchanged.
 theorem commit_not_later<T>(source: List<T>, a, b: Nat, error: Failure<T>(source), stayed: a.Lt(b) → False):
     commit_offsets(source, a, b, error) = error {
-    match Succ(a).le_dec(b) { Inl(yes) => false_elim(stayed(yes)), Inr(_) => refl }
+    match (a + 1).le_dec(b) { Inl(yes) => false_elim(stayed(yes)), Inr(_) => refl }
 }
 
 // Once committed, a failure needs no further commitment from an earlier prefix.
 theorem commit_absorbs<T>(source: List<T>, a, b: Nat, error: Failure<T>(source)):
     committed(source, commit_offsets(source, a, b, error)) = committed(source, error) {
-    match Succ(a).le_dec(b) {
+    match (a + 1).le_dec(b) {
         Inl(yes) => j(commit_later(source, a, b, error, yes), λ changed q => committed(source, commit_offsets(source, a, b, error)) = committed(source, changed), refl),
         Inr(no) => j(commit_not_later(source, a, b, error, no), λ changed q => committed(source, commit_offsets(source, a, b, error)) = committed(source, changed), refl),
     }
@@ -132,17 +132,17 @@ theorem commit_absorbs<T>(source: List<T>, a, b: Nat, error: Failure<T>(source))
 
 // If neither of two consecutive offsets advances, their combined interval cannot advance.
 theorem no_total_progress(a, b, c: Nat, first: a.Lt(b) → False, second: b.Lt(c) → False, total: a.Lt(c)): False {
-    a.lt_irrefl(Succ(a).le_trans(c, a, total,
-        c.le_trans(b, a, Nat::lt_of_not_le(c, Succ(b), second), Nat::lt_of_not_le(b, Succ(a), first))))
+    a.lt_irrefl((a + 1).le_trans(c, a, total,
+        c.le_trans(b, a, Nat::lt_of_not_le(c, b + 1, second), Nat::lt_of_not_le(b, a + 1, first))))
 }
 
 // Committing across two forward prefixes agrees with committing across their combined span.
 theorem commit_chain<T>(source: List<T>, a, b, c: Nat, ab: a.Le(b), bc: b.Le(c), error: Failure<T>(source)):
     commit_offsets(source, a, b, commit_offsets(source, b, c, error)) = commit_offsets(source, a, c, error) {
-    or_elim(Succ(a).le_dec(b),
-        λ first => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [Succ(a).le_trans(b, c, first, bc)]),
-        λ first => or_elim(Succ(b).le_dec(c),
-            λ second => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [Succ(a).le_trans(Succ(b), c, ab, second)]),
+    or_elim((a + 1).le_dec(b),
+        λ first => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [(a + 1).le_trans(b, c, first, bc)]),
+        λ first => or_elim((b + 1).le_dec(c),
+            λ second => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [(a + 1).le_trans(b + 1, c, ab, second)]),
             λ second => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [no_total_progress(a, b, c, first, second)])))
 }
 

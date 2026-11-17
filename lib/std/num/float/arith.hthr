@@ -575,18 +575,18 @@ theorem Finite::val_of_mag_zero({F: Format}, a: Finite(F), em: a.mag = 0): a.val
     match a.neg { False => pm, True => nm }
 }
 
-theorem Finite::val_neg_lt({F: Format}, a: Finite(F), ea: a.neg = True, k: Nat, em: a.mag = Succ(k)): a.val() < 0 {
+theorem Finite::val_neg_lt({F: Format}, a: Finite(F), ea: a.neg = True, k: Nat, em: a.mag = k + 1): a.val() < 0 {
     let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
-    let l: (Dyadic(-Succ(k).int(), a.q()).rat() < Dyadic(0, a.q()).rat()) = Dyadic::lt_of_mant_lt(-Succ(k).int(), 0, a.q(), omega);
-    let base: (Dyadic(-Succ(k).int(), a.q()).rat() < 0) = Rat::lt_respects(Dyadic(-Succ(k).int(), a.q()).rat().same_refl(), z, l);
+    let l: (Dyadic(-(k + 1).int(), a.q()).rat() < Dyadic(0, a.q()).rat()) = Dyadic::lt_of_mant_lt(-(k + 1).int(), 0, a.q(), omega);
+    let base: (Dyadic(-(k + 1).int(), a.q()).rat() < 0) = Rat::lt_respects(Dyadic(-(k + 1).int(), a.q()).rat().same_refl(), z, l);
     let at_mag: (Dyadic(-a.mag.int(), a.q()).rat() < 0) = j(sym(em), λ m _ => Dyadic(-m.int(), a.q()).rat() < 0, base);
     j(sym(ea), λ b _ => Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat() < 0, at_mag)
 }
 
-theorem Finite::val_pos_lt({F: Format}, a: Finite(F), ea: a.neg = False, k: Nat, em: a.mag = Succ(k)): 0 < a.val() {
+theorem Finite::val_pos_lt({F: Format}, a: Finite(F), ea: a.neg = False, k: Nat, em: a.mag = k + 1): 0 < a.val() {
     let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
-    let l: (Dyadic(0, a.q()).rat() < Dyadic(Succ(k).int(), a.q()).rat()) = Dyadic::lt_of_mant_lt(0, Succ(k).int(), a.q(), omega);
-    let base: (0 < Dyadic(Succ(k).int(), a.q()).rat()) = Rat::lt_respects(z, Dyadic(Succ(k).int(), a.q()).rat().same_refl(), l);
+    let l: (Dyadic(0, a.q()).rat() < Dyadic((k + 1).int(), a.q()).rat()) = Dyadic::lt_of_mant_lt(0, (k + 1).int(), a.q(), omega);
+    let base: (0 < Dyadic((k + 1).int(), a.q()).rat()) = Rat::lt_respects(z, Dyadic((k + 1).int(), a.q()).rat().same_refl(), l);
     let at_mag: (0 < Dyadic(a.mag.int(), a.q()).rat()) = j(sym(em), λ m _ => 0 < Dyadic(m.int(), a.q()).rat(), base);
     j(sym(ea), λ b _ => 0 < Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat(), at_mag)
 }
@@ -658,7 +658,7 @@ theorem Finite::sqrt_neg_zero({F: Format}, a: Finite(F), mode: Mode, nan: F.spec
     j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) = Float::Fin(a), inner)
 }
 
-theorem Finite::sqrt_neg({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, k: Nat, nz: a.mag = Succ(k)):
+theorem Finite::sqrt_neg({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, k: Nat, nz: a.mag = k + 1):
     (a.sqrt(mode := mode, nan := nan)).is_nan() = True
 {
     let inner = j(sym(nz), λ m _ => (match m as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }).is_nan() = True, refl);
@@ -809,7 +809,7 @@ theorem Float::mul_zero_inf({F: Format}, b: Finite(F), z: b.mag = 0, n: Bool, h:
     j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Inf(n.xor(b.neg), h) }).is_nan() = True, refl)
 }
 
-theorem Float::mul_inf({F: Format}, b: Finite(F), k: Nat, nz: b.mag = Succ(k), n: Bool, h: F.specials.has_inf().IsTrue(), mode: Mode):
+theorem Float::mul_inf({F: Format}, b: Finite(F), k: Nat, nz: b.mag = k + 1, n: Bool, h: F.specials.has_inf().IsTrue(), mode: Mode):
     Float::mul(Inf(n, h), Float::Fin(b), mode := mode) = Inf(n.xor(b.neg), h)
 {
     j(sym(nz), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Inf(n.xor(b.neg), h) }) = Inf(n.xor(b.neg), h), refl)
@@ -827,7 +827,7 @@ theorem Float::div_zero_zero({F: Format}, a, b: Finite(F), za: a.mag = 0, zb: b.
     }).is_nan() = True, inner)
 }
 
-theorem Float::div_by_zero_inf({F: Format}, a, b: Finite(F), k: Nat, na: a.mag = Succ(k), zb: b.mag = 0, nan: F.specials.has_nan().IsTrue(),
+theorem Float::div_by_zero_inf({F: Format}, a, b: Finite(F), k: Nat, na: a.mag = k + 1, zb: b.mag = 0, nan: F.specials.has_nan().IsTrue(),
     has: F.specials.has_inf().IsTrue(), mode: Mode): Float::div(Float::Fin(a), Float::Fin(b), mode := mode, nan := nan) = Inf(a.neg.xor(b.neg), has)
 {
     let dz: (F.div_by_zero(a.neg.xor(b.neg), nan) = Inf(a.neg.xor(b.neg), has)) =
@@ -879,7 +879,7 @@ theorem Float::sqrt_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), mode
 // ---------------------------------------------------------------------------
 // A float of nonzero magnitude has a nonzero value.
 
-theorem Finite::val_ne_zero({F: Format}, a: Finite(F), k: Nat, em: a.mag = Succ(k)): ¬(a.val() ≈ 0) {
+theorem Finite::val_ne_zero({F: Format}, a: Finite(F), k: Nat, em: a.mag = k + 1): ¬(a.val() ≈ 0) {
     match a.neg as λ b => a.neg = b → ¬(a.val() ≈ 0) {
         False => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_pos_lt(a, ea, k, em), z); k0 },
         True => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_neg_lt(a, ea, k, em), z); k0 },

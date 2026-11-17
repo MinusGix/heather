@@ -1874,7 +1874,7 @@ theorem CReal::npow_add(self x: CReal, m, n: Nat): x.npow(m + n) ≈ x.npow(m) *
     match n {
         Zero => CReal::same_sym(x.npow(m).mul_one()),
         Succ(k) => calc {
-            x.npow(m + Succ(k)) ≈ x.npow(m + k) * x := (x.npow(m + k) * x).same_refl(),
+            x.npow(m + (k + 1)) ≈ x.npow(m + k) * x := (x.npow(m + k) * x).same_refl(),
             ≈ (x.npow(m) * x.npow(k)) * x := CReal::mul_respects(x.npow_add(m, k), x.same_refl()),
             ≈ x.npow(m) * (x.npow(k) * x) := x.npow(m).mul_assoc(x.npow(k), x),
         },
@@ -1903,7 +1903,7 @@ designation ^ at CReal := CReal::pow
 
 theorem CReal::pow_ofNat(self x: CReal, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
 
-theorem CReal::pow_negSucc(self x: CReal, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
+theorem CReal::pow_negSucc(self x: CReal, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) = x⁻¹.npow(k + 1) { refl }
 
 theorem CReal::pow_zero(self x: CReal): x ^ 0 ≈ 1 { CReal::same_refl(1) }
 
@@ -2235,7 +2235,7 @@ theorem CReal::archimedean(self x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofI
 
 theorem CReal::zero_lt_one(): CReal::Lt(0, 1) { CReal::ofRat_lt(Rat::zero_lt_one()) }
 
-theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) ≈ CReal::ofRat(Rat::ofInt(OfNat(n))) + 1 {
+theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n + 1))) ≈ CReal::ofRat(Rat::ofInt(OfNat(n))) + 1 {
     CReal::same_trans(CReal::ofRat_respects(omega), CReal::ofRat_add(Rat::ofInt(OfNat(n)), 1))
 }
 

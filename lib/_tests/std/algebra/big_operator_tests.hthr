@@ -31,7 +31,7 @@ theorem sum_on_the_right(f: Nat → Rat): (0 + f(0)) + f(1) ≈ ∑ k < 2, f(k) 
 theorem nat_split(m, n: Nat, f: Nat → Nat): ∑ k < m + n, f(k) = (∑ k < m, f(k)) + ∑ k < n, f(m + k) {
     MonoidRel::range_add(+, m, n, f)
 }
-theorem nat_reverse(n: Nat, f: Nat → Nat): ∑ k < n, f(n - Succ(k)) = ∑ k < n, f(k) {
+theorem nat_reverse(n: Nat, f: Nat → Nat): ∑ k < n, f(n - (k + 1)) = ∑ k < n, f(k) {
     CommMonoidRel::range_reverse(≈, +, n, f)
 }
 
@@ -44,7 +44,7 @@ theorem prod_split<A: Semiring(≈, +, *)>(m, n: Nat, f: Nat → A):
 theorem prod_op<A: CommSemiring(≈, +, *)>(n: Nat, f, g: Nat → A): ∏ k < n, f(k) * g(k) ≈ (∏ k < n, f(k)) * ∏ k < n, g(k) {
     CommMonoidRel::range_op(≈, *, n, f, g)
 }
-theorem rat_prod_shift(n: Nat, f: Nat → Rat): f(0) * ∏ k < n, f(Succ(k)) ≈ ∏ k < Succ(n), f(k) {
+theorem rat_prod_shift(n: Nat, f: Nat → Rat): f(0) * ∏ k < n, f(k + 1) ≈ ∏ k < n + 1, f(k) {
     Rat::same_sym(MonoidRel::range_succ_l(*, n, f))
 }
 
@@ -118,7 +118,7 @@ theorem ring_atom(n: Nat, f: Nat → Rat): (∑ k < n, f(k)) * 2 ≈ (∑ k < n,
 theorem ring_atom_nat(n: Nat, f: Nat → Nat): (∑ k < n, f(k)) * 2 = (∑ k < n, f(k)) + ∑ k < n, f(k) { ring }
 theorem ring_last(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
 theorem ring_last_two(n: Nat, f: Nat → Int): ∑ k < n + 2, f(k) = f(n + 1) + f(n) + ∑ k < n, f(k) { ring }
-theorem ring_succ_prod(n: Nat, f: Nat → Rat): ∏ k < Succ(n), f(k) ≈ f(n) * ∏ k < n, f(k) { ring }
+theorem ring_succ_prod(n: Nat, f: Nat → Rat): ∏ k < n + 1, f(k) ≈ f(n) * ∏ k < n, f(k) { ring }
 theorem ring_numeral(f: Nat → CReal): ∑ k < 3, f(k) ≈ f(0) + f(1) + f(2) { ring }
 theorem ring_empty(f: Nat → Rat): ∏ k < 0, f(k) ≈ 1 { ring }
 // One step of an induction: the hypothesis about the sum below, and `ring`.
@@ -132,10 +132,10 @@ theorem ring_no_drop(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ ∑ k < n,
 // `*` (issues/finite-difference-calculus.md: induction over a generic sum).
 section<R: CommRing(≈, +, *)> {
 theorem ring_class_empty(f: Nat → R): ∑ k < 0, f(k) ≈ R.unit { ring }
-theorem ring_class_last(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
+theorem ring_class_last(n: Nat, f: Nat → R): ∑ k < n + 1, f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
 theorem ring_class_power(r: R, n: Nat): ∏ k < Nat::add(n, 1), r ≈ r * ∏ k < n, r { ring }
 // expect-error: it is not an identity of commutative rings
-theorem ring_class_no_drop(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ ∑ k < n, f(k) { ring }
+theorem ring_class_no_drop(n: Nat, f: Nat → R): ∑ k < n + 1, f(k) ≈ ∑ k < n, f(k) { ring }
 }
 theorem linarith_step(n: Nat, f: Nat → Rat, h: ∑ k < n, f(k) <= 1, hf: f(n) <= 2): ∑ k < n + 1, f(k) <= 3 { linarith }
 theorem omega_step(n: Nat, f: Nat → Nat, h: (∑ k < n, f(k)) <= n * 3, hf: f(n) <= 3): (∑ k < n + 1, f(k)) <= n * 3 + 3 { omega }

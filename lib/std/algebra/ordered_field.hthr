@@ -1050,17 +1050,17 @@ theorem OrderedField::recip_mul(x: A, h: ApartBy(<, x, A.unit)): A.recip(x, h) *
 }
 
 // The embedded naturals climb by one at each step.
-theorem OrderedField::of_nat_lt_succ(n: Nat): A.of_nat(n) < A.of_nat(Succ(n)) {
-    A.lt_respects(A.of_nat(n) + A.unit, A.of_nat(n), A.of_nat(n) + A.multiplicative.unit, A.of_nat(Succ(n)),
-        A.unit_r(A.of_nat(n)), A.rel_sym(A.of_nat(Succ(n)), A.of_nat(n) + A.multiplicative.unit, A.of_nat_succ(n)),
+theorem OrderedField::of_nat_lt_succ(n: Nat): A.of_nat(n) < A.of_nat(n + 1) {
+    A.lt_respects(A.of_nat(n) + A.unit, A.of_nat(n), A.of_nat(n) + A.multiplicative.unit, A.of_nat(n + 1),
+        A.unit_r(A.of_nat(n)), A.rel_sym(A.of_nat(n + 1), A.of_nat(n) + A.multiplicative.unit, A.of_nat_succ(n)),
         OrderedAddMonoid::add_lt_mono_l(A.unit, A.multiplicative.unit, A.of_nat(n), A.zero_lt_one))
 }
 
-theorem OrderedField::of_nat_pos(n: Nat): A.unit < A.of_nat(Succ(n)) {
+theorem OrderedField::of_nat_pos(n: Nat): A.unit < A.of_nat(n + 1) {
     match n {
-        Zero => StrictOrder::lt_respects_l(A.of_nat(Zero), A.unit, A.of_nat(Succ(Zero)), A.of_nat_zero, OrderedField::of_nat_lt_succ(Zero)),
-        Succ(m) => A.lt_trans(A.unit, A.of_nat(Succ(m)), A.of_nat(Succ(Succ(m))), OrderedField::of_nat_pos(m),
-            OrderedField::of_nat_lt_succ(Succ(m))),
+        Zero => StrictOrder::lt_respects_l(A.of_nat(Zero), A.unit, A.of_nat(1), A.of_nat_zero, OrderedField::of_nat_lt_succ(Zero)),
+        Succ(m) => A.lt_trans(A.unit, A.of_nat(m + 1), A.of_nat(m + 2), OrderedField::of_nat_pos(m),
+            OrderedField::of_nat_lt_succ(m + 1)),
     }
 }
 
@@ -1122,14 +1122,14 @@ theorem OrderedField::recip_lt_recip(x, y: A, hx: ApartBy(<, x, A.unit), hy: Apa
 // 1/(n+1). Its inverse is below some natural n, so below n + 1, and
 // inverting reverses that.
 theorem OrderedField::archimedean_recip(x: A, hx: A.unit < x):
-    ∃ n: Nat, A.recip(A.of_nat(Succ(n)), Inr(OrderedField::of_nat_pos(n))) < x
+    ∃ n: Nat, A.recip(A.of_nat(n + 1), Inr(OrderedField::of_nat_pos(n))) < x
 {
     let h: ApartBy(<, x, A.unit) = Inr(hx);
     let u = A.recip(x, h);
     let pu: (A.unit < u) = OrderedField::recip_pos(x, h, hx);
     match A.archimedean(u) {
         Exists(n, below) => {
-            let big = A.of_nat(Succ(n));
+            let big = A.of_nat(n + 1);
             let pbig: (A.unit < big) = OrderedField::of_nat_pos(n);
             let flipped: (A.recip(big, Inr(pbig)) < A.recip(u, Inr(pu))) = OrderedField::recip_lt_recip(u, big, Inr(pu), Inr(pbig), pu,
                 A.lt_trans(u, A.of_nat(n), big, below, OrderedField::of_nat_lt_succ(n)));
