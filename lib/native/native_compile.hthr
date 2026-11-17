@@ -153,6 +153,9 @@ fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(lay
 fn Layout::room_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
 fn Layout::room_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.room_offset()) }
 fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 16 }
+// The program's stack: the `room` bytes of the segment past the layout, its
+// top the address RSP is given at the entry (`Prog::saves_rsp`).
+fn Layout::stack_top(self layout: Layout, room: Nat) → BitVec(64) { layout.low.add_nat(layout.size() + room) }
 
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
@@ -555,12 +558,16 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 // The command line
 
 // RSP as the process starts, saved to the slot past the scratch range: the
-// command line is above it (`ArgvAt`). `main`'s frame is opened below it
-// (`Prog::frames_main`); `depth` calls are room left
-// (docs/native/native-procedures-design.md §4.1).
-fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
+// command line is at and above it (`ArgvAt`), and that is all the program
+// uses it for. RSP is then the top of the program's own stack: `room` bytes
+// of its data segment past the layout (`Layout::stack_top`), so the stack
+// rests on the file's own PT_LOAD header and nothing is asked of the stack
+// the system made (issues/native-target-minimal-system-assumptions.md).
+// `main`'s frame is opened below it (`Prog::frames_main`); `depth` calls are
+// room left (docs/native/native-procedures-design.md §4.1).
+fn Prog::saves_rsp(self p: Prog, layout: Layout, depth, room: Nat) → Prog {
     let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
-    then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
+    then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth)), MovRI(Rsp, layout.stack_top(room))])), Store(WordStore(Rbx, Rax)))
 }
 
 // RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
@@ -1152,11 +1159,6 @@ fn Prog::frames_main(self p: Prog, layout: Layout, live: List<Nat>) → Prog {
     then(p, Block(frame_down(layout.words) ++ [MovRI(Rax, BitVec::ofNat(0))])).zeroes(layout, live)
 }
 
-fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), src.main.live_in(homes, []))
-        .inits(src.layout(low, homes), src.buffers, 0)
-}
-
 fn Prog::finish(self p: Prog) → Option<Prog> {
     let whole = then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     match whole.laid_out() { False => None, True => Some(whole) }
@@ -1301,6 +1303,19 @@ theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Pla
                 Some(_) => λ h => h,
             }(e)),
     }(linkable, emitted)
+}
+
+// The stack a source's program needs: `main`'s frame; a frame, a return
+// address and the registers a callee keeps for each call of `src.depth`; the
+// room its functions' table asks; and a word for the return address of a
+// call past the depth. The program carries it in its own data segment.
+fn Source::stack_room(self src: Source) → Nat {
+    (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1)
+}
+
+fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
+    Start.saves_rsp(src.layout(low, homes), src.depth, src.stack_room()).frames_main(src.layout(low, homes), src.main.live_in(homes, []))
+        .inits(src.layout(low, homes), src.buffers, 0)
 }
 
 // A source with procedures or functions: `main` naming its labels past

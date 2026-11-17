@@ -229,8 +229,8 @@ Beyond the kernel, the theorem rests on these:
   word of it reads as some word, and code below the canonical boundary reads
   as data where it was fetched from. They are proved of the byte memory
   model: any data region of it is a `Stack` (`DataRegion::stack`,
-  `x86_64_byte_memory.hthr`), and the Linux image model places one where
-  the loader puts the process stack (`DataRegion::process_stack`,
+  `x86_64_byte_memory.hthr`), and the Linux image model gives a program one
+  inside its own data segment (`DataRegion::own_stack`,
   `linux_x86_64_image.hthr`). What is assumed is that those models are
   faithful to the processor's memory and to Linux's loader.
 - **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
@@ -260,12 +260,20 @@ Linux. Its theorem (`Source::elf_file_runs`, and each certificate's
   0x400000 readable and executable, the data segment zero-filled, readable
   and writable). The ELF loading rule, not proved of Linux.
 - **`entry`**: the process starts at the header's entry address.
-- **`placed`, `rsp`, `stack`**: the program's stack room
-  (`Source::stack_room`) below the entry RSP is usable. On Linux the stack
-  limit grants it (`RLIMIT_STACK`, `ulimit -s`): the kernel maps the stack as
-  it is touched, down to the limit. A process started under a smaller limit
-  is outside the theorem.
-- **`argv`**: the command line is at and above RSP as the psABI lays it out.
+- **`argv`**: the command line is at and above RSP, past the segment, as the
+  psABI lays it out.
+
+That is the whole list. The stack is not on it, because the program does not
+run on the stack the system made. Its data segment is sized for its layout
+and, after it, the stack its calls need (`Source::stack_room`, a figure the
+compiler computes for the program), and the entry code saves the entry RSP
+for the command line and then points RSP at the end of that room
+(`Prog::saves_rsp`, `DataRegion::own_stack`). So the stack is data by the
+same `PT_LOAD` header the buffers are, and the theorem holds whatever the
+stack limit is, whether or not the system grows a stack on a fault, and
+however little of it the system mapped at exec
+(`issues/io-stack-below-rsp-not-mapped.md`). There is no guard page under
+this stack: the proved bound on its depth is what keeps it off the data.
 
 No register but RIP and RSP is assumed, and no flag. After the start, each
 system call is answered as the model allows (`LinuxCmd::Answers`: short
@@ -275,8 +283,9 @@ call convention promises none of them. A descriptor is the low 32 bits of
 its word, as Linux reads it. Signals are not modelled: a process killed by
 one (SIGPIPE on a closed pipe) ends its run without an exit.
 
-A target that asks for less (no kernel stack, nothing beyond the ELF loading
-rule) is `issues/native-target-minimal-system-assumptions.md`.
+What is left to shrink (the command line asked only of a program that reads
+it, the calls a program makes named in its theorem, signals) is
+`issues/native-target-minimal-system-assumptions.md`.
 
 ## What is not covered
 

@@ -1639,8 +1639,8 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
         sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩
 }
 
-// RSP saved to its slot and the depth to the room slot, `main`'s frame
-// opened below RSP, and zero stored in each word live at the start: a
+// RSP saved to its slot and the depth to the room slot, RSP moved to the
+// top of the program's own stack, `main`'s frame opened below it, and zero stored in each word live at the start: a
 // region of zeros, with the command line above the stack, holds the start,
 // and `main` is the activation running, its frame at the stack's top with
 // no frames above it and `depth` calls of room
@@ -1648,10 +1648,11 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
 // stack held.
 theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slotted(live).IsTrue(), bare: t.frames = Nil,
     depth: Nat, deep: t.room = depth, small: depth < Nat::pow(2, 64),
-    p: Prog, within: p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live)), live, tree, t.start_env())):
+    room: Nat, at_top: t.layout().stack_top(room) = t.stack.at(t.index + 8 * t.words),
+    p: Prog, within: p.saves_rsp(t.layout(), depth, room).frames_main(t.layout(), live).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(p.saves_rsp(t.layout(), depth, room).frames_main(t.layout(), live)), live, tree, t.start_env())):
     t.Goes(prog_len(p), tree, λ s => t.r.Holds(λ _ => zero_byte(), s.memory) ∧
-        (ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args) ∧ (read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8 * t.words)))) {
+        ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args)) {
     let layout = t.layout();
     let so = layout.stack_offset();
     let env = t.start_env();
@@ -1659,7 +1660,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let store = WordStore(Rbx, Rsp);
     let store3 = WordStore(Rbx, Rax);
     let d: BitVec(64) = BitVec::ofNat(depth);
-    let set3: List<Instruction> = [MovRI(Rbx, layout.room_at()), MovRI(Rax, d)];
+    let set3: List<Instruction> = [MovRI(Rbx, layout.room_at()), MovRI(Rax, d), MovRI(Rsp, layout.stack_top(room))];
     let size: BitVec(64) = BitVec::ofNat(8 * t.words);
     let open: List<Instruction> = [MovRI(Rbx, size), SubRR(Rsp, Rbx), MovRI(Rax, BitVec::ofNat(0))];
     let mov = then(p, Block([MovRI(Rbx, layout.stack_at())]));
@@ -1727,7 +1728,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
         let room_word: (word_in(w3, so + 8) = d) = t.r.x86_word_stored(w1, so + 8, d);
         let room_is: (word_in(w3, so + 8).toNat() = t.room) =
             trans(trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room_word), BitVec::toNat_ofNat(64, depth, small)), sym(deep));
-        let argv1 = argv_at_kept(t.argv(), m, t.argv(), m1, t.kept_store(m, so, bytes, fits), rsp, t.args, held.right.left);
+        let argv1 = argv_at_kept(t.argv(), m, t.argv(), m1, t.kept_store(m, so, bytes, fits), rsp, t.args, held.right);
         let argv3 = argv_at_kept(t.argv(), m1, t.argv(), m3, t.kept_store(m1, so + 8, bytes3, fits3), rsp, t.args, argv1);
         let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m3, y, t.args), argv3);
         let frames: t.FramesAt(m3, t.frames, top) = j(sym(bare), λ fs _ => t.FramesAt(m3, fs, top), trivial);
@@ -1741,9 +1742,9 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
         });
         let holds3 = t.r.store_holds(w1, m1, t.r.store_holds(zero, m, held.left, so, bytes, fits), so + 8, bytes3, fits3);
         let based: t.Based(env, t.room, w3, m3) = ⟨holds3, ⟨keeps.right, ⟨refl, ⟨argv, room_is⟩⟩⟩⟩;
-        let g3 = write_gpr(Rax, d, write_gpr(Rbx, layout.room_at(), write_gpr(Rbx, layout.stack_at(), s.gprs)));
-        // Nothing here writes RSP.
-        let rsp3: (read_gpr(Rsp, g3) = t.stack.at(top)) = held.right.right;
+        let g3 = write_gpr(Rsp, layout.stack_top(room), write_gpr(Rax, d, write_gpr(Rbx, layout.room_at(), write_gpr(Rbx, layout.stack_at(), s.gprs))));
+        // RSP is the program's own stack's top from here.
+        let rsp3: (read_gpr(Rsp, g3) = t.stack.at(top)) = at_top;
         let third = λ (c: BitVec(64)) => t.writes().writable(m1, c, 8) ∧
             (t.site().Resident(t.r.profile.store(m1, c, bytes3)) ∧ t.Bare(env, t.room, top, t.frames, g3, t.r.profile.store(m1, c, bytes3)));
         let r1 = t.store_resident(m, so, bytes, fits, resident);

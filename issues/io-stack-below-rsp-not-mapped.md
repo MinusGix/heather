@@ -4,7 +4,7 @@ status: closed
 labels: [native,machine-model]
 area: heather-in-heather
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 `StackPlaced` lets a process rely on up to 128 KiB (`io_stack_limit`) of data
@@ -38,3 +38,11 @@ cap, which rested on the mapping exec was thought to make
 (`issues/elf-theorem-runtime-premises.md`). A target that owns its stack
 inside its own segment, and so asks nothing of the limit, is
 `issues/native-target-minimal-system-assumptions.md`.
+
+## Superseded (2026-11-17): the program owns its stack
+
+Minus asked to improve on the stated premise, so the premise is gone: a
+written program's stack is in its own data segment
+(`DataRegion::own_stack`), `X86Profile::process` and `StackPlaced` are
+deleted, and nothing is asked of the kernel's stack but the command line
+(`issues/native-target-minimal-system-assumptions.md`).

@@ -212,19 +212,20 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   frame's slots) is a lemma over the buffer (`DataRegion::x86_word_stored`),
   not a view of its own; a view over two regions at once is
   `issues/wp-view-separating-product.md`.
-- **The process's stack.** A process as the ELF theorem takes it is a
-  memory of `X86Profile::process(size, top, depth)`: what `X86Profile::io(size)`
-  relies on (the segment, since `issues/native-data-capacity.md`) and `depth`
-  bytes below the entry RSP `top` data (`issues/io-image-process-stack.md`).
-  `StackPlaced` is where Linux puts it. That the `depth` bytes are data is
-  a premise about the system (`LinuxStart`'s `stack`): Linux maps the stack
-  as it is touched, down to RLIMIT_STACK, so it holds when the stack limit
-  leaves `depth` bytes below the entry RSP
-  (`issues/io-stack-below-rsp-not-mapped.md`). `DataRegion::process_stack` is a `DataRegion`, so
-  `DataRegion::stack` is a `Stack` of the process from its entry, top at
-  RSP; its stores keep the segment (`process_stack_keeps_data`). The
-  loader with the stack (`X86Memory::process_load`) is `LoadedFrom` the
-  file, which keeps the ELF theorem's premises satisfiable.
+- **The program's stack.** A process as the ELF theorem takes it is a
+  memory of `X86Profile::io(size)`: it relies on the segment alone
+  (`issues/native-data-capacity.md`). The program's stack is part of that
+  segment: the `room` bytes after the `used` bytes of its layout
+  (`DataRegion::own_data` and `DataRegion::own_stack`, two regions of the
+  one profile), and the entry code points RSP at its end. Until 2026-11-17
+  the stack was the one Linux makes, `depth` bytes below the entry RSP that
+  the profile relied on (`X86Profile::process`,
+  `issues/io-image-process-stack.md`), which asked the system for a stack
+  limit and for growth on a fault (`issues/io-stack-below-rsp-not-mapped.md`);
+  now it rests on the file's `PT_LOAD` header and nothing else.
+  `DataRegion::own_stack` is a `DataRegion`, so `DataRegion::stack` is a
+  `Stack` of the process. The loader's own memory (`X86Memory::io_load`) is
+  `LoadedFrom` the file, which keeps the ELF theorem's premises satisfiable.
 
 ## 7. Outside v1, and the seam for each
 

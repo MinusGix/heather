@@ -4,7 +4,7 @@ status: closed
 labels: [native,machine-model]
 area: heather-in-heather
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 What a written program's theorem relies on when it is run should be explicit
@@ -28,6 +28,12 @@ premise.
 - The flags are undefined after a system call
   (`issues/linux-syscall-flags-not-promised.md`).
 - `docs/native/compiler-theorem.md` lists the premises.
+
+- 2026-11-17: the stack fields left `LinuxStart`, which is now
+  `LinuxStart(size, file, args, s)` with `loaded`, `entry` and `argv`: the
+  program's stack is in its own segment
+  (`issues/native-target-minimal-system-assumptions.md`), so the stack limit
+  is no longer relied on at all.
 
 ## Left
 

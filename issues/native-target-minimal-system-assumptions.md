@@ -4,7 +4,7 @@ status: open
 labels: [native,machine-model,design]
 area: heather-in-heather
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 Minus (2026-11-16): "we should make so we can target compilation for
@@ -13,6 +13,22 @@ files and whatnot". Not urgent. Today a written program's theorem asks what
 `LinuxStart` lists (`lib/native/native_compile_elf.hthr`); this target would
 shrink that list to the ELF loading rule, the entry address, and the calls
 the program makes.
+
+## Done (2026-11-17): the stack is the program's own
+
+Every program `write-elf` writes now carries its stack in its data segment.
+The segment is sized for the layout and `Source::stack_room` after it; the
+entry code saves the entry RSP for the command line and moves RSP to the
+room's end (`Prog::saves_rsp`, `Layout::stack_top`); the regions are
+`DataRegion::own_data` and `DataRegion::own_stack` of `X86Profile::io(size)`.
+`X86Profile::process`, `StackPlaced` and the `top`, `depth`, `placed`, `rsp`
+and `deep` premises are gone, and `LinuxStart` is `loaded`, `entry`, `argv`.
+This replaced the kernel-stack target outright: there is one target, and it
+is the one that asks less. Cost: one more instruction at the entry and a
+segment larger by the stack room (zero-filled, nothing in the file).
+
+Left: the command line only of sources that read it, naming the calls a
+source makes, and signals, as below.
 
 ## What would go
 

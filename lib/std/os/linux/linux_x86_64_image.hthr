@@ -268,13 +268,12 @@ theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), hea
 }
 
 // ---------------------------------------------------------------------------
-// A process loaded from the file, with a stack of its own
+// A process loaded from the file
 
 // What Linux maps below the segment's end is the file, its window and the
-// RW segment, as `io_load` says; above it, the stack (and the command line
-// on it, `ArgvAt`) is the process's own, so a process is not `io_load`'s
-// memory but one that agrees with it below there, whatever else its profile
-// relies on.
+// RW segment, as `io_load` says; above it is the system's (the command line
+// among it, `ArgvAt`), so a process is not `io_load`'s memory but one that
+// agrees with it below there.
 fn io_data_end(size: Nat) → Nat { 0x410000 + size }
 
 // The profile is the memory's, read off its type.
@@ -359,187 +358,84 @@ theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), fi
     X86Memory::io_load(size, within, file).LoadedFrom(size, file) { λ a _ => ⟨refl, refl⟩ }
 
 // ---------------------------------------------------------------------------
-// The process's stack (issues/io-image-process-stack.md)
+// The program's own stack (issues/native-target-minimal-system-assumptions.md)
 
-// Linux maps a process's stack high in the user half and starts RSP in it,
-// the command line at RSP and above (`ArgvAt`). A process relies on `depth`
-// bytes of stack below RSP being data. That is the environment's
-// assumption, a premise of every theorem about a process, and what it asks
-// of the system is the stack limit: exec maps part of the stack before the
-// program runs (128 KiB below the argument strings, less the argc, argv,
-// envp and auxv tables it then lays inside that reserve), and the kernel
-// maps the rest at the fault of its first touch, down to RLIMIT_STACK
-// (`getrlimit(2)`; `mmap(2)` under MAP_GROWSDOWN). So the premise holds of a
-// process whose stack limit leaves `depth` bytes below its entry RSP, as
-// every program that does not probe its stack assumes, and fails under a
-// limit set smaller (`ulimit -s`) or on a system that does not grow the
-// stack (issues/io-stack-below-rsp-not-mapped.md).
+// A program does not run on the stack the system made. Its segment is
+// `size` bytes of which its data uses the first `used`, and the `room` bytes
+// after them are its stack: the entry code points RSP at their end before
+// anything is pushed. So the stack is data by the rule the segment is data
+// by, the file's own PT_LOAD header, and nothing is asked of the system's
+// stack but the command line it holds (`ArgvAt`): not how deep it is mapped
+// at exec, not that it grows, not the stack limit
+// (issues/io-stack-below-rsp-not-mapped.md). There is no guard page below
+// it: what keeps the stack off the data is the bound the compiler's theorem
+// proves on its depth.
 
-// Where the stack of `depth` bytes below `top` sits: above the segment and
-// below the canonical boundary. That the entry RSP is such a `top`, and that
-// the bytes are data, are the environment's assumptions, beside
-// `LoadedFrom` and `ArgvAt`.
-record StackPlaced(size, top, depth: Nat) {
-    above: io_data_end(size) + depth <= top,
-    canonical: top <= Nat::pow(2, 47),
+// An offset up to the segment's end is its address's value less 0x410000.
+theorem io_segment_offset(size: Nat, within: size <= io_data_limit(), i: Nat, inside: i <= size):
+    next_rip(BitVec::ofNat(0x410000), i).toNat() = 0x410000 + i {
+    let limit: (io_data_limit() = 0x40000000) = refl;
+    let top: (Succ(0x410000 + 0x40000000) <= Nat::pow(2, 64)) = Nat::leb_sound(Succ(0x410000 + 0x40000000), Nat::pow(2, 64), trivial);
+    BitVec::ofNat_offset_toNat(64, 0x410000, i, omega(inside, within, limit, top))
 }
 
-// The stack's lowest address.
-fn io_stack_low(top, depth: Nat) → BitVec(64) { BitVec::ofNat(top - depth) }
-
-// What a process relies on: what the image relies on, and the `depth`
-// bytes below `top` data.
-fn X86Profile::process(size, top, depth: Nat) → X86Profile {
-    X86Profile(λ perms => X86Profile::io(size).relies(perms) ∧ DataAt(perms, io_stack_low(top, depth), depth))
-}
-
-theorem io_stack_low_toNat(size, top, depth: Nat, placed: StackPlaced(size, top, depth)): io_stack_low(top, depth).toNat() = top - depth {
-    let wide = canonical_below_top();
-    BitVec::toNat_ofNat(64, top - depth, omega(placed.canonical, wide))
-}
-
-// An offset into the stack is its address's value less the stack's low.
-theorem io_stack_offset(size, top, depth: Nat, placed: StackPlaced(size, top, depth), i: Nat, inside: i <= depth):
-    next_rip(io_stack_low(top, depth), i).toNat() = top - depth + i {
-    let wide = canonical_below_top();
-    BitVec::ofNat_offset_toNat(64, top - depth, i, omega(inside, placed.above, placed.canonical, wide))
-}
-
-// The process's two regions: its segment, as the image's, and its stack.
-fn DataRegion::process_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat) → DataRegion {
-    DataRegion(profile := X86Profile::process(size, top, depth), low := io_data_low(), size := size,
-        canonical := io_data_canonical(size, within), data := λ perms relied => relied.left)
-}
-
-fn DataRegion::process_stack(size, top, depth: Nat, placed: StackPlaced(size, top, depth)) → DataRegion {
-    DataRegion(profile := X86Profile::process(size, top, depth), low := io_stack_low(top, depth), size := depth,
+// The segment's two regions: the program's data, its first `used` bytes…
+fn DataRegion::own_data(size: Nat, within: size <= io_data_limit(), used: Nat, inside: used <= size) → DataRegion {
+    DataRegion(profile := X86Profile::io(size), low := io_data_low(), size := used,
         canonical := {
-            let low = io_stack_low_toNat(size, top, depth, placed);
-            omega(low, placed.above, placed.canonical)
+            let whole: (io_data_low().toNat() + size <= Nat::pow(2, 47)) = io_data_canonical(size, within);
+            omega(whole, inside)
         },
-        data := λ perms relied => relied.right)
+        data := λ perms relied i below => relied(i, omega(below, inside)))
 }
 
-// The stack's top is `top`: at the entry, RSP.
-theorem io_stack_top(size, top, depth: Nat, placed: StackPlaced(size, top, depth), rsp: BitVec(64), at: rsp.toNat() = top):
-    next_rip(io_stack_low(top, depth), depth) = rsp {
-    let a = next_rip(io_stack_low(top, depth), depth);
-    let value = io_stack_offset(size, top, depth, placed, depth, omega());
-    let same: (a.toNat() = rsp.toNat()) = omega(value, at, placed.above);
-    trans(sym(BitVec::ofNat_toNat(64, a)), trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), same), BitVec::ofNat_toNat(64, rsp)))
+// …and its stack, the `room` bytes after them.
+fn DataRegion::own_stack(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size) → DataRegion {
+    DataRegion(profile := X86Profile::io(size), low := next_rip(io_data_low(), used), size := room,
+        canonical := {
+            let low: (next_rip(io_data_low(), used).toNat() = 0x410000 + used) = io_segment_offset(size, within, used, omega(fits));
+            let whole: (io_data_low().toNat() + size <= Nat::pow(2, 47)) = io_data_canonical(size, within);
+            let base: (io_data_low().toNat() = 0x410000) = refl;
+            omega(low, whole, base, fits)
+        },
+        data := λ perms relied i below => j(sym(rip_compose(io_data_low(), used, i)), λ a _ => perms(a) = Perm::data(), relied(used + i, omega(below, fits))))
 }
 
-// So from the entry the process's stack is a `Stack` whose top is RSP…
-theorem DataRegion::process_stack_entry(size, top, depth: Nat, placed: StackPlaced(size, top, depth), gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = top):
-    DataRegion::process_stack(size, top, depth, placed).stack().at(depth) = read_gpr(Rsp, gprs) {
-    io_stack_top(size, top, depth, placed, read_gpr(Rsp, gprs), rsp)
+// Where the stack starts, and that it ends inside the segment.
+theorem io_own_stack_low(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    next_rip(io_data_low(), used).toNat() = 0x410000 + used {
+    io_segment_offset(size, within, used, omega(fits))
 }
 
-// …and a CALL there pushes its return address into the stack's top word.
-theorem DataRegion::process_stack_push(size, top, depth: Nat, placed: StackPlaced(size, top, depth), gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = top,
-    room: 8 <= depth): push_address(gprs) = DataRegion::process_stack(size, top, depth, placed).stack().at(depth - 8) {
-    let low = io_stack_low(top, depth);
-    let count: (next_rip(low, depth) = next_rip(low, depth - 8 + 8)) = rip_count(low, omega(room));
-    trans(cong_fn<BitVec(64), BitVec(64)>(λ y => y.sub(BitVec::ofNat(8)), trans(sym(io_stack_top(size, top, depth, placed, read_gpr(Rsp, gprs), rsp)), count)),
-        push_at(low, depth - 8))
+// The stack's top is the address `used + room` bytes into the segment: the
+// one the entry code gives RSP.
+theorem DataRegion::own_stack_top(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    DataRegion::own_stack(size, within, used, room, fits).stack().at(room) = io_data_low().add_nat(used + room) {
+    trans(rip_compose(io_data_low(), used, room), sym(BitVec::add_nat_iterate(64, io_data_low(), used + room)))
 }
 
-// The loader, with the stack: the image as `io_load` maps it, and the
-// `depth` bytes below `top` data. What Linux puts at and above `top` (the
-// command line) is not this model's: `ArgvAt` says what the process reads
-// there.
-fn process_perm(size, length, top, depth, n: Nat) → Perm {
-    match (top - depth).leb(n) {
-        True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
-        False => io_perm(size, length, n),
+// A process loaded from the file: its data zero.
+theorem X86Memory::loaded_own_data(size: Nat, within: size <= io_data_limit(), used: Nat, inside: used <= size,
+    self m: X86Memory(X86Profile::io(size)), file: List<BitVec(8)>, loaded: m.LoadedFrom(size, file)):
+    DataRegion::own_data(size, within, used, inside).Holds(io_zero(), m) {
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    λ p below => {
+        let value = io_data_offset(size, within, p, omega(below, inside));
+        trans(loaded(next_rip(BitVec::ofNat(0x410000), p), j(sym(value), λ k _ => k < io_data_end(size), omega(below, inside, end))).left,
+            X86Memory::io_load_data(size, within, file, p, omega(below, inside)))
     }
 }
 
-fn process_perms(size, top, depth: Nat, file: List<BitVec(8)>) → BitVec(64) → Perm {
-    λ (a: BitVec(64)) => process_perm(size, file.len(), top, depth, a.toNat())
+// The stack is past the data and ends inside the segment.
+theorem DataRegion::own_stack_above(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    io_data_low().toNat() + used <= next_rip(io_data_low(), used).toNat() {
+    let low = io_own_stack_low(size, within, used, room, fits);
+    let base: (io_data_low().toNat() = 0x410000) = refl;
+    omega(low, base)
 }
-
-// Below the stack, the image's permission.
-theorem process_perm_below(size, length, top, depth, n: Nat, below: n < top - depth): process_perm(size, length, top, depth, n) = io_perm(size, length, n) {
-    let low = Nat::leb_false(top - depth, n, below);
-    j(sym(low), λ s _ => (match s as λ _ => Perm {
-            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
-            False => io_perm(size, length, n),
-        }) = io_perm(size, length, n), refl)
-}
-
-// The stack's byte `i` is data.
-theorem process_perm_in_stack(size, length, top, depth, i: Nat, inside: i < depth, placed: StackPlaced(size, top, depth)):
-    process_perm(size, length, top, depth, top - depth + i) = Perm::data() {
-    let n = top - depth + i;
-    let low = Nat::leb_true(top - depth, n, Nat::le_add_l(top - depth, i));
-    let high = Nat::leb_true(Succ(n), top, omega(inside, placed.above));
-    j(sym(low), λ s _ => (match s as λ _ => Perm {
-            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
-            False => io_perm(size, length, n),
-        }) = Perm::data(),
-        j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl))
-}
-
-theorem process_relies(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth), file: List<BitVec(8)>):
-    X86Profile::process(size, top, depth).relies(process_perms(size, top, depth, file)) {
+theorem DataRegion::own_stack_end(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    next_rip(io_data_low(), used).toNat() + room <= io_data_end(size) {
+    let low = io_own_stack_low(size, within, used, room, fits);
     let end: (io_data_end(size) = 0x410000 + size) = refl;
-    ⟨λ i inside => trans(cong_fn<Nat, Perm>(λ n => process_perm(size, file.len(), top, depth, n), io_data_offset(size, within, i, inside)),
-            trans(process_perm_below(size, file.len(), top, depth, 0x410000 + i, omega(inside, end, placed.above)),
-                io_perm_in_segment(size, file.len(), i, inside))),
-     λ i inside => trans(cong_fn<Nat, Perm>(λ n => process_perm(size, file.len(), top, depth, n), io_stack_offset(size, top, depth, placed, i, omega(inside))),
-            process_perm_in_stack(size, file.len(), top, depth, i, inside, placed))⟩
-}
-
-// The process the loader maps from `file`, with a segment of `size` and a
-// stack of `depth` below `top`.
-fn X86Memory::process_load(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
-    file: List<BitVec(8)>) → X86Memory(X86Profile::process(size, top, depth)) {
-    X86Memory(cells := λ (a: BitVec(64)) => io_cell(file, a.toNat()), perms := process_perms(size, top, depth, file),
-        relied := process_relies(size, within, top, depth, placed, file))
-}
-
-// It is loaded from the file: a process of the profile, at its entry, is
-// one Linux can start.
-theorem X86Memory::process_load_loaded(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
-    file: List<BitVec(8)>): X86Memory::process_load(size, within, top, depth, placed, file).LoadedFrom(size, file) {
-    λ a below => ⟨refl, process_perm_below(size, file.len(), top, depth, a.toNat(), omega(below, placed.above))⟩
-}
-
-// A process loaded from the file: its segment zero.
-theorem X86Memory::loaded_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat, self m: X86Memory(X86Profile::process(size, top, depth)),
-    file: List<BitVec(8)>, loaded: m.LoadedFrom(size, file)): DataRegion::process_data(size, within, top, depth).Holds(io_zero(), m) {
-    let end: (io_data_end(size) = 0x410000 + size) = refl;
-    λ p inside => {
-        let value = io_data_offset(size, within, p, inside);
-        trans(loaded(next_rip(BitVec::ofNat(0x410000), p), j(sym(value), λ k _ => k < io_data_end(size), omega(inside, end))).left,
-            X86Memory::io_load_data(size, within, file, p, inside))
-    }
-}
-
-// The stack lies wholly above the segment: a word stored in it leaves the
-// segment as it was, so a call that pushes and spills keeps what the
-// program's buffers hold.
-theorem DataRegion::process_stack_keeps_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
-    m: X86Memory(X86Profile::process(size, top, depth)), v: Nat → BitVec(8), i: Nat, word: BitVec(64), fits: i + 8 <= depth,
-    holds: DataRegion::process_data(size, within, top, depth).Holds(v, m)):
-    DataRegion::process_data(size, within, top, depth).Holds(v,
-        X86Profile::process(size, top, depth).store(m, next_rip(io_stack_low(top, depth), i), word_bytes(word))) {
-    let x = X86Profile::process(size, top, depth);
-    let a = next_rip(io_stack_low(top, depth), i);
-    let end: (io_data_end(size) = 0x410000 + size) = refl;
-    λ p inside => {
-        let y = next_rip(io_data_low(), p);
-        let low = io_data_offset(size, within, p, inside);
-        let outside: ((q: Nat) → q < word_bytes(word).len() → BitVec::space(64).same(next_rip(a, q), y) = False) = λ q below => {
-            let long: (word_bytes(word).len() = 8) = refl;
-            let high = trans(cong_fn<BitVec(64), Nat>(λ b => b.toNat(), rip_compose(io_stack_low(top, depth), i, q)),
-                io_stack_offset(size, top, depth, placed, i + q, omega(below, long, fits)));
-            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(a, q), y, λ same => {
-                let values = cong_fn<BitVec(64), Nat>(λ b => b.toNat(), same);
-                false_elim(omega(values, high, low, inside, end, placed.above))
-            })
-        };
-        trans(x.store_outside(m, a, word_bytes(word), y, outside), holds(p, inside))
-    }
+    omega(low, end, fits)
 }
