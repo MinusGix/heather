@@ -449,11 +449,15 @@ slot, and the slot lemmas of `native_compile_homes` and the code of
   what a store to one word's slot needs of every other word
   (`Homes::number_put_other`).
 - **A procedure's frame is packed.** `Greedy::frame` renumbers the slots
-  its colouring left from zero in the words' order (`List::packed`), and
-  the frame is `List::slot_count` words: a procedure whose words all live
-  in registers opens no frame words at all. `main` keeps each slotted word
-  in the slot of its own number, so its frame and `write-elf`'s literals
-  for it are as before.
+  its colouring left (`List::packed`): a slotted word the body names
+  (a parameter, a result or a word of a statement) has the next slot from
+  zero in the words' order, and the frame is as many words as those
+  (`List::slots_used`). A word the body never names has a slot past them,
+  outside the frame: the words are numbered across the whole source, so
+  most names below a procedure's own are another body's, and they cost
+  its frame nothing. A procedure whose words all live in registers opens
+  no frame words at all. `main` keeps each slotted word in the slot of its
+  own number, so its frame and `write-elf`'s literals for it are as before.
 - **Not built: slots shared by liveness** (§2.2). Two words never live
   together could share a slot, as they share a register. That needs the
   interference check applied to slots and a `Held` whose file is read

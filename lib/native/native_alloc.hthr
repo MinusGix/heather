@@ -883,25 +883,41 @@ fn List::home_put(self of: List<Home>, id: Nat, home: Home, at: Nat) → List<Ho
 
 fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.home_put(id, home, 0), homes.loops, homes.places, homes.pins, homes.rooms) }
 
-// The homes of a frame's first `left` words with their slots numbered from
-// `next` in the words' order, a word in a register keeping it: a frame
-// then has one slot for each word that needs one.
-fn List::packed(self of: List<Home>, left, next: Nat) → List<Home> {
+// Of a frame's `left` words from word `at`, how many are in slots and
+// among `used`: the slots the frame needs.
+fn List::slots_used(self of: List<Home>, used: List<Nat>, at, left: Nat) → Nat {
     match left {
-        Zero => [],
-        Succ(more) => match of {
-            Nil => Cons(InSlot(next), List::packed(Nil, more, Succ(next))),
-            Cons(home, rest) => match home {
-                InSlot(_) => Cons(InSlot(next), rest.packed(more, Succ(next))),
-                InReg(k) => Cons(InReg(k), rest.packed(more, next)),
-            },
+        Zero => 0,
+        Succ(more) => {
+            let rest = match of { Nil => List::slots_used(Nil, used, Succ(at), more), Cons(_, tail) => tail.slots_used(used, Succ(at), more) };
+            match of.nth(0) {
+                Some(InReg(_)) => rest,
+                _ => match used.holds(at) { False => rest, True => Succ(rest) },
+            }
         },
     }
 }
 
-// How many of them are in slots.
-fn List::slot_count(self of: List<Home>) → Nat {
-    match of { Nil => 0, Cons(home, rest) => match home { InSlot(_) => Succ(rest.slot_count()), InReg(_) => rest.slot_count() } }
+// The homes of a frame's `left` words from word `at`, a word in a register
+// keeping it and the slots numbered again: a slotted word among `used` has
+// the next slot from `next`, in the words' order, and one the body never
+// names has one from `spare`, past them all. A frame then has one slot
+// for each word that needs one, and a word no statement names costs it
+// nothing.
+fn List::packed(self of: List<Home>, used: List<Nat>, at, left, next, spare: Nat) → List<Home> {
+    match left {
+        Zero => [],
+        Succ(more) => {
+            let tail: List<Home> = match of { Nil => [], Cons(_, rest) => rest };
+            match of.nth(0) {
+                Some(InReg(k)) => Cons(InReg(k), tail.packed(used, Succ(at), more, next, spare)),
+                _ => match used.holds(at) {
+                    True => Cons(InSlot(next), tail.packed(used, Succ(at), more, Succ(next), spare)),
+                    False => Cons(InSlot(spare), tail.packed(used, Succ(at), more, next, Succ(spare))),
+                },
+            }
+        },
+    }
 }
 
 // Each word in turn, heaviest first, given the first register none of its
@@ -958,10 +974,12 @@ fn Greedy::frame(self g: Greedy, loops: List<List<Nat>>, proc: Procedure) → Fr
     let words = proc.named();
     let rows = of.put(words - 1, of.row(words - 1), []);
     let coloured = proc.body.weights(g.loop_weight, 1, []).heaviest().colour([], rows, slots);
-    // One slot for each word the colouring left in one, numbered in the
-    // words' order; the frame is that many words.
-    let packed = coloured.of.packed(words, 0);
-    match proc.checks_under(Homes(packed, loops)) { True => Frame(packed, loops, [], packed.slot_count()), False => Frame([], loops, [], words) }
+    // One slot for each word the body names that the colouring left in
+    // one, numbered in the words' order; the frame is that many words.
+    let used = proc.params ++ (proc.results ++ proc.body.words());
+    let slots_used = coloured.of.slots_used(used, 0, words);
+    let packed = coloured.of.packed(used, 0, words, 0, slots_used);
+    match proc.checks_under(Homes(packed, loops)) { True => Frame(packed, loops, [], slots_used), False => Frame([], loops, [], words) }
 }
 
 fn List::frames_by(self procs: List<Procedure>, g: Greedy, loops: List<List<Nat>>) → List<Frame> {

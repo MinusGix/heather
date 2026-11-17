@@ -1475,7 +1475,7 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 //      the registers no word lives in)
 //   2  a leaf's nodes are not in evaluation order
 //   3  a leaf writes one of its own inputs
-//   4  a word past the slots (the word, the slots)
+//   4  a word whose slot is past the frame's (the word, the frame's words)
 //   5  an input neither a word nor a bit (its width)
 //   6  S4's lowering refused the leaf
 //   7  a call the compiler does not make (4 stat of a path, 5 stat of a

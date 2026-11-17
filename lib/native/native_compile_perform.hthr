@@ -976,8 +976,8 @@ theorem Target::fresh(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.pro
 }
 
 // A frame opened: RSP the frame and its frames from its end up, whatever
-// its slots hold. No word is live but ones past the slots, which have none
-// and read zero.
+// its slots hold. No word is live but ones whose slot is past the frame's,
+// which have no word of the stack and read zero.
 theorem Target::held_fresh(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile),
     based: Exists<Nat → BitVec(8)>(λ v => t.Based(env, t.room, v, m)), frames: t.FramesAt(m, t.frames, t.index + 8 * t.words),
     rsp: read_gpr(Rsp, g) = t.frame(), pins: t.Pins(home_values(g)),

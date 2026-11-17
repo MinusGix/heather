@@ -489,8 +489,8 @@ theorem view_small_table_refused():
     view_source(True).refusal(low(), Homes::slots(view_source(True)).placed(plan_program(view_functions(True))).roomed([0, 8]), []) = [0, 5, 17, 0, 0] { refl }
 
 // A procedure's frame is packed (`Greedy::frame`): `double`'s two words
-// share a register, and word 0, a name it never uses, keeps a slot, so its
-// frame is one word where every word in its slot takes one for each name.
-theorem double_frame_packed(): Greedy::standard().frame([], double()).words = 1 { refl }
+// share a register and word 0 is a name it never uses, so its frame has no
+// words, where every word in its slot takes one for each name.
+theorem double_frame_packed(): Greedy::standard().frame([], double()).words = 0 { refl }
 theorem double_frame_homes(): Greedy::standard().frame([], double()).of.homes_numbered() = [0, 1, 1] { refl }
 theorem double_frame_slotted(): SpillAll().frames(doubling(5)).frame(0).words = 3 { refl }
