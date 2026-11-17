@@ -197,18 +197,18 @@ function deciding through a connective (`calls_either` in
 `own_rule.hthr` declares a rule beside the function it compiles:
 
 ```heather
-rule theorem or_zero({w: Nat}, x: BitVec(w)): x | 0 = x { … }
+rule theorem add_sub_left({w: Nat}, a, b: BitVec(w)): (a + b) - a = b { … }
 ```
 
 It is an ordinary theorem about words. The `rule` prefix reads the
-statement as what the optimizer may do (an `or` with a zero constant is a
-move of the other word), proves that sound from the theorem, and registers
-it. `compile-x86` then uses the rules registered in the program's modules
-beside the library's own, and the certificate's replay is over both, so
-nothing about the rule is trusted beyond the theorem the kernel checked.
-`first_or_zero` compiles to 46 bytes with the rule and 55 without: the
-`or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
-`docs/native/optimizer-rules-design.md`).
+statement as what the optimizer may do (a sum with its left part taken
+away is a move of the right part), proves that sound from the theorem, and
+registers it. `compile-x86` then uses the rules registered in the
+program's modules beside the library's own, and the certificate's replay
+is over both, so nothing about the rule is trusted beyond the theorem the
+kernel checked. `first_and_back` compiles to 39 bytes with the rule and
+45 without: the add and the subtraction are gone
+(`crates/cli/tests/native_own_rule.rs`; `docs/native/optimizer-rules-design.md`).
 
 `own_learner.hthr` goes one step further. Its rule says a mask of the low
 `k` bits does nothing to a word below `2^k`:
@@ -238,10 +238,11 @@ with the learner and 48 without; without it `--explain-optimizer=all`
 says `not applied at t10 = t6 & t9: mask_low   (known: t6 within 0 ..= 255)`.
 
 A set of rules is a module. `lib/native/function_ir/function_ir_identities.hthr`
-states the plain identities of words (`x | 0 = x`, `(a + b) - b = a`,
-`x.bxor(x) = 0` and the like), each a one-line `rule theorem`, and
-`rule_set.hthr` imports it. `tangled` compiles to 39 bytes with the import
-and 54 without, and the report shows one rule's result read by the next:
+is the standard set: the plain identities of words (`x | 0 = x`,
+`(a + b) - b = a`, `x.bxor(x) = 0` and the like), each a one-line
+`rule theorem`. `compile-x86` registers it in every compilation, so
+`rule_set.hthr` names no rule and its `tangled` is compiled with them, one
+rule's result read by the next:
 
 ```console
   t10 = (t8 + t1) - t1 = t8   by add_sub
@@ -253,16 +254,17 @@ and 54 without, and the report shows one rule's result read by the next:
 for each one used, in the rule's own words and by its name:
 
 ```console
-$ heather compile-x86 examples/x86-native/own_rule.hthr first_or_zero \
-    -o target/x86-native/first_or_zero.s --explain-optimizer
+$ heather compile-x86 examples/x86-native/own_rule.hthr first_and_back \
+    -o target/x86-native/first_and_back.s --explain-optimizer
 function 0: 6 rules used
   …
   t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
-  t10 = t8 | 0 = t8   by or_zero
+  t10 = (t1 + t8) - t1 = t8   by add_sub_left
 ```
 
-`t10` is the word the `or` computed; the line says what it was, what the
-rule makes it, and (in brackets) the facts the rule needed.
+`t10` is the word the subtraction computed; the line says what it was,
+what the rule makes it, and (in brackets, for `narrow_back`) the facts a
+rule needed.
 
 `--explain-optimizer=all` also says where a rule was not applied though
 the nodes it states were there, which is what to read where a rule was

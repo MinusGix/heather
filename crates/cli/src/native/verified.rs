@@ -484,10 +484,11 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     Ok(())
 }
 
-/// What the optimizer needs besides: its stage, the plans' types, and the
-/// search.
+/// What the optimizer needs besides: its stage, the plans' types, the
+/// search, and the standard set of rules (`function_ir_identities`), which
+/// is so registered in every compilation beside the program's own.
 const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
-    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
+    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "function_ir_identities", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
 /// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
