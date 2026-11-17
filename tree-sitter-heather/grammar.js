@@ -27,7 +27,7 @@ const PREC = {
 
 // Words that introduce a special form only before their fixed follower
 // (`contextual_identifier` below); elsewhere they are names.
-const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with'];
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'cases'];
 
 module.exports = grammar({
   name: 'heather',
@@ -298,13 +298,13 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
       // A statement body ends in a statement and has no result
       // (docs/language/sequencing-surface-design.md §4).
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
         choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
           'break', 'continue', seq('return', field('value', $._expression))), '}'),
     ),
@@ -345,6 +345,16 @@ module.exports = grammar({
     ),
     named_destructure_field: $ => seq(
       field('field', $.identifier), ':=', field('name', $.identifier),
+    ),
+    // `cases h;` / `cases h as e1, e2(x, y);`: take the hypothesis apart
+    // along the tests of the call it states; the rest of the block is every
+    // case that survives (docs/tactics/goal-combinators.md, `cases h`).
+    cases_statement: $ => seq(
+      'cases', field('hypothesis', $.identifier),
+      optional(seq('as', commaSep1($.cases_name))), ';',
+    ),
+    cases_name: $ => seq(
+      field('equation', $.identifier), optional(seq('(', commaSep1(field('field', $.identifier)), ')')),
     ),
     split_statement: $ => seq(
       'split', optional(seq(field('equation', $.identifier), ':')),

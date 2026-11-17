@@ -4,7 +4,7 @@
     "all_goals", "datarepr", "designation", "else", "evidence", "export", "extends", "fn", "for", "fun", "if",
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match", "mut",
     "meta", "mk", "on", "postfix", "prefix", "record", "refl", "by",
-    "requires", "assuming", "section", "self", "split", "split_all", "induct",
+    "requires", "assuming", "section", "self", "split", "split_all", "induct", "cases",
     "theorem", "generate", "def", "break", "continue", "return", "while", "Squash", "squash_ind", "decreases", "decreasing", "with", "varies", "interface", "unfolding", "partial"
   ],
   "rejected_fixed_tokens": ["=="]
