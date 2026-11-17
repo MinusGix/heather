@@ -144,3 +144,29 @@ fn pred_of(n: Nat) → Nat {
     n - 1
 }
 theorem pred_of_lit(): pred_of(5) = 4 { refl }
+
+// A returning `for` after a returning guard: the loop is a statement of the
+// guard's `False` arm, which ends the function as the body does.
+fn first_big(c: Bool, xs: List<Nat>) → Nat {
+    if c { return 1; }
+    for x in xs {
+        if 10 <= x { return x }
+    }
+    0
+}
+theorem first_big_guard(xs: List<Nat>): first_big(True, xs) = 1 { refl }
+theorem first_big_found(): first_big(False, [3, 12, 40]) = 12 { refl }
+theorem first_big_none(): first_big(False, [3, 4]) = 0 { refl }
+
+fn Counter::tick_till_big(mut self c: Counter, k: Nat, xs: List<Nat>) → Nat {
+    if k = 0 { return 0; }
+    for x in xs {
+        if 10 <= x { return x }
+        c.tick(x);
+    }
+    c.n
+}
+theorem tick_till_big_found(): Counter::tick_till_big(Counter(0, []), 1, [2, 30, 4])
+    = Mutated(Counter(2, [2]), 30) { refl }
+theorem tick_till_big_none(): Counter::tick_till_big(Counter(0, []), 1, [2, 3])
+    = Mutated(Counter(5, [3, 2]), 5) { refl }

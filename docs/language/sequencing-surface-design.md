@@ -1464,8 +1464,10 @@ runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.
 6. **Refused, at parse time:** `return` in a λ or a block in value
    position ("not from a λ or a block in value position"), `break` or
    `continue` outside a loop, and a statement after a `return` in its
-   block. A returning `for` inside a returning form's arm is still
-   refused as §15 (5) says.
+   block. A returning `for` after a returning guard is a statement of
+   the guard's arm, which ends the function, so `lower_returns` follows
+   the split's arms; one in a statement form that does not itself return
+   is still refused as §15 (5) says.
 7. **Beside `?`** a `return e` is the function's whole result, as `?`'s
    own exit is (§6.3's agreement for `Result` and `Option`): the binds are
    lowered after the split, inside the arm that holds them.

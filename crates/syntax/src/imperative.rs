@@ -808,6 +808,17 @@ pub(crate) fn lower_returns(mut body: Block) -> Block {
     let Some(i) = body.stmts.iter().position(|s| matches!(s, Stmt::Let { expr, .. }
         if is_loop(expr) && returns(expr)))
     else {
+        // The arms of a branch that ends the body, as `return` outside a
+        // loop leaves it (§22), each end the function as the body does.
+        if let ExprKind::Match { arms, .. } = &mut body.result.kind {
+            for arm in arms {
+                if let ExprKind::Block(b) = &mut arm.body.kind {
+                    **b = lower_returns(std::mem::replace(&mut **b, Block {
+                        stmts: Vec::new(), result: Box::new(unit(arm.body.span)), ons: Vec::new(), span: arm.body.span,
+                    }));
+                }
+            }
+        }
         return body;
     };
     let rest: Vec<Stmt> = body.stmts.split_off(i + 1);
@@ -845,6 +856,11 @@ pub(crate) fn return_receiver(body: &mut Block, receiver: &str, record: &str) {
         && let Some(ExprKind::Block(rest)) = args.get_mut(1).map(|a| &mut a.kind)
     {
         return_receiver(rest, receiver, record);
+    }
+    if let ExprKind::Match { arms, .. } = &mut body.result.kind {
+        for arm in arms {
+            if let ExprKind::Block(b) = &mut arm.body.kind { return_receiver(b, receiver, record); }
+        }
     }
 }
 
