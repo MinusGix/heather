@@ -299,6 +299,9 @@ impl<'a> Defs<'a> {
     /// `v + 1` instead of paying for a copy per gate call
     /// (`docs/kernel/lazy-global-offset-design.md`). `None` on the same three
     /// conditions as [`Defs::body`].
+    /// Where `v` is in Ψ, for a count of references (`stats::profile_global`).
+    pub(crate) fn position(&self, v: GlobalVar) -> Option<usize> { self.psi?.position(v) }
+
     pub(crate) fn body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
         if self.withheld(v).is_some() {
             return None;

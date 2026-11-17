@@ -629,11 +629,32 @@ fn absolute(term: &Term, caller: usize) -> Option<usize> {
 /// steps it took, its time, and the process's peak resident and mapped
 /// memory during it: a read keeps what it evaluates until it ends, so the
 /// one that holds a compile's memory is the one with the steps.
+/// With `HEATHER_READ_PROFILE` set too, a read of any size also reports the
+/// definitions it referenced most, by how often: where its steps are.
 pub fn evaluate_numbers(elaborator: &Elaborator, name: &str) -> Result<Vec<u64>, SourceError> {
-    if std::env::var_os("HEATHER_READ_TRACE").is_none() { return with_reads(elaborator, |reads| reads.numbers(name)); }
+    traced(elaborator, name, || with_reads(elaborator, |reads| reads.numbers(name)))
+}
+
+/// `read` run under `HEATHER_READ_TRACE` and `HEATHER_READ_PROFILE`, which
+/// report as a read of `name`: `heather eval` reads through this too, so a
+/// term can be measured apart from a compile.
+pub fn traced<R>(elaborator: &Elaborator, name: &str, read: impl FnOnce() -> R) -> R {
+    if std::env::var_os("HEATHER_READ_TRACE").is_none() { return read(); }
     let _ = std::fs::write("/proc/self/clear_refs", "5");
     let (started, steps) = (std::time::Instant::now(), heather_kernel::stats::snapshot().eval_steps);
-    let out = with_reads(elaborator, |reads| reads.numbers(name));
+    let profile = std::env::var_os("HEATHER_READ_PROFILE").is_some();
+    if profile { heather_kernel::stats::profile_start(); }
+    let out = read();
+    if profile {
+        let counts = heather_kernel::stats::profile_take();
+        let total: u64 = counts.iter().map(|(_, n)| n).sum();
+        if total > 200_000 || std::env::var("HEATHER_READ_PROFILE").as_deref() == Ok("all") {
+            eprintln!("profile {name}: {total} references");
+            for (place, n) in counts.iter().take(60) {
+                eprintln!("  {n:>10}  {}", elaborator.global_name_at(*place).unwrap_or_else(|| format!("#{place}")));
+            }
+        }
+    }
     let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     let field = |key: &str| status.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).unwrap_or(0) / 1024;
     eprintln!("read {name}: {} steps, {} ms, peak {} MB resident, {} MB mapped", heather_kernel::stats::snapshot().eval_steps - steps,
