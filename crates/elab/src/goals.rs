@@ -328,6 +328,16 @@ impl GoalArena {
         allocated
     }
 
+    /// Close `checkpoint` keeping everything done since it: the changes
+    /// stay logged for a checkpoint still open outside it.
+    pub(super) fn keep(&self, checkpoint: GoalCheckpoint) {
+        let _ = checkpoint;
+        self.checkpoints.set(self.checkpoints.get() - 1);
+        if self.checkpoints.get() == 0 {
+            self.undo.borrow_mut().clear();
+        }
+    }
+
     /// Log goal `index`'s state and spelling before it is changed in place,
     /// if a checkpoint is open.
     fn log_change(&self, goal: &Goal, index: usize) {
@@ -736,7 +746,19 @@ impl GoalArena {
                     let shadowed = names[i + 1..].contains(name)
                         || aliases.iter().any(|a| a.name == *name && a.depth > i);
                     if !name.starts_with('#') && !shadowed {
-                        context.push((name.to_string(), display(&goal.cx.prefix(i), &entry.ty)));
+                        let mut shown = display(&goal.cx.prefix(i), &entry.ty);
+                        // A hypothesis an enclosing match refined is usable
+                        // at its type as written too, which is said here or
+                        // nowhere (docs/language/matching/arm-readings-design.md).
+                        if let Some(from) = crate::readings::Readings::written_position(&goal.cx, i)
+                            && let Some(outer) = goal.cx.gamma.entries.get(from)
+                        {
+                            let written = display(&goal.cx.prefix(from), &outer.ty);
+                            if written != shown {
+                                shown = format!("{shown}   (or as written: {written})");
+                            }
+                        }
+                        context.push((name.to_string(), shown));
                     }
                 }
                 for (k, alias) in aliases.iter().enumerate() {

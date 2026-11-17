@@ -544,6 +544,7 @@ module.exports = grammar({
       $.argument_slot,
       $.universe,
       $.parenthesized_expression,
+      $.operator_section,
       $.ascription_expression,
       $.vector_type,
       $.squash_type,
@@ -584,6 +585,9 @@ module.exports = grammar({
     ),
 
     parenthesized_expression: $ => seq('(', $._expression, ')'),
+    // `(<=)`: the bare operator symbol as a value, wherever an expression
+    // stands (issues/parenthesized-operator-symbols.md).
+    operator_section: $ => seq('(', $.operator, ')'),
     // `(e: T)`: a type ascription. `(x: A) -> B` is a binder group instead,
     // told apart by the arrow after it.
     ascription_expression: $ => seq('(', field('value', $._expression), ':', field('type', $._expression), ')'),

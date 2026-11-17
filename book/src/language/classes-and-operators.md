@@ -80,6 +80,23 @@ A designation tells the resolver what an operator means at a carrier. Prefix
 and infix slots are separate. The designated operation is a bare global name;
 ordinary implicit inference instantiates it at the use site.
 
+The operator itself is a value when it is written alone in parentheses, as in
+Haskell: `(<=)`, `(+)`, `(++)`. It means what the designation at the carrier
+its position asks for says, so at a list of bytes `(<=)` is
+`BitVec::unsigned_le`:
+
+```heather
+theorem sorted(s: List<u8>): s.SortedPerm((<=), s.insertion_sort((<=))) {
+    s.insertion_sort_correct(BitVec::unsigned_le)
+}
+```
+
+The carrier comes from the parameter's type, which a receiver or an earlier
+argument has to have fixed: `List::insertion_sort((<=), [3, 1, 2])` has none
+yet when the symbol is read and is refused. Directly between an argument
+list's delimiters the parentheses may be left off, `xs.foldl(+, 0)`. `(-)` is
+subtraction; to fix one operand, write an argument slot, `· <= 10`.
+
 An operation binder can install a local symbol in its own scope:
 
 ```text

@@ -30,10 +30,10 @@ fn low() → BitVec(64) { io_data_low() }
 // same for any homes the check passes, and the greedy allocator is
 // `write-elf`'s, evaluated on its fork, too costly beside a compile in one
 // declaration's fuel.
-fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src)) }
+fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src), SpillAll().frames(src)) }
 
 // A source's layout with every word in its slot.
-fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src)) }
+fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src), SpillAll().frames(src)) }
 
 // `head -c 10`: cat whose read length is a countdown word. Words as cat's;
 // 2 the bytes still to copy, 20 and 21 scratch.
@@ -105,7 +105,7 @@ fn narrow_long_leaf() → Source {
     Source::of([], Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
 }
 
-theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes()) = [1, 0, 1, 41, 12] { refl }
+theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes(), narrow_long_leaf().bodies()) = [1, 0, 1, 41, 12] { refl }
 
 // The third statement exits with a word past the slots; the second, a loop,
 // tests one; a write names a buffer the source does not have.
@@ -299,7 +299,7 @@ fn Prog::calls_of(self p: Prog, label: Nat) → Nat {
         },
     }
 }
-fn compiled_or_start(src: Source) → Prog { match src.compile(low(), Homes::slots(src)) { None => Start, Some(p) => p } }
+fn compiled_or_start(src: Source) → Prog { match src.compile(low(), Homes::slots(src), SpillAll().frames(src)) { None => Start, Some(p) => p } }
 
 // It compiles, with every word in its slot and with the allocator's homes;
 // its body is emitted once, at its label, and called from three sites: the
@@ -328,8 +328,8 @@ theorem spreading_allocated(): spreading().allocation_ok(spreading().homes()) = 
 // The allocator's homes keep the three parameters apart, all live as the
 // body starts and none written by it, so the procedure fits and the source
 // compiles with them.
-theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().homes())) = True { refl }
-theorem spreading_homed(): spreading().refusal(low(), spreading().homes()) = [] { refl }
+theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().homes(), spreading().bodies()).body(0)) = True { refl }
+theorem spreading_homed(): spreading().refusal(low(), spreading().homes(), spreading().bodies()) = [] { refl }
 theorem spreading_exits(): ITree::next(Events::linux(), spreading().tree([], 4)) = Exits(BitVec::ofNat(59)) { refl }
 
 // Two procedures calling each other (docs/native/native-procedures-are-functions-design.md
@@ -361,7 +361,7 @@ fn alternating() → Source { alternating_to(5, 6) }
 fn alternating_shallow() → Source { alternating_to(5, 5) }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
-theorem alternating_homed(): alternating().refusal(low(), alternating().homes()) = [] { refl }
+theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
 theorem alternating_two_bodies(): compiled_or_start(alternating()).named(1) + compiled_or_start(alternating()).named(2) = 2 { refl }
 theorem alternating_calls(): compiled_or_start(alternating()).calls_of(1) + compiled_or_start(alternating()).calls_of(2) = 3 { refl }
 theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
@@ -414,7 +414,7 @@ fn view_source(written: Bool) → Source {
 
 // Its functions' values where the function compiler's planner puts them.
 fn view_refused(written: Bool) → List<Nat> {
-    view_source(written).refusal(low(), Homes::slots(view_source(written)).placed(plan_program(view_functions(written))))
+    view_source(written).refusal(low(), Homes::slots(view_source(written)).placed(plan_program(view_functions(written))), SpillAll().frames(view_source(written)))
 }
 
 // The functions link: placeless, the view's base hidden, and with rows
@@ -436,3 +436,61 @@ theorem view_source_read_refused(): view_refused(False) = [0, 5, 17, 0, 0] { ref
 // callee stored through the view and read back.
 fn view_program() → Source { view_source(True) }
 fn view_program_read() → Source { view_source(False) }
+
+// ---------------------------------------------------------------------------
+// The stack a program needs (`Source::need`)
+
+fn need_slotted(src: Source) → Nat { src.need(Homes::slots(src), SpillAll().frames(src)) }
+// `main`'s frame and saved RSP's word, then a level a call: `sum`'s seven
+// words, the six registers it saves and its return address, five deep.
+theorem summing_need(): need_slotted(summing()) = 88 + 5 * 112 { refl }
+// With no room a call leaves in the callee's entry: nothing below `main`.
+theorem summing_need_no_room(): need_slotted(summing_to(20, 0)) = 88 { refl }
+
+// The bound follows the calls a body makes, not the depth alone: `main`
+// performs only `double`, which performs nothing, so whatever the depth
+// the program needs one level of `double` and never a level of `sum`,
+// which nothing reaches.
+fn double() → Procedure { Procedure(params := [1], results := [2], body := ops([Add(64, 2, 1, 1)])) }
+fn doubling(depth: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], depth := depth)
+}
+theorem doubling_compiles(): refused(doubling(5)) = [] { refl }
+theorem doubling_performs(): doubling(5).main.performed() = [0] { refl }
+theorem doubling_need(): need_slotted(doubling(5)) = 88 + SpillAll().frames(doubling(5)).frame(0).level([]) { refl }
+theorem doubling_need_any_depth(): need_slotted(doubling(5)) = need_slotted(doubling(1)) { refl }
+
+// A call of a procedure the running body's layout does not list is refused.
+theorem unlisted_call_refused():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
+theorem listed_call_fits():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0]).call_fits([], 0, [0], [7]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The functions' room table (`Homes.rooms`)
+
+// The table the planner's placement asks for: `view_put` is a leaf that
+// saves nothing and needs no stack below its return address, the lender
+// its call of it. With no table chosen every function is taken to save six
+// registers and to call with eight slots.
+fn view_planned(written: Bool) → Homes {
+    Homes::slots(view_source(written)).placed(plan_program(view_functions(written))).roomed(program_rooms_planned(view_functions(written)))
+}
+theorem view_rooms_planned(): program_rooms_planned(view_functions(True)) = [0, 24] { refl }
+theorem view_rooms_default(): Homes::slots(view_source(True)).room_table(view_functions(True)) = [48, 184] { refl }
+theorem view_planned_compiles(): view_source(True).refusal(low(), view_planned(True), []) = [] { refl }
+// What a call of a function takes of the stack, under each table.
+theorem view_calls_room_planned(): view_planned(True).calls_room(view_functions(True)) = 32 { refl }
+theorem view_calls_room_default(): Homes::slots(view_source(True)).calls_room(view_functions(True)) = 192 { refl }
+// A table is checked, not trusted: one too small for the lender's call is
+// refused where the functions link.
+theorem view_small_table_refused():
+    view_source(True).refusal(low(), Homes::slots(view_source(True)).placed(plan_program(view_functions(True))).roomed([0, 8]), []) = [0, 5, 17, 0, 0] { refl }
+
+// A procedure's frame is packed (`Greedy::frame`): `double`'s two words
+// share a register and word 0 is a name it never uses, so its frame has no
+// words, where every word in its slot takes one for each name.
+theorem double_frame_packed(): Greedy::standard().frame([], double()).words = 0 { refl }
+theorem double_frame_homes(): Greedy::standard().frame([], double()).of.homes_numbered() = [0, 1, 1] { refl }
+theorem double_frame_slotted(): SpillAll().frames(doubling(5)).frame(0).words = 3 { refl }

@@ -1,0 +1,56 @@
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import rt;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import runtime_file;
+
+// How many of the span's bytes from `i` are newlines, added to `count`.
+runtime fn List::newlines(self span: List<u8>, length, i, count: u64) → u64
+    decreases (length - i).toNat() {
+    if h: i < length {
+        if span.byte_within(length, i) = 10 {
+            span.newlines(length, i + 1, count + 1)
+        } else {
+            span.newlines(length, i + 1, count)
+        }
+    } else {
+        count
+    }
+}
+
+// At most one newline a byte.
+theorem List::newlines_at_most(self span: List<u8>, length, i, count: u64,
+    started: i <= length, room: count.toNat() + (length - i).toNat() < 2 ^ 64):
+    span.newlines(length, i, count) <= count + (length - i) {
+    induct List::newlines(span, length, i, count); all_goals { bv_omega }
+}
+
+// `wc -l`: the newlines among the span's first `length` bytes.
+runtime fn List::count_lines(self span: List<u8>, length: u64) → u64 {
+    span.newlines(length, 0, 0)
+}
+
+theorem List::count_lines_at_most(self span: List<u8>, length: u64): span.count_lines(length) <= length {
+    let bound = span.newlines_at_most(length, 0, 0, bv_omega, bv_omega);
+    bv_omega
+}

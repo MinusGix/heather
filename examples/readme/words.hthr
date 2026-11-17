@@ -1,0 +1,41 @@
+import logic;
+import bool;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import nat;
+import omega;
+import tactic;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import list;
+import option;
+
+// A word function the compiler takes: `heather compile-x86 words.hthr clamp`.
+runtime fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+// Inside the bounds, clamping changes nothing.
+theorem clamp_inside({x, lo, hi: u64}, above: lo <= x, below: x <= hi): clamp(x, lo, hi) = x {
+    split_all; all_goals { bv_omega }
+}
+
+// Whatever `x` is, the answer is within the bounds.
+theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, lo, hi) ∧ clamp(x, lo, hi) <= hi {
+    split_all; all_goals { bv_omega }
+}
+
+// So clamping twice is clamping once.
+theorem clamp_twice(x: u64, {lo, hi: u64}, ordered: lo <= hi): clamp(clamp(x, lo, hi), lo, hi) = clamp(x, lo, hi) {
+    split_all; all_goals { bv_omega }
+}

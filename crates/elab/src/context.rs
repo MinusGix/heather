@@ -116,6 +116,10 @@ pub(crate) struct Cx {
     /// §6): an arm body checked against the probe's marker type is inferred
     /// instead, and its type recorded if it lives outside the arm.
     pub(crate) arm_type_probe: Option<Rc<crate::matching::ArmTypeProbe>>,
+    /// The names an enclosing `match` bound as a refined copy of a
+    /// hypothesis, or as its equation: each has a second reading
+    /// (`readings.rs`, docs/language/matching/arm-readings-design.md).
+    pub(crate) readings: Spine<Rc<crate::readings::Reading>>,
 }
 
 type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
@@ -279,6 +283,7 @@ impl Cx {
             case_splits: Rc::new(Vec::new()),
             pending_eqs: Rc::new(Vec::new()),
             arm_type_probe: None,
+            readings: Spine::new(),
         }
     }
 
@@ -378,6 +383,7 @@ impl Cx {
             case_splits: Rc::new(Vec::new()),
             pending_eqs: Rc::new(Vec::new()),
             arm_type_probe: None,
+            readings: Spine::new(),
         }
     }
 

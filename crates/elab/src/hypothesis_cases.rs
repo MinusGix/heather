@@ -101,8 +101,7 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
     if last.as_deref().is_some_and(|last| last.rsplit('.').next() == Some(&fingerprint)) {
         return err(
             format!(
-                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}` \
-                 (a hypothesis passed beside the split's equation in one call is kept as written)"
+                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}`"
             ),
             hypothesis.span,
         );
@@ -158,10 +157,11 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
     })
 }
 
-/// The rest of the block, as an argument of a step beside `h` that is not
-/// itself a name: a bare `fa` there would read as `h` passed beside the
-/// split's equation `fa`, which keeps `h` as written
-/// (`generalize::passed_beside`).
+/// The rest of the block, as an argument of a step that is not itself a
+/// name. It was written to keep a bare `fa` from reading as `h` passed
+/// beside the split's equation under the rule
+/// docs/language/matching/arm-readings-design.md replaced; nothing needs
+/// it now, and it changes no meaning.
 fn shielded(body: &Expr) -> Expr {
     match &body.kind {
         ExprKind::Var(_) => Expr {

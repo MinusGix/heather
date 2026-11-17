@@ -202,7 +202,7 @@ theorem Target::writes_request(self t: Target, env: Env, m: X86Memory(t.r.profil
 // + min(from, capacity), min(len, capacity - that)), and on from its end
 // with each answer decoded into the environment.
 theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, from, len, result, cap, names: Nat,
-    in_fd: fd < t.words, in_from: from < t.words, in_len: len < t.words, in_result: result < t.words,
+    in_fd: t.layout().word_fits(fd).IsTrue(), in_from: t.layout().word_fits(from).IsTrue(), in_len: t.layout().word_fits(len).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(),
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
     within: p.writes(t.layout(), known, out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
     tree: WriteResult → ITree<BitVec(64)>(Events::linux()),
@@ -713,7 +713,7 @@ theorem Prog::copy_in_within(self p: Prog, layout: Layout, buf, head, done: Nat,
 // are copied in from the offset in R9, and the count is put in the
 // result's home.
 theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
-    a, result: Nat, in_result: result < t.words, names: Nat,
+    a, result: Nat, in_result: t.layout().word_fits(result).IsTrue(), names: Nat,
     sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
     within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     bytes: List<BitVec(8)>, short: a + bytes.len() <= cap, tree: ITree<BitVec(64)>(Events::linux()),
@@ -781,7 +781,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
 
 // After a read that failed: TEST finds the negated errno negative, the JS
 // skips the copy, and the errno is put in the result's home.
-theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, result: Nat, in_result: result < t.words, names: Nat,
+theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, result: Nat, in_result: t.layout().word_fits(result).IsTrue(), names: Nat,
     sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
     within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     e: Nat, error: Errno(e), tree: ITree<BitVec(64)>(Events::linux()),
@@ -852,7 +852,7 @@ theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.larges
 // min(len, capacity - min(at, capacity))), and on from its end with each
 // answer decoded into the environment.
 theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, at, len, result, cap, names: Nat,
-    in_fd: fd < t.words, in_at: at < t.words, in_len: len < t.words, in_result: result < t.words,
+    in_fd: t.layout().word_fits(fd).IsTrue(), in_at: t.layout().word_fits(at).IsTrue(), in_len: t.layout().word_fits(len).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(),
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
     within: p.reads(t.layout(), known, out, fd, buf, at, len, result, cap, names).prog.Within(t.program),
     tree: ReadResult → ITree<BitVec(64)>(Events::linux()),

@@ -65,12 +65,15 @@ import omega;
 
 record Target {
     r: DataRegion,
+    // The words' room the region keeps before its buffers: the program's,
+    // whichever activation runs.
+    reserved: Nat,
     words: Nat,
     caps: List<Nat>,
     // Each word's home (native_alloc), every register in the pool.
     homes: Homes,
     homed: homes.fits().IsTrue(),
-    fits: Layout::of(r.low, words, caps, homes).size() <= r.size,
+    fits: Layout::placed(r.low, reserved, words, caps, homes).size() <= r.size,
     program: Prog,
     origin: BitVec(64),
     laid: program.laid_out().IsTrue(),
@@ -90,21 +93,32 @@ record Target {
     // The running activation: its frame at offset `index` of the stack, a
     // word a word of the file; the words above the frame (the registers
     // it saved, its return address, then its caller's frame and so on up);
-    // and how many calls deeper it may go, each needing a return address,
-    // at most six saved registers and a frame. Below them all is room for
-    // a function a region calls (`program_calls_room`: its room under
-    // `program_room` and the CALL's word) and for one return address more: a call
-    // with no room left is refused in the callee's entry, after its CALL.
+    // and how many calls deeper it may go. Below the frame is what the
+    // deepest of its calls takes with that room (`List::reach`: each level
+    // a return address, the registers the callee saves and the callee's
+    // own frame), then room for a function a region calls
+    // (`Homes::calls_room`: its room under the homes' table and the CALL's
+    // word) and for one return address more: a call with no room left is
+    // refused in the callee's entry, after its CALL.
     // `main`'s frame is the stack's top, with nothing above it.
+    // The procedures' placements (`Layout::body`): a callee's activation is
+    // this target with the callee's frame and homes.
+    bodies: List<Frame>,
+    // The procedures the running body may call (`Layout.callees`).
+    callees: List<Nat>,
     index: Nat,
     frames: List<BitVec(64)>,
+    // What the registers the homes pin held when the activation was entered,
+    // by their places in the home pool: it never writes them, so they hold
+    // it still, unsaved.
+    pinned: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: (room * (8 * (words + 7)) + program_calls_room(functions)) + 8 <= index,
+    roomy: (callees.reach(procedures, bodies, homes.places, room) + homes.calls_room(functions)) + 8 <= index,
 }
 
 fn Target::layout(self t: Target) → Layout {
-    Layout::of(t.r.low, t.words, t.caps, t.homes).with_procedures(t.procedures).with_functions(t.functions)
+    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies, t.callees)
 }
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
@@ -248,36 +262,36 @@ theorem Layout::word_below_buffers(self layout: Layout, i, t: Nat, inside: i < l
     omega(inside, short)
 }
 
-theorem Layout::buffers_after_words(self layout: Layout, b: Nat): 8 * layout.words <= layout.buffer_offset(b) {
-    let after: (8 * layout.words <= 8 * layout.words + layout.capacities.take(b).total()) = omega();
+theorem Layout::buffers_after_words(self layout: Layout, b: Nat): 8 * layout.reserved <= layout.buffer_offset(b) {
+    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.take(b).total()) = omega();
     after
 }
 
-theorem Layout::scratch_after_words(self layout: Layout): 8 * layout.words <= layout.scratch_offset() {
-    let after: (8 * layout.words <= 8 * layout.words + layout.capacities.total()) = omega();
+theorem Layout::scratch_after_words(self layout: Layout): 8 * layout.reserved <= layout.scratch_offset() {
+    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.total()) = omega();
     after
 }
 
 theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
     layout.buffer_offset(b) + cap <= layout.scratch_offset() {
-    let ends: ((8 * layout.words + layout.capacities.take(b).total()) + cap <= 8 * layout.words + layout.capacities.total()) =
+    let ends: ((8 * layout.reserved + layout.capacities.take(b).total()) + cap <= 8 * layout.reserved + layout.capacities.total()) =
         omega(layout.capacities.total_take_nth(b, cap, found));
     ends
 }
 
 // A buffer's range is the `b`th piece of the capacities packed after the
 // words, so the packing lemma places it.
-fn Layout::buffer_span(self layout: Layout, b, cap: Nat) → Span { Span::packed(8 * layout.words, layout.capacities, b, cap) }
+fn Layout::buffer_span(self layout: Layout, b, cap: Nat) → Span { Span::packed(8 * layout.reserved, layout.capacities, b, cap) }
 
 theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: layout.capacities.nth(b) = Some(cap), below: b < other):
     layout.buffer_offset(b) + cap <= layout.buffer_offset(other) {
-    Span::packed_before(8 * layout.words, layout.capacities, b, cap, other, found, below)
+    Span::packed_before(8 * layout.reserved, layout.capacities, b, cap, other, found, below)
 }
 
 // Two different buffers share no byte.
 theorem Layout::buffers_disjoint(self layout: Layout, b, cap, c, cap2: Nat, found: layout.capacities.nth(b) = Some(cap),
     found2: layout.capacities.nth(c) = Some(cap2), differ: b ≠ c): layout.buffer_span(b, cap).Disjoint(layout.buffer_span(c, cap2)) {
-    Span::packed_disjoint(8 * layout.words, layout.capacities, b, cap, c, cap2, found, found2, differ)
+    Span::packed_disjoint(8 * layout.reserved, layout.capacities, b, cap, c, cap2, found, found2, differ)
 }
 
 // The scratch range is one byte longer than the largest buffer, so a path

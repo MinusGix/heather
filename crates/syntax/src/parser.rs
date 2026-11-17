@@ -238,6 +238,9 @@ struct Parser {
     /// each as a `let mut` local, and a `mut self` one is returned beside the
     /// result. Taken by the first [`Parser::block_body`].
     pending_mut: Option<Vec<(String, bool)>>,
+    /// The next block is a function's body, where `return` may stand outside
+    /// any loop (docs/language/sequencing-surface-design.md §5.5).
+    fn_body: bool,
     /// The method whose body is being read, by its base name, when it is a
     /// `mut self` one: a call of that name on the receiver that ends the
     /// body is the method's own ([`Parser::receiver_end`]).
@@ -698,6 +701,7 @@ impl Parser {
             elseless_if: false,
             mut_params: Vec::new(),
             pending_mut: None,
+            fn_body: false,
             own_method: None,
             defer_binds: false,
             mutables: Vec::new(),
@@ -3291,7 +3295,9 @@ impl Parser {
             self.own_method = mut_self.is_some().then(|| name.rsplit("::").next().unwrap_or(&name).to_string());
             let ahead = self.on_names_ahead();
             let on_names = std::mem::replace(&mut self.body_on_names, ahead);
+            self.fn_body = true;
             let body = self.block();
+            self.fn_body = false;
             self.body_on_names = on_names;
             self.pending_mut = None;
             self.own_method = None;
@@ -3415,14 +3421,37 @@ impl Parser {
 
     fn block_body(&mut self, open: Span) -> R<Block> {
         let pending = self.pending_mut.take();
+        let fn_body = std::mem::take(&mut self.fn_body);
         let defer = std::mem::take(&mut self.defer_binds);
         let saved = self.mutables.len();
+        let receiver = pending.as_ref().and_then(|ps| ps.iter().find(|(_, s)| *s)).map(|(n, _)| n.clone());
         if let Some(ps) = &pending {
             self.mutables.extend(ps.iter().map(|(n, _)| n.clone()));
         }
         let block = self.block_body_in(open, pending);
         self.mutables.truncate(saved);
-        let block = crate::imperative::lower_block(block?, &mut self.next_hygienic)?;
+        let block = if fn_body {
+            // `return e` outside a loop ends the body (§5.5); in a `mut
+            // self` method it leaves with the receiver as it stands there,
+            // as the body's own end does (§8.2).
+            let ret = |value: Expr| match &receiver {
+                Some(x) => {
+                    let span = value.span;
+                    Expr {
+                        kind: ExprKind::App {
+                            head: Box::new(Expr { kind: ExprKind::Var(MUTATED_RECORD.into()), span }),
+                            args: vec![Expr { kind: ExprKind::Var(x.clone()), span }, value],
+                            named: vec![], explicit: false, goal_oriented: false,
+                        },
+                        span,
+                    }
+                }
+                None => value,
+            };
+            crate::imperative::lower_body(block?, &ret, &mut self.next_hygienic)?
+        } else {
+            crate::imperative::lower_block(block?, &mut self.next_hygienic)?
+        };
         if defer {
             return Ok(block);
         }
@@ -6296,6 +6325,21 @@ impl Parser {
             }
             TokKind::LParen => {
                 let open = self.bump().span;
+                // `(<=)`: an operator section, the bare symbol as a value
+                // anywhere an expression stands (issues/parenthesized-operator-symbols.md).
+                // It is the node `f(<=, x)` already gives a lone symbol between
+                // delimiters, so it resolves by the same designation ladder:
+                // `s.SortedPerm((<=), out)` at `BitVec(64)` is
+                // `BitVec::unsigned_le`. An infix token cannot begin an
+                // expression, so `(` symbol `)` has no other reading.
+                if let Some(sym) = Self::op_symbol(self.peek())
+                    && matches!(self.nth(1), TokKind::RParen)
+                {
+                    self.bump();
+                    let close = self.bump().span;
+                    let span = open.join(close);
+                    return Ok(Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity: OpFixity::Infix }, span });
+                }
                 // Parenthesising is the escape hatch for a record literal in
                 // scrutinee position **and for the comparison rung**, so both
                 // restrictions must lift here. The `no_eq` half is what makes
@@ -8443,6 +8487,29 @@ mod tests {
             &args[0].kind,
             ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "||"
         ));
+    }
+
+    #[test]
+    fn a_parenthesised_symbol_is_the_bare_symbol_anywhere() {
+        // `(<=)` is the node `f(<=, x)` gives the lone symbol, in any
+        // expression position: a call's argument, a receiver call's.
+        let k = body("f(x, (<=))");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        let k = body("xs.SortedPerm((<=), ys)");
+        let ExprKind::Dot { args: Some(args), .. } = &k else { panic!("expected a receiver call, got {k:?}") };
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        // Every infix symbol reads this way, `-` as subtraction.
+        for sym in ["+", "-", "*", "<", "&&", "||", "++", "^", "≈"] {
+            let k = body(&format!("({sym})"));
+            assert!(
+                matches!(&k, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == sym),
+                "({sym}) gave {k:?}"
+            );
+        }
+        // A symbol with an operand is no section: `(-x)` is still negation.
+        let k = body("(-x)");
+        assert!(matches!(&k, ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. })));
     }
 
     #[test]

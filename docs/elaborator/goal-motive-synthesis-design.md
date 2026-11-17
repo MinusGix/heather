@@ -298,14 +298,16 @@ take with the call as written (`p.word_from_slot(…)` rewrites it), and
 unfolding it out from under them is never what the proof wants. An
 equation between two computations is not about one call's value either.
 
-**Under `match h:`.** The match refines what the plain form refines, with
-two exceptions, both what `h` is passed to or with: a hypothesis that
-takes an equation about the scrutinee (as before, `False => g(h)`), and at
-a computed scrutinee one an arm passes as an argument of one call beside
-`h`, `InSlot => t.goes_word_to_slot(…, slot, within, …)`: the callee
-states the two about the test as written, which is what passing the
-evidence along is for (`generalize::passed_beside`). A variable scrutinee
-keeps its earlier rule.
+**Under `match h:`.** The match refines what the plain form refines, and
+an arm may still use a refined hypothesis at its type as written: the
+outer binder stays in scope under the refined copy, and the position a
+name is used at picks between the two
+(`docs/language/matching/arm-readings-design.md`, `readings.rs`). So a
+hypothesis that takes the equation (`False => g(h)`) and one passed beside
+it in a call (`InSlot => t.goes_word_to_slot(…, slot, within, …)`, whose
+callee states both about the test as written) check without a rule that
+looks at how the arm is written; the two exceptions that did
+(`passed_beside`, `takes_equation_about`) are gone.
 
 **What it changes.** Proofs that transported a hypothesis by hand where
 the match now refines it: `j(s, λ b _ => (!b && rest.spare(query)) = True,

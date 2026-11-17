@@ -202,6 +202,7 @@ mod iwf_family;
 mod iwf_w;
 mod gendefs;
 mod generalize;
+mod readings;
 mod goal_combinators;
 mod hypothesis_cases;
 mod goals;
@@ -1490,6 +1491,20 @@ impl application::ImplicitApplicationElab for Elaborator {
 
     fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, argument)
+    }
+
+    fn argument_readings(&self, cx: &Cx, term: &Term) -> Vec<(Term, Type)> {
+        let mut readings = readings::Readings(self).written(cx, term);
+        readings.extend(readings::Readings(self).equation(cx, term));
+        readings
+    }
+
+    fn argument_reading_replaced(&self, cx: &Cx, term: &Term) {
+        readings::Readings::note_replaced(cx, term);
+    }
+
+    fn argument_type_converts(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level) -> bool {
+        self.conv_types(cx, got, expected, level)
     }
 
     fn infer_polymorphic_argument(
@@ -3147,7 +3162,10 @@ impl Elaborator {
         let local_pos = cx.names.lookup(name);
         let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
-            (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
+            (Some(pos), Some(a)) if a.depth <= pos => {
+                readings::Readings(self).note_use_at(cx, name, pos, span);
+                return Ok(self.local(cx, pos));
+            }
             (_, Some(a)) => {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
@@ -3155,7 +3173,10 @@ impl Elaborator {
                 let (term, ty) = if splice { a.splice(by) } else { a.at(by) };
                 return Ok((term, ty, a.level.clone()));
             }
-            (Some(pos), None) => return Ok(self.local(cx, pos)),
+            (Some(pos), None) => {
+                readings::Readings(self).note_use_at(cx, name, pos, span);
+                return Ok(self.local(cx, pos));
+            }
             (None, None) => {}
         }
         if let Some((ind, i)) = self.ctor_of(name).or_else(|| Constructors(self).ctor_over_types(name)) {
