@@ -1032,3 +1032,125 @@ theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K),
             λ v => BitVec::bool_eq_by_xor(q.eval(input_env(K, v)), r.eval(input_env(K, v)))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Inputs read as the same bits wherever they appear.
+
+theorem cong_args<A, B, C>(f: A → B → C, {a1, a2: A}, {b1, b2: B}, ea: a1 = a2, eb: b1 = b2): f(a1, b1) = f(a2, b2) {
+    j(ea, λ x _ => f(a1, b1) = f(x, b2), j(eb, λ y _ => f(a1, b1) = f(a1, y), refl))
+}
+
+theorem window_ext(n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k), o, w: Nat): window(b1, o, w, n := n) = window(b2, o, w, n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => match w {
+            Zero => refl,
+            Succ(r) => BitVec::cons_bit_cong(k, same(o), window_ext(k, b1, b2, same, Succ(o), r)),
+        },
+    }
+}
+
+theorem BVExpr::eval_ext(self e: BVExpr, n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k)): e.eval(n, b1) = e.eval(n, b2) {
+    match e {
+        BVar(o, w) => window_ext(n, b1, b2, same, o, w),
+        BConst(x) => refl,
+        BNot(a) => cong_fn(λ (x: BitVec(n)) => x.complement(), a.eval_ext(n, b1, b2, same)),
+        BAnd(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.band(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        BOr(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bor(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        BXor(a, b) => cong_args<BitVec(n), BitVec(n), BitVec(n)>(λ x y => x.bxor(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+    }
+}
+
+theorem BVPred::eval_ext(self p: BVPred, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k)): p.eval(b1) = p.eval(b2) {
+    match p {
+        PConst(b) => refl,
+        PEq(n, a, b) => cong_args<BitVec(n), BitVec(n), Bool>(λ x y => x.eq_bit(y), a.eval_ext(n, b1, b2, same), b.eval_ext(n, b1, b2, same)),
+        PNot(q) => cong_fn(λ (x: Bool) => !x, q.eval_ext(b1, b2, same)),
+        PAnd(q, r) => Bool::and_cong(q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
+        POr(q, r) => Bool::or_cong(q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
+        PIff(q, r) => cong_args<Bool, Bool, Bool>(λ x y => BitVec::bool_eq(x, y), q.eval_ext(b1, b2, same), r.eval_ext(b1, b2, same)),
+    }
+}
+
+// The circuit that starts every blast: node 0, then input bit `k` at node
+// `k + 1` for each `k < K`.
+fn Circ::inputs(K: Nat) → Circ {
+    match K {
+        Zero => Circ::empty(),
+        Succ(k) => Circ::inputs(k).push(GInput(0, k)).fst,
+    }
+}
+
+theorem Circ::inputs_good(K: Nat): Circ::inputs(K).Good() ∧ ((Circ::inputs(K).size = Succ(K)) ∧
+    ((env: Nat → Nat → Bool) → (k: Nat) → k < K → Circ::inputs(K).at(env)(Succ(k)) = env(0, k))) {
+    match K {
+        Zero => ⟨Circ::empty_good(), ⟨refl, λ env k lt => { let no: (False) = omega(lt); false_elim(no) }⟩⟩,
+        Succ(m) => {
+            let prev = Circ::inputs_good(m);
+            let c = Circ::inputs(m);
+            let g = c.push_grows(prev.left, GInput(0, m));
+            ⟨g.left, ⟨Nat::cong_succ(prev.right.left), λ env k lt =>
+                (match Succ(k).leb(m) as λ t => Succ(k).leb(m) = t → c.push(GInput(0, m)).fst.at(env)(Succ(k)) = env(0, k) {
+                    True => λ e => {
+                        let below: (k < m) = Nat::le_of_leb(Succ(k), m, e);
+                        let small: (Succ(k) < c.size) = omega(below, prev.right.left);
+                        trans(g.right.right(env, Succ(k), small), prev.right.right(env, k, below))
+                    },
+                    False => λ e => {
+                        let nle: ¬(Succ(k) <= m) = λ h => absurd(trans(sym(e), Nat::leb_true(Succ(k), m, h)));
+                        let km: (m = k) = omega(nle, lt);
+                        let top: (c.push(GInput(0, m)).fst.at(env)(Succ(m)) = env(0, m)) =
+                            j(prev.right.left, λ z _ => c.push(GInput(0, m)).fst.at(env)(z) = env(0, m), c.push_value(prev.left, GInput(0, m), env));
+                        j(km, λ z _ => c.push(GInput(0, m)).fst.at(env)(Succ(z)) = env(0, z), top)
+                    },
+                })(refl)
+            ⟩⟩
+        },
+    }
+}
+
+theorem Bool::and_cong_when(t: Bool, {x, y: Bool}, h: t = True → x = y): t && x = t && y {
+    (match t as λ s => (s = True → x = y) → s && x = s && y {
+        False => λ h => refl,
+        True => λ h => h(refl),
+    })(h)
+}
+
+// ---------------------------------------------------------------------------
+// The end: a predicate's circuit, its clauses, and what refuting them proves.
+
+fn BVPred::circuit(self p: BVPred, K: Nat) → Pair<Circ, Lit> { p.blast(K)(Circ::inputs(K)) }
+
+// The clauses a refutation of which proves the circuit's output true: the
+// circuit's own and the output's negation.
+fn Circ::refutation_clauses(r: Pair<Circ, Lit>) → List<List<Nat>> {
+    cnf_of(Cons([r.snd.not()], tseitin(r.fst.gates, r.fst.gates.len())))
+}
+
+fn BVPred::clauses(self p: BVPred, K: Nat) → List<List<Nat>> { Circ::refutation_clauses(p.circuit(K)) }
+
+// No assignment satisfies `p`'s clauses, so `p` holds at all inputs: bit `k`
+// of the input is `bits(k)` for `k < K`, and inputs past `K` read false.
+theorem BVPred::unsat_sound(self p: BVPred, K: Nat, unsat: (v: Nat → Bool) → all_true(p.clauses(K), v) = False, bits: Nat → Bool):
+    p.eval(λ k => Succ(k).leb(K) && bits(k)) = True {
+    let c0 = Circ::inputs(K);
+    let ig = Circ::inputs_good(K);
+    let r = p.circuit(K);
+    let env: (Nat → Nat → Bool) = λ i k => bits(k);
+    let m = p.blast_ok(K)(c0, ig.left, j(sym(ig.right.left), λ z _ => K < z, Nat::lt_succ_self(K)));
+    let v = r.fst.at(env);
+    let out: (r.snd.value(v) = True) = circuit_unsat(env, r.fst.gates, r.snd, unsat);
+    let meaning: (r.snd.value(v) = p.eval(input_env(K, v))) = m.right.right(r.fst, r.fst.grows_refl(m.left.left), env);
+    let same: ((k: Nat) → input_env(K, v)(k) = Succ(k).leb(K) && bits(k)) = λ k => Bool::and_cong_when(Succ(k).leb(K), λ e => {
+        let le: (Succ(k) <= K) = Nat::le_of_leb(Succ(k), K, e);
+        let lt: (Succ(k) < c0.size) = omega(le, ig.right.left);
+        trans(m.left.right.right(env, Succ(k), lt), ig.right.right(env, k, le))
+    });
+    trans(sym(p.eval_ext(input_env(K, v), λ k => Succ(k).leb(K) && bits(k), same)), trans(sym(meaning), out))
+}
+
+// The same from a refutation checked in one step.
+theorem BVPred::refuted_sound(self p: BVPred, K: Nat, steps: List<Step>, ok: check(formula_of(p.clauses(K)), steps) = True, bits: Nat → Bool):
+    p.eval(λ k => Succ(k).leb(K) && bits(k)) = True {
+    p.unsat_sound(K, λ v => refuted(p.clauses(K), steps, ok, v), bits)
+}
