@@ -219,7 +219,7 @@ impl Generalize<'_> {
             }
         }
         Refined {
-            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None))),
+            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|_| (scrutinee, None)), eqbind),
             retyped: Vec::new(),
             beside: Vec::new(),
         }
@@ -288,7 +288,7 @@ impl Generalize<'_> {
             let passed = passed_beside(arms, h);
             about.iter().map(|&q| cx.names[q].to_string()).filter(|n| passed.contains(n)).collect()
         });
-        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))));
+        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind);
         retyped.retain(|(q, _)| positions.contains(q));
         Refined { positions, retyped, beside }
     }
@@ -302,7 +302,10 @@ impl Generalize<'_> {
     /// beside `h` in one call, `InSlot => t.goes_slot(…, slot, within, …)`:
     /// the callee states the two about the test as written, which is what
     /// passing the evidence along is for
-    /// (issues/case-split-refines-hypotheses-under-calls.md).
+    /// (issues/case-split-refines-hypotheses-under-calls.md). A hypothesis
+    /// named like the equation `eqbind` is not refined for its name: the
+    /// arms' mention of that name is the equation, which a refined copy of
+    /// the hypothesis would shadow.
     fn select_refined(
         &self,
         cx: &Cx,
@@ -310,6 +313,7 @@ impl Generalize<'_> {
         expected: &Type,
         about: Vec<usize>,
         convoy: Option<(&Term, Option<&str>)>,
+        eqbind: Option<&str>,
     ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
@@ -334,7 +338,9 @@ impl Generalize<'_> {
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && ((named.iter().any(|n| n == &cx.names[q]) && !takes_h(q))
+                    && ((named.iter().any(|n| n == &cx.names[q])
+                        && eqbind.is_none_or(|h| h != &cx.names[q])
+                        && !takes_h(q))
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
