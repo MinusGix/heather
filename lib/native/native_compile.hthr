@@ -117,15 +117,15 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // evaluation (issues/native-leaf-pool-per-leaf.md).
 // The procedures are the table a call names (docs/native/native-procedures-design.md),
 // the functions the ones a region's `Call` does.
-record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
+record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
     procedures: List<Procedure> := [], functions: List<Function> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions)
 }
 
 fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions)
 }
 
 // Word `id` has a slot.
@@ -137,12 +137,12 @@ fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
 
 fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
 fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
-fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.words + layout.capacities.take(buf).total() }
+fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.reserved + layout.capacities.take(buf).total() }
 fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
 // A buffer's capacity: none where the file has no such buffer.
 fn Layout::capacity(self layout: Layout, buf: Nat) → Nat { match layout.capacities.nth(buf) { None => 0, Some(cap) => cap } }
 fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
-fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layout.capacities.total() }
+fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.reserved + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
@@ -343,7 +343,16 @@ fn register_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, R
 fn Homes::leaf_pool(self homes: Homes) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !homes.uses(register)) }
 
 // A layout with its pools computed from its homes.
-fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout(low, words, capacities, homes, homes.leaf_pool(), homes.registers()) }
+// A layout whose data region keeps `reserved` words' room before the
+// buffers, for an activation of `words` words with `homes`: the region is
+// the program's, the same under every activation, and the words and their
+// homes are the running activation's
+// (docs/native/native-procedure-frames-design.md §2.3).
+fn Layout::placed(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers())
+}
+// The layout of a program's first activation: the region keeps its words' room.
+fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout::placed(low, words, words, capacities, homes) }
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
 theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
     Layout::of(low, words, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }

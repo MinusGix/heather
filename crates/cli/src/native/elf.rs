@@ -662,7 +662,7 @@ fn layout_literal(src: &str, homes: &str, sizes: &[u64], spelled: &[u64]) -> Opt
     // `home_register`: a home past the pool reads as the pool's first.
     let used: Vec<&str> = of.iter().filter(|&&h| h != 0).map(|&h| HOME_POOL.get((h - 1) as usize).copied().unwrap_or(HOME_POOL[0])).collect();
     let list = |pool: &[&str], keep: bool| pool.iter().filter(|r| used.contains(r) == keep).copied().collect::<Vec<_>>().join(", ");
-    Some(format!("Layout({LOW}, {words}, [{}], {homes}, [{}], [{}], {src}().procedures, {src}().functions)",
+    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{}], [{}], {src}().procedures, {src}().functions)",
         capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", "), list(&REGISTER_POOL, false), list(&HOME_POOL, true)))
 }
 

@@ -75,7 +75,7 @@ import set_tactic;
 // The same target running another activation.
 fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.words + frames.len()) <= t.stack.size,
     roomy: (room * (8 * (t.words + 7)) + program_calls_room(t.functions)) + 8 <= index) → Target {
-    Target(t.r, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
+    Target(t.r, t.reserved, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
         t.stack_above, t.stack_canonical, index, frames, room, framed, roomy)
 }
 
