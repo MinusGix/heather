@@ -2155,6 +2155,45 @@ theorem layout_iff(p2, q2, p, q: Bool, ep: p2 = p, eq: q2 = q, h: BitVec::bool_e
     trans(sym(ep), trans(BitVec::bool_eq_true(p2, q2, h), eq))
 }
 theorem layout_true(p2, p: Bool, ep: p2 = p, h: p2 = True): p = True { trans(sym(ep), h) }
+theorem layout_lt(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a2.unsigned_lt_bit(b2) = True): a.unsigned_lt(b) {
+    j(ea, λ z _ => z.unsigned_lt(b), j(eb, λ z _ => a2.unsigned_lt(z), BitVec::reflects_lt(n, a2, b2).left(h)))
+}
+theorem layout_le(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: !b2.unsigned_lt_bit(a2) = True): a.unsigned_le(b) {
+    j(ea, λ z _ => z.unsigned_le(b), j(eb, λ z _ => a2.unsigned_le(z), BitVec::reflects_le(n, a2, b2).left(h)))
+}
+theorem layout_ne(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: !a2.eq_bit(b2) = True): a ≠ b {
+    λ e => absurd(sym(trans(sym(h), cong_fn(λ (t: Bool) => !t, BitVec::eq_bit_of_eq(n, a2, b2, trans(ea, trans(e, sym(eb))))))))
+}
+
+// A hypothesis, read: the claim at its atoms gives its predicate at the
+// laid-out stream, as `layout_eq` and its kin give it back for the goal.
+theorem layout_eq_hyp(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a = b): a2.eq_bit(b2) = True {
+    BitVec::eq_bit_of_eq(n, a2, b2, trans(ea, trans(h, sym(eb))))
+}
+theorem layout_iff_hyp(p2, q2, p, q: Bool, ep: p2 = p, eq: q2 = q, h: p = q): BitVec::bool_eq(p2, q2) = True {
+    j(trans(ep, trans(h, sym(eq))), λ z _ => BitVec::bool_eq(p2, z) = True, BitVec::bool_eq_self(p2))
+}
+theorem layout_true_hyp(p2, p: Bool, ep: p2 = p, h: p = True): p2 = True { trans(ep, h) }
+theorem layout_lt_hyp(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a.unsigned_lt(b)): a2.unsigned_lt_bit(b2) = True {
+    let p: a2.unsigned_lt(b2) = j(sym(ea), λ z _ => z.unsigned_lt(b2), j(sym(eb), λ z _ => a.unsigned_lt(z), h));
+    eq_true_of_is_true(a2.unsigned_lt_bit(b2), reflects_intro(BitVec::reflects_lt(n, a2, b2), p))
+}
+theorem layout_le_hyp(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a.unsigned_le(b)): !b2.unsigned_lt_bit(a2) = True {
+    let p: a2.unsigned_le(b2) = j(sym(ea), λ z _ => z.unsigned_le(b2), j(sym(eb), λ z _ => a.unsigned_le(z), h));
+    eq_true_of_is_true(!b2.unsigned_lt_bit(a2), reflects_intro(BitVec::reflects_le(n, a2, b2), p))
+}
+theorem layout_ne_hyp(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a ≠ b): !a2.eq_bit(b2) = True {
+    match e: a2.eq_bit(b2) {
+        True => false_elim(h(trans(sym(ea), trans(BitVec::eq_of_eq_bit(n, a2, b2, e), eb)))),
+        False => refl,
+    }
+}
+
+// The predicate of a claim under a hypothesis is `¬h ∨ r`: with the
+// hypothesis's predicate true, the rest is.
+theorem layout_imp(h, r: BVPred, bits: Nat → Bool, all: POr(PNot(h), r).eval(bits) = True, hh: h.eval(bits) = True): r.eval(bits) = True {
+    trans(sym(cong_fn(λ (t: Bool) => !t || r.eval(bits), hh)), all)
+}
 
 // A closed side condition, `(o + w).leb(K) = True` at numerals, by evaluation.
 theorem layout_ok(): True = True { refl }

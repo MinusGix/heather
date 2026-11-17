@@ -72,7 +72,7 @@ record BVOps {
     word: Nat, add: Nat, sub: Nat, mul: Nat, neg: Nat, band: Nat, bor: Nat, bxor: Nat, compl: Nat,
     shl: Nat, shr: Nat, of_nat: Nat, zext: Nat, trunc: Nat, sext: Nat, concat: Nat,
     eq_bit: Nat, ult: Nat, slt: Nat, bit_at: Nat, and: Nat, or: Nat, not: Nat, iff: Nat, bool: Nat,
-    take: Nat, drop: Nat, head: Nat, xor: Nat,
+    take: Nat, drop: Nat, head: Nat, xor: Nat, lt: Nat, le: Nat, not_p: Nat,
 }
 
 fn bv_ref(name: String) → Tac<Nat> {
@@ -110,8 +110,11 @@ fn bv_ops() → Tac<BVOps> {
     let drop <- bv_ref("bitvec::BitVec::drop_low");
     let head <- bv_ref("bitvec::BitVec::head_bit");
     let xor <- bv_ref("bool::Bool::xor");
+    let lt <- bv_ref("bitvec::BitVec::unsigned_lt");
+    let le <- bv_ref("bitvec::BitVec::unsigned_le");
+    let not_p <- bv_ref("logic::Not");
     pure(BVOps(word, add, sub, mul, neg, band, bor, bxor, compl, shl, shr, of_nat, zext, trunc, sext, concat, eq_bit, ult, slt, bit_at, and, or, not, iff, bool,
-        take, drop, head, xor))
+        take, drop, head, xor, lt, le, not_p))
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +483,8 @@ fn BVPred::quote(self p: BVPred, q: BVQuote) → Expr {
 record BVLemmas {
     clauses: Handle, norm: Handle, unsat: Handle, lay_word: Handle, lay_bool: Handle, no_bits: Handle,
     here: Handle, past: Handle, ok: Handle, trans: Handle, cong: Handle, congr: Handle, same: Handle,
-    eq: Handle, iff: Handle, tru: Handle,
+    eq: Handle, iff: Handle, tru: Handle, lt: Handle, le: Handle, ne: Handle,
+    eq_hyp: Handle, iff_hyp: Handle, tru_hyp: Handle, lt_hyp: Handle, le_hyp: Handle, ne_hyp: Handle, imp: Handle,
 }
 
 fn bv_lemmas() → Tac<BVLemmas> {
@@ -500,7 +504,18 @@ fn bv_lemmas() → Tac<BVLemmas> {
     let eq <- bv_resolve("bitblast::layout_eq");
     let iff <- bv_resolve("bitblast::layout_iff");
     let tru <- bv_resolve("bitblast::layout_true");
-    pure(BVLemmas(clauses, norm, unsat, lay_word, lay_bool, no_bits, here, past, ok, trans, cong, congr, same, eq, iff, tru))
+    let lt <- bv_resolve("bitblast::layout_lt");
+    let le <- bv_resolve("bitblast::layout_le");
+    let ne <- bv_resolve("bitblast::layout_ne");
+    let eq_hyp <- bv_resolve("bitblast::layout_eq_hyp");
+    let iff_hyp <- bv_resolve("bitblast::layout_iff_hyp");
+    let tru_hyp <- bv_resolve("bitblast::layout_true_hyp");
+    let lt_hyp <- bv_resolve("bitblast::layout_lt_hyp");
+    let le_hyp <- bv_resolve("bitblast::layout_le_hyp");
+    let ne_hyp <- bv_resolve("bitblast::layout_ne_hyp");
+    let imp <- bv_resolve("bitblast::layout_imp");
+    pure(BVLemmas(clauses, norm, unsat, lay_word, lay_bool, no_bits, here, past, ok, trans, cong, congr, same, eq, iff, tru, lt, le, ne,
+        eq_hyp, iff_hyp, tru_hyp, lt_hyp, le_hyp, ne_hyp, imp))
 }
 
 // The stream from Boolean `j` on.
@@ -625,53 +640,179 @@ fn bv_counterexample(locals: List<LocalInfo>, ws: List<BVWord>, bs: List<LocalRe
 // ---------------------------------------------------------------------------
 // The tactic.
 
-// The claim's sides: words of width `n`, two Booleans, or a Boolean that is
-// `True`.
-inductive BVGoal { GWords(n: Nat, a: Handle, b: Handle), GBools(p: Handle, q: Handle), GTrue(p: Handle) }
+// A claim, the goal's or a hypothesis's: an equation between words of width
+// `n`, between Booleans, a Boolean that is `True`, or `a < b`, `a <= b`,
+// `a ≠ b` between words.
+inductive BVClaim {
+    CWords(n: Nat, a: Handle, b: Handle),
+    CBools(p: Handle, q: Handle),
+    CTrue(p: Handle),
+    CLt(n: Nat, a: Handle, b: Handle),
+    CLe(n: Nat, a: Handle, b: Handle),
+    CNe(n: Nat, a: Handle, b: Handle),
+}
 
-fn bv_goal(ops: BVOps, t: Handle) → Tac<BVGoal> {
+fn bv_word_claim(ops: BVOps, a, b: Handle, k: Nat → Handle → Handle → BVClaim) → Tac<BVClaim> {
+    let n <- bv_width(ops, a);
+    match n {
+        Some(n) => pure(k(n, a, b)),
+        None => fail("bv_decide: the sides are not words", []),
+    }
+}
+
+fn bv_pair(args: List<Handle>, k: Handle → Handle → Tac<BVClaim>) → Tac<BVClaim> {
+    match args {
+        Cons(a, rest) => match rest {
+            Cons(b, Nil) => k(a, b),
+            _ => fail("bv_decide: the comparison is not of two words", []),
+        },
+        Nil => fail("bv_decide: the comparison is not of two words", []),
+    }
+}
+
+fn bv_claim(ops: BVOps, t: Handle) → Tac<BVClaim> {
     let v <- view(t);
     match v {
         HEq(a, b) => {
             let n <- bv_width(ops, a);
             match n {
-                Some(n) => pure(GWords(n, a, b)),
+                Some(n) => pure(CWords(n, a, b)),
                 None => {
                     let vb <- view(b);
                     match vb {
-                        HCtor(ty, i, _, Nil) => match ty.id.same(ops.bool) && i.same(1) { True => pure(GTrue(a)), False => pure(GBools(a, b)) },
-                        _ => pure(GBools(a, b)),
+                        HCtor(ty, i, _, Nil) => match ty.id.same(ops.bool) && i.same(1) { True => pure(CTrue(a)), False => pure(CBools(a, b)) },
+                        _ => pure(CBools(a, b)),
                     }
                 },
             }
         },
-        _ => fail("bv_decide: the goal is not an equation between words or Booleans", []),
+        HGlobal(g, _, args) => match g.id.same(ops.lt) {
+            True => bv_pair(args, λ a b => bv_word_claim(ops, a, b, λ n x y => CLt(n, x, y))),
+            False => match g.id.same(ops.le) {
+                True => bv_pair(args, λ a b => bv_word_claim(ops, a, b, λ n x y => CLe(n, x, y))),
+                False => match g.id.same(ops.not_p) {
+                    True => match args {
+                        Cons(p, Nil) => {
+                            let vp <- view(p);
+                            match vp {
+                                HEq(a, b) => bv_word_claim(ops, a, b, λ n x y => CNe(n, x, y)),
+                                _ => fail("bv_decide: a negation of something other than an equation between words", []),
+                            }
+                        },
+                        _ => fail("bv_decide: the claim is not one bv_decide reads", []),
+                    },
+                    False => fail("bv_decide: the goal is not an equation or comparison between words or Booleans", []),
+                },
+            },
+        },
+        _ => fail("bv_decide: the goal is not an equation or comparison between words or Booleans", []),
+    }
+}
+
+fn bv_read_words(ops: BVOps, n: Nat, a, b: Handle, st: BVAtoms, k: BVExpr → BVExpr → BVPred) → Tac<BVRead> {
+    let ra <- bv_read(ops, a, WWord(n), st, 4096);
+    let rb <- bv_read(ops, b, WWord(n), ra.st, 4096);
+    pure(BVRead(OBool(k(ra.word(), rb.word())), rb.st))
+}
+
+// The claim's predicate, its atoms added to `st`.
+fn bv_read_claim(ops: BVOps, c: BVClaim, st: BVAtoms) → Tac<BVRead> {
+    match c {
+        CWords(n, a, b) => bv_read_words(ops, n, a, b, st, λ x y => PEq(n, x, y)),
+        CBools(p, q) => {
+            let rp <- bv_read(ops, p, WBool, st, 4096);
+            let rq <- bv_read(ops, q, WBool, rp.st, 4096);
+            pure(BVRead(OBool(PIff(rp.bool(), rq.bool())), rq.st))
+        },
+        CTrue(p) => bv_read(ops, p, WBool, st, 4096),
+        CLt(n, a, b) => bv_read_words(ops, n, a, b, st, λ x y => PUlt(n, x, y)),
+        CLe(n, a, b) => bv_read_words(ops, n, a, b, st, λ x y => PNot(PUlt(n, y, x))),
+        CNe(n, a, b) => bv_read_words(ops, n, a, b, st, λ x y => PNot(PEq(n, x, y))),
+    }
+}
+
+// A hypothesis the tactic reads: its proof and its predicate.
+record BVHyp { proof: LocalRef, claim: BVClaim, pred: BVPred }
+
+// The hypotheses among `locals` that read as claims, their atoms added to
+// `st`; the others are left out.
+fn bv_hyps(ops: BVOps, locals: List<LocalInfo>, st: BVAtoms) → Tac<Pair<List<BVHyp>, BVAtoms>> {
+    match locals {
+        Nil => pure(Pair([], st)),
+        Cons(h, rest) => {
+            let tried <- attempt(bv_claim(ops, h.ty).bind(λ c => bv_read_claim(ops, c, st).bind(λ r => pure(Pair(c, r)))));
+            match tried {
+                Done(cr) => {
+                    let more <- bv_hyps(ops, rest, cr.snd.st);
+                    pure(Pair(Cons(BVHyp(h.ref, cr.fst, cr.snd.bool()), more.fst), more.snd))
+                },
+                Failed(_, _) => bv_hyps(ops, rest, st),
+            }
+        },
+    }
+}
+
+// The claim under its hypotheses: `¬h₁ ∨ (¬h₂ ∨ … goal)`.
+fn bv_under(hs: List<BVHyp>, goal: BVPred) → BVPred {
+    match hs {
+        Nil => goal,
+        Cons(h, rest) => POr(PNot(h.pred), bv_under(rest, goal)),
+    }
+}
+
+// The claim from its predicate at the laid-out atoms (`last`, as the goal),
+// or its predicate there from the claim's proof (`last`, as a hypothesis).
+fn bv_bridge(l: BVLemmas, k: Nat, ws: List<BVWord>, bools: Expr, c: BVClaim, as_goal: Bool, last: Expr) → Tac<Expr> {
+    let words = λ (n: Nat) (a: Handle) (b: Handle) (goal: Handle) (hyp: Handle) => bv_abstracted(a, ws).bind(λ fa => bv_abstracted(b, ws).bind(λ fb =>
+        pure(bv_app(as_goal.select(goal, hyp), [NatLit(n), Blank, Blank, Hd(a), Hd(b), bv_replaced(l, k, ws, bools, fa, a), bv_replaced(l, k, ws, bools, fb, b), last]))));
+    match c {
+        CWords(n, a, b) => words(n, a, b, l.eq, l.eq_hyp),
+        CBools(p, q) => {
+            let fp <- bv_abstracted(p, ws);
+            let fq <- bv_abstracted(q, ws);
+            pure(bv_app(as_goal.select(l.iff, l.iff_hyp), [Blank, Blank, Hd(p), Hd(q), bv_replaced(l, k, ws, bools, fp, p), bv_replaced(l, k, ws, bools, fq, q), last]))
+        },
+        CTrue(p) => {
+            let fp <- bv_abstracted(p, ws);
+            pure(bv_app(as_goal.select(l.tru, l.tru_hyp), [Blank, Hd(p), bv_replaced(l, k, ws, bools, fp, p), last]))
+        },
+        CLt(n, a, b) => words(n, a, b, l.lt, l.lt_hyp),
+        CLe(n, a, b) => words(n, a, b, l.le, l.le_hyp),
+        CNe(n, a, b) => words(n, a, b, l.ne, l.ne_hyp),
+    }
+}
+
+// From the whole predicate at the stream (`holds`), each hypothesis
+// discharged in turn (`layout_imp`), to the goal's predicate there. `p` is
+// the placed predicate, `¬h ∨ rest` once per hypothesis.
+fn bv_discharge(l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, hs: List<BVHyp>, p: BVPred, holds: Expr) → Tac<Expr> {
+    match hs {
+        Nil => pure(holds),
+        Cons(h, rest) => match p {
+            POr(nh, r) => match nh {
+                PNot(hp) => {
+                    let hh <- bv_bridge(l, k, ws, bools, h.claim, False, Local(h.proof));
+                    bv_discharge(l, q, k, ws, bools, rest, r, bv_app(l.imp, [hp.quote(q), r.quote(q), Blank, holds, hh]))
+                },
+                _ => fail("bv_decide: the hypotheses' layout", []),
+            },
+            _ => fail("bv_decide: the hypotheses' layout", []),
+        },
     }
 }
 
 fn bv_decide() → Tac<Expr> {
     let g <- goal();
     let ops <- bv_ops();
-    let shape <- bv_goal(ops, g.target);
-    let empty = BVAtoms([], []);
-    let read <- match shape {
-        GWords(n, a, b) => {
-            let ra <- bv_read(ops, a, WWord(n), empty, 4096);
-            let rb <- bv_read(ops, b, WWord(n), ra.st, 4096);
-            pure(BVRead(OBool(PEq(n, ra.word(), rb.word())), rb.st))
-        },
-        GBools(p, q) => {
-            let rp <- bv_read(ops, p, WBool, empty, 4096);
-            let rq <- bv_read(ops, q, WBool, rp.st, 4096);
-            pure(BVRead(OBool(PIff(rp.bool(), rq.bool())), rq.st))
-        },
-        GTrue(p) => bv_read(ops, p, WBool, empty, 4096),
-    };
-    let ws = read.st.words;
-    let bs = read.st.bools;
+    let claim <- bv_claim(ops, g.target);
+    let read <- bv_read_claim(ops, claim, BVAtoms([], []));
+    let under <- bv_hyps(ops, g.locals, read.st);
+    let hs = under.fst;
+    let ws = under.snd.words;
+    let bs = under.snd.bools;
     let wbits = bv_word_bits(ws);
     let k = wbits + bs.len();
-    let pred = read.bool().placed(bv_offsets(ws, 0), wbits);
+    let pred = bv_under(hs, read.bool()).placed(bv_offsets(ws, 0), wbits);
     let q <- bv_quotes();
     let l <- bv_lemmas();
     let pe = pred.quote(q);
@@ -681,23 +822,8 @@ fn bv_decide() → Tac<Expr> {
         Unsatisfiable(r) => {
             let bools = bv_lay_bools(l, bs, wbits);
             let lay = bv_lay(l, ws, 0, bools);
-            let holds = bv_app(l.unsat, [pe, NatLit(k), Hd(r), lay]);
-            match shape {
-                GWords(n, a, b) => {
-                    let fa <- bv_abstracted(a, ws);
-                    let fb <- bv_abstracted(b, ws);
-                    pure(bv_app(l.eq, [NatLit(n), Blank, Blank, Hd(a), Hd(b), bv_replaced(l, k, ws, bools, fa, a), bv_replaced(l, k, ws, bools, fb, b), holds]))
-                },
-                GBools(p, q2) => {
-                    let fp <- bv_abstracted(p, ws);
-                    let fq <- bv_abstracted(q2, ws);
-                    pure(bv_app(l.iff, [Blank, Blank, Hd(p), Hd(q2), bv_replaced(l, k, ws, bools, fp, p), bv_replaced(l, k, ws, bools, fq, q2), holds]))
-                },
-                GTrue(p) => {
-                    let fp <- bv_abstracted(p, ws);
-                    pure(bv_app(l.tru, [Blank, Hd(p), bv_replaced(l, k, ws, bools, fp, p), holds]))
-                },
-            }
+            let holds <- bv_discharge(l, q, k, ws, bools, hs, pred, bv_app(l.unsat, [pe, NatLit(k), Hd(r), lay]));
+            bv_bridge(l, k, ws, bools, claim, True, holds)
         },
     }
 }
