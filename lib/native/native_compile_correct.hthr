@@ -1082,7 +1082,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes, bodies);
@@ -1650,7 +1650,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes, bodies);
@@ -1699,7 +1699,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
 
 // The compiled program, from its first byte with its code resident, its
 // region zero, a stack above the region whose top is RSP and deep enough
-// for the source's calls, and the command line `args` at RSP above the
+// for the source's calls, and the command line `args` at RDI above the
 // stack, simulates the source run with `args` at every fuel, whatever homes
 // the compile was given: it checked them (`Source::allocation_ok`).
 theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, bodies: List<Frame>, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
@@ -1709,7 +1709,7 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, bodies:
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes, bodies), src.layout(r.low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {

@@ -667,8 +667,8 @@ separate machines do not slow each other's tests.
   done. The host interface reads goals, builds checked terms and reports
   failures with what it tried (rounds 1–2¾), and `split_all` has a Heather
   port that closes the Rust one's goals (`tac-first-port`). Every program
-  `write-elf` builds gets `<s>_elf_simulates`, `SimProgram` of the ELF
-  against `src.denote(args)` (`Source::elf_file_simulates`), and
+  `write-elf` builds gets `<s>_elf_runs`, `SimProgram` of the ELF
+  against `src.denote(args)` (`Source::elf_runs`), and
   `sim_every_run` says a run that got a returning trace's answers produced
   exactly that trace's events. The claim holds at every fuel, so liveness is
   not stated. The host interface's remaining work

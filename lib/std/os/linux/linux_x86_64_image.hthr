@@ -38,8 +38,8 @@ import nat;
 import option;
 import omega;
 
-// Where the program starts: its first byte, past the 232-byte header.
-fn io_entry() → BitVec(64) { BitVec::ofNat(0x4000e8) }
+// Where the program starts: its first byte, past the 288-byte header.
+fn io_entry() → BitVec(64) { BitVec::ofNat(0x400120) }
 
 // ---------------------------------------------------------------------------
 // The profile and its region
@@ -82,31 +82,37 @@ fn DataRegion::io_data(size: Nat, within: size <= io_data_limit()) → DataRegio
 // ---------------------------------------------------------------------------
 // The file
 
-// The profile's ELF: `static_elf64_header` with its entry at 0x4000e8, past a
-// third program header, and that header a PT_LOAD of the RW segment: `size`
-// zero-filled bytes at 0x410000 (p_offset 0x1000, nothing from the file),
-// readable and writable. `low` and `high` are the file's size, the header
-// included; the RX mapping is the whole file at 0x400000, as before. That
-// Linux maps these headers as `X86Memory::io_load` says is the environment's
-// assumption, not a theorem.
-fn io_elf_header(low, high: BitVec(8), size: Nat) → List<BitVec(8)> {
+// The profile's ELF: `static_elf64_header` with its entry at 0x400120, past a
+// third and a fourth program header. The third is a PT_LOAD of the RW
+// segment: `size` zero-filled bytes at 0x410000 (p_offset 0x1000, nothing
+// from the file), readable and writable. The fourth is a PT_NOTE: `note_len`
+// bytes of the file from offset `note_at`, which the RX mapping already
+// holds (docs/native/system-contract-design.md §2.1: the file's contract,
+// for whoever reads the file). A loader maps nothing for it. `low` and
+// `high` are the file's size, the header included; the RX mapping is the
+// whole file at 0x400000, as before. That Linux maps these headers as
+// `X86Memory::io_load` says is the environment's assumption, not a theorem.
+fn io_elf_header(low, high: BitVec(8), size, note_at, note_len: Nat) → List<BitVec(8)> {
     let base = static_elf64_header(low, high);
     let segment: List<BitVec(8)> = List::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)],
         List::append(word_bytes(BitVec::ofNat(0x1000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0x410000)),
         List::append(word_bytes(BitVec::ofNat(0)), List::append(word_bytes(BitVec::ofNat(size)), word_bytes(BitVec::ofNat(0x1000))))))));
+    let note: List<BitVec(8)> = List::append([elf_byte(4), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(4), elf_byte(0), elf_byte(0), elf_byte(0)],
+        List::append(word_bytes(BitVec::ofNat(note_at)), List::append(word_bytes(BitVec::ofNat(0x400000 + note_at)), List::append(word_bytes(BitVec::ofNat(0x400000 + note_at)),
+        List::append(word_bytes(BitVec::ofNat(note_len)), List::append(word_bytes(BitVec::ofNat(note_len)), word_bytes(BitVec::ofNat(4))))))));
     List::append(base.take(24), List::append(word_bytes(io_entry()), List::append(base.drop(32).take(24),
-        List::append([elf_byte(3), elf_byte(0)], List::append(base.drop(58), segment)))))
+        List::append([elf_byte(4), elf_byte(0)], List::append(base.drop(58), List::append(segment, note))))))
 }
 
-theorem io_elf_header_length(low, high: BitVec(8), size: Nat): io_elf_header(low, high, size).len() = 232 { refl }
+theorem io_elf_header_length(low, high: BitVec(8), size, note_at, note_len: Nat): io_elf_header(low, high, size, note_at, note_len).len() = 288 { refl }
 
-// The file of `code` with a segment of `size`: the header, its size read off
-// the code's length, then the code. The size is sixteen bits, so a file is
-// at most 65535 bytes; the loader's window (`X86Memory::io_load_entry`'s
-// `fits`) asks the same.
-fn io_elf_file(code: List<BitVec(8)>, size: Nat) → List<BitVec(8)> {
-    let length = 232 + code.len();
-    List::append(io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), code)
+// The file of `code` and a `note` with a segment of `size`: the header, its
+// sizes read off the two lengths, then the code, then the note. The file's
+// size is sixteen bits, so a file is at most 65535 bytes; the loader's
+// window (`X86Memory::io_load_entry`'s `fits`) asks the same.
+fn io_elf_file(code, note: List<BitVec(8)>, size: Nat) → List<BitVec(8)> {
+    let length = 288 + (code.len() + note.len());
+    List::append(io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + code.len(), note.len()), code ++ note)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,15 +258,15 @@ theorem X86Memory::io_load_resident(size: Nat, within: size <= io_data_limit(), 
             trans(header.nth_append_r(code, i), present)))
 }
 
-// The entry is the first byte past a 232-byte header.
-theorem io_entry_past_header(): next_rip(BitVec::ofNat(0x400000), 232) = io_entry() {
-    BitVec::eq_of_eq_bit(64, next_rip(BitVec::ofNat(0x400000), 232), io_entry(), refl)
+// The entry is the first byte past a 288-byte header.
+theorem io_entry_past_header(): next_rip(BitVec::ofNat(0x400000), 288) = io_entry() {
+    BitVec::eq_of_eq_bit(64, next_rip(BitVec::ofNat(0x400000), 288), io_entry(), refl)
 }
 
-// The process at its entry, from a 232-byte header and code: the code
+// The process at its entry, from a 288-byte header and code: the code
 // resident at the entry.
-theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), header, code: List<BitVec(8)>, long: header.len() = 232,
-    fits: 232 + code.len() <= 65536):
+theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), header, code: List<BitVec(8)>, long: header.len() = 288,
+    fits: 288 + code.len() <= 65536):
     CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, header ++ code), code, io_entry()) {
     let resident = X86Memory::io_load_resident(size, within, header, code, j(sym(long), λ n _ => n + code.len() <= 65536, fits));
     j(trans(rip_count(BitVec::ofNat(0x400000), long), io_entry_past_header()),
@@ -268,13 +274,12 @@ theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), hea
 }
 
 // ---------------------------------------------------------------------------
-// A process loaded from the file, with a stack of its own
+// A process loaded from the file, with a stack
 
 // What Linux maps below the segment's end is the file, its window and the
-// RW segment, as `io_load` says; above it, the stack (and the command line
-// on it, `ArgvAt`) is the process's own, so a process is not `io_load`'s
-// memory but one that agrees with it below there, whatever else its profile
-// relies on.
+// RW segment, as `io_load` says; above it is the system's (the command line
+// among it, `ArgvAt`), so a process is not `io_load`'s memory but one that
+// agrees with it below there.
 fn io_data_end(size: Nat) → Nat { 0x410000 + size }
 
 // The profile is the memory's, read off its type.
@@ -343,15 +348,24 @@ theorem io_executable_low(size: Nat, within: size <= io_data_limit(), file: List
     }
 }
 
-// A memory of any profile loaded from a 232-byte header and code: the code
+// A memory of any profile loaded from a 288-byte header and code: the code
 // resident at the entry.
 theorem X86Memory::loaded_entry({x: X86Profile}, size: Nat, within: size <= io_data_limit(), self m: X86Memory(x), header, code: List<BitVec(8)>,
-    long: header.len() = 232, fits: 232 + code.len() <= 65536, loaded: m.LoadedFrom(size, header ++ code)):
+    long: header.len() = 288, fits: 288 + code.len() <= 65536, loaded: m.LoadedFrom(size, header ++ code)):
     CodeResident(x.fetch(), m, code, io_entry()) {
     code_resident_alike(X86Profile::io(size), x, X86Memory::io_load(size, within, header ++ code), m, λ a exec => {
         let same = loaded(a, io_executable_low(size, within, header ++ code, a, exec));
         ⟨sym(same.left), sym(same.right)⟩
     }, code, io_entry(), X86Memory::io_load_entry(size, within, header, code, long, fits))
+}
+
+// The same with bytes after the code in the file (a note): the code is
+// resident at the entry, and nothing is said of what follows it.
+theorem X86Memory::loaded_entry_before({x: X86Profile}, size: Nat, within: size <= io_data_limit(), self m: X86Memory(x), header, code, after: List<BitVec(8)>,
+    long: header.len() = 288, fits: 288 + (code.len() + after.len()) <= 65536, loaded: m.LoadedFrom(size, header ++ (code ++ after))):
+    CodeResident(x.fetch(), m, code, io_entry()) {
+    let whole: (288 + (code ++ after).len() <= 65536) = j(sym(code.len_append(after)), λ n _ => 288 + n <= 65536, fits);
+    resident_split(x.fetch(), m, code, after, io_entry(), m.loaded_entry(size, within, header, code ++ after, long, whole, loaded)).left
 }
 
 // The loader's own memory is loaded from the file.
@@ -362,26 +376,26 @@ theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), fi
 // The process's stack (issues/io-image-process-stack.md)
 
 // Linux maps a process's stack high in the user half and starts RSP in it,
-// the command line at RSP and above (`ArgvAt`). A process relies on a fixed
-// `depth` of stack below RSP, at most 128 KiB. That those bytes are data is
-// the environment's assumption, and it leans on the kernel growing the
-// stack: exec reserves 128 KiB below the argument strings (fs/exec.c,
-// `setup_arg_pages`'s `stack_expand`), then lays argc, the argv and envp
-// pointers and auxv below the strings, inside that reserve, so what is
-// mapped below the entry RSP is 128 KiB less those tables (a few hundred
-// bytes less on a small environment, almost nothing left with twenty
-// thousand variables) and the rest is mapped by the fault of its first
-// touch, up to RLIMIT_STACK (issues/io-stack-below-rsp-not-mapped.md).
-fn io_stack_limit() → Nat { 0x20000 }
+// the command line at RSP and above (`ArgvAt`). A process relies on `depth`
+// bytes of stack below RSP being data. That is the environment's
+// assumption, a premise of every theorem about a process, and what it asks
+// of the system is the stack limit: exec maps part of the stack before the
+// program runs (128 KiB below the argument strings, less the argc, argv,
+// envp and auxv tables it then lays inside that reserve), and the kernel
+// maps the rest at the fault of its first touch, down to RLIMIT_STACK
+// (`getrlimit(2)`; `mmap(2)` under MAP_GROWSDOWN). So the premise holds of a
+// process whose stack limit leaves `depth` bytes below its entry RSP, as
+// every program that does not probe its stack assumes, and fails under a
+// limit set smaller (`ulimit -s`) or on a system that does not grow the
+// stack (issues/io-stack-below-rsp-not-mapped.md).
 
-// Where the stack of `depth` bytes below `top` sits: above the segment,
-// below the canonical boundary, and within what exec maps. That the entry
-// RSP is such a `top` is the environment's assumption, beside `LoadedFrom`
-// and `ArgvAt`.
+// Where the stack of `depth` bytes below `top` sits: above the segment and
+// below the canonical boundary. That the entry RSP is such a `top`, and that
+// the bytes are data, are the environment's assumptions, beside
+// `LoadedFrom` and `ArgvAt`.
 record StackPlaced(size, top, depth: Nat) {
     above: io_data_end(size) + depth <= top,
     canonical: top <= Nat::pow(2, 47),
-    within: depth <= io_stack_limit(),
 }
 
 // The stack's lowest address.
@@ -542,4 +556,89 @@ theorem DataRegion::process_stack_keeps_data(size: Nat, within: size <= io_data_
         };
         trans(x.store_outside(m, a, word_bytes(word), y, outside), holds(p, inside))
     }
+}
+
+// ---------------------------------------------------------------------------
+// The program's own stack (issues/native-target-minimal-system-assumptions.md)
+
+// The other provider of a stack (docs/native/system-contract-design.md
+// §4.2): a program that does not run on the stack the system made. Its
+// segment is `size` bytes of which its data uses the first `used`, and the
+// `room` bytes after them are its stack: the entry code points RSP at their
+// end before anything is pushed. So the stack is data by the rule the
+// segment is data by, the file's own PT_LOAD header, and nothing is asked
+// of the system's stack but the command line it holds (`ArgvAt`): not how
+// deep it is mapped at exec, not that it grows, not the stack limit. Its
+// size is fixed when the file is written, a limit on the data segment kills
+// the process at exec, and there is no guard page below it: what keeps the
+// stack off the data is the bound the compiler's theorem proves on its
+// depth.
+
+// An offset up to the segment's end is its address's value less 0x410000.
+theorem io_segment_offset(size: Nat, within: size <= io_data_limit(), i: Nat, inside: i <= size):
+    next_rip(BitVec::ofNat(0x410000), i).toNat() = 0x410000 + i {
+    let limit: (io_data_limit() = 0x40000000) = refl;
+    let top: (Succ(0x410000 + 0x40000000) <= Nat::pow(2, 64)) = Nat::leb_sound(Succ(0x410000 + 0x40000000), Nat::pow(2, 64), trivial);
+    BitVec::ofNat_offset_toNat(64, 0x410000, i, omega(inside, within, limit, top))
+}
+
+// The segment's two regions: the program's data, its first `used` bytes…
+fn DataRegion::own_data(size: Nat, within: size <= io_data_limit(), used: Nat, inside: used <= size) → DataRegion {
+    DataRegion(profile := X86Profile::io(size), low := io_data_low(), size := used,
+        canonical := {
+            let whole: (io_data_low().toNat() + size <= Nat::pow(2, 47)) = io_data_canonical(size, within);
+            omega(whole, inside)
+        },
+        data := λ perms relied i below => relied(i, omega(below, inside)))
+}
+
+// …and its stack, the `room` bytes after them.
+fn DataRegion::own_stack(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size) → DataRegion {
+    DataRegion(profile := X86Profile::io(size), low := next_rip(io_data_low(), used), size := room,
+        canonical := {
+            let low: (next_rip(io_data_low(), used).toNat() = 0x410000 + used) = io_segment_offset(size, within, used, omega(fits));
+            let whole: (io_data_low().toNat() + size <= Nat::pow(2, 47)) = io_data_canonical(size, within);
+            let base: (io_data_low().toNat() = 0x410000) = refl;
+            omega(low, whole, base, fits)
+        },
+        data := λ perms relied i below => j(sym(rip_compose(io_data_low(), used, i)), λ a _ => perms(a) = Perm::data(), relied(used + i, omega(below, fits))))
+}
+
+// Where the stack starts, and that it ends inside the segment.
+theorem io_own_stack_low(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    next_rip(io_data_low(), used).toNat() = 0x410000 + used {
+    io_segment_offset(size, within, used, omega(fits))
+}
+
+// The stack's top is the address `used + room` bytes into the segment: the
+// one the entry code gives RSP.
+theorem DataRegion::own_stack_top(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    DataRegion::own_stack(size, within, used, room, fits).stack().at(room) = io_data_low().add_nat(used + room) {
+    trans(rip_compose(io_data_low(), used, room), sym(BitVec::add_nat_iterate(64, io_data_low(), used + room)))
+}
+
+// A process loaded from the file: its data zero.
+theorem X86Memory::loaded_own_data(size: Nat, within: size <= io_data_limit(), used: Nat, inside: used <= size,
+    self m: X86Memory(X86Profile::io(size)), file: List<BitVec(8)>, loaded: m.LoadedFrom(size, file)):
+    DataRegion::own_data(size, within, used, inside).Holds(io_zero(), m) {
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    λ p below => {
+        let value = io_data_offset(size, within, p, omega(below, inside));
+        trans(loaded(next_rip(BitVec::ofNat(0x410000), p), j(sym(value), λ k _ => k < io_data_end(size), omega(below, inside, end))).left,
+            X86Memory::io_load_data(size, within, file, p, omega(below, inside)))
+    }
+}
+
+// The stack is past the data and ends inside the segment.
+theorem DataRegion::own_stack_above(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    io_data_low().toNat() + used <= next_rip(io_data_low(), used).toNat() {
+    let low = io_own_stack_low(size, within, used, room, fits);
+    let base: (io_data_low().toNat() = 0x410000) = refl;
+    omega(low, base)
+}
+theorem DataRegion::own_stack_end(size: Nat, within: size <= io_data_limit(), used, room: Nat, fits: used + room <= size):
+    next_rip(io_data_low(), used).toNat() + room <= io_data_end(size) {
+    let low = io_own_stack_low(size, within, used, room, fits);
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    omega(low, end, fits)
 }

@@ -152,13 +152,13 @@ theorem drain_runs(origin: BitVec(64), n: Nat, page: Nat → BitVec(8), state: M
         n, drain(n), page, state, rip, holds, refl)
 }
 
-// The entry: the process Linux loads from a file of a 232-byte header and
+// The entry: the process Linux loads from a file of a 288-byte header and
 // the program, started at the entry with any registers and flags, reads to
 // the end of its input and exits 0.
-theorem drain_entry(header: List<BitVec(8)>, long: header.len() = 232, n: Nat, gprs: Gprs, flags: Flags):
+theorem drain_entry(header: List<BitVec(8)>, long: header.len() = 288, n: Nat, gprs: Gprs, flags: Flags):
     Sim(X86Profile::io(4096).linux(), drain(n), MachineState(gprs, flags, io_entry(), X86Memory::io_load(4096, drain_within(), header ++ drain_code()))) {
     let memory = X86Memory::io_load(4096, drain_within(), header ++ drain_code());
-    let fits: (232 + drain_code().len() <= 65536) = Nat::leb_sound(232 + drain_code().len(), 65536, trivial);
+    let fits: (288 + drain_code().len() <= 65536) = Nat::leb_sound(288 + drain_code().len(), 65536, trivial);
     drain_runs(io_entry(), n, io_zero(), MachineState(gprs, flags, io_entry(), memory), refl,
         ⟨X86Memory::io_load_data(4096, drain_within(), header ++ drain_code()), X86Memory::io_load_entry(4096, drain_within(), header, drain_code(), long, fits)⟩)
 }

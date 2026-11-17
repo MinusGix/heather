@@ -1743,8 +1743,8 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
         sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩
 }
 
-// RSP saved to its slot and the depth to the room slot, `main`'s frame
-// opened below RSP, and zero stored in each word live at the start: a
+// RDI (where the command line is) saved to its slot and the depth to the
+// room slot, `main`'s frame opened below RSP, and zero stored in each word live at the start: a
 // region of zeros, with the command line above the stack, holds the start,
 // and `main` is the activation running, its frame at the stack's top with
 // no frames above it and `depth` calls of room
@@ -1755,7 +1755,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     p: Prog, within: p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live)), live, tree, t.start_env())):
     t.Goes(prog_len(p), tree, λ s => t.r.Holds(λ _ => zero_byte(), s.memory) ∧
-        (ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args) ∧ ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8 * t.words)) ∧
+        (ArgvAt(t.argv(), s.memory, read_gpr(Rdi, s.gprs), t.args) ∧ ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8 * t.words)) ∧
             t.Pins(home_values(s.gprs))))) {
     let layout = t.layout();
     let free_rsp = t.homes.unused_unpinned(Rsp, t.homes.unused(Rsp, trivial));
@@ -1764,7 +1764,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let so = layout.stack_offset();
     let env = t.start_env();
     let top = t.index + 8 * t.words;
-    let store = WordStore(Rbx, Rsp);
+    let store = WordStore(Rbx, Rdi);
     let store3 = WordStore(Rbx, Rax);
     let d: BitVec(64) = BitVec::ofNat(depth);
     let set3: List<Instruction> = [MovRI(Rbx, layout.room_at()), MovRI(Rax, d)];
@@ -1821,7 +1821,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let moved1 = t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], w_mov, tree, λ u => pre_store(store, mid, u), stored1);
     λ s here resident held => {
         let m = s.memory;
-        let rsp = read_gpr(Rsp, s.gprs);
+        let rsp = read_gpr(Rdi, s.gprs);
         let bytes = word_bytes(rsp);
         let bytes3 = word_bytes(d);
         let eight: (bytes.len() = 8) = refl;

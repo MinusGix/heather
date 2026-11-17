@@ -1,5 +1,5 @@
 // The process's stack (linux_x86_64_image; issues/io-image-process-stack.md):
-// a stack of the 128 KiB exec maps, placed where Linux puts one; the
+// a stack of 128 KiB, placed where Linux puts one; the
 // loader's process of a file with it, which is loaded from the file; its top
 // at an entry RSP and a CALL's push in its top word; a word pushed there
 // read back with the segment still zero; and placements Linux never gives
@@ -20,70 +20,130 @@ import option;
 import omega;
 
 fn probe_top() → Nat { 0x7ffffffde000 }
-fn probe_profile() → X86Profile { X86Profile::process(4096, probe_top(), io_stack_limit()) }
+fn probe_depth() → Nat { 0x20000 }
+fn probe_profile() → X86Profile { X86Profile::process(4096, probe_top(), probe_depth()) }
 
 theorem probe_within(): 4096 <= io_data_limit() { Nat::leb_sound(4096, io_data_limit(), trivial) }
-theorem probe_placed(): StackPlaced(4096, probe_top(), io_stack_limit()) {
-    StackPlaced(above := Nat::leb_sound(io_data_end(4096) + io_stack_limit(), probe_top(), trivial),
-        canonical := Nat::leb_sound(probe_top(), Nat::pow(2, 47), trivial),
-        within := Nat::leb_sound(io_stack_limit(), io_stack_limit(), trivial))
+theorem probe_placed(): StackPlaced(4096, probe_top(), probe_depth()) {
+    StackPlaced(above := Nat::leb_sound(io_data_end(4096) + probe_depth(), probe_top(), trivial),
+        canonical := Nat::leb_sound(probe_top(), Nat::pow(2, 47), trivial))
 }
 
-// A file of one RET, and the process the loader maps of it.
-fn probe_file() → List<BitVec(8)> { io_elf_file([BitVec::ofNat(0xc3)], 4096) }
+// A file of one RET and a note of four bytes after it, and the process the
+// loader maps of it.
+fn probe_note() → List<BitVec(8)> { [BitVec::ofNat(1), BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4)] }
+fn probe_file() → List<BitVec(8)> { io_elf_file([BitVec::ofNat(0xc3)], probe_note(), 4096) }
+
+// The header is 288 bytes, four program headers, and the fourth names the
+// note: a PT_NOTE, readable, at offset 289 of the file, four bytes.
+theorem probe_file_length(): probe_file().len() = 293 { refl }
+theorem probe_note_header(): probe_file().drop(232).take(16) =
+    [BitVec::ofNat(4), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(4), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(0x21), BitVec::ofNat(0x01), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)] { refl }
+theorem probe_note_there(): probe_file().drop(289) = probe_note() { refl }
 fn probe_memory() → X86Memory(probe_profile()) {
-    X86Memory::process_load(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
+    X86Memory::process_load(4096, probe_within(), probe_top(), probe_depth(), probe_placed(), probe_file())
 }
 
 theorem probe_loaded(): probe_memory().LoadedFrom(4096, probe_file()) {
-    X86Memory::process_load_loaded(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
+    X86Memory::process_load_loaded(4096, probe_within(), probe_top(), probe_depth(), probe_placed(), probe_file())
 }
 
 // Its code at the entry, and its segment zero.
 theorem probe_code(): CodeResident(probe_profile().fetch(), probe_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
-    probe_memory().loaded_entry(4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
-        [BitVec::ofNat(0xc3)], refl, Nat::leb_sound(233, 65536, trivial), probe_loaded())
+    probe_memory().loaded_entry_before(4096, probe_within(), io_elf_header(BitVec::ofNat(293), BitVec::ofNat((293).shr(8)), 4096, 289, 4),
+        [BitVec::ofNat(0xc3)], probe_note(), refl, Nat::leb_sound(293, 65536, trivial), probe_loaded())
 }
-theorem probe_zero(): DataRegion::process_data(4096, probe_within(), probe_top(), io_stack_limit()).Holds(io_zero(), probe_memory()) {
-    probe_memory().loaded_data(4096, probe_within(), probe_top(), io_stack_limit(), probe_file(), probe_loaded())
+theorem probe_zero(): DataRegion::process_data(4096, probe_within(), probe_top(), probe_depth()).Holds(io_zero(), probe_memory()) {
+    probe_memory().loaded_data(4096, probe_within(), probe_top(), probe_depth(), probe_file(), probe_loaded())
 }
 
-fn probe_stack() → DataRegion { DataRegion::process_stack(4096, probe_top(), io_stack_limit(), probe_placed()) }
+fn probe_stack() → DataRegion { DataRegion::process_stack(4096, probe_top(), probe_depth(), probe_placed()) }
 
 // At an entry whose RSP is the top, the stack's top is RSP, and a CALL
 // there pushes into the stack's top word.
-theorem probe_entry(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): probe_stack().stack().at(io_stack_limit()) = read_gpr(Rsp, gprs) {
-    DataRegion::process_stack_entry(4096, probe_top(), io_stack_limit(), probe_placed(), gprs, rsp)
+theorem probe_entry(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): probe_stack().stack().at(probe_depth()) = read_gpr(Rsp, gprs) {
+    DataRegion::process_stack_entry(4096, probe_top(), probe_depth(), probe_placed(), gprs, rsp)
 }
-theorem probe_push(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): push_address(gprs) = probe_stack().stack().at(io_stack_limit() - 8) {
-    DataRegion::process_stack_push(4096, probe_top(), io_stack_limit(), probe_placed(), gprs, rsp, Nat::leb_sound(8, io_stack_limit(), trivial))
+theorem probe_push(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): push_address(gprs) = probe_stack().stack().at(probe_depth() - 8) {
+    DataRegion::process_stack_push(4096, probe_top(), probe_depth(), probe_placed(), gprs, rsp, Nat::leb_sound(8, probe_depth(), trivial))
 }
 
 // A word pushed into the top word reads back, and the segment is still
 // zero.
 fn probe_pushed(word: BitVec(64)) → X86Memory(probe_profile()) {
-    probe_profile().store(probe_memory(), probe_stack().stack().at(io_stack_limit() - 8), word_bytes(word))
+    probe_profile().store(probe_memory(), probe_stack().stack().at(probe_depth() - 8), word_bytes(word))
 }
-theorem probe_slot_fits(): io_stack_limit() - 8 + 8 <= io_stack_limit() {
-    let limit: (io_stack_limit() = 0x20000) = refl;
+theorem probe_slot_fits(): probe_depth() - 8 + 8 <= probe_depth() {
+    let limit: (probe_depth() = 0x20000) = refl;
     omega(limit)
 }
 theorem probe_reads_back(word: BitVec(64)):
-    read_word(probe_profile().data(), probe_pushed(word), probe_stack().stack().at(io_stack_limit() - 8)) = Some(word) {
-    probe_stack().stack().stored(probe_memory(), io_stack_limit() - 8, probe_slot_fits(), word)
+    read_word(probe_profile().data(), probe_pushed(word), probe_stack().stack().at(probe_depth() - 8)) = Some(word) {
+    probe_stack().stack().stored(probe_memory(), probe_depth() - 8, probe_slot_fits(), word)
 }
-theorem probe_segment_kept(word: BitVec(64)): DataRegion::process_data(4096, probe_within(), probe_top(), io_stack_limit()).Holds(io_zero(), probe_pushed(word)) {
-    DataRegion::process_stack_keeps_data(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_memory(), io_zero(),
-        io_stack_limit() - 8, word, probe_slot_fits(), probe_zero())
+theorem probe_segment_kept(word: BitVec(64)): DataRegion::process_data(4096, probe_within(), probe_top(), probe_depth()).Holds(io_zero(), probe_pushed(word)) {
+    DataRegion::process_stack_keeps_data(4096, probe_within(), probe_top(), probe_depth(), probe_placed(), probe_memory(), io_zero(),
+        probe_depth() - 8, word, probe_slot_fits(), probe_zero())
 }
 
-// A stack overlapping the segment is not placed, nor one deeper than exec
-// maps.
+// A stack overlapping the segment is not placed.
 theorem overlapping_not_placed(): ¬StackPlaced(4096, 0x410000, 8) {
     let end: (io_data_end(4096) = 0x411000) = refl;
     λ placed => omega(placed.above, end)
 }
-theorem deep_not_placed(top: Nat): ¬StackPlaced(4096, top, 0x20001) {
-    let limit: (io_stack_limit() = 0x20000) = refl;
-    λ placed => omega(placed.within, limit)
+
+// ---------------------------------------------------------------------------
+// The program's own stack (issues/native-target-minimal-system-assumptions.md):
+// a segment of a page whose first 1024 bytes are the program's data and whose
+// next 512 its stack; the loader's process of the file, its code at the
+// entry and its data zero; the stack's top the address the entry code gives
+// RSP; a word pushed there read back; and the stack past the data and inside
+// the segment.
+
+fn own_profile() → X86Profile { X86Profile::io(4096) }
+
+theorem own_fits(): 1024 + 512 <= 4096 { Nat::leb_sound(1024 + 512, 4096, trivial) }
+theorem own_inside(): 1024 <= 4096 { Nat::leb_sound(1024, 4096, trivial) }
+
+fn own_memory() → X86Memory(own_profile()) { X86Memory::io_load(4096, probe_within(), probe_file()) }
+
+theorem own_loaded(): own_memory().LoadedFrom(4096, probe_file()) {
+    X86Memory::io_load_loaded(4096, probe_within(), probe_file())
+}
+
+// Its code at the entry, and its data zero.
+theorem own_code(): CodeResident(own_profile().fetch(), own_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
+    own_memory().loaded_entry_before(4096, probe_within(), io_elf_header(BitVec::ofNat(293), BitVec::ofNat((293).shr(8)), 4096, 289, 4),
+        [BitVec::ofNat(0xc3)], probe_note(), refl, Nat::leb_sound(293, 65536, trivial), own_loaded())
+}
+theorem own_zero(): DataRegion::own_data(4096, probe_within(), 1024, own_inside()).Holds(io_zero(), own_memory()) {
+    own_memory().loaded_own_data(4096, probe_within(), 1024, own_inside(), probe_file(), own_loaded())
+}
+
+fn own_stack() → DataRegion { DataRegion::own_stack(4096, probe_within(), 1024, 512, own_fits()) }
+
+// The stack's top is the address 1536 bytes into the segment, 0x410600:
+// what the entry code moves into RSP.
+theorem own_top(): own_stack().stack().at(512) = io_data_low().add_nat(1024 + 512) {
+    DataRegion::own_stack_top(4096, probe_within(), 1024, 512, own_fits())
+}
+theorem own_top_address(): io_data_low().add_nat(1024 + 512).toNat() = 0x410600 { refl }
+
+// A word pushed into the top word reads back.
+theorem own_slot_fits(): 504 + 8 <= own_stack().stack().size { Nat::leb_sound(504 + 8, 512, trivial) }
+fn own_pushed(word: BitVec(64)) → X86Memory(own_profile()) {
+    own_profile().store(own_memory(), own_stack().stack().at(504), word_bytes(word))
+}
+theorem own_reads_back(word: BitVec(64)):
+    read_word(own_profile().data(), own_pushed(word), own_stack().stack().at(504)) = Some(word) {
+    own_stack().stack().stored(own_memory(), 504, own_slot_fits(), word)
+}
+
+// The stack starts where the data ends and ends inside the segment.
+theorem own_above(): io_data_low().toNat() + 1024 <= own_stack().low.toNat() {
+    DataRegion::own_stack_above(4096, probe_within(), 1024, 512, own_fits())
+}
+theorem own_end(): own_stack().low.toNat() + 512 <= io_data_end(4096) {
+    DataRegion::own_stack_end(4096, probe_within(), 1024, 512, own_fits())
 }

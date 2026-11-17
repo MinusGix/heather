@@ -229,8 +229,9 @@ Beyond the kernel, the theorem rests on these:
   word of it reads as some word, and code below the canonical boundary reads
   as data where it was fetched from. They are proved of the byte memory
   model: any data region of it is a `Stack` (`DataRegion::stack`,
-  `x86_64_byte_memory.hthr`), and the Linux image model places one where
-  the loader puts the process stack (`DataRegion::process_stack`,
+  `x86_64_byte_memory.hthr`), and the Linux image model has two: where the
+  loader puts the process stack (`DataRegion::process_stack`) and inside
+  the program's own data segment (`DataRegion::own_stack`,
   `linux_x86_64_image.hthr`). What is assumed is that those models are
   faithful to the processor's memory and to Linux's loader.
 - **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
@@ -248,6 +249,76 @@ Beyond the kernel, the theorem rests on these:
   list of bytes. `compile-x86` writes the same bytes into the `.s` file as
   `.byte` directives, and the assembler and linker copy them into the
   binary. That copy is trusted.
+
+### A whole program: what its theorem asks of the system
+
+A program `write-elf` writes has no caller: its file is loaded and run by
+Linux. The file's code is entry code and then the compiled program. The
+compiled program asks, where it starts, for RSP at the top of a stack with
+what the source needs (`Source::need`, a figure computed for the program
+under its placement)
+and RDI where the command line is; the entry code is what provides them
+(`Source::runs_after`, `lib/native/native_compile_elf.hthr`). Which entry
+code is a choice made when the file is written (`write-elf --stack`). Either
+way the file has one record of what it presumes of the system, its
+`Contract` (`docs/native/system-contract-design.md` §2): the certificate
+states it (`<source>_elf_contract`, its lines by name in
+`<source>_elf_presumes`), `write-elf` prints those lines, the file carries
+them as an ELF note after its code (`Contract::note`, a claim a reader can
+check only against the certificate), and the file's theorem,
+`<source>_elf_runs` by `Source::elf_runs`, is about the file with that note
+and takes the contract's `Start` as its one premise about the system. Its
+conclusion is the contract's `Runs`.
+
+**The system's stack** (`--stack system`, the default;
+`stack_touched_entry`). The contract's `Start` is `SystemStart` (the theorem
+behind it is `Source::elf_touched_runs`):
+
+- **`loaded`**: the file's two `PT_LOAD` headers were honoured (its bytes at
+  0x400000 readable and executable, the data segment zero-filled, readable
+  and writable). The ELF loading rule, not proved of Linux.
+- **`entry`**: the process starts at the header's entry address.
+- **`placed`, `rsp`**: the entry RSP is a page and the program's stack room
+  above the data segment's end, in the lower half of the address space.
+  Nothing written says where a system puts its stack; this is taken on
+  trust.
+- **`argv`**: the command line is at and above RSP as the psABI lays it out.
+
+Nothing is asked of what lies below RSP. The entry code stores a byte into
+each page of the stack room before anything else runs, and the model has a
+rule for what Linux does at such a store (`StackTouch`,
+`lib/std/os/linux/linux_x86_64_stack_growth.hthr`): it extends the stack to
+the address or ends the process with a signal, which is what mmap(2) and
+getrlimit(2) say of a stack. So `Runs` is not the bare simulation: it says
+the process runs to each store, that in every memory Linux may leave there
+it runs to the next, and that after the last it simulates the source
+(`TouchedRuns`). A process started under a stack limit below its room is
+ended at one of those stores, before it has made a system call, and the
+theorem says nothing false of it; before the touch it produced output and
+then died mid-run (`docs/native/system-contract-design.md` §3, §4.3). The
+last step identifies the state reached with one whose memory's type relies
+on the room (`Alike`); that the two run alike is by inspection of the model,
+not yet a lemma (`issues/elf-touched-runs-exact.md`).
+
+**The program's own stack** (`--stack segment`; `stack_from_segment`). The
+data segment is sized for the layout and the stack room after it, and the
+entry code points RSP at the end of that room. The contract's `Start` is
+`SegmentStart` (the theorem behind it is `Source::elf_segment_file_runs`), which is
+`loaded`, `entry` and `argv` only: nothing is asked of the stack limit, of
+growth, or of how much stack exec maps, and `Runs` is the simulation itself. What it costs: the stack's size is
+fixed when the file is written, a limit on the data segment or the address
+space kills the process at exec with a signal (before its first
+instruction), and there is no guard page under the stack, so the proved
+bound on its depth is all that keeps it off the data.
+
+Under either, no register but RIP and RSP is assumed, and no flag. After the
+start, each system call is answered as the model allows
+(`LinuxCmd::Answers`: short reads and writes, any errno, a failed read
+leaving anything in its buffer), and resumes with RCX, R11 and every
+arithmetic flag unspecified, since the call convention promises none of
+them. A descriptor is the low 32 bits of its word, as Linux reads it.
+Signals are not modelled: a process killed by one (SIGPIPE on a closed pipe,
+the kernel's out-of-memory kill) ends its run without an exit.
 
 ## What is not covered
 

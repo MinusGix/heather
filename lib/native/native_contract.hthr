@@ -1,0 +1,200 @@
+// A written program's contract: what it presumes of the system that runs it
+// (docs/native/system-contract-design.md §2). One record per file,
+// `Contract`; its lines, `Presumes`, each with what it rests on, `Basis`;
+// and its text, which is what `write-elf` prints and what the file carries
+// in a note (§2.1). The premise a file's theorem takes is the contract's
+// too (`Contract::Start`, native_compile_elf), so the list and the theorem
+// come from one value.
+//
+// The text is generated here and not in the driver so that a certificate
+// can state the file's note as this function of the file's contract, and
+// the kernel evaluates it: the words printed, the bytes embedded and the
+// record the theorem is over cannot differ.
+import x86_64_store;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// Where a file's stack comes from: which entry code it has.
+inductive StackFrom { FromSystem, FromSegment }
+
+// What one line of a contract rests on: a written standard says it; the
+// program tests it when it starts; or neither, and it is taken on trust.
+inductive Basis { Standard, Checked, Presumed }
+
+// One thing a written program takes for granted about where it runs.
+inductive Presumes {
+    // The machine is the x86-64 the model describes (the vendors' manuals).
+    Processor,
+    // The file's PT_LOAD headers are honoured, the data segment `size` bytes
+    // (ELF gABI). `SystemStart.loaded`, `SegmentStart.loaded`.
+    FileLoaded(size: Nat),
+    // Execution starts at the header's entry address (ELF gABI). `.entry`.
+    EntryAddress,
+    // The command line is at RSP as the process starts (x86-64 psABI,
+    // process initialization). `.argv`.
+    CommandLine,
+    // RSP as the process starts is `gap` bytes or more above the data
+    // segment's end, and in the lower half of the address space: nothing
+    // written says where a system puts its stack. `SystemStart.placed`; with
+    // the program's own stack the gap is none, and it is the command line
+    // that lies above the segment (`SegmentStart.argv`).
+    StackAbove(gap: Nat),
+    // `room` bytes below RSP as the process starts are usable. The program
+    // tests it: its entry code stores into each page of them before anything
+    // else runs (`stack_touched_entry`, linux_x86_64_stack_growth), so no
+    // premise of the file's theorem says it.
+    StackRoom(room: Nat),
+    // A store within a page below the stack either extends the stack or
+    // ends the process with a signal (Linux: mmap(2) on MAP_GROWSDOWN,
+    // getrlimit(2) on RLIMIT_STACK). What the test above rests on
+    // (`StackTouch`, `StackGrown`).
+    StackGrowth,
+    // System calls follow the Linux x86-64 convention and answer as the
+    // model allows (`LinuxCmd::Answers`, `LinuxAnswered`).
+    CallsAnswered,
+    // No fatal signal is delivered, the kernel's out-of-memory kill
+    // included: the model has no such step.
+    NoFatalSignal,
+}
+
+fn Presumes::basis(self line: Presumes) → Basis {
+    match line {
+        Processor => Standard,
+        FileLoaded(_) => Standard,
+        EntryAddress => Standard,
+        CommandLine => Standard,
+        StackAbove(_) => Presumed,
+        StackRoom(_) => Checked,
+        StackGrowth => Standard,
+        CallsAnswered => Standard,
+        NoFatalSignal => Presumed,
+    }
+}
+
+// A file's contract: where its stack is from, its data segment's size, and
+// the stack room its program needs.
+record Contract { stack: StackFrom, size: Nat, room: Nat }
+
+// Every line of it. The lines down to the stack's place are the fields of
+// the premise its theorem takes (`Contract::Start`). The stack's room is no
+// field: the program tests it, by the rule the line after it names, which
+// the theorem's conclusion is stated through (`Contract::Runs`). The last
+// two are what the model of the run itself takes for granted, which no
+// premise states.
+fn Contract::lines(self c: Contract) → List<Presumes> {
+    match c.stack {
+        FromSystem => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackAbove(c.room + 4096), StackRoom(c.room), StackGrowth,
+            CallsAnswered, NoFatalSignal],
+        FromSegment => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackAbove(0), CallsAnswered, NoFatalSignal],
+    }
+}
+
+// The lines as numbers, three a line (which, its basis, its figure), for the
+// driver that prints them.
+fn Basis::number(self b: Basis) → Nat { match b { Standard => 0, Checked => 1, Presumed => 2 } }
+fn Presumes::spelled(self line: Presumes) → List<Nat> {
+    match line {
+        Processor => [0, line.basis().number(), 0],
+        FileLoaded(size) => [1, line.basis().number(), size],
+        EntryAddress => [2, line.basis().number(), 0],
+        CommandLine => [3, line.basis().number(), 0],
+        StackRoom(room) => [4, line.basis().number(), room],
+        CallsAnswered => [5, line.basis().number(), 0],
+        NoFatalSignal => [6, line.basis().number(), 0],
+        StackAbove(gap) => [7, line.basis().number(), gap],
+        StackGrowth => [8, line.basis().number(), 0],
+    }
+}
+fn spelled_lines(lines: List<Presumes>) → List<Nat> {
+    match lines { Nil => Nil, Cons(line, rest) => line.spelled() ++ spelled_lines(rest) }
+}
+fn Contract::spelled(self c: Contract) → List<Nat> { spelled_lines(c.lines()) }
+
+// ---------------------------------------------------------------------------
+// The text
+
+// A number's decimal digits. `decimal` (lib/std/text) divides by ten a unit
+// at a time, which a segment's size is far past; this doubles a list of
+// digits a bit of the number at a time, by operations a literal has at once
+// (`half`, `sub`, `leb`).
+fn doubled(digits: List<Nat>, carry: Nat) → List<Nat> {
+    match digits {
+        Nil => match carry { Zero => Nil, Succ(_) => [carry] },
+        Cons(d, rest) => match ((d + d) + carry).leb(9) {
+            True => Cons((d + d) + carry, doubled(rest, 0)),
+            False => Cons(((d + d) + carry).sub(10), doubled(rest, 1)),
+        },
+    }
+}
+// Least significant first; `fuel` counts the halvings left, and `n` of them
+// are always enough.
+fn digits_low(fuel, n: Nat) → List<Nat> {
+    match fuel {
+        Zero => Nil,
+        Succ(rest) => match n { Zero => Nil, Succ(_) => doubled(digits_low(rest, n.half()), n.sub(n.half() + n.half())) },
+    }
+}
+fn number_text(n: Nat) → List<BitVec(8)> {
+    match n { Zero => b"0", Succ(_) => digits_low(n, n).rev().map(λ (d: Nat) => BitVec::ofNat(48 + d)) }
+}
+
+fn text_join(parts: List<List<BitVec(8)>>) → List<BitVec(8)> {
+    match parts { Nil => Nil, Cons(part, rest) => part ++ text_join(rest) }
+}
+
+fn Basis::tag(self b: Basis) → List<BitVec(8)> {
+    match b { Standard => b"[standard]  ", Checked => b"[checked]   ", Presumed => b"[presumed]  " }
+}
+
+// A line in words.
+fn Presumes::words(self line: Presumes) → List<BitVec(8)> {
+    match line {
+        Processor => b"the processor is an x86-64, as the vendors' manuals describe the instructions it runs",
+        FileLoaded(size) => text_join([b"the file is loaded as its two PT_LOAD headers say, its data segment ", number_text(size), b" zero bytes (ELF gABI)"]),
+        EntryAddress => b"execution starts at the header's entry address (ELF gABI)",
+        CommandLine => b"the command line is at the stack pointer as the process starts (x86-64 psABI)",
+        StackAbove(gap) => text_join([b"the stack pointer as the process starts is ", number_text(gap), b" bytes or more above the data segment's end, in the lower half of the address space"]),
+        StackRoom(room) => text_join([number_text(room), b" bytes below the stack pointer as the process starts are usable: the program stores into each page of them as it starts, and ends there with a signal if one is refused"]),
+        StackGrowth => b"a store within a page below the stack extends the stack or ends the process with a signal (Linux: mmap(2), getrlimit(2))",
+        CallsAnswered => b"system calls follow the Linux x86-64 convention and answer as their manual pages allow",
+        NoFatalSignal => b"no fatal signal is delivered, the kernel's out-of-memory kill included",
+    }
+}
+fn Presumes::text(self line: Presumes) → List<BitVec(8)> { text_join([line.basis().tag(), line.words(), b"\n"]) }
+fn presumed_text(lines: List<Presumes>) → List<BitVec(8)> {
+    match lines { Nil => Nil, Cons(line, rest) => line.text() ++ presumed_text(rest) }
+}
+
+// The lines, one to a line of text: what `write-elf` prints.
+fn Contract::lines_text(self c: Contract) → List<BitVec(8)> { presumed_text(c.lines()) }
+
+// The contract as a file carries it: what it is and what it is worth, then
+// the lines. Whoever holds only the file cannot tell a true note from a
+// false one, and the first lines say so.
+fn Contract::text(self c: Contract) → List<BitVec(8)> {
+    text_join([b"Heather contract 1: what this program presumes of the system that runs it.\n",
+        b"A claim by its compiler, unverified unless checked against the file's certificate.\n", c.lines_text()])
+}
+
+// ---------------------------------------------------------------------------
+// The note
+
+// A 32-bit word, least significant byte first.
+fn word32(n: Nat) → List<BitVec(8)> { word_bytes(BitVec::ofNat(n)).take(4) }
+
+// What brings `n` to a multiple of four.
+fn pad4(n: Nat) → Nat {
+    let quarter = n.half().half();
+    match n.sub((quarter + quarter) + (quarter + quarter)) { Zero => 0, Succ(over) => 3.sub(over) }
+}
+
+// The contract as an ELF note (gABI, "Note Section"): the name's length,
+// the description's, the type (1), the name `Heather` and a zero byte,
+// then the text, padded with zeros to a multiple of four. The file's
+// fourth program header names these bytes (`io_elf_header`), so
+// `readelf -n` finds the note and `strings` shows its text.
+fn Contract::note(self c: Contract) → List<BitVec(8)> {
+    text_join([word32(8), word32(c.text().len()), word32(1), b"Heather\0", c.text(), List::replicate(BitVec::ofNat(0), pad4(c.text().len()))])
+}
