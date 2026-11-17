@@ -636,3 +636,7 @@ theorem Bool::and_cong_when(t: Bool, {x, y: Bool}, h: t = True → x = y): t && 
         True => λ h => h(refl),
     })(h)
 }
+
+theorem Bool::and_self(a: Bool): a && a = a { match a { False => refl, True => refl } }
+
+theorem Bool::not_and_self(a: Bool): !a && a = False { match a { False => refl, True => refl } }
