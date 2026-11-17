@@ -188,102 +188,67 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             _ => λ p out known names c emitted => region.region_extends(layout, p, out, names, c, emitted),
         },
         Invoke(shape) => λ p out known names c => match shape {
-            Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(buf) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
-                },
+            Reads(fd, buf, at, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)
             },
-            Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(buf) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
-                },
+            Writes(fd, buf, from, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)
             },
-            Opens(path, len, result) => match layout.words_fit([len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(path) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_opens(layout, known, out, path, len, result, capacity, names)),
-                },
+            Opens(path, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_opens(layout, known, out, path, len, result, capacity, names)
             },
-            Closes(fd, result) => match layout.words_fit([fd, result]) {
-                False => λ none => absurd(none),
-                True => λ same => subst(same, p.within_closes(layout, known, out, fd, result)),
+            Closes(fd, result) => λ emitted => {
+                cases emitted;
+                p.within_closes(layout, known, out, fd, result)
             },
             StatsPath(_, _, _, _) => λ none => absurd(none),
             StatsFd(_, _, _) => λ none => absurd(none),
         },
-        Then(first, rest) => λ p out known names c => {
+        Then(first, rest) => λ p out known names c emitted => {
             let carried = first.carried(rest, layout.homes, out);
             let before = rest.live_with(layout.homes, carried, out);
-            (match one: first.emits(p, layout, before, first.first_known(known), names) {
-                None => λ none => absurd(none),
-                Some(c1) => λ two => Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
-                    rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, two)),
-            })
+            cases emitted as one(c1);
+            Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
+                rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, emitted))
         },
-        Branch(condition, yes, no) => λ p out known names c => {
+        Branch(condition, yes, no) => λ p out known names c emitted => {
             let tested = p.tests(layout, condition, Succ(names));
-            match layout.word_fits(condition) {
-                False => λ none => absurd(none),
-                True => (match y_is: yes.emits(tested, layout, out, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(y) => {
-                        let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
-                        (match n_is: no.emits(other, layout, out, Nil, y.names) {
-                            None => λ none => absurd(none),
-                            Some(n) => λ same => subst(same,
-                                calc {
-                                    p <= tested := p.within_tests(layout, condition, Succ(names)),
-                                    <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
-                                    <= other := Exists(2, refl),
-                                    <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
-                                    <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
-                                }),
-                        })
-                    },
-                }),
+            cases emitted as fits, y_is(y), n_is(n);
+            let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+            calc {
+                p <= tested := p.within_tests(layout, condition, Succ(names)),
+                <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
+                <= other := Exists(2, refl),
+                <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
+                <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
             }
         },
-        Repeat(body, again) => λ p out known names c => {
+        Repeat(body, again) => λ p out known names c emitted => {
             let head = p.label(Succ(names));
             let inner = Repeat(body, again).loop_out(layout.homes, out);
-            match layout.word_fits(again) {
-                False => λ none => absurd(none),
-                True => (match b_is: body.emits(head, layout, inner, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(b) => λ same => {
-                        let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
-                        subst(same,
-                            calc {
-                                p <= head := p.within_label(Succ(names)),
-                                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
-                                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
-                                <= closed := Exists(2, refl),
-                            })
-                    },
-                }),
+            cases emitted as fits, b_is(b);
+            let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
+            calc {
+                p <= head := p.within_label(Succ(names)),
+                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
+                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
+                <= closed := Exists(2, refl),
             }
         },
-        Exit(status) => λ p out known names c => match layout.word_fits(status) {
-            False => λ none => absurd(none),
-            True => λ same => subst(same,
-                p.within_exits(layout, known, status)),
+        Exit(status) => λ p out known names c emitted => {
+            cases emitted;
+            p.within_exits(layout, known, status)
         },
-        Arg(index, buf, len) => λ p out known names c => match layout.words_fit([index, len]) {
-            False => λ none => absurd(none),
-            True => match layout.capacities.nth(buf) {
-                None => λ none => absurd(none),
-                Some(capacity) => λ same => subst(same, p.within_args(layout, out, index, buf, len, capacity, names)),
-            },
+        Arg(index, buf, len) => λ p out known names c emitted => {
+            cases emitted as fit, found(capacity);
+            p.within_args(layout, out, index, buf, len, capacity, names)
         },
-        Perform(index, args, results) => λ p out known names c => match layout.call_fits(out, index, args, results) {
-            False => λ none => absurd(none),
-            True => λ same => subst(same,
-                p.within_performs(layout, out, index, args, results)),
+        Perform(index, args, results) => λ p out known names c emitted => {
+            cases emitted;
+            p.within_performs(layout, out, index, args, results)
         },
     }
 }

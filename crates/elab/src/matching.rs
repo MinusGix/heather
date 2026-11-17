@@ -22,6 +22,14 @@ pub(crate) use routes::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
 pub(crate) trait MotiveSynthesisElab {
     fn read_motive_type(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type>;
     fn read_motive_term(&self, cx: &Cx, term: &Term, span: Span) -> Option<Rc<Term>>;
+    /// [`Self::read_motive_term`] for a hypothesis's side, which the
+    /// refined hypothesis keeps: a structural recursion's later calls are
+    /// spelled as calls (`l.emits(q)`), not as copies of its eliminator,
+    /// so a later split can find and name them
+    /// (issues/cases-on-hypothesis-tactic.md).
+    fn read_hypothesis_term(&self, cx: &Cx, term: &Term, span: Span) -> Option<Rc<Term>> {
+        self.read_motive_term(cx, term, span)
+    }
     fn motive_candidate_converts(
         &self,
         cx: &Cx,
@@ -817,8 +825,8 @@ pub(crate) fn hypothesis_through_calls(
     let Type::Id { level, ty: carrier, lhs, rhs } = elab.read_motive_type(cx, ty, span)? else {
         return None;
     };
-    let lhs = elab.read_motive_term(cx, &lhs, span).unwrap_or(lhs);
-    let rhs = elab.read_motive_term(cx, &rhs, span).unwrap_or(rhs);
+    let lhs = elab.read_hypothesis_term(cx, &lhs, span).unwrap_or(lhs);
+    let rhs = elab.read_hypothesis_term(cx, &rhs, span).unwrap_or(rhs);
     let mut budget = STUCK_CANDIDATES;
     let mut on_left = Vec::new();
     stuck_scrutinees(&lhs, &mut on_left, &mut budget);

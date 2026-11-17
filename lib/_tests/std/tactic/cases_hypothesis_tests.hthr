@@ -93,3 +93,27 @@ theorem staged_first(n, out: Nat, ran: staged(n) = Some(out), k: st1(n) = Some(o
     cases ran as below;
     k(ran)
 }
+
+// A structural recursion's later call is a test of its own: the left
+// subtree's call is split on and its value named, read as the call
+// `l.emits(…)` and not as a copy of the recursion's eliminator.
+inductive Tree { TLeaf(w: Nat), TNode(w: Nat, l: Tree, r: Tree) }
+
+fn Tree::emits(self t: Tree, p: List<Nat>) → Option<List<Nat>> {
+    match t {
+        TLeaf(w) => match fits(w) { False => None, True => Some(Cons(w, p)) },
+        TNode(w, l, r) => match fits(w) {
+            False => None,
+            True => match l.emits(Cons(w, p)) {
+                None => None,
+                Some(q) => r.emits(q),
+            },
+        },
+    }
+}
+
+theorem node_left(w: Nat, l, r: Tree, p, c: List<Nat>, same: TNode(w, l, r).emits(p) = Some(c),
+    k: (q: List<Nat>) → l.emits(Cons(w, p)) = Some(q) → Nat): Nat {
+    cases same as fw, left(q);
+    k(q, left)
+}

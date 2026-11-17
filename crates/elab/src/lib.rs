@@ -1164,6 +1164,25 @@ impl matching::MotiveSynthesisElab for Elaborator {
         self.semantic_oracle().whnf_term_probing(&cx.gamma, term).ok().map(Rc::new)
     }
 
+    fn read_hypothesis_term(&self, cx: &Cx, term: &Term, span: Span) -> Option<Rc<Term>> {
+        // The head walk that refolds each recursion's hypothesis as calls
+        // (`crate::refold`), to where it is stuck; the reducer's whnf
+        // copies the eliminator instead. A walk the budget ends is read as
+        // any motive term is.
+        let oracle = self.semantic_oracle();
+        let walk = oracle::Unfold::StuckScrutinee;
+        let mut steps = 0u64;
+        let mut last = None;
+        for reduct in oracle.unfold(&cx.gamma, term, walk) {
+            steps += 1;
+            last = Some(reduct);
+        }
+        if steps < walk.steps() {
+            return Some(Rc::new(last.unwrap_or_else(|| term.clone())));
+        }
+        self.read_motive_term(cx, term, span)
+    }
+
     fn motive_candidate_converts(
         &self,
         cx: &Cx,
