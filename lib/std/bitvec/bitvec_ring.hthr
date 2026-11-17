@@ -52,6 +52,15 @@ theorem BitVec::neg_add(n: Nat, a: BitVec(n)): a.neg().add(a) = BitVec::ofNat(0)
     trans(BitVec::add_comm(n, a.neg(), a), BitVec::add_neg(n, a))
 }
 
+theorem BitVec::neg_neg(n: Nat, a: BitVec(n)): a.neg().neg() = a {
+    let b = a.neg().neg();
+    trans(sym(BitVec::add_zero(n, b)),
+    trans(@cong(λ (v: BitVec(n)) => b.add(v), BitVec::ofNat(0), a.neg().add(a), sym(BitVec::neg_add(n, a))),
+    trans(sym(BitVec::add_assoc(n, b, a.neg(), a)),
+    trans(@cong(λ (v: BitVec(n)) => v.add(a), b.add(a.neg()), BitVec::ofNat(0), BitVec::neg_add(n, a.neg())),
+    trans(BitVec::add_comm(n, BitVec::ofNat(0), a), BitVec::add_zero(n, a))))))
+}
+
 theorem BitVec::mul_assoc(n: Nat, a, b, c: BitVec(n)): a.mul(b).mul(c) = a.mul(b.mul(c)) {
     trans(BitVec::mul_ofNat_l(n, a.toNat() * b.toNat(), c),
     trans(BitVec::ofNat_cong(n, Nat::mul_assoc(a.toNat(), b.toNat(), c.toNat())),

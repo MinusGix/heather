@@ -1460,6 +1460,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ByteStr(_)
+        | ExprKind::ByteChar(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl

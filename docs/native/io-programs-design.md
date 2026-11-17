@@ -413,7 +413,7 @@ What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 
 **The surface (built, 2026-11-16).** `b"valid\n"` is one token, `ByteStr`,
 from its `b` (`b` alone or `b "x"` is what it was), cut the same by the
-Rust lexer (`lex_byte_string`) and Heather's own scanner
+Rust lexer (`lex_byte_literal`) and Heather's own scanner
 (`lib/lang/lexer/lexer_scan.hthr`, `step_byte_string`). Its bytes are its
 characters, each ASCII, since a non-ASCII character is refused rather than
 read as its UTF-8 encoding (the message spells its bytes as escapes); the
@@ -425,6 +425,14 @@ to the collection literal of its numerals at `[u8; n]`, or at
 `List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
 exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
 `lib/_tests/std/bitvec/byte_string_tests.hthr` pins it.
+
+**One byte, `b'…'` (built, 2026-11-17).** A byte string's element on its
+own: `b'\n'` is the token `ByteChar`, one ASCII character or one of the
+escapes above, then its `'` (`step_byte_char` in the scanner; an empty or
+second byte is refused where the `'` belongs, `ByteCount`). It elaborates
+(`Literals::elab_byte_char_*`) to the numeral of its byte at `u8` wherever
+it stands, as `42u8` is, so `x = b'\n'` is the term `x = 10` and compiles
+to the same code; `lib/_tests/std/bitvec/byte_char_tests.hthr` pins it.
 
 **The native half (built, 2026-11-16): a byte string is one more buffer
 parameter.** D2's move, applied by the reflector: before reading a program,

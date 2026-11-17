@@ -531,9 +531,12 @@ record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
 
 // Code to add after a program: items, a word fetched to a register (from
 // its home, or as its number where known), a register kept in a word's home
-// (where the word is live after), and `body` skipped where the flags meet
-// `cc` (its label the name after `names`). What a fragment needs before it
-// is computed from it (`Fragment::before`, native_compile_claims).
+// (where the word is live after), `body` skipped where the flags meet `cc`
+// (its label the name after `names`), and a loop: `enter` once, then `body`
+// again and again, until either leaves it (`Leave`, a jump where the flags
+// meet `cc` to the label `to`; the loop's head is the name after `names`
+// and its way out the one after that). What a fragment needs before it is
+// computed from it (`Fragment::before`, native_compile_claims).
 inductive Fragment {
     Skip,
     Place(name: Nat, item: Asm),
@@ -541,6 +544,8 @@ inductive Fragment {
     Keep(id: Nat, register: Gpr),
     Both(first: Fragment, rest: Fragment),
     Unless(cc: ConditionCode, names: Nat, body: Fragment),
+    Leave(cc: ConditionCode, to: Nat),
+    Cycle(names: Nat, enter: Fragment, body: Fragment),
 }
 
 fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
@@ -551,6 +556,8 @@ fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
         Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
         Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
         Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
+        Leave(cc, to) => At(p, 0, Jcc(cc, to)),
+        Cycle(names, enter, body) => At(At(body.onto(cx, At(enter.onto(cx, p), names + 1, Block([]))), 0, Jmp(names + 1)), names + 2, Block([])),
     }
 }
 
@@ -581,6 +588,9 @@ fn Build::point(self b: Build, to: Gpr, at: BitVec(64)) → Build { b.ins(MovRI(
 fn Build::plus(self b: Build, to, by: Gpr) → Build { b.ins(AddRR(to, by)) }
 fn Build::minus(self b: Build, to, by: Gpr) → Build { b.ins(SubRR(to, by)) }
 fn Build::cmp(self b: Build, left, right: Gpr) → Build { b.ins(CmpRR(left, right)) }
+fn Build::test(self b: Build, register: Gpr) → Build { b.ins(TestRR(register, register)) }
+fn Build::next(self b: Build, register: Gpr) → Build { b.ins(AddRI8(register, BitVec::ofNat(1))) }
+fn Build::load_byte(self b: Build, to, at: Gpr) → Build { b.item(LoadByte(ByteLoad(to, at))) }
 fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
 
 // A word in a register, and a register in its word's home.
@@ -593,6 +603,23 @@ fn Build::unless(self b: Build, cc: ConditionCode, body: Build → Build) → Bu
     let inside = body(b.cx.from(b.names + 1)).cut();
     Build(b.cx, Both(b.cut().code, Unless(cc, b.names, inside.code)), [], inside.names)
 }
+
+// A loop's way out: only `Build::loop` makes one, and places it.
+record Label { name: Nat }
+
+// Out of the loop where the flags meet `cc`.
+fn Build::leave(self b: Build, cc: ConditionCode, out: Label) → Build { b.add(Leave(cc, out.name)) }
+
+// `enter` once, then `body` again and again, until either leaves.
+fn Build::loop(self b: Build, enter: Label → Build → Build, body: Label → Build → Build) → Build {
+    let out = Label(b.names + 2);
+    let entered = enter(out, b.cx.from(b.names + 2)).cut();
+    let inside = body(out, b.cx.from(entered.names)).cut();
+    Build(b.cx, Both(b.cut().code, Cycle(b.names, entered.code, inside.code)), [], inside.names)
+}
+
+// `body` again and again, until it leaves.
+fn Build::repeat(self b: Build, body: Label → Build → Build) → Build { b.loop(λ _ b => b, body) }
 
 // `value` clamped to `bound`, unsigned: unless it is below, the bound. The
 // comparison starts a block of its own.
@@ -628,12 +655,21 @@ fn Build::window(self b: Build, at, len, capacity: Nat, count: Gpr) → Build {
      .word(len, count).clamp(count, R9)
 }
 
-// read(fd, scratch, count) over the window, the clamped offset kept in R9.
-fn Build::read(self b: Build, fd, at, len, capacity: Nat) → Build {
+// read(fd, scratch, count) over the window, the clamped offset kept in R9;
+// unless it failed (RAX negative), the RAX bytes it read copied from the
+// scratch range to the buffer's past the offset: R8 counts, RSI and RDI
+// walk the two ranges, RDX carries each byte. The result kept.
+fn Build::read(self b: Build, fd, buf, at, len, result, capacity: Nat) → Build {
     let read = Abi::linux_syscall().read();
     b.window(at, len, capacity, read.count)
      .mov(R9, R8).point(read.buf, b.cx.layout.scratch_at()).number(read.number)
      .word(fd, read.fd).syscall()
+     .test(read.result)
+     .loop(λ out b => b.leave(S, out).set(R8, 0).point(Rsi, b.cx.layout.scratch_at()).point(Rdi, b.cx.layout.buffer_at(buf)).plus(Rdi, R9),
+           λ out b => b.cmp(R8, read.result).leave(E, out)
+                       .load_byte(Rdx, Rsi).store_byte(Rdi, Rdx)
+                       .next(Rsi).next(Rdi).next(R8))
+     .keep(result, read.result)
 }
 
 // write(fd, buffer + offset, count) over the window; the result kept.
@@ -651,20 +687,29 @@ fn Build::close(self b: Build, fd, result: Nat) → Build {
     b.number(close.number).word(fd, close.fd).syscall().keep(result, close.result)
 }
 
-// openat(AT_FDCWD, scratch, O_RDONLY), the path NUL-ended in the scratch
-// range; the result kept.
-fn Build::openat(self b: Build, result: Nat) → Build {
+// openat(AT_FDCWD, scratch, O_RDONLY) of the path: its first min(len,
+// capacity) bytes up to its NUL copied from its buffer to the scratch range
+// (R8 counts up to RCX, RSI and RDI walk the two ranges, RDX carries each
+// byte) and a NUL put after them. The result kept.
+fn Build::open(self b: Build, path, len, result, capacity: Nat) → Build {
     let openat = Abi::linux_syscall().openat();
-    b.number(openat.number).point(openat.dirfd, fdcwd_word()).point(openat.pathname, b.cx.layout.scratch_at()).set(openat.flags, 0)
-     .syscall().keep(result, openat.result)
+    b.word(len, Rcx).set(R9, capacity).clamp(Rcx, R9)
+     .set(R8, 0).point(Rsi, b.cx.layout.buffer_at(path)).point(Rdi, b.cx.layout.scratch_at())
+     .repeat(λ out b => b.cmp(R8, Rcx).leave(E, out)
+                         .load_byte(Rdx, Rsi).test(Rdx).leave(E, out)
+                         .store_byte(Rdi, Rdx)
+                         .next(Rsi).next(Rdi).next(R8))
+     .set(Rdx, 0).store_byte(Rdi, Rdx)
+     .number(openat.number).point(openat.dirfd, fdcwd_word()).point(openat.pathname, b.cx.layout.scratch_at()).set(openat.flags, 0)
+     .syscall()
+     .keep(result, openat.result)
 }
 
 // read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
 // offset kept in R9; the result stored; on success the bytes copied into
 // the buffer from the offset.
 fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let asked = Emission(layout, known, out).from(names).read(fd, at, len, capacity).onto(p).prog;
-    Compiled(asked.read_back(layout, out, buf, result, names), names + 4)
+    Emission(layout, known, out).from(names).read(fd, buf, at, len, result, capacity).onto(p)
 }
 
 // write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
@@ -698,10 +743,7 @@ fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog 
 // capacity) bytes up to its NUL copied to the scratch range and a NUL put
 // after them (RDI is past them); the result put in its word's home.
 fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let cx = Emission(layout, known, out);
-    let clamped = cx.from(names).word(len, Rcx).set(R9, capacity).clamp(Rcx, R9).onto(p).prog;
-    let copied = clamped.path_copy(layout, path, names + 2, names + 3).label(names + 3);
-    cx.from(names + 3).set(Rdx, 0).store_byte(Rdi, Rdx).openat(result).onto(copied)
+    Emission(layout, known, out).from(names).open(path, len, result, capacity).onto(p)
 }
 
 fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {

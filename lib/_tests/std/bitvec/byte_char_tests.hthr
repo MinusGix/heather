@@ -1,0 +1,47 @@
+// Byte characters `b'…'`: one byte, an ASCII character or one of a byte
+// string's escapes, which is the numeral of that byte at `u8` wherever it
+// stands, as each element of a byte string `b"…"` is. Pinned by `refl`
+// against the numerals a reader would write instead, in inference and
+// checking position, against a neutral byte, inside a collection literal
+// and beside the byte string of the same byte; the last probes are the
+// negative controls (an empty or two-byte literal, a character past ASCII
+// or a short `\x`, refuses the whole file, so those are the Rust lexer's
+// tests). Tests, not library: nothing outside lib/_tests imports this
+// module.
+import list; import bitvec; import bool; import logic;
+
+// Inference: a `u8`, with nothing around it to say so.
+def newline = b'\n';
+fn newline_byte() → u8 { newline }
+theorem newline_is_ten(): newline = 10 { refl }
+theorem a_is_97(): b'a' = 97 { refl }
+
+// Checking at `u8`, and each escape a byte string has, `\xHH` in either
+// case.
+fn quote() → u8 { b'\'' }
+fn escapes() → List<u8> { [b'\t', b'\r', b'\\', b'\'', b'"', b'\"', b'\0', b'\x7f', b'\xFF', b'\xc3'] }
+theorem escapes_are(): escapes() = [9, 13, 92, 39, 34, 34, 0, 127, 255, 0xC3] { refl }
+
+// A byte string's elements are byte characters.
+theorem byte_string_is_its_characters(): b"hi\n" = [b'h', b'i', b'\n'] { refl }
+
+// Beside a neutral byte, on either side of a comparison; a closed verdict
+// by evaluation.
+fn is_newline(x: u8) → Bool { if x = b'\n' { True } else { False } }
+theorem newline_is_newline(): is_newline(10) = True { refl }
+theorem space_is_not_newline(): is_newline(b' ') = False { refl }
+theorem neutral_left(x: u8, h: x = b'\n'): x = 10 { h }
+theorem neutral_right(x: u8, h: b'\n' = x): 10 = x { h }
+
+// `b` is still a name, apart from its quote.
+fn named_b(b: u8) → u8 { b }
+theorem named_b_is(): named_b(b'b') = 98 { refl }
+
+// The negative controls: a byte is not a natural number, not a wider word,
+// and not the byte next to it.
+// expect-error: this has type `u8`, but `Nat` is expected here
+fn not_nat() → Nat { b'a' }
+// expect-error: this has type `u8`, but `u16` is expected here
+fn not_wide() → u16 { b'a' }
+// expect-error(kernel): NotConvertible
+theorem upper_is_not_lower(): b'A' = b'a' { refl }

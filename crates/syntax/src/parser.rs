@@ -468,6 +468,40 @@ fn is_imperative_statement(s: &Stmt) -> bool {
                 || (args.is_empty() && (n == crate::imperative::BREAK || n == crate::imperative::CONTINUE)))))
 }
 
+/// The binding power just above `&&` and `||`: an operand read at it holds
+/// neither.
+const BOOL_CHAIN_BP: u8 = 5;
+
+/// An operand of `&&`/`||` as a `Bool`: a relation (`a < b`, `a ≠ b`) is
+/// its decision `decide_bit<a < b>()`; anything else is as written.
+fn decided(e: Expr) -> Expr {
+    let relation = match &e.kind {
+        ExprKind::App { head, args, .. } => match &head.kind {
+            ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } => args.len() == 2 && matches!(symbol.as_str(), "<" | "<=" | "≈"),
+            ExprKind::Var(n) => n == "Not" && args.len() == 1 && matches!(args[0].kind, ExprKind::Eq(..)),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !relation {
+        return e;
+    }
+    let span = e.span;
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(Expr {
+                kind: ExprKind::TyApp { head: Box::new(Expr { kind: ExprKind::Var("decide_bit".into()), span }), args: vec![expr_as_ty(&e)] },
+                span,
+            }),
+            args: vec![],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
+}
+
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr {
@@ -4069,8 +4103,8 @@ impl Parser {
         self.loop_stmt(start, iter, x, xspan, "for")
     }
 
-    /// `while c decreases m { body }` (docs/language/sequencing-surface-design.md
-    /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
+    /// `while c [invariant p] decreases m { body }` (docs/language/sequencing-surface-design.md
+    /// §5.3, §22.5): the `for` marker over the header `\0while(decide_bit<c>(),
     /// m)` and a private binder, so [`crate::imperative`] threads its state
     /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
     /// instead of a step over a fold.
@@ -4082,6 +4116,13 @@ impl Parser {
         let start = self.bump().span;
         let condition = self.with_record_lit(true, |p| p.expr())?;
         let cspan = condition.span;
+        // `invariant P`: a fact the loop keeps, proved where it starts and
+        // at each round's end, and assumed in the body (§22.5).
+        let invariant = if self.eat_kw("invariant") {
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
         let measure = if self.eat_kw("decreases") {
             Some(self.with_record_lit(true, |p| p.expr())?)
         } else {
@@ -4113,8 +4154,19 @@ impl Parser {
             },
             span: cspan,
         };
+        if let Some(p) = &invariant
+            && measure.is_none()
+        {
+            return Err(ParseError {
+                msg: "a `while` with an `invariant` states its measure too: `while c invariant p decreases m { … }`"
+                    .into(),
+                span: p.span,
+            });
+        }
         let mut header_args = vec![scrut];
         header_args.extend(measure.clone());
+        // The invariant rides third, read as the proposition it states.
+        header_args.extend(invariant.map(|p| Expr { span: p.span, kind: ExprKind::TyLit(Box::new(expr_as_ty(&p))) }));
         let header = crate::imperative::call_marker(crate::imperative::WHILE, header_args, start.join(cspan));
         let x = self.hygienic("while");
         self.defer_binds = measure.is_none();
@@ -5126,7 +5178,7 @@ impl Parser {
             }
             TokKind::Ne => {
                 let op = self.bump().span;
-                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let rhs = self.with_eq(true, |p| p.expr_bp(BOOL_CHAIN_BP))?;
                 let eq_span = lhs.span.join(rhs.span);
                 let eq = Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span: eq_span };
                 let head = Expr { kind: ExprKind::Var("Not".to_string()), span: op };
@@ -5148,7 +5200,7 @@ impl Parser {
                     _ => "<",
                 };
                 self.bump();
-                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let rhs = self.with_eq(true, |p| p.expr_bp(BOOL_CHAIN_BP))?;
                 let span = lhs.span.join(rhs.span);
                 op_call(sym, OpFixity::Infix, vec![lhs, rhs], span)
             }
@@ -5241,13 +5293,50 @@ impl Parser {
                 span,
             });
         }
-        let lhs = self.expr_bp(0)?;
-        let relation = matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne);
-        if self.no_eq && !(self.annotation_rel && relation) {
-            Ok(lhs)
-        } else {
-            self.comparison(lhs)
+        if self.no_eq {
+            let lhs = self.expr_bp(0)?;
+            let relation = matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne);
+            return if self.annotation_rel && relation { self.comparison(lhs) } else { Ok(lhs) };
         }
+        // `&&` and `||` sit between the relations and `=`: `0 < j && key < b`
+        // is the conjunction of two tests, as in Rust, while `x && True = x`
+        // is still `(x && True) = x`.
+        let lhs = self.bool_chain(0)?;
+        self.comparison(lhs)
+    }
+
+    /// `r₁ && r₂ || …` over relation operands ([`Self::relation_operand`]),
+    /// `&&` binding tighter than `||`, both left-associative. A relation
+    /// among the operands is read as its decision, `decide_bit<r>()`, since
+    /// `&&` combines `Bool`s.
+    fn bool_chain(&mut self, min_bp: u8) -> R<Expr> {
+        let mut lhs = self.relation_operand()?;
+        loop {
+            let (sym, l_bp, r_bp) = match self.peek() {
+                TokKind::PipePipe => ("||", 1, 2),
+                TokKind::AmpAmp => ("&&", 3, 4),
+                _ => break,
+            };
+            if l_bp < min_bp {
+                break;
+            }
+            self.bump();
+            let rhs = self.bool_chain(r_bp)?;
+            let span = lhs.span.join(rhs.span);
+            lhs = op_call(sym, OpFixity::Infix, vec![decided(lhs), decided(rhs)], span);
+        }
+        Ok(lhs)
+    }
+
+    /// An operand of `&&`/`||`: an arithmetic expression, or a relation
+    /// (`<`, `<=`, `≈`, `≠`) between two (the `=` rung is looser, read by
+    /// [`Self::comparison`] after the chain).
+    fn relation_operand(&mut self) -> R<Expr> {
+        let lhs = self.expr_bp(BOOL_CHAIN_BP)?;
+        if matches!(self.peek(), TokKind::LtEq | TokKind::Lt | TokKind::Approx | TokKind::Ne) {
+            return self.comparison(lhs);
+        }
+        Ok(lhs)
     }
 
     /// `∀ x: A, P` and `∃ x: A, P` — one binder group, then the body, which
@@ -6322,6 +6411,11 @@ impl Parser {
                 let bytes = bytes.clone();
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::ByteStr(bytes), span: sp })
+            }
+            // `b'…'`, one byte.
+            TokKind::ByteChar(byte) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::ByteChar(byte), span: sp })
             }
             TokKind::LParen => {
                 let open = self.bump().span;
@@ -7544,6 +7638,13 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         assert!(parse_file(r#"fn f() -> X { b "x" }"#).is_err());
         assert!(parse_file(r#"fn f() -> X { bb"x" }"#).is_err());
+        // A byte character, `b'…'`, is one byte the same way.
+        assert!(matches!(body(r"b'\n'"), ExprKind::ByteChar(b'\n')));
+        assert!(matches!(body(r"b'\xff'"), ExprKind::ByteChar(0xff)));
+        let call = body("g(b'x', b)");
+        let (_, args, _) = as_call(&call);
+        assert!(matches!(&args[0].kind, ExprKind::ByteChar(b'x')));
+        assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         let refused = parse_file(r#"fn f() -> X { b"aé" }"#).unwrap_err();
         assert!(refused.msg.contains("a byte string holds ASCII characters"), "{}", refused.msg);
         assert!(refused.msg.contains(r"`\xC3\xA9`"), "{}", refused.msg);

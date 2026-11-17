@@ -79,24 +79,91 @@ impl Checking<'_> {
     /// proves a squash. Anything else is inferred in a probe and wrapped
     /// only when it infers and what it proves is not itself a squash, so a
     /// condition passed on (`inside := inside`) stays as it is.
-    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, prop: &Rc<Type>, level: &Level) -> R<Option<Term>> {
+    /// An arithmetic search for a condition `∥P∥` where squashed facts
+    /// `h: ∥A∥` are in scope (a loop's invariant, a caller's found
+    /// condition): the search runs with each fact released, as
+    /// `elim_squash(h, x. search)` with `x: A` in scope, which is allowed
+    /// because what it proves is itself a squash. `None` where there is no
+    /// fact to release, or the expression is not such a search (a block of
+    /// `let`s ending in one counts, as a lifted found proof's body is).
+    fn release_squashed_facts(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> Option<R<Term>> {
+        const ARITHMETIC: [&str; 4] = ["omega", "bv_omega", "linarith", "nlinarith"];
+        fn is_search(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Var(v) => ARITHMETIC.contains(&v.as_str()),
+                ExprKind::Block(b) => b.stmts.iter().all(|s| matches!(s, heather_syntax::Stmt::Let { .. })) && is_search(&b.result),
+                _ => false,
+            }
+        }
+        if !is_search(e) {
+            return None;
+        }
+        let span = e.span;
+        let Ok(Type::Squash { level: dst_level, ty: goal }) = self.whnf(cx, expected, span) else { return None };
+        // The first fact not yet released (`__unsq_h` names its release).
+        let mut seen = std::collections::HashSet::new();
+        let found = cx.names.iter().rev().find_map(|name| {
+            if name.starts_with('#') || name.starts_with("__unsq_") || !seen.insert(name.clone()) {
+                return None;
+            }
+            let released = format!("__unsq_{name}");
+            if cx.names.iter().any(|n| *n == released) {
+                return None;
+            }
+            let (term, ty, _) = self.resolve_reading(cx, name, span).ok()?;
+            match self.whnf(cx, &ty, span).ok()? {
+                Type::Squash { level, ty: payload } => Some((released, term, level, payload)),
+                _ => None,
+            }
+        });
+        let (released, scrut, src_level, payload) = found?;
+        // Read through a call that steps to a local where it does not spell
+        // (`s.len()` is `n`), as `bv_omega` reads a goal.
+        let payload = match crate::bv_omega::aliased_goal(self, cx, &payload) {
+            Some(read) => Rc::new(read),
+            None => payload,
+        };
+        let mut inner = cx.clone();
+        inner.push(released, (*payload).clone(), src_level.clone());
+        let shifted = expected.shift_local(1);
+        Some(self.elab_check(&inner, e, &shifted, lvl).map(|case| Term::ElimSquash {
+            src_level,
+            dst_level,
+            src_ty: payload,
+            motive: Rc::new(goal.shift_local(1)),
+            case: Rc::new(case),
+            scrut: Rc::new(scrut),
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_condition_squashed(&self, cx: &Cx, e: &Expr, expected: &Type, prop: &Rc<Type>, level: &Level, lvl: &Level) -> R<Squashed> {
         if let ExprKind::App { head, .. } = &e.kind
             && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
         {
-            return Ok(None);
+            return Ok(Squashed::Neither);
         }
         let search = matches!(&e.kind, ExprKind::Hole(_))
             || (crate::surface::count_holes_expr(e) == 0 && crate::defaults::is_discharge(e));
         if !search {
-            let squashed = self.probe(|| match self.elab_infer(cx, e) {
-                Ok((_, got, _)) => self.whnf(cx, &got, e.span).ok().map(|w| matches!(w, Type::Squash { .. })),
-                Err(_) => None,
+            // The inference that tells a squashed argument from a payload is
+            // kept when it answers squashed at the expected type: elaborating
+            // it again would run its own arguments' searches again, and an
+            // argument nested `k` deep in squashed positions would run its
+            // search `2^k` times. `None`: `e` is a proof of `P` itself.
+            let squashed = self.probe_unless(|| match self.elab_infer(cx, e) {
+                Ok((tm, got, _)) => match self.whnf(cx, &got, e.span).ok() {
+                    Some(Type::Squash { .. }) if self.conv_types(cx, &got, expected, lvl) => (Some(Squashed::Whole(tm)), true),
+                    Some(Type::Squash { .. }) | None => (Some(Squashed::Neither), false),
+                    Some(_) => (None, false),
+                },
+                Err(_) => (Some(Squashed::Neither), false),
             });
-            if squashed != Some(false) {
-                return Ok(None);
+            if let Some(squashed) = squashed {
+                return Ok(squashed);
             }
         }
-        self.elab_check(cx, e, prop, level).map(Some)
+        self.elab_check(cx, e, prop, level).map(Squashed::Payload)
     }
 
     /// [`Self::elab_check_hinted`] plus, where the caller has one, the
@@ -358,10 +425,23 @@ impl Checking<'_> {
                 capture_slots,
             );
         }
-        if let Type::Squash { level, ty } = expected
-            && let Some(payload) = self.check_condition_squashed(cx, e, ty, level)?
-        {
-            return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) });
+        if let Some(released) = self.release_squashed_facts(cx, e, expected, lvl) {
+            return released;
+        }
+        // A search at a goal that steps to a squash (a motive applied, as
+        // in an `induct` arm) is the search at the squash.
+        let stepped = match expected {
+            Type::Squash { .. } => None,
+            _ if matches!(&e.kind, ExprKind::Var(v) if ["omega", "bv_omega", "linarith", "nlinarith"].contains(&v.as_str())) => self.whnf(cx, expected, e.span).ok().filter(|w| matches!(w, Type::Squash { .. })),
+            _ => None,
+        };
+        if let Type::Squash { level, ty } = stepped.as_ref().unwrap_or(expected) {
+            let expected = stepped.as_ref().unwrap_or(expected);
+            match self.check_condition_squashed(cx, e, expected, ty, level, lvl)? {
+                Squashed::Payload(payload) => return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) }),
+                Squashed::Whole(whole) => return Ok(whole),
+                Squashed::Neither => {}
+            }
         }
         if let ExprKind::App {
             head,
@@ -1330,6 +1410,7 @@ impl Checking<'_> {
             ExprKind::Scaled(lit) => Literals(self).elab_scaled_check(cx, lit, e, expected, lvl),
             ExprKind::Str(text) => Literals(self).elab_string_check(cx, text, e, expected, lvl),
             ExprKind::ByteStr(bytes) => Literals(self).elab_byte_string_check(cx, bytes, e, expected),
+            ExprKind::ByteChar(byte) => Literals(self).elab_byte_char_check(cx, *byte, e, expected),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -1932,4 +2013,15 @@ impl Checking<'_> {
         let _rollback = matching::MatchRollback::new(self.0);
         self.elab_infer(cx, &call).is_ok()
     }
+}
+
+/// How an argument at a squashed position `∥P∥` was elaborated
+/// ([`Checking::check_condition_squashed`]).
+enum Squashed {
+    /// A proof of `P`, to be squashed.
+    Payload(Term),
+    /// Already a term of the expected `∥P∥`, inferred once and kept.
+    Whole(Term),
+    /// Neither: the ordinary checking routes take it.
+    Neither,
 }

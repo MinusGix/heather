@@ -166,3 +166,8 @@ before a generator is worth writing.
   several hundred kernel steps per hinted literal, and CaDiCaL's long proofs
   on small arithmetic (three 4-bit additions reassociated: about 5000
   hints).
+- 2026-11-17: follow-ups filed (Minus: file them all, do the first two):
+  [[bv-decide-shared-subcircuits]], [[bv-decide-normalize]],
+  [[bv-decide-parallel-stages]], [[bv-decide-literal-cost]],
+  [[bv-decide-hypotheses]], [[bv-decide-goal-shapes]],
+  [[bv-decide-multiplication-split]], [[bv-decide-fast-counterexample]].

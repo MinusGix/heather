@@ -1404,6 +1404,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ByteStr(_)
+            | ExprKind::ByteChar(_)
             | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl

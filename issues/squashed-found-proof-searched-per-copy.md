@@ -4,7 +4,7 @@ status: open
 labels: [performance,elaborator,recursion]
 area: language
 created: 2026-11-14
-updated: 2026-11-14
+updated: 2026-11-17
 ---
 
 A `decreases` function is lowered to several declarations that each elaborate the body's syntax: `f#body`, `f#ext` and `f_unfold` (`measure::companions`). `f#ext` and `f_unfold` spell the body several times over. A call in the body that leaves a proof to a search (`v.at(j + 14)`, whose `inside` defaults to `bv_omega`) is searched for at every one of those spellings.
@@ -24,6 +24,13 @@ A `decreases` function is lowered to several declarations that each elaborate th
 
 `MeasureContext::measure_default_goals` lifts a squashed goal at its squashed type. The probes in `lib/_tests/std/core/squash_conditions_tests.hthr` keep a squashed pair that is not lifted (`block_spread`, defaults written as blocks), so the conversion of squashed proofs is still what one test rests on.
 
+Two more ways the search escaped the lifting (2026-11-17, a lifted `while` with an `invariant`, whose next-state fact is found at the end of the body):
+
+- The query that finds a call's default goals bound each `let` in scope as a local of its type, so a search that reads what a `let` is (`let j₂ = j - 1` before `found_fact<j₂ <= i>()`) failed there and was left at the call. `measure_default_goals` now asks again with the values bound as aliases when the plain telescope fails (`MeasureContext::measure_query_valued`).
+- `check_condition_squashed` inferred an argument at a squashed position in a probe, threw it away, and checked it again; an argument `k` deep in squashed positions ran its searches `2^k` times. The inference is kept where it answers squashed at the expected type.
+
+The loop went from 15 s to 2 s.
+
 ## Left
 
 - A default the lifting does not know (a block, a tactic other than a context search) is still searched for at every copy.
@@ -33,3 +40,4 @@ A `decreases` function is lowered to several declarations that each elaborate th
 ## Log
 
 - 2026-11-14: Found while looking for what a cold library gate pays ([[sentinel-seed-follows-master]]); fixed for context-search defaults in the same round.
+- 2026-11-17: let values in the default-goal query, the squashed probe kept (loops thread).

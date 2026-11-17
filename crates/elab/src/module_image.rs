@@ -1499,6 +1499,7 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         // Its own tag, after the last, so every image written before byte
         // strings existed still reads.
         ExprKind::ByteStr(bytes) => { w.byte(29); w.vec(bytes, |w, b| w.byte(*b)); }
+        ExprKind::ByteChar(byte) => { w.byte(30); w.byte(*byte); }
         ExprKind::RecordUpdate { base, fields } => {
             w.byte(25); put_expr(w, base);
             w.vec(fields, |w, field| {
@@ -1568,6 +1569,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             ),
             24 => ExprKind::Str(r.string()?),
             29 => ExprKind::ByteStr(r.vec(Reader::byte)?),
+            30 => ExprKind::ByteChar(r.byte()?),
             25 => ExprKind::RecordUpdate {
                 base: Box::new(get_expr(r)?), fields: r.vec(|r| Ok(RecordLitField {
                     name: r.string()?, expr: get_expr(r)?, span: get_span(r)?,
