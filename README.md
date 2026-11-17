@@ -1,5 +1,7 @@
 # Heather
 
+> This README was written by Claude, with the maintainer's feedback.
+
 Heather is a dependently typed language in which a program and the theorems
 about it are written side by side, in one file, and the program is then
 compiled to x86-64 machine code that carries its own proof. A function
@@ -374,9 +376,41 @@ runtime fn List::copy_word(mut self s: List<u8>, n, from, to: u64) → u64 {
 ```
 
 That is the path where both words are inside the span; the bounds test
-before it is the reads' own. Rules are a fixed table for now: registering
-your own `rule theorem` from any module, and a search that proposes it
-wherever its statement matches, are the next steps.
+before it is the reads' own.
+
+A program can bring its own rule. Declaring it registers it: `compile-x86`
+takes the rules of the program's modules beside the library's, the search
+finds where the statement fits, and the certificate replays the rule's
+soundness, which `rule` proved from the theorem:
+
+<!-- checked: examples/x86-native/own_rule.hthr -->
+```heather
+rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 { … }
+
+runtime fn first_and_nothing(s: List<u8>, n: u64) → u64 {
+    if h: 0 < n {
+        s.byte_within(n, 0).zero_extend(56) + (n - n)
+    } else {
+        0
+    }
+}
+```
+
+`--explain-optimizer` says which rules a compilation used and where. Here
+`sub_self` turns `n - n` into `0`, and `add_zero` then removes the sum:
+
+```text
+$ heather compile-x86 --explain-optimizer examples/x86-native/own_rule.hthr first_and_nothing -o own_rule.s
+function 0: 7 rules used
+  …
+  t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
+  t9 = t1 - t1 = 0   by sub_self
+  t10 = t8 + 0 = t8   by add_zero
+```
+
+A standard set of identities (`function_ir_identities.hthr`) is in every
+compilation the same way, and the search follows a word's other spellings
+by them, so `(y + x) - y` is found to be `x` from `add_comm` and `add_sub`.
 
 ## Plain mathematics
 
