@@ -395,7 +395,7 @@ fn Circ::and_gate(self c: Circ, a, b: Lit) → Pair<Circ, Lit> { c.push(GAnd(a, 
 
 // Whether two literals are one: `a ∧ a` is `a` and `a ∧ ¬a` is false, so
 // neither needs a gate.
-fn Nat::same(self x, y: Nat) → Bool { x.leb(y) && y.leb(x) }
+
 
 fn Lit::same(self a, b: Lit) → Bool {
     match a {
@@ -470,22 +470,16 @@ theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node
     }⟩⟩
 }
 
-theorem Nat::same_eq(self x, y: Nat, e: x.same(y) = True): x = y {
-    (match x.leb(y) as λ t => x.leb(y) = t → t && y.leb(x) = True → x = y {
-        True => λ l r => { let a: (x <= y) = Nat::le_of_leb(x, y, l); let b: (y <= x) = Nat::le_of_leb(y, x, r); omega(a, b) },
-        False => λ l r => absurd(r),
-    })(refl, e)
-}
 
 theorem Lit::same_value(self a, b: Lit, e: a.same(b) = True, v: Nat → Bool): a.value(v) = b.value(v) {
     match a {
         Pos(x) => match b {
-            Pos(y) => cong_fn(v, Nat::same_eq(x, y, e)),
+            Pos(y) => cong_fn(v, Nat::same_sound(x, y, e)),
             Neg(y) => absurd(e),
         },
         Neg(x) => match b {
             Pos(y) => absurd(e),
-            Neg(y) => cong_fn(λ (n: Nat) => !v(n), Nat::same_eq(x, y, e)),
+            Neg(y) => cong_fn(λ (n: Nat) => !v(n), Nat::same_sound(x, y, e)),
         },
     }
 }
@@ -2084,3 +2078,82 @@ theorem BitVec::pair_window_high(n: Nat, x, y: BitVec(n)): window(λ k => Succ(k
             cong_fn(λ k => y.bit_at(k), back))
     })
 }
+
+// ---------------------------------------------------------------------------
+// Layouts. `bv_decide` lays a claim's atoms into one bit stream, words first
+// at increasing offsets and then Booleans, `lay_word(x, o, lay_word(y, o', …
+// lay_bool(b, o'', λ _ => False)))`. A Boolean reads back by evaluation
+// (`PVar`); a word reads back as `x` through `window_lay_here` after a
+// `window_lay_past` for each word laid before it.
+
+fn lay_word({w: Nat}, x: BitVec(w), o: Nat, rest: Nat → Bool) → Nat → Bool {
+    λ k => BitVec::choose_bit(o.leb(k) && Succ(k).leb(o + w), x.bit_at(k - o), rest(k))
+}
+
+fn lay_bool(b: Bool, o: Nat, rest: Nat → Bool) → Nat → Bool {
+    λ k => BitVec::choose_bit(o.leb(k) && Succ(k).leb(Succ(o)), b, rest(k))
+}
+
+// Two bit streams that agree on a window give it the same word.
+theorem window_agree(n: Nat, b1, b2: Nat → Bool, o: Nat, same: (i: Nat) → i < n → b1(o + i) = b2(o + i)): window(b1, o, n, n := n) = window(b2, o, n, n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => {
+            let zero: (o = o + 0) = omega;
+            let first: (b1(o) = b2(o)) = trans(cong_fn(b1, zero), trans(same(0, omega), sym(cong_fn(b2, zero))));
+            let rest = window_agree(k, b1, b2, Succ(o), λ i lt => {
+                let moved: (Succ(o) + i = o + Succ(i)) = omega;
+                let inside: (Succ(i) < Succ(k)) = omega(lt);
+                trans(cong_fn(b1, moved), trans(same(Succ(i), inside), sym(cong_fn(b2, moved))))
+            });
+            BitVec::cons_bit_cong(k, first, rest)
+        },
+    }
+}
+
+theorem window_lay_here(K, w: Nat, x: BitVec(w), o: Nat, rest: Nat → Bool, fits: (o + w).leb(K) = True):
+    window(λ k => Succ(k).leb(K) && lay_word(x, o, rest)(k), o, w, n := w) = x {
+    let room = Nat::le_of_leb(o + w, K, fits);
+    window_of(w, λ k => Succ(k).leb(K) && lay_word(x, o, rest)(k), o, x, λ i lt => {
+        let in_k = Nat::leb_true(Succ(o + i), K, omega(lt, room));
+        let from = Nat::leb_true(o, o + i, omega);
+        let below = Nat::leb_true(Succ(o + i), o + w, omega(lt));
+        let back: ((o + i) - o = i) = omega;
+        let opened = trans(cong_fn(λ (t: Bool) => BitVec::choose_bit(t && Succ(o + i).leb(o + w), x.bit_at((o + i) - o), rest(o + i)), from),
+            cong_fn(λ (t: Bool) => BitVec::choose_bit(True && t, x.bit_at((o + i) - o), rest(o + i)), below));
+        Bool::and_cong(in_k, trans(opened, cong_fn(λ k => x.bit_at(k), back)))
+    })
+}
+
+theorem window_lay_past(K, w: Nat, x: BitVec(w), o: Nat, rest: Nat → Bool, w2, o2: Nat, past: (o + w).leb(o2) = True):
+    window(λ k => Succ(k).leb(K) && lay_word(x, o, rest)(k), o2, w2, n := w2) = window(λ k => Succ(k).leb(K) && rest(k), o2, w2, n := w2) {
+    let before = Nat::le_of_leb(o + w, o2, past);
+    window_agree(w2, λ k => Succ(k).leb(K) && lay_word(x, o, rest)(k), λ k => Succ(k).leb(K) && rest(k), o2, λ i lt => {
+        let above = Nat::leb_false(Succ(o2 + i), o + w, omega(before));
+        let skipped = trans(cong_fn(λ (t: Bool) => BitVec::choose_bit(o.leb(o2 + i) && t, x.bit_at((o2 + i) - o), rest(o2 + i)), above),
+            cong_fn(λ (t: Bool) => BitVec::choose_bit(t, x.bit_at((o2 + i) - o), rest(o2 + i)), Bool::and_false_r(o.leb(o2 + i))));
+        cong_fn(λ (t: Bool) => Succ(o2 + i).leb(K) && t, skipped)
+    })
+}
+
+// The claim with each atom's window in place of the atom (`a2`, …) is the
+// claim: `ea: a2 = a` replaces one atom at a time (`layout_congr`), `f` the
+// side abstracted over the atoms not yet replaced. Every parameter is
+// explicit, since the tactic applies these by their qualified names.
+theorem layout_congr<A, B>(f, g: A → B, a, b: A, hf: f = g, ha: a = b): f(a) = g(b) { rewrite(hf, ha, refl) }
+theorem layout_cong<A, B>(f: A → B, a, b: A, ha: a = b): f(a) = f(b) { rewrite(ha, refl) }
+theorem layout_same<A>(a: A): a = a { refl }
+theorem layout_trans<A>(a, b, c: A, p: a = b, q: b = c): a = c { trans(p, q) }
+theorem layout_eq(n: Nat, a2, b2, a, b: BitVec(n), ea: a2 = a, eb: b2 = b, h: a2.eq_bit(b2) = True): a = b {
+    trans(sym(ea), trans(BitVec::eq_of_eq_bit(n, a2, b2, h), eb))
+}
+theorem layout_iff(p2, q2, p, q: Bool, ep: p2 = p, eq: q2 = q, h: BitVec::bool_eq(p2, q2) = True): p = q {
+    trans(sym(ep), trans(BitVec::bool_eq_true(p2, q2, h), eq))
+}
+theorem layout_true(p2, p: Bool, ep: p2 = p, h: p2 = True): p = True { trans(sym(ep), h) }
+
+// A closed side condition, `(o + w).leb(K) = True` at numerals, by evaluation.
+theorem layout_ok(): True = True { refl }
+
+// The stream past every atom.
+fn no_bits(k: Nat) → Bool { False }

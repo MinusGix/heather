@@ -390,3 +390,113 @@ theorem adds_sound(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), steps
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A refutation as one term, a conversion per stage, which a tactic can hand
+// back (`Sat`, `lib/std/tactic/tactic.hthr`; the host builds it in
+// `crates/elab/src/host/sat.rs`). `Reaches(f, cs)`: no valuation satisfies
+// both the formula `f` and the clauses `cs` still to be added to it. The
+// formula is built a chunk of clauses at a time (`reaches_build`), each
+// chunk's result a literal; the solver's steps are then added a stage at a
+// time (`reaches_add`), some stages ending in a literal checkpoint
+// (`reaches_keep`) so later stages do not replay the insertions before it;
+// the last stage derives the empty clause (`reaches_done`). A checkpoint
+// keeps only the clauses later steps name (`reaches_trim`, `reaches_keep`). Every
+// obligation is `X = True` or `X = literal`, a conversion of its own.
+
+// `cs ++ ds` at the one type the host builds it at: a spelling it can name.
+fn cert_append(cs, ds: List<List<Nat>>) → List<List<Nat>> { cs ++ ds }
+
+fn Reaches(f: NatMap<List<Nat>>, cs: List<List<Nat>>) → Type {
+    (v: Nat → Bool) → Holds(f, v) → all_true(cs, v) = True → False
+}
+
+theorem all_true_append(cs, ds: List<List<Nat>>, v: Nat → Bool): all_true(cs ++ ds, v) = all_true(cs, v) && all_true(ds, v) {
+    match cs {
+        Nil => refl,
+        Cons(c, rest) => trans(cong_fn(λ (b: Bool) => clause_true(c, v) && b, all_true_append(rest, ds, v)),
+            sym(clause_true(c, v).and_assoc(all_true(rest, v), all_true(ds, v)))),
+    }
+}
+
+theorem reaches_done(f: NatMap<List<Nat>>, steps: List<Step>, ok: check(f, steps) = True): Reaches(f, Nil) {
+    λ v hf _ => check_sound(f, v, hf, steps, ok)
+}
+
+theorem reaches_build(k: Nat, f: NatMap<List<Nat>>, chunk: List<List<Nat>>, g: NatMap<List<Nat>>, rest: List<List<Nat>>,
+    built: formula_from(chunk, k, f) = g, r: Reaches(g, rest)): Reaches(f, cert_append(chunk, rest)) {
+    λ v hf all => {
+        let parts = all_true(chunk, v).and_true_parts(all_true(rest, v), trans(sym(all_true_append(chunk, rest, v)), all));
+        r(v, j(built, λ x _ => Holds(x, v), holds_formula_from(chunk, v, k, f, hf, parts.left)), parts.right)
+    }
+}
+
+theorem reaches_add(f: NatMap<List<Nat>>, steps: List<Step>, cs: List<List<Nat>>, ok: adds(f, steps) = True, r: Reaches(add_all(f, steps), cs)): Reaches(f, cs) {
+    λ v hf all => r(v, adds_sound(f, v, hf, steps, ok), all)
+}
+
+// A checkpoint keeps only the clauses later steps still name: `keep(f,
+// keys, acc)` is `acc` with `f`'s clause at each key. LRAT's deletions are
+// never needed for soundness, so the proof format has none; dropping dead
+// clauses here keeps each checkpoint, and every lookup after it, as small as
+// what is still live.
+fn keep_one(o: Option<List<Nat>>, k: Nat, acc: NatMap<List<Nat>>) → NatMap<List<Nat>> {
+    match o { None => acc, Some(c) => nat_map_set(acc, k, c) }
+}
+
+fn keep(f: NatMap<List<Nat>>, keys: List<Nat>, acc: NatMap<List<Nat>>) → NatMap<List<Nat>> {
+    match keys {
+        Nil => acc,
+        Cons(k, rest) => keep(f, rest, keep_one(nat_map_get(f, k), k, acc)),
+    }
+}
+
+theorem holds_keep_one(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), k: Nat, acc: NatMap<List<Nat>>, ha: Holds(acc, v), o: Option<List<Nat>>, got: nat_map_get(f, k) = o): Holds(keep_one(o, k, acc), v) {
+    match o {
+        None => ha,
+        Some(c) => holds_set(acc, v, ha, k, c, hf(k, c, got)),
+    }
+}
+
+theorem holds_keep(f: NatMap<List<Nat>>, v: Nat → Bool, hf: Holds(f, v), keys: List<Nat>, acc: NatMap<List<Nat>>, ha: Holds(acc, v)): Holds(keep(f, keys, acc), v) {
+    match keys {
+        Nil => ha,
+        Cons(k, rest) => holds_keep(f, v, hf, rest, keep_one(nat_map_get(f, k), k, acc), holds_keep_one(f, v, hf, k, acc, ha, nat_map_get(f, k), refl)),
+    }
+}
+
+// A checkpoint after a chunk of steps: the formula they built, cut to `keys`.
+theorem reaches_keep(f: NatMap<List<Nat>>, steps: List<Step>, keys: List<Nat>, g: NatMap<List<Nat>>, cs: List<List<Nat>>, ok: adds(f, steps) = True, same: keep(add_all(f, steps), keys, MEmpty) = g, r: Reaches(g, cs)): Reaches(f, cs) {
+    λ v hf all => r(v, j(same, λ x _ => Holds(x, v), holds_keep(add_all(f, steps), v, adds_sound(f, v, hf, steps, ok), keys, MEmpty, holds_empty(v))), all)
+}
+
+// A checkpoint with no steps: the formula cut to `keys`.
+theorem reaches_trim(f: NatMap<List<Nat>>, keys: List<Nat>, g: NatMap<List<Nat>>, cs: List<List<Nat>>, same: keep(f, keys, MEmpty) = g, r: Reaches(g, cs)): Reaches(f, cs) {
+    λ v hf all => r(v, j(same, λ x _ => Holds(x, v), holds_keep(f, v, hf, keys, MEmpty, holds_empty(v))), all)
+}
+
+// What the stages prove.
+theorem reaches_refutes(cs: List<List<Nat>>, r: Reaches(MEmpty, cs)): (v: Nat → Bool) → all_true(cs, v) = False {
+    λ v => match e: all_true(cs, v) {
+        False => refl,
+        True => false_elim(r(v, holds_empty(v), e)),
+    }
+}
+
+// The obligations' proofs: each converts by evaluating its left side.
+theorem reaches_true(): True = True { refl }
+theorem reaches_same(g: NatMap<List<Nat>>): g = g { refl }
+
+// The literals a certificate is built from. A constructor is not a global
+// the host can name, so each is spelled by a function here.
+fn cert_nat_nil() → List<Nat> { Nil }
+fn cert_nat_cons(x: Nat, rest: List<Nat>) → List<Nat> { Cons(x, rest) }
+fn cert_clause_nil() → List<List<Nat>> { Nil }
+fn cert_clause_cons(c: List<Nat>, rest: List<List<Nat>>) → List<List<Nat>> { Cons(c, rest) }
+fn cert_step(id: Nat, c: List<Nat>, hints: List<Nat>) → Step { Add(id, c, hints) }
+fn cert_step_nil() → List<Step> { Nil }
+fn cert_step_cons(s: Step, rest: List<Step>) → List<Step> { Cons(s, rest) }
+fn cert_map_empty() → NatMap<List<Nat>> { MEmpty }
+fn cert_map_node(here: Option<List<Nat>>, even, odd: NatMap<List<Nat>>) → NatMap<List<Nat>> { MNode(here, even, odd) }
+fn cert_none() → Option<List<Nat>> { None }
+fn cert_some(c: List<Nat>) → Option<List<Nat>> { Some(c) }
