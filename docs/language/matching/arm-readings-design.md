@@ -392,8 +392,9 @@ it generalized was never used refined.
   k(h) }` by `split_all`, and with `k` generalized and `h` read as `refl`
   the split's leaves no longer had the shape its lemma states. §3.4 was
   built for it, and the test passes.
-- Sweep and `scripts/test --pr` with §3.4 in: **(running; filled in
-  before this leaves draft).**
+- With §3.4 in: the whole library re-elaborates with no proof changed
+  (the same one inherited failure), and `scripts/test --pr` has one
+  failure, the library gate on that same file.
 
 ## 7. What it costs, and what could go wrong
 
