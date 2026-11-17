@@ -1481,23 +1481,34 @@ fn apply_implicit_planned(
                     // accepts (docs/language/matching/arm-readings-design.md).
                     let (inferred, inferred_ty) = match &argument.kind {
                         ExprKind::Var(name) if cx.readings.iter_inner().any(|r| &r.name == name) => {
-                            let real = zonked(&dom, n, &sols);
-                            let fits = |ty: &Type| match &real {
-                                Some(real) => elab.argument_type_converts(cx, ty, real, &dom_level),
-                                None => {
-                                    let mut trial = sols.to_vec();
-                                    elab.unify_application_argument_type(
-                                        cx, &dom, ty, n, &mut trial, &meta_doms,
-                                        Guesses::Postpone(&std::cell::Cell::new(false)), span,
-                                    )
-                                    .is_empty()
-                                }
+                            // Where the parameter's type is known, conversion
+                            // decides. Where implicits are still open, the
+                            // name as it elaborated stands unless it clashes
+                            // with one already solved, and another reading
+                            // takes its place only if it settles the
+                            // parameter's type at its own.
+                            let learns = |ty: &Type| {
+                                let mut trial = sols.to_vec();
+                                let clashes = elab.unify_application_argument_type(
+                                    cx, &dom, ty, n, &mut trial, &meta_doms,
+                                    Guesses::Postpone(&std::cell::Cell::new(false)), span,
+                                );
+                                (clashes.is_empty(), zonked(&dom, n, &trial))
+                            };
+                            let fits = |ty: &Type, first: bool| match zonked(&dom, n, &sols) {
+                                Some(real) => elab.argument_type_converts(cx, ty, &real, &dom_level),
+                                None => match learns(ty) {
+                                    (false, _) => false,
+                                    (true, _) if first => true,
+                                    (true, Some(real)) => elab.argument_type_converts(cx, ty, &real, &dom_level),
+                                    (true, None) => false,
+                                },
                             };
                             let readings = elab.argument_readings(cx, &inferred);
-                            if readings.is_empty() || fits(&inferred_ty) {
+                            if readings.is_empty() || fits(&inferred_ty, true) {
                                 (inferred, inferred_ty)
                             } else {
-                                readings.into_iter().find(|(_, ty)| fits(ty)).unwrap_or((inferred, inferred_ty))
+                                readings.into_iter().find(|(_, ty)| fits(ty, false)).unwrap_or((inferred, inferred_ty))
                             }
                         }
                         _ => (inferred, inferred_ty),
