@@ -47,31 +47,10 @@ import bitvec_nat;
 // ---------------------------------------------------------------------------
 // Fragments
 
-record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
+// `Emission`, `Fragment` and `Fragment::onto` are native_compile's: the
+// emitters are written with them (its builder).
 
-// Code to add after a program: items, a word fetched to a register, a
-// register kept in a word's home, and `body` skipped where the flags meet
-// `cc` (its label the name after `names`).
-inductive Fragment {
-    Skip,
-    Place(name: Nat, item: Asm),
-    Fetch(id: Nat, register: Gpr),
-    Keep(id: Nat, register: Gpr),
-    Both(first: Fragment, rest: Fragment),
-    Unless(cc: ConditionCode, names: Nat, body: Fragment),
-}
-
-fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
-    match code {
-        Skip => p,
-        Place(name, item) => At(p, name, item),
-        Fetch(id, register) => p.known_to(cx.layout, cx.known, id, register),
-        Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
-        Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
-        Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
-    }
-}
-
+// Code only appends: every emitter's `within_` lemma, once.
 theorem Fragment::extends(self code: Fragment, cx: Emission, p: Prog): p.Within(code.onto(cx, p)) {
     match code {
         Skip => p.within_self(),

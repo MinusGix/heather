@@ -519,29 +519,163 @@ fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result
     tested.copy_in(layout, buf, Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).label(Succ(Succ(Succ(Succ(names))))).word_from(layout, out, result, Rax)
 }
 
+// AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
+fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
+
+// ---------------------------------------------------------------------------
+// Code as a value, and its builder
+
+// What an emitter is given: where words live, which hold known numbers
+// here, and which are live after.
+record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
+
+// Code to add after a program: items, a word fetched to a register (from
+// its home, or as its number where known), a register kept in a word's home
+// (where the word is live after), and `body` skipped where the flags meet
+// `cc` (its label the name after `names`). What a fragment needs before it
+// is computed from it (`Fragment::before`, native_compile_claims).
+inductive Fragment {
+    Skip,
+    Place(name: Nat, item: Asm),
+    Fetch(id: Nat, register: Gpr),
+    Keep(id: Nat, register: Gpr),
+    Both(first: Fragment, rest: Fragment),
+    Unless(cc: ConditionCode, names: Nat, body: Fragment),
+}
+
+fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
+    match code {
+        Skip => p,
+        Place(name, item) => At(p, name, item),
+        Fetch(id, register) => p.known_to(cx.layout, cx.known, id, register),
+        Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
+        Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
+        Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
+    }
+}
+
+// Code being written, in the order it runs: the code so far, the
+// instructions of the block being written, and the last label name used.
+record Build { cx: Emission, code: Fragment, block: List<Instruction>, names: Nat }
+
+fn Emission::from(self cx: Emission, names: Nat) → Build { Build(cx, Skip, [], names) }
+
+// The block being written closed.
+fn Build::cut(self b: Build) → Build {
+    match b.block {
+        Nil => b,
+        Cons(_, _) => Build(b.cx, Both(b.code, Place(0, Block(b.block))), [], b.names),
+    }
+}
+
+fn Build::ins(self b: Build, i: Instruction) → Build { Build(b.cx, b.code, b.block ++ [i], b.names) }
+fn Build::add(self b: Build, code: Fragment) → Build { Build(b.cx, Both(b.cut().code, code), [], b.names) }
+fn Build::item(self b: Build, item: Asm) → Build { b.add(Place(0, item)) }
+
+// The program built after `p`, and the last label name it used.
+fn Build::onto(self b: Build, p: Prog) → Compiled { Compiled(b.cut().code.onto(b.cx, p), b.names) }
+
+fn Build::mov(self b: Build, to, from: Gpr) → Build { b.ins(MovRR(to, from)) }
+fn Build::set(self b: Build, to: Gpr, value: Nat) → Build { b.ins(MovRI(to, BitVec::ofNat(value))) }
+fn Build::point(self b: Build, to: Gpr, at: BitVec(64)) → Build { b.ins(MovRI(to, at)) }
+fn Build::plus(self b: Build, to, by: Gpr) → Build { b.ins(AddRR(to, by)) }
+fn Build::minus(self b: Build, to, by: Gpr) → Build { b.ins(SubRR(to, by)) }
+fn Build::cmp(self b: Build, left, right: Gpr) → Build { b.ins(CmpRR(left, right)) }
+fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
+
+// A word in a register, and a register in its word's home.
+fn Build::word(self b: Build, id: Nat, register: Gpr) → Build { b.add(Fetch(id, register)) }
+fn Build::keep(self b: Build, id: Nat, register: Gpr) → Build { b.add(Keep(id, register)) }
+
+// `body`, skipped where the flags meet `cc`. The label is made and placed
+// here, so the jump goes to a label placed exactly once.
+fn Build::unless(self b: Build, cc: ConditionCode, body: Build → Build) → Build {
+    let inside = body(b.cx.from(b.names + 1)).cut();
+    Build(b.cx, Both(b.cut().code, Unless(cc, b.names, inside.code)), [], inside.names)
+}
+
+// `value` clamped to `bound`, unsigned: unless it is below, the bound. The
+// comparison starts a block of its own.
+fn Build::clamp(self b: Build, value, bound: Gpr) → Build {
+    b.cut().cmp(value, bound).unless(B, λ b => b.mov(value, bound))
+}
+
+// Where a system call's number, its first three arguments and its result
+// go.
+record Abi { number: Gpr, first: Gpr, second: Gpr, third: Gpr, result: Gpr }
+fn Abi::linux_syscall() → Abi { Abi(Rax, Rdi, Rsi, Rdx, Rax) }
+
+// The calls, each argument's place under the name its manual page gives it.
+record Read { number: Nat, fd: Gpr, buf: Gpr, count: Gpr, result: Gpr }
+record Write { number: Nat, fd: Gpr, buf: Gpr, count: Gpr, result: Gpr }
+record Close { number: Nat, fd: Gpr, result: Gpr }
+record Openat { number: Nat, dirfd: Gpr, pathname: Gpr, flags: Gpr, result: Gpr }
+
+fn Abi::read(self abi: Abi) → Read { Read(0, abi.first, abi.second, abi.third, abi.result) }
+fn Abi::write(self abi: Abi) → Write { Write(1, abi.first, abi.second, abi.third, abi.result) }
+fn Abi::close(self abi: Abi) → Close { Close(3, abi.first, abi.result) }
+fn Abi::openat(self abi: Abi) → Openat { Openat(257, abi.first, abi.second, abi.third, abi.result) }
+
+// The call's number where the convention wants it, and the call made.
+fn Build::number(self b: Build, number: Nat) → Build { b.set(Abi::linux_syscall().number, number) }
+fn Build::syscall(self b: Build) → Build { b.item(Syscall) }
+
+// The part of a buffer of `capacity` bytes a read or a write may touch: R8
+// = min(at, capacity), R9 the room past it, `count` = min(len, room).
+fn Build::window(self b: Build, at, len, capacity: Nat, count: Gpr) → Build {
+    b.word(at, R8).set(R9, capacity).clamp(R8, R9)
+     .minus(R9, R8)
+     .word(len, count).clamp(count, R9)
+}
+
+// read(fd, scratch, count) over the window, the clamped offset kept in R9.
+fn Build::read(self b: Build, fd, at, len, capacity: Nat) → Build {
+    let read = Abi::linux_syscall().read();
+    b.window(at, len, capacity, read.count)
+     .mov(R9, R8).point(read.buf, b.cx.layout.scratch_at()).number(read.number)
+     .word(fd, read.fd).syscall()
+}
+
+// write(fd, buffer + offset, count) over the window; the result kept.
+fn Build::write(self b: Build, fd, buf, from, len, result, capacity: Nat) → Build {
+    let write = Abi::linux_syscall().write();
+    b.window(from, len, capacity, write.count)
+     .point(write.buf, b.cx.layout.buffer_at(buf)).plus(write.buf, R8).number(write.number)
+     .word(fd, write.fd).syscall()
+     .keep(result, write.result)
+}
+
+// close(fd); the result kept.
+fn Build::close(self b: Build, fd, result: Nat) → Build {
+    let close = Abi::linux_syscall().close();
+    b.number(close.number).word(fd, close.fd).syscall().keep(result, close.result)
+}
+
+// openat(AT_FDCWD, scratch, O_RDONLY), the path NUL-ended in the scratch
+// range; the result kept.
+fn Build::openat(self b: Build, result: Nat) → Build {
+    let openat = Abi::linux_syscall().openat();
+    b.number(openat.number).point(openat.dirfd, fdcwd_word()).point(openat.pathname, b.cx.layout.scratch_at()).set(openat.flags, 0)
+     .syscall().keep(result, openat.result)
+}
+
 // read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
 // offset kept in R9; the result stored; on success the bytes copied into
 // the buffer from the offset.
 fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let start = then(p.known_to(layout, known, at, R8), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
-    let room = then(start, Block([SubRR(R9, R8)])).known_to(layout, known, len, Rdx).clamp(Rdx, R9, Succ(Succ(names)));
-    let asking: List<Instruction> = [MovRR(R9, R8), MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))];
-    let asked = then(then(room, Block(asking)).known_to(layout, known, fd, Rdi), Syscall);
-    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(Succ(names)))))
+    let asked = Emission(layout, known, out).from(names).read(fd, at, len, capacity).onto(p).prog;
+    Compiled(asked.read_back(layout, out, buf, result, names), names + 4)
 }
 
 // write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
 // result stored.
 fn Prog::writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let start = then(p.known_to(layout, known, from, R8), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
-    let room = then(start, Block([SubRR(R9, R8)])).known_to(layout, known, len, Rdx).clamp(Rdx, R9, Succ(Succ(names)));
-    let asked = then(then(room, Block([MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))])).known_to(layout, known, fd, Rdi), Syscall);
-    Compiled(asked.word_from(layout, out, result, Rax), Succ(Succ(names)))
+    Emission(layout, known, out).from(names).write(fd, buf, from, len, result, capacity).onto(p)
 }
 
 // close(fd); the result put in its word's home.
 fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat) → Prog {
-    then(then(p, Block([MovRI(Rax, BitVec::ofNat(3))])).known_to(layout, known, fd, Rdi), Syscall).word_from(layout, out, result, Rax)
+    Emission(layout, known, out).from(0).close(fd, result).onto(p).prog
 }
 
 // The path copy's counter and its two walks set, and its loop's label.
@@ -560,18 +694,14 @@ fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog 
     then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
 }
 
-// AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
-fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
-
 // openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
 // capacity) bytes up to its NUL copied to the scratch range and a NUL put
 // after them (RDI is past them); the result put in its word's home.
 fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    let clamped = then(p.known_to(layout, known, len, Rcx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rcx, R9, Succ(names));
-    let copied = clamped.path_copy(layout, path, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
-    let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
-    let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
-    Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, out, result, Rax), Succ(Succ(Succ(names))))
+    let cx = Emission(layout, known, out);
+    let clamped = cx.from(names).word(len, Rcx).set(R9, capacity).clamp(Rcx, R9).onto(p).prog;
+    let copied = clamped.path_copy(layout, path, names + 2, names + 3).label(names + 3);
+    cx.from(names + 3).set(Rdx, 0).store_byte(Rdi, Rdx).openat(result).onto(copied)
 }
 
 fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
