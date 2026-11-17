@@ -212,17 +212,30 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   frame's slots) is a lemma over the buffer (`DataRegion::x86_word_stored`),
   not a view of its own; a view over two regions at once is
   `issues/wp-view-separating-product.md`.
-- **The process's stack.** A process as the ELF theorem takes it is a
-  memory of `X86Profile::process(size, top, depth)`: what `X86Profile::io(size)`
-  relies on (the segment, since `issues/native-data-capacity.md`) and `depth`
-  bytes below the entry RSP `top` data (`issues/io-image-process-stack.md`).
-  `StackPlaced` is where Linux puts it, with `depth` at most the 128 KiB
-  exec maps before the program runs; the on-demand growth below that is
-  never relied on. `DataRegion::process_stack` is a `DataRegion`, so
-  `DataRegion::stack` is a `Stack` of the process from its entry, top at
-  RSP; its stores keep the segment (`process_stack_keeps_data`). The
-  loader with the stack (`X86Memory::process_load`) is `LoadedFrom` the
-  file, which keeps the ELF theorem's premises satisfiable.
+- **The process's stack.** A process as the ELF theorem takes it by default
+  is a memory of `X86Profile::process(size, top, depth)`: what
+  `X86Profile::io(size)` relies on (the segment, since
+  `issues/native-data-capacity.md`) and `depth` bytes below the entry RSP
+  `top` data (`issues/io-image-process-stack.md`). `StackPlaced` is where
+  Linux puts it. That the `depth` bytes are data is not a premise about the
+  system: a written file's process starts as one of `X86Profile::io(size)`,
+  its entry code stores into each page of them, and Linux's growth of the
+  stack at such a store is a rule beside the machine's steps (`StackTouch`,
+  `lib/std/os/linux/linux_x86_64_stack_growth.hthr`); the state after the
+  last store is then read as one of this profile (`Alike`,
+  `issues/io-stack-below-rsp-not-mapped.md`).
+  `DataRegion::process_stack` is a `DataRegion`, so `DataRegion::stack` is a
+  `Stack` of the process from its entry, top at RSP; its stores keep the
+  segment (`process_stack_keeps_data`). The loader with the stack
+  (`X86Memory::process_load`) is `LoadedFrom` the file, which keeps the ELF
+  theorem's premises satisfiable.
+- **The program's own stack** (`write-elf --stack segment`). The process is
+  a memory of `X86Profile::io(size)`, relying on the segment alone, and the
+  stack is the `room` bytes after the `used` bytes of the layout
+  (`DataRegion::own_data` and `DataRegion::own_stack`, two regions of the
+  one profile). It rests on the file's `PT_LOAD` header and asks nothing of
+  the stack limit; its size is fixed when the file is written
+  (`docs/native/system-contract-design.md` §4.2).
 
 ## 7. Outside v1, and the seam for each
 

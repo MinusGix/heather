@@ -92,6 +92,16 @@ record LinuxIo<M> {
     store: M → BitVec(64) → List<BitVec(8)> → M,
 }
 
+// The flags a process resumes with. The x86-64 Linux call convention names
+// RCX and R11 as destroyed and says nothing of the arithmetic flags (the
+// kernel does restore them today, from the copy SYSCALL leaves in R11), so
+// none of them is relied on: each resumes undefined. An undefined flag is
+// written False, as an instruction's is (`execute_normal`), and no step
+// reads one (issues/linux-syscall-flags-not-promised.md).
+fn syscall_flags() → Flags {
+    Flags(cf := False, pf := False, af := False, zf := False, sf := False, of := False, defined := DefinedFlags::none())
+}
+
 // After a successful read: the bytes are stored at RSI, RAX holds their count,
 // and RIP is past the SYSCALL. RCX and R11 hold whatever the rule was given:
 // the rule quantifies over them, so a run can't depend on their values.
@@ -100,7 +110,7 @@ fn linux_read_return<M>(io: LinuxIo<M>, state: MachineState<M>, bytes: List<BitV
     MachineState(
         gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx,
             write_gpr(Rax, bitvec_nat::word_of_nat(64, bytes.len()), state.gprs))),
-        flags := state.flags,
+        flags := syscall_flags(),
         rip := next_rip(state.rip, 2),
         memory := io.store(state.memory, read_gpr(Rsi, state.gprs), bytes))
 }
@@ -112,7 +122,7 @@ fn linux_read_failed_return<M>(io: LinuxIo<M>, state: MachineState<M>, errno: Na
     rcx, r11: BitVec(64)) → MachineState<M> {
     MachineState(
         gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, errno_word(errno), state.gprs))),
-        flags := state.flags,
+        flags := syscall_flags(),
         rip := next_rip(state.rip, 2),
         memory := io.store(state.memory, read_gpr(Rsi, state.gprs), junk))
 }
@@ -123,7 +133,7 @@ fn linux_read_failed_return<M>(io: LinuxIo<M>, state: MachineState<M>, errno: Na
 fn linux_write_return<M>(state: MachineState<M>, rax, rcx, r11: BitVec(64)) → MachineState<M> {
     MachineState(
         gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, rax, state.gprs))),
-        flags := state.flags,
+        flags := syscall_flags(),
         rip := next_rip(state.rip, 2),
         memory := state.memory)
 }
@@ -194,12 +204,14 @@ theorem ByteReadAccess::above_read<M>(self data: ByteReadAccess<M>, floor: Nat, 
 
 // Every byte one access reads at one memory, another reads alike at
 // another: the command line read through the first is read through the
-// second.
-fn ReadsKept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M) → Type {
+// second. The two memories need not be of one type: a process seen under
+// two profiles is two memories with the same cells
+// (linux_x86_64_stack_growth).
+fn ReadsKept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N) → Type {
     (a: BitVec(64)) → (byte: BitVec(8)) → data.read(memory, a) = Some(byte) → other.read(later, a) = Some(byte)
 }
 
-theorem word_bytes_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem word_bytes_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     address, word: BitVec(64), at: WordBytesAt(data, memory, address, word)): WordBytesAt(other, later, address, word) {
     ⟨at.left, λ t byte found => kept(next_rip(address, t), byte, at.right(t, byte, found))⟩
 }
@@ -213,14 +225,14 @@ theorem cstring_from_kept(path: List<BitVec(8)>): (source, target: Nat → Optio
     }
 }
 
-theorem cstring_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem cstring_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     address: BitVec(64), path: List<BitVec(8)>, at: CStringAt(data, memory, address, path)): CStringAt(other, later, address, path) {
     cstring_from_kept(path, λ i => data.read(memory, bitvec_nat::word_of_nat(64, address.toNat() + i)),
         λ i => other.read(later, bitvec_nat::word_of_nat(64, address.toNat() + i)),
         λ i b got => kept(bitvec_nat::word_of_nat(64, address.toNat() + i), b, got), at)
 }
 
-theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem argv_from_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     rsp: BitVec(64), args: List<List<BitVec(8)>>): (k: Nat) → ArgvFrom(data, memory, rsp, args, k) → ArgvFrom(other, later, rsp, args, k) {
     match args {
         Nil => λ k at => word_bytes_at_kept(data, memory, other, later, kept, argv_slot(rsp, k), BitVec::zero(), at),
@@ -231,7 +243,7 @@ theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAcc
     }
 }
 
-theorem argv_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+theorem argv_at_kept<M, N>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<N>, later: N, kept: ReadsKept(data, memory, other, later),
     rsp: BitVec(64), args: List<List<BitVec(8)>>, at: ArgvAt(data, memory, rsp, args)): ArgvAt(other, later, rsp, args) {
     ⟨at.left, ⟨word_bytes_at_kept(data, memory, other, later, kept, rsp, bitvec_nat::word_of_nat(64, args.len()), at.right.left),
         argv_from_kept(data, memory, other, later, kept, rsp, args, 1, at.right.right)⟩⟩
@@ -326,7 +338,7 @@ fn linux_stat_return<M>(io: LinuxIo<M>, state: MachineState<M>, target: StatTarg
     rax, rcx, r11: BitVec(64)) → MachineState<M> {
     MachineState(
         gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, rax, state.gprs))),
-        flags := state.flags,
+        flags := syscall_flags(),
         rip := next_rip(state.rip, 2),
         memory := io.store(state.memory, stat_buffer(target, state.gprs), bytes))
 }
@@ -585,8 +597,8 @@ theorem linux_resumes_mono<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<N
     λ junk leaves rcx r11 => weaker(linux_answered(io, at, c, a, junk, rcx, r11), resumes(junk, leaves, rcx, r11))
 }
 
-// Linux's answers read only defined components and keep the flags, so each
-// commutes with erasing AF by `refl`.
+// Linux's answers read only defined components and leave every flag
+// undefined, so each commutes with erasing the undefined ones by `refl`.
 theorem linux_answered_respects<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>): (a: c.Resp()) → (junk: List<BitVec(8)>) →
     (rcx, r11: BitVec(64)) →
     PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, λ state => linux_answered(io, state, c, a, junk, rcx, r11)) {

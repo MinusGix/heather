@@ -77,9 +77,9 @@ fn the_io_loop_reads_to_the_end_and_exits() {
         Err(err) => assert_refused("linux_wp_drain_exit_one", &err.render(&wrong)),
     }
     let short = drain_variant("// The entry:", |s| s.replace("theorem drain_entry(", "theorem drain_entry_short(")
-        .replace("long: header.len() = 232", "long: header.len() = 231"));
+        .replace("long: header.len() = 288", "long: header.len() = 287"));
     match e.elab_module_source("linux_wp_drain_entry_short", &short) {
-        Ok(()) => panic!("an entry past a 231-byte header should be refused"),
+        Ok(()) => panic!("an entry past a 287-byte header should be refused"),
         Err(err) => assert_refused("linux_wp_drain_entry_short", &err.render(&short)),
     }
 }

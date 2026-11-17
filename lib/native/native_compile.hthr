@@ -781,12 +781,16 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 // ---------------------------------------------------------------------------
 // The command line
 
-// RSP as the process starts, saved to the slot past the scratch range: the
-// command line is above it (`ArgvAt`). `main`'s frame is opened below it
+// How the compiled program is entered: RSP is the top of its stack, and RDI
+// is where the command line is (`ArgvAt`: the process's RSP as it started).
+// The two are separate so that the stack can be any the entry code in front
+// of the program provides (docs/native/system-contract-design.md §4.2: the
+// system's, with RDI a copy of RSP, or the program's own). RDI is saved to
+// the slot past the scratch range; `main`'s frame is opened below RSP
 // (`Prog::frames_main`); `depth` calls are room left
 // (docs/native/native-procedures-design.md §4.1).
 fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
-    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
+    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rdi)));
     then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
 }
 

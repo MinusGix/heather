@@ -25,11 +25,16 @@ fn write_cat(output: &Path) {
 }
 
 fn write_elf(file: &str, source: &str, output: &Path) -> std::process::Output {
+    write_elf_with(file, source, output, &[])
+}
+
+fn write_elf_with(file: &str, source: &str, output: &Path, options: &[&str]) -> std::process::Output {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
     cmd.current_dir(&root)
         .args(["write-elf", file, source, "-o"])
         .arg(output)
+        .args(options)
         .arg("--cache-dir").arg(showcase::cli_check_images());
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
@@ -133,7 +138,7 @@ fn mebibyte_buffer_runs_as_cat() {
     // 2097321 bytes, in 513 pages.
     let size = 513 * 4096u64;
     let certificate = std::fs::read_to_string(dir.join("mib_cat.certificate.hthr")).unwrap();
-    for statement in [&format!("fn mib_cat_elf_size() → Nat {{ {size} }}")[..], "theorem mib_cat_elf_fits()", "theorem mib_cat_elf_simulates("] {
+    for statement in [&format!("fn mib_cat_elf_size() → Nat {{ {size} }}")[..], "theorem mib_cat_elf_fits()", "theorem mib_cat_elf_runs("] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
     let file = std::fs::read(&binary).unwrap();
@@ -173,9 +178,45 @@ fn every_written_program_gets_its_theorem() {
     let result = write_elf(PROBES, "head10", &binary);
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
-    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_simulates("] {
+    // Its theorem is over its contract, whose lines the certificate names
+    // and the compile prints. On the system's stack the room below RSP is
+    // one of them, and checked: the entry code stores into each page of it,
+    // and the theorem's conclusion is the claim over every memory Linux may
+    // leave at those stores (`Contract::Runs`). Where the stack is, a page
+    // and the room above the segment, is what stays taken on trust.
+    for statement in ["theorem head10_elf_fits()", "theorem head10_elf_runs(", "start: head10_elf_contract().Start(head10_elf_file(), top, args)(s)",
+        "head10_elf_contract().Runs(top, head10().denote(args))(s)", "fn head10_elf_from() → StackFrom { FromSystem }",
+        "fn head10_elf_stack() → List<BitVec(8)> {",
+        "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(4280), StackRoom(184), StackGrowth, CallsAnswered, NoFatalSignal]"] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
     }
+    let printed = String::from_utf8_lossy(&result.stdout).to_string();
+    for line in ["`head10` presumes of the system that runs it:", "  [standard]  execution starts at the header's entry address (ELF gABI)",
+        "  [presumed]  the stack pointer as the process starts is 4280 bytes or more above the data segment's end, in the lower half of the address space",
+        "  [checked]   184 bytes below the stack pointer as the process starts are usable: the program stores into each page of them as it starts, and ends there with a signal if one is refused",
+        "  [standard]  a store within a page below the stack extends the stack or ends the process with a signal (Linux: mmap(2), getrlimit(2))",
+        "  [presumed]  no fatal signal is delivered, the kernel's out-of-memory kill included"] {
+        assert!(printed.contains(line), "the compile prints `{line}`:\n{printed}");
+    }
+    // The file carries the same lines as an ELF note after its code, and the
+    // certificate states that note is the contract's.
+    assert!(certificate.contains("theorem head10_elf_note_is(): head10_elf_contract().note() = head10_elf_note()"), "the certificate states the note");
+    let file = std::fs::read(&binary).unwrap();
+    let text = String::from_utf8_lossy(&file).to_string();
+    for line in ["Heather contract 1: what this program presumes of the system that runs it.\nA claim by its compiler, unverified unless checked against the file's certificate.\n",
+        "[checked]   184 bytes below the stack pointer as the process starts are usable",
+        "[presumed]  no fatal signal is delivered, the kernel's out-of-memory kill included\n"] {
+        assert!(text.contains(line), "the file carries `{line}`");
+    }
+    // The file starts by keeping RSP, and stores a byte 184 below it before
+    // anything else: `mov rdi, rsp`, then the touch `mov [rbx], al`, then
+    // `mov rsp, rdi`.
+    let entry = usize::try_from(u64::from_le_bytes(file[24..32].try_into().unwrap()) - 0x400000).unwrap();
+    assert_eq!(&file[entry..][..3], [0x48, 0x89, 0xe7], "the entry code keeps RSP in RDI");
+    assert_eq!(&file[entry + 19 + 13..][..6], [0x40, 0x88, 0x03, 0x48, 0x89, 0xfc], "one touch, then RSP is put back");
+    // The fourth program header is a PT_NOTE.
+    assert_eq!(u16::from_le_bytes(file[56..58].try_into().unwrap()), 4, "four program headers");
+    assert_eq!(u32::from_le_bytes(file[64 + 3 * 56..][..4].try_into().unwrap()), 4, "the fourth a PT_NOTE");
     let every: Vec<u8> = (0..700u32).map(|i| (i * 7 % 256) as u8).collect();
     for input in [&b"hello, head\n"[..], &every] {
         let (code, out) = run(&binary, input, Stdio::piped());
@@ -292,6 +333,129 @@ fn structured_regions_run() {
         assert!(!result.status.success(), "`{source}` is refused");
         assert!(stderr.contains(reason), "`{source}`'s refusal says `{reason}`:\n{stderr}");
         assert!(!output.exists(), "and nothing is written for it");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same program on a stack of its own (`--stack segment`): its theorem
+/// asks the system for the file loaded, the entry and the command line above
+/// the segment (`SegmentStart`, which its contract's `Start` is) and nothing
+/// of the stack Linux made: its contract has no line for stack room, and its
+/// conclusion is the simulation itself, with no touches before it. It runs.
+#[test]
+fn a_program_can_carry_its_own_stack() {
+    let dir = scratch("head10_segment");
+    let binary = dir.join("head10");
+    let result = write_elf_with(PROBES, "head10", &binary, &["--stack", "segment"]);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
+    for statement in ["theorem head10_elf_runs(", "fn head10_elf_from() → StackFrom { FromSegment }", "fn head10_elf_stack() → List<BitVec(8)> {",
+        "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(0), CallsAnswered, NoFatalSignal]"] {
+        assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
+    let printed = String::from_utf8_lossy(&result.stdout).to_string();
+    assert!(!printed.contains("below the stack pointer") && !printed.contains("[checked]"), "and the compile prints no line about the system's stack:\n{printed}");
+    assert!(printed.contains("  [presumed]  the stack pointer as the process starts is 0 bytes or more above the data segment's end"), "the command line is above the segment:\n{printed}");
+    let (code, out) = run(&binary, b"hello, head\n", Stdio::piped());
+    assert_eq!(code, Some(0), "head -c 10 exits 0");
+    assert_eq!(out, b"hello, hea", "and has sent the first ten bytes");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A two-header ELF of `code` at 0x400000 (a PT_LOAD of the whole file,
+/// readable and executable, and a PT_GNU_STACK asking for a stack that is
+/// not), entered at its first byte. `code` gets its own address to patch a
+/// pointer with.
+fn bare_elf(code: impl Fn(u64) -> Vec<u8>) -> Vec<u8> {
+    let entry = 0x400000u64 + 64 + 2 * 56;
+    let code = code(entry);
+    let total = 64 + 2 * 56 + code.len() as u64;
+    let mut file = b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0".to_vec();
+    for half in [2u16, 62] { file.extend(half.to_le_bytes()); }
+    file.extend(1u32.to_le_bytes());
+    for word in [entry, 64, 0] { file.extend(word.to_le_bytes()); }
+    file.extend(0u32.to_le_bytes());
+    for half in [64u16, 56, 2, 0, 0, 0] { file.extend(half.to_le_bytes()); }
+    for (kind, flags, words) in [(1u32, 5u32, [0u64, 0x400000, 0x400000, total, total, 0x1000]), (0x6474e551, 6, [0, 0, 0, 0, 0, 16])] {
+        file.extend(kind.to_le_bytes());
+        file.extend(flags.to_le_bytes());
+        for word in words { file.extend(word.to_le_bytes()); }
+    }
+    file.extend(code);
+    file
+}
+
+/// `write(1, at, 3)`, and `exit(0)`.
+fn write_three(at: u64) -> Vec<u8> {
+    let mut code = vec![0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0x48, 0xbe];
+    code.extend(at.to_le_bytes());
+    code.extend([0xba, 3, 0, 0, 0, 0x0f, 0x05]);
+    code
+}
+const EXIT_ZERO: [u8; 9] = [0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05];
+
+/// `binary` run with no environment under a stack limit of `kib` KiB:
+/// what it wrote, its exit code, and the signal that ended it.
+fn run_under_stack(binary: &Path, kib: u32) -> (Vec<u8>, Option<i32>, Option<i32>) {
+    use std::os::unix::process::ExitStatusExt;
+    let out = Command::new("/bin/sh").env_clear().arg("-c").arg(format!("ulimit -s {kib} && exec \"$0\"")).arg(binary)
+        .stdin(Stdio::null()).output().unwrap();
+    (out.stdout, out.status.code(), out.status.signal())
+}
+
+/// The stack's startup touch against Linux itself
+/// (docs/native/system-contract-design.md §3, §4.3). The library's entry code
+/// for a room of a MiB (`stack_touched_entry`, the bytes a file on the
+/// system's stack starts with), then a line written and exit 0: under a
+/// stack limit that leaves the room it prints the line; under one that does
+/// not, Linux ends it with SIGSEGV in the entry code and nothing was
+/// written. Beside it the room presumed: the line first, then a store a MiB
+/// below RSP. Under the small limit that one has printed before it dies,
+/// which is the failure the touch removes.
+#[test]
+fn a_short_stack_ends_a_touched_program_before_any_output() {
+    let root = showcase::repo_root();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
+    cmd.current_dir(&root)
+        .args(["eval", "lib/std/os/linux/linux_x86_64_stack_growth.hthr", "stack_touched_entry(1048576).map(λ (b: BitVec(8)) => b.toNat())", "--limit", "100000"])
+        .arg("--cache-dir").arg(showcase::cli_check_images());
+    if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
+        cmd.arg("--accept-stale-images");
+    }
+    let result = cmd.output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let printed = String::from_utf8_lossy(&result.stdout).to_string();
+    let entry: Vec<u8> = printed.trim().trim_start_matches('[').trim_end_matches(']').split(',').map(|n| n.trim().parse().expect("a byte")).collect();
+    // RSP kept and moved below the room, 256 touches of sixteen bytes, RSP
+    // put back.
+    assert_eq!(entry.len(), 19 + 16 * 256 + 3, "the entry code of a MiB room");
+    assert_eq!((&entry[..3], &entry[entry.len() - 6..]), (&[0x48, 0x89, 0xe7][..], &[0x40, 0x88, 0x03, 0x48, 0x89, 0xfc][..]));
+
+    let dir = scratch("touch");
+    let touched = dir.join("touched");
+    let presumed = dir.join("presumed");
+    std::fs::write(&touched, bare_elf(|at| {
+        let line = at + (entry.len() + write_three(0).len() + EXIT_ZERO.len()) as u64;
+        [&entry[..], &write_three(line), &EXIT_ZERO, b"ok\n"].concat()
+    })).unwrap();
+    // `mov rbx, rsp; mov rcx, 1 MiB; sub rbx, rcx; mov [rbx], al`.
+    let mut deep = vec![0x48, 0x89, 0xe3, 0x48, 0xb9];
+    deep.extend(1048576u64.to_le_bytes());
+    deep.extend([0x48, 0x29, 0xcb, 0x40, 0x88, 0x03]);
+    std::fs::write(&presumed, bare_elf(|at| {
+        let line = at + (write_three(0).len() + deep.len() + EXIT_ZERO.len()) as u64;
+        [&write_three(line)[..], &deep, &EXIT_ZERO, b"ok\n"].concat()
+    })).unwrap();
+    for file in [&touched, &presumed] {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for file in [&touched, &presumed] {
+        assert_eq!(run_under_stack(file, 8192), (b"ok\n".to_vec(), Some(0), None), "with 8 MiB of stack either runs");
+    }
+    for kib in [1024, 64] {
+        assert_eq!(run_under_stack(&touched, kib), (Vec::new(), None, Some(11)), "under {kib} KiB the touched program is ended before it writes");
+        assert_eq!(run_under_stack(&presumed, kib), (b"ok\n".to_vec(), None, Some(11)), "under {kib} KiB the presumed one has written when it is ended");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

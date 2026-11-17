@@ -1,0 +1,57 @@
+// A contract's text and note (lib/native/native_contract.hthr,
+// docs/native/system-contract-design.md §2.1), pinned by `refl`: a number's
+// digits at a small figure, at a segment's largest and at zero and past a
+// word, where the standard `decimal` is out of reach; the line a figure
+// stands in; which lines each stack has; and the note's header, name,
+// length and padding. Tests, not library: nothing outside lib/_tests
+// imports this module.
+import native_contract;
+import bitvec;
+import list;
+import nat;
+import logic;
+
+theorem number_small(): number_text(184) = b"184" { refl }
+theorem number_segment(): number_text(1073741824) = b"1073741824" { refl }
+theorem number_zero(): number_text(0) = b"0" { refl }
+theorem number_past_a_word(): number_text(18446744073709551616) = b"18446744073709551616" { refl }
+theorem number_carries(): number_text(99999) = b"99999" { refl }
+
+theorem pads(): (pad4(0) = 0) ∧ ((pad4(1) = 3) ∧ ((pad4(2) = 2) ∧ ((pad4(3) = 1) ∧ (pad4(772) = 0)))) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩ }
+
+// A line with its basis and its figure.
+theorem stack_line(): StackRoom(184).text() =
+    b"[checked]   184 bytes below the stack pointer as the process starts are usable: the program stores into each page of them as it starts, and ends there with a signal if one is refused\n" { refl }
+theorem place_line(): StackAbove(4280).text() =
+    b"[presumed]  the stack pointer as the process starts is 4280 bytes or more above the data segment's end, in the lower half of the address space\n" { refl }
+theorem growth_line(): StackGrowth.text() =
+    b"[standard]  a store within a page below the stack extends the stack or ends the process with a signal (Linux: mmap(2), getrlimit(2))\n" { refl }
+theorem loaded_line(): FileLoaded(4096).text() =
+    b"[standard]  the file is loaded as its two PT_LOAD headers say, its data segment 4096 zero bytes (ELF gABI)\n" { refl }
+
+// The system's stack has a line for its room, which the program checks, one
+// for the rule the check rests on, and one for a page more than the room
+// above the segment; the program's own has none for a room.
+fn on_system() → Contract { Contract(FromSystem, 4096, 184) }
+fn on_segment() → Contract { Contract(FromSegment, 4096, 184) }
+theorem system_lines(): on_system().lines() =
+    [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(4280), StackRoom(184), StackGrowth, CallsAnswered, NoFatalSignal] { refl }
+theorem room_is_checked(): (StackRoom(184).basis() = Checked) ∧ (StackAbove(4280).basis() = Presumed) { ⟨refl, refl⟩ }
+theorem segment_lines(): on_segment().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(0), CallsAnswered, NoFatalSignal] { refl }
+
+// The text opens by saying what it is and what it is worth.
+theorem text_opens(): on_system().text().take(71) = b"Heather contract 1: what this program presumes of the system that runs " { refl }
+
+// The note: name length 8, the text's length, type 1, `Heather` and a zero
+// byte, the text, and zeros to a multiple of four.
+theorem note_header(): on_segment().note().take(20) =
+    [8, 0, 0, 0, 77, 3, 0, 0, 1, 0, 0, 0, 72, 101, 97, 116, 104, 101, 114, 0] { refl }
+theorem note_text_length(): on_segment().text().len() = 845 { refl }
+theorem note_length(): on_segment().note().len() = 868 { refl }
+theorem note_holds_text(): on_segment().note().drop(20).take(845) = on_segment().text() { refl }
+theorem note_padded(): on_segment().note().drop(865) = [0, 0, 0] { refl }
+
+// Negative control: the two stacks' contracts are different notes.
+theorem notes_differ(): ¬(on_system().note() = on_segment().note()) {
+    λ same => absurd(cong_fn<List<BitVec(8)>, Bool>(λ note => note.len().same(868), same))
+}
