@@ -118,6 +118,7 @@ def TOKEN_KINDS: List<TokenKind> = [
     TokenKind(KIND_OPLUS, "OPlus", ["⊕"]),
     TokenKind(KIND_TILDE, "Tilde", ["~"]),
     TokenKind(KIND_BYTE_STR, "ByteStr", []),
+    TokenKind(KIND_BYTE_CHAR, "ByteChar", []),
 ];
 
 // Whether the codes of `kinds` are `next`, `next + 1`, … in order.
