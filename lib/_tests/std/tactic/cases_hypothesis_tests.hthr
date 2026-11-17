@@ -1,0 +1,95 @@
+// Probes of `cases h;`: an equation about a call taken apart along the
+// call's own tests (issues/cases-on-hypothesis-tactic.md). Tests, not
+// library: nothing imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option;
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+
+inductive Shape { Leaf(w: Nat), Pair(a: Nat, b: Nat), Skip }
+
+fn Shape::emits(self s: Shape, p: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Leaf(w) => match fits(w) { False => None, True => Some(Cons(w, p)) },
+        Pair(a, b) => match fits(a) {
+            False => None,
+            True => match fits(b) { False => None, True => Some(Cons(a, Cons(b, p))) },
+        },
+        Skip => Some(p),
+    }
+}
+
+// One test: the `False` case is refuted, the `True` case substitutes `c`.
+theorem leaf_emits(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c)): c = Cons(w, p) {
+    cases same;
+    refl
+}
+
+// Two tests, the equations named and used; the goal is refined with the
+// hypothesis, and a hypothesis that takes an equation about a test is
+// passed it.
+theorem pair_fits(a, b: Nat, p, c: List<Nat>, same: Pair(a, b).emits(p) = Some(c), k: fits(a) = True → fits(b) = True → Nat): Nat {
+    cases same as fa, fb;
+    k(fa, fb)
+}
+
+theorem pair_goal(a, b: Nat, p, c: List<Nat>, same: Pair(a, b).emits(p) = Some(c)): fits(b) = True {
+    cases same;
+    refl
+}
+
+// A pipeline of `Option` stages, the surviving value named.
+fn st1(n: Nat) → Option<Nat> { match n.leb(5) { False => None, True => Some(Succ(n)) } }
+fn st2(n: Nat) → Option<Nat> { match n.leb(7) { False => None, True => Some(Succ(n)) } }
+fn pipe(n: Nat) → Option<Nat> {
+    match st1(n) { None => None, Some(a) => match st2(a) { None => None, Some(b) => Some(b) } }
+}
+
+theorem pipe_first(n, out: Nat, ran: pipe(n) = Some(out)): Option<Nat> {
+    cases ran as e1(a), e2(b);
+    Some(a)
+}
+
+// The surviving stage's equation, at its named value.
+theorem pipe_stage(n, out: Nat, ran: pipe(n) = Some(out), k: (a: Nat) → st1(n) = Some(a) → Nat): Nat {
+    cases ran as e1(a), e2(b);
+    k(a, e1)
+}
+
+// A `Bool` verdict.
+fn small(n: Nat) → Bool { match n.leb(3) { False => False, True => fits(n) } }
+
+theorem small_fits(n: Nat, ok: small(n) = True, k: n.leb(3) = True → Nat): Nat {
+    cases ok as below;
+    k(below)
+}
+
+// An open element type.
+fn pick<A>(n: Nat, a: A) → Option<A> { match n.leb(3) { True => Some(a), False => None } }
+
+theorem pick_is<A>(n: Nat, a, x: A, same: pick(n, a) = Some(x)): x = a {
+    cases same;
+    refl
+}
+
+// A literal test computes: nothing is stuck, and the hypothesis is
+// substituted at once.
+theorem leaf_literal(p, c: List<Nat>, same: Leaf(3).emits(p) = Some(c)): c = Cons(3, p) {
+    cases same;
+    refl
+}
+
+// Refused: an equation stuck on nothing.
+// expect-error: nothing to take apart
+theorem not_stuck(w: Nat, p, c: List<Nat>, same: Cons(w, p) = c): c = Cons(w, p) {
+    cases same;
+    refl
+}
+
+// Named splits bound the inversion: one name, one split, and the stage's
+// equation is left for a lemma about it.
+fn staged(n: Nat) → Option<Nat> { match n.leb(9) { False => None, True => st1(n) } }
+
+theorem staged_first(n, out: Nat, ran: staged(n) = Some(out), k: st1(n) = Some(out) → Nat): Nat {
+    cases ran as below;
+    k(ran)
+}
