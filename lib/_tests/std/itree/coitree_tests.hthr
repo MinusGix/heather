@@ -99,8 +99,8 @@ record Stamped<R> { count: Nat, value: R }
 fn stamp_obs<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), o: Obs<R>(E), w: Nat) → Partial(Stamped<R>) {
     match o {
         ORet(r) => CRet(Stamped(w, r)),
-        OTau(s) => CTau(stamp_obs(E, ans, CoTree::obs(E, s), Succ(w))),
-        OVis(c, k) => CTau(stamp_obs(E, ans, CoTree::obs(E, k(ans(c))), Succ(w))),
+        OTau(s) => CTau(stamp_obs(E, ans, CoTree::obs(E, s), w + 1)),
+        OVis(c, k) => CTau(stamp_obs(E, ans, CoTree::obs(E, k(ans(c))), w + 1)),
     }
 }
 

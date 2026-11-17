@@ -183,10 +183,10 @@ fn regex_seq(sub: List<Nat> → Option<Parsed>, fuel: Nat, cs: List<Nat>, acc: R
         Zero => None,
         Succ(f) => match regex_seq_ends(cs) {
             True => Some(Parsed(acc, cs)),
-            False => match regex_atom(sub, Succ(f), cs) {
+            False => match regex_atom(sub, f + 1, cs) {
                 None => None,
                 Some(a) => {
-                    let b = regex_postfix(Succ(f), a);
+                    let b = regex_postfix(f + 1, a);
                     regex_seq(sub, f, b.rest, regex_then(acc, b.re))
                 },
             },
@@ -201,7 +201,7 @@ fn regex_alts(sub: List<Nat> → Option<Parsed>, fuel: Nat, p: Parsed) → Optio
         Succ(f) => match p.rest {
             Nil => Some(p),
             Cons(c, rest) => match c.same(124) {
-                True => match regex_seq(sub, Succ(f), rest, Eps) {
+                True => match regex_seq(sub, f + 1, rest, Eps) {
                     None => None,
                     Some(q) => regex_alts(sub, f, Parsed(Alt(p.re, q.re), q.rest)),
                 },
@@ -215,9 +215,9 @@ fn regex_alts(sub: List<Nat> → Option<Parsed>, fuel: Nat, p: Parsed) → Optio
 fn regex_alt(fuel: Nat, cs: List<Nat>) → Option<Parsed> {
     match fuel {
         Zero => None,
-        Succ(f) => match regex_seq(λ ds => regex_alt(f, ds), Succ(f), cs, Eps) {
+        Succ(f) => match regex_seq(λ ds => regex_alt(f, ds), f + 1, cs, Eps) {
             None => None,
-            Some(p) => regex_alts(λ ds => regex_alt(f, ds), Succ(f), p),
+            Some(p) => regex_alts(λ ds => regex_alt(f, ds), f + 1, p),
         },
     }
 }
@@ -226,7 +226,7 @@ fn regex_alt(fuel: Nat, cs: List<Nat>) → Option<Parsed> {
 // unclosed group or class, a stray `)` or postfix operator, a trailing `\`).
 fn Regex::parse(s: String) → Option<Regex> {
     let cs = s.chars.map(λ c => c.code);
-    match regex_alt(Succ(cs.len()), cs) {
+    match regex_alt(cs.len() + 1, cs) {
         None => None,
         Some(p) => match p.rest { Nil => Some(p.re), Cons(_, _) => None },
     }

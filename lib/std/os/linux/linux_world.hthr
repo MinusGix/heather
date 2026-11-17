@@ -100,7 +100,7 @@ fn Exchange::reads(past: List<Exchange>) → Nat {
     match past {
         Nil => 0,
         Cons(e, rest) => match e.cmd {
-            ReadCmd(_, _) => Succ(Exchange::reads(rest)),
+            ReadCmd(_, _) => Exchange::reads(rest) + 1,
             WriteCmd(_, _) => Exchange::reads(rest),
             OpenCmd(_) => Exchange::reads(rest),
             CloseCmd(_) => Exchange::reads(rest),

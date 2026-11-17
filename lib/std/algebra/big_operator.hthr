@@ -177,7 +177,7 @@ theorem MonoidRel::range_single(n: Nat, f: Nat → A, p: Nat):
 }
 
 // The antidiagonal `i + j = n`, as the range over its first coordinate.
-fn MonoidRel::antidiag(n: Nat, f: Nat → Nat → A) → A { MonoidRel::range(op, Succ(n), λ i => f(i, n - i)) }
+fn MonoidRel::antidiag(n: Nat, f: Nat → Nat → A) → A { MonoidRel::range(op, n + 1, λ i => f(i, n - i)) }
 
 // `x` at index `j` when reading index `i`, the unit elsewhere: the
 // Kronecker delta of a monoid.

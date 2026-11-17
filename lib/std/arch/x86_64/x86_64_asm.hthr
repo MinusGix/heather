@@ -239,7 +239,7 @@ theorem asm_jump_lands_back(labels: Nat → Nat, l: Prog, size, to: Nat, same: a
 // shorter. It is `l` itself when `l` is one of `p`'s labels, which is what a
 // proof that cites `l` converts by.
 fn asm_back(p: Prog, k: Nat) → Prog { match k { Zero => p, Succ(j) => match p { Start => Start, At(before, _, _) => asm_back(before, j) } } }
-fn prog_depth(p: Prog) → Nat { match p { Start => 0, At(before, _, _) => Succ(prog_depth(before)) } }
+fn prog_depth(p: Prog) → Nat { match p { Start => 0, At(before, _, _) => prog_depth(before) + 1 } }
 fn asm_find(p, l: Prog) → Prog { asm_back(p, prog_depth(p) - prog_depth(l)) }
 
 // ---------------------------------------------------------------------------

@@ -54,7 +54,7 @@ import tactic;
 
 section<A: GroupRel(same, add) + Commutative(same, add)>(same as ≈: A → A → Type, add as +: A → A → A) {
 
-fn GroupRel::delta(f: Nat → A, k: Nat) → A { f(Succ(k)) + A.inv(f(k)) }
+fn GroupRel::delta(f: Nat → A, k: Nat) → A { f(k + 1) + A.inv(f(k)) }
 
 // The `m`-th difference, `Δ^m f`: the next one is the difference of the
 // difference, so `Δ^{m+1} f = Δ^m (Δ f)` holds by computation.

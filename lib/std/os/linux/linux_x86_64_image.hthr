@@ -114,10 +114,10 @@ fn io_elf_file(code: List<BitVec(8)>, size: Nat) → List<BitVec(8)> {
 
 // An address's permission and cell, by its value: the RW segment first, then
 // the file's window below it.
-fn io_perm_segment(size, n: Nat) → Perm { match Succ(n).leb(0x410000 + size) { True => Perm::data(), False => Perm::none() } }
+fn io_perm_segment(size, n: Nat) → Perm { match (n + 1).leb(0x410000 + size) { True => Perm::data(), False => Perm::none() } }
 fn io_perm_file(length, n: Nat) → Perm {
     match 0x400000.leb(n) {
-        True => match Succ(n).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
+        True => match (n + 1).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
         False => Perm::none(),
     }
 }
@@ -283,7 +283,7 @@ fn X86Memory::LoadedFrom({x: X86Profile}, size: Nat, self m: X86Memory(x), file:
 }
 
 // An address's permission and read, from its cell and permission alone.
-fn perm_with(a: BitVec(64), q: Perm) → Perm { match Succ(a.toNat()).leb(Nat::pow(2, 47)) { True => q, False => Perm::none() } }
+fn perm_with(a: BitVec(64), q: Perm) → Perm { match (a.toNat() + 1).leb(Nat::pow(2, 47)) { True => q, False => Perm::none() } }
 fn read_with(a: BitVec(64), c: BitVec(8), q: Perm) → Option<BitVec(8)> {
     match Memory<BitVec(64), BitVec(8)>(BitVec::space(64), λ _ => c, λ _ => perm_with(a, q)).read(a) { Ok(byte) => Some(byte), Err(_) => None }
 }
@@ -450,7 +450,7 @@ theorem DataRegion::process_stack_push(size, top, depth: Nat, placed: StackPlace
 // there.
 fn process_perm(size, length, top, depth, n: Nat) → Perm {
     match (top - depth).leb(n) {
-        True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+        True => match (n + 1).leb(top) { True => Perm::data(), False => Perm::none() },
         False => io_perm(size, length, n),
     }
 }

@@ -190,7 +190,7 @@ theorem CReal::log_rat_sub_le(P, Q, a, L: Rat, pP: 0 < P, pQ: 0 < Q, ha: 0 <= a,
 
 fn CReal::log_lo(k: Nat) → Rat { Rat::inv_succ(k) }
 
-fn CReal::log_L(k: Nat) → Rat { Rat::ofInt(OfNat(Succ(k))) }
+fn CReal::log_L(k: Nat) → Rat { Rat::ofInt(OfNat(k + 1)) }
 
 theorem CReal::log_L_mul(k: Nat): CReal::log_L(k) * CReal::log_lo(k) ≈ 1 { omega }
 

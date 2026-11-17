@@ -61,7 +61,7 @@ record X86Memory(x: X86Profile) {
 
 // The canonical-address rule: only the user half has permissions.
 fn X86Profile::perm(self x: X86Profile, m: X86Memory(x), a: BitVec(64)) → Perm {
-    match Succ(a.toNat()).leb(Nat::pow(2, 47)) { True => m.perms(a), False => Perm::none() }
+    match (a.toNat() + 1).leb(Nat::pow(2, 47)) { True => m.perms(a), False => Perm::none() }
 }
 
 // The memory as one of the model.

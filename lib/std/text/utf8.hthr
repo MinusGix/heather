@@ -65,15 +65,15 @@ fn bit3(b: BitVec(8)) → Bool { b.drop_low(3, 5).head_bit() }
 inductive Width { W1, W2, W3, W4 }
 
 fn width_ge_800(code: Nat) → Width {
-    match Succ(code).leb(0x10000) { True => W3, False => W4 }
+    match (code + 1).leb(0x10000) { True => W3, False => W4 }
 }
 
 fn width_ge_80(code: Nat) → Width {
-    match Succ(code).leb(0x800) { True => W2, False => width_ge_800(code) }
+    match (code + 1).leb(0x800) { True => W2, False => width_ge_800(code) }
 }
 
 fn width_of(code: Nat) → Width {
-    match Succ(code).leb(0x80) { True => W1, False => width_ge_80(code) }
+    match (code + 1).leb(0x80) { True => W1, False => width_ge_80(code) }
 }
 
 // What a class guarantees, as the very Boolean tests the decoder repeats: the
@@ -81,9 +81,9 @@ fn width_of(code: Nat) → Width {
 // width bound. `W4`'s upper bound is not here — it is `Char`'s own witness.
 fn WidthBounds(w: Width, code: Nat) → Type {
     match w {
-        W1 => Succ(code).leb(0x80).IsTrue(),
-        W2 => Nat::leb(0x80, code).IsTrue() ∧ Succ(code).leb(0x800).IsTrue(),
-        W3 => Nat::leb(0x800, code).IsTrue() ∧ Succ(code).leb(0x10000).IsTrue(),
+        W1 => (code + 1).leb(0x80).IsTrue(),
+        W2 => Nat::leb(0x80, code).IsTrue() ∧ (code + 1).leb(0x800).IsTrue(),
+        W3 => Nat::leb(0x800, code).IsTrue() ∧ (code + 1).leb(0x10000).IsTrue(),
         W4 => Nat::leb(0x10000, code).IsTrue(),
     }
 }

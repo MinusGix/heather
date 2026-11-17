@@ -13,7 +13,7 @@ theorem iterate_three(): Nat::iterate(3, λ (n: Nat) => n + 2, 1) = 7 { refl }
 theorem orbit_three(): Nat::orbit(3, λ (n: Nat) => n + 2, 1) = [1, 3, 5] { refl }
 
 // A capped successor: Kleene's run from 0 stops at the cap, and not before.
-fn capped(n: Nat) → Nat { Nat::min(Succ(n), 5) }
+fn capped(n: Nat) → Nat { Nat::min(n + 1, 5) }
 theorem capped_run(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 10, 0) = Some(5) { refl }
 theorem capped_out_of_fuel(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 3, 0) = None { refl }
 theorem capped_from_above(): PartialOrderRel::kleene(RelId<Nat>, Nat::Le, capped, 1, 9) = Some(9) { refl }

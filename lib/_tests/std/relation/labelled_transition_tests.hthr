@@ -10,7 +10,7 @@ import list; import omega;
 // A printer: each step prints the count and adds one. No step is silent.
 
 fn Print(a: Nat, label: Option<Nat>, b: Nat) → Type {
-    match label { None => False, Some(e) => (e = a) ∧ (b = Succ(a)) }
+    match label { None => False, Some(e) => (e = a) ∧ (b = a + 1) }
 }
 
 // Three steps from zero print 0, 1, 2.
@@ -69,12 +69,12 @@ theorem prints_one_first(): StarT(Print, [1], 0, 1) {
 
 fn Chatter(a: Pair<Nat, Nat>, label: Option<Nat>, b: Pair<Nat, Nat>) → Type {
     match a.fst {
-        Zero => match label { None => False, Some(e) => (e = a.snd) ∧ (b = Pair(0, Succ(a.snd))) },
+        Zero => match label { None => False, Some(e) => (e = a.snd) ∧ (b = Pair(0, a.snd + 1)) },
         Succ(k) => match label { None => b = Pair(k, a.snd), Some(_) => False },
     }
 }
 
-fn Below(i, j: Nat) → Type { Succ(i) = j }
+fn Below(i, j: Nat) → Type { i + 1 = j }
 
 fn Drops(i: Nat, a: Pair<Nat, Nat>, b: Nat) → Type { (a.fst = i) ∧ (a.snd = b) }
 
@@ -110,7 +110,7 @@ theorem chatter_prints(trace: List<Nat>, a, a2: Pair<Nat, Nat>, run: StarT(Chatt
 // chatterer prints.
 
 fn PrintBoth(a: Pair<Nat, Nat>, label: Option<Nat>, b: Pair<Nat, Nat>) → Type {
-    match label { None => False, Some(e) => (e = a.fst) ∧ (b = Pair(Succ(a.fst), Succ(Succ(a.snd)))) }
+    match label { None => False, Some(e) => (e = a.fst) ∧ (b = Pair(a.fst + 1, a.snd + 2)) }
 }
 
 fn Shadowed(b: Nat, c: Pair<Nat, Nat>) → Type { (c.fst = b) ∧ (c.snd = b + b) }

@@ -205,7 +205,7 @@ fn RunWhole(t: ITree<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Ty
 fn PaidRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, more: Nat) → Type {
     (u: ITree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
         SimPaid(io, u, left) → LinuxRunTakes(io, rest, more, right) → LinuxEventsValid(rest) →
-        ITree::Deep(Events::linux(), u, Succ(more)) → RunWhole(u, rest)
+        ITree::Deep(Events::linux(), u, more + 1) → RunWhole(u, rest)
 }
 
 // At a return: the run's syscall is the exit, with the tree's status.
