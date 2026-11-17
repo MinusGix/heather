@@ -21,7 +21,7 @@ No statement changes and no proof is re-argued: each step replaces a spelling by
 | `Bool::is_true_and(…)` chains feeding `layout.word_inside(…)` | 32 / 140 | `omega(fit)` reads a guard written with `&&`; at `words_fit([…])` it reads the first word only ([[bool-guard-facts-by-known]]) |
 | `j(sym(fit), λ v _ => v.IsTrue(), trivial)` | 16 / 55 | take the test as `.IsTrue()` or let `omega` read `fit` |
 | seven arms `Compute(_) => false_elim(is), Invoke(_) => false_elim(is), …` | 42 / 42 | `_ => false_elim(is)` |
-| seven identical arms over `StructuredRegion`'s constructors, each respelling the constructor with its fields | 4 blocks | none: a `_` arm does not see the scrutinee refined ([[wildcard-arm-sees-its-constructor]]) |
+| seven identical arms over `StructuredRegion`'s constructors, each respelling the constructor with its fields | 4 blocks | `_ => region.region_extends(…)`, done (closed [[wildcard-arm-sees-its-constructor]]) |
 | every point explicit: `t.then_nil(leaf, rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)` | everywhere | implicit points for what a hypothesis names (`{p, out, names, c}` from `emitted`), per `docs/proof-patterns.md` and [[generic-theorem-implicit-points]] |
 | `(match test as λ b => test = b → <callee body> = Some(c) → <goal>) { … })(refl, emitted)` | 84 / 204 written motives | `match h: test` where the goal alone mentions the test; the rest wait on [[case-split-refines-hypotheses-under-calls]] |
 | `λ (s: MachineState<X86Memory(t.r.profile)>) => …`, `Flow → ITree<BitVec(64)>(Events::linux())` | 100+ | named types (`Target::State`, `Target::Rest`); annotations dropped where the expected type gives them |
