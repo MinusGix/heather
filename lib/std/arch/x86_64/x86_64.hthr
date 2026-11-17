@@ -139,6 +139,16 @@ theorem read_gpr_write(register, query: Gpr, value: BitVec(64), registers: Gprs)
     }
 }
 
+// A register written with what it holds is the file.
+theorem write_gpr_held(register: Gpr, registers: Gprs): write_gpr(register, read_gpr(register, registers), registers) = registers {
+    match register {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl,
+        Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl,
+        R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 fn gpr_location(register: Gpr) → Location<Gprs, BitVec(64)> {
     Location<Gprs, BitVec(64)>(
         read := λ (registers: Gprs) => read_gpr(register, registers),
@@ -3028,7 +3038,7 @@ fn ShiftOp::by(self op: ShiftOp, x: BitVec(64), count: Nat) → BitVec(64) {
 }
 
 theorem ShiftOp::by_succ(self op: ShiftOp, x: BitVec(64), count: Nat):
-    op.apply(op.by(x, count)) = op.by(x, Succ(count))
+    op.apply(op.by(x, count)) = op.by(x, count + 1)
 {
     match op { OpShl => refl, OpShr => refl, OpSar => refl }
 }

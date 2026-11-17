@@ -37,7 +37,12 @@ const CPU_WARN_FRACTION = 0.5;
 // 2026-11-04 master reds (issues/native-sort-gate-rail.md). They keep the
 // address-space cap; the CPU rail is three times the default until a cheaper
 // certificate brings the tools back under it.
-export const CPU_RAIL_OVERRIDES = new Map([["native_cat", 900], ["native_tools", 900]]);
+// native_linked compiles each linked export (`compile-x86`, one process
+// each): SHA-256's three sat at 75 to 95% of the rail over a cold store
+// once the optimizer searched by default, the 2026-11-16 and 2026-11-17
+// master reds, and past it with the stage that puts new words
+// (issues/optimizer-search-compile-cost.md).
+export const CPU_RAIL_OVERRIDES = new Map([["native_cat", 900], ["native_tools", 900], ["native_linked", 900]]);
 export function cpuRail(name) { return CPU_RAIL_OVERRIDES.get(name) ?? CPU_RAIL_SECONDS; }
 
 export function parseArtifacts(text, root = process.cwd()) {

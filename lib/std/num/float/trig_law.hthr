@@ -56,13 +56,13 @@ fn Series::sigma(n: Nat) → Rat { match n { Zero => 0, Succ(m) => match m { Zer
 fn Series::gamma(n: Nat) → Rat { match n { Zero => 1, Succ(m) => match m { Zero => 0, Succ(k) => -Series::gamma(k) } } }
 
 // One step shifts the pair: σ(n+1) = γ(n), γ(n+1) = -σ(n).
-theorem Series::pattern_step(n: Nat): Series::sigma(Succ(n)) ≈ Series::gamma(n) ∧ Series::gamma(Succ(n)) ≈ -Series::sigma(n) {
+theorem Series::pattern_step(n: Nat): Series::sigma(n + 1) ≈ Series::gamma(n) ∧ Series::gamma(n + 1) ≈ -Series::sigma(n) {
     match n {
         Zero => And(Rat::same_refl(1), ring),
         Succ(m) => {
             let ih = Series::pattern_step(m);
-            let a: (-Series::sigma(m) ≈ Series::gamma(Succ(m))) = Rat::same_sym(ih.right);
-            let b: (-Series::gamma(m) ≈ -Series::sigma(Succ(m))) = Rat::neg_respects(Rat::same_sym(ih.left));
+            let a: (-Series::sigma(m) ≈ Series::gamma(m + 1)) = Rat::same_sym(ih.right);
+            let b: (-Series::gamma(m) ≈ -Series::sigma(m + 1)) = Rat::neg_respects(Rat::same_sym(ih.left));
             And(a, b)
         },
     }
@@ -85,9 +85,9 @@ theorem Series::pattern_add(i, k: Nat):
             let ih = Series::pattern_add(i, m);
             let st = Series::pattern_step(i + m);
             let sk = Series::pattern_step(m);
-            let a: (Series::sigma(Succ(i + m)) ≈ Series::sigma(i) * Series::gamma(Succ(m)) + Series::gamma(i) * Series::sigma(Succ(m))) =
+            let a: (Series::sigma(i + m + 1) ≈ Series::sigma(i) * Series::gamma(m + 1) + Series::gamma(i) * Series::sigma(m + 1)) =
                 ring(st.left, ih.right, sk.left, sk.right);
-            let b: (Series::gamma(Succ(i + m)) ≈ Series::gamma(i) * Series::gamma(Succ(m)) - Series::sigma(i) * Series::sigma(Succ(m))) =
+            let b: (Series::gamma(i + m + 1) ≈ Series::gamma(i) * Series::gamma(m + 1) - Series::sigma(i) * Series::sigma(m + 1)) =
                 ring(st.right, ih.left, sk.left, sk.right);
             And(a, b)
         },
@@ -100,8 +100,8 @@ theorem Series::pattern_bound(n: Nat): Series::sigma(n).abs() <= 1 ∧ Series::g
         Succ(m) => {
             let ih = Series::pattern_bound(m);
             let st = Series::pattern_step(m);
-            let a: (Series::sigma(Succ(m)).abs() <= 1) = Rat::le_trans(Rat::le_of_same(Rat::abs_respects(st.left)), ih.right);
-            let b: (Series::gamma(Succ(m)).abs() <= 1) = Rat::le_trans(Rat::le_of_same(Rat::same_trans(Rat::abs_respects(st.right), Series::sigma(m).abs_neg())), ih.left);
+            let a: (Series::sigma(m + 1).abs() <= 1) = Rat::le_trans(Rat::le_of_same(Rat::abs_respects(st.left)), ih.right);
+            let b: (Series::gamma(m + 1).abs() <= 1) = Rat::le_trans(Rat::le_of_same(Rat::same_trans(Rat::abs_respects(st.right), Series::sigma(m).abs_neg())), ih.left);
             And(a, b)
         },
     }
@@ -113,10 +113,10 @@ theorem Series::pattern_zero(K: Nat): Series::sigma(K + K) ≈ 0 ∧ Series::gam
         Zero => And(Rat::same_refl(0), Rat::same_refl(0)),
         Succ(m) => {
             let ih = Series::pattern_zero(m);
-            let e1: (Succ(m) + Succ(m) = Succ(Succ(m + m))) = omega;
-            let e2: (Succ(m) + Succ(m) + 1 = Succ(Succ(m + m + 1))) = omega;
-            let a0: (Series::sigma(Succ(Succ(m + m))) ≈ 0) = Rat::same_trans(Rat::neg_respects(ih.left), ring);
-            let b0: (Series::gamma(Succ(Succ(m + m + 1))) ≈ 0) = Rat::same_trans(Rat::neg_respects(ih.right), ring);
+            let e1: (m + 1 + (m + 1) = m + m + 2) = omega;
+            let e2: (m + 1 + (m + 1) + 1 = m + m + 3) = omega;
+            let a0: (Series::sigma(m + m + 2) ≈ 0) = Rat::same_trans(Rat::neg_respects(ih.left), ring);
+            let b0: (Series::gamma(m + m + 3) ≈ 0) = Rat::same_trans(Rat::neg_respects(ih.right), ring);
             And(j(sym(e1), λ v _ => Series::sigma(v) ≈ 0, a0), j(sym(e2), λ v _ => Series::gamma(v) ≈ 0, b0))
         },
     }
@@ -141,15 +141,15 @@ theorem Series::sin_term_full(a: Rat, K: Nat): Series::sin(a).term(K) ≈ Series
             let ih = Series::sin_term_full(a, k);
             let m = k + k + 1;
             let I = Rat::inv_succ(4 * (k * k) + 10 * k + 5);
-            let n: (m * (Succ(m) + 1) + Succ(m) = 4 * (k * k) + 10 * k + 5) = ring;
-            let f0: (Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ Rat::inv_succ(m * (Succ(m) + 1) + Succ(m))) = Rat::inv_succ_mul(m, Succ(m));
-            let f: (Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ I) = j(n, λ v _ => Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ Rat::inv_succ(v), f0);
-            let sg: (Series::sigma(Succ(Succ(m))) ≈ -Series::sigma(m)) = Rat::same_refl(-Series::sigma(m));
-            let et: (E.term(Succ(Succ(m))) ≈ E.term(m) * (a * Rat::inv_succ(m)) * (a * Rat::inv_succ(Succ(m)))) = Rat::same_refl(E.term(Succ(Succ(m))));
-            let st: (Series::sin(a).term(Succ(k)) ≈ Series::sin(a).term(k) * (-(a * a) * I)) = Rat::same_refl(Series::sin(a).term(Succ(k)));
-            let at: (Series::sin(a).term(Succ(k)) ≈ Series::sigma(Succ(Succ(m))) * E.term(Succ(Succ(m)))) = ring(ih, f, sg, et, st);
-            let e: (Succ(k) + Succ(k) + 1 = Succ(Succ(m))) = omega;
-            j(sym(e), λ v _ => Series::sin(a).term(Succ(k)) ≈ Series::sigma(v) * E.term(v), at)
+            let n: (m * (m + 1 + 1) + (m + 1) = 4 * (k * k) + 10 * k + 5) = ring;
+            let f0: (Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ Rat::inv_succ(m * (m + 1 + 1) + (m + 1))) = Rat::inv_succ_mul(m, m + 1);
+            let f: (Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ I) = j(n, λ v _ => Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ Rat::inv_succ(v), f0);
+            let sg: (Series::sigma(m + 2) ≈ -Series::sigma(m)) = Rat::same_refl(-Series::sigma(m));
+            let et: (E.term(m + 2) ≈ E.term(m) * (a * Rat::inv_succ(m)) * (a * Rat::inv_succ(m + 1))) = Rat::same_refl(E.term(m + 2));
+            let st: (Series::sin(a).term(k + 1) ≈ Series::sin(a).term(k) * (-(a * a) * I)) = Rat::same_refl(Series::sin(a).term(k + 1));
+            let at: (Series::sin(a).term(k + 1) ≈ Series::sigma(m + 2) * E.term(m + 2)) = ring(ih, f, sg, et, st);
+            let e: (k + 1 + (k + 1) + 1 = m + 2) = omega;
+            j(sym(e), λ v _ => Series::sin(a).term(k + 1) ≈ Series::sigma(v) * E.term(v), at)
         },
     }
 }
@@ -162,15 +162,15 @@ theorem Series::cos_term_full(a: Rat, K: Nat): Series::cos(a).term(K) ≈ Series
             let ih = Series::cos_term_full(a, k);
             let m = k + k;
             let I = Rat::inv_succ(4 * (k * k) + 6 * k + 1);
-            let n: (m * (Succ(m) + 1) + Succ(m) = 4 * (k * k) + 6 * k + 1) = ring;
-            let f0: (Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ Rat::inv_succ(m * (Succ(m) + 1) + Succ(m))) = Rat::inv_succ_mul(m, Succ(m));
-            let f: (Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ I) = j(n, λ v _ => Rat::inv_succ(m) * Rat::inv_succ(Succ(m)) ≈ Rat::inv_succ(v), f0);
-            let sg: (Series::gamma(Succ(Succ(m))) ≈ -Series::gamma(m)) = Rat::same_refl(-Series::gamma(m));
-            let et: (E.term(Succ(Succ(m))) ≈ E.term(m) * (a * Rat::inv_succ(m)) * (a * Rat::inv_succ(Succ(m)))) = Rat::same_refl(E.term(Succ(Succ(m))));
-            let st: (Series::cos(a).term(Succ(k)) ≈ Series::cos(a).term(k) * (-(a * a) * I)) = Rat::same_refl(Series::cos(a).term(Succ(k)));
-            let at: (Series::cos(a).term(Succ(k)) ≈ Series::gamma(Succ(Succ(m))) * E.term(Succ(Succ(m)))) = ring(ih, f, sg, et, st);
-            let e: (Succ(k) + Succ(k) = Succ(Succ(m))) = omega;
-            j(sym(e), λ v _ => Series::cos(a).term(Succ(k)) ≈ Series::gamma(v) * E.term(v), at)
+            let n: (m * (m + 1 + 1) + (m + 1) = 4 * (k * k) + 6 * k + 1) = ring;
+            let f0: (Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ Rat::inv_succ(m * (m + 1 + 1) + (m + 1))) = Rat::inv_succ_mul(m, m + 1);
+            let f: (Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ I) = j(n, λ v _ => Rat::inv_succ(m) * Rat::inv_succ(m + 1) ≈ Rat::inv_succ(v), f0);
+            let sg: (Series::gamma(m + 2) ≈ -Series::gamma(m)) = Rat::same_refl(-Series::gamma(m));
+            let et: (E.term(m + 2) ≈ E.term(m) * (a * Rat::inv_succ(m)) * (a * Rat::inv_succ(m + 1))) = Rat::same_refl(E.term(m + 2));
+            let st: (Series::cos(a).term(k + 1) ≈ Series::cos(a).term(k) * (-(a * a) * I)) = Rat::same_refl(Series::cos(a).term(k + 1));
+            let at: (Series::cos(a).term(k + 1) ≈ Series::gamma(m + 2) * E.term(m + 2)) = ring(ih, f, sg, et, st);
+            let e: (k + 1 + (k + 1) = m + 2) = omega;
+            j(sym(e), λ v _ => Series::cos(a).term(k + 1) ≈ Series::gamma(v) * E.term(v), at)
         },
     }
 }
@@ -183,10 +183,10 @@ theorem Series::sin_sum_full(a: Rat, K: Nat): Series::sin(a).sum(K) ≈ ∑ n < 
         Succ(k) => {
             let ih = Series::sin_sum_full(a, k);
             let z: (f(k + k) ≈ 0) = Rat::same_trans(Rat::mul_respects((Series::pattern_zero(k)).left, Series::exp(a).term(k + k).same_refl()), Series::exp(a).term(k + k).zero_mul());
-            let t: (Series::sin(a).term(k) ≈ f(Succ(k + k))) = Series::sin_term_full(a, k);
-            let two: (MonoidRel::range(+, Succ(Succ(k + k)), f) ≈ (MonoidRel::range(+, k + k, f) + f(k + k)) + f(Succ(k + k))) = Rat::same_refl(MonoidRel::range(+, Succ(Succ(k + k)), f));
-            let at: (Series::sin(a).sum(k) + Series::sin(a).term(k) ≈ MonoidRel::range(+, Succ(Succ(k + k)), f)) = ring(ih, z, t, two);
-            let e: (Succ(k) + Succ(k) = Succ(Succ(k + k))) = omega;
+            let t: (Series::sin(a).term(k) ≈ f(k + k + 1)) = Series::sin_term_full(a, k);
+            let two: (MonoidRel::range(+, k + k + 2, f) ≈ (MonoidRel::range(+, k + k, f) + f(k + k)) + f(k + k + 1)) = Rat::same_refl(MonoidRel::range(+, k + k + 2, f));
+            let at: (Series::sin(a).sum(k) + Series::sin(a).term(k) ≈ MonoidRel::range(+, k + k + 2, f)) = ring(ih, z, t, two);
+            let e: (k + 1 + (k + 1) = k + k + 2) = omega;
             j(sym(e), λ v _ => Series::sin(a).sum(k) + Series::sin(a).term(k) ≈ MonoidRel::range(+, v, f), at)
         },
     }
@@ -198,11 +198,11 @@ theorem Series::cos_sum_full(a: Rat, K: Nat): Series::cos(a).sum(K) ≈ ∑ n < 
         Zero => Rat::same_refl(0),
         Succ(k) => {
             let ih = Series::cos_sum_full(a, k);
-            let z: (f(Succ(k + k)) ≈ 0) = Rat::same_trans(Rat::mul_respects((Series::pattern_zero(k)).right, Series::exp(a).term(k + k + 1).same_refl()), Series::exp(a).term(k + k + 1).zero_mul());
+            let z: (f(k + k + 1) ≈ 0) = Rat::same_trans(Rat::mul_respects((Series::pattern_zero(k)).right, Series::exp(a).term(k + k + 1).same_refl()), Series::exp(a).term(k + k + 1).zero_mul());
             let t: (Series::cos(a).term(k) ≈ f(k + k)) = Series::cos_term_full(a, k);
-            let two: (MonoidRel::range(+, Succ(Succ(k + k)), f) ≈ (MonoidRel::range(+, k + k, f) + f(k + k)) + f(Succ(k + k))) = Rat::same_refl(MonoidRel::range(+, Succ(Succ(k + k)), f));
-            let at: (Series::cos(a).sum(k) + Series::cos(a).term(k) ≈ MonoidRel::range(+, Succ(Succ(k + k)), f)) = ring(ih, z, t, two);
-            let e: (Succ(k) + Succ(k) = Succ(Succ(k + k))) = omega;
+            let two: (MonoidRel::range(+, k + k + 2, f) ≈ (MonoidRel::range(+, k + k, f) + f(k + k)) + f(k + k + 1)) = Rat::same_refl(MonoidRel::range(+, k + k + 2, f));
+            let at: (Series::cos(a).sum(k) + Series::cos(a).term(k) ≈ MonoidRel::range(+, k + k + 2, f)) = ring(ih, z, t, two);
+            let e: (k + 1 + (k + 1) = k + k + 2) = omega;
             j(sym(e), λ v _ => Series::cos(a).sum(k) + Series::cos(a).term(k) ≈ MonoidRel::range(+, v, f), at)
         },
     }
@@ -222,8 +222,8 @@ theorem Series::sin_prod_term(a, b: Rat, n: Nat):
     calc {
         Series::sigma(n) * Series::exp(a + b).term(n) ≈ Series::sigma(n) * Series::exp_prod_term(a, b, n)
             := Rat::mul_respects(Series::sigma(n).same_refl(), Rat::same_sym(Series::exp_prod_term_eq(a, b, n))),
-        ≈ MonoidRel::range(+, Succ(n), λ i => Series::sigma(n) * (u(i) * v(n - i))) := Semiring::mul_range_l(Series::sigma(n), Succ(n), λ i => u(i) * v(n - i)),
-        ≈ MonoidRel::range(+, Succ(n), λ i => F(i) + G(i)) := MonoidRel::range_cong(+, Succ(n), λ i => Series::sigma(n) * (u(i) * v(n - i)), λ i => F(i) + G(i), λ i hi => {
+        ≈ MonoidRel::range(+, n + 1, λ i => Series::sigma(n) * (u(i) * v(n - i))) := Semiring::mul_range_l(Series::sigma(n), n + 1, λ i => u(i) * v(n - i)),
+        ≈ MonoidRel::range(+, n + 1, λ i => F(i) + G(i)) := MonoidRel::range_cong(+, n + 1, λ i => Series::sigma(n) * (u(i) * v(n - i)), λ i => F(i) + G(i), λ i hi => {
             let e: (i + (n - i) = n) = omega(hi);
             let pa = (Series::pattern_add(i, n - i)).left;
             let pn: (Series::sigma(n) ≈ Series::sigma(i) * Series::gamma(n - i) + Series::gamma(i) * Series::sigma(n - i)) =
@@ -231,7 +231,7 @@ theorem Series::sin_prod_term(a, b: Rat, n: Nat):
             let r: (Series::sigma(n) * (u(i) * v(n - i)) ≈ (Series::sigma(i) * u(i)) * (Series::gamma(n - i) * v(n - i)) + (Series::gamma(i) * u(i)) * (Series::sigma(n - i) * v(n - i))) = ring(pn);
             r
         }),
-        ≈ MonoidRel::range(+, Succ(n), F) + MonoidRel::range(+, Succ(n), G) := CommMonoidRel::range_op(≈, +, Succ(n), F, G),
+        ≈ MonoidRel::range(+, n + 1, F) + MonoidRel::range(+, n + 1, G) := CommMonoidRel::range_op(≈, +, n + 1, F, G),
     }
 }
 
@@ -247,8 +247,8 @@ theorem Series::cos_prod_term(a, b: Rat, n: Nat):
     calc {
         Series::gamma(n) * Series::exp(a + b).term(n) ≈ Series::gamma(n) * Series::exp_prod_term(a, b, n)
             := Rat::mul_respects(Series::gamma(n).same_refl(), Rat::same_sym(Series::exp_prod_term_eq(a, b, n))),
-        ≈ MonoidRel::range(+, Succ(n), λ i => Series::gamma(n) * (u(i) * v(n - i))) := Semiring::mul_range_l(Series::gamma(n), Succ(n), λ i => u(i) * v(n - i)),
-        ≈ MonoidRel::range(+, Succ(n), λ i => F(i) + G(i)) := MonoidRel::range_cong(+, Succ(n), λ i => Series::gamma(n) * (u(i) * v(n - i)), λ i => F(i) + G(i), λ i hi => {
+        ≈ MonoidRel::range(+, n + 1, λ i => Series::gamma(n) * (u(i) * v(n - i))) := Semiring::mul_range_l(Series::gamma(n), n + 1, λ i => u(i) * v(n - i)),
+        ≈ MonoidRel::range(+, n + 1, λ i => F(i) + G(i)) := MonoidRel::range_cong(+, n + 1, λ i => Series::gamma(n) * (u(i) * v(n - i)), λ i => F(i) + G(i), λ i hi => {
             let e: (i + (n - i) = n) = omega(hi);
             let pa = (Series::pattern_add(i, n - i)).right;
             let pn: (Series::gamma(n) ≈ Series::gamma(i) * Series::gamma(n - i) - Series::sigma(i) * Series::sigma(n - i)) =
@@ -256,7 +256,7 @@ theorem Series::cos_prod_term(a, b: Rat, n: Nat):
             let r: (Series::gamma(n) * (u(i) * v(n - i)) ≈ (Series::gamma(i) * u(i)) * (Series::gamma(n - i) * v(n - i)) + (Series::sigma(i) * u(i)) * (-(Series::sigma(n - i) * v(n - i)))) = ring(pn);
             r
         }),
-        ≈ MonoidRel::range(+, Succ(n), F) + MonoidRel::range(+, Succ(n), G) := CommMonoidRel::range_op(≈, +, Succ(n), F, G),
+        ≈ MonoidRel::range(+, n + 1, F) + MonoidRel::range(+, n + 1, G) := CommMonoidRel::range_op(≈, +, n + 1, F, G),
     }
 }
 
@@ -370,14 +370,14 @@ theorem Series::sin_partial(a: Rat, K: Nat): Series::sin(a).sum(K) ≈ ∑ n < K
     r
 }
 
-theorem Series::cos_partial(a: Rat, K: Nat): Series::cos(a).sum(Succ(K)) ≈ ∑ n < K + K + 1, Series::gamma(n) * Series::exp(a).term(n) {
+theorem Series::cos_partial(a: Rat, K: Nat): Series::cos(a).sum(K + 1) ≈ ∑ n < K + K + 1, Series::gamma(n) * Series::exp(a).term(n) {
     let f = λ (n: Nat) => Series::gamma(n) * Series::exp(a).term(n);
-    let e: (Succ(K) + Succ(K) = Succ(K + K + 1)) = omega;
-    let s0: (Series::cos(a).sum(Succ(K)) ≈ MonoidRel::range(+, Succ(K) + Succ(K), f)) = Series::cos_sum_full(a, Succ(K));
-    let s: (Series::cos(a).sum(Succ(K)) ≈ MonoidRel::range(+, Succ(K + K + 1), f)) = j(e, λ v _ => Series::cos(a).sum(Succ(K)) ≈ MonoidRel::range(+, v, f), s0);
+    let e: (K + 1 + (K + 1) = K + K + 2) = omega;
+    let s0: (Series::cos(a).sum(K + 1) ≈ MonoidRel::range(+, K + 1 + (K + 1), f)) = Series::cos_sum_full(a, K + 1);
+    let s: (Series::cos(a).sum(K + 1) ≈ MonoidRel::range(+, K + K + 2, f)) = j(e, λ v _ => Series::cos(a).sum(K + 1) ≈ MonoidRel::range(+, v, f), s0);
     let z: (f(K + K + 1) ≈ 0) = Rat::same_trans(Rat::mul_respects((Series::pattern_zero(K)).right, Series::exp(a).term(K + K + 1).same_refl()), Series::exp(a).term(K + K + 1).zero_mul());
-    let one: (MonoidRel::range(+, Succ(K + K + 1), f) ≈ MonoidRel::range(+, K + K + 1, f) + f(K + K + 1)) = Rat::same_refl(MonoidRel::range(+, Succ(K + K + 1), f));
-    let r: (Series::cos(a).sum(Succ(K)) ≈ MonoidRel::range(+, K + K + 1, f)) = ring(s, z, one);
+    let one: (MonoidRel::range(+, K + K + 2, f) ≈ MonoidRel::range(+, K + K + 1, f) + f(K + K + 1)) = Rat::same_refl(MonoidRel::range(+, K + K + 2, f));
+    let r: (Series::cos(a).sum(K + 1) ≈ MonoidRel::range(+, K + K + 1, f)) = ring(s, z, one);
     r
 }
 
@@ -401,23 +401,23 @@ theorem Series::sin_factor(a: Rat, K: Nat):
 }
 
 theorem Series::cos_factor(a: Rat, K: Nat):
-    Series::cos(a).sum(Succ(K)).abs() + Series::cos(a).err(Succ(K)) <= Series::exp(a.abs()).sum(K + K + 2) + Series::exp(a.abs()).err(K + K + 2)
+    Series::cos(a).sum(K + 1).abs() + Series::cos(a).err(K + 1) <= Series::exp(a.abs()).sum(K + K + 2) + Series::exp(a.abs()).err(K + K + 2)
 {
     let A = Series::exp(a.abs());
     let N = K + K + 1;
     let f = λ (n: Nat) => Series::gamma(n) * Series::exp(a).term(n);
-    let ps: (Series::cos(a).sum(Succ(K)).abs() <= A.sum(N)) = calc {
-        Series::cos(a).sum(Succ(K)).abs() ≈ (∑ n < N, f(n)).abs() := Rat::abs_respects(Series::cos_partial(a, K)),
+    let ps: (Series::cos(a).sum(K + 1).abs() <= A.sum(N)) = calc {
+        Series::cos(a).sum(K + 1).abs() ≈ (∑ n < N, f(n)).abs() := Rat::abs_respects(Series::cos_partial(a, K)),
         <= ∑ n < N, f(n).abs() := Rat::sum_abs_le(N, f),
         <= ∑ n < N, A.term(n) := Rat::range_le(N, λ n => f(n).abs(), λ n => A.term(n), λ n _ => Series::gamma_dominated(a, n)),
         ≈ A.sum(N) := Rat::same_sym(A.sum_same_range(N)),
     };
-    let e: (Succ(K) + Succ(K) = K + K + 2) = omega;
-    let t0: (Series::cos(a).term(Succ(K)) ≈ f(Succ(K) + Succ(K))) = Series::cos_term_full(a, Succ(K));
-    let t: (Series::cos(a).term(Succ(K)) ≈ f(K + K + 2)) = j(e, λ v _ => Series::cos(a).term(Succ(K)) ≈ f(v), t0);
-    let tb: (Series::cos(a).term(Succ(K)).abs() <= A.term(K + K + 2)) =
+    let e: (K + 1 + (K + 1) = K + K + 2) = omega;
+    let t0: (Series::cos(a).term(K + 1) ≈ f(K + 1 + (K + 1))) = Series::cos_term_full(a, K + 1);
+    let t: (Series::cos(a).term(K + 1) ≈ f(K + K + 2)) = j(e, λ v _ => Series::cos(a).term(K + 1) ≈ f(v), t0);
+    let tb: (Series::cos(a).term(K + 1).abs() <= A.term(K + K + 2)) =
         Rat::le_trans(Rat::le_of_same(Rat::abs_respects(t)), Series::gamma_dominated(a, K + K + 2));
-    let er: (Series::cos(a).err(Succ(K)) ≈ Series::cos(a).term(Succ(K)).abs() + Series::cos(a).term(Succ(K)).abs()) = Rat::same_refl(Series::cos(a).err(Succ(K)));
+    let er: (Series::cos(a).err(K + 1) ≈ Series::cos(a).term(K + 1).abs() + Series::cos(a).term(K + 1).abs()) = Rat::same_refl(Series::cos(a).err(K + 1));
     let eA: (A.err(K + K + 2) ≈ A.term(K + K + 2).abs() + A.term(K + K + 2).abs()) = Rat::same_refl(A.err(K + K + 2));
     let step: (A.sum(K + K + 2) ≈ A.sum(N) + A.term(N)) = Rat::same_refl(A.sum(K + K + 2));
     let nn: (0 <= A.term(N)) = Rat::nonneg_of_dominates(f, λ n => A.term(n), λ n => Series::gamma_dominated(a, n), N);
@@ -464,13 +464,13 @@ theorem CReal::sin_add_near(a, b: Rat, m, K: Nat,
     let nM1: (0 <= M1) = CReal::exp_reach_nonneg(a.abs(), a.abs_nonneg());
     let nM2: (0 <= M2) = CReal::exp_reach_nonneg(b.abs(), b.abs_nonneg());
     let s1: (sa.start <= K) = sa.start.le_trans(sa.index(ma), K, sa.index_start(ma), i1);
-    let s2: (cb.start <= Succ(K)) = cb.start.le_trans(cb.index(mb), Succ(K), cb.index_start(mb), omega(i2));
-    let s3: (ca.start <= Succ(K)) = ca.start.le_trans(ca.index(ma), Succ(K), ca.index_start(ma), omega(i3));
+    let s2: (cb.start <= K + 1) = cb.start.le_trans(cb.index(mb), K + 1, cb.index_start(mb), omega(i2));
+    let s3: (ca.start <= K + 1) = ca.start.le_trans(ca.index(ma), K + 1, ca.index_start(ma), omega(i3));
     let s4: (sb.start <= K) = sb.start.le_trans(sb.index(mb), K, sb.index_start(mb), i4);
     let s5: (sc.start <= K) = sc.start.le_trans(sc.index(m + 3), K, sc.index_start(m + 3), i5);
     let w1: (M2 * sa.err(K) <= Q) = sa.err_scaled(M2, nM2, m + 3, K, i1);
-    let w2: (M1 * cb.err(Succ(K)) <= Q) = cb.err_scaled(M1, nM1, m + 3, Succ(K), omega(i2));
-    let w3: (M2 * ca.err(Succ(K)) <= Q) = ca.err_scaled(M2, nM2, m + 3, Succ(K), omega(i3));
+    let w2: (M1 * cb.err(K + 1) <= Q) = cb.err_scaled(M1, nM1, m + 3, K + 1, omega(i2));
+    let w3: (M2 * ca.err(K + 1) <= Q) = ca.err_scaled(M2, nM2, m + 3, K + 1, omega(i3));
     let w4: (M1 * sb.err(K) <= Q) = sb.err_scaled(M1, nM1, m + 3, K, i4);
     let w5: (sc.err(K) <= Q) = Rat::le_trans(sc.err_small(m + 3, K, i5), Rat::inv_pow2_antitone(m + 3, m + 4, omega));
     let w6: (C.err(N) <= Q) = Rat::le_trans(C.err_small(m + 3, N, i6), Rat::inv_pow2_antitone(m + 3, m + 4, omega));
@@ -484,20 +484,20 @@ theorem CReal::sin_add_near(a, b: Rat, m, K: Nat,
     let fcb = Series::cos_factor(b, K);
     let x1lo = sa.below(K, s1);
     let x1hi = sa.above(K, s1);
-    let y1lo = cb.below(Succ(K), s2);
-    let y1hi = cb.above(Succ(K), s2);
-    let x2lo = ca.below(Succ(K), s3);
-    let x2hi = ca.above(Succ(K), s3);
+    let y1lo = cb.below(K + 1, s2);
+    let y1hi = cb.above(K + 1, s2);
+    let x2lo = ca.below(K + 1, s3);
+    let x2hi = ca.above(K + 1, s3);
     let y2lo = sb.below(K, s4);
     let y2hi = sb.above(K, s4);
     let zlo = sc.below(K, s5);
     let zhi = sc.above(K, s5);
     let b1hi: (sa.real() <= CReal::ofRat(M1)) = CReal::le_trans(x1hi, CReal::ofRat_le(linarith(sa.sum(K).le_abs(), fa, bA)));
     let b1lo: (CReal::ofRat(-M1) <= sa.real()) = CReal::le_trans(CReal::ofRat_le(linarith(sa.sum(K).neg_le_abs(), fa, bA)), x1lo);
-    let b2hi: (ca.real() <= CReal::ofRat(M1)) = CReal::le_trans(x2hi, CReal::ofRat_le(linarith(ca.sum(Succ(K)).le_abs(), fca, bA2)));
-    let b2lo: (CReal::ofRat(-M1) <= ca.real()) = CReal::le_trans(CReal::ofRat_le(linarith(ca.sum(Succ(K)).neg_le_abs(), fca, bA2)), x2lo);
-    let c1hi: (cb.sum(Succ(K)) <= M2) = linarith(cb.sum(Succ(K)).le_abs(), fcb, bB2, cb.err_nonneg(Succ(K)));
-    let c1lo: (-M2 <= cb.sum(Succ(K))) = linarith(cb.sum(Succ(K)).neg_le_abs(), fcb, bB2, cb.err_nonneg(Succ(K)));
+    let b2hi: (ca.real() <= CReal::ofRat(M1)) = CReal::le_trans(x2hi, CReal::ofRat_le(linarith(ca.sum(K + 1).le_abs(), fca, bA2)));
+    let b2lo: (CReal::ofRat(-M1) <= ca.real()) = CReal::le_trans(CReal::ofRat_le(linarith(ca.sum(K + 1).neg_le_abs(), fca, bA2)), x2lo);
+    let c1hi: (cb.sum(K + 1) <= M2) = linarith(cb.sum(K + 1).le_abs(), fcb, bB2, cb.err_nonneg(K + 1));
+    let c1lo: (-M2 <= cb.sum(K + 1)) = linarith(cb.sum(K + 1).neg_le_abs(), fcb, bB2, cb.err_nonneg(K + 1));
     let c2hi: (sb.sum(K) <= M2) = linarith(sb.sum(K).le_abs(), fsb, bB, sb.err_nonneg(K));
     let c2lo: (-M2 <= sb.sum(K)) = linarith(sb.sum(K).neg_le_abs(), fsb, bB, sb.err_nonneg(K));
     let usa = λ (n: Nat) => Series::sigma(n) * Series::exp(a).term(n);
@@ -516,25 +516,25 @@ theorem CReal::sin_add_near(a, b: Rat, m, K: Nat,
     let X2 = (∑ n < N, uca(n)) * (∑ n < N, usb(n));
     let H1 = ∑ n < N, h1(n);
     let H2 = ∑ n < N, h2(n);
-    let m1: (sa.sum(K) * cb.sum(Succ(K)) ≈ X1) = Rat::mul_respects(Series::sin_partial(a, K), Series::cos_partial(b, K));
-    let m2: (ca.sum(Succ(K)) * sb.sum(K) ≈ X2) = Rat::mul_respects(Series::cos_partial(a, K), Series::sin_partial(b, K));
+    let m1: (sa.sum(K) * cb.sum(K + 1) ≈ X1) = Rat::mul_respects(Series::sin_partial(a, K), Series::cos_partial(b, K));
+    let m2: (ca.sum(K + 1) * sb.sum(K) ≈ X2) = Rat::mul_respects(Series::cos_partial(a, K), Series::sin_partial(b, K));
     let rr: (sc.sum(K) ≈ H1 + H2) = Rat::same_trans(Series::sin_partial(a + b, K), Rat::same_trans(
         MonoidRel::range_cong(+, N, λ n => Series::sigma(n) * Series::exp(a + b).term(n), λ n => h1(n) + h2(n), λ n _ => Series::sin_prod_term(a, b, n)),
         CommMonoidRel::range_op(≈, +, N, h1, h2)));
     let G = C.err(N) + C.err(N);
-    let P = sa.sum(K) * cb.sum(Succ(K)) + ca.sum(Succ(K)) * sb.sum(K);
+    let P = sa.sum(K) * cb.sum(K + 1) + ca.sum(K + 1) * sb.sum(K);
     let gl: (-G <= P - sc.sum(K)) = linarith(g1, g2, (X1 - H1).neg_le_abs(), (X2 - H2).neg_le_abs(), m1, m2, rr);
     let gh: (P - sc.sum(K) <= G) = linarith(g1, g2, (X1 - H1).le_abs(), (X2 - H2).le_abs(), m1, m2, rr);
     let gap: ((P - sc.sum(K)).abs() <= G) = Rat::abs_le(gl, gh);
     let h2q = Rat::inv_pow2_half(m + 2);
     let h1q = Rat::inv_pow2_half(m + 1);
     let h0q = Rat::inv_pow2_half(m);
-    let small: ((cb.err(Succ(K)) * M1 + sa.err(K) * M2) + (sb.err(K) * M1 + ca.err(Succ(K)) * M2) + sc.err(K) + G <= Rat::inv_pow2(m)) =
+    let small: ((cb.err(K + 1) * M1 + sa.err(K) * M2) + (sb.err(K) * M1 + ca.err(K + 1) * M2) + sc.err(K) + G <= Rat::inv_pow2(m)) =
         linarith(w1, w2, w3, w4, w5, w6, sc.err_nonneg(K), h2q, h1q, h0q);
-    CReal::cauchy2_near(sa.sum(K), cb.sum(Succ(K)), ca.sum(Succ(K)), sb.sum(K), sc.sum(K),
-        sa.err(K), cb.err(Succ(K)), ca.err(Succ(K)), sb.err(K), sc.err(K), M1, M2, G, m,
+    CReal::cauchy2_near(sa.sum(K), cb.sum(K + 1), ca.sum(K + 1), sb.sum(K), sc.sum(K),
+        sa.err(K), cb.err(K + 1), ca.err(K + 1), sb.err(K), sc.err(K), M1, M2, G, m,
         x1lo, x1hi, y1lo, y1hi, x2lo, x2hi, y2lo, y2hi, zlo, zhi,
-        sa.err_nonneg(K), cb.err_nonneg(Succ(K)), ca.err_nonneg(Succ(K)), sb.err_nonneg(K),
+        sa.err_nonneg(K), cb.err_nonneg(K + 1), ca.err_nonneg(K + 1), sb.err_nonneg(K),
         b1lo, b1hi, c1lo, c1hi, b2lo, b2hi, c2lo, c2hi, gap, small)
 }
 
@@ -591,15 +591,15 @@ theorem CReal::cos_add_near(a, b: Rat, m, K: Nat,
     let nM1: (0 <= M1) = CReal::exp_reach_nonneg(a.abs(), a.abs_nonneg());
     let nM2: (0 <= M2) = CReal::exp_reach_nonneg(b.abs(), b.abs_nonneg());
     let s1: (sa.start <= K) = sa.start.le_trans(sa.index(ma), K, sa.index_start(ma), i1);
-    let s2: (cb.start <= Succ(K)) = cb.start.le_trans(cb.index(mb), Succ(K), cb.index_start(mb), omega(i2));
-    let s3: (ca.start <= Succ(K)) = ca.start.le_trans(ca.index(ma), Succ(K), ca.index_start(ma), omega(i3));
+    let s2: (cb.start <= K + 1) = cb.start.le_trans(cb.index(mb), K + 1, cb.index_start(mb), omega(i2));
+    let s3: (ca.start <= K + 1) = ca.start.le_trans(ca.index(ma), K + 1, ca.index_start(ma), omega(i3));
     let s4: (sb.start <= K) = sb.start.le_trans(sb.index(mb), K, sb.index_start(mb), i4);
-    let s5: (cc.start <= Succ(K)) = cc.start.le_trans(cc.index(m + 3), Succ(K), cc.index_start(m + 3), omega(i5));
+    let s5: (cc.start <= K + 1) = cc.start.le_trans(cc.index(m + 3), K + 1, cc.index_start(m + 3), omega(i5));
     let w1: (M2 * sa.err(K) <= Q) = sa.err_scaled(M2, nM2, m + 3, K, i1);
-    let w2: (M1 * cb.err(Succ(K)) <= Q) = cb.err_scaled(M1, nM1, m + 3, Succ(K), omega(i2));
-    let w3: (M2 * ca.err(Succ(K)) <= Q) = ca.err_scaled(M2, nM2, m + 3, Succ(K), omega(i3));
+    let w2: (M1 * cb.err(K + 1) <= Q) = cb.err_scaled(M1, nM1, m + 3, K + 1, omega(i2));
+    let w3: (M2 * ca.err(K + 1) <= Q) = ca.err_scaled(M2, nM2, m + 3, K + 1, omega(i3));
     let w4: (M1 * sb.err(K) <= Q) = sb.err_scaled(M1, nM1, m + 3, K, i4);
-    let w5: (cc.err(Succ(K)) <= Q) = Rat::le_trans(cc.err_small(m + 3, Succ(K), omega(i5)), Rat::inv_pow2_antitone(m + 3, m + 4, omega));
+    let w5: (cc.err(K + 1) <= Q) = Rat::le_trans(cc.err_small(m + 3, K + 1, omega(i5)), Rat::inv_pow2_antitone(m + 3, m + 4, omega));
     let w6: (C.err(N) <= Q) = Rat::le_trans(C.err_small(m + 3, N, i6), Rat::inv_pow2_antitone(m + 3, m + 4, omega));
     let bA: (A.sum(N) + A.err(N) <= M1) = A.bound_after(A.start, A.start.le_refl(), N, ia);
     let bA2: (A.sum(K + K + 2) + A.err(K + K + 2) <= M1) = A.bound_after(A.start, A.start.le_refl(), K + K + 2, omega(ia));
@@ -609,23 +609,23 @@ theorem CReal::cos_add_near(a, b: Rat, m, K: Nat,
     let fca = Series::cos_factor(a, K);
     let fsb = Series::sin_factor(b, K);
     let fcb = Series::cos_factor(b, K);
-    let x1lo = ca.below(Succ(K), s3);
-    let x1hi = ca.above(Succ(K), s3);
-    let y1lo = cb.below(Succ(K), s2);
-    let y1hi = cb.above(Succ(K), s2);
+    let x1lo = ca.below(K + 1, s3);
+    let x1hi = ca.above(K + 1, s3);
+    let y1lo = cb.below(K + 1, s2);
+    let y1hi = cb.above(K + 1, s2);
     let x2lo = sa.below(K, s1);
     let x2hi = sa.above(K, s1);
     let q2 = -sb.sum(K);
     let y2lo: (CReal::ofRat(q2 - sb.err(K)) <= -sb.real()) = linarith(sb.above(K, s4));
     let y2hi: (-sb.real() <= CReal::ofRat(q2 + sb.err(K))) = linarith(sb.below(K, s4));
-    let zlo = cc.below(Succ(K), s5);
-    let zhi = cc.above(Succ(K), s5);
-    let b1hi: (ca.real() <= CReal::ofRat(M1)) = CReal::le_trans(x1hi, CReal::ofRat_le(linarith(ca.sum(Succ(K)).le_abs(), fca, bA2)));
-    let b1lo: (CReal::ofRat(-M1) <= ca.real()) = CReal::le_trans(CReal::ofRat_le(linarith(ca.sum(Succ(K)).neg_le_abs(), fca, bA2)), x1lo);
+    let zlo = cc.below(K + 1, s5);
+    let zhi = cc.above(K + 1, s5);
+    let b1hi: (ca.real() <= CReal::ofRat(M1)) = CReal::le_trans(x1hi, CReal::ofRat_le(linarith(ca.sum(K + 1).le_abs(), fca, bA2)));
+    let b1lo: (CReal::ofRat(-M1) <= ca.real()) = CReal::le_trans(CReal::ofRat_le(linarith(ca.sum(K + 1).neg_le_abs(), fca, bA2)), x1lo);
     let b2hi: (sa.real() <= CReal::ofRat(M1)) = CReal::le_trans(x2hi, CReal::ofRat_le(linarith(sa.sum(K).le_abs(), fa, bA)));
     let b2lo: (CReal::ofRat(-M1) <= sa.real()) = CReal::le_trans(CReal::ofRat_le(linarith(sa.sum(K).neg_le_abs(), fa, bA)), x2lo);
-    let c1hi: (cb.sum(Succ(K)) <= M2) = linarith(cb.sum(Succ(K)).le_abs(), fcb, bB2, cb.err_nonneg(Succ(K)));
-    let c1lo: (-M2 <= cb.sum(Succ(K))) = linarith(cb.sum(Succ(K)).neg_le_abs(), fcb, bB2, cb.err_nonneg(Succ(K)));
+    let c1hi: (cb.sum(K + 1) <= M2) = linarith(cb.sum(K + 1).le_abs(), fcb, bB2, cb.err_nonneg(K + 1));
+    let c1lo: (-M2 <= cb.sum(K + 1)) = linarith(cb.sum(K + 1).neg_le_abs(), fcb, bB2, cb.err_nonneg(K + 1));
     let c2hi: (q2 <= M2) = linarith(sb.sum(K).neg_le_abs(), fsb, bB, sb.err_nonneg(K));
     let c2lo: (-M2 <= q2) = linarith(sb.sum(K).le_abs(), fsb, bB, sb.err_nonneg(K));
     let usa = λ (n: Nat) => Series::sigma(n) * Series::exp(a).term(n);
@@ -646,25 +646,25 @@ theorem CReal::cos_add_near(a, b: Rat, m, K: Nat,
     let H1 = ∑ n < N, h1(n);
     let H2 = ∑ n < N, h2(n);
     let ns: (q2 ≈ ∑ n < N, nsb(n)) = Rat::same_trans(Rat::neg_respects(Series::sin_partial(b, K)), Rat::same_sym(Rat::range_neg(N, usb)));
-    let m1: (ca.sum(Succ(K)) * cb.sum(Succ(K)) ≈ X1) = Rat::mul_respects(Series::cos_partial(a, K), Series::cos_partial(b, K));
+    let m1: (ca.sum(K + 1) * cb.sum(K + 1) ≈ X1) = Rat::mul_respects(Series::cos_partial(a, K), Series::cos_partial(b, K));
     let m2: (sa.sum(K) * q2 ≈ X2) = Rat::mul_respects(Series::sin_partial(a, K), ns);
-    let rr: (cc.sum(Succ(K)) ≈ H1 + H2) = Rat::same_trans(Series::cos_partial(a + b, K), Rat::same_trans(
+    let rr: (cc.sum(K + 1) ≈ H1 + H2) = Rat::same_trans(Series::cos_partial(a + b, K), Rat::same_trans(
         MonoidRel::range_cong(+, N, λ n => Series::gamma(n) * Series::exp(a + b).term(n), λ n => h1(n) + h2(n), λ n _ => Series::cos_prod_term(a, b, n)),
         CommMonoidRel::range_op(≈, +, N, h1, h2)));
     let G = C.err(N) + C.err(N);
-    let P = ca.sum(Succ(K)) * cb.sum(Succ(K)) + sa.sum(K) * q2;
-    let gl: (-G <= P - cc.sum(Succ(K))) = linarith(g1, g2, (X1 - H1).neg_le_abs(), (X2 - H2).neg_le_abs(), m1, m2, rr);
-    let gh: (P - cc.sum(Succ(K)) <= G) = linarith(g1, g2, (X1 - H1).le_abs(), (X2 - H2).le_abs(), m1, m2, rr);
-    let gap: ((P - cc.sum(Succ(K))).abs() <= G) = Rat::abs_le(gl, gh);
+    let P = ca.sum(K + 1) * cb.sum(K + 1) + sa.sum(K) * q2;
+    let gl: (-G <= P - cc.sum(K + 1)) = linarith(g1, g2, (X1 - H1).neg_le_abs(), (X2 - H2).neg_le_abs(), m1, m2, rr);
+    let gh: (P - cc.sum(K + 1) <= G) = linarith(g1, g2, (X1 - H1).le_abs(), (X2 - H2).le_abs(), m1, m2, rr);
+    let gap: ((P - cc.sum(K + 1)).abs() <= G) = Rat::abs_le(gl, gh);
     let h2q = Rat::inv_pow2_half(m + 2);
     let h1q = Rat::inv_pow2_half(m + 1);
     let h0q = Rat::inv_pow2_half(m);
-    let small: ((cb.err(Succ(K)) * M1 + ca.err(Succ(K)) * M2) + (sb.err(K) * M1 + sa.err(K) * M2) + cc.err(Succ(K)) + G <= Rat::inv_pow2(m)) =
-        linarith(w1, w2, w3, w4, w5, w6, cc.err_nonneg(Succ(K)), h2q, h1q, h0q);
-    let r = CReal::cauchy2_near(ca.sum(Succ(K)), cb.sum(Succ(K)), sa.sum(K), q2, cc.sum(Succ(K)),
-        ca.err(Succ(K)), cb.err(Succ(K)), sa.err(K), sb.err(K), cc.err(Succ(K)), M1, M2, G, m,
+    let small: ((cb.err(K + 1) * M1 + ca.err(K + 1) * M2) + (sb.err(K) * M1 + sa.err(K) * M2) + cc.err(K + 1) + G <= Rat::inv_pow2(m)) =
+        linarith(w1, w2, w3, w4, w5, w6, cc.err_nonneg(K + 1), h2q, h1q, h0q);
+    let r = CReal::cauchy2_near(ca.sum(K + 1), cb.sum(K + 1), sa.sum(K), q2, cc.sum(K + 1),
+        ca.err(K + 1), cb.err(K + 1), sa.err(K), sb.err(K), cc.err(K + 1), M1, M2, G, m,
         x1lo, x1hi, y1lo, y1hi, x2lo, x2hi, y2lo, y2hi, zlo, zhi,
-        ca.err_nonneg(Succ(K)), cb.err_nonneg(Succ(K)), sa.err_nonneg(K), sb.err_nonneg(K),
+        ca.err_nonneg(K + 1), cb.err_nonneg(K + 1), sa.err_nonneg(K), sb.err_nonneg(K),
         b1lo, b1hi, c1lo, c1hi, b2lo, b2hi, c2lo, c2hi, gap, small);
     let up: (cc.real() <= ca.real() * cb.real() - sa.real() * sb.real() + CReal::ofRat(Rat::inv_pow2(m))) = linarith(r.left);
     let dn: (ca.real() * cb.real() - sa.real() * sb.real() <= cc.real() + CReal::ofRat(Rat::inv_pow2(m))) = linarith(r.right);
@@ -699,10 +699,10 @@ theorem CReal::cos_rat_respects({a, b: Rat}, e: a ≈ b): CReal::cos_rat(a) ≈ 
 // A pattern-signed term of exp(d) past the first is within |d| of exp(D)'s
 // one place back.
 theorem Series::exp_shift_dominated(d, D: Rat, hd: d.abs() <= D, c: Rat, hc: c.abs() <= 1, n: Nat):
-    (c * Series::exp(d).term(Succ(n))).abs() <= d.abs() * Series::exp(D).term(n)
+    (c * Series::exp(d).term(n + 1)).abs() <= d.abs() * Series::exp(D).term(n)
 {
-    let t = Series::exp(d).term(Succ(n));
-    let e: (1 + n = Succ(n)) = omega;
+    let t = Series::exp(d).term(n + 1);
+    let e: (1 + n = n + 1) = omega;
     let dt0: ((Series::exp(d)).drop(1).term(n) ≈ Series::exp(d).term(1 + n)) = (Series::exp(d)).drop_term(1, n);
     let dt: ((Series::exp(d)).drop(1).term(n) ≈ t) = j(e, λ v _ => (Series::exp(d)).drop(1).term(n) ≈ Series::exp(d).term(v), dt0);
     let tb: (t.abs() <= d.abs() * Series::exp(D).term(n)) = Rat::le_trans(Rat::le_of_same(Rat::abs_respects(Rat::same_sym(dt))), Series::exp_drop_dominated(d, D, hd, n));
@@ -713,13 +713,13 @@ theorem Series::exp_shift_dominated(d, D: Rat, hd: d.abs() <= D, c: Rat, hc: c.a
 
 // The shifted pattern sums, bounded.
 theorem Series::shift_sum_dominated(d, D: Rat, hd: d.abs() <= D, u: Nat → Rat, hu: (n: Nat) → u(n).abs() <= 1, N: Nat):
-    (∑ n < N, u(Succ(n)) * Series::exp(d).term(Succ(n))).abs() <= d.abs() * Series::exp(D).sum(N)
+    (∑ n < N, u(n + 1) * Series::exp(d).term(n + 1)).abs() <= d.abs() * Series::exp(D).sum(N)
 {
     let E = Series::exp(D);
-    let f = λ (n: Nat) => u(Succ(n)) * Series::exp(d).term(Succ(n));
+    let f = λ (n: Nat) => u(n + 1) * Series::exp(d).term(n + 1);
     calc {
         (∑ n < N, f(n)).abs() <= ∑ n < N, f(n).abs() := Rat::sum_abs_le(N, f),
-        <= ∑ n < N, d.abs() * E.term(n) := Rat::range_le(N, λ n => f(n).abs(), λ n => d.abs() * E.term(n), λ n _ => Series::exp_shift_dominated(d, D, hd, u(Succ(n)), hu(Succ(n)), n)),
+        <= ∑ n < N, d.abs() * E.term(n) := Rat::range_le(N, λ n => f(n).abs(), λ n => d.abs() * E.term(n), λ n _ => Series::exp_shift_dominated(d, D, hd, u(n + 1), hu(n + 1), n)),
         ≈ d.abs() * ∑ n < N, E.term(n) := Rat::same_sym(Semiring::mul_range_l(d.abs(), N, λ n => E.term(n))),
         ≈ d.abs() * E.sum(N) := Rat::mul_respects(d.abs().same_refl(), Rat::same_sym(E.sum_same_range(N))),
     }
@@ -732,9 +732,9 @@ theorem Series::sin_small_part(d, D: Rat, hd: d.abs() <= D, K: Nat):
     let s = Series::sin(d);
     let f = λ (n: Nat) => Series::sigma(n) * Series::exp(d).term(n);
     let hu = λ (n: Nat) => (Series::pattern_bound(n)).left;
-    let p0: (MonoidRel::range(+, Succ(K + K), f) ≈ f(0) + MonoidRel::range(+, K + K, λ n => f(Succ(n)))) = MonoidRel::range_succ_l(+, K + K, f);
+    let p0: (MonoidRel::range(+, K + K + 1, f) ≈ f(0) + MonoidRel::range(+, K + K, λ n => f(n + 1))) = MonoidRel::range_succ_l(+, K + K, f);
     let z: (f(0) ≈ 0) = Series::exp(d).term(0).zero_mul();
-    let ps: (s.sum(K) ≈ MonoidRel::range(+, K + K, λ n => f(Succ(n)))) = ring(Series::sin_partial(d, K), p0, z);
+    let ps: (s.sum(K) ≈ MonoidRel::range(+, K + K, λ n => f(n + 1))) = ring(Series::sin_partial(d, K), p0, z);
     let sb: (s.sum(K).abs() <= d.abs() * E.sum(K + K)) =
         Rat::le_trans(Rat::le_of_same(Rat::abs_respects(ps)), Series::shift_sum_dominated(d, D, hd, Series::sigma, hu, K + K));
     let tb: (s.term(K).abs() <= d.abs() * E.term(K + K)) =
@@ -748,23 +748,23 @@ theorem Series::sin_small_part(d, D: Rat, hd: d.abs() <= D, K: Nat):
 }
 
 theorem Series::cos_small_part(d, D: Rat, hd: d.abs() <= D, K: Nat):
-    (Series::cos(d).sum(Succ(K)) - 1).abs() + Series::cos(d).err(Succ(K)) <= d.abs() * (Series::exp(D).sum(K + K + 1) + Series::exp(D).err(K + K + 1))
+    (Series::cos(d).sum(K + 1) - 1).abs() + Series::cos(d).err(K + 1) <= d.abs() * (Series::exp(D).sum(K + K + 1) + Series::exp(D).err(K + K + 1))
 {
     let E = Series::exp(D);
     let s = Series::cos(d);
     let f = λ (n: Nat) => Series::gamma(n) * Series::exp(d).term(n);
     let hu = λ (n: Nat) => (Series::pattern_bound(n)).right;
-    let p0: (MonoidRel::range(+, Succ(K + K), f) ≈ f(0) + MonoidRel::range(+, K + K, λ n => f(Succ(n)))) = MonoidRel::range_succ_l(+, K + K, f);
+    let p0: (MonoidRel::range(+, K + K + 1, f) ≈ f(0) + MonoidRel::range(+, K + K, λ n => f(n + 1))) = MonoidRel::range_succ_l(+, K + K, f);
     let o: (f(0) ≈ 1) = Rat::same_refl(1);
-    let ps: (s.sum(Succ(K)) - 1 ≈ MonoidRel::range(+, K + K, λ n => f(Succ(n)))) = ring(Series::cos_partial(d, K), p0, o);
-    let sb: ((s.sum(Succ(K)) - 1).abs() <= d.abs() * E.sum(K + K)) =
+    let ps: (s.sum(K + 1) - 1 ≈ MonoidRel::range(+, K + K, λ n => f(n + 1))) = ring(Series::cos_partial(d, K), p0, o);
+    let sb: ((s.sum(K + 1) - 1).abs() <= d.abs() * E.sum(K + K)) =
         Rat::le_trans(Rat::le_of_same(Rat::abs_respects(ps)), Series::shift_sum_dominated(d, D, hd, Series::gamma, hu, K + K));
-    let e: (Succ(K) + Succ(K) = Succ(K + K + 1)) = omega;
-    let t0: (s.term(Succ(K)) ≈ f(Succ(K) + Succ(K))) = Series::cos_term_full(d, Succ(K));
-    let tf: (s.term(Succ(K)) ≈ f(Succ(K + K + 1))) = j(e, λ v _ => s.term(Succ(K)) ≈ f(v), t0);
-    let tb: (s.term(Succ(K)).abs() <= d.abs() * E.term(K + K + 1)) =
-        Rat::le_trans(Rat::le_of_same(Rat::abs_respects(tf)), Series::exp_shift_dominated(d, D, hd, Series::gamma(Succ(K + K + 1)), hu(Succ(K + K + 1)), K + K + 1));
-    let er: (s.err(Succ(K)) ≈ s.term(Succ(K)).abs() + s.term(Succ(K)).abs()) = Rat::same_refl(s.err(Succ(K)));
+    let e: (K + 1 + (K + 1) = K + K + 2) = omega;
+    let t0: (s.term(K + 1) ≈ f(K + 1 + (K + 1))) = Series::cos_term_full(d, K + 1);
+    let tf: (s.term(K + 1) ≈ f(K + K + 2)) = j(e, λ v _ => s.term(K + 1) ≈ f(v), t0);
+    let tb: (s.term(K + 1).abs() <= d.abs() * E.term(K + K + 1)) =
+        Rat::le_trans(Rat::le_of_same(Rat::abs_respects(tf)), Series::exp_shift_dominated(d, D, hd, Series::gamma(K + K + 2), hu(K + K + 2), K + K + 1));
+    let er: (s.err(K + 1) ≈ s.term(K + 1).abs() + s.term(K + 1).abs()) = Rat::same_refl(s.err(K + 1));
     let t = E.term(K + K + 1);
     let hD: (0 <= D) = Rat::le_trans(d.abs_nonneg(), hd);
     let eE: (E.err(K + K + 1) ≈ t.abs() + t.abs()) = Rat::same_refl(E.err(K + K + 1));
@@ -798,10 +798,10 @@ theorem CReal::cos_rat_sub_one(d, D: Rat, hd: d.abs() <= D):
     let part = Series::cos_small_part(d, D, hd, K);
     let up: (E.sum(K + K + 1) + E.err(K + K + 1) <= CReal::exp_reach(D)) = E.bound_after(E.start, E.start.le_refl(), K + K + 1, omega);
     let sc: (d.abs() * (E.sum(K + K + 1) + E.err(K + K + 1)) <= d.abs() * CReal::exp_reach(D)) = Rat::mul_le_mono_l(up, d.abs_nonneg());
-    let lo: (-(d.abs() * CReal::exp_reach(D)) + 1 <= s.sum(Succ(K)) - s.err(Succ(K))) = linarith(part, sc, (s.sum(Succ(K)) - 1).neg_le_abs());
-    let hi: (s.sum(Succ(K)) + s.err(Succ(K)) <= d.abs() * CReal::exp_reach(D) + 1) = linarith(part, sc, (s.sum(Succ(K)) - 1).le_abs());
-    let a = CReal::le_trans(CReal::ofRat_le(lo), s.below(Succ(K), omega));
-    let b = CReal::le_trans(s.above(Succ(K), omega), CReal::ofRat_le(hi));
+    let lo: (-(d.abs() * CReal::exp_reach(D)) + 1 <= s.sum(K + 1) - s.err(K + 1)) = linarith(part, sc, (s.sum(K + 1) - 1).neg_le_abs());
+    let hi: (s.sum(K + 1) + s.err(K + 1) <= d.abs() * CReal::exp_reach(D) + 1) = linarith(part, sc, (s.sum(K + 1) - 1).le_abs());
+    let a = CReal::le_trans(CReal::ofRat_le(lo), s.below(K + 1, omega));
+    let b = CReal::le_trans(s.above(K + 1, omega), CReal::ofRat_le(hi));
     let x = s.real();
     let r1: (CReal::ofRat(-(d.abs() * CReal::exp_reach(D))) <= x - 1) = linarith(a);
     let r2: (x - 1 <= CReal::ofRat(d.abs() * CReal::exp_reach(D))) = linarith(b);
@@ -861,9 +861,9 @@ theorem Series::sin_term_neg(a: Rat, k: Nat): Series::sin(-a).term(k) ≈ -Serie
         Succ(i) => {
             let ih = Series::sin_term_neg(a, i);
             let I = Rat::inv_succ(4 * (i * i) + 10 * i + 5);
-            let t1: (Series::sin(-a).term(Succ(i)) ≈ Series::sin(-a).term(i) * (-((-a) * (-a)) * I)) = Rat::same_refl(Series::sin(-a).term(Succ(i)));
-            let t2: (Series::sin(a).term(Succ(i)) ≈ Series::sin(a).term(i) * (-(a * a) * I)) = Rat::same_refl(Series::sin(a).term(Succ(i)));
-            let r: (Series::sin(-a).term(Succ(i)) ≈ -Series::sin(a).term(Succ(i))) = ring(ih, t1, t2);
+            let t1: (Series::sin(-a).term(i + 1) ≈ Series::sin(-a).term(i) * (-((-a) * (-a)) * I)) = Rat::same_refl(Series::sin(-a).term(i + 1));
+            let t2: (Series::sin(a).term(i + 1) ≈ Series::sin(a).term(i) * (-(a * a) * I)) = Rat::same_refl(Series::sin(a).term(i + 1));
+            let r: (Series::sin(-a).term(i + 1) ≈ -Series::sin(a).term(i + 1)) = ring(ih, t1, t2);
             r
         },
     }
@@ -875,9 +875,9 @@ theorem Series::cos_term_neg(a: Rat, k: Nat): Series::cos(-a).term(k) ≈ Series
         Succ(i) => {
             let ih = Series::cos_term_neg(a, i);
             let I = Rat::inv_succ(4 * (i * i) + 6 * i + 1);
-            let t1: (Series::cos(-a).term(Succ(i)) ≈ Series::cos(-a).term(i) * (-((-a) * (-a)) * I)) = Rat::same_refl(Series::cos(-a).term(Succ(i)));
-            let t2: (Series::cos(a).term(Succ(i)) ≈ Series::cos(a).term(i) * (-(a * a) * I)) = Rat::same_refl(Series::cos(a).term(Succ(i)));
-            let r: (Series::cos(-a).term(Succ(i)) ≈ Series::cos(a).term(Succ(i))) = ring(ih, t1, t2);
+            let t1: (Series::cos(-a).term(i + 1) ≈ Series::cos(-a).term(i) * (-((-a) * (-a)) * I)) = Rat::same_refl(Series::cos(-a).term(i + 1));
+            let t2: (Series::cos(a).term(i + 1) ≈ Series::cos(a).term(i) * (-(a * a) * I)) = Rat::same_refl(Series::cos(a).term(i + 1));
+            let r: (Series::cos(-a).term(i + 1) ≈ Series::cos(a).term(i + 1)) = ring(ih, t1, t2);
             r
         },
     }

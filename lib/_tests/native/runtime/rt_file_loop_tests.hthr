@@ -130,7 +130,7 @@ theorem bump_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), W
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
                 bump_from::rec(length.sub(i).toNat(), s, y1, y2, p),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
-            λ s y1 y2 p q => trans(bump_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
+            λ s y1 y2 p q => trans(bump_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
                 sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
                         hyp([place, y1, y2], s, refl, p)))),
@@ -260,7 +260,7 @@ theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), 
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
                 raise_from::rec(length.sub(i).toNat(), s, y1, y2, p),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
-            λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), Succ(y1.sub(y2).toNat()), s, y1, y2, p,
+            λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
                 sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
                         hyp([place, y1, y2], s, refl, p)))),

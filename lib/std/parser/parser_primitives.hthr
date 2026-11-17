@@ -64,12 +64,12 @@ fn complete<T, A>(self p: Parser<T, A>, expected: Nat) → Parser<T, A> { before
 theorem recognize_bound<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Bound(source, begin, 1, recognize_at(pick, expected, source, begin)) {
     // TODO(minus): use ifelse here
-    match Succ(begin.offset).le_dec(source.len()) {
+    match (begin.offset + 1).le_dec(source.len()) {
         Inl(_) => match rest(source, begin) {
             Nil => trivial,
             Cons(head, _) => match pick(head) {
                 None => trivial,
-                Some(_) => Succ(begin.offset).le_refl()
+                Some(_) => (begin.offset + 1).le_refl()
             },
         },
         Inr(_) => trivial,
@@ -99,7 +99,7 @@ fn Recognized<T, A>(pick: T → Option<A>, source: List<T>, begin, end: Cursor<T
 // Establish the recognition relation for a single recognition reply.
 theorem recognize_post<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)):
     Post(source, begin, Recognized<T, A>(pick), recognize_at(pick, expected, source, begin)) {
-    match Succ(begin.offset).le_dec(source.len()) {
+    match (begin.offset + 1).le_dec(source.len()) {
         Inl(_) => match input_shape: rest(source, begin) {
             Nil => trivial,
             Cons(head, _) => match picked: pick(head) {
@@ -186,5 +186,5 @@ fn recognize_certified<T, A>(pick: T → Option<A>, expected: Nat, source: List<
 // Extract the strict cursor advance needed for recursion from recognition evidence.
 theorem recognized_progress<T, A>(pick: T → Option<A>, source: List<T>, begin, end: Cursor<T>(source), value: A,
     proof: Recognized<T, A>(pick, source, begin, end, value)): begin.offset.Lt(end.offset) {
-    j(sym(proof.left), λ offset q => begin.offset.Lt(offset), Succ(begin.offset).le_refl())
+    j(sym(proof.left), λ offset q => begin.offset.Lt(offset), (begin.offset + 1).le_refl())
 }

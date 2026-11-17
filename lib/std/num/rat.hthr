@@ -343,11 +343,11 @@ theorem Rat::mul_recip_parts(a: Int, d: Pos<Nat>):
     match a {
         OfNat(n) => match n {
             Zero => λ nonzero => false_elim(nonzero(sym(Int::zero_mul(d.int())))),
-            Succ(k) => λ nonzero => omega(d.int_mul(Succ(k)), OfNat(Succ(k)).mul_comm(d.int())),
+            Succ(k) => λ nonzero => omega(d.int_mul(k + 1), OfNat(k + 1).mul_comm(d.int())),
         },
         NegSucc(k) => λ nonzero => {
-            omega(d.int_mul(Succ(k)), NegSucc(k).mul_neg_r(d.int()), OfNat(Succ(k)).mul_neg_l(d.int()),
-                OfNat(Succ(k)).mul_comm(d.int()))
+            omega(d.int_mul(k + 1), NegSucc(k).mul_neg_r(d.int()), OfNat(k + 1).mul_neg_l(d.int()),
+                OfNat(k + 1).mul_comm(d.int()))
         },
     }
 }
@@ -391,14 +391,14 @@ theorem Rat::recip_parts_respects(a: Int, p: Pos<Nat>, c: Int, q: Pos<Nat>):
             Succ(k) => match c {
                 OfNat(m) => match m {
                     Zero => λ h => false_elim(Rat::num_pos_of_same(h, trivial)),
-                    Succ(j) => λ h => Rat::same_recip(Succ(k), p, Succ(j), q, h),
+                    Succ(j) => λ h => Rat::same_recip(k + 1, p, j + 1, q, h),
                 },
                 NegSucc(_) => λ h => false_elim(Rat::num_pos_of_same(h, trivial)),
             },
         },
         NegSucc(k) => match c {
             OfNat(_) => λ h => false_elim(Rat::num_neg_of_same(h, Int::negsucc_lt_ofnat(k, 0))),
-            NegSucc(j) => λ h => Rat::neg_respects(Rat::same_recip(Succ(k), p, Succ(j), q, Rat::neg_respects(h))),
+            NegSucc(j) => λ h => Rat::neg_respects(Rat::same_recip(k + 1, p, j + 1, q, Rat::neg_respects(h))),
         },
     }
 }
@@ -431,8 +431,8 @@ theorem Rat::recip_parts_nonneg(a: Int, d: Pos<Nat>, h: 0 <= a): 0 <= Rat::recip
         OfNat(n) => match n {
             Zero => λ _ => Rat::le_refl(0),
             Succ(k) => λ _ => {
-                let num: ((Rat(d.int(), Succ(k))).num = d.int()) = refl;
-                omega(num, Int::zero_mul((Succ(k)).int()))
+                let num: ((Rat(d.int(), k + 1)).num = d.int()) = refl;
+                omega(num, Int::zero_mul((k + 1).int()))
             },
         },
         NegSucc(k) => λ bad => false_elim(omega(bad, Int::negsucc_lt_ofnat(k, 0))),
@@ -446,8 +446,8 @@ theorem Rat::recip_parts_nonpos(a: Int, d: Pos<Nat>, h: a <= 0): Rat::recip_part
             Succ(_) => λ bad => false_elim(omega(bad)),
         },
         NegSucc(k) => λ _ => {
-            let num: ((Rat(-d.int(), Succ(k))).num = -d.int()) = refl;
-            omega(num, Int::zero_mul((Succ(k)).int()))
+            let num: ((Rat(-d.int(), k + 1)).num = -d.int()) = refl;
+            omega(num, Int::zero_mul((k + 1).int()))
         },
     }(h)
 }
@@ -899,7 +899,7 @@ theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
             Zero => refl,
             Succ(_) => refl,
         },
-        NegSucc(k) => Rat(x.den.int(), Succ(k)).same_of_parts(-Rat(-x.den.int(), Succ(k)), sym(x.den.int().neg_neg()), refl),
+        NegSucc(k) => Rat(x.den.int(), k + 1).same_of_parts(-Rat(-x.den.int(), k + 1), sym(x.den.int().neg_neg()), refl),
     }
 }
 
@@ -1070,8 +1070,8 @@ theorem Rat::scale_inv_pow2(b, n: Nat): Rat::ofInt(Nat::pow(2, b).int()) * Rat::
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
     let p = x.den.int();
-    let scaled = Int::mul_le_mono_l(1, p, OfNat(Succ(a.natAbs())), omega(x.den_pos), trivial);
-    Exists(Succ(a.natAbs()), omega(scaled, a.le_abs()))
+    let scaled = Int::mul_le_mono_l(1, p, OfNat(a.natAbs() + 1), omega(x.den_pos), trivial);
+    Exists(a.natAbs() + 1, omega(scaled, a.le_abs()))
 }
 
 // Every positive rational is above some 1/(n+1): with ε = e/r and e ≥ 1,
@@ -1080,7 +1080,7 @@ theorem Rat::archimedean_inv(self eps: Rat, h: 0 < eps): ∃ n: Nat, Rat::inv_su
     let e = eps.num;
     let r = eps.den.int();
     let he: (1 <= e) = omega(Int::zero_mul(r));
-    Exists(eps.den, omega(Int::mul_le_mono_r(1, e, OfNat(Succ(eps.den)), he, trivial)))
+    Exists(eps.den, omega(Int::mul_le_mono_r(1, e, OfNat(eps.den + 1), he, trivial)))
 }
 
 // Every positive rational is above some 2^-n.
@@ -1104,14 +1104,14 @@ fn Rat::abs_ceil(self x: Rat) → Nat { Succ(x.num.natAbs().ldiv(x.den).quot()) 
 theorem Rat::abs_le_abs_ceil(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.abs_ceil())) {
     let n = x.num.natAbs();
     let d: Nat = x.den;
-    match n.ldiv(d) as λ st => DivMod::Spec(n, d, st) → x.abs() <= Rat::ofInt(OfNat(Succ(st.quot()))) {
+    match n.ldiv(d) as λ st => DivMod::Spec(n, d, st) → x.abs() <= Rat::ofInt(OfNat(st.quot() + 1)) {
         MkDivMod(q, r) => λ sp => {
             let parts: (q * d + r = n) = sp.left;
             let small: (r < d) = match sp.right { Inl(bad) => false_elim(omega(bad, x.den_pos)), Inr(lt) => lt };
-            let succ: (d * Succ(q) = d * q + d) = refl;
+            let succ: (d * (q + 1) = d * q + d) = refl;
             let comm: (q * d = d * q) = q.mul_comm(d);
-            let flip: (Succ(q) * d = d * Succ(q)) = Succ(q).mul_comm(d);
-            let bound: (x.abs() <= Rat::ofInt(OfNat(Succ(q)))) = omega(parts, small, succ, comm, flip);
+            let flip: ((q + 1) * d = d * (q + 1)) = (q + 1).mul_comm(d);
+            let bound: (x.abs() <= Rat::ofInt(OfNat(q + 1))) = omega(parts, small, succ, comm, flip);
             bound
         },
     }(n.ldiv_spec(d))
@@ -1706,7 +1706,7 @@ theorem Rat::npow_add(self x: Rat, m, n: Nat): x.npow(m + n) ≈ x.npow(m) * x.n
     match n {
         Zero => Rat::same_sym(x.npow(m).mul_one()),
         Succ(k) => calc {
-            x.npow(m + Succ(k)) ≈ x.npow(m + k) * x := refl,
+            x.npow(m + (k + 1)) ≈ x.npow(m + k) * x := refl,
             ≈ (x.npow(m) * x.npow(k)) * x := Rat::mul_respects(x.npow_add(m, k), x.same_refl()),
             ≈ x.npow(m) * (x.npow(k) * x) := x.npow(m).mul_assoc(x.npow(k), x),
         },
@@ -1720,7 +1720,7 @@ theorem Rat::mul_npow(self x, y: Rat, n: Nat): (x * y).npow(n) ≈ x.npow(n) * y
             let p = x.npow(k);
             let q = y.npow(k);
             calc {
-                (x * y).npow(Succ(k)) ≈ (x * y).npow(k) * (x * y) := refl,
+                (x * y).npow(k + 1) ≈ (x * y).npow(k) * (x * y) := refl,
                 ≈ (p * q) * (x * y) := Rat::mul_respects(x.mul_npow(y, k), (x * y).same_refl()),
                 ≈ (p * x) * (q * y) := ring(p.den_mul(q), x.den_mul(y), (p * q).den_mul(x * y), p.den_mul(x), q.den_mul(y), (p * x).den_mul(q * y)),
             }
@@ -1806,7 +1806,7 @@ designation ^ at Rat := Rat::pow
 theorem Rat::apart_pow_parts(x: Rat, n: Int, h: x.Apart(0)): (hn: x.PowOk(n)) → Rat::pow_parts(x, n, hn).Apart(0) {
     match n {
         OfNat(m) => λ _ => x.npow_apart(m, h),
-        NegSucc(k) => λ hn => x.inv(h := hn).npow_apart(Succ(k), Rat::apart_inv()),
+        NegSucc(k) => λ hn => x.inv(h := hn).npow_apart(k + 1, Rat::apart_inv()),
     }
 }
 
@@ -1818,7 +1818,7 @@ evidence theorem Rat::apart_pow({x: Rat}, {n: Int}, {hn: x.PowOk(n)}, h: x.Apart
 
 theorem Rat::pow_ofNat(self x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
 
-theorem Rat::pow_negSucc(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
+theorem Rat::pow_negSucc(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) = x⁻¹.npow(k + 1) { refl }
 
 theorem Rat::pow_zero(self x: Rat): x ^ 0 ≈ 1 { refl }
 
@@ -1830,8 +1830,8 @@ theorem Rat::pow_two(self x: Rat): x ^ 2 ≈ x * x { Rat::mul_respects(x.pow_one
 theorem Rat::pow_neg_one(self x: Rat, h: x.Apart(0) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
 
 // A negative power is the inverse of the positive one.
-theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ {
-    let n = Succ(k);
+theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) ≈ (x ^ OfNat(k + 1))⁻¹ {
+    let n = k + 1;
     let unit = calc {
         x.npow(n) * x⁻¹.npow(n) ≈ (x * x⁻¹).npow(n) := Rat::same_sym(x.mul_npow(x⁻¹, n)),
         ≈ Rat::npow(1, n) := Rat::npow_respects(x.mul_inv(), n),
@@ -2323,7 +2323,7 @@ evidence theorem Rat::positive_npow({x: Rat}, {n: Nat}, hx: x.Positive() := infe
 theorem Rat::positive_pow_parts(x: Rat, n: Int, hx: x.Positive()): (hn: x.PowOk(n)) → 0 < Rat::pow_parts(x, n, hn) {
     match n {
         OfNat(m) => λ _ => Rat::npow_pos(m, hx),
-        NegSucc(k) => λ hn => Rat::npow_pos(Succ(k), Rat::positive_inv(h := hn, hx := hx)),
+        NegSucc(k) => λ hn => Rat::npow_pos(k + 1, Rat::positive_inv(h := hn, hx := hx)),
     }
 }
 
@@ -2438,7 +2438,7 @@ theorem Rat::half_pow(j: Nat): ∏ i < j, Rat::inv_succ(1) ≈ Rat::inv_succ(j.o
         Succ(i) => calc {
             (∏ k < i, Rat::inv_succ(1)) * Rat::inv_succ(1)
                 ≈ Rat::inv_succ(i.ones()) * Rat::inv_succ(1) := Rat::mul_respects(Rat::half_pow(i), Rat::inv_succ(1).same_refl()),
-                ≈ Rat::inv_succ(Succ(i).ones()) := Rat::inv_succ_mul(i.ones(), 1),
+                ≈ Rat::inv_succ((i + 1).ones()) := Rat::inv_succ_mul(i.ones(), 1),
         },
     }
 }
@@ -2477,9 +2477,9 @@ theorem Rat::root_floor_spec(self q: Rat, n: Nat): q.root_floor(n) * q.root_floo
     let small: (m < D) = (A * (P * P)).ldiv_rem_lt(D);
     let root = N.isqrt_spec();
     let lo: ((k * k) * D <= N * D) = Nat::mul_le_mono_r(D, k * k, N, root.left);
-    let hi: (Succ(N) * D <= (Succ(k) * Succ(k)) * D) = Nat::mul_le_mono_r(D, Succ(N), Succ(k) * Succ(k), root.right);
+    let hi: ((N + 1) * D <= ((k + 1) * (k + 1)) * D) = Nat::mul_le_mono_r(D, N + 1, (k + 1) * (k + 1), root.right);
     let r = q.root_floor(n);
-    let s = Rat(OfNat(Succ(k)), P);
+    let s = Rat(OfNat(k + 1), P);
     let c = Rat::inv_pow2(n);
     let rn: ((r + c).num = k.int() * P.int() + 1 * P.int()) = refl;
     let rd: ((r + c).den.int() = P.int() * P.int()) = refl;
@@ -2488,8 +2488,8 @@ theorem Rat::root_floor_spec(self q: Rat, n: Nat): q.root_floor(n) * q.root_floo
     let e: ((r + c).num * s.den.int() = s.num * (r + c).den.int()) = ring(rn, rd, sn, sd);
     let up: (r + c ≈ s) = omega(e);
     let a0: ((k * k) * D <= A * (P * P)) = omega(lo, parts);
-    let sN: (Succ(N) * D = N * D + D) = ring;
-    let b0: (A * (P * P) < (Succ(k) * Succ(k)) * D) = omega(hi, parts, small, sN);
+    let sN: ((N + 1) * D = N * D + D) = ring;
+    let b0: (A * (P * P) < ((k + 1) * (k + 1)) * D) = omega(hi, parts, small, sN);
     let a: (r * r <= q.abs()) = a0;
     let b: (q.abs() < s * s) = b0;
     And(a, Rat::lt_respects(q.abs().same_refl(), Rat::mul_respects(Rat::same_sym(up), Rat::same_sym(up)), b))

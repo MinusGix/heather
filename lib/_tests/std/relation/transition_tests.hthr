@@ -38,8 +38,8 @@ theorem even_kept(): Invariant(TickTwice, Even) {
     λ a b even step => {
         let k = even.witness;
         let was: (a = k + k) = even.proof;
-        let now: (b = Succ(Succ(a))) = step;
-        Exists(Succ(k), { omega })
+        let now: (b = a + 2) = step;
+        Exists(k + 1, { omega })
     }
 }
 
@@ -83,8 +83,8 @@ fn Drops(i: Nat, a: Pair<Nat, Nat>, b: Nat) → Type { (a.fst = i) ∧ (a.snd = 
 theorem drops_diagram(): StarDiagram(Skip, Tick, Below, Drops) {
     λ i a a2 b => match a {
         Pair(pending, _) => match pending {
-            Zero => λ m s => Exists(0, Exists(Succ(b), ⟨Inl(Plus::one(Tick, b, Succ(b), refl)),
-                j(sym(s), λ x _ => Drops(0, x, Succ(b)), ⟨refl, Nat::cong_succ(m.right)⟩)⟩)),
+            Zero => λ m s => Exists(0, Exists(b + 1, ⟨Inl(Plus::one(Tick, b, b + 1, refl)),
+                j(sym(s), λ x _ => Drops(0, x, b + 1), ⟨refl, Nat::cong_succ(m.right)⟩)⟩)),
             Succ(k) => λ m s => Exists(k, Exists(b, ⟨Inr(⟨Star::refl(Tick, b), m.left⟩),
                 j(sym(s), λ x _ => Drops(k, x, b), ⟨refl, m.right⟩)⟩)),
         },
@@ -96,8 +96,8 @@ fn Doubled(b, c: Nat) → Type { c = b + b }
 theorem doubled_diagram(): LockstepDiagram(Tick, TickTwice, Doubled) {
     λ b b2 c matched step => {
         let was: (c = b + b) = matched;
-        let now: (b2 = Succ(b)) = step;
-        Exists(Succ(Succ(c)), ⟨refl, { omega }⟩)
+        let now: (b2 = b + 1) = step;
+        Exists(c + 2, ⟨refl, { omega }⟩)
     }
 }
 
@@ -125,8 +125,8 @@ theorem source_runs_doubled(n: Nat, a, a2: Pair<Nat, Nat>, run: StarN(Skip, n, a
 // tick from a matched state is the no-op source's next counting step, or
 // the source stutters toward it.
 theorem drops_backward(i: Nat, a, a2: Pair<Nat, Nat>, b: Nat, matched: Drops(i, a, b), step: Skip(a, a2)):
-    ∃ j: Nat, (∃ b3: Nat, Star(Tick, Succ(b), b3) ∧ Drops(j, a2, b3)) ∨ (Below(j, i) ∧ Drops(j, a2, b)) {
-    StarDiagram::backward(Skip, Tick, Below, Drops, drops_diagram(), tick_det(), i, a, a2, b, Succ(b),
+    ∃ j: Nat, (∃ b3: Nat, Star(Tick, b + 1, b3) ∧ Drops(j, a2, b3)) ∨ (Below(j, i) ∧ Drops(j, a2, b)) {
+    StarDiagram::backward(Skip, Tick, Below, Drops, drops_diagram(), tick_det(), i, a, a2, b, b + 1,
         matched, refl, step)
 }
 

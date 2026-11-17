@@ -36,7 +36,7 @@ import tactic;
 // certificate's `_returns` theorem is a `Prog::Returns` with no step.
 theorem returns_is_compiled_returns<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
     lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
-    machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat, defined: Succ(f) <= functions.len(),
+    machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat, defined: f + 1 <= functions.len(),
     arguments: List<BitVec(64)>, arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     code.Returns(machine, origin, last, f, rooms(f), arguments, answer) {

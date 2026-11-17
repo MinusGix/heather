@@ -89,8 +89,8 @@ theorem high(n, m: Nat, x: BitVec(n), y: BitVec(m)):
     (@BitVec::concat(n, m, x, y)).drop_low(n, m) = y { BitVec::split_concat_high(n, m, x, y) }
 theorem zround(n, m: Nat, x: BitVec(n)):
     (@BitVec::zero_extend(n, m, x)).truncate(n, m) = x { BitVec::truncate_zero_extend(n, m, x) }
-theorem sround(n, m: Nat, x: BitVec(Succ(n))):
-    (@BitVec::sign_extend(n, m, x)).truncate(Succ(n), m) = x { BitVec::truncate_sign_extend(n, m, x) }
+theorem sround(n, m: Nat, x: BitVec(n + 1)):
+    (@BitVec::sign_extend(n, m, x)).truncate(n + 1, m) = x { BitVec::truncate_sign_extend(n, m, x) }
 theorem ext(n: Nat, x, y: BitVec(n), at: (i: Fin(n)) -> @BitVec::get(n, x, i) = @BitVec::get(n, y, i)):
     x = y { BitVec::extensionality(n, x, y, at) }
 theorem equality_is_decidable(n: Nat, x, y: BitVec(n)): x = y ∨ x ≠ y {

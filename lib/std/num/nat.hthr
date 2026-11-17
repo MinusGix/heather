@@ -24,7 +24,7 @@ theorem Nat::add_left_zero(self x: Nat): 0 + x = x {
     match x { Zero => refl, Succ(k) => Nat::cong_succ(k.add_left_zero()) }
 }
 
-theorem Nat::add_succ_left(self a, b: Nat): Succ(a) + b = Succ(a + b) {
+theorem Nat::add_succ_left(self a, b: Nat): a + 1 + b = a + b + 1 {
     match b { Zero => refl, Succ(k) => Nat::cong_succ(a.add_succ_left(k)) }
 }
 
@@ -61,11 +61,11 @@ theorem Nat::twice_add_self(self n: Nat): n.twice() = n + n {
     match n {
         Zero => refl,
         Succ(k) => calc {
-            Succ(k).twice()
-                = Succ(Succ(k.twice())) := refl,
-                = Succ(Succ(k + k)) := Nat::cong_succ(Nat::cong_succ(k.twice_add_self())),
-                = Succ(Succ(k) + k) := Nat::cong_succ(sym(k.add_succ_left(k))),
-                = Succ(k) + Succ(k) := refl,
+            (k + 1).twice()
+                = k.twice() + 2 := refl,
+                = k + k + 2 := Nat::cong_succ(Nat::cong_succ(k.twice_add_self())),
+                = k + 1 + k + 1 := Nat::cong_succ(sym(k.add_succ_left(k))),
+                = k + 1 + (k + 1) := refl,
         },
     }
 }
@@ -144,15 +144,15 @@ theorem Nat::mul_left_one(self x: Nat): 1 * x = x {
 // `add_succ_left`'s counterpart: the lemma that moves a `Succ` across from the
 // left. It is the one proof here that is not three lines, and every step of it
 // is an `add` law — which is the point of proving `add`'s kit first.
-theorem Nat::mul_succ_left(self a, b: Nat): Succ(a) * b = b + a * b {
+theorem Nat::mul_succ_left(self a, b: Nat): (a + 1) * b = b + a * b {
     match b {
         Zero => refl,
         Succ(k) => calc {
-            Succ(a) * Succ(k)
-                = Succ(Succ(a) * k + a)   := refl,
-                = Succ((k + a * k) + a)   := prelude::cong(a.mul_succ_left(k)),
-                = Succ(k + (a * k + a))   := prelude::cong(k.add_assoc(a * k, a)),
-                = Succ(k) + a * Succ(k)   := sym(k.add_succ_left(a * k + a)),
+            (a + 1) * (k + 1)
+                = (a + 1) * k + a + 1   := refl,
+                = (k + a * k) + a + 1   := prelude::cong(a.mul_succ_left(k)),
+                = k + (a * k + a) + 1   := prelude::cong(k.add_assoc(a * k, a)),
+                = k + 1 + a * (k + 1)   := sym(k.add_succ_left(a * k + a)),
         },
     }
 }
@@ -188,11 +188,11 @@ theorem Nat::mul_comm(self x, y: Nat): x * y = y * x {
     match y {
         Zero => sym(x.mul_left_zero()),
         Succ(k) => calc {
-            x * Succ(k)
+            x * (k + 1)
                 = x * k + x := refl,
                 = k * x + x := prelude::cong(x.mul_comm(k)),
                 = x + k * x := (k * x).add_comm(x),
-                = Succ(k) * x := sym(k.mul_succ_left(x)),
+                = (k + 1) * x := sym(k.mul_succ_left(x)),
         },
     }
 }
@@ -255,7 +255,7 @@ theorem Nat::leb_refl(self n: Nat): n.leb(n) = True {
 
 // truncated subtraction; both arguments descend together, `n` generalized
 // `n <= m` fails exactly when `m < n` holds, as Booleans.
-theorem Nat::leb_flip(self n: Nat): (m: Nat) → n.leb(m) = !Succ(m).leb(n) {
+theorem Nat::leb_flip(self n: Nat): (m: Nat) → n.leb(m) = !(m + 1).leb(n) {
     match n {
         Zero => λ m => refl,
         Succ(k) => λ m => match m { Zero => refl, Succ(l) => k.leb_flip(l) },
@@ -341,7 +341,7 @@ theorem Nat::twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
 {
     match n {
         Zero => λ m => Iff(mp := λ h => m.nonneg(),
-            mpr := λ h => Succ(m.twice()).nonneg()),
+            mpr := λ h => (m.twice() + 1).nonneg()),
         Succ(_, ih) => λ m => match m {
             Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
             Succ(l) => ih(l),
@@ -350,7 +350,7 @@ theorem Nat::twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
 }
 
 theorem Nat::twice_le_succ_twice_iff(n, m: Nat):
-    (n.twice() <= Succ(m.twice())) ↔ (n <= m)
+    (n.twice() <= m.twice() + 1) ↔ (n <= m)
 {
     Nat::twice_le_succ_twice_iff_curried(n, m)
 }
@@ -392,21 +392,21 @@ theorem Nat::twice_lt_succ_twice_iff_curried(n: Nat): (m: Nat) →
 }
 
 theorem Nat::twice_lt_succ_twice_iff(n, m: Nat):
-    (n.twice() < Succ(m.twice())) ↔ (n <= m)
+    (n.twice() < m.twice() + 1) ↔ (n <= m)
 {
     Nat::twice_lt_succ_twice_iff_curried(n, m)
 }
 
 theorem Nat::le_refl(self n: Nat): n <= n { match n { Zero => trivial, Succ(k) => k.le_refl() } }
 
-theorem Nat::not_succ_le_zero(self n: Nat, h: Succ(n) <= 0): False { h }
+theorem Nat::not_succ_le_zero(self n: Nat, h: n + 1 <= 0): False { h }
 
 // Both directions of the successor step, and both are the identity function —
 // `Le(Succ n, Succ m)` and `Le(n, m)` are the same type. This is the
 // definitional inversion the recursive definition is chosen for; stated as
 // lemmas anyway, because the API is the kit and downstream never unfolds `Le`.
-theorem Nat::le_succ_succ(self n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
-theorem Nat::le_of_succ_succ(self n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
+theorem Nat::le_succ_succ(self n, m: Nat, h: n <= m): n + 1 <= m + 1 { h }
+theorem Nat::le_of_succ_succ(self n, m: Nat, h: n + 1 <= m + 1): n <= m { h }
 
 theorem Nat::le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     (a <= c) ↔ (b <= d)
@@ -420,7 +420,7 @@ theorem Nat::lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     rewrite(sym(left), sym(right), iff_refl())
 }
 
-theorem Nat::le_succ_r(self n, m: Nat): n <= m → n <= Succ(m) {
+theorem Nat::le_succ_r(self n, m: Nat): n <= m → n <= m + 1 {
     match n {
         Zero => λ h => trivial,
         Succ(k) =>
@@ -599,16 +599,16 @@ instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := n.l
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
 // section is short because `Lt` is a definition rather than a second relation.
 
-theorem Nat::lt_succ_self(self n: Nat): n < Succ(n) { n.le_refl() }
+theorem Nat::lt_succ_self(self n: Nat): n < n + 1 { n.le_refl() }
 
-theorem Nat::lt_succ_iff_le(self n, m: Nat): n < Succ(m) ↔ n <= m {
-    Iff(mp := λ (h: n < Succ(m)) => h, mpr := λ (h: n <= m) => h)
+theorem Nat::lt_succ_iff_le(self n, m: Nat): n < m + 1 ↔ n <= m {
+    Iff(mp := λ (h: n < m + 1) => h, mpr := λ (h: n <= m) => h)
 }
 
 theorem Nat::lt_irrefl(self n: Nat): ¬(n < n) {
     match n {
         Zero => λ (h: 0 < 0) => h,
-        Succ(k, ih) => λ (h: Succ(k) < Succ(k)) => ih(h),
+        Succ(k, ih) => λ (h: k + 1 < k + 1) => ih(h),
     }
 }
 
@@ -635,7 +635,7 @@ theorem Nat::le_of_lt(self n: Nat): (m: Nat) → n < m → n <= m {
 // is worth seeing why that is enough: `Lt(n, m)` IS `Le(Succ n, m)`, so the
 // chain `Succ(n) <= m <= l` is already the goal.
 theorem Nat::lt_trans(self n, m, l: Nat, h1: n < m, h2: m < l): n < l {
-    Succ(n).le_trans(m, l, h1, m.le_of_lt(l, h2))
+    (n + 1).le_trans(m, l, h1, m.le_of_lt(l, h2))
 }
 
 theorem Nat::lt_of_le_of_ne(self n: Nat): (m: Nat) → n <= m → n ≠ m → n < m {
@@ -717,41 +717,41 @@ theorem Nat::lt_of_not_le(n: Nat): (m: Nat) → ¬(m <= n) → n < m {
 // consumes and avoids duplicating quotient/remainder reasoning at the public
 // projections.
 theorem Nat::divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
-                         h: DivMod::Spec(n, Succ(divisor_pred), state)):
-    DivMod::Spec(Succ(n), Succ(divisor_pred), Nat::divmod_step(divisor_pred, state))
+                         h: DivMod::Spec(n, divisor_pred + 1, state)):
+    DivMod::Spec(n + 1, divisor_pred + 1, Nat::divmod_step(divisor_pred, state))
 {
     match state as λ s =>
-        DivMod::Spec(n, Succ(divisor_pred), s) →
-        DivMod::Spec(Succ(n), Succ(divisor_pred), Nat::divmod_step(divisor_pred, s))
+        DivMod::Spec(n, divisor_pred + 1, s) →
+        DivMod::Spec(n + 1, divisor_pred + 1, Nat::divmod_step(divisor_pred, s))
     {
         MkDivMod(quotient, remainder) => λ spec => match spec {
             And(reconstruct, alternatives) => match alternatives {
                 Inl(impossible) => false_elim(impossible),
                 Inr(bounded) =>
-                    match Succ(divisor_pred).le_dec(Succ(remainder)) as λ decision =>
+                    match (divisor_pred + 1).le_dec(remainder + 1) as λ decision =>
                         DivMod::Spec(
-                            Succ(n),
-                            Succ(divisor_pred),
+                            n + 1,
+                            divisor_pred + 1,
                             match decision {
-                                Inl(_) => MkDivMod(Succ(quotient), 0),
-                                Inr(_) => MkDivMod(quotient, Succ(remainder)),
+                                Inl(_) => MkDivMod(quotient + 1, 0),
+                                Inr(_) => MkDivMod(quotient, remainder + 1),
                             },
                         )
                     {
                         Inl(carry) => And(
                             calc {
-                                Succ(quotient) * Succ(divisor_pred)
-                                    = Succ(divisor_pred) + quotient * Succ(divisor_pred) :=
-                                        quotient.mul_succ_left(Succ(divisor_pred)),
-                                    = quotient * Succ(divisor_pred) + Succ(divisor_pred) :=
-                                        Succ(divisor_pred).add_comm(quotient * Succ(divisor_pred)),
-                                    = quotient * Succ(divisor_pred) + Succ(remainder) :=
+                                (quotient + 1) * (divisor_pred + 1)
+                                    = divisor_pred + 1 + quotient * (divisor_pred + 1) :=
+                                        quotient.mul_succ_left(divisor_pred + 1),
+                                    = quotient * (divisor_pred + 1) + (divisor_pred + 1) :=
+                                        (divisor_pred + 1).add_comm(quotient * (divisor_pred + 1)),
+                                    = quotient * (divisor_pred + 1) + (remainder + 1) :=
                                         Nat::cong(
                                             λ (x: Nat) =>
-                                                quotient * Succ(divisor_pred) + Succ(x),
+                                                quotient * (divisor_pred + 1) + (x + 1),
                                             divisor_pred.le_antisym(remainder, carry, bounded)),
-                                    = Succ(quotient * Succ(divisor_pred) + remainder) := refl,
-                                    = Succ(n) := Nat::cong_succ(reconstruct),
+                                    = quotient * (divisor_pred + 1) + remainder + 1 := refl,
+                                    = n + 1 := Nat::cong_succ(reconstruct),
                             },
                             Inr(trivial),
                         ),
@@ -771,11 +771,11 @@ theorem Nat::divmod_spec(n: Nat): (divisor: Nat) →
     match n {
         Zero => λ divisor => match divisor {
             Zero => And(refl, Inl(trivial)),
-            Succ(d) => And(Succ(d).mul_left_zero(), Inr(trivial)),
+            Succ(d) => And((d + 1).mul_left_zero(), Inr(trivial)),
         },
         Succ(k, ih) => λ divisor => match divisor {
             Zero => And(Nat::cong_succ(k.add_left_zero()), Inl(trivial)),
-            Succ(d) => Nat::divmod_step_spec(k, d, k.divmod(Succ(d)), ih(Succ(d))),
+            Succ(d) => Nat::divmod_step_spec(k, d, k.divmod(d + 1), ih(d + 1)),
         },
     }
 }
@@ -803,17 +803,17 @@ theorem Nat::mod_lt(self n: Nat, divisor: Pos<Nat>):
     match divisor as λ d => 0 < d → n.mod(d) < d {
         Zero => λ impossible => false_elim(impossible),
         Succ(d) => λ _ =>
-            match n.divmod(Succ(d)) as λ state =>
-                DivMod::Spec(n, Succ(d), state) →
+            match n.divmod(d + 1) as λ state =>
+                DivMod::Spec(n, d + 1, state) →
                 match state as λ _ => Type {
-                    MkDivMod(_, remainder) => remainder < Succ(d),
+                    MkDivMod(_, remainder) => remainder < d + 1,
                 }
             {
                 MkDivMod(_, _) => λ spec => match spec.right {
                     Inl(impossible) => false_elim(impossible),
                     Inr(bounded) => bounded,
                 },
-            }(n.divmod_spec(Succ(d))),
+            }(n.divmod_spec(d + 1)),
     }(divisor_pos)
 }
 
@@ -842,7 +842,7 @@ fn Nat::Divides(self divisor, n: Nat) → Type { n.mod(divisor) = 0 }
 // predecessor of a natural, saturating at zero
 fn Nat::pred(self n: Nat) → Nat { match n { Zero => 0, Succ(k) => k } }
 
-theorem Nat::succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { Nat::cong(Nat::pred, h) }
+theorem Nat::succ_inj(n, m: Nat, h: n + 1 = m + 1): n = m { Nat::cong(Nat::pred, h) }
 
 theorem Nat::pred_le(self n: Nat): n.pred() <= n {
     match n { Zero => trivial, Succ(k) => k.le_succ_r(k, k.le_refl()) }
@@ -862,12 +862,12 @@ theorem Nat::pred_mono(self e: Nat): (d: Nat) → e <= d → e.pred() <= d.pred(
 // are told apart by a type rather than by a generated no-confusion lemma.
 fn Nat::IsSucc(self n: Nat) → Type { match n { Zero => False, Succ(_) => True } }
 
-theorem Nat::succ_ne_zero(self n: Nat): Succ(n) ≠ 0 {
-    λ (h: Succ(n) = 0) => j(h, λ y q => y.IsSucc(), trivial)
+theorem Nat::succ_ne_zero(self n: Nat): n + 1 ≠ 0 {
+    λ (h: n + 1 = 0) => j(h, λ y q => y.IsSucc(), trivial)
 }
 
-theorem Nat::zero_ne_succ(self n: Nat): 0 ≠ Succ(n) {
-    λ (h: 0 = Succ(n)) => n.succ_ne_zero(sym(h))
+theorem Nat::zero_ne_succ(self n: Nat): 0 ≠ n + 1 {
+    λ (h: 0 = n + 1) => n.succ_ne_zero(sym(h))
 }
 
 // The equality decider. A `fn` and not a `theorem`: it has to reduce.
@@ -909,7 +909,7 @@ theorem Nat::equation_self(self n: Nat): n.equation(n) = Inl(refl) {
     match n {
         Zero => refl,
         Succ(k) => j(sym(k.equation_self()), λ d _ =>
-            (match d as λ _ => (Succ(k) = Succ(k)) ∨ True { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => Succ(k) = Succ(x), refl)) }) = Inl(refl), refl),
+            (match d as λ _ => (k + 1 = k + 1) ∨ True { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) }) = Inl(refl), refl),
     }
 }
 
@@ -985,7 +985,7 @@ theorem Nat::sub_le(self m: Nat): (n: Nat) → m - n <= m {
         Zero => λ n => trivial,
         Succ(m2, ih) => λ n =>
             match n {
-                Zero => Succ(m2).le_refl(),
+                Zero => (m2 + 1).le_refl(),
                 Succ(n2) => (m2 - n2).le_succ_r(m2, ih(n2)),
             },
     }
@@ -1008,9 +1008,9 @@ theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m - n
 
 // Reversal of the indices below `n`, `k ↦ n - 1 - k`: it stays below `n`
 // and is its own inverse (big_operator's `range_reverse`).
-theorem Nat::sub_succ_lt(self n, k: Nat, hk: k < n): n - Succ(k) < n { n.sub_lt_of_pos(Succ(k), trivial, hk) }
+theorem Nat::sub_succ_lt(self n, k: Nat, hk: k < n): n - (k + 1) < n { n.sub_lt_of_pos(k + 1, trivial, hk) }
 
-theorem Nat::sub_succ_sub_succ(self n, k: Nat): k < n → n - Succ(n - Succ(k)) = k {
+theorem Nat::sub_succ_sub_succ(self n, k: Nat): k < n → n - (n - (k + 1) + 1) = k {
     match n {
         Zero => λ bad => false_elim(bad),
         Succ(m) => λ hk => j(k.le_add(m, hk), λ w _ => w - (m - k) = k, k.add_sub_cancel(m - k)),
@@ -1067,12 +1067,12 @@ theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <=
 // Multiplying by a positive keeps a strict inequality: k·(n + 1) is k·n + k,
 // already past k·n, and at most k·m.
 theorem Nat::mul_lt_mono_l(self k, n, m: Nat, hk: 0 < k, h: n < m): k * n < k * m {
-    Succ(k * n).le_trans(k * n + k, k * m, (k * n).add_le_mono_l(1, k, hk), k.mul_le_mono_l(Succ(n), m, h))
+    (k * n + 1).le_trans(k * n + k, k * m, (k * n).add_le_mono_l(1, k, hk), k.mul_le_mono_l(n + 1, m, h))
 }
 
 // A common left factor cancels from a strict comparison.
 theorem Nat::lt_of_mul_lt_mul_l(self k, n, m: Nat, h: k * n < k * m): n < m {
-    Nat::lt_of_not_le(n, m, λ le => (k * n).lt_irrefl(Succ(k * n).le_trans(k * m, k * n, h, k.mul_le_mono_l(m, n, le))))
+    Nat::lt_of_not_le(n, m, λ le => (k * n).lt_irrefl((k * n + 1).le_trans(k * m, k * n, h, k.mul_le_mono_l(m, n, le))))
 }
 
 // A nonzero left factor cancels from an equation
@@ -1105,7 +1105,7 @@ theorem Nat::mul_cancel_r(self n, m, k: Nat, hk: ¬(k = 0), h: n * k = m * k): n
 // A common right factor cancels from a strict comparison.
 theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
     match b.le_dec(a) {
-        Inl(le) => false_elim((a * c).lt_irrefl(Succ(a * c).le_trans(b * c, a * c, h, Nat::mul_le_mono_r(c, b, a, le)))),
+        Inl(le) => false_elim((a * c).lt_irrefl((a * c + 1).le_trans(b * c, a * c, h, Nat::mul_le_mono_r(c, b, a, le)))),
         Inr(no) => Nat::lt_of_not_le(a, b, no),
     }
 }
@@ -1115,15 +1115,15 @@ theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
 // and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
 // group closes every recursive call's scaled obligation with one of these.
 theorem Nat::scaled_lt(self a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
-    Succ(a * n + r).le_trans(Succ(a) * n, b * n + s,
-        rewrite(a.mul_succ_left(n), n.add_comm(a * n), (a * n).add_le_mono_l(Succ(r), n, q)),
-        (Succ(a) * n).le_trans(b * n, b * n + s,
-            n.mul_le_mono_r(Succ(a), b, h), (b * n).le_add_l(s)))
+    (a * n + r + 1).le_trans((a + 1) * n, b * n + s,
+        rewrite(a.mul_succ_left(n), n.add_comm(a * n), (a * n).add_le_mono_l(r + 1, n, q)),
+        ((a + 1) * n).le_trans(b * n, b * n + s,
+            n.mul_le_mono_r(a + 1, b, h), (b * n).le_add_l(s)))
 }
 
 theorem Nat::scaled_le(self a, b, r, s, n: Nat, h: a <= b, q: r < s): a * n + r < b * n + s {
-    Succ(a * n + r).le_trans(a * n + s, b * n + s,
-        (a * n).add_le_mono_l(Succ(r), s, q),
+    (a * n + r + 1).le_trans(a * n + s, b * n + s,
+        (a * n).add_le_mono_l(r + 1, s, q),
         s.add_le_mono_r(a * n, b * n, n.mul_le_mono_r(a, b, h)))
 }
 
@@ -1156,7 +1156,7 @@ theorem Nat::div_mod_unique(self n, divisor, q, r: Nat, parts: q * divisor + r =
     (n.div(divisor) = q) ∧ (n.mod(divisor) = r)
 {
     let whole: (n.div(divisor) * divisor + n.mod(divisor) = n) = n.div_mul_add_mod(divisor);
-    let below: (n.mod(divisor) < divisor) = n.mod_lt(divisor, divisor_pos := (1).le_trans(Succ(r), divisor, trivial, bound));
+    let below: (n.mod(divisor) < divisor) = n.mod_lt(divisor, divisor_pos := (1).le_trans(r + 1, divisor, trivial, bound));
     let same: (n.div(divisor) = q) = match n.div(divisor).lt_trichotomy(q) {
         Inl(smaller) => false_elim(n.lt_irrefl(Nat::lt_congr_iff(
             n.div(divisor) * divisor + n.mod(divisor), n, q * divisor + r, n, whole, parts).mp(
@@ -1190,7 +1190,7 @@ theorem Nat::mod_one(self n: Nat): n.mod(1) = 0 { n.div_mod_unique(1, n, 0, n.ad
 // whole `d`s in `n`. No positivity premise: at `d = 0` the bound is false.
 theorem Nat::div_lt_of_lt_mul(self n, d, k: Nat, h: n < d * k): n.div(d) < k {
     match k.le_dec(n.div(d)) {
-        Inl(enough) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * k, n, h,
+        Inl(enough) => false_elim(n.lt_irrefl((n + 1).le_trans(d * k, n, h,
             (d * k).le_trans(n.div(d) * d, n,
                 rewrite(n.div(d).mul_comm(d), d.mul_le_mono_l(k, n.div(d), enough)),
                 rewrite(sym(n.div_mul_add_mod(d)), (n.div(d) * d).le_add_l(n.mod(d)), at := 2))))),
@@ -1202,11 +1202,11 @@ theorem Nat::div_lt_of_lt_mul(self n, d, k: Nat, h: n < d * k): n.div(d) < k {
 theorem Nat::le_div_of_mul_le(self n: Nat, d: Pos<Nat>, k: Nat, h: d * k <= n): k <= n.div(d) {
     match k.le_dec(n.div(d)) {
         Inl(fits) => fits,
-        Inr(short) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * Succ(n.div(d)), n,
-            j(n.div_mul_add_mod(d), λ y _ => Succ(y) <= d * n.div(d) + d,
+        Inr(short) => false_elim(n.lt_irrefl((n + 1).le_trans(d * (n.div(d) + 1), n,
+            j(n.div_mul_add_mod(d), λ y _ => y + 1 <= d * n.div(d) + d,
                 rewrite(sym(n.div(d).mul_comm(d)),
-                    (n.div(d) * d).add_le_mono_l(Succ(n.mod(d)), d, n.mod_lt(d)))),
-            (d * Succ(n.div(d))).le_trans(d * k, n, d.mul_le_mono_l(Succ(n.div(d)), k, n.div(d).lt_of_not_le(k, short)), h)))),
+                    (n.div(d) * d).add_le_mono_l(n.mod(d) + 1, d, n.mod_lt(d)))),
+            (d * (n.div(d) + 1)).le_trans(d * k, n, d.mul_le_mono_l(n.div(d) + 1, k, n.div(d).lt_of_not_le(k, short)), h)))),
     }
 }
 
@@ -1421,7 +1421,7 @@ theorem Nat::le_max_l(self a: Nat): (b: Nat) → a <= a.max(b) {
         Zero => λ b => trivial,
         Succ(k, ih) => λ b =>
             match b {
-                Zero => Succ(k).le_refl(),
+                Zero => (k + 1).le_refl(),
                 Succ(l) => ih(l),
             },
     }
@@ -1569,18 +1569,18 @@ theorem Nat::sub_min(c, f: Nat): c - f.min(c) = c - f {
 // Order through a sum and a difference, by steps rather than by `omega`:
 // a proof over large closed terms cites these at the cost of a conversion
 // of its own facts, where a decision procedure's certificate unfolds them.
-theorem Nat::lt_of_lt_of_le(self a, b, c: Nat, h1: a < b, h2: b <= c): a < c { Nat::le_trans(Succ(a), b, c, h1, h2) }
+theorem Nat::lt_of_lt_of_le(self a, b, c: Nat, h1: a < b, h2: b <= c): a < c { Nat::le_trans(a + 1, b, c, h1, h2) }
 
 theorem Nat::lt_of_add_lt(self a, b, c: Nat, h: a + b < c): a < c {
-    Nat::le_trans(Succ(a), Succ(a + b), c, Nat::le_succ_succ(a, a + b, a.le_add_l(b)), h)
+    Nat::le_trans(a + 1, a + b + 1, c, Nat::le_succ_succ(a, a + b, a.le_add_l(b)), h)
 }
 
 theorem Nat::le_of_add_le(self a, b, c: Nat, h: a + b <= c): a <= c { Nat::le_trans(a, a + b, c, a.le_add_l(b), h) }
 
 theorem Nat::add_lt_of_lt_sub(self a, b, c: Nat, h: b < c - a): a + b < c {
     match a.le_total(c) {
-        Inl(fits) => j(a.le_add(c, fits), λ x _ => Succ(a + b) <= x, a.add_le_mono_l(Succ(b), c - a, h)),
-        Inr(past) => false_elim(b.not_succ_le_zero(j(c.sub_zero_of_le(a, past), λ x _ => Succ(b) <= x, h))),
+        Inl(fits) => j(a.le_add(c, fits), λ x _ => a + b + 1 <= x, a.add_le_mono_l(b + 1, c - a, h)),
+        Inr(past) => false_elim(b.not_succ_le_zero(j(c.sub_zero_of_le(a, past), λ x _ => b + 1 <= x, h))),
     }
 }
 
@@ -1628,15 +1628,15 @@ theorem Nat::dvd_mul_right(self a: Pos<Nat>, {n: Nat}, k: Nat, h: a.Divides(n)):
 
 // Two multiples less than a divisor apart are in order.
 theorem Nat::le_of_dvd_of_lt_add(self n, m: Nat, a: Pos<Nat>, hn: a.Divides(n), hm: a.Divides(m), near: n < m + a): n <= m {
-    let scaled: n.div(a) * a < Succ(m.div(a)) * a = (Nat::lt_congr_iff(n, n.div(a) * a, m + a, Succ(m.div(a)) * a,
+    let scaled: n.div(a) * a < (m.div(a) + 1) * a = (Nat::lt_congr_iff(n, n.div(a) * a, m + a, (m.div(a) + 1) * a,
         sym(n.div_mul_of_dvd(a, hn)),
         calc {
             m + a
                 = m.div(a) * a + a := Nat::cong(λ (x: Nat) => x + a, sym(m.div_mul_of_dvd(a, hm))),
                 = a + m.div(a) * a := (m.div(a) * a).add_comm(a),
-                = Succ(m.div(a)) * a := sym(m.div(a).mul_succ_left(a)),
+                = (m.div(a) + 1) * a := sym(m.div(a).mul_succ_left(a)),
         })).mp(near);
-    let quotients: n.div(a) <= m.div(a) = n.div(a).lt_of_mul_lt_mul_r(Succ(m.div(a)), a, scaled);
+    let quotients: n.div(a) <= m.div(a) = n.div(a).lt_of_mul_lt_mul_r(m.div(a) + 1, a, scaled);
     (Nat::le_congr_iff(n.div(a) * a, n, m.div(a) * a, m, n.div_mul_of_dvd(a, hn), m.div_mul_of_dvd(a, hm)))
         .mp(a.mul_le_mono_r(n.div(a), m.div(a), quotients))
 }
@@ -1665,7 +1665,7 @@ theorem Nat::padding_of_dvd(self n: Nat, a: Pos<Nat>, h: a.Divides(n)): n.paddin
 theorem Nat::le_round_up(self n, a: Nat): n <= n.round_up(a) { n.le_add_l(n.padding(a)) }
 
 theorem Nat::round_up_lt(self n: Nat, a: Pos<Nat>): n.round_up(a) < n + a {
-    n.add_le_mono_l(Succ(n.padding(a)), a, n.padding_lt(a))
+    n.add_le_mono_l(n.padding(a) + 1, a, n.padding_lt(a))
 }
 
 theorem Nat::round_up_dvd(self n: Nat, a: Pos<Nat>): a.Divides(n.round_up(a)) {
@@ -1724,10 +1724,10 @@ theorem Nat::pow_mul(self a: Nat, b, c: Nat): a.pow(b * c) = a.pow(b).pow(c) {
     match c {
         Zero => refl,
         Succ(k) => calc {
-            a.pow(b * Succ(k))
+            a.pow(b * (k + 1))
                 = a.pow(b * k) * a.pow(b) := a.pow_add(b * k, b),
                 = a.pow(b).pow(k) * a.pow(b) := prelude::cong(a.pow_mul(b, k)),
-                = a.pow(b).pow(Succ(k))           := refl,
+                = a.pow(b).pow(k + 1)           := refl,
         },
     }
 }
@@ -1793,7 +1793,7 @@ theorem Nat::fact_zero(): (0).fact() = 1 { refl }
 theorem Nat::fact_pos(n: Nat): 0 < n.fact() {
     match n {
         Zero => trivial,
-        Succ(k) => (1).mul_le_mono(Succ(k), 1, k.fact(), trivial, k.fact_pos()),
+        Succ(k) => (1).mul_le_mono(k + 1, 1, k.fact(), trivial, k.fact_pos()),
     }
 }
 
@@ -1811,7 +1811,7 @@ fn Nat::choose(self n, k: Nat) → Nat {
 
 theorem Nat::choose_zero_r(self n: Nat): n.choose(0) = 1 { match n { Zero => refl, Succ(_) => refl } }
 
-theorem Nat::choose_pascal(self m, j: Nat): Succ(m).choose(Succ(j)) = m.choose(j) + m.choose(Succ(j)) { refl }
+theorem Nat::choose_pascal(self m, j: Nat): (m + 1).choose(j + 1) = m.choose(j) + m.choose(j + 1) { refl }
 
 // Past the top the coefficient vanishes.
 theorem Nat::choose_eq_zero(self n, k: Nat): n < k → n.choose(k) = 0 {
@@ -1819,7 +1819,7 @@ theorem Nat::choose_eq_zero(self n, k: Nat): n < k → n.choose(k) = 0 {
         Zero => match k { Zero => λ h => false_elim(h), Succ(_) => λ h => refl },
         Succ(m) => match k {
             Zero => λ h => false_elim(h),
-            Succ(j) => λ h => j(sym(m.choose_eq_zero(Succ(j), Succ(m).le_succ_r(j, h))),
+            Succ(j) => λ h => j(sym(m.choose_eq_zero(j + 1, (m + 1).le_succ_r(j, h))),
                 λ w _ => m.choose(j) + w = 0, m.choose_eq_zero(j, h)),
         },
     }
@@ -1828,7 +1828,7 @@ theorem Nat::choose_eq_zero(self n, k: Nat): n < k → n.choose(k) = 0 {
 theorem Nat::choose_self(self n: Nat): n.choose(n) = 1 {
     match n {
         Zero => refl,
-        Succ(m) => j(sym(m.choose_eq_zero(Succ(m), Nat::le_refl(Succ(m)))), λ w _ => m.choose(m) + w = 1, m.choose_self()),
+        Succ(m) => j(sym(m.choose_eq_zero(m + 1, Nat::le_refl(m + 1))), λ w _ => m.choose(m) + w = 1, m.choose_self()),
     }
 }
 
@@ -1888,8 +1888,8 @@ theorem Nat::mod_pow_mod(self x: Nat, b: Pos<Nat>, n, k: Nat): x.mod(b.pow(k + n
     x.mod_mod_of_dvd(b.pow(k + n), b.pow(n), b.pow_dvd_pow_add(n, k))
 }
 
-theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
-    rewrite(sym(n.fact().mul_left_one()), n.fact().mul_le_mono_r(1, Succ(n), trivial))
+theorem Nat::fact_le_succ(self n: Nat): n.fact() <= (n + 1).fact() {
+    rewrite(sym(n.fact().mul_left_one()), n.fact().mul_le_mono_r(1, n + 1, trivial))
 }
 
 // ---------------------------------------------------------------------------
@@ -1930,7 +1930,7 @@ theorem Nat::half_double(self n: Nat): (n + n).half() = n {
         Zero => refl,
         Succ(l) =>
             apply trans;
-            give Nat::cong(λ (w: Nat) => Succ(w).half(), l.add_succ_left(l));
+            give Nat::cong(λ (w: Nat) => (w + 1).half(), l.add_succ_left(l));
             Nat::cong_succ(l.half_double()),
     }
 }
@@ -1943,19 +1943,19 @@ theorem Nat::half_add_le(self n: Nat): n.half() + n.half() <= n {
             Zero => trivial,
             Succ(l) => {
                 let ih: (l.half() + l.half() <= l) = l.half_add_le();
-                j(sym(l.half().add_succ_left(l.half())), λ y _ => y <= Succ(l), ih)
+                j(sym(l.half().add_succ_left(l.half())), λ y _ => y <= l + 1, ih)
             },
         },
     }
 }
 
-theorem Nat::le_succ_half_add(self n: Nat): n <= Succ(n.half() + n.half()) {
+theorem Nat::le_succ_half_add(self n: Nat): n <= n.half() + n.half() + 1 {
     match n {
         Zero => trivial,
         Succ(k) => match k {
             Zero => trivial,
             Succ(l) => {
-                let ih: (l <= Succ(l.half() + l.half())) = l.le_succ_half_add();
+                let ih: (l <= l.half() + l.half() + 1) = l.le_succ_half_add();
                 j(sym(l.half().add_succ_left(l.half())), λ y _ => l <= y, ih)
             },
         },
@@ -1987,26 +1987,26 @@ theorem Nat::shr_mul_le(self k: Nat): (n: Nat) → n.shr(k) * Nat::pow(2, k) <= 
     }
 }
 
-theorem Nat::lt_succ_shr_mul(self k: Nat): (n: Nat) → n < Succ(n.shr(k)) * Nat::pow(2, k) {
+theorem Nat::lt_succ_shr_mul(self k: Nat): (n: Nat) → n < (n.shr(k) + 1) * Nat::pow(2, k) {
     match k {
         Zero => λ n => j(sym(n.add_left_zero()), λ y _ => n <= y, n.le_refl()),
         Succ(i) => λ n => {
             let s = n.half().shr(i);
             let p = Nat::pow(2, i);
-            let ih: (Succ(n.half()) <= Succ(s) * p) = Nat::lt_succ_shr_mul(i, n.half());
-            let doubled: (Succ(n.half()) * 2 <= (Succ(s) * p) * 2) = Nat::mul_le_mono_r(2, Succ(n.half()), Succ(s) * p, ih);
-            let two: (Succ(n.half()) * 2 = Succ(Succ(n.half() + n.half()))) =
-                trans(Succ(n.half()).mul_two(), Nat::cong_succ(n.half().add_succ_left(n.half())));
-            let low: (Succ(n) <= Succ(n.half()) * 2) = j(sym(two), λ y _ => Succ(n) <= y, n.le_succ_half_add());
-            let assoc: ((Succ(s) * p) * 2 = Succ(s) * (p * 2)) = Succ(s).mul_assoc(p, 2);
-            j(assoc, λ y _ => Succ(n) <= y, Succ(n).le_trans(Succ(n.half()) * 2, (Succ(s) * p) * 2, low, doubled))
+            let ih: (n.half() + 1 <= (s + 1) * p) = Nat::lt_succ_shr_mul(i, n.half());
+            let doubled: ((n.half() + 1) * 2 <= ((s + 1) * p) * 2) = Nat::mul_le_mono_r(2, n.half() + 1, (s + 1) * p, ih);
+            let two: ((n.half() + 1) * 2 = n.half() + n.half() + 2) =
+                trans((n.half() + 1).mul_two(), Nat::cong_succ(n.half().add_succ_left(n.half())));
+            let low: (n + 1 <= (n.half() + 1) * 2) = j(sym(two), λ y _ => n + 1 <= y, n.le_succ_half_add());
+            let assoc: (((s + 1) * p) * 2 = (s + 1) * (p * 2)) = (s + 1).mul_assoc(p, 2);
+            j(assoc, λ y _ => n + 1 <= y, (n + 1).le_trans((n.half() + 1) * 2, ((s + 1) * p) * 2, low, doubled))
         },
     }
 }
 
 // One more halving is the last one: a shift can be carried along a search
 // that increments `k`, at one halving a step.
-theorem Nat::shr_succ_half(self k: Nat): (n: Nat) → n.shr(Succ(k)) = n.shr(k).half() {
+theorem Nat::shr_succ_half(self k: Nat): (n: Nat) → n.shr(k + 1) = n.shr(k).half() {
     match k {
         Zero => λ n => refl,
         Succ(i) => λ n => Nat::shr_succ_half(i, n.half()),
@@ -2023,7 +2023,7 @@ fn Nat::width(self n: Nat) → Nat { Nat::width_fuel(n, n) }
 theorem Nat::even_double(self n: Nat): Nat::Even(n + n) {
     match n {
         Zero => trivial,
-        Succ(l) => j(sym(l.add_succ_left(l)), λ y q => Nat::Even(Succ(y)), l.even_double()),
+        Succ(l) => j(sym(l.add_succ_left(l)), λ y q => Nat::Even(y + 1), l.even_double()),
     }
 }
 
@@ -2034,7 +2034,7 @@ theorem Nat::even_or_odd(self n: Nat): Nat::Even(n) ∨ Nat::Odd(n) {
     }
 }
 
-theorem Nat::even_succ_of_odd(self n: Nat): Nat::Odd(n) → Nat::Even(Succ(n)) {
+theorem Nat::even_succ_of_odd(self n: Nat): Nat::Odd(n) → Nat::Even(n + 1) {
     match n {
         Zero => λ h => false_elim(h),
         Succ(k) => match k {
@@ -2044,11 +2044,11 @@ theorem Nat::even_succ_of_odd(self n: Nat): Nat::Odd(n) → Nat::Even(Succ(n)) {
     }
 }
 
-theorem Nat::even_succ_of_not_even(self n: Nat, h: ¬Nat::Even(n)): Nat::Even(Succ(n)) {
+theorem Nat::even_succ_of_not_even(self n: Nat, h: ¬Nat::Even(n)): Nat::Even(n + 1) {
     match n.even_or_odd() { Inl(e) => false_elim(h(e)), Inr(o) => n.even_succ_of_odd(o) }
 }
 
-theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(Succ(n)) {
+theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(n + 1) {
     match n {
         Zero => λ _ (b: Nat::Even(1)) => b,
         Succ(k) => match k {
@@ -2058,7 +2058,7 @@ theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(Su
     }
 }
 
-theorem Nat::even_pow_two(self k: Nat): Nat::Even(Nat::pow(2, Succ(k))) {
+theorem Nat::even_pow_two(self k: Nat): Nat::Even(Nat::pow(2, k + 1)) {
     j(sym(Nat::pow(2, k).mul_two()), λ y _ => Nat::Even(y), Nat::pow(2, k).even_double())
 }
 
@@ -2081,7 +2081,7 @@ theorem Nat::half_add_half(self n: Nat): Nat::Even(n) → n.half() + n.half() = 
         Zero => λ (h: Nat::Even(0)) => refl,
         Succ(k) => match k {
             Zero => λ (h: Nat::Even(1)) => false_elim(h),
-            Succ(l) => (h: Nat::Even(Succ(Succ(l)))) ⊢
+            Succ(l) => (h: Nat::Even(l + 2)) ⊢
                 apply trans;
                 give Nat::cong_succ(l.half().add_succ_left(l.half()));
                 Nat::cong_succ(Nat::cong_succ(l.half_add_half(h))),
@@ -2103,7 +2103,7 @@ theorem half_lt_of_lt_double(self x: Nat): (p: Nat) → x < p + p → x.half() <
             Succ(l) => λ p => match p {
                 Zero => λ bad => false_elim(bad),
                 Succ(r) => λ h => l.half_lt_of_lt_double(r,
-                    j(r.add_succ_left(r), λ y _ => Succ(l) < y, h)),
+                    j(r.add_succ_left(r), λ y _ => l + 1 < y, h)),
             },
         },
     }
@@ -2170,7 +2170,7 @@ fn Nat::ldiv_fuel(self n, d, fuel: Nat) → DivMod {
 
 fn Nat::ldiv(self n, d: Nat) → DivMod { n.ldiv_fuel(d, n) }
 
-theorem Nat::half_succ_le(self k: Nat): Succ(k).half() <= k { match k { Zero => trivial, Succ(l) => l.half_le() } }
+theorem Nat::half_succ_le(self k: Nat): (k + 1).half() <= k { match k { Zero => trivial, Succ(l) => l.half_le() } }
 
 // `2^j - 1`, the number with `j` one bits. Every `n` is at most the ones of
 // its width, `n < 2^width(n)`, read without a subtraction: a halving loses at
@@ -2183,11 +2183,11 @@ theorem Nat::le_ones_width_fuel(self fuel: Nat): (n: Nat) → n <= fuel → n <=
         Succ(f, ih) => λ n => match n {
             Zero => λ _ => trivial,
             Succ(k) => λ le => {
-                let h = Succ(k).half();
+                let h = (k + 1).half();
                 let w = Nat::width_fuel(h, f);
                 let below: (h <= w.ones()) = ih(h, h.le_trans(k, f, k.half_succ_le(), le));
                 let doubled: (h * 2 <= w.ones() * 2) = Nat::mul_le_mono_r(2, h, w.ones(), below);
-                let halves: (k <= h + h) = Succ(k).le_succ_half_add();
+                let halves: (k <= h + h) = (k + 1).le_succ_half_add();
                 k.le_trans(h * 2, w.ones() * 2, j(sym(h.mul_two()), λ y _ => k <= y, halves), doubled)
             },
         },
@@ -2197,9 +2197,9 @@ theorem Nat::le_ones_width_fuel(self fuel: Nat): (n: Nat) → n <= fuel → n <=
 theorem Nat::le_ones_width(self n: Nat): n <= n.width().ones() { n.le_ones_width_fuel(n, n.le_refl()) }
 
 theorem Nat::ldiv_bit_parts(self n: Nat): (n.half() + n.half()) + Nat::ldiv_bit(n, n.half()) = n ∧ Nat::ldiv_bit(n, n.half()) <= 1 {
-    match Succ(n.half() + n.half()).le_dec(n) {
-        Inl(le) => And(Succ(n.half() + n.half()).le_antisym(n, le, n.le_succ_half_add()), trivial),
-        Inr(nle) => And((n.half() + n.half()).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(n.half() + n.half()), nle)), trivial),
+    match (n.half() + n.half() + 1).le_dec(n) {
+        Inl(le) => And((n.half() + n.half() + 1).le_antisym(n, le, n.le_succ_half_add()), trivial),
+        Inr(nle) => And((n.half() + n.half()).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, n.half() + n.half() + 1, nle)), trivial),
     }
 }
 
@@ -2224,7 +2224,7 @@ theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q
         Inl(le) => {
             let back: ((r - d) + d = r) = d.sub_add_cancel(r, le);
             let sum = calc {
-                Succ(q * 2) * d + (r - d)
+                (q * 2 + 1) * d + (r - d)
                     = (d + (q * 2) * d) + (r - d) := Nat::cong(λ (x: Nat) => x + (r - d), (q * 2).mul_succ_left(d)),
                     = ((q * 2) * d + d) + (r - d) := Nat::cong(λ (x: Nat) => x + (r - d), d.add_comm((q * 2) * d)),
                     = (q * 2) * d + (d + (r - d)) := ((q * 2) * d).add_assoc(d, r - d),
@@ -2236,8 +2236,8 @@ theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q
             let lower: (d <= 0 ∨ r - d < d) = match bound {
                 Inl(zero) => Inl(zero),
                 Inr(lt) => {
-                    let shifted: (Succ((r - d) + d) <= d + d) = j(sym(back), λ y _ => Succ(y) <= d + d, lt);
-                    Inr(d.le_of_add_le_add_r(Succ(r - d), d, j(sym((r - d).add_succ_left(d)), λ y _ => y <= d + d, shifted)))
+                    let shifted: ((r - d) + d + 1 <= d + d) = j(sym(back), λ y _ => y + 1 <= d + d, lt);
+                    Inr(d.le_of_add_le_add_r(r - d + 1, d, j(sym((r - d).add_succ_left(d)), λ y _ => y <= d + d, shifted)))
                 },
             };
             And(sum, lower)
@@ -2259,7 +2259,7 @@ theorem Nat::of_bit_twice_lt(b: Bool, m, p: Nat, h: m < p): Nat::of_bit(b) + m.t
     match b {
         False => rewrite(m.twice().add_left_zero(), Nat::twice_lt_twice_iff(m, p).mpr(h)),
         True => rewrite(trans(Nat::add_succ_left(0, m.twice()), Nat::cong_succ(m.twice().add_left_zero())),
-            Nat::twice_le_twice_iff(Succ(m), p).mpr(h)),
+            Nat::twice_le_twice_iff(m + 1, p).mpr(h)),
     }
 }
 
@@ -2267,7 +2267,7 @@ theorem Nat::of_bit_twice_lt(b: Bool, m, p: Nat, h: m < p): Nat::of_bit(b) + m.t
 // only when the number is under the bound.
 theorem Nat::lt_of_bit_twice_lt(b: Bool, m, p: Nat, h: Nat::of_bit(b) + m.twice() < p.twice()): m < p {
     let low: (m.twice() <= Nat::of_bit(b) + m.twice()) = Nat::le_add_r(Nat::of_bit(b), m.twice());
-    Nat::twice_lt_twice_iff(m, p).mp(Nat::le_trans(Succ(m.twice()), Succ(Nat::of_bit(b) + m.twice()), p.twice(), low, h))
+    Nat::twice_lt_twice_iff(m, p).mp(Nat::le_trans(m.twice() + 1, Nat::of_bit(b) + m.twice() + 1, p.twice(), low, h))
 }
 
 // A number is at most a bit pushed in below it.
@@ -2308,7 +2308,7 @@ theorem Nat::shr_eq_div(self k: Nat): (n: Nat) → n.shr(k) = n.div(Nat::pow(2, 
     match k {
         Zero => λ n => sym(n.div_one()),
         Succ(i, ih) => λ n => calc {
-            n.shr(Succ(i))
+            n.shr(i + 1)
                 = n.shr(i).half() := Nat::shr_succ_half(i, n),
                 = n.div(Nat::pow(2, i)).half() := prelude::cong(ih(n)),
                 = n.div(Nat::pow(2, i)).div(2) := n.div(Nat::pow(2, i)).half_eq_div_two(),
@@ -2349,8 +2349,8 @@ theorem DivMod::quot_le(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)),
 // A positive quotient as large as the dividend leaves the divisor at most one.
 theorem DivMod::divisor_le_one(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)), small: n <= q, positive: 0 < q): d <= 1 {
     let below: (q * d <= q) = Nat::le_trans(q * d, n, q, rewrite(sym(sp.left), Nat::le_add_l(q * d, r)), small);
-    let twice: (Succ(q) <= q * 2) = j(sym(q.mul_two()), λ y _ => Succ(q) <= y, q.add_le_mono_l(1, q, positive));
-    Nat::lt_of_mul_lt_mul_l(q, d, 2, Nat::le_trans(Succ(q * d), Succ(q), q * 2, below, twice))
+    let twice: (q + 1 <= q * 2) = j(sym(q.mul_two()), λ y _ => q + 1 <= y, q.add_le_mono_l(1, q, positive));
+    Nat::lt_of_mul_lt_mul_l(q, d, 2, Nat::le_trans(q * d + 1, q + 1, q * 2, below, twice))
 }
 
 // The digit's arithmetic: doubling `q·d + r = a` and pushing a bit in.
@@ -2391,9 +2391,9 @@ theorem DivMod::digit_take(a, d, q, r: Nat, b: Bool, sp: DivMod::Spec(a, d, MkDi
         Inl(zero) => Inl(zero),
         Inr(lt) => Inr(rewrite(sym(d.twice_add_self()), Nat::of_bit_twice_lt(b, r, d, lt))),
     };
-    let picked: (DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(Succ(q * 2), t - d))) =
+    let picked: (DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(q * 2 + 1, t - d))) =
         Nat::ldiv_pick_spec(Nat::of_bit(b) + a.twice(), d, q, t, Inl(fits), DivMod::digit_parts(a, d, q, r, b, sp.left), bound);
-    let digit: (Succ(q * 2) = 1 + q.twice()) =
+    let digit: (q * 2 + 1 = 1 + q.twice()) =
         sym(trans(Nat::add_succ_left(0, q.twice()), Nat::cong_succ(trans(q.twice().add_left_zero(), trans(q.twice_add_self(), sym(q.mul_two()))))));
     j(digit, λ y _ => DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(y, t - d)), picked)
 }
@@ -2413,10 +2413,10 @@ theorem Nat::ldiv_step_spec(n, d: Nat, s: DivMod, h: DivMod::Spec(n.half(), d, s
             let bound: (d <= 0 ∨ (r0 + r0) + b < d + d) = match sp.right {
                 Inl(zero) => Inl(zero),
                 Inr(lt) => {
-                    let low: ((r0 + r0) + b <= Succ(r0 + r0)) = (r0 + r0).add_le_mono_l(b, 1, bits.right);
-                    let two: (Succ(r0) + Succ(r0) <= d + d) = Succ(r0).add_le_mono(d, Succ(r0), d, lt, lt);
-                    let top: (Succ(Succ(r0 + r0)) <= d + d) = j(Nat::cong_succ(r0.add_succ_left(r0)), λ y _ => y <= d + d, two);
-                    Inr(Succ((r0 + r0) + b).le_trans(Succ(Succ(r0 + r0)), d + d, low, top))
+                    let low: ((r0 + r0) + b <= r0 + r0 + 1) = (r0 + r0).add_le_mono_l(b, 1, bits.right);
+                    let two: (r0 + 1 + (r0 + 1) <= d + d) = (r0 + 1).add_le_mono(d, r0 + 1, d, lt, lt);
+                    let top: (r0 + r0 + 2 <= d + d) = j(Nat::cong_succ(r0.add_succ_left(r0)), λ y _ => y <= d + d, two);
+                    Inr(((r0 + r0) + b + 1).le_trans(r0 + r0 + 2, d + d, low, top))
                 },
             };
             let e: (r0 * 2 + n.low_bit() = (r0 + r0) + b) =
@@ -2436,8 +2436,8 @@ theorem Nat::ldiv_fuel_spec(self fuel: Nat): (n, d: Nat) → n <= fuel → DivMo
             }(le)),
         Succ(f, ih) => λ n d => match n {
             Zero => λ _ => And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
-            Succ(k) => λ le => Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f),
-                ih(Succ(k).half(), d, Succ(k).half().le_trans(k, f, k.half_succ_le(), le))),
+            Succ(k) => λ le => Nat::ldiv_step_spec(k + 1, d, (k + 1).half().ldiv_fuel(d, f),
+                ih((k + 1).half(), d, (k + 1).half().le_trans(k, f, k.half_succ_le(), le))),
         },
     }
 }
@@ -2455,8 +2455,8 @@ theorem Nat::ldiv_fuel_bounded(self fuel: Nat): (n, d: Nat) → n < d * Nat::pow
             Zero => λ _ => And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
             Succ(k) => λ lt => {
                 let p = Nat::pow(2, f);
-                let lt2: (Succ(k) < d * p + d * p) = j(trans(sym(d.mul_assoc(p, 2)), (d * p).mul_two()), λ y _ => Succ(k) < y, lt);
-                Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f), ih(Succ(k).half(), d, Succ(k).half_lt_of_lt_double(d * p, lt2)))
+                let lt2: (k + 1 < d * p + d * p) = j(trans(sym(d.mul_assoc(p, 2)), (d * p).mul_two()), λ y _ => k + 1 < y, lt);
+                Nat::ldiv_step_spec(k + 1, d, (k + 1).half().ldiv_fuel(d, f), ih((k + 1).half(), d, (k + 1).half_lt_of_lt_double(d * p, lt2)))
             },
         },
     }
@@ -2498,16 +2498,16 @@ theorem Nat::pow_sq_fuel_eq(self fuel: Nat): (a, n: Nat) → n <= fuel → Nat::
         Succ(f, ih) => λ a n => match n {
             Zero => λ _ => refl,
             Succ(k) => λ le => {
-                let h = Succ(k).half();
-                let b = Nat::ldiv_bit(Succ(k), h);
-                let parts = Succ(k).ldiv_bit_parts();
+                let h = (k + 1).half();
+                let b = Nat::ldiv_bit(k + 1, h);
+                let parts = (k + 1).ldiv_bit_parts();
                 let s_eq: (Nat::pow_sq_fuel(a, h, f) = a.pow(h)) = ih(a, h, h.le_trans(k, f, k.half_succ_le(), le));
                 calc {
-                    Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, h, f), Succ(k).low_bit())
-                        = Nat::pow_sq_step(a, a.pow(h), Succ(k).low_bit()) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, x, Succ(k).low_bit()), s_eq),
-                        = Nat::pow_sq_step(a, a.pow(h), b) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, a.pow(h), x), Succ(k).low_bit_eq()),
+                    Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, h, f), (k + 1).low_bit())
+                        = Nat::pow_sq_step(a, a.pow(h), (k + 1).low_bit()) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, x, (k + 1).low_bit()), s_eq),
+                        = Nat::pow_sq_step(a, a.pow(h), b) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, a.pow(h), x), (k + 1).low_bit_eq()),
                         = a.pow((h + h) + b) := Nat::pow_sq_step_eq(a, h, b, parts.right),
-                        = a.pow(Succ(k)) := Nat::cong(λ (x: Nat) => a.pow(x), parts.left),
+                        = a.pow(k + 1) := Nat::cong(λ (x: Nat) => a.pow(x), parts.left),
                 }
             },
         },
@@ -2554,10 +2554,10 @@ fn Nat::div_checked(n, d, g: Nat) → DivMod {
 
 theorem Nat::div_checked_parts(n, d, g: Nat): Nat::div_checked(n, d, g).quot() * d + Nat::div_checked(n, d, g).rem() = n {
     match Nat::leb(g * d, n) as λ c => Nat::leb(g * d, n) = c →
-        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).quot() * d
-        + (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() = n
+        (match c { True => match Nat::leb(n - g * d + 1, d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).quot() * d
+        + (match c { True => match Nat::leb(n - g * d + 1, d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() = n
     {
-        True => λ le => match Nat::leb(Succ(n - g * d), d) {
+        True => λ le => match Nat::leb(n - g * d + 1, d) {
             True => trans((g * d).add_comm(n - g * d), (g * d).sub_add_cancel(n, (g * d).leb_sound(n, j(sym(le), λ c _ => c.IsTrue(), trivial)))),
             False => n.ldiv_parts(d),
         },
@@ -2567,12 +2567,12 @@ theorem Nat::div_checked_parts(n, d, g: Nat): Nat::div_checked(n, d, g).quot() *
 
 theorem Nat::div_checked_rem_lt(n: Nat, d: Pos<Nat>, g: Nat): Nat::div_checked(n, d, g).rem() < d {
     match Nat::leb(g * d, n) as λ c =>
-        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() < d
+        (match c { True => match Nat::leb(n - g * d + 1, d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() < d
     {
-        True => match Nat::leb(Succ(n - g * d), d) as λ c2 => Nat::leb(Succ(n - g * d), d) = c2 →
+        True => match Nat::leb(n - g * d + 1, d) as λ c2 => Nat::leb(n - g * d + 1, d) = c2 →
             (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).rem() < d
         {
-            True => λ lt => Succ(n - g * d).leb_sound(d, j(sym(lt), λ c _ => c.IsTrue(), trivial)),
+            True => λ lt => (n - g * d + 1).leb_sound(d, j(sym(lt), λ c _ => c.IsTrue(), trivial)),
             False => λ _ => n.ldiv_rem_lt(d, d_pos := d_pos),
         }(refl),
         False => n.ldiv_rem_lt(d, d_pos := d_pos),
@@ -2623,7 +2623,7 @@ fn Nat::IsRoot(n, r: Nat) → Type { r * r <= n ∧ n < Succ(r) * Succ(r) }
 
 fn Nat::quarter(self n: Nat) → Nat { n.half().half() }
 
-fn Nat::isqrt_pick(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n)) → Nat {
+fn Nat::isqrt_pick(n, r: Nat, c: (r * 2 + 1) * (r * 2 + 1) <= n ∨ ¬((r * 2 + 1) * (r * 2 + 1) <= n)) → Nat {
     match c { Inl(_) => Succ(r * 2), Inr(_) => r * 2 }
 }
 
@@ -2652,12 +2652,12 @@ theorem Nat::mul_four(self q: Nat): q * 4 = (q + q) + (q + q) {
 
 theorem Nat::sq_double(self r: Nat): (r * 2) * (r * 2) = (r * r) * 4 { Nat::mul_shuffle(r, 2, r, 2) }
 
-theorem Nat::succ_double(self r: Nat): Succ(Succ(r * 2)) = Succ(r) * 2 {
+theorem Nat::succ_double(self r: Nat): r * 2 + 2 = (r + 1) * 2 {
     calc {
-        Succ(Succ(r * 2))
-            = Succ(Succ(r + r)) := Nat::cong(λ (w: Nat) => Succ(Succ(w)), r.mul_two()),
-            = Succ(r) + Succ(r) := sym(Nat::cong_succ(r.add_succ_left(r))),
-            = Succ(r) * 2 := sym(Succ(r).mul_two()),
+        r * 2 + 2
+            = r + r + 2 := Nat::cong(λ (w: Nat) => w + 2, r.mul_two()),
+            = r + 1 + (r + 1) := sym(Nat::cong_succ(r.add_succ_left(r))),
+            = (r + 1) * 2 := sym((r + 1).mul_two()),
     }
 }
 
@@ -2670,38 +2670,38 @@ theorem Nat::quarter_mul_le(self n: Nat): n.quarter() * 4 <= n {
     j(sym(q.mul_four()), λ y _ => y <= n, ((q + q) + (q + q)).le_trans(h + h, n, b, n.half_add_le()))
 }
 
-theorem Nat::lt_succ_quarter_mul(self n: Nat): n < Succ(n.quarter()) * 4 {
+theorem Nat::lt_succ_quarter_mul(self n: Nat): n < (n.quarter() + 1) * 4 {
     let h = n.half();
     let q = h.half();
-    let A = Succ(q + q);
+    let A = q + q + 1;
     let a: (h <= A) = h.le_succ_half_add();
     let b: (h + h <= A + A) = h.add_le_mono(A, h, A, a, a);
-    let c: (n <= Succ(A + A)) = n.le_trans(Succ(h + h), Succ(A + A), n.le_succ_half_add(), Nat::le_succ_succ(h + h, A + A, b));
+    let c: (n <= A + A + 1) = n.le_trans(h + h + 1, A + A + 1, n.le_succ_half_add(), Nat::le_succ_succ(h + h, A + A, b));
     let e = calc {
-        Succ(Succ(A + A))
-            = Succ(A) + Succ(A) := sym(Nat::cong_succ(A.add_succ_left(A))),
-            = (Succ(q) + Succ(q)) + (Succ(q) + Succ(q)) := sym(Nat::cong(λ (w: Nat) => w + w, Nat::cong_succ(q.add_succ_left(q)))),
-            = Succ(q) * 4 := sym(Succ(q).mul_four()),
+        A + A + 2
+            = A + 1 + (A + 1) := sym(Nat::cong_succ(A.add_succ_left(A))),
+            = (q + 1 + (q + 1)) + (q + 1 + (q + 1)) := sym(Nat::cong(λ (w: Nat) => w + w, Nat::cong_succ(q.add_succ_left(q)))),
+            = (q + 1) * 4 := sym((q + 1).mul_four()),
     };
-    j(e, λ y _ => Succ(n) <= y, Nat::le_succ_succ(n, Succ(A + A), c))
+    j(e, λ y _ => n + 1 <= y, Nat::le_succ_succ(n, A + A + 1, c))
 }
 
-theorem Nat::isqrt_pick_spec(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n), ih: Nat::IsRoot(n.quarter(), r)):
+theorem Nat::isqrt_pick_spec(n, r: Nat, c: (r * 2 + 1) * (r * 2 + 1) <= n ∨ ¬((r * 2 + 1) * (r * 2 + 1) <= n), ih: Nat::IsRoot(n.quarter(), r)):
     Nat::IsRoot(n, Nat::isqrt_pick(n, r, c))
 {
     let q = n.quarter();
-    let s = Succ(r);
+    let s = r + 1;
     match c {
         Inl(le) => {
-            let up: (Succ(q) * 4 <= (s * s) * 4) = Nat::mul_le_mono_r(4, Succ(q), s * s, ih.right);
-            let lt: (n < (s * s) * 4) = n.lt_of_lt_of_le(Succ(q) * 4, (s * s) * 4, n.lt_succ_quarter_mul(), up);
+            let up: ((q + 1) * 4 <= (s * s) * 4) = Nat::mul_le_mono_r(4, q + 1, s * s, ih.right);
+            let lt: (n < (s * s) * 4) = n.lt_of_lt_of_le((q + 1) * 4, (s * s) * 4, n.lt_succ_quarter_mul(), up);
             let sq: (n < (s * 2) * (s * 2)) = j(sym(s.sq_double()), λ y _ => n < y, lt);
             And(le, j(sym(r.succ_double()), λ y _ => n < y * y, sq))
         },
         Inr(nle) => {
             let down: ((r * r) * 4 <= q * 4) = Nat::mul_le_mono_r(4, r * r, q, ih.left);
             let le: ((r * r) * 4 <= n) = ((r * r) * 4).le_trans(q * 4, n, down, n.quarter_mul_le());
-            And(j(sym(r.sq_double()), λ y _ => y <= n, le), Nat::lt_of_not_le(n, Succ(r * 2) * Succ(r * 2), nle))
+            And(j(sym(r.sq_double()), λ y _ => y <= n, le), Nat::lt_of_not_le(n, (r * 2 + 1) * (r * 2 + 1), nle))
         },
     }
 }
@@ -2715,10 +2715,10 @@ theorem Nat::isqrt_fuel_spec(self fuel: Nat): (n: Nat) → n <= fuel → Nat::Is
         Succ(f, ih) => λ n => match n {
             Zero => λ _ => And(trivial, trivial),
             Succ(k) => λ le => {
-                let toward: (Succ(k).quarter() <= k) = Succ(k).quarter().le_trans(Succ(k).half(), k, Succ(k).half().half_le(), k.half_succ_le());
-                let below: (Succ(k).quarter() <= f) = Succ(k).quarter().le_trans(k, f, toward, le);
-                Nat::isqrt_pick_spec(Succ(k), Succ(k).quarter().isqrt_fuel(f), (Succ(Succ(k).quarter().isqrt_fuel(f) * 2) * Succ(Succ(k).quarter().isqrt_fuel(f) * 2)).le_dec(Succ(k)),
-                    ih(Succ(k).quarter(), below))
+                let toward: ((k + 1).quarter() <= k) = (k + 1).quarter().le_trans((k + 1).half(), k, (k + 1).half().half_le(), k.half_succ_le());
+                let below: ((k + 1).quarter() <= f) = (k + 1).quarter().le_trans(k, f, toward, le);
+                Nat::isqrt_pick_spec(k + 1, (k + 1).quarter().isqrt_fuel(f), (((k + 1).quarter().isqrt_fuel(f) * 2 + 1) * ((k + 1).quarter().isqrt_fuel(f) * 2 + 1)).le_dec(k + 1),
+                    ih((k + 1).quarter(), below))
             },
         },
     }
@@ -2731,7 +2731,7 @@ theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_i
 theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
     match found: n.leb(m) {
         False => refl,
-        True => false_elim(m.lt_irrefl(Succ(m).le_trans(n, m, h, n.leb_sound(m, j(sym(found), λ d _ => d.IsTrue(), trivial))))),
+        True => false_elim(m.lt_irrefl((m + 1).le_trans(n, m, h, n.leb_sound(m, j(sym(found), λ d _ => d.IsTrue(), trivial))))),
     }
 }
 
@@ -2753,13 +2753,13 @@ theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
 }
 
 // TODO: use symbol for not
-theorem Nat::leb_not_lt(self n, m: Nat, h: Succ(n).leb(m).not().IsTrue()): m.leb(n).IsTrue() {
+theorem Nat::leb_not_lt(self n, m: Nat, h: (n + 1).leb(m).not().IsTrue()): m.leb(n).IsTrue() {
     m.leb_complete(n, n.le_of_not_lt(m,
-        λ (k: n < m) => Succ(n).leb(m).is_true_not(h, Succ(n).leb_complete(m, k))))
+        λ (k: n < m) => (n + 1).leb(m).is_true_not(h, (n + 1).leb_complete(m, k))))
 }
 
-theorem Nat::leb_lt_le_absurd(self n, m: Nat, lt: Succ(n).leb(m).IsTrue(), le: m.leb(n).IsTrue()): False {
-    n.lt_irrefl(Succ(n).le_trans(m, n, Succ(n).leb_sound(m, lt), m.leb_sound(n, le)))
+theorem Nat::leb_lt_le_absurd(self n, m: Nat, lt: (n + 1).leb(m).IsTrue(), le: m.leb(n).IsTrue()): False {
+    n.lt_irrefl((n + 1).le_trans(m, n, (n + 1).leb_sound(m, lt), m.leb_sound(n, le)))
 }
 
 // `ones(j)` is 2^j - 1, so a number is below two to its width.
@@ -2769,10 +2769,10 @@ theorem Nat::ones_succ_pow(self j: Nat): j.ones() + 1 = Nat::pow(2, j) {
         Succ(i) => {
             let o = i.ones();
             let ih: (o + 1 = Nat::pow(2, i)) = i.ones_succ_pow();
-            let fwd: (Succ(0 + o) + o = Succ((0 + o) + o)) = (0 + o).add_succ_left(o);
-            let back: (Succ((0 + o) + o) = Succ(0 + o) + o) = j(fwd, λ z _ => z = Succ(0 + o) + o, refl);
-            let step: (Succ(Succ(o * 2)) = Succ(o) * 2) = Nat::cong_succ(back);
-            j(ih, λ y _ => Succ(Succ(o * 2)) = y * 2, step)
+            let fwd: (0 + o + 1 + o = (0 + o) + o + 1) = (0 + o).add_succ_left(o);
+            let back: ((0 + o) + o + 1 = 0 + o + 1 + o) = j(fwd, λ z _ => z = 0 + o + 1 + o, refl);
+            let step: (o * 2 + 2 = (o + 1) * 2) = Nat::cong_succ(back);
+            j(ih, λ y _ => o * 2 + 2 = y * 2, step)
         },
     }
 }
@@ -2796,15 +2796,15 @@ theorem Nat::pow_width_le_fuel(self fuel: Nat): (n: Nat) → n <= fuel → 0 < n
             Zero => λ _ (pos: False) => false_elim(pos),
             Succ(k) => λ le _ => {
                 let kf: (k <= f) = le;
-                let two: (2 <= Succ(k) + Succ(k)) = Nat::le_trans(1, Succ(k), Succ(k) + k, trivial, Succ(k).le_add_l(k));
-                match Succ(k).half() as λ y => y <= f → y + y <= Succ(k) → Nat::pow(2, Succ(Nat::width_fuel(y, f))) <= Succ(k) + Succ(k) {
-                    Zero => λ _ _ => j(sym(f.width_fuel_zero()), λ w _ => Nat::pow(2, Succ(w)) <= Succ(k) + Succ(k), two),
+                let two: (2 <= k + 1 + (k + 1)) = Nat::le_trans(1, k + 1, k + 1 + k, trivial, (k + 1).le_add_l(k));
+                match (k + 1).half() as λ y => y <= f → y + y <= k + 1 → Nat::pow(2, Nat::width_fuel(y, f) + 1) <= k + 1 + (k + 1) {
+                    Zero => λ _ _ => j(sym(f.width_fuel_zero()), λ w _ => Nat::pow(2, w + 1) <= k + 1 + (k + 1), two),
                     Succ(l) => λ lf hh => {
-                        let w = Nat::width_fuel(Succ(l), f);
-                        let below: (Nat::pow(2, w) <= Succ(k)) = Nat::le_trans(Nat::pow(2, w), Succ(l) + Succ(l), Succ(k), ih(Succ(l), lf, trivial), hh);
-                        j(Succ(k).mul_two(), λ v _ => Nat::pow(2, w) * 2 <= v, Nat::mul_le_mono_r(2, Nat::pow(2, w), Succ(k), below))
+                        let w = Nat::width_fuel(l + 1, f);
+                        let below: (Nat::pow(2, w) <= k + 1) = Nat::le_trans(Nat::pow(2, w), l + 1 + (l + 1), k + 1, ih(l + 1, lf, trivial), hh);
+                        j((k + 1).mul_two(), λ v _ => Nat::pow(2, w) * 2 <= v, Nat::mul_le_mono_r(2, Nat::pow(2, w), k + 1, below))
                     },
-                }(Succ(k).half().le_trans(k, f, k.half_succ_le(), kf), Succ(k).half_add_le())
+                }((k + 1).half().le_trans(k, f, k.half_succ_le(), kf), (k + 1).half_add_le())
             },
         },
     }
@@ -2821,8 +2821,8 @@ theorem Nat::lt_two_pow(self n: Nat): n < Nat::pow(2, n) {
             let p = Nat::pow(2, k);
             let ih: (k < p) = k.lt_two_pow();
             let one: (1 <= p) = Nat::one_le_pow(2, k, trivial);
-            let sum: (Succ(k) + 1 <= p + p) = Nat::add_le_mono(Succ(k), p, 1, p, ih, one);
-            j(p.mul_two(), λ y _ => Succ(k) + 1 <= y → Succ(k) < p * 2, λ h => h)(sum)
+            let sum: (k + 1 + 1 <= p + p) = Nat::add_le_mono(k + 1, p, 1, p, ih, one);
+            j(p.mul_two(), λ y _ => k + 1 + 1 <= y → k + 1 < p * 2, λ h => h)(sum)
         },
     }
 }

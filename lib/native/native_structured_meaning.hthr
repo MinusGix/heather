@@ -594,7 +594,7 @@ theorem loop_run_len(step: Valuation() → Buffers() → State, parameters: List
     match remaining {
         Zero => λ state buffers sl => sl,
         Succ(rest) => λ state buffers sl => {
-            let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
+            let after = step(pass_valuation(parameters, count, rest + 1, state), buffers);
             let wl: (words_of(after.values, next).len() = n) = trans(words_of_len(after.values, next), nl);
             match after.values(1, exit).head_bit() {
                 False => loop_run_len(step, parameters, count, exit, next, n, nl, rest, words_of(after.values, next), after.buffers, wl),
@@ -610,8 +610,8 @@ theorem Valuation::bind_bound(ids: List<Nat>): (words: List<BitVec(64)>) → wor
     match ids {
         Nil => λ words _ v1 v2 w o never => false_elim(never),
         Cons(id, rest) => λ words => match words {
-            Nil => λ (bad: 0 = Succ(rest.len())) => false_elim(rest.len().zero_ne_succ(bad)),
-            Cons(word, more) => λ (same: Succ(more.len()) = Succ(rest.len())) v1 v2 w o m => {
+            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(word, more) => λ (same: more.len() + 1 = rest.len() + 1) v1 v2 w o m => {
                 let b1 = Valuation::bind(v1, rest, more);
                 let b2 = Valuation::bind(v2, rest, more);
                 match o.eq_dec(id) as λ _ => Valuation::set(b1, id, word_value(word))(w, o) = Valuation::set(b2, id, word_value(word))(w, o) {
@@ -637,8 +637,8 @@ theorem Valuation::bind_coherent(ids: List<Nat>): (words: List<BitVec(64)>) → 
     match ids {
         Nil => λ words _ v o never => false_elim(never),
         Cons(id, rest) => λ words => match words {
-            Nil => λ (bad: 0 = Succ(rest.len())) => false_elim(rest.len().zero_ne_succ(bad)),
-            Cons(word, more) => λ (same: Succ(more.len()) = Succ(rest.len())) v o m => {
+            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(word, more) => λ (same: more.len() + 1 = rest.len() + 1) v o m => {
                 let b = Valuation::bind(v, rest, more);
                 match o.eq_dec(id) as λ _ => Valuation::set(b, id, word_value(word))(1, o).head_bit() = Valuation::set(b, id, word_value(word))(64, o).head_bit() {
                     Inl(e) => j(sym(e), λ y _ => Valuation::set(b, id, word_value(word))(1, y).head_bit() = Valuation::set(b, id, word_value(word))(64, y).head_bit(),

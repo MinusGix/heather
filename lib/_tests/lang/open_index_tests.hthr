@@ -19,7 +19,7 @@ fn two_steps(n: Nat) → Acc<Nat>(n) { Step(n, 0, Step(0, 7, Stop(7))) }
 // Closed and open computation through the open index.
 theorem two_steps_depth(n: Nat): Acc::depth(n, two_steps(n)) = 2 { refl }
 
-theorem depth_step<P>(a, b: P, c: Acc<P>(b)): Acc::depth(a, Step(a, b, c)) = Succ(Acc::depth(b, c)) { refl }
+theorem depth_step<P>(a, b: P, c: Acc<P>(b)): Acc::depth(a, Step(a, b, c)) = Acc::depth(b, c) + 1 { refl }
 
 // Value parameters beside the index, and a function child whose index reads
 // its argument: `Reach(step, goal, a)` says every path from `a` meets `goal`.

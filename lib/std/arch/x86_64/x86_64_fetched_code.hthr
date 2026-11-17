@@ -326,7 +326,7 @@ fn CodeResident<M>(fetch: FetchAccess<M>, memory: M, bytes: List<BitVec(8)>) →
     }
 }
 
-theorem one_add(k: Nat): 1 + k = Succ(k) {
+theorem one_add(k: Nat): 1 + k = k + 1 {
     trans(Nat::add_succ_left(0, k), Nat::cong_succ(Nat::add_left_zero(k)))
 }
 

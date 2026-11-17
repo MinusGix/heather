@@ -127,6 +127,7 @@ version = "0.0.1"
 dependencies = [
  "heather-kernel-lib",
  "heather-numeral",
+ "heather-sat",
  "heather-syntax",
  "mimalloc",
 ]
@@ -137,6 +138,7 @@ version = "0.0.1"
 dependencies = [
  "heather-kernel-lib",
  "heather-numeral",
+ "heather-sat",
  "heather-syntax",
  "mimalloc",
 ]

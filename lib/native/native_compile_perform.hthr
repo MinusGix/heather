@@ -329,7 +329,7 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
                     let m = u.memory;
                     let g0 = t.rbx_gprs(env, id, g);
                     let g1 = write_gpr(register, w, g0);
-                    let held1: t.Held(live, env, g1, m) = t.held_scratch(live, env, g0, m, t.held_rbx(live, env, g, m, held.left, env, id), register, w, known);
+                    let held1: t.Held(live, env, g1, m) = t.held_scratch(live, env, g0, m, held.left, register, w, known);
                     ⟨held.left, ⟨held1, λ g2 held2 passed keeps => {
                         let not_rbx: (register.same(Rbx) = False) = Rbx.absent_head(register, more, known);
                         let away: register.absent_from(Cons(Rbx, more)).IsTrue() = Bool::is_true_and_intro(!register.same(Rbx), register.absent_from(more),
@@ -339,7 +339,7 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
                             let x_rest: x.absent_from(more).IsTrue() = x.absent_rest(register, more, known);
                             trans(keeps(x, Bool::is_true_and_intro(!x.same(Rbx), x.absent_from(more), known, x_rest)),
                                 trans(read_gpr_other(register, x, w, g0, x.absent_head(register, more, known)),
-                                    t.rbx_gprs_other(env, id, g, x, x.absent_head(Rbx, Cons(register, more), absent))))
+                                    read_gpr_other(Rbx, x, t.rbx_word(env, id), g, x.absent_head(Rbx, Cons(register, more), absent))))
                         })
                     }⟩⟩
                 })
@@ -1714,13 +1714,13 @@ theorem Target::goes_zeroes(self t: Target, env: Env, tree: ITree<BitVec(64)>(Ev
                         let m = s.memory;
                         let g2 = t.slot_gprs(k, g);
                         let zero: BitVec(64) = BitVec::ofNat(0);
-                        let rax2: (read_gpr(Rax, g2) = zero) = trans(t.slot_gprs_other(k, g, Rax, refl), h.right);
+                        let rax2: (read_gpr(Rax, g2) = zero) = trans(read_gpr_other(Rbx, Rax, t.slot(k), g, refl), h.right);
                         let value: (zero.toNat() = env.number(id)) = sym(facts.right);
                         let set: t.Held(Cons(id, live), env, g, t.r.profile.store(m, t.slot(k), word_bytes(zero))) =
                             t.held_slot_same(live, env, id, zero, g, m, h.left, k, at, inside, value);
                         let moved = t.held_regs(Cons(id, live), env, g, g2, t.r.profile.store(m, t.slot(k), word_bytes(zero)), set,
-                            λ r _ _ => t.slot_gprs_other(k, g, home_register(r), trans(Rbx.same_comm(home_register(r)), home_register_apart(Rbx, trivial, r))),
-                            t.slot_gprs_other(k, g, Rsp, refl));
+                            λ r _ _ => read_gpr_other(Rbx, home_register(r), t.slot(k), g, trans(Rbx.same_comm(home_register(r)), home_register_apart(Rbx, trivial, r))),
+                            read_gpr_other(Rbx, Rsp, t.slot(k), g, refl));
                         let done: q(g2, t.r.profile.store(m, t.slot(k), word_bytes(zero))) = ⟨moved, rax2⟩;
                         ⟨t.held_rsp(live, env, g, m, h.left), j(sym(rax2), λ x _ => q(g2, t.r.profile.store(m, t.slot(k), word_bytes(x))), done)⟩
                     })

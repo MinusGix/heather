@@ -106,7 +106,7 @@ theorem OrderedField::shrink(c, e: K, hc: 0 <= c, he: 0 < e): ∃ e2: K, 0 < e2 
 theorem OrderedField::of_nat_nonneg(n: Nat): K.unit <= K.of_nat(n) {
     match n {
         Zero => StrictOrder::le_of_same(K.unit, K.of_nat(Zero), K.rel_sym(K.of_nat(Zero), K.unit, K.of_nat_zero)),
-        Succ(m) => StrictOrder::le_of_lt(K.unit, K.of_nat(Succ(m)), OrderedField::of_nat_pos(m)),
+        Succ(m) => StrictOrder::le_of_lt(K.unit, K.of_nat(m + 1), OrderedField::of_nat_pos(m)),
     }
 }
 
@@ -568,10 +568,10 @@ theorem BoundedOn::npow_deriv(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R
         Zero => And(StrictOrder::le_refl(K.unit), λ x dx =>
             LocatedAddGroup::abs_le_zero(K.unit, K.unit, K.rel_refl(K.unit), StrictOrder::le_refl(K.unit))),
         Succ(m) => {
-            let p = OrderedField::of_nat_nonneg(Succ(m));
-            let nat: BoundedOn(D, λ x => K.of_nat(Succ(m)), K.of_nat(Succ(m))) =
-                And(p, λ x dx => LocatedAddGroup::abs_le_intro(K.of_nat(Succ(m)), K.of_nat(Succ(m)), linarith(p), StrictOrder::le_refl(K.of_nat(Succ(m)))));
-            BoundedOn::mul(D, λ x => K.of_nat(Succ(m)), λ x => OrderedField::npow(x, m), K.of_nat(Succ(m)), OrderedField::npow(R, m),
+            let p = OrderedField::of_nat_nonneg(m + 1);
+            let nat: BoundedOn(D, λ x => K.of_nat(m + 1), K.of_nat(m + 1)) =
+                And(p, λ x dx => LocatedAddGroup::abs_le_intro(K.of_nat(m + 1), K.of_nat(m + 1), linarith(p), StrictOrder::le_refl(K.of_nat(m + 1))));
+            BoundedOn::mul(D, λ x => K.of_nat(m + 1), λ x => OrderedField::npow(x, m), K.of_nat(m + 1), OrderedField::npow(R, m),
                 nat, BoundedOn::pow(D, R, hb, m))
         },
     }
@@ -579,19 +579,19 @@ theorem BoundedOn::npow_deriv(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R
 
 // The product rule's `(xᵐ)'·x + xᵐ·1` is `(x^(m+1))'`.
 theorem DerivOn::pow_step(x: K, m: Nat):
-    OrderedField::npow_deriv(x, m) * x + OrderedField::npow(x, m) * K.multiplicative.unit ≈ OrderedField::npow_deriv(x, Succ(m))
+    OrderedField::npow_deriv(x, m) * x + OrderedField::npow(x, m) * K.multiplicative.unit ≈ OrderedField::npow_deriv(x, m + 1)
 {
     match m {
         Zero => {
             let z = K.of_nat_zero;
             let s = K.of_nat_succ(Zero);
-            let k: (K.unit * x + K.multiplicative.unit * K.multiplicative.unit ≈ K.of_nat(Succ(Zero)) * K.multiplicative.unit) = ring(z, s);
+            let k: (K.unit * x + K.multiplicative.unit * K.multiplicative.unit ≈ K.of_nat(1) * K.multiplicative.unit) = ring(z, s);
             k
         },
         Succ(i) => {
-            let s = K.of_nat_succ(Succ(i));
-            let k: ((K.of_nat(Succ(i)) * OrderedField::npow(x, i)) * x + (OrderedField::npow(x, i) * x) * K.multiplicative.unit
-                ≈ K.of_nat(Succ(Succ(i))) * (OrderedField::npow(x, i) * x)) = ring(s);
+            let s = K.of_nat_succ(i + 1);
+            let k: ((K.of_nat(i + 1) * OrderedField::npow(x, i)) * x + (OrderedField::npow(x, i) * x) * K.multiplicative.unit
+                ≈ K.of_nat(i + 2) * (OrderedField::npow(x, i) * x)) = ring(s);
             k
         },
     }
@@ -612,9 +612,9 @@ theorem DerivOn::pow(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R), n: Nat
             let pr = DerivOn::mul(D, λ x => OrderedField::npow(x, m), λ x => OrderedField::npow_deriv(x, m), λ x => x, λ x => K.multiplicative.unit,
                 OrderedField::npow(R, m), R, OrderedField::npow_deriv(R, m), K.multiplicative.unit,
                 DerivOn::pow(D, R, hb, m), DerivOn::id(D), BoundedOn::pow(D, R, hb, m), hb, BoundedOn::npow_deriv(D, R, hb, m), one);
-            DerivOn::congr(D, λ x => OrderedField::npow(x, m) * x, λ x => OrderedField::npow(x, Succ(m)),
+            DerivOn::congr(D, λ x => OrderedField::npow(x, m) * x, λ x => OrderedField::npow(x, m + 1),
                 λ x => OrderedField::npow_deriv(x, m) * x + OrderedField::npow(x, m) * K.multiplicative.unit,
-                λ x => OrderedField::npow_deriv(x, Succ(m)),
+                λ x => OrderedField::npow_deriv(x, m + 1),
                 λ x dx => K.rel_refl(OrderedField::npow(x, m) * x),
                 λ x dx => DerivOn::pow_step(x, m),
                 pr)
@@ -732,8 +732,8 @@ theorem DerivOn::mvi_steps(D: K → Type, f: K → K, L, d: K, hD: ConvexOn(D), 
             match K.rel_cotrans(s, d, y + K.inv(x), sd) {
                 Inr(close) => loc(x, y, y + K.inv(x), dx, dy, LocatedAddGroup::abs_le_self(x, y, xy), StrictOrder::le_of_lt(y + K.inv(x), d, close)),
                 Inl(far) => {
-                    let su: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
-                    let w: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(su);
+                    let su: (K.of_nat(m + 1) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+                    let w: (K.of_nat(m + 1) * s ≈ K.of_nat(m) * s + s) = ring(su);
                     let xz: (x <= x + s) = linarith(ps);
                     let zy: (x + s <= y) = linarith(far);
                     let dz = hD(x, y, x + s, dx, dy, xz, zy);

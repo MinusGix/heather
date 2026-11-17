@@ -319,7 +319,7 @@ fn wp_shorter(passed: Bool, cur, tr: Trace<BitVec(64)>(Events::linux())) → Typ
     match passed { False => cur = tr, True => Trace::len(Events::linux(), cur) < Trace::len(Events::linux(), tr) }
 }
 
-theorem wp_succ_lt(a, b: Nat, less: Succ(a) < b): a < b { omega }
+theorem wp_succ_lt(a, b: Nat, less: a + 1 < b): a < b { omega }
 
 theorem wp_shorter_answered(passed: Bool, c: LinuxCmd<Nat>, a: c.Resp(), rest, tr: Trace<BitVec(64)>(Events::linux()),
     short: wp_shorter(passed, TAns(c, a, rest), tr)): wp_shorter(True, rest, tr) {
@@ -757,7 +757,7 @@ fn LoopRuns<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), head: Na
 }
 
 theorem wp_lt_zero(a, b: Nat, less: a < b, small: b <= 0): False { omega }
-theorem wp_lt_le(a, b, c: Nat, less: a < b, small: b <= Succ(c)): a <= c { omega }
+theorem wp_lt_le(a, b, c: Nat, less: a < b, small: b <= c + 1): a <= c { omega }
 
 // One pass: a pass back with a syscall is a shorter trace (`outer`), one
 // back without is the same trace at a lower variant (`inner`).

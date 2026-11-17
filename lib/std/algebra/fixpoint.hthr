@@ -49,7 +49,7 @@ theorem Nat::iterate_add<A>(self n, k: Nat, f: A → A, x: A): (n + k).iterate(f
 }
 
 // The outermost application moved innermost.
-theorem Nat::iterate_succ_inner<A>(self n: Nat, f: A → A, x: A): Succ(n).iterate(f, x) = n.iterate(f, f(x)) {
+theorem Nat::iterate_succ_inner<A>(self n: Nat, f: A → A, x: A): (n + 1).iterate(f, x) = n.iterate(f, f(x)) {
     match n {
         Zero => refl,
         Succ(m) => cong_fn(f, m.iterate_succ_inner(f, x)),
@@ -74,11 +74,11 @@ theorem PartialOrderRel::iterate_le_prefix(f: A → A, mono: PartialOrderRel::Mo
 
 // From a point below its image the iterates ascend.
 theorem PartialOrderRel::iterate_ascends(f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: x <= f(x), n: Nat):
-    n.iterate(f, x) <= Succ(n).iterate(f, x)
+    n.iterate(f, x) <= (n + 1).iterate(f, x)
 {
     match n {
         Zero => rise,
-        Succ(m) => mono(m.iterate(f, x), Succ(m).iterate(f, x), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, m)),
+        Succ(m) => mono(m.iterate(f, x), (m + 1).iterate(f, x), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, m)),
     }
 }
 
@@ -87,7 +87,7 @@ theorem PartialOrderRel::iterate_le_later(f: A → A, mono: PartialOrderRel::Mon
 {
     match k {
         Zero => PartialOrderRel::le_refl(n.iterate(f, x)),
-        Succ(m) => PartialOrderRel::le_trans(n.iterate(f, x), (n + m).iterate(f, x), Succ(n + m).iterate(f, x),
+        Succ(m) => PartialOrderRel::le_trans(n.iterate(f, x), (n + m).iterate(f, x), (n + m + 1).iterate(f, x),
             PartialOrderRel::iterate_le_later(same, le, f, mono, x, rise, n, m), PartialOrderRel::iterate_ascends(same, le, f, mono, x, rise, n + m)),
     }
 }
@@ -164,7 +164,7 @@ theorem PartialOrderRel::kleene_sound(f: A → A, fuel: Nat): (x, y: A) → Part
         {
             Inl(stop) => λ h => And(j(Option::some_inj(x, y, h), λ w _ => f(w) <= w, stop), Exists(Zero, sym(Option::some_inj(x, y, h)))),
             Inr(_) => λ h => match PartialOrderRel::kleene_sound(same, le, f, m, f(x), y, h) {
-                And(stop, reach) => And(stop, Exists(Succ(reach.witness), trans(reach.proof, sym(reach.witness.iterate_succ_inner(f, x))))),
+                And(stop, reach) => And(stop, Exists(reach.witness + 1, trans(reach.proof, sym(reach.witness.iterate_succ_inner(f, x))))),
             },
         },
     }
@@ -197,16 +197,16 @@ theorem PartialOrderRel::kleene_none_chain(f: A → A, mono: PartialOrderRel::Mo
 // size: a run with no answer would be a strict chain longer than the type.
 theorem Fintype::kleene_total<A: Fintype + PartialOrderRel(same, le) + DecidableRel(le)>(same: A → A → Type, le: A → A → Type,
     f: A → A, mono: PartialOrderRel::Monotone(same, le, f), x: A, rise: le(x, f(x))):
-    Exists(λ (y: A) => PartialOrderRel::kleene(same, le, f, Succ(Fintype::card<A>()), x) = Some(y))
+    Exists(λ (y: A) => PartialOrderRel::kleene(same, le, f, (Fintype::card<A>()) + 1, x) = Some(y))
 {
-    match h: PartialOrderRel::kleene(same, le, f, Succ(Fintype::card<A>()), x) {
+    match h: PartialOrderRel::kleene(same, le, f, (Fintype::card<A>()) + 1, x) {
         Some(y) => Exists(y, refl),
         None => false_elim(Fintype::card<A>().lt_irrefl(
-            j(Succ(Fintype::card<A>()).len_orbit(f, x), λ w _ => w <= Fintype::card<A>(),
+            j(((Fintype::card<A>()) + 1).len_orbit(f, x), λ w _ => w <= Fintype::card<A>(),
                 Fintype::chain_len_le(λ a b => PartialOrderRel::Strict(same, le, a, b),
                     λ a => PartialOrderRel::strict_irrefl(same, le, a), λ a b c ab bc => PartialOrderRel::strict_trans(same, le, a, b, c, ab, bc),
-                    Succ(Fintype::card<A>()).orbit(f, x),
-                    PartialOrderRel::kleene_none_chain(same, le, f, mono, Succ(Fintype::card<A>()), x, rise, h))))),
+                    ((Fintype::card<A>()) + 1).orbit(f, x),
+                    PartialOrderRel::kleene_none_chain(same, le, f, mono, (Fintype::card<A>()) + 1, x, rise, h))))),
     }
 }
 

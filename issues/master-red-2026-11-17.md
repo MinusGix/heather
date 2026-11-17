@@ -85,3 +85,7 @@ failing on `Sha256::compress` certificate checking over a cold store, with
 SHA-256 `compile-x86` processes near the 300 s CPU rail), which looks like
 one cause carried over rather than a new regression; the logs do not say
 which merge raised the cold cost.
+
+## Log
+
+- 2026-11-17: The gate has the 900 s rail since the new-words round; the cost itself is [[optimizer-search-compile-cost]].

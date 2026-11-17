@@ -125,9 +125,9 @@ fn CReal::atanh_coef(k: Nat) → CReal { CReal::ofRat(Rat::inv_succ(k + k)) }
 
 fn CReal::atanh_n(n: Nat, t: CReal) → CReal { OrderedField::atanh_poly(λ k => CReal::atanh_coef(k), n, t) }
 
-theorem CReal::atanh_coef_mul(k: Nat): CReal::atanh_coef(k) * CReal::ofRat(Rat::ofInt(OfNat(Succ(k + k)))) ≈ 1 {
-    let q: (Rat::inv_succ(k + k) * Rat::ofInt(OfNat(Succ(k + k))) ≈ 1) = omega;
-    CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::inv_succ(k + k), Rat::ofInt(OfNat(Succ(k + k))))), CReal::ofRat_respects(q))
+theorem CReal::atanh_coef_mul(k: Nat): CReal::atanh_coef(k) * CReal::ofRat(Rat::ofInt(OfNat(k + k + 1))) ≈ 1 {
+    let q: (Rat::inv_succ(k + k) * Rat::ofInt(OfNat(k + k + 1)) ≈ 1) = omega;
+    CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::inv_succ(k + k), Rat::ofInt(OfNat(k + k + 1)))), CReal::ofRat_respects(q))
 }
 
 theorem CReal::atanh_coef_le(k: Nat): AbsLe(CReal::atanh_coef(k), 1) {
@@ -150,8 +150,8 @@ theorem CReal::half_r_pow(m: Nat): OrderedField::npow(CReal::half_r(), m) ≈ CR
             let h2 = Rat::inv_pow2_half(i);
             let hf0: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
             let q: (Rat::inv_pow2(i + 1) ≈ Rat::inv_pow2(i) * Rat::inv_succ(1)) = ring(h2, hf0);
-            let k: (OrderedField::npow(CReal::half_r(), Succ(i)) ≈ OrderedField::npow(CReal::half_r(), i) * CReal::half_r()) =
-                CReal::same_refl(OrderedField::npow(CReal::half_r(), Succ(i)));
+            let k: (OrderedField::npow(CReal::half_r(), i + 1) ≈ OrderedField::npow(CReal::half_r(), i) * CReal::half_r()) =
+                CReal::same_refl(OrderedField::npow(CReal::half_r(), i + 1));
             let m2 = CReal::mul_respects(ih, CReal::half_r().same_refl());
             CReal::same_trans(k, CReal::same_trans(m2, CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::inv_pow2(i), Rat::inv_succ(1))),
                 CReal::ofRat_respects(Rat::same_sym(q)))))
@@ -368,19 +368,19 @@ theorem CReal::atanh_n_deriv(n: Nat): DerivOn(λ (t: CReal) => CReal::atanh_D(t)
 
 // The approximants at `n + 1` once `(1/2)^n <= w`.
 theorem CReal::atanh_close(w: CReal, n: Nat, hn: OrderedField::npow(CReal::half_r(), n) <= w, t: CReal, dt: CReal::atanh_D(t)):
-    AbsLe(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t), w) ∧ AbsLe(CReal::atanh_g(t) + -OrderedField::geom_sq_poly(Succ(n), t), w)
+    AbsLe(CReal::atanh(t) + -CReal::atanh_n(n + 1, t), w) ∧ AbsLe(CReal::atanh_g(t) + -OrderedField::geom_sq_poly(n + 1, t), w)
 {
     let H = CReal::half_r();
     let s = CReal::half_r_add();
     let pH: (0 <= H) = CReal::le_of_lt(CReal::half_r_pos());
     let pn: (0 <= OrderedField::npow(H, n)) = OrderedField::npow_nonneg(H, pH, n);
-    let un: (OrderedField::npow(H, Succ(n)) ≈ OrderedField::npow(H, n) * H) = CReal::same_refl(OrderedField::npow(H, Succ(n)));
+    let un: (OrderedField::npow(H, n + 1) ≈ OrderedField::npow(H, n) * H) = CReal::same_refl(OrderedField::npow(H, n + 1));
     let hm: (OrderedField::npow(H, n) * H <= OrderedField::npow(H, n) * 1) = OrderedSemiring::mul_le_mono_l(H, 1, OrderedField::npow(H, n), CReal::half_r_le_one(), pn);
-    let hp = CReal::half_r_pow(Succ(n));
-    let a = CReal::atanh_near(t, dt, Succ(n));
-    let first = LocatedAddGroup::abs_le_weaken(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t), CReal::atanh(t) + -CReal::atanh_n(Succ(n), t),
-        CReal::ofRat(Rat::inv_pow2(Succ(n))), w, a, CReal::same_refl(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t)), linarith(hp, un, hm, hn));
-    let m = Succ(n);
+    let hp = CReal::half_r_pow(n + 1);
+    let a = CReal::atanh_near(t, dt, n + 1);
+    let first = LocatedAddGroup::abs_le_weaken(CReal::atanh(t) + -CReal::atanh_n(n + 1, t), CReal::atanh(t) + -CReal::atanh_n(n + 1, t),
+        CReal::ofRat(Rat::inv_pow2(n + 1)), w, a, CReal::same_refl(CReal::atanh(t) + -CReal::atanh_n(n + 1, t)), linarith(hp, un, hm, hn));
+    let m = n + 1;
     let gm: (OrderedField::geom_sq_poly(m, t) * (1 + -(t * t)) ≈ 1 + -OrderedField::npow(t, m + m)) = OrderedField::geom_sq_mul(m, t);
     let ug: ((1 + -(t * t)) * CReal::atanh_g(t) ≈ 1) = CReal::atanh_u_g(t, dt);
     let eq: (CReal::atanh_g(t) + -OrderedField::geom_sq_poly(m, t) ≈ CReal::atanh_g(t) * OrderedField::npow(t, m + m)) = ring(gm, ug);
@@ -403,7 +403,7 @@ theorem CReal::atanh_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t:
         λ n => CReal::atanh_n_deriv(n),
         λ w pw => {
             let n = OrderedField::npow_small(H, pH, hr, w, pw);
-            Exists(Succ(n.witness), And(λ t dt => (CReal::atanh_close(w, n.witness, n.proof, t, dt)).left,
+            Exists(n.witness + 1, And(λ t dt => (CReal::atanh_close(w, n.witness, n.proof, t, dt)).left,
                 λ t dt => (CReal::atanh_close(w, n.witness, n.proof, t, dt)).right))
         })
 }
@@ -621,27 +621,27 @@ theorem Series::atanh_X_sq(A, B: Nat): Rat::ofInt(OfNat(Series::atanh_X(A, B))) 
 // reciprocal.
 theorem Series::atanh_ratio_step(A, B: Nat, pos: 0 < A + B, k: Nat):
     Rat::inv_succ(k + k) * Series::atanh_ratio(Series::atanh_X(A, B), Series::atanh_m(A, B), k)
-        ≈ (Series::atanh_t(A, B) * Series::atanh_t(A, B)) * Rat::inv_succ(Succ(k) + Succ(k))
+        ≈ (Series::atanh_t(A, B) * Series::atanh_t(A, B)) * Rat::inv_succ(k + 1 + (k + 1))
 {
     let X = Series::atanh_X(A, B);
     let m = Series::atanh_m(A, B);
     let N = 2 * (m * k) + 3 * m + 2 * k + 2;
     let p = Rat::inv_succ(k + k);
-    let q = Rat::inv_succ(Succ(k) + Succ(k));
+    let q = Rat::inv_succ(k + 1 + (k + 1));
     let r = Rat::inv_succ(N);
     let s = Rat::inv_succ(A + B - 1);
     let d = Rat::ofInt(A.int() - B.int());
     let Xr = Rat::ofInt(OfNat(X));
-    let K1 = Rat::ofInt(OfNat(Succ(k + k)));
-    let K3 = Rat::ofInt(OfNat(Succ(Succ(k) + Succ(k))));
+    let K1 = Rat::ofInt(OfNat(k + k + 1));
+    let K3 = Rat::ofInt(OfNat(k + 1 + (k + 1) + 1));
     let M1 = Rat::ofInt(OfNat(m + 1));
     let S = Rat::ofInt(OfNat(A + B));
     let f1: (p * K1 ≈ 1) = omega;
     let f2: (q * K3 ≈ 1) = omega;
-    let f3: (r * Rat::ofInt(OfNat(Succ(N))) ≈ 1) = omega;
-    let n4: (Succ(N) = (m + 1) * Succ(Succ(k) + Succ(k))) = ring;
-    let f4: (Rat::ofInt(OfNat(Succ(N))) ≈ M1 * K3) = j(sym(n4), λ v _ => Rat::ofInt(OfNat(v)) ≈ M1 * K3, Rat::same_refl(M1 * K3));
-    let n5: (X * Succ(k + k) = 2 * (X * k) + X) = ring;
+    let f3: (r * Rat::ofInt(OfNat(N + 1)) ≈ 1) = omega;
+    let n4: (N + 1 = (m + 1) * (k + 1 + (k + 1) + 1)) = ring;
+    let f4: (Rat::ofInt(OfNat(N + 1)) ≈ M1 * K3) = j(sym(n4), λ v _ => Rat::ofInt(OfNat(v)) ≈ M1 * K3, Rat::same_refl(M1 * K3));
+    let n5: (X * (k + k + 1) = 2 * (X * k) + X) = ring;
     let f5: (Series::atanh_ratio(X, m, k) ≈ Xr * K1 * r) = j(n5, λ v _ => Rat::ofInt(OfNat(v)) * r ≈ Xr * K1 * r, Rat::same_refl(Xr * K1 * r));
     let f6: (Xr ≈ d * d) = Series::atanh_X_sq(A, B);
     let f7: (s * S ≈ 1) = omega(pos);
@@ -670,8 +670,8 @@ fn Series::atanh_c(k: Nat) → Rat { Rat::inv_succ(k + k) }
 
 // The k-th term is 2·t^(2k+1)/(2k+1).
 theorem Series::atanh2_term(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1, k: Nat):
-    (Series::atanh2(A, B, small)).term(k) ≈ Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), Succ(k + k))
-        + Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), Succ(k + k))
+    (Series::atanh2(A, B, small)).term(k) ≈ Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), k + k + 1)
+        + Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), k + k + 1)
 {
     let t = Series::atanh_t(A, B);
     match k {
@@ -681,10 +681,10 @@ theorem Series::atanh2_term(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A,
                 Rat::same_refl(Rat::ofInt(d + d) * Rat::inv_succ(A + B - 1));
             let a = Rat::ofInt_add(d, d);
             let i0: (Series::atanh_c(0) ≈ 1) = omega;
-            let u: (OrderedField::npow(t, Succ(0 + 0)) ≈ 1 * t) = Rat::same_refl(1 * t);
+            let u: (OrderedField::npow(t, 0 + 1) ≈ 1 * t) = Rat::same_refl(1 * t);
             let tt: (t ≈ Rat::ofInt(d) * Rat::inv_succ(A + B - 1)) = Rat::same_refl(t);
-            let k0: ((Series::atanh2(A, B, small)).term(0) ≈ Series::atanh_c(0) * OrderedField::npow(t, Succ(0 + 0))
-                + Series::atanh_c(0) * OrderedField::npow(t, Succ(0 + 0))) = ring(f, a, i0, u, tt);
+            let k0: ((Series::atanh2(A, B, small)).term(0) ≈ Series::atanh_c(0) * OrderedField::npow(t, 0 + 1)
+                + Series::atanh_c(0) * OrderedField::npow(t, 0 + 1)) = ring(f, a, i0, u, tt);
             k0
         },
         Succ(i) => {
@@ -692,14 +692,14 @@ theorem Series::atanh2_term(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A,
             let ih = Series::atanh2_term(A, B, pos, small, i);
             let st = Series::atanh_ratio_step(A, B, pos, i);
             let r = Series::atanh_ratio(Series::atanh_X(A, B), Series::atanh_m(A, B), i);
-            let un: (s.term(Succ(i)) ≈ s.term(i) * r) = Rat::same_refl(s.term(Succ(i)));
-            let ix = OrderedField::npow_index(t, Succ(Succ(i) + Succ(i)), Succ(Succ(Succ(i + i))), omega);
-            let pw: (OrderedField::npow(t, Succ(Succ(Succ(i + i)))) ≈ OrderedField::npow(t, Succ(i + i)) * t * t) =
-                Rat::same_refl(OrderedField::npow(t, Succ(Succ(Succ(i + i)))));
+            let un: (s.term(i + 1) ≈ s.term(i) * r) = Rat::same_refl(s.term(i + 1));
+            let ix = OrderedField::npow_index(t, i + 1 + (i + 1) + 1, i + i + 3, omega);
+            let pw: (OrderedField::npow(t, i + i + 3) ≈ OrderedField::npow(t, i + i + 1) * t * t) =
+                Rat::same_refl(OrderedField::npow(t, i + i + 3));
             let cs: (Series::atanh_c(i) ≈ Rat::inv_succ(i + i)) = Rat::same_refl(Series::atanh_c(i));
-            let cs2: (Series::atanh_c(Succ(i)) ≈ Rat::inv_succ(Succ(i) + Succ(i))) = Rat::same_refl(Series::atanh_c(Succ(i)));
-            let k1: (s.term(Succ(i)) ≈ Series::atanh_c(Succ(i)) * OrderedField::npow(t, Succ(Succ(i) + Succ(i)))
-                + Series::atanh_c(Succ(i)) * OrderedField::npow(t, Succ(Succ(i) + Succ(i)))) = ring(un, ih, st, ix, pw, cs, cs2);
+            let cs2: (Series::atanh_c(i + 1) ≈ Rat::inv_succ(i + 1 + (i + 1))) = Rat::same_refl(Series::atanh_c(i + 1));
+            let k1: (s.term(i + 1) ≈ Series::atanh_c(i + 1) * OrderedField::npow(t, i + 1 + (i + 1) + 1)
+                + Series::atanh_c(i + 1) * OrderedField::npow(t, i + 1 + (i + 1) + 1)) = ring(un, ih, st, ix, pw, cs, cs2);
             k1
         },
     }
@@ -720,11 +720,11 @@ theorem Series::atanh2_sum(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, 
             let s = Series::atanh2(A, B, small);
             let ih = Series::atanh2_sum(A, B, pos, small, i);
             let tm = Series::atanh2_term(A, B, pos, small, i);
-            let us: (s.sum(Succ(i)) ≈ s.sum(i) + s.term(i)) = Rat::same_refl(s.sum(Succ(i)));
-            let ua: (OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), i, t)
-                + Series::atanh_c(i) * OrderedField::npow(t, Succ(i + i))) = Rat::same_refl(OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t));
-            let k: (s.sum(Succ(i)) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t)
-                + OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t)) = ring(us, ih, tm, ua);
+            let us: (s.sum(i + 1) ≈ s.sum(i) + s.term(i)) = Rat::same_refl(s.sum(i + 1));
+            let ua: (OrderedField::atanh_poly(λ k => Series::atanh_c(k), i + 1, t) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), i, t)
+                + Series::atanh_c(i) * OrderedField::npow(t, i + i + 1)) = Rat::same_refl(OrderedField::atanh_poly(λ k => Series::atanh_c(k), i + 1, t));
+            let k: (s.sum(i + 1) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), i + 1, t)
+                + OrderedField::atanh_poly(λ k => Series::atanh_c(k), i + 1, t)) = ring(us, ih, tm, ua);
             k
         },
     }
@@ -746,11 +746,11 @@ theorem CReal::atanh_n_ofRat(q: Rat, n: Nat):
         Zero => CReal::same_refl(CReal::ofRat(0)),
         Succ(m) => {
             let ih = CReal::atanh_n_ofRat(q, m);
-            let p = CReal::npow_ofRat(q, Succ(m + m));
+            let p = CReal::npow_ofRat(q, m + m + 1);
             let t = CReal::mul_respects(CReal::same_refl(CReal::atanh_coef(m)), p);
-            let e = CReal::same_trans(t, CReal::same_sym(CReal::ofRat_mul(Series::atanh_c(m), OrderedField::npow(q, Succ(m + m)))));
+            let e = CReal::same_trans(t, CReal::same_sym(CReal::ofRat_mul(Series::atanh_c(m), OrderedField::npow(q, m + m + 1))));
             CReal::same_trans(CReal::add_respects(ih, e),
-                CReal::same_sym(CReal::ofRat_add(OrderedField::atanh_poly(λ k => Series::atanh_c(k), m, q), Series::atanh_c(m) * OrderedField::npow(q, Succ(m + m)))))
+                CReal::same_sym(CReal::ofRat_add(OrderedField::atanh_poly(λ k => Series::atanh_c(k), m, q), Series::atanh_c(m) * OrderedField::npow(q, m + m + 1))))
         },
     }
 }
@@ -763,23 +763,23 @@ theorem CReal::atanh2_close(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A,
 {
     let s = Series::atanh2(A, B, small);
     let T = CReal::ofRat(Series::atanh_t(A, B));
-    let N = s.index(Succ(m));
-    let hs = s.index_start(Succ(m));
+    let N = s.index(m + 1);
+    let hs = s.index_start(m + 1);
     let ab = s.above(N, hs);
     let be = s.below(N, hs);
-    let es = CReal::ofRat_le(s.err_small(Succ(m), N, N.le_refl()));
+    let es = CReal::ofRat_le(s.err_small(m + 1, N, N.le_refl()));
     let near = CReal::atanh_near(T, dT, N);
     let nl: (-CReal::ofRat(Rat::inv_pow2(N)) <= CReal::atanh(T) + -CReal::atanh_n(N, T)) = near.left;
-    let ix: (N = s.start + ((Succ(m) + 1) + s.scale().width())) = refl;
-    let pN = CReal::ofRat_le(Rat::inv_pow2_antitone(Succ(m) + 1, N, omega(ix)));
+    let ix: (N = s.start + ((m + 1 + 1) + s.scale().width())) = refl;
+    let pN = CReal::ofRat_le(Rat::inv_pow2_antitone(m + 1 + 1, N, omega(ix)));
     let sr = CReal::ofRat_respects(Series::atanh2_sum(A, B, pos, small, N));
     let P = OrderedField::atanh_poly(λ k => Series::atanh_c(k), N, Series::atanh_t(A, B));
     let sa = CReal::ofRat_add(P, P);
     let an = CReal::atanh_n_ofRat(Series::atanh_t(A, B), N);
-    let h1 = Rat::inv_pow2_half(Succ(m));
+    let h1 = Rat::inv_pow2_half(m + 1);
     let h0 = Rat::inv_pow2_half(m);
-    let pp: (0 < Rat::inv_pow2(Succ(m) + 1)) = Rat::inv_pow2_pos(Succ(m) + 1);
-    let q: (Rat::inv_pow2(Succ(m) + 1) + Rat::inv_pow2(Succ(m) + 1) + Rat::inv_pow2(Succ(m) + 1) <= Rat::inv_pow2(m)) = linarith(h1, h0, pp);
+    let pp: (0 < Rat::inv_pow2(m + 1 + 1)) = Rat::inv_pow2_pos(m + 1 + 1);
+    let q: (Rat::inv_pow2(m + 1 + 1) + Rat::inv_pow2(m + 1 + 1) + Rat::inv_pow2(m + 1 + 1) <= Rat::inv_pow2(m)) = linarith(h1, h0, pp);
     let qc = CReal::ofRat_le(q);
     let lo: (-CReal::ofRat(Rat::inv_pow2(m)) <= s.real() + -(CReal::atanh(T) + CReal::atanh(T))) = linarith(be, es, near.right, pN, sr, sa, an, qc);
     let hi: (s.real() + -(CReal::atanh(T) + CReal::atanh(T)) <= CReal::ofRat(Rat::inv_pow2(m))) = linarith(ab, es, nl, pN, sr, sa, an, qc);
@@ -904,9 +904,9 @@ theorem CReal::exp_nat_ln2(n: Nat): CReal::exp(CReal::ofRat(Rat::ofInt(OfNat(n))
         Zero => CReal::same_trans(CReal::exp_respects(CReal::zero_mul(L)), CReal::exp_zero()),
         Succ(m) => {
             let ih = CReal::exp_nat_ln2(m);
-            let x = CReal::ofRat(Rat::ofInt(OfNat(Succ(m))));
+            let x = CReal::ofRat(Rat::ofInt(OfNat(m + 1)));
             let y = CReal::ofRat(Rat::ofInt(OfNat(m)));
-            let r: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let r: (Rat::ofInt(OfNat(m + 1)) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
             let xr: (x ≈ y + 1) = CReal::same_trans(CReal::ofRat_respects(r), CReal::ofRat_add(Rat::ofInt(OfNat(m)), 1));
             let a = CReal::exp_respects(CReal::exp_nat_alg(x, L, y, xr));
             let b = CReal::exp_add(y * L, L);

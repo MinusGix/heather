@@ -41,7 +41,7 @@ theorem graft_declines(): Leaf(1, PHere).compose(Branch(Lit(0), Lit(0))) = None 
 theorem add_iter(c: Nat): Leaf(1, PHere).iter(c) = Some(Leaf(c, PHere)) {
     match c {
         Zero => refl,
-        Succ(m) => j(sym(add_iter(m)), λ y p => Aff::then_compose(Leaf(1, PHere), y) = Some(Leaf(Succ(m), PHere)), refl),
+        Succ(m) => j(sym(add_iter(m)), λ y p => Aff::then_compose(Leaf(1, PHere), y) = Some(Leaf(m + 1, PHere)), refl),
     }
 }
 
@@ -62,7 +62,7 @@ theorem window_over_two(z, x: Tm, zc: z.Lc(0), xc: x.Lc(0)):
 
 // Peeled: the innermost step is taken as written.
 theorem split_over_run(z, x: Tm, zc: z.Lc(0), xc: x.Lc(0), c: Nat):
-        NRec(z, split_step(), NRun(Succ(c), x))
+        NRec(z, split_step(), NRun(c + 1, x))
             .Joins(NRun(c, App(App(split_step(), x), NRec(z, split_step(), x)))) {
     Tm::fold_affine_peeled(split_step(), And(trivial, And(trivial, trivial)), And(trivial, And(trivial, trivial)),
         8, Leaf(1, PHere), refl, z, x, zc, xc, c, Leaf(c, PHere), add_iter(c))

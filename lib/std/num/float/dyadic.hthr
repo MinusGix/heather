@@ -537,7 +537,7 @@ theorem Dyadic::mant_zero(self d: Dyadic, h: d ≈ 0): d.mant = 0 {
     match d.mant as λ m => m * p = OfNat(0) → m = OfNat(0) {
         OfNat(n) => match n {
             Zero => λ _ => refl,
-            Succ(k) => λ e => false_elim(omega(e, OfNat(Succ(k)).mul_pos(p, trivial, p_pos := pp))),
+            Succ(k) => λ e => false_elim(omega(e, OfNat(k + 1).mul_pos(p, trivial, p_pos := pp))),
         },
         NegSucc(k) => λ e => false_elim(omega(e, NegSucc(k).mul_neg(p, Int::negsucc_lt_ofnat(k, 0), p_pos := pp))),
     }(eqn)
@@ -685,10 +685,10 @@ theorem Dyadic::recip_up_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
     let r = Nat::pow2_div(K, m).rem();
     let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow2_div_parts(K, m);
     let rem: (r < m) = Nat::pow2_div_rem_lt(K, m, d_pos := hm);
-    let hi = Dyadic(Succ(q).int(), -e - K.int());
-    let scale: ((hi * d).rat() ≈ Rat((Succ(q).int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale(Succ(q).int(), m.int(), e, K);
-    let cross: (1 * Nat::pow(2, K).int() <= (Succ(q).int() * m.int()) * 1 * 1) = omega(parts, rem, Nat::int_mul(Succ(q), m), q.mul_succ_left(m));
-    let one: (1 <= Rat((Succ(q).int() * m.int()) * 1, Nat::pow(2, K))) = cross;
+    let hi = Dyadic((q + 1).int(), -e - K.int());
+    let scale: ((hi * d).rat() ≈ Rat(((q + 1).int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale((q + 1).int(), m.int(), e, K);
+    let cross: (1 * Nat::pow(2, K).int() <= ((q + 1).int() * m.int()) * 1 * 1) = omega(parts, rem, Nat::int_mul(q + 1, m), q.mul_succ_left(m));
+    let one: (1 <= Rat(((q + 1).int() * m.int()) * 1, Nat::pow(2, K))) = cross;
     let prod: (1 <= hi.rat() * d.rat()) = Rat::le_trans(one, Rat::le_of_same(Rat::same_trans(Rat::same_sym(scale), hi.rat_mul(d))));
     Rat::recip_le_of_one_le_mul(Dyadic::rat_pos(Dyadic::pos_of_mant(e, hm)), prod)
 }
@@ -703,7 +703,7 @@ theorem Dyadic::recip_bounds(self d: Dyadic, p: Nat, pos: 0 < d):
     {
         OfNat(n) => match n {
             Zero => λ h => false_elim(Dyadic::lt_irrefl(0, Dyadic::lt_respects(Dyadic::same_refl(0), Dyadic::zero_mant(d.exp), h))),
-            Succ(j) => λ _ => And(Dyadic::recip_down_at(Succ(j), d.exp, p, trivial), Dyadic::recip_up_at(Succ(j), d.exp, p, trivial)),
+            Succ(j) => λ _ => And(Dyadic::recip_down_at(j + 1, d.exp, p, trivial), Dyadic::recip_up_at(j + 1, d.exp, p, trivial)),
         },
         NegSucc(j) => λ h => false_elim(Dyadic::lt_irrefl(0, Dyadic::lt_trans(h,
             Dyadic::lt_respects(Dyadic(NegSucc(j), d.exp).same_refl(), Dyadic::zero_mant(d.exp), Dyadic::lt_of_mant_lt(NegSucc(j), 0, d.exp, Int::negsucc_lt_ofnat(j, 0)))))),
@@ -903,7 +903,7 @@ theorem Dyadic::trim_same(self d: Dyadic): d.trim() ≈ d {
     match d {
         Dyadic(a, e) => match a {
             OfNat(m) => Dyadic::trim_nat_same(m.width(), m, e),
-            NegSucc(m) => Dyadic::neg_respects(Dyadic::trim_nat_same(Succ(m).width(), Succ(m), e)),
+            NegSucc(m) => Dyadic::neg_respects(Dyadic::trim_nat_same((m + 1).width(), m + 1, e)),
         },
     }
 }

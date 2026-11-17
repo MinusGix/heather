@@ -90,7 +90,7 @@ fn CReal::exp_box(a: Rat) → Enclosed { Series::exp(a).enclosed() }
 // At a zero argument every term past the first vanishes, so exp(0) = 1: the
 // one exact value exp takes at a rational, which the search alone cannot
 // round in a directed mode (an enclosure of 1 straddles it).
-theorem Series::exp_sum_zero(a: Rat, z: a ≈ 0, m: Nat): Series::exp(a).sum(Succ(m)) ≈ 1 {
+theorem Series::exp_sum_zero(a: Rat, z: a ≈ 0, m: Nat): Series::exp(a).sum(m + 1) ≈ 1 {
     let s = Series::exp(a);
     match m {
         Zero => Rat::zero_add(1),
@@ -111,7 +111,7 @@ theorem CReal::exp_rat_of_zero(a: Rat, z: a ≈ 0): CReal::exp_rat(a) ≈ CReal:
     let s = Series::exp(a);
     let at_one = λ (n: Nat) => {
         let d: (s.index(n) = s.start + ((n + 1) + s.scale().width())) = refl;
-        let e: (s.index(n) = Succ(s.index(n) - 1)) = omega(d);
+        let e: (s.index(n) = s.index(n) - 1 + 1) = omega(d);
         let r: (s.sum(s.index(n)) ≈ 1) = j(sym(e), λ k _ => s.sum(k) ≈ 1, Series::exp_sum_zero(a, z, s.index(n) - 1));
         r
     };
@@ -246,8 +246,8 @@ theorem Binade::scaled_close(a, b, wa, wb: Nat, ta: a < Nat::pow(2, wa), la: Nat
     let whole: (Nat::pow(2, wa) = Nat::pow(2, wb) * P) = j(back, λ y _ => Nat::pow(2, y) = Nat::pow(2, wb) * P, parts);
     let up: (Nat::pow(2, wb) * P <= (b + b) * P) = Nat::mul_le_mono_r(P, Nat::pow(2, wb), b + b, lb);
     let e1: ((b + b) * P = b * P + b * P) = b.add_mul_distr(b, P);
-    let below: (Succ(b) * P <= Nat::pow(2, wb) * P) = Nat::mul_le_mono_r(P, Succ(b), Nat::pow(2, wb), tb);
-    let e2: (Succ(b) * P = b * P + 1 * P) = b.add_mul_distr(1, P);
+    let below: ((b + 1) * P <= Nat::pow(2, wb) * P) = Nat::mul_le_mono_r(P, b + 1, Nat::pow(2, wb), tb);
+    let e2: ((b + 1) * P = b * P + 1 * P) = b.add_mul_distr(1, P);
     let e3: (1 * P = P) = P.mul_left_one();
     And(omega(ta, whole, up, e1), omega(la, whole, below, e2, e3, pp))
 }

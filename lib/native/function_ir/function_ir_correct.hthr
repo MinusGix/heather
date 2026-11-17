@@ -156,7 +156,7 @@ theorem spread_intro(n: Nat): (P: List<BitVec(64)> → Type) → ((words: List<B
         Zero => λ P all => all([], refl),
         Succ(m) => λ P all => λ (a: BitVec(64)) =>
             spread_intro(m, λ (ws: List<BitVec(64)>) => P(Cons(a, ws)),
-                λ ws same => all(Cons(a, ws), cong_fn(λ (k: Nat) => Succ(k), same))),
+                λ ws same => all(Cons(a, ws), cong_fn(λ (k: Nat) => k + 1, same))),
     }
 }
 

@@ -190,7 +190,7 @@ theorem BitVec::nat_cast_eq(n, k: Nat): Ring::nat_cast<BitVec(n)>(k) = BitVec::o
 theorem BitVec::int_cast_ofInt(n: Nat, c: Int): Ring::int_cast<BitVec(n)>(c) = BitVec::ofInt(c) {
     match c {
         OfNat(k) => BitVec::nat_cast_eq(n, k),
-        NegSucc(k) => @cong(λ (w: BitVec(n)) => w.neg(), Ring::nat_cast<BitVec(n)>(Succ(k)), BitVec::ofNat(Succ(k)), BitVec::nat_cast_eq(n, Succ(k))),
+        NegSucc(k) => @cong(λ (w: BitVec(n)) => w.neg(), Ring::nat_cast<BitVec(n)>(k + 1), BitVec::ofNat(k + 1), BitVec::nat_cast_eq(n, k + 1)),
     }
 }
 
@@ -275,6 +275,6 @@ theorem BitVec::complement_eq_neg(n: Nat, x: BitVec(n)): x.complement() = x.add(
 // negative integer, with no subtraction from `2^n`
 // (issues/bitvec-int-cast-is-ofint.md).
 theorem BitVec::ofInt_negSucc(n, k: Nat): BitVec::ofInt(NegSucc(k), n := n) = BitVec::ofNat(k).complement() {
-    trans(@cong(λ (w: BitVec(n)) => w.neg(), BitVec::ofNat(Succ(k)), BitVec::ofNat(k).add(BitVec::ofNat(1)), sym(BitVec::ofNat_add(n, k, 1))),
+    trans(@cong(λ (w: BitVec(n)) => w.neg(), BitVec::ofNat(k + 1), BitVec::ofNat(k).add(BitVec::ofNat(1)), sym(BitVec::ofNat_add(n, k, 1))),
         sym(BitVec::complement_eq_neg(n, BitVec::ofNat(k))))
 }

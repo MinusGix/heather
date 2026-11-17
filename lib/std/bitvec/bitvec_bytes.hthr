@@ -73,7 +73,7 @@ theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_
 }
 
 // A word whose low bit is rebuilt from its tail.
-theorem BitVec::cons_back(n: Nat, x: BitVec(Succ(n)), {rest: BitVec(n)}, same: rest = x.tail_bits()): rest.cons_bit(x.head_bit()) = x {
+theorem BitVec::cons_back(n: Nat, x: BitVec(n + 1), {rest: BitVec(n)}, same: rest = x.tail_bits()): rest.cons_bit(x.head_bit()) = x {
     trans(BitVec::cons_bit_cong(n, refl, same, a := x.head_bit(), b := x.head_bit()), BitVec::cons_head_tail(n, x))
 }
 

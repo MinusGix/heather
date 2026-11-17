@@ -38,7 +38,7 @@ theorem BitVec::all_complete(n: Nat): (x: BitVec(n)) → Mem(x, BitVec::all(n)) 
 }
 
 theorem BitVec::cons_bit_inj(n: Nat, b: Bool, x, y: BitVec(n), e: BitVec::cons_bit(b, x) = BitVec::cons_bit(b, y)): x = y {
-    cong_fn(λ (w: BitVec(Succ(n))) => w.tail_bits(), e)
+    cong_fn(λ (w: BitVec(n + 1)) => w.tail_bits(), e)
 }
 
 theorem BitVec::all_nodup(n: Nat): BitVec::all(n).NoDup() {
@@ -48,7 +48,7 @@ theorem BitVec::all_nodup(n: Nat): BitVec::all(n).NoDup() {
             BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x)),
             λ w ml mr => match BitVec::all(k).mem_map_inv(λ (x: BitVec(k)) => BitVec::cons_bit(False, x), w, ml) {
                 Exists(_, wx) => match BitVec::all(k).mem_map_inv(λ (x: BitVec(k)) => BitVec::cons_bit(True, x), w, mr) {
-                    Exists(_, wy) => absurd(cong_fn(λ (v: BitVec(Succ(k))) => v.head_bit(), trans(wx.right, sym(wy.right)))),
+                    Exists(_, wy) => absurd(cong_fn(λ (v: BitVec(k + 1)) => v.head_bit(), trans(wx.right, sym(wy.right)))),
                 },
             },
             BitVec::all(k).nodup_map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x), λ x y e => BitVec::cons_bit_inj(k, False, x, y, e), BitVec::all_nodup(k)),

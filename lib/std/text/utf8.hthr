@@ -94,8 +94,8 @@ fn WidthBounds(w: Width, code: Nat) → Type {
 // lower bound.
 theorem bounds_ge_800(code: Nat, low: Nat::leb(0x800, code).IsTrue()):
         WidthBounds(width_ge_800(code), code) {
-    match Succ(code).leb(0x10000) as λ b =>
-            (b = Succ(code).leb(0x10000)) →
+    match (code + 1).leb(0x10000) as λ b =>
+            (b = (code + 1).leb(0x10000)) →
             WidthBounds(match b { True => W3, False => W4 }, code) {
         True => λ eq => And(low, rewrite(sym(eq), trivial)),
         False => λ eq =>
@@ -105,8 +105,8 @@ theorem bounds_ge_800(code: Nat, low: Nat::leb(0x800, code).IsTrue()):
 
 theorem bounds_ge_80(code: Nat, low: Nat::leb(0x80, code).IsTrue()):
         WidthBounds(width_ge_80(code), code) {
-    match Succ(code).leb(0x800) as λ b =>
-            (b = Succ(code).leb(0x800)) →
+    match (code + 1).leb(0x800) as λ b =>
+            (b = (code + 1).leb(0x800)) →
             WidthBounds(match b { True => W2, False => width_ge_800(code) }, code) {
         True => λ eq => And(low, rewrite(sym(eq), trivial)),
         False => λ eq =>
@@ -116,8 +116,8 @@ theorem bounds_ge_80(code: Nat, low: Nat::leb(0x80, code).IsTrue()):
 }
 
 theorem width_bounds(code: Nat): WidthBounds(width_of(code), code) {
-    match Succ(code).leb(0x80) as λ b =>
-            (b = Succ(code).leb(0x80)) →
+    match (code + 1).leb(0x80) as λ b =>
+            (b = (code + 1).leb(0x80)) →
             WidthBounds(match b { True => W1, False => width_ge_80(code) }, code) {
         True => λ eq => j(eq, λ y _ => y.IsTrue(), trivial),
         False => λ eq =>
@@ -455,10 +455,10 @@ theorem decode_emit(min, n, code: Nat, p: char::scalar(code),
 }
 
 // A class's upper range test is its payload's width bound, through the order.
-theorem bound_pow(code, bnd, n: Nat, h: Succ(code).leb(bnd).IsTrue(),
+theorem bound_pow(code, bnd, n: Nat, h: (code + 1).leb(bnd).IsTrue(),
         le: bnd <= Nat::pow(2, n)): code < Nat::pow(2, n) {
-    Succ(code).le_trans(bnd, Nat::pow(2, n),
-        Succ(code).leb_sound(bnd, h), le)
+    (code + 1).le_trans(bnd, Nat::pow(2, n),
+        (code + 1).leb_sound(bnd, h), le)
 }
 
 // Theorem 2. Every byte the encoder wrote is read back: the class test picks
@@ -730,13 +730,13 @@ theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, re
 // `width_of`. A rung the class did not take is refuted two ways — its test
 // came out `True` against the class's lower bound (`rung_absurd`), or `False`
 // against the class's upper bound (`rung_refuted`).
-theorem rung_absurd(code, bnd: Nat, e: Succ(code).leb(bnd) = True,
+theorem rung_absurd(code, bnd: Nat, e: (code + 1).leb(bnd) = True,
         low: bnd.leb(code).IsTrue()): False {
     code.leb_lt_le_absurd(bnd, rewrite(e, trivial), low)
 }
 
-theorem rung_refuted(code, bnd: Nat, e: Succ(code).leb(bnd) = False,
-        hi: Succ(code).leb(bnd).IsTrue()): False {
+theorem rung_refuted(code, bnd: Nat, e: (code + 1).leb(bnd) = False,
+        hi: (code + 1).leb(bnd).IsTrue()): False {
     j(e, λ y _ => y.IsTrue(), hi)
 }
 
@@ -748,48 +748,48 @@ theorem low_trans(a, b, code: Nat, ab: a.leb(b).IsTrue(), h: b.leb(code).IsTrue(
 
 theorem width_of_bounds(w: Width, code: Nat, hb: WidthBounds(w, code)): width_of(code) = w {
     match w as λ v => WidthBounds(v, code) → width_of(code) = v {
-        W1 => λ h => match Succ(code).leb(0x80) as λ x => (Succ(code).leb(0x80) = x) →
+        W1 => λ h => match (code + 1).leb(0x80) as λ x => ((code + 1).leb(0x80) = x) →
                 (match x { True => W1, False => width_ge_80(code) }) = W1 {
             True => λ _ => refl,
             False => λ e => false_elim(rung_refuted(code, 0x80, e, h)),
         }(refl),
-        W2 => λ h => match Succ(code).leb(0x80) as λ x => (Succ(code).leb(0x80) = x) →
+        W2 => λ h => match (code + 1).leb(0x80) as λ x => ((code + 1).leb(0x80) = x) →
                 (match x { True => W1, False => width_ge_80(code) }) = W2 {
             True => λ e => false_elim(rung_absurd(code, 0x80, e, h.left)),
-            False => λ _ => match Succ(code).leb(0x800) as λ x =>
-                    (Succ(code).leb(0x800) = x) →
+            False => λ _ => match (code + 1).leb(0x800) as λ x =>
+                    ((code + 1).leb(0x800) = x) →
                     (match x { True => W2, False => width_ge_800(code) }) = W2 {
                 True => λ _ => refl,
                 False => λ e => false_elim(rung_refuted(code, 0x800, e, h.right)),
             }(refl),
         }(refl),
-        W3 => λ h => match Succ(code).leb(0x80) as λ x => (Succ(code).leb(0x80) = x) →
+        W3 => λ h => match (code + 1).leb(0x80) as λ x => ((code + 1).leb(0x80) = x) →
                 (match x { True => W1, False => width_ge_80(code) }) = W3 {
             True => λ e => false_elim(rung_absurd(code, 0x80, e,
                 low_trans(0x80, 0x800, code, trivial, h.left))),
-            False => λ _ => match Succ(code).leb(0x800) as λ x =>
-                    (Succ(code).leb(0x800) = x) →
+            False => λ _ => match (code + 1).leb(0x800) as λ x =>
+                    ((code + 1).leb(0x800) = x) →
                     (match x { True => W2, False => width_ge_800(code) }) = W3 {
                 True => λ e => false_elim(rung_absurd(code, 0x800, e, h.left)),
-                False => λ _ => match Succ(code).leb(0x10000) as λ x =>
-                        (Succ(code).leb(0x10000) = x) →
+                False => λ _ => match (code + 1).leb(0x10000) as λ x =>
+                        ((code + 1).leb(0x10000) = x) →
                         (match x { True => W3, False => W4 }) = W3 {
                     True => λ _ => refl,
                     False => λ e => false_elim(rung_refuted(code, 0x10000, e, h.right)),
                 }(refl),
             }(refl),
         }(refl),
-        W4 => λ h => match Succ(code).leb(0x80) as λ x => (Succ(code).leb(0x80) = x) →
+        W4 => λ h => match (code + 1).leb(0x80) as λ x => ((code + 1).leb(0x80) = x) →
                 (match x { True => W1, False => width_ge_80(code) }) = W4 {
             True => λ e => false_elim(rung_absurd(code, 0x80, e,
                 low_trans(0x80, 0x10000, code, trivial, h))),
-            False => λ _ => match Succ(code).leb(0x800) as λ x =>
-                    (Succ(code).leb(0x800) = x) →
+            False => λ _ => match (code + 1).leb(0x800) as λ x =>
+                    ((code + 1).leb(0x800) = x) →
                     (match x { True => W2, False => width_ge_800(code) }) = W4 {
                 True => λ e => false_elim(rung_absurd(code, 0x800, e,
                     low_trans(0x800, 0x10000, code, trivial, h))),
-                False => λ _ => match Succ(code).leb(0x10000) as λ x =>
-                        (Succ(code).leb(0x10000) = x) →
+                False => λ _ => match (code + 1).leb(0x10000) as λ x =>
+                        ((code + 1).leb(0x10000) = x) →
                         (match x { True => W3, False => W4 }) = W4 {
                     True => λ e => false_elim(rung_absurd(code, 0x10000, e, h)),
                     False => λ _ => refl,
@@ -822,7 +822,7 @@ fn code_4(b, c1, c2, c3: BitVec(8)) → Nat {
 theorem encode_1_of(b: BitVec(8), h: Header(C1, b)):
         encode_width(width_of(code_1(b)), code_1(b)) = [b] {
     rewrite(width_of_bounds(W1, code_1(b),
-            Succ(code_1(b)).leb_complete(0x80, BitVec::toNat_lt_pow(7, ascii_payload(b)))),
+            (code_1(b) + 1).leb_complete(0x80, BitVec::toNat_lt_pow(7, ascii_payload(b)))),
         cong_fn(λ (z: BitVec(8)) => [z],
             j(sym(BitVec::ofNat_toNat(7, ascii_payload(b))), λ p _ => ascii_byte(p) = b,
                 rebuild(7, 1, b, BitVec::from_bits([False]), h))))
@@ -834,7 +834,7 @@ theorem encode_2_of(b, c1: BitVec(8), hb: Header(C2, b),
         encode_width(width_of(code_2(b, c1)), code_2(b, c1)) = [b, c1] {
     let v = cont_payload(c1).concat(lead2_payload(b));
     rewrite(width_of_bounds(W2, code_2(b, c1),
-            And(low, Succ(code_2(b, c1)).leb_complete(0x800, BitVec::toNat_lt_pow(11, v)))),
+            And(low, (code_2(b, c1) + 1).leb_complete(0x800, BitVec::toNat_lt_pow(11, v)))),
         rewrite(BitVec::ofNat_toNat(11, v),
             List::cons_eq<BitVec(8)>([cont_byte(cont_payload(c1))], [c1], lead2_byte(lead2_payload(b)), b,
                 rebuild(5, 3, b, BitVec::from_bits([False, True, True]), hb),
@@ -849,7 +849,7 @@ theorem encode_3_of(b, c1, c2: BitVec(8), hb: Header(C3, b),
         encode_width(width_of(code_3(b, c1, c2)), code_3(b, c1, c2)) = [b, c1, c2] {
     let v = cont_payload(c2).concat(cont_payload(c1).concat(lead3_payload(b)));
     rewrite(width_of_bounds(W3, code_3(b, c1, c2),
-            And(low, Succ(code_3(b, c1, c2)).leb_complete(0x10000,
+            And(low, (code_3(b, c1, c2) + 1).leb_complete(0x10000,
                 BitVec::toNat_lt_pow(16, v)))),
         rewrite(BitVec::ofNat_toNat(16, v),
             List::cons_eq<BitVec(8)>(
@@ -1055,30 +1055,30 @@ theorem strict_leaf3(b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>,
 fn Bounded(k: Nat) → Type { (bytes: List<BitVec(8)>) → bytes.len() <= k → Strict(bytes) }
 
 theorem bounded_leaf0(k: Nat, ih: Bounded(k), b: BitVec(8),
-        hl: Cons(b, Nil<BitVec(8)>).len() <= Succ(k)): Strict(Cons(b, Nil<BitVec(8)>)) {
+        hl: Cons(b, Nil<BitVec(8)>).len() <= k + 1): Strict(Cons(b, Nil<BitVec(8)>)) {
     strict_leaf0(b, ih(Nil<BitVec(8)>, hl))
 }
 
 theorem bounded_leaf1(k: Nat, ih: Bounded(k), b, c1: BitVec(8),
-        hl: Cons(b, Cons(c1, Nil<BitVec(8)>)).len() <= Succ(k)):
+        hl: Cons(b, Cons(c1, Nil<BitVec(8)>)).len() <= k + 1):
         Strict(Cons(b, Cons(c1, Nil<BitVec(8)>))) {
     strict_leaf1(b, c1, ih(Cons(c1, Nil<BitVec(8)>), hl), ih(Nil<BitVec(8)>, k.nonneg()))
 }
 
 theorem bounded_leaf2(k: Nat, ih: Bounded(k), b, c1, c2: BitVec(8),
-        hl: Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>))).len() <= Succ(k)):
+        hl: Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>))).len() <= k + 1):
         Strict(Cons(b, Cons(c1, Cons(c2, Nil<BitVec(8)>)))) {
     strict_leaf2(b, c1, c2, ih(Cons(c1, Cons(c2, Nil<BitVec(8)>)), hl),
-        ih(Cons(c2, Nil<BitVec(8)>), Succ(0).le_of_lt(k, hl)),
+        ih(Cons(c2, Nil<BitVec(8)>), 1.le_of_lt(k, hl)),
         ih(Nil<BitVec(8)>, k.nonneg()))
 }
 
 theorem bounded_leaf3(k: Nat, ih: Bounded(k), b, c1, c2, c3: BitVec(8), rest4: List<BitVec(8)>,
-        hl: Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))).len() <= Succ(k)):
+        hl: Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4)))).len() <= k + 1):
         Strict(Cons(b, Cons(c1, Cons(c2, Cons(c3, rest4))))) {
     let l = rest4.len();
-    let h3 = Succ(Succ(l)).le_of_lt(k, hl);
-    let h2 = Succ(l).le_of_lt(k, h3);
+    let h3 = (l + 2).le_of_lt(k, hl);
+    let h2 = (l + 1).le_of_lt(k, h3);
     strict_leaf3(b, c1, c2, c3, rest4,
         ih(Cons(c1, Cons(c2, Cons(c3, rest4))), hl),
         ih(Cons(c2, Cons(c3, rest4)), h3),

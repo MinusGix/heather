@@ -431,6 +431,31 @@ impl AppUnify<'_> {
         last.filter(|r| matches!(spelling::app_spine(r).0, Term::Case { .. }))
     }
 
+    /// [`unification::U::succ_pred`]: `a + k` at a positive numeral `k`,
+    /// one successor down — `a + (k - 1)`, or `a` at `k = 1`.
+    pub(crate) fn succ_pred(&self, t: &Term) -> Option<Term> {
+        let (fun, k) = spelling::app_of(t)?;
+        let pred = match &**k {
+            Term::Succ(j) => (**j).clone(),
+            Term::NatLit(j) if !j.is_zero() => heather_kernel::term::nat_lit_pred(j),
+            _ => return None,
+        };
+        let (_, a) = spelling::app_of(fun)?;
+        crate::omega_cert::named_args(self, t, "nat::Nat::add")?;
+        Some(match (pred, t) {
+            (Term::Zero, _) => (**a).clone(),
+            (pred, Term::App { fun, dom_level, cod_level, dom, cod, .. }) => Term::App {
+                fun: Rc::clone(fun),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: Rc::new(pred),
+            },
+            (pred, _) => Term::AppAt { fun: Rc::clone(fun), arg: Rc::new(pred) },
+        })
+    }
+
     /// [`unification::U::unfold_constant`]: a closed constant of Σ, `t`,
     /// unfolded one δ step to its definition, when it is transparent.
     pub(crate) fn unfold_constant(&self, cx: &Cx, t: &Term) -> Option<Term> {
@@ -531,6 +556,7 @@ impl AppUnify<'_> {
         let slot_type = |i: usize, sols: &[Sol]| doms.get(i).and_then(|t| unification::zonked(t, n, sols));
         let next_head = |t: &Term| self.next_head(cx, t);
         let unfold_constant = |t: &Term| self.unfold_constant(cx, t);
+        let succ_pred = |t: &Term| self.succ_pred(t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -544,6 +570,7 @@ impl AppUnify<'_> {
             disagree,
             next_head: &next_head,
             unfold_constant: &unfold_constant,
+            succ_pred: &succ_pred,
             guesses,
             clash,
         };

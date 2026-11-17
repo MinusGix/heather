@@ -112,7 +112,7 @@ theorem cat_native_runs(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X
     start: SystemStart(cat_size(), io_elf_file(cat_bytes(), cat_note(), cat_size()), top, cat_room(), args, s)):
     TouchedRuns(cat_size(), top, cat_room(), cat(cat_capacity()).denote(args))(s) {
     cat(cat_capacity()).elf_touched_runs(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_note(), cat_bytes_fit(),
-        Nat::leb_sound(Succ(cat(cat_capacity()).depth), Nat::pow(2, 64), trivial), top, args, s, start)
+        Nat::leb_sound(cat(cat_capacity()).depth + 1, Nat::pow(2, 64), trivial), top, args, s, start)
 }
 
 // What cat's process does once its stack is its own: every run Linux can
@@ -144,7 +144,7 @@ theorem cat_native_sends(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<
             Exists(reached.witness, ⟨reached.proof.left, λ tr produces valid returns run ran responses =>
                 trans(sim_run_sends(io, program.at(produces.n), reached.witness, reached.proof.right(produces.n), tr, produces.h, valid,
                         Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns), run, ran, responses, BitVec::ofNat(1)),
-                    cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(Succ(cat_capacity()), Nat::pow(2, 63), trivial),
+                    cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(cat_capacity() + 1, Nat::pow(2, 63), trivial),
                         tr, produces, valid, returns))⟩),
         stack_strides(cat_room(), cat_room()), 0, s, cat_native_runs(top, args, s, start))
 }

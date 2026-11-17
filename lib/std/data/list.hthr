@@ -342,13 +342,13 @@ theorem List::foldl_rev<A, B>(self xs: List<A>, f: B → A → B):
 }
 
 theorem List::foldl_len<A>(self xs: List<A>):
-    (z: Nat) → xs.foldl(λ (k: Nat) (a: A) => Succ(k), z) = z + xs.len()
+    (z: Nat) → xs.foldl(λ (k: Nat) (a: A) => k + 1, z) = z + xs.len()
 {
     match xs {
         Nil => λ z => {},
         Cons(_, t) => z ⊢
             apply trans;
-            give t.foldl_len(Succ(z));
+            give t.foldl_len(z + 1);
             z.add_succ_left(t.len()),
     }
 }
@@ -442,7 +442,7 @@ theorem List::len_take<A>(self xs: List<A>): (n: Nat) → n <= xs.len() → xs.t
         Nil => λ n => match n { Zero => λ _ => refl, Succ(_) => λ (h: False) => false_elim(h) },
         Cons(_, t) => λ n => match n {
             Zero => λ _ => refl,
-            Succ(k) => λ h => Nat::cong(λ m => Succ(m), t.len_take(k, h)),
+            Succ(k) => λ h => Nat::cong(λ m => m + 1, t.len_take(k, h)),
         },
     }
 }
@@ -1029,7 +1029,7 @@ theorem List::ext_nth<A>(self xs: List<A>): (ys: List<A>) → xs.len() = ys.len(
             Nil => λ len _ => false_elim(Nat::succ_ne_zero(rest.len(), len)),
             Cons(y, more) => λ len same => trans(cong_fn<A, List<A>>(λ head => Cons(head, rest), Option::some_inj(x, y, same(0, trivial))),
                 cong_fn<List<A>, List<A>>(λ tail => Cons(y, tail),
-                    rest.ext_nth(more, Nat::succ_inj(rest.len(), more.len(), len), λ k below => same(Succ(k), below)))),
+                    rest.ext_nth(more, Nat::succ_inj(rest.len(), more.len(), len), λ k below => same(k + 1, below)))),
         },
     }
 }
@@ -1058,7 +1058,7 @@ theorem List::len_update<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.
         Nil => λ i f => refl,
         Cons(_, t) => λ i => match i {
             Zero => λ f => refl,
-            Succ(k) => λ f => cong_fn<Nat, Nat>(λ n => Succ(n), t.len_update(k, f)),
+            Succ(k) => λ f => cong_fn<Nat, Nat>(λ n => n + 1, t.len_update(k, f)),
         },
     }
 }
@@ -1081,7 +1081,7 @@ theorem List::nth_update_other<A>(self xs: List<A>): (i: Nat) → (f: A → A) �
             Zero => λ f k => match k { Zero => λ ne => false_elim(ne(refl)), Succ(_) => λ _ => refl },
             Succ(m) => λ f k => match k {
                 Zero => λ _ => refl,
-                Succ(l) => λ ne => t.nth_update_other(m, f, l, λ same => ne(cong_fn<Nat, Nat>(λ n => Succ(n), same))),
+                Succ(l) => λ ne => t.nth_update_other(m, f, l, λ same => ne(cong_fn<Nat, Nat>(λ n => n + 1, same))),
             },
         },
     }
@@ -1514,7 +1514,7 @@ theorem List::len_product<A, B>(self xs: List<A>, ys: List<B>): xs.product(ys).l
             trans(rewrite(ys.len_map(λ (b: B) => Pair(h, b)), rewrite(t.len_product(ys), refl)),
                 trans(Nat::add_comm(ys.len(), t.len() * ys.len()),
                     trans(cong_fn(λ (n: Nat) => n + ys.len(), Nat::mul_comm(t.len(), ys.len())),
-                        Nat::mul_comm(ys.len(), Succ(t.len())))))),
+                        Nat::mul_comm(ys.len(), t.len() + 1))))),
     }
 }
 

@@ -73,12 +73,13 @@ impl Polymorphic<'_> {
             let slot_type = |i: usize, sols: &[Sol]| doms.get(i).and_then(|t| zonked(t, k, sols));
             let next_head = |t: &Term| AppUnify(self).next_head(cx, t);
             let unfold_constant = |t: &Term| AppUnify(self).unfold_constant(cx, t);
+            let succ_pred = |t: &Term| AppUnify(self).succ_pred(t);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
                 constructor: &constructor, slot_view: &slot_view, slot_type: &slot_type,
                 admit: &admit, disagree: None, next_head: &next_head, unfold_constant: &unfold_constant,
-                guesses: crate::unification::Guesses::Take, clash: None,
+                succ_pred: &succ_pred, guesses: crate::unification::Guesses::Take, clash: None,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
             check.settle(&mut inner);
