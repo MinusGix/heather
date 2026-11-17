@@ -813,9 +813,9 @@ pub(crate) fn hypothesis_through_calls(
     scrutinee_type: &Type,
     scrutinee_level: &Level,
     span: Span,
-) -> Option<Type> {
-    let Type::Id { level, ty: carrier, lhs, rhs } = elab.read_motive_type(cx, ty, span)? else {
-        return None;
+) -> Result<Type, NotRead> {
+    let Some(Type::Id { level, ty: carrier, lhs, rhs }) = elab.read_motive_type(cx, ty, span) else {
+        return Err(NotRead::NotAbout);
     };
     let lhs = elab.read_motive_term(cx, &lhs, span).unwrap_or(lhs);
     let rhs = elab.read_motive_term(cx, &rhs, span).unwrap_or(rhs);
@@ -827,7 +827,7 @@ pub(crate) fn hypothesis_through_calls(
     let mut candidates = match (on_left.is_empty(), on_right.is_empty()) {
         (false, true) => on_left,
         (true, false) => on_right,
-        _ => return None,
+        _ => return Err(NotRead::NotAbout),
     };
     candidates.dedup();
     let hits: Vec<Term> = candidates
@@ -838,14 +838,27 @@ pub(crate) fn hypothesis_through_calls(
         })
         .collect();
     if hits.is_empty() {
-        return None;
+        return Err(NotRead::NotAbout);
     }
     let read = Type::Id { level, ty: carrier, lhs, rhs };
-    let motive = read.abstract_local_any(&with_scrutinee(hits, scrutinee))?;
+    let Some(motive) = read.abstract_local_any(&with_scrutinee(hits, scrutinee)) else {
+        return Err(NotRead::NotAbout);
+    };
     if !elab.motive_well_formed(cx, &motive, scrutinee_type, scrutinee_level) {
-        return None;
+        return Err(NotRead::IllFormed);
     }
-    Some(motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrutinee.clone()))))
+    Ok(motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrutinee.clone()))))
+}
+
+/// Why [`hypothesis_through_calls`] left a hypothesis as written.
+pub(crate) enum NotRead {
+    /// Its type is not an equation about one call's value stuck on the
+    /// scrutinee.
+    NotAbout,
+    /// It is, and the motive that abstracts the scrutinee from it is
+    /// ill-formed (§4.6): said at the use that wanted it refined
+    /// (docs/language/matching/arm-readings-design.md §3.5).
+    IllFormed,
 }
 
 /// `ty` with its term positions reduced, below `Π` codomains and `Σ`
