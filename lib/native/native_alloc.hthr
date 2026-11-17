@@ -76,6 +76,20 @@ fn Home::in_pool(self home: Home) → Bool {
 // (docs/native/native-procedure-frames-design.md §2.4).
 record Homes { of: List<Home>, loops: List<List<Nat>>, places: List<Place> := [], pins: List<Home> := [] }
 
+// A procedure's placement: its body's words' homes and loop sets, the
+// registers it pins, and how many words its frame has. Each body has its
+// own, so a body pays for the registers and the slots it uses and not for
+// another's (docs/native/native-procedure-frames-design.md §2.2). One a list
+// does not reach has no word.
+record Frame { of: List<Home>, loops: List<List<Nat>>, pins: List<Home>, words: Nat }
+
+fn List::frame(self bodies: List<Frame>, index: Nat) → Frame {
+    match bodies.nth(index) { None => Frame([], [], [], 0), Some(frame) => frame }
+}
+
+// The frame's homes, with the functions' values where the program has them.
+fn Frame::homes(self frame: Frame, places: List<Place>) → Homes { Homes(frame.of, frame.loops, places, frame.pins) }
+
 fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
     match homes.loops.nth(again) { None => [], Some(set) => set }
 }

@@ -94,11 +94,14 @@ record Target {
     // word a word of the file; the words above the frame (the registers
     // it saved, its return address, then its caller's frame and so on up);
     // and how many calls deeper it may go, each needing a return address,
-    // at most six saved registers and a frame. Below them all is room for
+    // at most six saved registers and a frame of at most the reserved words. Below them all is room for
     // a function a region calls (`program_calls_room`: its room under
     // `program_room` and the CALL's word) and for one return address more: a call
     // with no room left is refused in the callee's entry, after its CALL.
     // `main`'s frame is the stack's top, with nothing above it.
+    // The procedures' placements (`Layout::body`): a callee's activation is
+    // this target with the callee's frame and homes.
+    bodies: List<Frame>,
     index: Nat,
     frames: List<BitVec(64)>,
     // What the registers the homes pin held when the activation was entered,
@@ -107,11 +110,11 @@ record Target {
     pinned: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: (room * (8 * (words + 7)) + program_calls_room(functions)) + 8 <= index,
+    roomy: (room * (8 * (reserved + 7)) + program_calls_room(functions)) + 8 <= index,
 }
 
 fn Target::layout(self t: Target) → Layout {
-    Layout::placed(t.r.low, t.reserved, t.words, t.caps, t.homes).with_procedures(t.procedures).with_functions(t.functions)
+    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies)
 }
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }

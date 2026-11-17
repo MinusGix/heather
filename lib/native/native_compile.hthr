@@ -14,7 +14,7 @@
 // puts what it writes in the word's home, where the word is live after it
 // (`Prog::word_to`, `word_from`); RBX carries a slot's address, or a home
 // register's word, on the way. The homes and each loop's set come with the
-// compile (`Source::compile(low, homes)`), which checks them first
+// compile (`Source::compile(low, homes, bodies)`), which checks them first
 // (`Source::allocation_ok`), so an allocator is never trusted.
 //
 // - A `Compute` leaf is first optimised by the FunctionIR pass
@@ -116,16 +116,22 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
 // The procedures are the table a call names (docs/native/native-procedures-design.md),
-// the functions the ones a region's `Call` does.
+// the functions the ones a region's `Call` does. `bodies` is each
+// procedure's own placement: the layout is the running body's, and
+// `Layout::body` is the one a procedure's code is compiled with.
 record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
-    procedures: List<Procedure> := [], functions: List<Function> := [] }
+    procedures: List<Procedure> := [], functions: List<Function> := [], bodies: List<Frame> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies)
 }
 
 fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies)
+}
+
+fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies)
 }
 
 // Word `id` has a slot.
@@ -353,6 +359,20 @@ fn Layout::placed(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, 
 }
 // The layout of a program's first activation: the region keeps its words' room.
 fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout::placed(low, words, words, capacities, homes) }
+
+// A layout with its tables: the procedures, the functions and the
+// procedures' placements.
+fn Layout::tabled(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes, procedures: List<Procedure>, functions: List<Function>,
+    bodies: List<Frame>) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies)
+}
+
+// The layout procedure `index`'s code is compiled with: the same region,
+// tables and placements, and the procedure's own frame and homes.
+fn Layout::body(self layout: Layout, index: Nat) → Layout {
+    Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places),
+        layout.procedures, layout.functions, layout.bodies)
+}
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
 theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
     Layout::of(low, words, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
@@ -1139,8 +1159,8 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout {
-    Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures).with_functions(src.functions)
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Layout {
+    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies)
 }
 
 // A word of the frame set to RAX, where the file has the word: a word past
@@ -1161,9 +1181,9 @@ fn Prog::frames_main(self p: Prog, layout: Layout, live: List<Nat>) → Prog {
     then(p, Block(frame_down(layout.words) ++ [MovRI(Rax, BitVec::ofNat(0))])).zeroes(layout, live)
 }
 
-fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), src.main.live_in(homes, []))
-        .inits(src.layout(low, homes), src.buffers, 0)
+fn Source::entry(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Prog {
+    Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), src.main.live_in(homes, []))
+        .inits(src.layout(low, homes, bodies), src.buffers, 0)
 }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
@@ -1185,7 +1205,8 @@ fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
     match proc.body.checked(layout.homes, proc.results) {
         None => False,
         Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
-            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
+            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && (proc.results.len().leb(6) &&
+            (layout.homes.fits() && layout.words.leb(layout.reserved)))))),
     }
 }
 
@@ -1222,11 +1243,12 @@ fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: 
     }
 }
 
-// The procedures from `index` on, each after the last.
+// The procedures from `index` on, each after the last and each under its
+// own layout (`Layout::body`).
 fn List::procedures_code(self procs: List<Procedure>, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
     match procs {
         Nil => Some(Compiled(p, names)),
-        Cons(proc, rest) => match proc.code(p, layout, index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
+        Cons(proc, rest) => match proc.code(p, layout.body(index), index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
     }
 }
 
@@ -1316,9 +1338,9 @@ theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Pla
 // A source with procedures or functions: `main` naming its labels past
 // theirs and the shared exit's, then exit 0, each procedure, the shared
 // exit, and the functions.
-fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
-    let layout = src.layout(low, homes);
-    match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Option<Prog> {
+    let layout = src.layout(low, homes, bodies);
+    match src.main.emit(src.entry(low, homes, bodies), layout, [], layout.deep_label()) {
         None => None,
         Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
                 layout, 0, c.names) {
@@ -1331,15 +1353,15 @@ fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Op
     }
 }
 
-fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
+fn Source::compile(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Option<Prog> {
     match src.allocation_ok(homes) {
         False => None,
         True => match src.procedures {
             Nil => match src.functions {
-                Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
-                Cons(_, _) => src.compile_calls(low, homes),
+                Nil => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
+                Cons(_, _) => src.compile_calls(low, homes, bodies),
             },
-            Cons(_, _) => src.compile_calls(low, homes),
+            Cons(_, _) => src.compile_calls(low, homes, bodies),
         },
     }
 }
@@ -1598,20 +1620,20 @@ fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → Compile
 fn List::procedures_refusal(self procs: List<Procedure>, layout: Layout, index: Nat) → List<Nat> {
     match procs {
         Nil => [],
-        Cons(proc, rest) => match proc.code(Start, layout, index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
+        Cons(proc, rest) => match proc.code(Start, layout.body(index), index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
     }
 }
 
-fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat> {
-    match src.main.scan(src.layout(low, homes), [], 1) {
+fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → List<Nat> {
+    match src.main.scan(src.layout(low, homes, bodies), [], 1) {
         Refused(why) => why,
         Passed(_) => match src.allocation_ok(homes) {
             False => [0, 5, 12, 0, 0],
-            True => match src.procedures.procedures_refusal(src.layout(low, homes), 0) {
+            True => match src.procedures.procedures_refusal(src.layout(low, homes, bodies), 0) {
                 Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
                 Nil => match Start.links(src.functions, homes.places, 0) {
                     None => [0, 5, 17, 0, 0],
-                    Some(_) => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+                    Some(_) => match src.compile(low, homes, bodies) { None => [0, 5, 9, 0, 0], Some(_) => [] },
                 },
             },
         },
