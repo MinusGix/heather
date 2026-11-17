@@ -15,5 +15,5 @@ Two loose ends of [[function-frame-sized-by-use]]:
 
 ## Closed
 
-- The statement compiler's functions are emitted under the homes' own table (`Homes.rooms`, `Prog::links(functions, places, rooms, names)`, `Homes::calls_room`), and `write-elf` states the planned one (`program_rooms_planned`) as a literal. With no table given it is `program_rooms`, as before. `docs/native/native-procedure-frames-design.md` §6.5.
+- The statement compiler's functions are emitted under the homes' own table (`Homes.rooms`, `Prog::links(functions, places, rooms, names)`, `Homes::calls_room`), and `write-elf` states the one its plans ask for as a literal (`program_rooms_by` over each plan's saves and slots). With no table given it is `program_rooms`, as before. `docs/native/native-procedure-frames-design.md` §6.5.
 - The optimizer's `Function::lowers` and its probe stay under `index_rooms()`: that call asks only whether a placement lowers and reads nothing of the room, so a smaller table changes no answer and costs its evaluation at every probe.

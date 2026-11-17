@@ -409,9 +409,13 @@ proofs are stated over any table and nothing new is proved about one.
   the table no placement exceeds: every function saving six registers and
   calling with eight slots. That is what the bound was before, and what
   `Source::homes()` and a test's `Homes::slots(src).placed(…)` still get.
-- `write-elf` reads `program_rooms_planned`, the table its places ask
-  for, on the fork and spells it in the homes' literal. A leaf that saves
-  nothing then asks for no stack below its return address.
+- `write-elf` states the table its places ask for in the homes' literal.
+  It reads each function's plan once, takes the saves and call slots the
+  plan begins with, and reads `program_rooms_by` over those literals, as
+  compile-x86 does. A leaf that saves nothing then asks for no stack below
+  its return address. Reading `program_rooms_planned` instead plans every
+  function a second time in one read, which ran the tools' gates out of
+  memory.
 
 The table cannot be computed from `places` inside `links` without planning
 or emitting the functions first: where one function's places end in the
