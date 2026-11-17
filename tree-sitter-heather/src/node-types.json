@@ -48,6 +48,10 @@
         "named": true
       },
       {
+        "type": "byte_character",
+        "named": true
+      },
+      {
         "type": "byte_string",
         "named": true
       },
@@ -2548,6 +2552,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -2651,6 +2659,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -2773,6 +2785,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -3170,6 +3186,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -3386,6 +3406,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -3491,6 +3515,10 @@
         },
         {
           "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "byte_character",
           "named": true
         },
         {
@@ -3615,6 +3643,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -3716,6 +3748,10 @@
         },
         {
           "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "byte_character",
           "named": true
         },
         {
@@ -3826,6 +3862,10 @@
           "named": true
         },
         {
+          "type": "byte_character",
+          "named": true
+        },
+        {
           "type": "byte_string",
           "named": true
         },
@@ -3929,6 +3969,10 @@
           "named": true
         },
         {
+          "type": "byte_character",
+          "named": true
+        },
+        {
           "type": "byte_string",
           "named": true
         },
@@ -4029,6 +4073,10 @@
         },
         {
           "type": "builtin_type",
+          "named": true
+        },
+        {
+          "type": "byte_character",
           "named": true
         },
         {
@@ -4177,6 +4225,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -4349,6 +4401,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -4973,6 +5029,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -5105,6 +5165,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -5212,6 +5276,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -6815,6 +6883,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -6921,6 +6993,10 @@
             "named": true
           },
           {
+            "type": "byte_character",
+            "named": true
+          },
+          {
             "type": "byte_string",
             "named": true
           },
@@ -7024,6 +7100,10 @@
           },
           {
             "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
             "named": true
           },
           {
@@ -7301,6 +7381,10 @@
   {
     "type": "by",
     "named": false
+  },
+  {
+    "type": "byte_character",
+    "named": true
   },
   {
     "type": "byte_string",

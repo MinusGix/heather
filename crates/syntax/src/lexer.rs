@@ -31,6 +31,10 @@ pub enum TokKind {
     /// `\xHH` for any byte. One token, so `b "…"` stays an identifier and a
     /// string.
     ByteStr(Vec<u8>),
+    /// `b'…'` — one byte, a byte string's element: an ASCII character or one
+    /// of a byte string's escapes, `b'\n'` or `b'\xFF'`. Held as the byte,
+    /// as a numeral holds its value; it is a `u8` wherever it stands.
+    ByteChar(u8),
     /// `·` followed immediately by zero or more Unicode subscript digits.
     /// No subscript is the left-to-right anonymous mode; a subscript is an
     /// explicit zero-based argument position (issues/argument-slot-sections.md).
@@ -712,18 +716,21 @@ pub enum ScanRefusal {
     /// The byte refused is in a byte string's `\x` escape and is no
     /// hexadecimal digit.
     ByteEscape = 23,
+    /// The byte refused is in a byte character literal where its closing
+    /// `'` belongs: right after its `b'` (no byte), or after its one byte.
+    ByteCount = 24,
 }
 
 impl ScanRefusal {
     /// Every reason, in code order: `ALL[r as usize - 1] == r`.
     #[rustfmt::skip]
-    pub const ALL: [ScanRefusal; 23] = [
+    pub const ALL: [ScanRefusal; 24] = [
         ScanRefusal::Unexpected, ScanRefusal::BangEq, ScanRefusal::Digit, ScanRefusal::Mark, ScanRefusal::SignedMark,
         ScanRefusal::LeadingUnderscore, ScanRefusal::Underscore, ScanRefusal::NoDigits, ScanRefusal::After,
         ScanRefusal::AfterMark, ScanRefusal::AfterSignedMark, ScanRefusal::AfterUnderscore, ScanRefusal::LeadingZeros,
         ScanRefusal::FractionUnderscore, ScanRefusal::Unterminated, ScanRefusal::CharCount, ScanRefusal::EscapeEnd,
         ScanRefusal::Escape, ScanRefusal::EscapeBrace, ScanRefusal::EscapeHex, ScanRefusal::NotUtf8,
-        ScanRefusal::NotAscii, ScanRefusal::ByteEscape,
+        ScanRefusal::NotAscii, ScanRefusal::ByteEscape, ScanRefusal::ByteCount,
     ];
 
     /// The reason with this code, if it is one.
@@ -769,10 +776,10 @@ impl ScanRefusal {
                 let at = (point + 1..at).find(|&j| bytes[j] == b'_' && !bytes.get(j + 1).is_some_and(u8::is_ascii_hexdigit))?;
                 return Some(literal_then(src, start, at));
             }
-            Unterminated | EscapeEnd | Escape | NotAscii | ByteEscape if bytes[start] == b'b' => {
+            Unterminated | EscapeEnd | Escape | NotAscii | ByteEscape | ByteCount if bytes[start] == b'b' => {
                 return byte_string_refusal(self, src, start, at);
             }
-            NotAscii | ByteEscape => return None,
+            NotAscii | ByteEscape | ByteCount => return None,
             Unterminated | CharCount | EscapeEnd | Escape | EscapeBrace | EscapeHex => return quoted_refusal(self, src, start, at),
             NotUtf8 => return None,
         };
@@ -836,26 +843,33 @@ fn quoted_refusal(reason: ScanRefusal, src: &str, start: usize, at: usize) -> Op
     })
 }
 
-/// A byte string opened at `start` (its `b`) and refused at `at` for
-/// `reason`: the message the lexer gives where its own reading of the
-/// literal is refused for that reason there, and `None` where it is not.
-/// A byte string's escapes have no values to refuse, so its reading is
-/// refused at the first byte it cannot take, as the scanner's is.
+/// A byte string or byte character opened at `start` (its `b`) and refused
+/// at `at` for `reason`: the message the lexer gives where its own reading
+/// of the literal is refused for that reason there, and `None` where it is
+/// not. A byte literal's escapes have no values to refuse, so its reading
+/// is refused at the first byte it cannot take, as the scanner's is.
 fn byte_string_refusal(reason: ScanRefusal, src: &str, start: usize, at: usize) -> Option<LexError> {
-    match lex_byte_string(src, start) {
+    if !matches!(src.as_bytes().get(start + 1), Some(b'"' | b'\'')) {
+        return None;
+    }
+    match lex_byte_literal(src, start) {
         Err((r, a)) if r == reason && a == at => Some(byte_string_error(src, start, reason, at)),
         _ => None,
     }
 }
 
-/// The byte string whose `b` is at `start` (a `"` right after it): its
-/// bytes and the offset past its closing `"`, or why and where it is
-/// refused, as `lexer_scan.hthr`'s `step_byte_string` refuses it. The
-/// escapes are a string's (`\n \t \r \\ \' \" \0`) and `\xHH`, two
-/// hexadecimal digits for any byte; `\u{…}` names a scalar value, which is
-/// not a byte, and is not one of them.
-fn lex_byte_string(src: &str, start: usize) -> Result<(Vec<u8>, usize), (ScanRefusal, usize)> {
+/// The byte literal whose `b` is at `start`, a `"` or a `'` right after it:
+/// its bytes and the offset past its closing quote, or why and where it is
+/// refused, as `lexer_scan.hthr`'s `step_byte_string` and `step_byte_char`
+/// refuse it. The escapes are a string's (`\n \t \r \\ \' \" \0`) and
+/// `\xHH`, two hexadecimal digits for any byte; `\u{…}` names a scalar
+/// value, which is not a byte, and is not one of them. A byte string `b"…"`
+/// holds any number of bytes; a byte character `b'…'` exactly one, so the
+/// place after it is its closing `'` or a refusal.
+fn lex_byte_literal(src: &str, start: usize) -> Result<(Vec<u8>, usize), (ScanRefusal, usize)> {
     let bytes = src.as_bytes();
+    let delim = bytes[start + 1];
+    let one = delim == b'\'';
     let hex = |at: usize| match bytes.get(at) {
         Some(b) => (*b as char).to_digit(16).map(|d| d as u8).ok_or((ScanRefusal::ByteEscape, at)),
         None => Err((ScanRefusal::ByteEscape, at)),
@@ -864,9 +878,16 @@ fn lex_byte_string(src: &str, start: usize) -> Result<(Vec<u8>, usize), (ScanRef
     let mut i = start + 2;
     loop {
         let Some(&b) = bytes.get(i) else { return Err((ScanRefusal::Unterminated, i)) };
+        if b == b'\n' {
+            return Err((ScanRefusal::Unterminated, i));
+        }
+        if one && (out.len() == 1) != (b == delim) {
+            // A byte character's one byte is followed by its `'`, and only
+            // it is.
+            return Err((ScanRefusal::ByteCount, i));
+        }
         match b {
-            b'"' => return Ok((out, i + 1)),
-            b'\n' => return Err((ScanRefusal::Unterminated, i)),
+            _ if b == delim => return Ok((out, i + 1)),
             b'\\' => {
                 let Some(&e) = bytes.get(i + 1) else { return Err((ScanRefusal::EscapeEnd, i + 1)) };
                 let simple = match e {
@@ -894,26 +915,29 @@ fn lex_byte_string(src: &str, start: usize) -> Result<(Vec<u8>, usize), (ScanRef
     }
 }
 
-/// The message for a byte string opened at `start` that [`lex_byte_string`]
+/// The message for a byte literal opened at `start` that [`lex_byte_literal`]
 /// refuses at `at` for `reason`.
 fn byte_string_error(src: &str, start: usize, reason: ScanRefusal, at: usize) -> LexError {
+    let one = src.as_bytes()[start + 1] == b'\'';
+    let (what, close) = if one { ("byte character", '\'') } else { ("byte string", '"') };
     // The character at `at`, whole: every byte before it is ASCII, so `at`
     // starts one.
     let ch = src.get(at..).and_then(|s| s.chars().next());
     let width = ch.map_or(0, char::len_utf8);
     match reason {
-        ScanRefusal::Unterminated => refused("unterminated byte string literal: no closing `\"`".into(), start, start + 2),
+        ScanRefusal::Unterminated => refused(format!("unterminated {what} literal: no closing `{close}`"), start, start + 2),
         ScanRefusal::EscapeEnd => escape_end_error(start, at),
         ScanRefusal::NotAscii => {
             let c = ch.unwrap_or('\u{FFFD}');
             let mut utf8 = [0; 4];
             let spelled: String = c.encode_utf8(&mut utf8).bytes().map(|b| format!("\\x{b:02X}")).collect();
+            let then = if one {
+                format!("its UTF-8 bytes are `{spelled}`, a byte string `b\"{spelled}\"`")
+            } else {
+                format!("write its UTF-8 bytes as escapes, `{spelled}`")
+            };
             refused(
-                format!(
-                    "a byte string holds ASCII characters, one byte each, and `{c}` (U+{:04X}) is not one: \
-                     write its UTF-8 bytes as escapes, `{spelled}`",
-                    c as u32
-                ),
+                format!("a {what} holds ASCII characters, one byte each, and `{c}` (U+{:04X}) is not one: {then}", c as u32),
                 at,
                 at + width,
             )
@@ -924,10 +948,20 @@ fn byte_string_error(src: &str, start: usize, reason: ScanRefusal, at: usize) ->
             let what = if ch.is_none() { format!("`{shown}` ends the source") } else { format!("`{shown}` is not a byte escape") };
             refused(format!("{what}: `\\x` takes exactly two hexadecimal digits, as in `\\x7F`"), slash, at + width)
         }
+        ScanRefusal::ByteCount if at == start + 2 => {
+            refused("empty byte character literal: `b'…'` holds exactly one byte".into(), start, at + 1)
+        }
+        ScanRefusal::ByteCount => refused(
+            "a byte character literal holds exactly one byte, so its closing `'` belongs here: \
+             write a byte string `b\"…\"` for more than one"
+                .into(),
+            at,
+            at + width,
+        ),
         _ => {
             let bad = ch.unwrap_or('\\');
             refused(
-                format!("unknown escape `\\{bad}` in a byte string: its escapes are \\n \\t \\r \\\\ \\' \\\" \\0 and \\xHH"),
+                format!("unknown escape `\\{bad}` in a {what}: its escapes are \\n \\t \\r \\\\ \\' \\\" \\0 and \\xHH"),
                 at - 1,
                 at + width,
             )
@@ -1037,6 +1071,7 @@ macro_rules! spelled_tok_kinds {
                     TokKind::Char(_) => ScanKind::Char,
                     TokKind::Str(_) => ScanKind::Str,
                     TokKind::ByteStr(_) => ScanKind::ByteStr,
+                    TokKind::ByteChar(_) => ScanKind::ByteChar,
                     TokKind::ArgSlot(_) => ScanKind::ArgSlot,
                     TokKind::Hole(_) => ScanKind::Hole,
                     TokKind::Eof => ScanKind::Eof,
@@ -1170,11 +1205,16 @@ fn lex_into_rust(src: &str, toks: &mut Vec<Tok>, mut keep: impl FnMut(&Tok) -> b
             continue;
         }
         let start = i;
-        // byte strings: `b` and a `"` right after it (docs/native/io-programs-design.md
-        // §5 D3), which no identifier is followed by otherwise.
-        if c == b'b' && bytes.get(i + 1) == Some(&b'"') {
-            let (value, end) = lex_byte_string(src, start).map_err(|(reason, at)| byte_string_error(src, start, reason, at))?;
-            emit!(Tok { kind: TokKind::ByteStr(value), span: Span { start, end } });
+        // byte strings and byte characters: `b` and a `"` or a `'` right
+        // after it (docs/native/io-programs-design.md §5 D3), which no
+        // identifier is followed by otherwise.
+        if c == b'b' && matches!(bytes.get(i + 1), Some(b'"' | b'\'')) {
+            let (value, end) = lex_byte_literal(src, start).map_err(|(reason, at)| byte_string_error(src, start, reason, at))?;
+            let kind = match value.as_slice() {
+                [byte] if bytes[i + 1] == b'\'' => TokKind::ByteChar(*byte),
+                _ => TokKind::ByteStr(value),
+            };
+            emit!(Tok { kind, span: Span { start, end } });
             i = end;
             continue;
         }
@@ -1621,7 +1661,59 @@ mod tests {
             assert!(error.msg.contains(says), "{src}: {}", error.msg);
             assert_eq!(error.span.start, at, "{src}: {}", error.msg);
             // The same refusal, from the reason and offset alone.
-            let (reason, refused_at) = lex_byte_string(src, 0).unwrap_err();
+            let (reason, refused_at) = lex_byte_literal(src, 0).unwrap_err();
+            let worded = reason.error(src, 0, refused_at).expect(src);
+            assert_eq!((worded.msg, worded.span), (error.msg, error.span), "{src}");
+        }
+    }
+
+    // A byte character is one token from its `b`: one ASCII character or
+    // one of a byte string's escapes, then its `'`. Each refusal names what
+    // it refuses, and the scanner's reason and offset word the same message.
+    #[test]
+    fn byte_characters_hold_one_byte() {
+        let byte = |src: &str| {
+            let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+            assert_eq!(toks[0].span, Span { start: 0, end: src.len() }, "{src}");
+            match toks[0].kind {
+                TokKind::ByteChar(b) => b,
+                ref other => panic!("{src}: {other:?}"),
+            }
+        };
+        assert_eq!(byte("b'a'"), b'a');
+        assert_eq!(byte("b'\"'"), b'"');
+        assert_eq!(byte(r"b'\n'"), b'\n');
+        assert_eq!(byte(r"b'\t'"), b'\t');
+        assert_eq!(byte(r"b'\r'"), b'\r');
+        assert_eq!(byte(r"b'\\'"), b'\\');
+        assert_eq!(byte(r"b'\''"), b'\'');
+        assert_eq!(byte(r#"b'\"'"#), b'"');
+        assert_eq!(byte(r"b'\0'"), 0);
+        assert_eq!(byte(r"b'\x7f'"), 0x7f);
+        assert_eq!(byte(r"b'\xFF'"), 0xff);
+        let toks = lex("b 'c' bb f(b'x')").unwrap();
+        assert!(matches!(&toks[0].kind, TokKind::Ident(b) if b == "b"));
+        assert!(matches!(toks[1].kind, TokKind::Char('c')));
+        assert!(matches!(&toks[2].kind, TokKind::Ident(b) if b == "bb"));
+        assert!(matches!(toks[5].kind, TokKind::ByteChar(b'x')));
+        assert_eq!(toks[5].span, Span { start: 11, end: 15 });
+        for (src, says, at) in [
+            ("b''", "empty byte character literal", 0),
+            ("b'ab'", "holds exactly one byte, so its closing `'` belongs here", 3),
+            (r"b'\nb'", "holds exactly one byte", 4),
+            ("b'é'", "`é` (U+00E9) is not one: its UTF-8 bytes are `\\xC3\\xA9`", 2),
+            (r"b'\u{41}'", "unknown escape `\\u` in a byte character", 2),
+            (r"b'\x4'", "`\\x4'` is not a byte escape", 2),
+            ("b'a", "unterminated byte character literal", 0),
+            ("b'", "unterminated byte character literal", 0),
+            ("b'\n'", "unterminated byte character literal", 0),
+            ("b'a\n'", "unterminated byte character literal", 0),
+            (r"b'\", "a literal ends inside an escape", 0),
+        ] {
+            let error = lex(src).unwrap_err();
+            assert!(error.msg.contains(says), "{src}: {}", error.msg);
+            assert_eq!(error.span.start, at, "{src}: {}", error.msg);
+            let (reason, refused_at) = lex_byte_literal(src, 0).unwrap_err();
             let worded = reason.error(src, 0, refused_at).expect(src);
             assert_eq!((worded.msg, worded.span), (error.msg, error.span), "{src}");
         }

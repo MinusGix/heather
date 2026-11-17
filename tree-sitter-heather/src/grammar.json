@@ -3976,6 +3976,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "byte_character"
+        },
+        {
+          "type": "SYMBOL",
           "name": "hole"
         },
         {
@@ -5180,6 +5184,10 @@
         {
           "type": "SYMBOL",
           "name": "byte_string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "byte_character"
         },
         {
           "type": "SYMBOL",
@@ -7412,6 +7420,10 @@
         {
           "type": "SYMBOL",
           "name": "byte_string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "byte_character"
         },
         {
           "type": "SYMBOL",
@@ -11217,6 +11229,39 @@
           {
             "type": "STRING",
             "value": "\""
+          }
+        ]
+      }
+    },
+    "byte_character": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "b'"
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "[\\x00-\\x09\\x0b\\x0c\\x0e-\\x26\\x28-\\x5b\\x5d-\\x7f]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "\\\\[ntr\\\\'\"0]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "\\\\x[0-9A-Fa-f]{2}"
+              }
+            ]
+          },
+          {
+            "type": "STRING",
+            "value": "'"
           }
         ]
       }

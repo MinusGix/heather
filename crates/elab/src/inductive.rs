@@ -6070,6 +6070,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ByteStr(_)
+        | ExprKind::ByteChar(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl

@@ -3,6 +3,7 @@
 (character) @string
 (string) @string
 (byte_string) @string
+(byte_character) @string
 (hole) @variable.special
 (argument_slot) @variable.special
 (universe) @type.builtin

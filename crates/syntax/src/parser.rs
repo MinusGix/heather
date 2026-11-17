@@ -6412,6 +6412,11 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::ByteStr(bytes), span: sp })
             }
+            // `b'…'`, one byte.
+            TokKind::ByteChar(byte) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::ByteChar(byte), span: sp })
+            }
             TokKind::LParen => {
                 let open = self.bump().span;
                 // `(<=)`: an operator section, the bare symbol as a value
@@ -7633,6 +7638,13 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         assert!(parse_file(r#"fn f() -> X { b "x" }"#).is_err());
         assert!(parse_file(r#"fn f() -> X { bb"x" }"#).is_err());
+        // A byte character, `b'…'`, is one byte the same way.
+        assert!(matches!(body(r"b'\n'"), ExprKind::ByteChar(b'\n')));
+        assert!(matches!(body(r"b'\xff'"), ExprKind::ByteChar(0xff)));
+        let call = body("g(b'x', b)");
+        let (_, args, _) = as_call(&call);
+        assert!(matches!(&args[0].kind, ExprKind::ByteChar(b'x')));
+        assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         let refused = parse_file(r#"fn f() -> X { b"aé" }"#).unwrap_err();
         assert!(refused.msg.contains("a byte string holds ASCII characters"), "{}", refused.msg);
         assert!(refused.msg.contains(r"`\xC3\xA9`"), "{}", refused.msg);

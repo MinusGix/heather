@@ -326,193 +326,92 @@ theorem Target::path_step(self t: Target, env: Env, buf: Nat, path: List<BitVec(
          ⟨pathed, homes_at⟩⟩⟩⟩⟩⟩
 }
 
-// The pieces of the copy, read off `Prog::path_copy`.
-fn Prog::path_counted(self x: Prog, layout: Layout, buf, h, d: Nat) → Prog {
-    then(then(x.path_head(layout, buf, Succ(h)), Block([CmpRR(R8, Rcx)])), Jcc(E, Succ(d)))
+// One step fewer to go: from `i + n` bytes in all and `i` short of them, a
+// number below `n` with one more byte counted.
+theorem Nat::one_fewer(i, n, all: Nat, left: i + n = all, below: i < all): Exists<Nat>(λ k => (k < n) ∧ (Succ(i) + k = all)) {
+    (match n as λ x => (i + x = all) → Exists<Nat>(λ k => (k < x) ∧ (Succ(i) + k = all)) {
+        Zero => λ ends => false_elim(Nat::lt_irrefl(all, j(ends, λ k _ => k < all, below))),
+        Succ(n1) => λ more => Exists(n1, ⟨Nat::le_refl(Succ(n1)), trans(i.add_succ_left(n1), more)⟩),
+    })(left)
 }
 
-fn Prog::path_tested(self x: Prog, layout: Layout, buf, h, d: Nat) → Prog {
-    then(then(then(x.path_counted(layout, buf, h, d), LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, Succ(d)))
+// A round of the copy: out at the count or at a NUL, otherwise the byte
+// stored and the count, RSI and RDI one further.
+fn Fragment::path_copy(out: Nat) → Fragment {
+    Both(Place(0, Block([CmpRR(R8, Rcx)])), Both(Leave(E, out),
+    Both(Place(0, LoadByte(ByteLoad(Rdx, Rsi))), Both(Place(0, Block([TestRR(Rdx, Rdx)])), Both(Leave(E, out),
+    Both(Place(0, StoreByte(ByteStore(Rdi, Rdx))),
+         Place(0, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))]))))))))
 }
 
-// Past both JEs with a byte that is not NUL: its store, the adds, and the
-// JMP back to the head.
-theorem Target::goes_path_body(self t: Target, env: Env, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
-    of: PathOf(env, buf, path), x: Prog, h, d: Nat,
-    within: x.path_copy(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
-    tree: ITree<BitVec(64)>(Events::linux()), i: Nat, byte: BitVec(8), got: path.before_nul().nth(i) = Some(byte),
-    again: t.GoesR(prog_len(x.path_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, Succ(i), g, m))):
-    t.GoesR(prog_len(x.path_tested(t.layout(), buf, h, d)), tree,
-        λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, i, g, m) ∧ (read_gpr(Rdx, g) = byte.zero_extend(56))) {
-    let layout = t.layout();
-    let so = layout.scratch_offset();
-    let tested = x.path_tested(layout, buf, h, d);
-    let moved = then(tested, StoreByte(ByteStore(Rdi, Rdx)));
-    let adds: List<Instruction> = [AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))];
-    let stepped = then(moved, Block(adds));
-    let set0 = then(x, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())]));
-    let w_stepped = stepped.within_before(0, Jmp(Succ(h)), t.program, within);
-    let w_moved = moved.within_before(0, Block(adds), t.program, w_stepped);
-    let w_head = calc { x.path_head(layout, buf, Succ(h)) <= x.path_copy(layout, buf, Succ(h), Succ(d)) := Exists(8, refl), <= t.program := within, };
-    let below: (i < path.before_nul().len()) = path.before_nul().nth_some_below(i, byte, got);
-    let back = t.program.lands_jmp(t.laid, within.witness, stepped, 0, h, within.proof, w_head.witness, set0, Block([]), w_head.proof);
-    let jumped = t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, stepped, 0, Succ(h), within.proof, prog_len(set0), back, tree,
-        λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, Succ(i), g, m), again);
-    let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.PathAt(env, buf, path, vals, Succ(i), u.gprs, u.memory);
-    let added = t.goes_block(moved, 0, adds, w_stepped, tree, post, jumped);
-    let storing = t.goes_store_byte(tested, 0, ByteStore(Rdi, Rdx), w_moved, tree, λ u => post(execute_block_normal(adds, u)),
-        added);
-    λ u here resident held => {
-        let at = held.left;
-        let g = u.gprs;
-        let m = u.memory;
-        let pathed = at.right.right.right.right.right.left;
-        let room: (i < t.caps.largest()) = t.path_room(env, buf, cap, found, path, of, i,
-            Nat::le_trans(Succ(i), path.before_nul().len(), path.len(), below, path.before_nul_len()), m, t.pathed_placed(env, path.before_nul(), i, m, pathed));
-        let fits: ((so + i) + 1 <= t.r.size) = Nat::le_trans((so + i) + 1, so + t.caps.largest(), t.r.size,
-            so.add_le_mono_l(Succ(i), t.caps.largest(), room), t.scratch_room());
-        let stored: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
-        let back_byte: (imm_byte0(byte.zero_extend(56)) = byte) = BitVec::truncate_zero_extend(8, 56, byte);
-        let after = λ (a: BitVec(64)) (y: BitVec(64)) => t.writes().writable(m, a, 1) ∧
-            (t.site().Resident(t.r.profile.store(m, a, [imm_byte0(y)])) ∧
-             post(execute_block_normal(adds, MachineState(g, u.flags, next_rip(u.rip, 3), t.r.profile.store(m, a, [imm_byte0(y)])))));
-        let next_pathed = j(sym(back_byte), λ b _ => t.Pathed(env, path.before_nul(), Succ(i), t.r.profile.store(m, next_rip(t.r.low, so + i), [b])),
-            t.pathed_store(env, path.before_nul(), i, m, pathed, Nat::le_of_lt(i, t.caps.largest(), room), byte, got));
-        let here_after: after(next_rip(t.r.low, so + i), byte.zero_extend(56)) = ⟨t.writable(m, so + i, 1, fits),
-            ⟨t.store_resident(m, so + i, stored, fits, resident),
-             t.path_step(env, buf, path, vals, i, below, MachineState(g, u.flags, next_rip(u.rip, 3), t.r.profile.store(m, next_rip(t.r.low, so + i), stored)),
-                ⟨at.right.left, ⟨at.right.right.left, ⟨at.right.right.right.left, at.right.right.right.right.left⟩⟩⟩, next_pathed, at.right.right.right.right.right.right)⟩⟩;
-        let there = j(sym(held.right), λ y _ => after(read_gpr(Rdi, g), y),
-            j(sym(at.right.right.right.right.left), λ a _ => after(a, byte.zero_extend(56)), here_after));
-        storing(u, here, resident, ⟨refl, there⟩)
-    }
-}
-
-// The head: CMP against the length and a JE out; the byte loaded, TEST
-// and a JE out at the NUL; on into the body with each byte that is not.
-theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
-    of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), x: Prog, h, d: Nat,
-    within: x.path_copy(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
-    w_done: x.path_copy(t.layout(), buf, Succ(h), Succ(d)).label(Succ(d)).Within(t.program),
-    tree: ITree<BitVec(64)>(Events::linux()), i: Nat,
-    fin: t.GoesR(prog_len(x.path_copy(t.layout(), buf, Succ(h), Succ(d))), tree,
-        λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, path.before_nul().len(), g, m)),
-    body: (byte: BitVec(8)) → path.before_nul().nth(i) = Some(byte) →
-        t.GoesR(prog_len(x.path_tested(t.layout(), buf, h, d)), tree,
-            λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, i, g, m) ∧ (read_gpr(Rdx, g) = byte.zero_extend(56)))):
-    t.GoesR(prog_len(x.path_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, i, g, m)) {
-    let layout = t.layout();
-    let head = x.path_head(layout, buf, Succ(h));
-    let cmp = then(head, Block([CmpRR(R8, Rcx)]));
-    let counted = x.path_counted(layout, buf, h, d);
-    let loaded = then(counted, LoadByte(ByteLoad(Rdx, Rsi)));
-    let flagged = then(loaded, Block([TestRR(Rdx, Rdx)]));
-    let tested = x.path_tested(layout, buf, h, d);
-    let copied = x.path_copy(layout, buf, Succ(h), Succ(d));
-    let w_tested = calc { tested <= copied := Exists(3, refl), <= t.program := within, };
-    let w_flagged = flagged.within_before(0, Jcc(E, Succ(d)), t.program, w_tested);
-    let w_loaded = loaded.within_before(0, Block([TestRR(Rdx, Rdx)]), t.program, w_flagged);
-    let w_counted = counted.within_before(0, LoadByte(ByteLoad(Rdx, Rsi)), t.program, w_loaded);
-    let w_cmp = cmp.within_before(0, Jcc(E, Succ(d)), t.program, w_counted);
+// What a round needs is the invariant: with `i` bytes copied and `n` to go
+// it leaves with the whole path copied, or comes round with one more.
+theorem Run::path_round(self r: Run, env: Env, buf, cap: Nat, found: r.t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
+    of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), o, n: Nat, s: r.State(), resident: r.t.site().Resident(s.memory),
+    i: Nat, left: i + n = path.before_nul().len(), at: r.t.PathAt(env, buf, path, vals, i, s.gprs, s.memory)):
+    Fragment::path_copy(Succ(o)).inside(r, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
+        λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = path.before_nul().len()) ∧ r.t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory))))(s) {
+    let t = r.t;
+    let g = s.gprs;
+    let m = s.memory;
+    let so = t.layout().scratch_offset();
     let name = path.before_nul();
-    let ended = λ (g: Gprs) (m: X86Memory(t.r.profile)) (at: t.PathAt(env, buf, path, vals, i, g, m)) (all: i = name.len()) =>
-        j(all, λ k _ => t.PathAt(env, buf, path, vals, k, g, m), at);
-    // The JE at the NUL.
-    let lands2 = t.program.lands_jcc(t.laid, w_tested.witness, flagged, 0, E, d, w_tested.proof, w_done.witness, copied, Block([]), w_done.proof);
-    let at_byte = λ (byte: BitVec(8)) => {
-        let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
-            (t.PathAt(env, buf, path, vals, i, g, m) ∧ ((read_gpr(Rdx, g) = byte.zero_extend(56)) ∧ ((path.nth(i) = Some(byte)) ∧ (i < path.len())))) ∧
-            (f.zf = is_zero_bits(64, read_gpr(Rdx, g).band(read_gpr(Rdx, g))));
-        let zf_is = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) (p: pre(g, f, m)) =>
-            trans(p.right, cong_fn<BitVec(64), Bool>(λ y => is_zero_bits(64, y.band(y)), p.left.right.left));
-        let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_tested.witness, flagged, 0, E, Succ(d), w_tested.proof, prog_len(copied),
-            lands2, tree, pre,
-            λ u here2 res2 held2 => {
-                let at = held2.left.left.left;
-                let facts = held2.left.left.right.right;
-                match byte.toNat().lt_or_ge(1) {
-                    Inl(under) => {
-                        let zero: (byte = BitVec::ofNat(0)) = byte_nul_of_nat(byte, Nat::le_antisym(byte.toNat(), 0, Nat::le_of_succ_succ(byte.toNat(), 0, under), Nat::nonneg(byte.toNat())));
-                        fin(u, here2, res2, ended(u.gprs, u.memory, at, sym(path.before_nul_stops(i, byte, facts.left, zero, at.left))))
-                    },
-                    Inr(over) => {
-                        let nonzero: (Not(byte = BitVec::ofNat(0))) = λ zero => false_elim(Nat::not_succ_le_zero(0, j(byte_nul_nat(byte, zero), λ n _ => 1 <= n, over)));
-                        absurd(trans(sym(held2.right), trans(zf_is(u.gprs, u.flags, u.memory, held2.left), byte_tests_nonzero(byte, nonzero))))
-                    },
-                }
-            },
-            λ u here2 res2 held2 => {
-                let at = held2.left.left.left;
-                let facts = held2.left.left.right.right;
-                match byte.toNat().lt_or_ge(1) {
-                    Inl(under) => {
-                        let zero: (byte = BitVec::ofNat(0)) = byte_nul_of_nat(byte, Nat::le_antisym(byte.toNat(), 0, Nat::le_of_succ_succ(byte.toNat(), 0, under), Nat::nonneg(byte.toNat())));
-                        absurd(trans(sym(held2.right), trans(zf_is(u.gprs, u.flags, u.memory, held2.left), byte_tests_zero(byte, zero))))
-                    },
-                    Inr(over) => {
-                        let nonzero: (Not(byte = BitVec::ofNat(0))) = λ zero => false_elim(Nat::not_succ_le_zero(0, j(byte_nul_nat(byte, zero), λ n _ => 1 <= n, over)));
-                        body(byte, path.before_nul_goes(i, byte, facts.left, nonzero, at.left), u, here2, res2, ⟨at, held2.left.left.right.left⟩)
-                    },
-                }
-            });
-        let test = t.goes_block_jcc(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree, E, pre, jumped, λ _ => refl);
-        test
-    };
-    // The JE at the length.
-    let lands1 = t.program.lands_jcc(t.laid, w_counted.witness, cmp, 0, E, d, w_counted.proof, w_done.witness, copied, Block([]), w_done.proof);
-    let pre1 = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, i, g, m) ∧
-        (f.zf = is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rcx, g))));
-    let jumped1 = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_counted.witness, cmp, 0, E, Succ(d), w_counted.proof, prog_len(copied),
-        lands1, tree, pre1,
-        λ u here2 res2 held2 => {
-            let at = held2.left.left;
-            let ends: (i = path.len()) = t.path_counted(env, buf, path, vals, i, small, u.gprs, u.memory, at).left(trans(sym(held2.left.right), held2.right));
-            let all: (i = name.len()) = Nat::le_antisym(i, name.len(), at.left, j(sym(ends), λ k _ => name.len() <= k, path.before_nul_len()));
-            fin(u, here2, res2, ended(u.gprs, u.memory, at, all))
+    let adds: List<Instruction> = [AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))];
+    let again: r.State() → Type = λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = name.len()) ∧ t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory)));
+    let counted = t.path_counted(env, buf, path, vals, i, small, g, m, at);
+    ⟨refl, ⟨⟨
+        // At the count: the whole path is copied.
+        λ at_count rip => {
+            let all: (i = name.len()) = Nat::le_antisym(i, name.len(), at.left, j(sym(counted.left(at_count)), λ k _ => name.len() <= k, path.before_nul_len()));
+            j(all, λ k _ => t.PathAt(env, buf, path, vals, k, g, m), at)
         },
-        λ u here2 res2 held2 => {
-            let at = held2.left.left;
+        λ before_count rip => {
             let short: (i < path.len()) = match i.lt_or_ge(path.len()) {
                 Inl(under) => under,
-                Inr(over) => {
-                    let ends: (i = path.len()) = Nat::le_antisym(i, path.len(), Nat::le_trans(i, name.len(), path.len(), at.left, path.before_nul_len()), over);
-                    absurd(trans(sym(held2.right), trans(held2.left.right, t.path_counted(env, buf, path, vals, i, small, u.gprs, u.memory, at).right(ends))))
-                },
+                Inr(over) => absurd(trans(sym(before_count), counted.right(Nat::le_antisym(i, path.len(),
+                    Nat::le_trans(i, name.len(), path.len(), at.left, path.before_nul_len()), over)))),
             };
-            let b = t.path_byte(env, buf, cap, found, path, vals, of, i, short, u.gprs, u.memory, at);
+            let b = t.path_byte(env, buf, cap, found, path, vals, of, i, short, g, m, at);
             let byte = b.witness;
-            let load = t.goes_load_byte(counted, 0, ByteLoad(Rdx, Rsi), w_loaded, tree,
-                λ w => {
-                    let after = execute_block_normal([TestRR(Rdx, Rdx)], w);
-                    (t.PathAt(env, buf, path, vals, i, after.gprs, after.memory) ∧ ((read_gpr(Rdx, after.gprs) = byte.zero_extend(56)) ∧
-                        ((path.nth(i) = Some(byte)) ∧ (i < path.len())))) ∧
-                    (after.flags.zf = is_zero_bits(64, read_gpr(Rdx, after.gprs).band(read_gpr(Rdx, after.gprs))))
-                }, at_byte(byte));
-            load(u, here2, res2, Exists(byte, ⟨b.proof.left, ⟨b.proof.right.left, ⟨⟨at, ⟨refl, ⟨b.proof.right.right, short⟩⟩⟩, refl⟩⟩⟩))
-        });
-    t.goes_weaken(t.goes_block_jcc(head, 0, [CmpRR(R8, Rcx)], w_cmp, tree, E, pre1, jumped1, λ _ => refl),
-        λ u held => ⟨held, refl⟩)
-}
-
-// The loop, from its head with `left` bytes before the path's end, on to
-// the label past it with the whole path copied.
-theorem Target::goes_path_loop(self t: Target, env: Env, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
-    of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), x: Prog, h, d: Nat,
-    within: x.path_copy(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
-    w_done: x.path_copy(t.layout(), buf, Succ(h), Succ(d)).label(Succ(d)).Within(t.program),
-    tree: ITree<BitVec(64)>(Events::linux()),
-    fin: t.GoesR(prog_len(x.path_copy(t.layout(), buf, Succ(h), Succ(d))), tree,
-        λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, path.before_nul().len(), g, m)), left: Nat):
-    (i: Nat) → i + left = path.before_nul().len() →
-    t.GoesR(prog_len(x.path_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(env, buf, path, vals, i, g, m)) {
-    match left {
-        Zero => λ i all => t.goes_path_head(env, buf, cap, found, path, vals, of, small, x, h, d, within, w_done, tree, i, fin,
-            λ byte got => false_elim(Nat::lt_irrefl(path.before_nul().len(),
-                j(all, λ k _ => k < path.before_nul().len(), path.before_nul().nth_some_below(i, byte, got))))),
-        Succ(l, ih) => λ i all => t.goes_path_head(env, buf, cap, found, path, vals, of, small, x, h, d, within, w_done, tree, i, fin,
-            λ byte got => t.goes_path_body(env, buf, cap, found, path, vals, of, x, h, d, within, tree, i, byte, got,
-                ih(Succ(i), trans(i.add_succ_left(l), all)))),
-    }
+            let is_nul: ((byte = BitVec::ofNat(0)) ∨ Not(byte = BitVec::ofNat(0))) = match byte.toNat().lt_or_ge(1) {
+                Inl(under) => Inl(byte_nul_of_nat(byte, Nat::le_antisym(byte.toNat(), 0, Nat::le_of_succ_succ(byte.toNat(), 0, under), Nat::nonneg(byte.toNat())))),
+                Inr(over) => Inr(λ zero => false_elim(Nat::not_succ_le_zero(0, j(byte_nul_nat(byte, zero), λ k _ => 1 <= k, over)))),
+            };
+            Exists(byte, ⟨b.proof.left, ⟨b.proof.right.left, ⟨refl, ⟨⟨
+                // At a NUL: the path ends here.
+                λ at_nul rip => match is_nul {
+                    Inl(zero) => j(sym(path.before_nul_stops(i, byte, b.proof.right.right, zero, at.left)), λ k _ => t.PathAt(env, buf, path, vals, k, g, m), at),
+                    Inr(nonzero) => absurd(trans(sym(at_nul), byte_tests_nonzero(byte, nonzero))),
+                },
+                // Otherwise the byte stored, and one further.
+                λ not_nul rip => match is_nul {
+                    Inl(zero) => absurd(trans(sym(not_nul), byte_tests_zero(byte, zero))),
+                    Inr(nonzero) => {
+                        let got = path.before_nul_goes(i, byte, b.proof.right.right, nonzero, at.left);
+                        let below: (i < name.len()) = name.nth_some_below(i, byte, got);
+                        let pathed = at.right.right.right.right.right.left;
+                        let room: (i < t.caps.largest()) = t.path_room(env, buf, cap, found, path, of, i,
+                            Nat::le_trans(Succ(i), name.len(), path.len(), below, path.before_nul_len()), m, t.pathed_placed(env, name, i, m, pathed));
+                        let fits: ((so + i) + 1 <= t.r.size) = Nat::le_trans((so + i) + 1, so + t.caps.largest(), t.r.size,
+                            so.add_le_mono_l(Succ(i), t.caps.largest(), room), t.scratch_room());
+                        let stored: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
+                        let tested = execute_block_normal([TestRR(Rdx, Rdx)], byte_load_after(ByteLoad(Rdx, Rsi), byte, s));
+                        let next_pathed = j(sym(BitVec::truncate_zero_extend(8, 56, byte)),
+                            λ c _ => t.Pathed(env, name, Succ(i), t.r.profile.store(m, next_rip(t.r.low, so + i), [c])),
+                            t.pathed_store(env, name, i, m, pathed, Nat::le_of_lt(i, t.caps.largest(), room), byte, got));
+                        let fewer = Nat::one_fewer(i, n, name.len(), left, below);
+                        let after = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧ (t.site().Resident(t.r.profile.store(m, a, stored)) ∧
+                            again(execute_block_normal(adds, MachineState(tested.gprs, tested.flags, next_rip(rip, 3), t.r.profile.store(m, a, stored)))));
+                        let here_after: after(next_rip(t.r.low, so + i)) = ⟨t.writable(m, so + i, 1, fits), ⟨t.store_resident(m, so + i, stored, fits, resident),
+                            Exists(fewer.witness, ⟨fewer.proof.left, Exists(Succ(i), ⟨fewer.proof.right,
+                                t.path_step(env, buf, path, vals, i, below,
+                                    MachineState(tested.gprs, tested.flags, next_rip(rip, 3), t.r.profile.store(m, next_rip(t.r.low, so + i), stored)),
+                                    ⟨at.right.left, ⟨at.right.right.left, ⟨at.right.right.right.left, at.right.right.right.right.left⟩⟩⟩, next_pathed,
+                                    at.right.right.right.right.right.right)⟩)⟩)⟩⟩;
+                        ⟨refl, j(sym(at.right.right.right.right.left), λ a _ => after(a), here_after)⟩
+                    },
+                }⟩, refl⟩⟩⟩⟩)
+        }⟩, refl⟩⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -582,9 +481,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
     let clamped = counted.onto(r.cx(), p);
     let sets: List<Instruction> = [MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(path)), MovRI(Rdi, layout.scratch_at())];
     let set0 = then(clamped, Block(sets));
-    let head = clamped.path_head(layout, path, Succ(h));
-    let copy = clamped.path_copy(layout, path, Succ(h), Succ(d));
-    let copied = copy.label(Succ(d));
+    let copied = Cycle(names + 1, Skip, Fragment::path_copy(names + 3)).onto(r.cx(), set0);
     let zeroed = then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))]));
     let ended = then(zeroed, StoreByte(ByteStore(Rdi, Rdx)));
     let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
@@ -595,9 +492,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
     let w_ended = ended.within_before(0, Block(asking), t.program, w_set);
     let w_zeroed = zeroed.within_before(0, StoreByte(ByteStore(Rdi, Rdx)), t.program, w_ended);
     let w_copied = copied.within_before(0, Block([MovRI(Rdx, BitVec::ofNat(0))]), t.program, w_zeroed);
-    let w_copy = copy.within_before(Succ(d), Block([]), t.program, w_copied);
-    let w_head = calc { head <= copy := Exists(8, refl), <= t.program := w_copy, };
-    let w_set0 = set0.within_before(Succ(h), Block([]), t.program, w_head);
+    let w_set0: set0.Within(t.program) = Prog::within_trans(Cycle(names + 1, Skip, Fragment::path_copy(names + 3)).extends(r.cx(), set0), w_copied);
     let w_clamped = clamped.within_before(0, Block(sets), t.program, w_set0);
     let room_cap: (cap < Nat::pow(2, 64)) = t.cap_small(path, cap, found);
     let of: PathOf(env, path, bytes) = λ k b got => env.buffer(path).take_nth(env.number(len), k, b, got).right;
@@ -646,7 +541,8 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         let nul = imm_byte0(BitVec::ofNat(0, n := 64));
         let one: List<BitVec(8)> = [nul];
         // The whole path copied: the NUL stored after it, and the call.
-        let fin: t.GoesR(prog_len(copy), Vis(c, tree), λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.PathAt(placed_env, path, bytes, vals, name.len(), g, m)) =
+        let copied_all: r.State() → Type = λ u => t.PathAt(placed_env, path, bytes, vals, name.len(), u.gprs, u.memory);
+        let fin: t.Goes(prog_len(copied), Vis(c, tree), copied_all) =
             λ u here resident held => {
                 let m = u.memory;
                 let s1 = execute_block_normal([MovRI(Rdx, BitVec::ofNat(0))], u);
@@ -665,14 +561,15 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                      }⟩⟩⟩;
                 at_copied(u, here, resident, ⟨refl, j(sym(held.right.right.right.right.left), λ a _ => landing(a), landed)⟩)
             };
-        let looped = t.goes_path_loop(placed_env, path, cap, found, bytes, vals, of, small, clamped, h, d, w_copy, w_copied, Vis(c, tree), fin, name.len(), 0,
-            name.len().add_left_zero());
-        let setting = t.goes_block(clamped, 0, sets, w_set0, Vis(c, tree),
-            λ w => t.PathAt(placed_env, path, bytes, vals, 0, w.gprs, w.memory), looped);
+        // The copy: `i` bytes copied and `n` to go, round its loop.
+        let copying: Nat → Gprs → X86Memory(t.r.profile) → Type = λ n g m => Exists<Nat>(λ i => (i + n = name.len()) ∧ t.PathAt(placed_env, path, bytes, vals, i, g, m));
+        let looped = Fragment::goes_loop(r, set0, names + 1, Skip, Fragment::path_copy(names + 3), Vis(c, tree), copied_all, copying, w_copied, fin,
+            λ n s resident at => r.path_round(placed_env, path, cap, found, bytes, vals, of, small, names + 2, n, s, resident, at.witness, at.proof.left, at.proof.right));
+        let setting = t.goes_block(clamped, 0, sets, w_set0, Vis(c, tree), λ w => Exists<Nat>(λ n => copying(n, w.gprs, w.memory)), looped);
         let rcx: (read_gpr(Rcx, u0.gprs) = word_of_nat(64, bytes.len())) = trans(sym(word_of_nat_toNat(64, read_gpr(Rcx, u0.gprs))),
             cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(held0.right, sym(bytes_len))));
-        setting(u0, here0, resident0, ⟨Nat::nonneg(name.len()), ⟨refl, ⟨rcx, ⟨t.buffer_rip(path), ⟨t.scratch_rip(),
-            ⟨Exists(v, ⟨placed.proof.left, ⟨placed.proof.right.left, ⟨placed.proof.right.right, λ k b early => false_elim(Nat::not_succ_le_zero(k, early))⟩⟩⟩), refl⟩⟩⟩⟩⟩⟩)
+        setting(u0, here0, resident0, Exists(name.len(), Exists(0, ⟨name.len().add_left_zero(), ⟨Nat::nonneg(name.len()), ⟨refl, ⟨rcx, ⟨t.buffer_rip(path), ⟨t.scratch_rip(),
+            ⟨Exists(v, ⟨placed.proof.left, ⟨placed.proof.right.left, ⟨placed.proof.right.right, λ k b early => false_elim(Nat::not_succ_le_zero(k, early))⟩⟩⟩), refl⟩⟩⟩⟩⟩⟩⟩)))
     };
     // The count fetched and clamped to the capacity.
     let bound = BitVec::ofNat(cap, n := 64);

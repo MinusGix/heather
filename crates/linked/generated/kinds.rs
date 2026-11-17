@@ -152,11 +152,13 @@ pub enum Kind {
     Tilde = 70,
     /// `KIND_BYTE_STR`.
     ByteStr = 71,
+    /// `KIND_BYTE_CHAR`.
+    ByteChar = 72,
 }
 
 impl Kind {
     /// Every kind, in code order: `ALL[k as usize - 1] == k`.
-    pub const ALL: [Kind; 71] = [
+    pub const ALL: [Kind; 72] = [
         Kind::Ident,
         Kind::Num,
         Kind::Scaled,
@@ -228,6 +230,7 @@ impl Kind {
         Kind::OPlus,
         Kind::Tilde,
         Kind::ByteStr,
+        Kind::ByteChar,
     ];
 
     /// The kind with this code, if it is one.
