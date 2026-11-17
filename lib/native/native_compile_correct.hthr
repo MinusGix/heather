@@ -336,53 +336,9 @@ theorem Region::paired(self body: Region, rest: Stmt, homes: Homes, out: List<Na
     carried: Compute(Dataflow(body)).pair_known(rest, homes, out) = Cons(f, fs)):
     (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
         && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-    (match rest.reads_known() as λ b => rest.reads_known() = b →
-            (match b as λ _ => List<Fact> {
-                False => Nil,
-                True => {
-                    let known = body.nodes.leaves_known();
-                    let before = rest.live_with(homes, known, out);
-                    match (homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) {
-                        False => Nil,
-                        True => known,
-                    }
-                },
-            }) = Cons(f, fs) → (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-        False => λ _ none => absurd(none),
-        True => λ _ => (match body.nodes.leaves_known() as λ l => body.nodes.leaves_known() = l →
-                (match (homes.nodes_apart(body.nodes, rest.live_with(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_with(homes, l, out)))
-                    && nodes_live_in(body.nodes, rest.live_with(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) as λ _ => List<Fact> {
-                    False => Nil,
-                    True => l,
-                }) = Cons(f, fs) → (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-            Nil => λ _ none => {
-                let g = (homes.nodes_apart(body.nodes, rest.live_in(homes, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_in(homes, out)))
-                    && nodes_live_in(body.nodes, rest.live_in(homes, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)));
-                false_elim((match g as λ b => (match b as λ _ => List<Fact> { False => Nil, True => Nil }) = Cons(f, fs) → False {
-                    False => λ e => absurd(e),
-                    True => λ e => absurd(e),
-                })(none))
-            },
-            Cons(g1, gs) => λ at same => {
-                let before = rest.live_head(homes, Cons(g1, gs), out);
-                (match (homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) as λ b =>
-                        ((homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))) = b →
-                        (match b as λ _ => List<Fact> { False => Nil, True => Cons(g1, gs) }) = Cons(f, fs) →
-                        (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-                    False => λ _ none => absurd(none),
-                    True => λ passed e => j(e, λ l _ => (body.nodes.leaves_known() = l) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, l, out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()),
-                        ⟨at, j(sym(passed), λ b _ => b.IsTrue(), trivial)⟩),
-                })(refl, same)
-            },
-        })(refl),
-    })(refl, carried)
+    cases carried as reads, passed;
+    ⟨carried, j(carried, λ l _ => (((homes.nodes_apart(body.nodes, rest.live_with(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_with(homes, l, out)))
+        && nodes_live_in(body.nodes, rest.live_with(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()), Bool::is_true_of_eq(passed))⟩
 }
 
 // A tree the same as one the code runs as.
