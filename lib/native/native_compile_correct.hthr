@@ -495,14 +495,9 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
         t.At(prog_len(p), t.homes.region_live(region, out), k(Onward(env.compute(call, region))), env) {
     λ n env k exits next => {
         let tree = k(Onward(env.compute(call, region)));
-        (match region.scoped(Scope::all()) as λ o => region.scoped(Scope::all()) = o →
-                (match (match o as λ _ => Bool { None => False, Some(_) => True }) as λ _ => Option<Compiled> {
-                    False => None,
-                    True => region.code(p, t.layout(), out, names),
-                }) = Some(c) →
-                t.At(prog_len(p), t.homes.region_live(region, out), tree, env) {
-            None => λ _ none => absurd(none),
-            Some(st) => λ scoped code => {
+        match scoped: region.scoped(Scope::all()) {
+            None => absurd(emitted),
+            Some(st) => {
                 let same = region.compute_same(call, st, scoped, env);
                 let goes = t.at_like(prog_len(c.prog), out, tree, env.compute(call, region), region.meaning(call, env),
                     env.compute(call, region).like_sym(region.meaning(call, env), out, env.compute(call, region).like_of_same(region.meaning(call, env), out, same)),
@@ -511,11 +506,11 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
                         Bool::IsTrue(match o { None => False, Some(_) => True }) →
                         t.At(prog_len(p), match o { None => out, Some(l) => l }, tree, env) {
                     None => λ _ never => false_elim(never),
-                    Some(l) => λ got _ => region.code_runs(t, call, fns, region.ok_of_scoped(Scope::all(), st, scoped), p, out, names, c, code, within, l, got,
+                    Some(l) => λ got _ => region.code_runs(t, call, fns, region.ok_of_scoped(Scope::all(), st, scoped), p, out, names, c, emitted, within, l, got,
                         env, tree, goes),
                 })(refl, checked)
             },
-        })(refl, emitted)
+        }
     }
 }
 
@@ -562,21 +557,19 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
     within: c.prog.Within(t.program), checked: (first.checks(t.homes, rest.live_in(t.homes, out)) && rest.checks(t.homes, out)).IsTrue()):
     t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
     let layout = t.layout();
-    (match first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) = o →
-            (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
-            t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
-        None => λ _ none => absurd(none),
-        Some(c1) => λ one two => {
-            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+    match one: first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) {
+        None => absurd(emitted),
+        Some(c1) => {
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, emitted), within);
             let run_first = t.runs_of(first, call, perform, rest.live_in(t.homes, out), p, c1.prog,
                 ih_first(p, rest.live_in(t.homes, out), Nil, names, c1, one, w_first, known));
-            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, known));
+            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, emitted, within, known));
             λ n env k exits next => {
                 let k2 = rest.and_then(call, perform, n, k);
                 t.then_at(run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
-    })(refl, emitted)
+    }
 }
 
 // A `Then` whose first part is a call or an exit: that part starts with
@@ -592,22 +585,18 @@ theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), p
         ((after: Env) → t.At(prog_len(c.prog), out, k(Onward(after)), after)) →
         t.At(prog_len(p), first.live_head(t.homes, facts, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
     let layout = t.layout();
-    (match first.emits(p, layout, rest.live_in(t.homes, out), facts, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), facts, names) = o →
-            (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
-            (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(facts) → t.Exiting(k) →
-            ((after: Env) → t.At(prog_len(c.prog), out, k(Onward(after)), after)) →
-            t.At(prog_len(p), first.live_head(t.homes, facts, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
-        None => λ _ none => absurd(none),
-        Some(c1) => λ one two => {
-            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+    match one: first.emits(p, layout, rest.live_in(t.homes, out), facts, names) {
+        None => absurd(emitted),
+        Some(c1) => {
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, emitted), within);
             let run_first = ih_first(p, rest.live_in(t.homes, out), facts, names, c1, one, w_first, known);
-            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, known));
+            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, emitted, within, known));
             λ n env k knows exits next => {
                 let k2 = rest.and_then(call, perform, n, k);
                 t.then_at(run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
-    })(refl, emitted)
+    }
 }
 
 // A leaf leaving known words to the call or exit after it: the leaf
@@ -628,13 +617,11 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
     let before = rest.live_head(t.homes, Cons(f, fs), out);
     let leaf = Compute(Dataflow(body));
     let pair = body.paired(rest, t.homes, out, f, fs, carried);
-    (match p.computes_best(layout, before, nodes, names) as λ o => p.computes_best(layout, before, nodes, names) = o →
-            (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Cons(f, fs), c1.names) }) = Some(c) →
-            t.Runs(Then(Compute(Dataflow(body)), rest), call, perform, out, p, c.prog) {
-        None => λ _ none => absurd(none),
-        Some(c1) => λ one two => {
-            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
-            let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, two, within, known);
+    match one: p.computes_best(layout, before, nodes, names) {
+        None => absurd(emitted),
+        Some(c1) => {
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, emitted), within);
+            let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, emitted, within, known);
             λ n env k exits next => {
                 let k2 = rest.and_then(call, perform, n, k);
                 let after = env.computes(nodes);
@@ -645,7 +632,7 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
                 t.then_at(run_leaf)
             }
         },
-    })(refl, emitted)
+    }
 }
 
 // A system call's code runs as the call's tree, from what `Prog::call`
@@ -1431,12 +1418,9 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
             },
         }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
         False => λ _ none => absurd(none),
-        True => λ fits same0 => (match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) as λ o =>
-                proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) = o →
-                (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(c) →
-                (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
-            None => λ _ none => absurd(none),
-            Some(b) => λ emitted same => subst(same,
+        True => λ fits same0 => match emitted: proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
+            None => absurd(same0),
+            Some(b) => subst(same0,
                 λ whole w => {
                     let labelled = p.label(layout.procedure_label(index));
                     let entry = proc.entry_code(p, layout, index);
@@ -1458,7 +1442,7 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
                         <= proc.exit_code(b.prog, layout) := Exists(1, refl),
                     }⟩
                 }),
-        })(refl, same0),
+        },
     })(refl, code)
 }
 
@@ -1635,17 +1619,13 @@ record ProcedureFits(proc: Procedure, layout: Layout) {
 
 theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): ProcedureFits(proc, layout) {
     let entry = proc.body.live_in(layout.homes, proc.results);
-    (match proc.body.checked(layout.homes, proc.results) as λ o => proc.body.checked(layout.homes, proc.results) = o → (match o as λ _ => Bool {
-            None => False,
-            Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
-                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
-        }) = True → ProcedureFits(proc, layout) {
-        None => λ _ none => absurd(none),
-        Some(l) => λ got same => {
+    match got: proc.body.checked(layout.homes, proc.results) {
+        None => absurd(fits),
+        Some(l) => {
             let sound = proc.body.checked_sound(layout.homes, proc.results, l, got);
             ProcedureFits(sound.right, known, known, known, Nat::leb_sound(proc.params.len(), 6, known), Nat::leb_sound(proc.results.len(), 6, known))
         },
-    })(refl, fits)
+    }
 }
 
 // A call's tree, its procedure found.
