@@ -463,9 +463,9 @@ theorem doubling_need_any_depth(): need_slotted(doubling(5)) = need_slotted(doub
 
 // A call of a procedure the running body's layout does not list is refused.
 theorem unlisted_call_refused():
-    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
 theorem listed_call_fits():
-    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0]).call_fits([], 0, [0], [7]) = True { refl }
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0], []).call_fits([], 0, [0], [7]) = True { refl }
 
 // ---------------------------------------------------------------------------
 // The functions' room table (`Homes.rooms`)
@@ -480,9 +480,17 @@ fn view_planned(written: Bool) → Homes {
 theorem view_rooms_planned(): program_rooms_planned(view_functions(True)) = [0, 24] { refl }
 theorem view_rooms_default(): Homes::slots(view_source(True)).room_table(view_functions(True)) = [48, 184] { refl }
 theorem view_planned_compiles(): view_source(True).refusal(low(), view_planned(True), []) = [] { refl }
-// What a call of a function takes of the stack, under each table.
-theorem view_calls_room_planned(): view_planned(True).calls_room(view_functions(True)) = 32 { refl }
-theorem view_calls_room_default(): Homes::slots(view_source(True)).calls_room(view_functions(True)) = 192 { refl }
+// What `main`'s calls of functions take of the stack, under each table: it
+// calls the lender only, so the leaf's room is not counted.
+theorem view_main_calls(): view_source(True).main.called() = [1] { refl }
+// A call of a function the running body's layout does not list is refused.
+theorem view_unlisted_function_refused():
+    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], []).function_fits(1, [0, 1], 2) = False { refl }
+theorem view_listed_function_fits():
+    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], [1]).function_fits(1, [0, 1], 2) = True { refl }
+theorem view_calls_room_planned(): view_source(True).main.called().functions_room(view_planned(True).room_table(view_functions(True))) = 32 { refl }
+theorem view_calls_room_default():
+    view_source(True).main.called().functions_room(Homes::slots(view_source(True)).room_table(view_functions(True))) = 192 { refl }
 // A table is checked, not trusted: one too small for the lender's call is
 // refused where the functions link.
 theorem view_small_table_refused():

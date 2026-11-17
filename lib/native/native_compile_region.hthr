@@ -96,16 +96,19 @@ record Target {
     // and how many calls deeper it may go. Below the frame is what the
     // deepest of its calls takes with that room (`List::reach`: each level
     // a return address, the registers the callee saves and the callee's
-    // own frame), then room for a function a region calls
-    // (`Homes::calls_room`: its room under the homes' table and the CALL's
-    // word) and for one return address more: a call with no room left is
-    // refused in the callee's entry, after its CALL.
+    // own frame), or the room of a function the body calls
+    // (`List::functions_room`: its room under the homes' table and the
+    // CALL's word), whichever is more (`List::below`); then one return
+    // address more: a call with no room left is refused in the callee's
+    // entry, after its CALL.
     // `main`'s frame is the stack's top, with nothing above it.
     // The procedures' placements (`Layout::body`): a callee's activation is
     // this target with the callee's frame and homes.
     bodies: List<Frame>,
     // The procedures the running body may call (`Layout.callees`).
     callees: List<Nat>,
+    // The functions the running body may call (`Layout.called`).
+    called: List<Nat>,
     index: Nat,
     frames: List<BitVec(64)>,
     // What the registers the homes pin held when the activation was entered,
@@ -114,11 +117,11 @@ record Target {
     pinned: List<BitVec(64)>,
     room: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: (callees.reach(procedures, bodies, homes.places, room) + homes.calls_room(functions)) + 8 <= index,
+    roomy: callees.below(called, procedures, bodies, homes.places, homes.room_table(functions), room) + 8 <= index,
 }
 
 fn Target::layout(self t: Target) → Layout {
-    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies, t.callees)
+    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies, t.callees, t.called)
 }
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
