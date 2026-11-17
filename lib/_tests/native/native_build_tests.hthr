@@ -82,7 +82,7 @@ theorem arg_past_last_runs(): arg_length(2).source().tree(two_args(), 0) = Ret(m
 // Pure statements as one region (issues/native-build-loop-regions.md)
 
 fn region_low() → BitVec(64) { io_data_low() }
-fn refused_slots(src: Source) → List<Nat> { src.refusal(region_low(), Homes::slots(src)) }
+fn refused_slots(src: Source) → List<Nat> { src.refusal(region_low(), Homes::slots(src), SpillAll().frames(src)) }
 
 // tr's byte map over a buffer's first `count` bytes: each raised where it
 // is a lower-case letter. The index is the loop's only state.
@@ -212,7 +212,7 @@ theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree
 // proposal like the words' own; with none the functions do not link.
 fn raised_status_source() → Source { raised_status([BitVec::ofNat(97)]).source() }
 theorem raised_status_compiles(): raised_status_source().refusal(region_low(),
-    Homes::slots(raised_status_source()).placed(plan_program(raised_status_source().functions))) = [] { refl }
+    Homes::slots(raised_status_source()).placed(plan_program(raised_status_source().functions)), SpillAll().frames(raised_status_source())) = [] { refl }
 theorem raised_status_unplaced(): refused_slots(raised_status_source()) = [0, 5, 17, 0, 0] { refl }
 
 // A call of a function the program does not have is refused at the call.
@@ -233,7 +233,7 @@ fn raised_twice() → Tool {
 }
 theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::ofNat(131)) { refl }
 theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
-    Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions))) = [] { refl }
+    Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions)), SpillAll().frames(raised_twice().source())) = [] { refl }
 
 // A function lent the program's buffer (docs/native/native-one-compiler-design.md
 // §2.3): the newlines of "a\n\nb", counted by a function the program
@@ -316,7 +316,7 @@ theorem counted_fn_runs(): counted_fn().source().tree([], 0) = Ret(BitVec::ofNat
 // the count (`Prog::function_call`), the function placeless and emitted
 // under its count of lent buffers (`Prog::links`).
 theorem counted_compiles(): counted().source().refusal(region_low(),
-    Homes::slots(counted().source()).placed(plan_program(counted().source().functions))) = [] { refl }
+    Homes::slots(counted().source()).placed(plan_program(counted().source().functions)), SpillAll().frames(counted().source())) = [] { refl }
 
 // The source spelled for `write-elf` says the function is lent a buffer:
 // its last number before the procedures' count, which is the last but the
@@ -352,7 +352,7 @@ theorem where_it_lies_evaluable(): program_evaluable([where_it_lies()]) = True {
 theorem where_it_lies_lowers(): lower_program_lent([where_it_lies()], plan_program([where_it_lies()]), [1]).is_some().IsTrue() { trivial }
 theorem where_it_lies_placed(): program_placeless([where_it_lies()]) = False { refl }
 theorem asks_where_refused(): asks_where().source().refusal(region_low(),
-    Homes::slots(asks_where().source()).placed(plan_program(asks_where().source().functions))) = [0, 5, 17, 0, 0] { refl }
+    Homes::slots(asks_where().source()).placed(plan_program(asks_where().source().functions)), SpillAll().frames(asks_where().source())) = [0, 5, 17, 0, 0] { refl }
 
 // A function that stores into its buffer links: a program lends its
 // buffers to write, and the statements after the call read the file the
@@ -381,7 +381,7 @@ theorem overwrites_placeless(): program_placeless([overwrites()]) = True { refl 
 theorem overwrites_lowers(): lower_program_lent([overwrites()], plan_program([overwrites()]), [1]).is_some().IsTrue() { trivial }
 theorem overwrites_stores(): program_quiet([overwrites()]) = False { refl }
 theorem overwriting_compiles(): overwriting(3).source().refusal(region_low(),
-    Homes::slots(overwriting(3).source()).placed(plan_program(overwriting(3).source().functions))) = [] { refl }
+    Homes::slots(overwriting(3).source()).placed(plan_program(overwriting(3).source().functions)), SpillAll().frames(overwriting(3).source())) = [] { refl }
 
 // The statement after the call reads the byte the function stored: 3 and
 // the 3 it answered, where the byte was 98.

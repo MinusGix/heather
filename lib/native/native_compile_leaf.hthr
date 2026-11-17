@@ -100,7 +100,10 @@ theorem Target::outputs_unused(self t: Target, nodes: List<Node>, r: Gpr, m: Mem
 // ---------------------------------------------------------------------------
 // Inputs in
 
-theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits(id).IsTrue()): id < layout.words { Nat::leb_sound(Succ(id), layout.words, fits) }
+// A word's fit, named: its callers hand it the check where `known` finds
+// it, and the slot's bound is read from it where a slot is
+// (`Layout::home_inside`).
+theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits(id).IsTrue()): layout.word_fits(id).IsTrue() { fits }
 
 // The registers after a port is loaded, by its kind.
 fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs) → Gprs {
