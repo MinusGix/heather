@@ -349,3 +349,122 @@ theorem Source::elf_segment_file_runs(self src: Source, size: Nat, within: size 
             io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
             io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), s, start.entry, start.loaded, args, start.argv))
 }
+
+// ---------------------------------------------------------------------------
+// The contract (docs/native/system-contract-design.md §2)
+
+// Where a file's stack comes from: which entry code it has.
+inductive StackFrom { FromSystem, FromSegment }
+
+// What one line of a contract rests on: a written standard says it; the
+// program tests it when it starts; or neither, and it is taken on trust.
+inductive Basis { Standard, Checked, Presumed }
+
+// One thing a written program takes for granted about where it runs.
+inductive Presumes {
+    // The machine is the x86-64 the model describes (the vendors' manuals).
+    Processor,
+    // The file's PT_LOAD headers are honoured, the data segment `size` bytes
+    // (ELF gABI). `LinuxStart.loaded`, `SegmentStart.loaded`.
+    FileLoaded(size: Nat),
+    // Execution starts at the header's entry address (ELF gABI). `.entry`.
+    EntryAddress,
+    // The command line is at RSP as the process starts (x86-64 psABI,
+    // process initialization). `.argv`.
+    CommandLine,
+    // `room` bytes below RSP as the process starts are usable: Linux grants
+    // it when the stack limit leaves that much. `LinuxStart.stack`.
+    StackRoom(room: Nat),
+    // System calls follow the Linux x86-64 convention and answer as the
+    // model allows (`LinuxCmd::Answers`, `LinuxAnswered`).
+    CallsAnswered,
+    // No fatal signal is delivered, the kernel's out-of-memory kill
+    // included: the model has no such step.
+    NoFatalSignal,
+}
+
+fn Presumes::basis(self line: Presumes) → Basis {
+    match line {
+        Processor => Standard,
+        FileLoaded(_) => Standard,
+        EntryAddress => Standard,
+        CommandLine => Standard,
+        StackRoom(_) => Presumed,
+        CallsAnswered => Standard,
+        NoFatalSignal => Presumed,
+    }
+}
+
+// A file's contract: where its stack is from, its data segment's size, and
+// the stack room its program needs.
+record Contract { stack: StackFrom, size: Nat, room: Nat }
+
+// Every line of it. The first lines are the fields of the premise its
+// theorem takes (`Contract::Start`); the last two are what the model of the
+// run itself takes for granted, which no premise states.
+fn Contract::lines(self c: Contract) → List<Presumes> {
+    match c.stack {
+        FromSystem => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, StackRoom(c.room), CallsAnswered, NoFatalSignal],
+        FromSegment => [Processor, FileLoaded(c.size), EntryAddress, CommandLine, CallsAnswered, NoFatalSignal],
+    }
+}
+
+// The lines as numbers, three a line (which, its basis, its figure), for the
+// driver that prints them.
+fn Basis::number(self b: Basis) → Nat { match b { Standard => 0, Checked => 1, Presumed => 2 } }
+fn Presumes::spelled(self line: Presumes) → List<Nat> {
+    match line {
+        Processor => [0, line.basis().number(), 0],
+        FileLoaded(size) => [1, line.basis().number(), size],
+        EntryAddress => [2, line.basis().number(), 0],
+        CommandLine => [3, line.basis().number(), 0],
+        StackRoom(room) => [4, line.basis().number(), room],
+        CallsAnswered => [5, line.basis().number(), 0],
+        NoFatalSignal => [6, line.basis().number(), 0],
+    }
+}
+fn spelled_lines(lines: List<Presumes>) → List<Nat> {
+    match lines { Nil => Nil, Cons(line, rest) => line.spelled() ++ spelled_lines(rest) }
+}
+fn Contract::spelled(self c: Contract) → List<Nat> { spelled_lines(c.lines()) }
+
+// The memory a process under the contract has, and what the contract asks
+// of the system at its start: the premise of the file's theorem.
+fn Contract::profile(self c: Contract, top: Nat) → X86Profile {
+    match c.stack { FromSystem => X86Profile::process(c.size, top, c.room), FromSegment => X86Profile::io(c.size) }
+}
+fn Contract::Start(self c: Contract, file: List<BitVec(8)>, top: Nat, args: List<List<BitVec(8)>>) → MachineState<X86Memory(c.profile(top))> → Type {
+    match c.stack as λ k => MachineState<X86Memory(Contract(k, c.size, c.room).profile(top))> → Type {
+        FromSystem => λ s => LinuxStart(c.size, file, top, c.room, args, s),
+        FromSegment => λ s => SegmentStart(c.size, file, args, s),
+    }
+}
+
+// A source's contract, its entry code and what its segment must hold, by
+// where its stack is from.
+fn Source::contract(self src: Source, stack: StackFrom, size: Nat) → Contract { Contract(stack, size, src.stack_room()) }
+fn Source::entry_code(self src: Source, stack: StackFrom, homes: Homes) → List<Instruction> {
+    match stack { FromSystem => stack_from_system(), FromSegment => src.segment_entry(homes) }
+}
+fn Source::segment_use(self src: Source, stack: StackFrom, homes: Homes) → Nat {
+    match stack {
+        FromSystem => Layout::of(io_data_low(), src.words, src.capacities(), homes).size(),
+        FromSegment => Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room(),
+    }
+}
+
+// The theorem of a written file, whichever its stack: a process the system
+// started as the file's contract says simulates the source run with its
+// command line.
+theorem Source::elf_runs(self src: Source, stack: StackFrom, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), top: Nat, args: List<List<BitVec(8)>>):
+    (fits: src.segment_use(stack, homes) <= size) →
+    (short: 232 + entered(src.entry_code(stack, homes), program).len() <= 65535) →
+    (s: MachineState<X86Memory(src.contract(stack, size).profile(top))>) →
+    src.contract(stack, size).Start(io_elf_file(entered(src.entry_code(stack, homes), program), size), top, args)(s) →
+    SimProgram(src.contract(stack, size).profile(top).linux(), src.denote(args), s) {
+    match stack {
+        FromSystem => λ fits short s start => src.elf_file_runs(size, within, program, homes, compiled, fits, short, top, args, s, start),
+        FromSegment => λ fits short s start => src.elf_segment_file_runs(size, within, program, homes, compiled, fits, short, args, s, start),
+    }
+}
