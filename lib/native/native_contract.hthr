@@ -16,7 +16,6 @@ import list;
 import logic;
 import nat;
 
-
 // Where a file's stack comes from: which entry code it has.
 inductive StackFrom { FromSystem, FromSegment }
 
