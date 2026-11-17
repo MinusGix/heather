@@ -659,10 +659,11 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
     }
 }
 
-// That table: what functions linked after a program of statements are
-// emitted under (`Prog::links`), the bound the statements' calls are
-// stated with. Every frame fits it, 112 bytes at the most and a call's 24
-// below, with each callee's room below that.
+// That table: one every frame fits, 112 bytes at the most and a call's 24
+// below, with each callee's room below that. What a question about a
+// placement alone is asked under (`Function::lowers`, compile-x86's
+// probes), where the room is not what is asked; code is emitted under a
+// program's own table (`program_room`, `program_room_planned`).
 fn index_rooms() → Nat → Nat { λ (g: Nat) => 136 * Succ(g) }
 
 // The room a region's calls ask below a frame: the largest of its
@@ -6892,15 +6893,14 @@ fn plan_program(functions: List<Function>) → List<Place> {
 // The table the planner's placement asks for: each function saving what
 // its plan says (`Function::plan`), so a leaf that saves nothing asks for
 // no stack below its return address. What an export is stated with.
-fn program_saves_planned(functions: List<Function>) → List<Nat> {
-    match functions { Nil => [], Cons(last, earlier) => program_saves_planned(earlier) ++ [placement_saves(last.plan())] }
+// Each function planned once: its slots and its saves are read off the one
+// plan, and the rooms below it are the earlier functions' table, not a
+// lookup that plans the program again.
+fn rooms_planned_then(rooms: List<Nat>, last: Function, plan: List<Place>) → List<Nat> {
+    rooms_then(rooms, last, placement_slots(plan), placement_saves(plan))
 }
-fn program_slots_planned(functions: List<Function>) → List<Nat> {
-    match functions { Nil => [], Cons(last, earlier) => program_slots_planned(earlier) ++ [placement_slots(last.plan())] }
-}
-
 fn program_rooms_planned(functions: List<Function>) → List<Nat> {
-    program_rooms_by(functions, λ (f: Nat) => rooms_at(program_slots_planned(functions), f), λ (f: Nat) => rooms_at(program_saves_planned(functions), f))
+    match functions { Nil => [], Cons(last, earlier) => rooms_planned_then(program_rooms_planned(earlier), last, last.plan()) }
 }
 fn program_room_planned(functions: List<Function>) → Nat → Nat { λ (f: Nat) => rooms_at(program_rooms_planned(functions), f) }
 
