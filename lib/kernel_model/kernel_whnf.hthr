@@ -146,7 +146,7 @@ theorem Tm::step_co_safe(t: Tm): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events:
         SProj(q, w) => CoTree::safe_call<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(q, w).Reduces(v), w, λ h => Tm::proj_head_co(q, h), λ h wh => Tm::proj_head_co_safe(q, w, h, wh)),
         NRun(c, w) => match c {
             Zero => Tm::reduce_co_safe(NRun(0, w), w, Tm::reduces_one(Tm::red_unpack_zero(w))),
-            Succ(m) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRun(Succ(m), w).Reduces(v), NSucc(NRun(m, w)), Tm::reduces_one(Tm::red_unpack_succ(m, w))),
+            Succ(m) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRun(m + 1, w).Reduces(v), NSucc(NRun(m, w)), Tm::reduces_one(Tm::red_unpack_succ(m, w))),
         },
     }
 }
@@ -168,7 +168,7 @@ theorem Tm::whnf_co_body_safe(t: Tm): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Ev
         SPair(c, d) => Tm::step_co_safe(SPair(c, d)),
         SProj(q, w) => CoTree::safe_call_bind<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(q, w).Reduces(v), w,
             λ h => Tm::proj_head_co(q, h), λ h wh => Tm::proj_head_co_safe(q, w, h, wh)),
-        NRun(c, w) => match c { Zero => Tm::step_co_safe(NRun(0, w)), Succ(m) => Tm::step_co_safe(NRun(Succ(m), w)) },
+        NRun(c, w) => match c { Zero => Tm::step_co_safe(NRun(0, w)), Succ(m) => Tm::step_co_safe(NRun(m + 1, w)) },
     }
 }
 

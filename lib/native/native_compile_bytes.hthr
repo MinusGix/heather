@@ -426,7 +426,7 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rcx, g) = w) ∧ then_q(m)),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right.left, ⟨refl, ⟨cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right.left), held.right.right⟩⟩⟩⟩));
-    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨t.held_rbx(live, env, s.gprs, s.memory, held.left, env, index), ⟨refl, held.right⟩⟩⟩)
+    λ s here resident held => loads(s, here, resident, ⟨held.left, ⟨held.left, ⟨refl, held.right⟩⟩⟩)
 }
 
 theorem Prog::loads_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat, program: Prog,
@@ -554,14 +554,14 @@ theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Pro
             let yes: (w.borrow_sub_bit(BitVec::ofNat(cap)) = True) = trans(sym(hp.right.right), cf);
             let lt: (i < BitVec::ofNat(cap, n := 64).toNat()) = BitVec::borrow_sub_of_bit_true(64, w, BitVec::ofNat(cap), yes);
             let below: (i < cap) = omega(lt, cap_is);
-            valued(u, here, resident, ⟨hp.left, ⟨t.held_rbx(live, env, u.gprs, u.memory, hp.left, env, value), ⟨trans(t.rbx_gprs_other(env, value, u.gprs, Rcx, refl), hp.right.left), ⟨refl, below⟩⟩⟩⟩)
+            valued(u, here, resident, ⟨hp.left, ⟨hp.left, ⟨trans(read_gpr_other(Rbx, Rcx, t.rbx_word(env, value), u.gprs, refl), hp.right.left), ⟨refl, below⟩⟩⟩⟩)
         });
     let compared = t.goes_block_jcc(w0, 0, set, w_cmp, tree, AE, pre, jumped, λ _ => refl);
     let indexed = t.goes_word_to(live, env, p, index, Rcx, inside_index, holds_index, w_w0, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g) = w),
         λ u here resident held => compared(u, here, resident,
             ⟨held.left, ⟨held.right, cong_fn<BitVec(64), Bool>(λ x => x.borrow_sub_bit(BitVec::ofNat(cap)), held.right)⟩⟩));
-    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨t.held_rbx(live, env, s.gprs, s.memory, held, env, index), refl⟩⟩)
+    λ s here resident held => indexed(s, here, resident, ⟨held, ⟨held, refl⟩⟩)
 }
 
 theorem Prog::stores_within(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat, program: Prog,

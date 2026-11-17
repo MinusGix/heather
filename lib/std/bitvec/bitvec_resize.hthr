@@ -227,7 +227,7 @@ theorem BitVec::shift_left_zero_low(n: Nat, v: BitVec(n), count: Nat):
 {
     match count {
         Zero => refl,
-        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(Succ(n))) => z.shift_left_one(), ih),
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(n + 1)) => z.shift_left_one(), ih),
             BitVec::shift_left_one_zero_low(n, v.shift_left(k))),
     }
 }
@@ -243,7 +243,7 @@ theorem BitVec::shift_left_low_bits(n, extra: Nat): (y: BitVec(n + extra)) →
 {
     match extra {
         Zero => λ y => refl,
-        Succ(k, ih) => λ y => trans(sym(BitVec::shift_left_one_first(Succ(n + k), y, k)),
+        Succ(k, ih) => λ y => trans(sym(BitVec::shift_left_one_first(n + k + 1, y, k)),
             trans(BitVec::shift_left_zero_low(n + k, y.init(), k),
                 cong_fn(λ (z: BitVec(n + k)) => z.cons_bit(False), ih(y.init())))),
     }
@@ -260,7 +260,7 @@ theorem BitVec::shift_right_zero_high(n: Nat, v: BitVec(n), count: Nat):
 {
     match count {
         Zero => refl,
-        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(Succ(n))) => z.shift_right_one(), ih),
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(n + 1)) => z.shift_right_one(), ih),
             BitVec::shift_right_one_zero_high(n, v.shift_right(k))),
     }
 }
@@ -284,7 +284,7 @@ theorem BitVec::shift_right_zeros_under(n: Nat, v: BitVec(n), extra: Nat):
 {
     match extra {
         Zero => refl,
-        Succ(k, ih) => trans(sym(BitVec::shift_right_one_first(Succ(n + k), BitVec::zeros_under(n, k, v).cons_bit(False), k)),
+        Succ(k, ih) => trans(sym(BitVec::shift_right_one_first(n + k + 1, BitVec::zeros_under(n, k, v).cons_bit(False), k)),
             trans(BitVec::shift_right_zero_high(n + k, BitVec::zeros_under(n, k, v), k),
                 cong_fn(λ (z: BitVec(n + k)) => z.snoc(False), ih))),
     }
@@ -313,7 +313,7 @@ theorem BitVec::zeros_over_resize(n, extra: Nat, v: BitVec(n)): BitVec::zeros_ov
 
 // A word without its top bit is its value at one bit less. The recursion is
 // `ofNat_toNat`'s.
-theorem BitVec::resize_init(n: Nat): (u: BitVec(Succ(n))) → u.resize(n) = u.init() {
+theorem BitVec::resize_init(n: Nat): (u: BitVec(n + 1)) → u.resize(n) = u.init() {
     match n {
         Zero => λ u => refl,
         Succ(k, ih) => λ u => {
@@ -390,13 +390,13 @@ theorem BitVec::resize_shift_right(n, m: Nat, fits: n <= m, a: BitVec(n), count:
     j(n.le_add(m, fits), λ w _ => a.resize(w).shift_right(count) = a.shift_right(count).resize(w), wide)
 }
 
-theorem BitVec::init_shift_left_one(n: Nat): (u: BitVec(Succ(n))) →
+theorem BitVec::init_shift_left_one(n: Nat): (u: BitVec(n + 1)) →
     u.shift_left_one().init() = u.init().shift_left_one()
 {
     match n { Zero => λ u => refl, Succ(_) => λ u => refl }
 }
 
-theorem BitVec::init_shift_left(n: Nat, u: BitVec(Succ(n)), count: Nat):
+theorem BitVec::init_shift_left(n: Nat, u: BitVec(n + 1), count: Nat):
     u.shift_left(count).init() = u.init().shift_left(count)
 {
     match count {
@@ -417,7 +417,7 @@ theorem BitVec::bor_assoc(n: Nat): (x, y, z: BitVec(n)) → x.bor(y).bor(z) = x.
     }
 }
 
-theorem BitVec::init_bor(n: Nat): (x, y: BitVec(Succ(n))) → x.bor(y).init() = x.init().bor(y.init()) {
+theorem BitVec::init_bor(n: Nat): (x, y: BitVec(n + 1)) → x.bor(y).init() = x.init().bor(y.init()) {
     match n {
         Zero => λ x y => refl,
         Succ(k, ih) => λ x y => BitVec::cons_bit_cong(k, refl, ih(x.tail_bits(), y.tail_bits()), a := x.head_bit() || y.head_bit(),

@@ -10,13 +10,13 @@ theorem tower_nil_reordered<A>(a, b, c: List<A>): ((a ++ []) ++ b) ++ c = a ++ (
 theorem tower_lens_unrelated<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) { by grind_using(["Int::add_comm", "Nat::add_assoc", "List::append_nil", "List::len_append"], []) }
 theorem regroup_reordered(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int::add_comm", "Int::add_assoc"], []) }
 theorem regroup_unrelated(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["List::append_assoc", "Int::add_assoc", "List::append_nil", "Int::add_comm"], []) }
-theorem neg_add_succ_reordered(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(Succ(k))) = -a + NegSucc(k) {
+theorem neg_add_succ_reordered(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k + 1)) = -a + NegSucc(k) {
     by grind_using(["Int::ipred_negOfNat", "Int::add_ipred", "Int::neg_isucc", "Int::add_isucc"], [])
 }
 // `Int::add_comm` matches every sum both ways, and the search makes about
 // 2,700 host requests before the sides meet. That used to be fatal under any
 // `bind`: each request lengthened the chain the final `Pure` reads, and its
 // native depth ran out (issues/grind-unrelated-lemma-fuel.md).
-theorem neg_add_succ_unrelated(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(Succ(k))) = -a + NegSucc(k) {
+theorem neg_add_succ_unrelated(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k + 1)) = -a + NegSucc(k) {
     by grind_using(["Int::add_isucc", "Int::add_comm", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
 }

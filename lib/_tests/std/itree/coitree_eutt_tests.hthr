@@ -11,7 +11,7 @@ import relation_props; import algebra_rel;
 fn two_taus(E: Events) → Eutt<Nat>(E, CTau(CTau(CRet(1))), CRet(1)) { ERet(2, 0, 1, refl, refl) }
 fn more_than_enough(E: Events) → Eutt<Nat>(E, CRet(1), CTau(CRet(1))) { ERet(5, 7, 1, refl, refl) }
 theorem after_open<R>(E: Events, n: Nat, t: CoTree<R>(E)):
-    CoTree::after(E, Succ(n), CTau(t)) = CoTree::after(E, n, t) { refl }
+    CoTree::after(E, n + 1, CTau(t)) = CoTree::after(E, n, t) { refl }
 
 fn spin_self<R>(E: Events) → Eutt<R>(E, CoTree::spin(E), CoTree::spin(E)) {
     ETau(3, 1, CoTree::spin(E), CoTree::spin(E), refl, refl, spin_self(E))
@@ -44,8 +44,8 @@ theorem after_bind_literal(E: Events, h: Nat → CoTree<Nat>(E)):
     CoTree::after_bind(E, h, OTau(CRet(1)), trivial, 2, CTau(CTau(CTau(CRet(1)))), refl)
 }
 fn taus_both_sides(E: Events) →
-    Eutt<Nat>(E, CoTree::bind<Nat, Nat>(E, CTau(CTau(CRet(1))), λ n => CTau(CRet(Succ(n)))),
-        CoTree::bind<Nat, Nat>(E, CRet(1), λ n => CRet(Succ(n))))
+    Eutt<Nat>(E, CoTree::bind<Nat, Nat>(E, CTau(CTau(CRet(1))), λ n => CTau(CRet(n + 1))),
+        CoTree::bind<Nat, Nat>(E, CRet(1), λ n => CRet(n + 1)))
 {
     Eutt::bind_cong(E, CTau(CTau(CRet(1))), CRet(1), λ n => CTau(CRet(Succ(n))), λ n => CRet(Succ(n)),
         two_off(E, CRet(1)), λ n => Eutt::tau_l(E, CRet(Succ(n))))

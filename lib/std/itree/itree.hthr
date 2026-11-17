@@ -359,7 +359,7 @@ theorem ITree::iter_zero<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A
 
 // The loop's unfolding, at one more unit of fuel.
 theorem ITree::iter_succ<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
-    ITree::iter(E, Succ(n), body, a) = ITree::bind(E, body(a), λ x => match x {
+    ITree::iter(E, n + 1, body, a) = ITree::bind(E, body(a), λ x => match x {
         Continue(a2) => Tau(ITree::iter(E, n, body, a2)),
         Break(b) => Ret(b),
     }) { refl }
@@ -380,13 +380,13 @@ theorem ITree::mrec_zero<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.R
 // A call, at one more unit of fuel, runs the body at that call and continues.
 theorem ITree::mrec_call<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
     n: Nat, d: D.Cmd, k: D.Resp(d) → ITree<R>(Events::sum(D, E))):
-    ITree::mrec<R>(D, E, body, Succ(n), Vis(Inl(d), k))
+    ITree::mrec<R>(D, E, body, n + 1, Vis(Inl(d), k))
         = Tau(ITree::mrec(D, E, body, n, ITree::bind(Events::sum(D, E), body(d), k))) { refl }
 
 // A command of `E` passes through, at the same fuel.
 theorem ITree::mrec_pass<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
     n: Nat, e: E.Cmd, k: E.Resp(e) → ITree<R>(Events::sum(D, E))):
-    ITree::mrec<R>(D, E, body, Succ(n), Vis(Inr(e), k))
+    ITree::mrec<R>(D, E, body, n + 1, Vis(Inr(e), k))
         = Vis(e, λ a => ITree::mrec_layer(D, E,
             λ d k2 => Tau(ITree::mrec(D, E, body, n, ITree::bind(Events::sum(D, E), body(d), k2))), k(a))) { refl }
 

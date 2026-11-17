@@ -241,22 +241,22 @@ theorem Accepted::longest_inside(source: List<u8>, rest: List<u8>): (state: u64)
         Cons(byte, tail) => λ state at last here ends kept => {
             let next = scan_step(state, byte.zero_extend(56));
             let within: (at <= source.len()) = omega;
-            let left: (source.drop(Succ(at)) = tail) =
+            let left: (source.drop(at + 1) = tail) =
                 trans(source.drop_succ(at), trans(cong_fn(λ (l: List<u8>) => l.drop(1), here), tail.drop_zero()));
-            let ends2: (Succ(at) + tail.len() = source.len()) = omega;
-            let within2: (Succ(at) <= source.len()) = omega;
+            let ends2: (at + 1 + tail.len() = source.len()) = omega;
+            let within2: (at + 1 <= source.len()) = omega;
             match next.band(255).eq_bit(FAIL) as λ b => Cut::inside(if b {
                     Cut::Refusal(scan_accept(next), at)
                 } else if next.eq_bit(DEAD) {
                     last
                 } else {
-                    Accepted::longest(next, tail, Succ(at), Accepted::after(next, tail, Succ(at), last))
+                    Accepted::longest(next, tail, at + 1, Accepted::after(next, tail, at + 1, last))
                 }, source) {
                 True => ⟨within, scan_accept_byte(next)⟩,
-                False => match next.eq_bit(DEAD) as λ b => Cut::inside(if b { last } else { Accepted::longest(next, tail, Succ(at), Accepted::after(next, tail, Succ(at), last)) }, source) {
+                False => match next.eq_bit(DEAD) as λ b => Cut::inside(if b { last } else { Accepted::longest(next, tail, at + 1, Accepted::after(next, tail, at + 1, last)) }, source) {
                     True => kept,
-                    False => Accepted::longest_inside(source, tail)(next, Succ(at), Accepted::after(next, tail, Succ(at), last), left, ends2,
-                        Accepted::after_inside(source, next, tail, Succ(at), last, left, within2, kept)),
+                    False => Accepted::longest_inside(source, tail)(next, at + 1, Accepted::after(next, tail, at + 1, last), left, ends2,
+                        Accepted::after_inside(source, next, tail, at + 1, last, left, within2, kept)),
                 },
             }
         },
@@ -424,8 +424,8 @@ theorem records_past(source: List<u8>, length, at: u64, sized: source.len() = le
 }
 
 theorem records_below(source: List<u8>, length, at: u64, byte: u8, tail: List<u8>, sized: source.len() = length.toNat(), here: source.drop(at.toNat()) = Cons(byte, tail)):
-    at.toNat() + Succ(tail.len()) = length.toNat() {
-    let gone: (Succ(tail.len()) = source.len() - at.toNat()) = j(here, λ r _ => r.len() = source.len() - at.toNat(), source.len_drop(at.toNat()));
+    at.toNat() + (tail.len() + 1) = length.toNat() {
+    let gone: (tail.len() + 1 = source.len() - at.toNat()) = j(here, λ r _ => r.len() = source.len() - at.toNat(), source.len_drop(at.toNat()));
     omega
 }
 
@@ -513,7 +513,7 @@ theorem scan_records_from(olen: u64, source: List<u8>, length: u64, sized: sourc
         },
         Succ(k1) => match rest {
             Nil => λ out fuel at previous n spent here within =>
-                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(Succ(k1), previous, Nil, at.toNat()),
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(k1 + 1, previous, Nil, at.toNat()),
                     λ room => scan_records_at_end(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, room,
                         records_past(source, length, at, sized, here))),
             Cons(byte, tail) => λ out fuel at previous n spent here within => {
@@ -528,7 +528,7 @@ theorem scan_records_from(olen: u64, source: List<u8>, length: u64, sized: sourc
                         cong_fn(λ (r: List<u8>) => Accepted::word(Accepted::longest(begin, r, at.toNat(), start)), here));
                 let first: Cut::inside(start, source) = ⟨omega, omega⟩;
                 let inside: Cut::inside(cut, source) = Accepted::longest_inside(source, Cons(byte, tail))(begin, at.toNat(), start, here, omega, first);
-                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(Succ(k1), previous, Cons(byte, tail), at.toNat()),
+                records_by_room(out, olen, source, length, fuel, at, scan_token(source, length, at, previous), n, Record::from(k1 + 1, previous, Cons(byte, tail), at.toNat()),
                     λ room => trans(cong_fn(λ (w: u64) => List::scan_records(out, olen, source, length, fuel, at, w, n), scanned),
                         (match cut as λ c => Cut::inside(c, source) → List::scan_records(out, olen, source, length, fuel, at, Accepted::word(c), n)
                             = List::put_records(out, olen, n, match c {

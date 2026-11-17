@@ -455,9 +455,9 @@ theorem ITree::sim_iter<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F), ct: C
                 Inl(moves) => ITree::sim_bind(E, F, m, ct, λ x y => Step::Rel(R, x, y), λ x y => x = y,
                     body(a), body2(a2), λ x => ITree::iter_next(E, k, body, x), λ y => ITree::iter_next(F, k, body2, y),
                     cont, moves),
-                Inr(stays) => ITree::sim_below(E, F, m, ct, λ x y => x = y, ITree::iter(E, Succ(k), body, a),
-                    ITree::iter(F, k, body2, a2), ITree::iter(F, Succ(k), body2, a2), ITree::iter_grows(F, k, body2, a2),
-                    ITree::sim_next(E, F, m, ct, λ x y => x = y, ITree::iter(E, Succ(k), body, a),
+                Inr(stays) => ITree::sim_below(E, F, m, ct, λ x y => x = y, ITree::iter(E, k + 1, body, a),
+                    ITree::iter(F, k, body2, a2), ITree::iter(F, k + 1, body2, a2), ITree::iter_grows(F, k, body2, a2),
+                    ITree::sim_next(E, F, m, ct, λ x y => x = y, ITree::iter(E, k + 1, body, a),
                         Tau(ITree::iter(F, k, body2, a2)), ITree::iter(F, k, body2, a2), refl,
                         ITree::sim_bind(E, F, m, ct, λ x y => Step::Rel(R, x, y), λ x y => x = y,
                             body(a), ITree::stay<A2, B>(F, a2), λ x => ITree::iter_next(E, k, body, x),
@@ -525,7 +525,7 @@ theorem ITree::simk_iter_next<A, B, C>(E: Events, F: Events, m: TraceMap(E, F), 
 // the spec's fuel at each `k`.
 theorem ITree::simk_iter<A, B, C>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E),
     body: A → ITree<Step<A, B>>(E), I: Nat → A → ITree<C>(F) → Type, K: B → ITree<C>(F) → Type,
-    pass: (k: Nat) → (a: A) → (v: ITree<C>(F)) → I(Succ(k), a, v) →
+    pass: (k: Nat) → (a: A) → (v: ITree<C>(F)) → I(k + 1, a, v) →
         ITree::SimK(E, F, m, ct, λ x w => ITree::StepK(F, I(k), K, x, w), body(a), v), n: Nat):
     (a: A) → (v: ITree<C>(F)) → I(n, a, v) → ITree::SimK(E, F, m, ct, K, ITree::iter(E, n, body, a), v)
 {

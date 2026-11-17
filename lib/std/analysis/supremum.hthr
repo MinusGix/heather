@@ -136,7 +136,7 @@ theorem Bisection::stage_lt(S: K → Type, c, w: K, m, n: Nat, a, b, a2, b2: K, 
 // `(b - a)·(1 - t)`.
 theorem Bisection::step(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, a, b: K,
     h: Bisection(S, K.multiplicative.unit + K.inv(t), w, n, a, b)):
-    ∃ a2: K, ∃ b2: K, Bisection(S, K.multiplicative.unit + K.inv(t), w, Succ(n), a2, b2)
+    ∃ a2: K, ∃ b2: K, Bisection(S, K.multiplicative.unit + K.inv(t), w, n + 1, a2, b2)
 {
     let c = K.multiplicative.unit + K.inv(t);
     let d = t * (b + K.inv(a));
@@ -151,15 +151,15 @@ theorem Bisection::step(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < 
     let hw: (b + K.inv(a) ≈ OrderedField::npow(c, n) * w) = h.right.right;
     let hwc: ((b + K.inv(a)) * c ≈ (OrderedField::npow(c, n) * w) * c) =
         OrderedSemiring::mul_respects(b + K.inv(a), OrderedField::npow(c, n) * w, c, c, hw, K.rel_refl(c));
-    let ps: (OrderedField::npow(c, Succ(n)) * w ≈ (OrderedField::npow(c, n) * c) * w) =
-        OrderedSemiring::mul_respects(OrderedField::npow(c, Succ(n)), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
+    let ps: (OrderedField::npow(c, n + 1) * w ≈ (OrderedField::npow(c, n) * c) * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, n + 1), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
     match loc(a + d, b + K.inv(d), lt) {
         Inl(ub) => {
-            let width: ((b + K.inv(d)) + K.inv(a) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            let width: ((b + K.inv(d)) + K.inv(a) ≈ OrderedField::npow(c, n + 1) * w) = ring(hwc, ps);
             Exists(a, Exists(b + K.inv(d), And(ub, And(ex, width))))
         },
         Inr(above) => {
-            let width: (b + K.inv(a + d) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            let width: (b + K.inv(a + d) ≈ OrderedField::npow(c, n + 1) * w) = ring(hwc, ps);
             Exists(a + d, Exists(b, And(h.left, And(above, width))))
         },
     }

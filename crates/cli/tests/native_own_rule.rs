@@ -108,5 +108,10 @@ fn the_standard_rule_set_is_applied() {
     for rule in ["add_comm", "add_sub", "xor_self", "or_zero"] {
         assert!(explained.lines().any(|line| line.ends_with(&format!("   by {rule}"))), "{rule}: {explained}");
     }
+    // A rule whose other side reads a node the code does not have:
+    // `3 + 4` is put, folded, and read by the sum written for `(x + 3) + 4`.
+    let (_, stepped) = compile(&root, &source, "stepped", &dir.join("stepped.s"), "--explain-optimizer");
+    assert!(stepped.lines().any(|line| line.ends_with(" = 3 + 4 = 7   by add_consts")), "{stepped}");
+    assert!(stepped.lines().any(|line| line.ends_with("   by add_assoc")), "{stepped}");
     std::fs::remove_dir_all(dir).unwrap();
 }

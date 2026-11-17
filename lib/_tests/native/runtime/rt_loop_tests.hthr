@@ -97,7 +97,7 @@ theorem count_down_guarded(): Fun::Guarded([Word(64), Word(64)], Word(64), count
     λ n acc again hyp => sym(count_down::ext(n.toNat(), n.toNat(),
         λ (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.toNat(), n.toNat())) => count_down::rec(n.toNat(), y1, y2, p),
         λ (y1: BitVec(64)) (y2: BitVec(64)) _ => again([y1, y2]),
-        λ y1 y2 p q => trans(count_down::irrel(n.toNat(), Succ(y1.toNat()), y1, y2, p, nat::Nat::lt_succ_self(y1.toNat())),
+        λ y1 y2 p q => trans(count_down::irrel(n.toNat(), y1.toNat() + 1, y1, y2, p, nat::Nat::lt_succ_self(y1.toNat())),
             sym(hyp([y1, y2], refl, p))),
         n, acc, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
 }

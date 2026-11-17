@@ -19,7 +19,7 @@ theorem bool_rearranged(): Perm<Bool>([True, False], [False, True]) {
 }
 
 // At open finite types: the instances' counts, and comparison along maps.
-theorem option_count<A: Fintype>(): Fintype::card<Option<A>>() = Succ(Fintype::card<A>()) { Fintype::card_option<A>() }
+theorem option_count<A: Fintype>(): Fintype::card<Option<A>>() = (Fintype::card<A>()) + 1 { Fintype::card_option<A>() }
 theorem pair_count<A: Fintype, B: Fintype>(): Fintype::card<Pair<A, B>>() = Fintype::card<A>() * Fintype::card<B>() { Fintype::card_pair<A, B>() }
 theorem sum_count<A: Fintype, B: Fintype>(): Fintype::card<Or<A, B>>() = Fintype::card<A>() + Fintype::card<B>() { Fintype::card_or<A, B>() }
 

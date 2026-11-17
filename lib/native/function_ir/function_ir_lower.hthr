@@ -1624,9 +1624,9 @@ theorem shift_code_executes<M>(op: ShiftOp, destination: Gpr, count: Nat, fits: 
         Zero => λ _ => j(sym(op.by_zero(x)),
             λ y _ => GprsAgree(s.gprs, write_gpr(destination, y, s.gprs)),
             gprs_agree_write_read(destination, s.gprs)),
-        Succ(k) => (match k as λ m => Succ(m) <= 63 →
-                GprsAgree(execute_block_normal(shift_code(op, destination, Succ(m)), s).gprs,
-                    write_gpr(destination, op.by(x, Succ(m)), s.gprs)) {
+        Succ(k) => (match k as λ m => m + 1 <= 63 →
+                GprsAgree(execute_block_normal(shift_code(op, destination, m + 1), s).gprs,
+                    write_gpr(destination, op.by(x, m + 1), s.gprs)) {
             Zero => λ _ => j(op.by_succ(x, 0),
                 λ y _ => GprsAgree(write_gpr(destination, op.apply(x), s.gprs),
                     write_gpr(destination, y, s.gprs)),
@@ -1634,9 +1634,9 @@ theorem shift_code_executes<M>(op: ShiftOp, destination: Gpr, count: Nat, fits: 
                     λ y _ => GprsAgree(write_gpr(destination, op.apply(x), s.gprs),
                         write_gpr(destination, op.apply(y), s.gprs)),
                     λ _ => refl)),
-            Succ(m) => λ fits => j(sym(shift_count_of(Succ(Succ(m)), fits)),
+            Succ(m) => λ fits => j(sym(shift_count_of(m + 2, fits)),
                 λ c _ => GprsAgree(write_gpr(destination, op.by(x, c), s.gprs),
-                    write_gpr(destination, op.by(x, Succ(Succ(m))), s.gprs)),
+                    write_gpr(destination, op.by(x, m + 2), s.gprs)),
                 λ _ => refl),
         }),
     })(fits)

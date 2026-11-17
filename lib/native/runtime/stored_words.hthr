@@ -266,7 +266,7 @@ theorem List::put_u64_be_within_part<A>({whole: Stored<A>}, self span: List<u8>,
 
 // Where element `i` of words of `2^k` bytes from `base` lies: the sum
 // does not wrap where the element is inside the length word.
-theorem BitVec::element_place(base, length, i: u64, k, size: Nat, inside: i.toNat() * Nat::pow(2, k) + base.toNat() + Succ(size) <= length.toNat()):
+theorem BitVec::element_place(base, length, i: u64, k, size: Nat, inside: i.toNat() * Nat::pow(2, k) + base.toNat() + (size + 1) <= length.toNat()):
     (base + i.shift_left(k)).toNat() = i.toNat() * Nat::pow(2, k) + base.toNat() {
     let m = i.toNat() * Nat::pow(2, k);
     let shifted: (i.shift_left(k) = BitVec::ofNat(m)) = BitVec::shift_left_eq_ofNat(64, i, k);

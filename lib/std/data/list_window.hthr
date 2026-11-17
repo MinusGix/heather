@@ -85,7 +85,7 @@ theorem List::update_take<A>(self xs: List<A>): (n, i: Nat) → (f: A → A) →
 // ---------------------------------------------------------------------------
 // A window
 
-theorem List::window_succ<A>(h: A, t: List<A>, start, end: Nat): Cons(h, t).window(Succ(start), Succ(end)) = t.window(start, end) { refl }
+theorem List::window_succ<A>(h: A, t: List<A>, start, end: Nat): Cons(h, t).window(start + 1, end + 1) = t.window(start, end) { refl }
 
 theorem List::window_from_zero<A>(self xs: List<A>, end: Nat): xs.window(0, end) = xs.take(end) {
     let all: (end - 0 = end) = omega();
@@ -104,7 +104,7 @@ theorem List::nth_window<A>(self xs: List<A>, start, end, i: Nat, inside: i < en
 // ---------------------------------------------------------------------------
 // A window replaced
 
-theorem List::put_window_succ<A>(h: A, t: List<A>, start: Nat, ys: List<A>): Cons(h, t).put_window(Succ(start), ys) = Cons(h, t.put_window(start, ys)) {
+theorem List::put_window_succ<A>(h: A, t: List<A>, start: Nat, ys: List<A>): Cons(h, t).put_window(start + 1, ys) = Cons(h, t.put_window(start, ys)) {
     refl
 }
 
@@ -371,7 +371,7 @@ theorem List::vector_of_window<A>(self xs: List<A>, at, k: Nat, pad: A): xs.wind
 
 // A window's first entry is an update, and the rest a window one on.
 theorem List::put_window_cons<A>(self xs: List<A>): (at: Nat) → (y: A) → (ys: List<A>) → at < xs.len() →
-    xs.put_window(at, Cons(y, ys)) = xs.update(at, λ _ => y).put_window(Succ(at), ys) {
+    xs.put_window(at, Cons(y, ys)) = xs.update(at, λ _ => y).put_window(at + 1, ys) {
     match xs {
         Nil => λ at y ys inside => false_elim(inside),
         Cons(h, t) => λ at => match at {
@@ -404,7 +404,7 @@ theorem List::put_window_update_from<A>(ys: List<A>): (xs: List<A>) → (at: Nat
         Cons(y, rest) => λ xs at fits => {
             let stored = xs.update(at, λ _ => y);
             let same: (stored.len() = xs.len()) = xs.len_update(at, λ _ => y);
-            trans(xs.put_window_cons(at, y, rest, omega), List::put_window_update_from(rest, stored, Succ(at), omega))
+            trans(xs.put_window_cons(at, y, rest, omega), List::put_window_update_from(rest, stored, at + 1, omega))
         },
     }
 }
@@ -414,9 +414,9 @@ theorem List::put_window_update_from<A>(ys: List<A>): (xs: List<A>) → (at: Nat
 // with one byte changed comes to (`Stored::u32_be_put_with_byte`).
 theorem List::update_from_one_of_four<A>(self xs: List<A>, o, r: Nat, b, pad: A, below: r < 4):
     xs.update_from(o, vector_entries(vector_update(xs.vector_at(o, 4, pad), r, b))) = xs.update(o + r, λ _ => b) {
-    let o1 = Succ(o);
-    let o2 = Succ(o1);
-    let o3 = Succ(o2);
+    let o1 = o + 1;
+    let o2 = o1 + 1;
+    let o3 = o2 + 1;
     let f0 = λ (_: A) => xs.nth(o).unwrap_or(pad);
     let f1 = λ (_: A) => xs.nth(o1).unwrap_or(pad);
     let f2 = λ (_: A) => xs.nth(o2).unwrap_or(pad);
@@ -556,7 +556,7 @@ theorem List::drop_len<A>(self xs: List<A>): xs.drop(xs.len()) = Nil {
 }
 
 // What is left from an index inside: its element, then the rest.
-theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len() → xs.drop(i) = Cons(xs.nth(i).unwrap_or(d), xs.drop(Succ(i))) {
+theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len() → xs.drop(i) = Cons(xs.nth(i).unwrap_or(d), xs.drop(i + 1)) {
     match xs {
         Nil => λ i d no => false_elim(no),
         Cons(h, t) => λ i => match i {
@@ -568,7 +568,7 @@ theorem List::drop_at<A>(self xs: List<A>): (i: Nat) → (d: A) → i < xs.len()
 
 // Only the empty list has no length.
 theorem List::nil_of_len_zero<A>(self xs: List<A>): xs.len() = 0 → xs = Nil {
-    match xs { Nil => λ _ => refl, Cons(_, t) => λ no => { let pos: (Cons(_, t).len() = Succ(t.len())) = refl; false_elim(omega) } }
+    match xs { Nil => λ _ => refl, Cons(_, t) => λ no => { let pos: (Cons(_, t).len() = t.len() + 1) = refl; false_elim(omega) } }
 }
 
 // Updating past a prefix updates the rest.
@@ -641,14 +641,14 @@ theorem List::update_update_apart<A>(self xs: List<A>, i, k: Nat, f, g: A → A,
             },
             Succ(m) => match k {
                 Zero => refl,
-                Succ(l) => List::cong_cons(h, t.update_update_apart(m, l, f, g, λ same => apart(cong_fn(λ (n: Nat) => Succ(n), same)))),
+                Succ(l) => List::cong_cons(h, t.update_update_apart(m, l, f, g, λ same => apart(cong_fn(λ (n: Nat) => n + 1, same)))),
             },
         },
     }
 }
 
 // The last element split off a nonempty list.
-theorem List::split_last<A>(self xs: List<A>, k: Nat, pad: A, at: xs.len() = Succ(k)): xs = xs.take(k) ++ [xs.nth(k).unwrap_or(pad)] {
+theorem List::split_last<A>(self xs: List<A>, k: Nat, pad: A, at: xs.len() = k + 1): xs = xs.take(k) ++ [xs.nth(k).unwrap_or(pad)] {
     match xs {
         Nil => absurd(at),
         Cons(h, t) => match k {
@@ -663,7 +663,7 @@ theorem List::split_last<A>(self xs: List<A>, k: Nat, pad: A, at: xs.len() = Suc
 
 // A list split at an index it holds: before it, the element, after it.
 theorem List::split_at<A>(self xs: List<A>, k: Nat, pad: A, inside: k < xs.len()):
-    xs = xs.take(k) ++ Cons(xs.nth(k).unwrap_or(pad), xs.drop(Succ(k)))
+    xs = xs.take(k) ++ Cons(xs.nth(k).unwrap_or(pad), xs.drop(k + 1))
 {
     match xs {
         Nil => { let no: False = omega; false_elim(no) },

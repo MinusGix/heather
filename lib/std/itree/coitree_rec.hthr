@@ -238,7 +238,7 @@ theorem CoTree::safe_bind_obs<A, B>(D: Events, E: Events, P: (d: D.Cmd) → D.Re
     match m {
         Zero => λ o s => trivial,
         Succ(m2, ih) => λ o => match o {
-            ORet(a) => λ s => hh(a, s, Succ(m2)),
+            ORet(a) => λ s => hh(a, s, m2 + 1),
             OTau(x) => λ s => j(sym(CoTree::obs_bind(Events::sum(D, E), x, h)),
                 λ y _ => CoTree::SafeObs(D, E, P, Q2, m2, y),
                 ih(CoTree::obs(Events::sum(D, E), x), s)),
@@ -291,12 +291,12 @@ theorem CoTree::mrec_safe<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D
         },
         Succ(n2, ih) => λ o => match o {
             ORet(r2) => λ s e => j(e, λ y _ => Obs::RetIs(E, y, Q), s(1)),
-            OTau(x) => λ s e => ih(CoTree::obs(Events::sum(D, E), x), λ m => s(Succ(m)), e),
+            OTau(x) => λ s e => ih(CoTree::obs(Events::sum(D, E), x), λ m => s(m + 1), e),
             OVis(c, k) => λ s e => (match c as λ c2 => (k2: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
                     ((m: Nat) → CoTree::SafeObs(D, E, P, Q, m, OVis(c2, k2))) →
-                    CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs<R>(D, E, body, OVis(c2, k2))) = ORet(r) → Q(r) {
+                    CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs<R>(D, E, body, OVis(c2, k2))) = ORet(r) → Q(r) {
                 Inl(d) => λ k2 s2 e2 => ih(CoTree::obs(Events::sum(D, E), CoTree::bind(Events::sum(D, E), body(d), k2)),
-                    CoTree::safe_bind(D, E, P, P(d), Q, body(d), k2, hb(d), λ a p m2 => s2(Succ(m2))(a, p)), e2),
+                    CoTree::safe_bind(D, E, P, P(d), Q, body(d), k2, hb(d), λ a p m2 => s2(m2 + 1)(a, p)), e2),
                 Inr(_) => λ k2 s2 e2 => absurd(e2),
             })(k, s, e),
         },
@@ -352,7 +352,7 @@ theorem CoTree::iter_safe<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), I:
                     λ m x2 e2 => hb(a, s(0, Continue(a), refl), x2, Returns(m, e2)), e),
                 Break(b2) => λ s e => j(e, λ y _ => Obs::RetIs(E, y, Q), s(0, Break(b2), refl)),
             },
-            OTau(t) => λ s e => ih(CoTree::obs(E, t), λ m x2 e2 => s(Succ(m), x2, e2), e),
+            OTau(t) => λ s e => ih(CoTree::obs(E, t), λ m x2 e2 => s(m + 1, x2, e2), e),
             OVis(_, _) => λ s e => absurd(e),
         },
     }
@@ -390,20 +390,20 @@ theorem CoTree::mrec_bisim<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<
             })(k1, j(hx, λ o _ => CoTree::after_obs(E, 0, CoTree::mrec_obs(D, E, body, o)) = ORet(r), e)),
         },
         Succ(n2, ih) => λ x y b e => match b {
-            BRet(r2, hx, hy) => j(trans(hx, sym(hy)), λ o _ => CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs(D, E, body, o)) = ORet(r), e),
-            BTau(x2, y2, hx, hy, next) => j(sym(hy), λ o _ => CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs(D, E, body, o)) = ORet(r),
-                ih(x2, y2, next, j(hx, λ o _ => CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs(D, E, body, o)) = ORet(r), e))),
-            BVis(c, k1, k2, hx, hy, next) => j(sym(hy), λ o _ => CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs(D, E, body, o)) = ORet(r),
+            BRet(r2, hx, hy) => j(trans(hx, sym(hy)), λ o _ => CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs(D, E, body, o)) = ORet(r), e),
+            BTau(x2, y2, hx, hy, next) => j(sym(hy), λ o _ => CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs(D, E, body, o)) = ORet(r),
+                ih(x2, y2, next, j(hx, λ o _ => CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs(D, E, body, o)) = ORet(r), e))),
+            BVis(c, k1, k2, hx, hy, next) => j(sym(hy), λ o _ => CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs(D, E, body, o)) = ORet(r),
                 (match c as λ c2 => (k3: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
                         (k4: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
                         ((a: Events::sum(D, E).Resp(c2)) → Bisim<R>(Events::sum(D, E), k3(a), k4(a))) →
-                        CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs<R>(D, E, body, OVis(c2, k3))) = ORet(r) →
-                        CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs<R>(D, E, body, OVis(c2, k4))) = ORet(r) {
+                        CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs<R>(D, E, body, OVis(c2, k3))) = ORet(r) →
+                        CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs<R>(D, E, body, OVis(c2, k4))) = ORet(r) {
                     Inl(d) => λ k3 k4 nx e2 => ih(
                         CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), k3), CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), k4),
                         CoTree::bind_cong<D.Resp(d), R>(Events::sum(D, E), body(d), body(d), k3, k4, Bisim::refl(Events::sum(D, E), body(d)), nx), e2),
                     Inr(_) => λ k3 k4 nx e2 => absurd(e2),
-                })(k1, k2, next, j(hx, λ o _ => CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs(D, E, body, o)) = ORet(r), e))),
+                })(k1, k2, next, j(hx, λ o _ => CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs(D, E, body, o)) = ORet(r), e))),
         },
     }
 }
@@ -444,7 +444,7 @@ theorem CoTree::mrec_bind_obs<A, R>(D: Events, E: Events, body: (d: D.Cmd) → C
         Succ(n2, ih) => λ t o => match o {
             ORet(a2) => λ h0 e => Returns::of_obs(E, CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E), t, k)),
                 CoTree::obs(E, CoTree::mrec(D, E, body, k(a))),
-                Obs::ret_same(E, CoTree::after_obs<A>(E, Succ(n2), CoTree::mrec_obs<A>(D, E, body, ORet(a2))), a2, a, refl, e,
+                Obs::ret_same(E, CoTree::after_obs<A>(E, n2 + 1, CoTree::mrec_obs<A>(D, E, body, ORet(a2))), a2, a, refl, e,
                     λ x => CoTree::obs(E, CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E), t, k))) = CoTree::obs(E, CoTree::mrec(D, E, body, k(x))),
                     CoTree::mrec_at(D, E, body, CoTree::bind(Events::sum(D, E), t, k), Obs::bind(Events::sum(D, E), ORet(a2), k),
                         CoTree::obs_bind_at(Events::sum(D, E), t, k, ORet(a2), h0))),
@@ -456,11 +456,11 @@ theorem CoTree::mrec_bind_obs<A, R>(D: Events, E: Events, body: (d: D.Cmd) → C
                     OTau(CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E), s, k))),
                     CoTree::mrec_at(D, E, body, CoTree::bind(Events::sum(D, E), t, k), Obs::bind(Events::sum(D, E), OTau(s), k),
                         CoTree::obs_bind_at(Events::sum(D, E), t, k, OTau(s), h0)),
-                    r, Succ(rs.count), rs.at)
+                    r, rs.count + 1, rs.at)
             },
             OVis(c, k1) => λ h0 e => (match c as λ c2 => (k2: Events::sum(D, E).Resp(c2) → CoTree<A>(Events::sum(D, E))) →
                     CoTree::obs(Events::sum(D, E), t) = OVis(c2, k2) →
-                    CoTree::after_obs(E, Succ(n2), CoTree::mrec_obs<A>(D, E, body, OVis(c2, k2))) = ORet(a) →
+                    CoTree::after_obs(E, n2 + 1, CoTree::mrec_obs<A>(D, E, body, OVis(c2, k2))) = ORet(a) →
                     Returns(E, CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E), t, k)), r) {
                 Inl(d) => λ k2 h1 e2 => {
                     let rs: Returns(E, CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E),
@@ -472,7 +472,7 @@ theorem CoTree::mrec_bind_obs<A, R>(D: Events, E: Events, body: (d: D.Cmd) → C
                             λ x => CoTree::bind(Events::sum(D, E), k2(x), k)))),
                         CoTree::mrec_at(D, E, body, CoTree::bind(Events::sum(D, E), t, k), Obs::bind(Events::sum(D, E), OVis(Inl(d), k2), k),
                             CoTree::obs_bind_at(Events::sum(D, E), t, k, OVis(Inl(d), k2), h1)),
-                        r, Succ(rs.count),
+                        r, rs.count + 1,
                         CoTree::mrec_bisim(D, E, body, r, rs.count,
                             CoTree::bind(Events::sum(D, E), CoTree::bind<D.Resp(d), A>(Events::sum(D, E), body(d), k2), k),
                             CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), λ x => CoTree::bind(Events::sum(D, E), k2(x), k)),
@@ -545,7 +545,7 @@ theorem CoTree::mrec_reaches<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTre
             OTau(s) => λ h0 f => {
                 let x: (∃ r: R, Returns(E, CoTree::mrec(D, E, body, s), r) ∧ Q(r)) = ih(s, CoTree::obs(Events::sum(D, E), s), refl, f);
                 Exists(x.witness, And(Returns::of_obs(E, CoTree::mrec(D, E, body, t), OTau(CoTree::mrec(D, E, body, s)),
-                    CoTree::mrec_at(D, E, body, t, OTau(s), h0), x.witness, Succ(x.proof.left.count), x.proof.left.at), x.proof.right))
+                    CoTree::mrec_at(D, E, body, t, OTau(s), h0), x.witness, x.proof.left.count + 1, x.proof.left.at), x.proof.right))
             },
             OVis(c, k) => λ h0 f => (match c as λ c2 => (k2: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
                     CoTree::obs(Events::sum(D, E), t) = OVis(c2, k2) →
@@ -559,7 +559,7 @@ theorem CoTree::mrec_reaches<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTre
                         CoTree::mrec_bind<D.Resp(d), R>(D, E, body, body(d), k2, ca.witness, x.witness, ca.proof.left, x.proof.left);
                     Exists(x.witness, And(Returns::of_obs(E, CoTree::mrec(D, E, body, t),
                         OTau(CoTree::mrec(D, E, body, CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), k2))),
-                        CoTree::mrec_at(D, E, body, t, OVis(Inl(d), k2), h1), x.witness, Succ(rb.count), rb.at), x.proof.right))
+                        CoTree::mrec_at(D, E, body, t, OVis(Inl(d), k2), h1), x.witness, rb.count + 1, rb.at), x.proof.right))
                 },
                 Inr(_) => λ k2 h1 f2 => false_elim(f2),
             })(k, h0, f),
@@ -587,7 +587,7 @@ theorem CoTree::rec_total(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Re
     hb: (d: D.Cmd) → CoTree::Reaches(D, E, P, λ d2 => measure(d2) < measure(d), body(d), P(d)), d: D.Cmd):
     (∃ r: D.Resp(d), Returns(E, CoTree::rec(D, E, body, d), r) ∧ P(d, r))
 {
-    CoTree::rec_total_below(D, E, body, P, measure, hb, Succ(measure(d)), d, omega)
+    CoTree::rec_total_below(D, E, body, P, measure, hb, measure(d) + 1, d, omega)
 }
 
 // ---------------------------------------------------------------------------

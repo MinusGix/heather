@@ -111,7 +111,7 @@ theorem MonoidRel::range_add(m, n: Nat, f: Nat → A):
 }
 
 theorem MonoidRel::range_succ_l(n: Nat, f: Nat → A):
-    MonoidRel::range(op, Succ(n), f) ≈ f(0) ∙ MonoidRel::range(op, n, λ k => f(Succ(k)))
+    MonoidRel::range(op, n + 1, f) ≈ f(0) ∙ MonoidRel::range(op, n, λ k => f(k + 1))
 {
     match n {
         Zero => calc {
@@ -120,11 +120,11 @@ theorem MonoidRel::range_succ_l(n: Nat, f: Nat → A):
                 ≈ f(0) ∙ A.unit := A.rel_sym(f(0) ∙ A.unit, f(0), A.unit_r(f(0))),
         },
         Succ(p) => calc {
-            MonoidRel::range(op, Succ(p), f) ∙ f(Succ(p))
-                ≈ (f(0) ∙ MonoidRel::range(op, p, λ k => f(Succ(k)))) ∙ f(Succ(p))
+            MonoidRel::range(op, p + 1, f) ∙ f(p + 1)
+                ≈ (f(0) ∙ MonoidRel::range(op, p, λ k => f(k + 1))) ∙ f(p + 1)
                     := rel_cong(MonoidRel::range_succ_l(op, p, f)),
-                ≈ f(0) ∙ (MonoidRel::range(op, p, λ k => f(Succ(k))) ∙ f(Succ(p)))
-                    := A.assoc(f(0), MonoidRel::range(op, p, λ k => f(Succ(k))), f(Succ(p))),
+                ≈ f(0) ∙ (MonoidRel::range(op, p, λ k => f(k + 1)) ∙ f(p + 1))
+                    := A.assoc(f(0), MonoidRel::range(op, p, λ k => f(k + 1)), f(p + 1)),
         },
     }
 }
@@ -286,9 +286,9 @@ theorem CommMonoidRel::range_perm(n: Nat, f: Nat → A, s, t: Nat → Nat,
 
 // Reversal: `k ↦ n - 1 - k`, its own inverse.
 theorem CommMonoidRel::range_reverse(n: Nat, f: Nat → A):
-    MonoidRel::range(op, n, λ k => f(n - Succ(k))) ≈ MonoidRel::range(op, n, f)
+    MonoidRel::range(op, n, λ k => f(n - (k + 1))) ≈ MonoidRel::range(op, n, f)
 {
-    CommMonoidRel::range_perm(same, op, n, f, λ k => n - Succ(k), λ k => n - Succ(k),
+    CommMonoidRel::range_perm(same, op, n, f, λ k => n - (k + 1), λ k => n - (k + 1),
         λ k hk => n.sub_succ_lt(k, hk), λ k hk => n.sub_succ_lt(k, hk),
         λ k hk => n.sub_succ_sub_succ(k, hk), λ k hk => n.sub_succ_sub_succ(k, hk))
 }
@@ -307,16 +307,16 @@ theorem CommMonoidRel::range_antidiag(N: Nat, f: Nat → Nat → A):
                 = rel_cong(MonoidRel::range_eq(op, M - M, 0, λ k => f(M, k), M.sub_self()));
             let drop: (rows ∙ MonoidRel::range(op, 0, λ k => f(M, k)) ≈ rows) = A.unit_r(rows);
             A.rel_sym(
-            MonoidRel::range(op, Succ(M), λ i => MonoidRel::range(op, Succ(M) - i, λ k => f(i, k))),
+            MonoidRel::range(op, M + 1, λ i => MonoidRel::range(op, M + 1 - i, λ k => f(i, k))),
             MonoidRel::range(op, M, λ n => MonoidRel::antidiag(op, n, f)) ∙ MonoidRel::antidiag(op, M, f),
             calc {
-                MonoidRel::range(op, Succ(M), λ i => MonoidRel::range(op, Succ(M) - i, λ k => f(i, k)))
-                    ≈ MonoidRel::range(op, Succ(M), λ i => MonoidRel::range(op, M - i, λ k => f(i, k)) ∙ f(i, M - i))
-                        := MonoidRel::range_cong(op, Succ(M), λ i => MonoidRel::range(op, Succ(M) - i, λ k => f(i, k)),
+                MonoidRel::range(op, M + 1, λ i => MonoidRel::range(op, M + 1 - i, λ k => f(i, k)))
+                    ≈ MonoidRel::range(op, M + 1, λ i => MonoidRel::range(op, M - i, λ k => f(i, k)) ∙ f(i, M - i))
+                        := MonoidRel::range_cong(op, M + 1, λ i => MonoidRel::range(op, M + 1 - i, λ k => f(i, k)),
                             λ i => MonoidRel::range(op, M - i, λ k => f(i, k)) ∙ f(i, M - i),
-                            λ i hi => MonoidRel::range_eq(op, Succ(M) - i, Succ(M - i), λ k => f(i, k), omega(i.le_add(M, hi), i.le_add(Succ(M), omega(hi))))),
-                    ≈ MonoidRel::range(op, Succ(M), λ i => MonoidRel::range(op, M - i, λ k => f(i, k))) ∙ MonoidRel::antidiag(op, M, f)
-                        := CommMonoidRel::range_op(same, op, Succ(M), λ i => MonoidRel::range(op, M - i, λ k => f(i, k)), λ i => f(i, M - i)),
+                            λ i hi => MonoidRel::range_eq(op, M + 1 - i, M - i + 1, λ k => f(i, k), omega(i.le_add(M, hi), i.le_add(M + 1, omega(hi))))),
+                    ≈ MonoidRel::range(op, M + 1, λ i => MonoidRel::range(op, M - i, λ k => f(i, k))) ∙ MonoidRel::antidiag(op, M, f)
+                        := CommMonoidRel::range_op(same, op, M + 1, λ i => MonoidRel::range(op, M - i, λ k => f(i, k)), λ i => f(i, M - i)),
                     ≈ (rows ∙ MonoidRel::range(op, M - M, λ k => f(M, k))) ∙ MonoidRel::antidiag(op, M, f)
                         := A.rel_refl((rows ∙ MonoidRel::range(op, M - M, λ k => f(M, k))) ∙ MonoidRel::antidiag(op, M, f)),
                     ≈ (rows ∙ MonoidRel::range(op, 0, λ k => f(M, k))) ∙ MonoidRel::antidiag(op, M, f) := rel_cong(last),

@@ -117,7 +117,7 @@ theorem both_one_pos_swapped<A: CommRingOfInt(≈, +, *) + OrderedField(≈, <, 
 
 // One parent's lemmas apply through it.
 theorem both_of_nat_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A, n: Nat):
-    A.unit < A.of_nat(Succ(n))
+    A.unit < A.of_nat(n + 1)
 {
     OrderedField::of_nat_pos(n)
 }

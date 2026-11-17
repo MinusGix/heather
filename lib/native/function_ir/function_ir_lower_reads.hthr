@@ -154,7 +154,7 @@ theorem lent_homes_hold(values: Valuation(), addresses: List<BitVec(64)>, buffer
             Cons(base, after) => match after {
                 Nil => λ _ => trivial,
                 Cons(length, rest) => λ lent =>
-                    ⟨⟨lent.left, lent.right.left⟩, lent_homes_hold(values, addresses, buffers, more, rest, Succ(buffer), lent.right.right)⟩,
+                    ⟨⟨lent.left, lent.right.left⟩, lent_homes_hold(values, addresses, buffers, more, rest, buffer + 1, lent.right.right)⟩,
             },
         },
     }
@@ -1393,9 +1393,9 @@ theorem args_lend_lent(values: Valuation(), addresses: List<BitVec(64)>, buffers
             Cons(base, after) => match after {
                 Nil => λ no => false_elim(no),
                 Cons(length, rest) => λ lend => {
-                    let both = Bool::is_true_and(homes_have(homes, buffer, base, length), args_lend(homes, more, Succ(buffer), rest), lend);
+                    let both = Bool::is_true_and(homes_have(homes, buffer, base, length), args_lend(homes, more, buffer + 1, rest), lend);
                     let here = homes_have_holds(values, addresses, buffers, buffer, base, length, homes, both.left, held);
-                    ⟨here.left, ⟨here.right, args_lend_lent(values, addresses, buffers, homes, held, more, Succ(buffer), rest, both.right)⟩⟩
+                    ⟨here.left, ⟨here.right, args_lend_lent(values, addresses, buffers, homes, held, more, buffer + 1, rest, both.right)⟩⟩
                 },
             },
         },

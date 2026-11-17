@@ -72,21 +72,21 @@ theorem cong_code(a, b: Char, p: a = b): a.code = b.code {
 // The arithmetic reading of the witness, for a client that wants the bounds
 // as an order fact rather than as a decided Boolean. Stated once here; the
 // two directions of the `leb`/`Le` bridge are `nat`'s.
-theorem scalar_bound(code: Nat, p: scalar(code)): Succ(code).leb(0x110000).IsTrue() {
-    Succ(code).leb(0x110000).is_true_and(
-        (Nat::leb(0xD800, code) && Succ(code).leb(0xE000)).not(), p).left
+theorem scalar_bound(code: Nat, p: scalar(code)): (code + 1).leb(0x110000).IsTrue() {
+    (code + 1).leb(0x110000).is_true_and(
+        (Nat::leb(0xD800, code) && (code + 1).leb(0xE000)).not(), p).left
 }
 
 theorem scalar_sound(code: Nat, p: scalar(code)):
         code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) {
-    let surrogate = Nat::leb(0xD800, code) && Succ(code).leb(0xE000);
-    let parts = Succ(code).leb(0x110000).is_true_and(surrogate.not(), p);
-    And(Succ(code).leb_sound(0x110000, scalar_bound(code, p)),
+    let surrogate = Nat::leb(0xD800, code) && (code + 1).leb(0xE000);
+    let parts = (code + 1).leb(0x110000).is_true_and(surrogate.not(), p);
+    And((code + 1).leb_sound(0x110000, scalar_bound(code, p)),
         λ (h: 0xD800 <= code ∧ code < 0xE000) =>
             surrogate.is_true_not(parts.right,
-                Nat::leb(0xD800, code).is_true_and_intro(Succ(code).leb(0xE000),
+                Nat::leb(0xD800, code).is_true_and_intro((code + 1).leb(0xE000),
                     Nat::leb_complete(0xD800, code, h.left),
-                    Succ(code).leb_complete(0xE000, h.right))))
+                    (code + 1).leb_complete(0xE000, h.right))))
 }
 
 // Equality decides through the code, which is the whole content of a `Char`.
@@ -174,12 +174,12 @@ theorem digit_selected(c: Char, n: Nat, h: digit_of(c) = Some(n)):
 // become order facts, the lower bound cancels against the subtraction, and
 // the upper bound is `0x3A` read as `10 + 0x30`.
 theorem digit_val_lt(c: Char, p: is_digit(c).IsTrue()): digit_val(c) < 10 {
-    let parts = Nat::leb(0x30, c.code).is_true_and(Succ(c.code).leb(0x3A), p);
+    let parts = Nat::leb(0x30, c.code).is_true_and((c.code + 1).leb(0x3A), p);
     let lower = Nat::leb_sound(0x30, c.code, parts.left);
-    let upper = Succ(c.code).leb_sound(0x3A, parts.right);
-    Nat::le_of_add_le_add_r(0x30, Succ(digit_val(c)), 10,
+    let upper = (c.code + 1).leb_sound(0x3A, parts.right);
+    Nat::le_of_add_le_add_r(0x30, digit_val(c) + 1, 10,
         j(sym(Nat::sub_add_cancel(0x30, c.code, lower)),
-            λ y q => Succ(y).Le(10 + 0x30), upper))
+            λ y q => (y + 1).Le(10 + 0x30), upper))
 }
 
 // A passed code test is an equality of codes, and so an equality of

@@ -52,7 +52,7 @@ theorem search_body_safe(n: Nat): CoTree::Safe<Nat>(Events::calls(Nat, Nat), Eve
     (match big(n) as λ b => big(n) = b →
             CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), Found, search_at(n, b), λ r => Found(n, r)) {
         True => λ h => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r => Found(n, r), n, And(omega, h)),
-        False => λ h => CoTree::safe_call<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r => Found(n, r), Succ(n), λ r => CRet(r),
+        False => λ h => CoTree::safe_call<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r => Found(n, r), n + 1, λ r => CRet(r),
             λ r f => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r2 => Found(n, r2), r,
                 And(omega(f.left), f.right))),
     })(refl)
@@ -131,9 +131,9 @@ theorem search_slow_0(): CoTree::after(Events::none(), 60, search_slow(0)) = ORe
 // search followed by adding one, up to taus, at a neutral argument.
 fn search_then(n: Nat) → Eutt<Nat>(Events::none(),
     CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body,
-        CoTree::bind<Nat, Nat>(Events::sum(Events::calls(Nat, Nat), Events::none()), search_body(n), λ r => CRet(Succ(r)))),
+        CoTree::bind<Nat, Nat>(Events::sum(Events::calls(Nat, Nat), Events::none()), search_body(n), λ r => CRet(r + 1))),
     CoTree::bind(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n)),
-        λ x => CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CRet(Succ(x)))))
+        λ x => CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CRet(x + 1))))
 {
     Eutt::mrec_bind<Nat, Nat>(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n), λ r => CRet(Succ(r)))
 }

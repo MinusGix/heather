@@ -75,6 +75,6 @@ theorem Loan::stable_saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
         Nil => λ k _ _ => ⟨λ memory own below word held => trivial, λ memory b at written inside bytes fits held => trivial⟩,
         Cons(register, rest) => λ k above room =>
             stack.stable_in_and(from, spans, loan.stable_word(from, d + 8 * k, above, { omega }, Some(read_gpr(register, gprs))),
-                loan.stable_saved(from, d, gprs, rest, Succ(k), { omega }, { omega })),
+                loan.stable_saved(from, d, gprs, rest, k + 1, { omega }, { omega })),
     }
 }

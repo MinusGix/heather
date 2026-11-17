@@ -34,13 +34,13 @@ fn ids_under(ids: List<Nat>, b: Nat) → Bool {
     match ids { Nil => True, Cons(id, rest) => Succ(id).leb(b) && ids_under(rest, b) }
 }
 
-theorem ids_under_mem(b: Nat, ids: List<Nat>): ids_under(ids, b) = True → (id: Nat) → Mem(id, ids) → Succ(id).leb(b) = True {
+theorem ids_under_mem(b: Nat, ids: List<Nat>): ids_under(ids, b) = True → (id: Nat) → Mem(id, ids) → (id + 1).leb(b) = True {
     match ids {
         Nil => λ _ id m => false_elim(m),
         Cons(first, rest) => λ under id m => {
-            let parts = Bool::and_true_parts(Succ(first).leb(b), ids_under(rest, b), under);
+            let parts = Bool::and_true_parts((first + 1).leb(b), ids_under(rest, b), under);
             match m {
-                Inl(same) => j(sym(same), λ x _ => Succ(x).leb(b) = True, parts.left),
+                Inl(same) => j(sym(same), λ x _ => (x + 1).leb(b) = True, parts.left),
                 Inr(later) => ids_under_mem(b, rest, parts.right, id, later),
             }
         },
@@ -51,8 +51,8 @@ theorem ids_under_mono(b, c: Nat, le: b.leb(c) = True, ids: List<Nat>): ids_unde
     match ids {
         Nil => λ _ => refl,
         Cons(first, rest) => λ under => {
-            let parts = Bool::and_true_parts(Succ(first).leb(b), ids_under(rest, b), under);
-            Bool::and_true_of(Succ(first).leb(c), ids_under(rest, c), Succ(first).leb_trans(b, c, parts.left, le), ids_under_mono(b, c, le, rest, parts.right))
+            let parts = Bool::and_true_parts((first + 1).leb(b), ids_under(rest, b), under);
+            Bool::and_true_of((first + 1).leb(c), ids_under(rest, c), (first + 1).leb_trans(b, c, parts.left, le), ids_under_mono(b, c, le, rest, parts.right))
         },
     }
 }
@@ -60,7 +60,7 @@ theorem ids_under_mono(b, c: Nat, le: b.leb(c) = True, ids: List<Nat>): ids_unde
 // Ids at or above a bound: none of them is an id below it.
 fn ids_over(ids: List<Nat>, b: Nat) → Bool { match ids { Nil => True, Cons(id, rest) => b.leb(id) && ids_over(rest, b) } }
 
-theorem ids_over_absent(b: Nat, ids: List<Nat>): ids_over(ids, b) = True → (id: Nat) → Succ(id).leb(b) = True → absent(id, ids).IsTrue() {
+theorem ids_over_absent(b: Nat, ids: List<Nat>): ids_over(ids, b) = True → (id: Nat) → (id + 1).leb(b) = True → absent(id, ids).IsTrue() {
     match ids {
         Nil => λ _ id _ => trivial,
         Cons(x, rest) => λ over id under => {
@@ -117,9 +117,9 @@ theorem StructuredRegion::under_mono(self region: StructuredRegion, b, c: Nat, l
             Bool::and_true_of(prefix.under(c), continuation.under(c), prefix.under_mono(b, c, le, parts.left), continuation.under_mono(b, c, le, parts.right))
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ under => {
-            let parts = Bool::and_true_parts(Succ(condition).leb(b), when_true.under(b) && when_false.under(b), under);
+            let parts = Bool::and_true_parts((condition + 1).leb(b), when_true.under(b) && when_false.under(b), under);
             let arms = Bool::and_true_parts(when_true.under(b), when_false.under(b), parts.right);
-            Bool::and_true_of(Succ(condition).leb(c), when_true.under(c) && when_false.under(c), Succ(condition).leb_trans(b, c, parts.left, le),
+            Bool::and_true_of((condition + 1).leb(c), when_true.under(c) && when_false.under(c), (condition + 1).leb_trans(b, c, parts.left, le),
                 Bool::and_true_of(when_true.under(c), when_false.under(c), when_true.under_mono(b, c, le, arms.left), when_false.under_mono(b, c, le, arms.right)))
         },
         Call(_, arguments, result) => λ under => ids_under_mono(b, c, le, Cons(result, arguments), under),
@@ -295,7 +295,7 @@ theorem StructuredRegion::runs_agree(self region: StructuredRegion, effects: Eff
                 continuation.runs_agree(effects, b, parts.right, values, other, agree, ran.witness, after, ran.proof.right)⟩)
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ under values other agree before after => {
-            let parts = Bool::and_true_parts(Succ(condition).leb(b), when_true.under(b) && when_false.under(b), under);
+            let parts = Bool::and_true_parts((condition + 1).leb(b), when_true.under(b) && when_false.under(b), under);
             let arms = Bool::and_true_parts(when_true.under(b), when_false.under(b), parts.right);
             let same: (other(1, condition) = values(1, condition)) = agree(condition, parts.left, 1);
             j(sym(same), λ bit _ =>
@@ -367,12 +367,12 @@ theorem Valuation::agree_below_refl(values: Valuation(), b: Nat): Valuation::Agr
 
 theorem Valuation::agree_below_less(values, new: Valuation(), b, c: Nat, agree: Valuation::AgreeBelow(values, new, c), le: b.leb(c) = True):
     Valuation::AgreeBelow(values, new, b) {
-    λ id under w => agree(id, Succ(id).leb_trans(b, c, under, le), w)
+    λ id under w => agree(id, (id + 1).leb_trans(b, c, under, le), w)
 }
 
 theorem Valuation::agree_below_trans(values, mid, new: Valuation(), b, c: Nat, first: Valuation::AgreeBelow(values, mid, b),
     second: Valuation::AgreeBelow(mid, new, c), le: b.leb(c) = True): Valuation::AgreeBelow(values, new, b) {
-    λ id under w => trans(second(id, Succ(id).leb_trans(b, c, under, le), w), first(id, under, w))
+    λ id under w => trans(second(id, (id + 1).leb_trans(b, c, under, le), w), first(id, under, w))
 }
 
 // ---------------------------------------------------------------------------

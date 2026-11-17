@@ -350,9 +350,9 @@ theorem loop_eval_apart(step: Valuation() → Valuation(), parameters: List<Nat>
     match remaining {
         Zero => λ state other h => ⟨refl, h⟩,
         Succ(rest) => λ state other h => {
-            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
-            let entry = pass_valuation(parameters, count, Succ(rest), state);
-            let entry2 = pass_valuation(parameters, count, Succ(rest), other);
+            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)));
+            let entry = pass_valuation(parameters, count, rest + 1, state);
+            let entry2 = pass_valuation(parameters, count, rest + 1, other);
             let entered: Valuation::Apart(taint_onto(parameters, mask, []), entry, entry2) =
                 Valuation::bind_apart(parameters, [], base, base, Valuation::apart_refl([], base), mask, state, other, h);
             let after = step(entry);
@@ -841,9 +841,9 @@ theorem loop_run_apart(step: Valuation() → Buffers() → State, parameters: Li
     match remaining {
         Zero => λ state other buffers h => ⟨refl, ⟨h, refl⟩⟩,
         Succ(rest) => λ state other buffers h => {
-            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
-            let entry = pass_valuation(parameters, count, Succ(rest), state);
-            let entry2 = pass_valuation(parameters, count, Succ(rest), other);
+            let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)));
+            let entry = pass_valuation(parameters, count, rest + 1, state);
+            let entry2 = pass_valuation(parameters, count, rest + 1, other);
             let entered: Valuation::Apart(taint_onto(parameters, mask, []), entry, entry2) =
                 Valuation::bind_apart(parameters, [], base, base, Valuation::apart_refl([], base), mask, state, other, h);
             let after = step(entry, buffers);

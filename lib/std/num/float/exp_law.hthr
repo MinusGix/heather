@@ -56,76 +56,76 @@ fn Series::exp_prod_term(a, b: Rat, n: Nat) → Rat { MonoidRel::antidiag(+, n, 
 // The left weights: Σ_{i<n+2} i·u_i·v_{n+1-i} = a·c_n. The first term has
 // weight 0, and past it `(k+1)·u_{k+1} = a·u_k`.
 theorem Series::exp_prod_left(a, b: Rat, n: Nat):
-    MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * (Series::exp(a).term(i) * Series::exp(b).term(Succ(n) - i)))
+    MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(i)) * (Series::exp(a).term(i) * Series::exp(b).term(n + 1 - i)))
         ≈ a * Series::exp_prod_term(a, b, n)
 {
     let u = λ (i: Nat) => Series::exp(a).term(i);
     let v = λ (k: Nat) => Series::exp(b).term(k);
-    let f = λ (i: Nat) => Rat::ofInt(OfNat(i)) * (u(i) * v(Succ(n) - i));
-    let first: (f(0) ≈ 0) = (u(0) * v(Succ(n) - 0)).zero_mul();
-    let shifted: (MonoidRel::range(+, Succ(n), λ k => f(Succ(k))) ≈ MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k)))) =
-        MonoidRel::range_cong(+, Succ(n), λ k => f(Succ(k)), λ k => a * (u(k) * v(n - k)), λ k hk => {
+    let f = λ (i: Nat) => Rat::ofInt(OfNat(i)) * (u(i) * v(n + 1 - i));
+    let first: (f(0) ≈ 0) = (u(0) * v(n + 1 - 0)).zero_mul();
+    let shifted: (MonoidRel::range(+, n + 1, λ k => f(k + 1)) ≈ MonoidRel::range(+, n + 1, λ k => a * (u(k) * v(n - k)))) =
+        MonoidRel::range_cong(+, n + 1, λ k => f(k + 1), λ k => a * (u(k) * v(n - k)), λ k hk => {
             let c: (Rat::ofInt(OfNat(k + 1)) * Rat::inv_succ(k) ≈ 1) = Rat::succ_mul_inv_succ(k);
-            let r: (Rat::ofInt(OfNat(Succ(k))) * ((u(k) * (a * Rat::inv_succ(k))) * v(n - k)) ≈ a * (u(k) * v(n - k))) = ring(c);
+            let r: (Rat::ofInt(OfNat(k + 1)) * ((u(k) * (a * Rat::inv_succ(k))) * v(n - k)) ≈ a * (u(k) * v(n - k))) = ring(c);
             r
         });
     calc {
-        MonoidRel::range(+, Succ(Succ(n)), f) ≈ f(0) + MonoidRel::range(+, Succ(n), λ k => f(Succ(k))) := MonoidRel::range_succ_l(+, Succ(n), f),
-        ≈ 0 + MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k))) := Rat::add_respects(first, shifted),
-        ≈ MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k))) := Rat::zero_add(MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k)))),
-        ≈ a * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(a, Succ(n), λ k => u(k) * v(n - k))),
+        MonoidRel::range(+, n + 2, f) ≈ f(0) + MonoidRel::range(+, n + 1, λ k => f(k + 1)) := MonoidRel::range_succ_l(+, n + 1, f),
+        ≈ 0 + MonoidRel::range(+, n + 1, λ k => a * (u(k) * v(n - k))) := Rat::add_respects(first, shifted),
+        ≈ MonoidRel::range(+, n + 1, λ k => a * (u(k) * v(n - k))) := Rat::zero_add(MonoidRel::range(+, n + 1, λ k => a * (u(k) * v(n - k)))),
+        ≈ a * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(a, n + 1, λ k => u(k) * v(n - k))),
     }
 }
 
 // The right weights: Σ_{i<n+2} (n+1-i)·u_i·v_{n+1-i} = b·c_n. The last
 // term has weight 0, and before it `n+1-i = (n-i)+1`.
 theorem Series::exp_prod_right(a, b: Rat, n: Nat):
-    MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * (Series::exp(a).term(i) * Series::exp(b).term(Succ(n) - i)))
+    MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(n + 1 - i)) * (Series::exp(a).term(i) * Series::exp(b).term(n + 1 - i)))
         ≈ b * Series::exp_prod_term(a, b, n)
 {
     let u = λ (i: Nat) => Series::exp(a).term(i);
     let v = λ (k: Nat) => Series::exp(b).term(k);
-    let g = λ (i: Nat) => Rat::ofInt(OfNat(Succ(n) - i)) * (u(i) * v(Succ(n) - i));
-    let z: (Succ(n) - Succ(n) = 0) = omega;
-    let last: (g(Succ(n)) ≈ 0) = j(sym(z), λ y _ => Rat::ofInt(OfNat(y)) * (u(Succ(n)) * v(y)) ≈ 0, ring);
-    let body: (MonoidRel::range(+, Succ(n), g) ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i)))) =
-        MonoidRel::range_cong(+, Succ(n), g, λ i => b * (u(i) * v(n - i)), λ i hi => {
-            let e: (Succ(n) - i = Succ(n - i)) = omega(hi);
+    let g = λ (i: Nat) => Rat::ofInt(OfNat(n + 1 - i)) * (u(i) * v(n + 1 - i));
+    let z: (n + 1 - (n + 1) = 0) = omega;
+    let last: (g(n + 1) ≈ 0) = j(sym(z), λ y _ => Rat::ofInt(OfNat(y)) * (u(n + 1) * v(y)) ≈ 0, ring);
+    let body: (MonoidRel::range(+, n + 1, g) ≈ MonoidRel::range(+, n + 1, λ i => b * (u(i) * v(n - i)))) =
+        MonoidRel::range_cong(+, n + 1, g, λ i => b * (u(i) * v(n - i)), λ i hi => {
+            let e: (n + 1 - i = n - i + 1) = omega(hi);
             let c: (Rat::ofInt(OfNat(n - i + 1)) * Rat::inv_succ(n - i) ≈ 1) = Rat::succ_mul_inv_succ(n - i);
-            let at: (Rat::ofInt(OfNat(Succ(n - i))) * (u(i) * (v(n - i) * (b * Rat::inv_succ(n - i)))) ≈ b * (u(i) * v(n - i))) = ring(c);
+            let at: (Rat::ofInt(OfNat(n - i + 1)) * (u(i) * (v(n - i) * (b * Rat::inv_succ(n - i)))) ≈ b * (u(i) * v(n - i))) = ring(c);
             j(sym(e), λ y _ => Rat::ofInt(OfNat(y)) * (u(i) * v(y)) ≈ b * (u(i) * v(n - i)), at)
         });
     calc {
-        MonoidRel::range(+, Succ(Succ(n)), g) ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i))) + 0 := Rat::add_respects(body, last),
-        ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i))) := Rat::add_zero(MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i)))),
-        ≈ b * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(b, Succ(n), λ i => u(i) * v(n - i))),
+        MonoidRel::range(+, n + 2, g) ≈ MonoidRel::range(+, n + 1, λ i => b * (u(i) * v(n - i))) + 0 := Rat::add_respects(body, last),
+        ≈ MonoidRel::range(+, n + 1, λ i => b * (u(i) * v(n - i))) := Rat::add_zero(MonoidRel::range(+, n + 1, λ i => b * (u(i) * v(n - i)))),
+        ≈ b * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(b, n + 1, λ i => u(i) * v(n - i))),
     }
 }
 
 theorem Series::exp_prod_step(a, b: Rat, n: Nat):
-    Rat::ofInt(OfNat(Succ(n))) * Series::exp_prod_term(a, b, Succ(n)) ≈ (a + b) * Series::exp_prod_term(a, b, n)
+    Rat::ofInt(OfNat(n + 1)) * Series::exp_prod_term(a, b, n + 1) ≈ (a + b) * Series::exp_prod_term(a, b, n)
 {
     let u = λ (i: Nat) => Series::exp(a).term(i);
     let v = λ (k: Nat) => Series::exp(b).term(k);
-    let T = λ (i: Nat) => u(i) * v(Succ(n) - i);
+    let T = λ (i: Nat) => u(i) * v(n + 1 - i);
     let c = Series::exp_prod_term(a, b, n);
-    let parts: (MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i))
-        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i))) =
-        MonoidRel::range_cong(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i),
+    let parts: (MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(n + 1)) * T(i))
+        ≈ MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(n + 1 - i)) * T(i))) =
+        MonoidRel::range_cong(+, n + 2, λ i => Rat::ofInt(OfNat(n + 1)) * T(i), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(n + 1 - i)) * T(i),
             λ i hi => {
-                let e: (i + (Succ(n) - i) = Succ(n)) = omega(hi);
-                let sum: (Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i)) ≈ Rat::ofInt(OfNat(i + (Succ(n) - i)))) = omega(Int::ofNat_add(i, Succ(n) - i));
-                let w: (Rat::ofInt(OfNat(Succ(n))) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i))) =
-                    j(e, λ y _ => Rat::ofInt(OfNat(y)) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i)), Rat::same_sym(sum));
-                let r: (Rat::ofInt(OfNat(Succ(n))) * T(i) ≈ Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i)) = ring(w);
+                let e: (i + (n + 1 - i) = n + 1) = omega(hi);
+                let sum: (Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(n + 1 - i)) ≈ Rat::ofInt(OfNat(i + (n + 1 - i)))) = omega(Int::ofNat_add(i, n + 1 - i));
+                let w: (Rat::ofInt(OfNat(n + 1)) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(n + 1 - i))) =
+                    j(e, λ y _ => Rat::ofInt(OfNat(y)) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(n + 1 - i)), Rat::same_sym(sum));
+                let r: (Rat::ofInt(OfNat(n + 1)) * T(i) ≈ Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(n + 1 - i)) * T(i)) = ring(w);
                 r
             });
     calc {
-        Rat::ofInt(OfNat(Succ(n))) * Series::exp_prod_term(a, b, Succ(n))
-            ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i)) := Semiring::mul_range_l(Rat::ofInt(OfNat(Succ(n))), Succ(Succ(n)), T),
-        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i)) := parts,
-        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i)) + MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * T(i))
-            := CommMonoidRel::range_op(≈, +, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * T(i)),
+        Rat::ofInt(OfNat(n + 1)) * Series::exp_prod_term(a, b, n + 1)
+            ≈ MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(n + 1)) * T(i)) := Semiring::mul_range_l(Rat::ofInt(OfNat(n + 1)), n + 2, T),
+        ≈ MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(n + 1 - i)) * T(i)) := parts,
+        ≈ MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(i)) * T(i)) + MonoidRel::range(+, n + 2, λ i => Rat::ofInt(OfNat(n + 1 - i)) * T(i))
+            := CommMonoidRel::range_op(≈, +, n + 2, λ i => Rat::ofInt(OfNat(i)) * T(i), λ i => Rat::ofInt(OfNat(n + 1 - i)) * T(i)),
         ≈ a * c + b * c := Rat::add_respects(Series::exp_prod_left(a, b, n), Series::exp_prod_right(a, b, n)),
         ≈ (a + b) * c := ring,
     }
@@ -140,9 +140,9 @@ theorem Series::exp_prod_term_eq(a, b: Rat, n: Nat): Series::exp_prod_term(a, b,
             let st = Series::exp_prod_step(a, b, m);
             let c: (Rat::ofInt(OfNat(m + 1)) * Rat::inv_succ(m) ≈ 1) = Rat::succ_mul_inv_succ(m);
             let w = Series::exp(a + b).term(m);
-            let x = Series::exp_prod_term(a, b, Succ(m));
+            let x = Series::exp_prod_term(a, b, m + 1);
             let r: (x ≈ w * ((a + b) * Rat::inv_succ(m))) = calc {
-                x ≈ (Rat::ofInt(OfNat(Succ(m))) * x) * Rat::inv_succ(m) := ring(c),
+                x ≈ (Rat::ofInt(OfNat(m + 1)) * x) * Rat::inv_succ(m) := ring(c),
                 ≈ ((a + b) * Series::exp_prod_term(a, b, m)) * Rat::inv_succ(m) := Rat::mul_respects(st, Rat::inv_succ(m).same_refl()),
                 ≈ ((a + b) * w) * Rat::inv_succ(m) := Rat::mul_respects(Rat::mul_respects((a + b).same_refl(), ih), Rat::inv_succ(m).same_refl()),
                 ≈ w * ((a + b) * Rat::inv_succ(m)) := ring,

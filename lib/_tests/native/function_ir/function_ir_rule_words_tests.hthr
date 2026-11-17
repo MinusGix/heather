@@ -113,12 +113,12 @@ theorem within_add_by(o, l, r, a, b, c, d: Nat, fits: (b + d).leb(word_top()) = 
 
 // A bit known and a range: two premises about one word, the second no
 // longer a definition once the first is written out.
-theorem below_left_words(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, Succ(b)).Holds(r)):
+theorem below_left_words(l, r: u64, b: Nat, below: BitVec::ofBool(l.unsigned_lt_bit(r)) = BitVec::ofNat(1), right: Range(0, b + 1).Holds(r)):
     Range(0, b).Holds(l) {
     let bit: (l.unsigned_lt_bit(r) = True) = trans(sym(BitVec::head_bit_ofBool(l.unsigned_lt_bit(r))),
         trans(cong_fn(λ (w: BitVec(1)) => w.head_bit(), below), BitVec::head_bit_ofBool(True)));
     let lt: (l.toNat() < r.toNat()) = BitVec::borrow_sub_bit_true_iff(64, l, r).mp(bit);
-    ⟨trivial, Nat::le_trans(Succ(l.toNat()), r.toNat(), Succ(b), lt, right.right)⟩
+    ⟨trivial, Nat::le_trans(l.toNat() + 1, r.toNat(), b + 1, lt, right.right)⟩
 }
 
 theorem below_left_by(c, l, r, b: Nat): below_left_clause(c, l, r, b).Sound() { by rule_sound(below_left_words) }

@@ -447,7 +447,7 @@ theorem List::sorted_of_nth<A>(R: A → A → Type, self xs: List<A>,
                 Nil => λ _ => trivial,
                 Cons(h2, _) => λ o => o(0, 1, h, h2, trivial, refl, refl),
             })(ordered);
-            And(head, t.sorted_of_nth(R, λ i k a b lt ea eb => ordered(Succ(i), Succ(k), a, b, lt, ea, eb)))
+            And(head, t.sorted_of_nth(R, λ i k a b lt ea eb => ordered(i + 1, k + 1, a, b, lt, ea, eb)))
         },
     }
 }

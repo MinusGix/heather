@@ -103,7 +103,7 @@ designation >> at SInt(n) := SInt::shift_right
 
 // Widening keeps the value (sign extension); narrowing keeps the low bits.
 // `extend` is at a positive width, the one with a sign bit.
-fn SInt::extend({n: Nat}, extra: Nat, self a: SInt(Succ(n))) → SInt(extra + Succ(n)) {
+fn SInt::extend({n: Nat}, extra: Nat, self a: SInt(n + 1)) → SInt(extra + (n + 1)) {
     SInt(a.bits.sign_extend(extra))
 }
 fn SInt::truncate(n, extra: Nat, self a: SInt(extra + n)) → SInt(n) { SInt(a.bits.truncate(n, extra)) }
@@ -186,24 +186,24 @@ theorem SInt::bits_ne_zero(n: Nat, d: SInt(n), nonzero: d ≠ SInt::zero()): d.b
     λ (same: d.bits = BitVec::zero()) => nonzero(cong(same, f := λ (x: BitVec(n)) => SInt(x)))
 }
 
-theorem SInt::div_rem_toInt(k: Nat, a, d: SInt(Succ(k)), nonzero: d ≠ SInt::zero(),
+theorem SInt::div_rem_toInt(k: Nat, a, d: SInt(k + 1), nonzero: d ≠ SInt::zero(),
         away: ¬(a.toInt() = -OfNat(Nat::pow(2, k)) ∧ d.toInt() = -OfNat(1))):
     a.toInt() = (a / d).toInt() * d.toInt() + (a % d).toInt()
 {
-    BitVec::sdiv_srem_toInt(k, a.bits, d.bits, SInt::bits_ne_zero(Succ(k), d, nonzero), away)
+    BitVec::sdiv_srem_toInt(k, a.bits, d.bits, SInt::bits_ne_zero(k + 1, d, nonzero), away)
 }
 
-theorem SInt::rem_natAbs_lt(k: Nat, a, d: SInt(Succ(k)), nonzero: d ≠ SInt::zero()):
+theorem SInt::rem_natAbs_lt(k: Nat, a, d: SInt(k + 1), nonzero: d ≠ SInt::zero()):
     (a % d).toInt().natAbs() < d.toInt().natAbs()
 {
-    BitVec::srem_natAbs_lt(k, a.bits, d.bits, SInt::bits_ne_zero(Succ(k), d, nonzero))
+    BitVec::srem_natAbs_lt(k, a.bits, d.bits, SInt::bits_ne_zero(k + 1, d, nonzero))
 }
 
-theorem SInt::rem_nonneg(k: Nat, a, d: SInt(Succ(k)), nonneg: OfNat(0) <= a.toInt()): OfNat(0) <= (a % d).toInt() {
+theorem SInt::rem_nonneg(k: Nat, a, d: SInt(k + 1), nonneg: OfNat(0) <= a.toInt()): OfNat(0) <= (a % d).toInt() {
     BitVec::srem_nonneg(k, a.bits, d.bits, nonneg)
 }
 
-theorem SInt::rem_nonpos(k: Nat, a, d: SInt(Succ(k)), negative: a.toInt() < OfNat(0)): (a % d).toInt() <= OfNat(0) {
+theorem SInt::rem_nonpos(k: Nat, a, d: SInt(k + 1), negative: a.toInt() < OfNat(0)): (a % d).toInt() <= OfNat(0) {
     BitVec::srem_nonpos(k, a.bits, d.bits, negative)
 }
 

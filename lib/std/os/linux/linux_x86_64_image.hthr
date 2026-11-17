@@ -137,7 +137,7 @@ fn io_perms(size: Nat, file: List<BitVec(8)>) → BitVec(64) → Perm { λ (a: B
 theorem io_perm_in_segment(size, length, i: Nat, inside: i < size): io_perm(size, length, 0x410000 + i) = Perm::data() {
     let n = 0x410000 + i;
     let low = Nat::leb_true(0x410000, n, Nat::le_add_l(0x410000, i));
-    let high = Nat::leb_true(Succ(n), 0x410000 + size, omega(inside));
+    let high = Nat::leb_true(n + 1, 0x410000 + size, omega(inside));
     j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::data(),
         j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl))
 }
@@ -173,10 +173,10 @@ theorem io_perm_in_file(size, length, k: Nat, inside: k < 65536, present: k < le
     let n = 0x400000 + k;
     let below = Nat::leb_false(0x410000, n, omega(inside));
     let low = Nat::leb_true(0x400000, n, Nat::le_add_l(0x400000, k));
-    let high = Nat::leb_true(Succ(n), 0x400000 + length, omega(present));
+    let high = Nat::leb_true(n + 1, 0x400000 + length, omega(present));
     j(sym(below), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::code(),
         j(sym(low), λ s _ => (match s as λ _ => Perm {
-                True => match Succ(n).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
+                True => match (n + 1).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
                 False => Perm::none(),
             }) = Perm::code(),
             j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::code(), False => Perm::none() }) = Perm::code(), refl)))
@@ -234,8 +234,8 @@ theorem X86Memory::io_load_suffix(size: Nat, within: size <= io_data_limit(), fi
             let cell: (m.cells(a) = byte) = trans(cong_fn<Nat, BitVec(8)>(λ n => io_cell(file, n), value), io_cell_in_file(file, k, byte, inside, here));
             let read: (x.read(m, a) = Some(byte)) =
                 trans(x.read_at(m, a, cong_fn<Perm, Bool>(λ p => p.read, perm)), cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), cell));
-            let later = X86Memory::io_load_suffix(size, within, file, rest, Succ(k), omega(fits),
-                λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.nth(at) = Some(found), placed(Succ(i), found, present)));
+            let later = X86Memory::io_load_suffix(size, within, file, rest, k + 1, omega(fits),
+                λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.nth(at) = Some(found), placed(i + 1, found, present)));
             ⟨cong_fn<Perm, Bool>(λ p => p.execute, perm),
              ⟨read, ⟨io_no_carry(k, inside),
                 j(sym(rip_compose(BitVec::ofNat(0x400000), k, 1)), λ y _ => CodeResident(x.fetch(), m, rest, y), later)⟩⟩⟩
@@ -321,7 +321,7 @@ theorem code_resident_alike(x, y: X86Profile, m: X86Memory(x), n: X86Memory(y),
 theorem io_perm_high(size, length, n: Nat, high: io_data_end(size) <= n): io_perm(size, length, n) = Perm::none() {
     let end: (io_data_end(size) = 0x410000 + size) = refl;
     let low = Nat::leb_true(0x410000, n, omega(high, end));
-    let over = Nat::leb_false(Succ(n), 0x410000 + size, omega(high, end));
+    let over = Nat::leb_false(n + 1, 0x410000 + size, omega(high, end));
     j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::none(),
         j(sym(over), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::none(), refl))
 }
@@ -334,7 +334,7 @@ theorem io_executable_low(size: Nat, within: size <= io_data_limit(), file: List
         Inr(high) => {
             let gone: (perm_with(a, Perm::none()).execute = True) =
                 j(io_perm_high(size, file.len(), a.toNat(), high), λ q _ => perm_with(a, q).execute = True, exec);
-            (match Succ(a.toNat()).leb(Nat::pow(2, 47)) as λ c =>
+            (match (a.toNat() + 1).leb(Nat::pow(2, 47)) as λ c =>
                     (match c as λ _ => Perm { True => Perm::none(), False => Perm::none() }).execute = True → a.toNat() < io_data_end(size) {
                 True => λ no => absurd(no),
                 False => λ no => absurd(no),
@@ -463,7 +463,7 @@ fn process_perms(size, top, depth: Nat, file: List<BitVec(8)>) → BitVec(64) �
 theorem process_perm_below(size, length, top, depth, n: Nat, below: n < top - depth): process_perm(size, length, top, depth, n) = io_perm(size, length, n) {
     let low = Nat::leb_false(top - depth, n, below);
     j(sym(low), λ s _ => (match s as λ _ => Perm {
-            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+            True => match (n + 1).leb(top) { True => Perm::data(), False => Perm::none() },
             False => io_perm(size, length, n),
         }) = io_perm(size, length, n), refl)
 }
@@ -473,9 +473,9 @@ theorem process_perm_in_stack(size, length, top, depth, i: Nat, inside: i < dept
     process_perm(size, length, top, depth, top - depth + i) = Perm::data() {
     let n = top - depth + i;
     let low = Nat::leb_true(top - depth, n, Nat::le_add_l(top - depth, i));
-    let high = Nat::leb_true(Succ(n), top, omega(inside, placed.above));
+    let high = Nat::leb_true(n + 1, top, omega(inside, placed.above));
     j(sym(low), λ s _ => (match s as λ _ => Perm {
-            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+            True => match (n + 1).leb(top) { True => Perm::data(), False => Perm::none() },
             False => io_perm(size, length, n),
         }) = Perm::data(),
         j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl))

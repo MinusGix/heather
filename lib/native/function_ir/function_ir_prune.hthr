@@ -109,7 +109,7 @@ fn program_closed(functions: List<Function>, live: Nat → Bool) → Bool {
 }
 
 theorem prune_len(live: Nat → Bool, functions: List<Function>): prune(functions, live).len() = functions.len() {
-    match functions { Nil => refl, Cons(_, earlier) => cong_fn<Nat, Nat>(λ n => Succ(n), prune_len(live, earlier)) }
+    match functions { Nil => refl, Cons(_, earlier) => cong_fn<Nat, Nat>(λ n => n + 1, prune_len(live, earlier)) }
 }
 
 // A live function of the pruned program may do whatever it did.

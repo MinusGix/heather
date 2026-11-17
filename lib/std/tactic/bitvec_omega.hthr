@@ -61,11 +61,11 @@ theorem fact_diff(x, q, p, a, b: Nat, f: x + q = p, ha: a = p, hb: b = q): x = a
 // A bound the writer stated, `x < k` or `x <= k` with `k` a literal within
 // the word's range, as a word's bound.
 theorem below_top(x, p, k, top: Nat, h: x < k, hx: x = p, small: k <= top): p < top + 0 {
-    rewrite(sym(hx), Nat::le_trans(Succ(x), k, top, h, small))
+    rewrite(sym(hx), Nat::le_trans(x + 1, k, top, h, small))
 }
 
 theorem below_top_le(x, p, k, top: Nat, h: x <= k, hx: x = p, small: k < top): p < top + 0 {
-    rewrite(sym(hx), Nat::le_trans(Succ(x), Succ(k), top, h, small))
+    rewrite(sym(hx), Nat::le_trans(x + 1, k + 1, top, h, small))
 }
 
 // ---------------------------------------------------------------------------
@@ -76,11 +76,11 @@ theorem below_top_le(x, p, k, top: Nat, h: x <= k, hx: x = p, small: k < top): p
 theorem le_cancel(a, b, k: Nat, h: a + k <= b + k): a <= b { k.le_of_add_le_add_r(a, b, h) }
 
 theorem lt_cancel(a, b, k: Nat, h: a + k < b + k): a < b {
-    k.le_of_add_le_add_r(Succ(a), b, rewrite(Nat::add_succ_left(a, k), h))
+    k.le_of_add_le_add_r(a + 1, b, rewrite(Nat::add_succ_left(a, k), h))
 }
 
 theorem lt_extend(a, b, k: Nat, h: a < b): a + k < b + k {
-    j(Nat::add_succ_left(a, k), λ z _ => z <= b + k, k.add_le_mono_r(Succ(a), b, h))
+    j(Nat::add_succ_left(a, k), λ z _ => z <= b + k, k.add_le_mono_r(a + 1, b, h))
 }
 
 theorem add_arith(x, y, qa, pa, qb, pb, q, p, top: Nat, fa: x + qa = pa, fb: y + qb = pb, hp: pa + pb = p, hq: qa + qb = q,
@@ -117,7 +117,7 @@ theorem bound_left(pt, qt, ps, qs, pp, qp, top: Nat, hp: pt + ps = pp, hq: qt + 
     pt < top + qt {
     let whole: (pt + ps < top + (qt + qs)) = rewrite(hp, hq, bound);
     let regrouped: (pt + ps < (top + qt) + qs) = rewrite(Nat::add_assoc(top, qt, qs), whole);
-    lt_cancel(pt, top + qt, qs, Nat::le_trans(Succ(pt + qs), Succ(pt + ps), (top + qt) + qs, Nat::add_le_mono_l(pt, qs, ps, sign), regrouped))
+    lt_cancel(pt, top + qt, qs, Nat::le_trans(pt + qs + 1, pt + ps + 1, (top + qt) + qs, Nat::add_le_mono_l(pt, qs, ps, sign), regrouped))
 }
 
 theorem bound_right(ps, qs, pt, qt, pp, qp, top: Nat, hp: ps + pt = pp, hq: qs + qt = qp, bound: pp < top + qp, sign: qs <= ps):
@@ -128,7 +128,7 @@ theorem bound_right(ps, qs, pt, qt, pp, qp, top: Nat, hp: ps + pt = pp, hq: qs +
 theorem bound_sub(pa, qa, pb, qb, pp, qp, top: Nat, hp: pa + qb = pp, hq: qa + pb = qp, fits: qp <= pp, bound: pa < top + qa):
     pb < top + qb {
     let fits2: (qa + pb <= pa + qb) = rewrite(hp, hq, fits);
-    let below: (qa + pb < (top + qa) + qb) = Nat::le_trans(Succ(qa + pb), Succ(pa + qb), (top + qa) + qb, fits2, lt_extend(pa, top + qa, qb, bound));
+    let below: (qa + pb < (top + qa) + qb) = Nat::le_trans(qa + pb + 1, pa + qb + 1, (top + qa) + qb, fits2, lt_extend(pa, top + qa, qb, bound));
     let swap: ((top + qa) + qb = (top + qb) + qa) =
         trans(Nat::add_assoc(top, qa, qb), trans(@cong(λ (t: Nat) => top + t, qa + qb, qb + qa, Nat::add_comm(qa, qb)), sym(Nat::add_assoc(top, qb, qa))));
     lt_cancel(pb, top + qb, qa, rewrite(sym(Nat::add_comm(qa, pb)), sym(swap), below))
@@ -173,23 +173,23 @@ theorem word_eq(n: Nat, a, b: BitVec(n), h: a.toNat() = b.toNat()): a = b {
 }
 
 theorem unsigned_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::True): a.toNat() < b.toNat() {
-    Nat::leb_sound(Succ(a.toNat()), b.toNat(),
+    Nat::leb_sound(a.toNat() + 1, b.toNat(),
         rewrite(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h), trivial))
 }
 
 theorem unsigned_false(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::False): b.toNat() <= a.toNat() {
     Nat::le_of_not_lt(a.toNat(), b.toNat(), λ lt =>
-        j(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h), λ flag _ => flag.IsTrue(), Nat::leb_complete(Succ(a.toNat()), b.toNat(), lt)))
+        j(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h), λ flag _ => flag.IsTrue(), Nat::leb_complete(a.toNat() + 1, b.toNat(), lt)))
 }
 
 theorem unsigned_of_true(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.unsigned_lt_bit(b) = bool::True {
-    trans(bitvec_nat::unsigned_lt_nat(n, a, b), bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Nat::leb_complete(Succ(a.toNat()), b.toNat(), h)))
+    trans(bitvec_nat::unsigned_lt_nat(n, a, b), bool::eq_true_of_is_true((a.toNat() + 1).leb(b.toNat()), Nat::leb_complete(a.toNat() + 1, b.toNat(), h)))
 }
 
 theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a.unsigned_lt_bit(b) = bool::False {
     match same: a.unsigned_lt_bit(b) {
         False => refl,
-        True => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(Succ(a.toNat()), b.toNat(), a.toNat(), unsigned_true(n, a, b, same), h))),
+        True => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(a.toNat() + 1, b.toNat(), a.toNat(), unsigned_true(n, a, b, same), h))),
     }
 }
 

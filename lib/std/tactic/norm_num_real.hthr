@@ -104,7 +104,7 @@ theorem NumReal::inv_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), h: x
 theorem NumReal::zpow_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), n: Int): (h: x.PowOk(n)) → x.pow(n, h := h) ≈ CReal::ofRat(NumReal::zpow(q, n)) {
     match n {
         OfNat(m) => λ h => CReal::same_trans(CReal::npow_respects(sx, m), CReal::ofRat_npow(q, m)),
-        NegSucc(k) => λ h => CReal::same_trans(CReal::npow_respects(NumReal::inv_sound(sx, h), Succ(k)), CReal::ofRat_npow(q.recip(), Succ(k))),
+        NegSucc(k) => λ h => CReal::same_trans(CReal::npow_respects(NumReal::inv_sound(sx, h), k + 1), CReal::ofRat_npow(q.recip(), k + 1)),
     }
 }
 

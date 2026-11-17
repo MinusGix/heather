@@ -198,11 +198,11 @@ theorem words_of_bind(values: Valuation(), ids: List<Nat>): distinct(ids).IsTrue
     match ids {
         Nil => λ _ words => match words {
             Nil => λ _ => refl,
-            Cons(_, more) => λ (bad: 0 = Succ(more.len())) => false_elim(more.len().zero_ne_succ(bad)),
+            Cons(_, more) => λ (bad: 0 = more.len() + 1) => false_elim(more.len().zero_ne_succ(bad)),
         },
         Cons(id, rest) => λ apart words => match words {
-            Nil => λ (bad: Succ(rest.len()) = 0) => false_elim(rest.len().succ_ne_zero(bad)),
-            Cons(word, more) => λ (same: Succ(rest.len()) = Succ(more.len())) => {
+            Nil => λ (bad: rest.len() + 1 = 0) => false_elim(rest.len().succ_ne_zero(bad)),
+            Cons(word, more) => λ (same: rest.len() + 1 = more.len() + 1) => {
                 let parts = Bool::is_true_and(absent(id, rest), distinct(rest), apart);
                 let inner = Valuation::bind(values, rest, more);
                 let head = trans(Valuation::set_here(inner, id, word_value(word), 64), word_value_word(word));
@@ -486,7 +486,7 @@ theorem loop_eval_len(step: Valuation() → Valuation(), parameters: List<Nat>, 
     match remaining {
         Zero => λ state same => same,
         Succ(rest) => λ state same => {
-            let after = step(pass_valuation(parameters, count, Succ(rest), state));
+            let after = step(pass_valuation(parameters, count, rest + 1, state));
             let next_len: (words_of(after, next).len() = parameters.len()) = trans(words_of_len(after, next), lengths);
             match after(1, exit).head_bit() {
                 False => loop_eval_len(step, parameters, count, exit, next, lengths, rest, words_of(after, next), next_len),
@@ -509,16 +509,16 @@ theorem loop_eval_runs(pass: Valuation() → Type, step: Valuation() → Valuati
         Zero => λ state _ => ⟨refl, refl⟩,
         Succ(rest) => λ state same => {
             let parts = Bool::is_true_and(absent(count, parameters), distinct(parameters), apart);
-            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
-            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)));
+            let before = pass_valuation(parameters, count, rest + 1, state);
             let after = step(before);
             let bound: (words_of(after, parameters) = state) = trans(
                 words_agree(parameters, before, after, λ id m => kept(before, 64, id, Inr(m))),
                 words_of_bind(counted, parameters, parts.right, state, sym(same)));
-            let at_count: (after(64, count) = BitVec::ofNat(Succ(rest))) = trans(kept(before, 64, count, Inl(refl)),
+            let at_count: (after(64, count) = BitVec::ofNat(rest + 1)) = trans(kept(before, 64, count, Inl(refl)),
                 trans(Valuation::bind_frame(counted, parameters, state, 64, count, parts.left),
-                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))), 64),
-                        word_value_word(BitVec::ofNat(Succ(rest))))));
+                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(rest + 1)), 64),
+                        word_value_word(BitVec::ofNat(rest + 1)))));
             let next_len: (words_of(after, next).len() = parameters.len()) = trans(words_of_len(after, next), lengths);
             Exists(after, ⟨bound, ⟨at_count, ⟨holds(before),
                 match after(1, exit).head_bit() as λ b => match b as λ _ => Type {
@@ -926,7 +926,7 @@ theorem loop_eval_same(step, other_step: Valuation() → Valuation(), same: (v: 
     match remaining {
         Zero => λ state => refl,
         Succ(rest) => λ state => {
-            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let entry = pass_valuation(parameters, count, rest + 1, state);
             let after = step(entry);
             let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
                 cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(entry, 1, exit));
@@ -1601,7 +1601,7 @@ theorem bits_union_r(a: List<Bool>): (b: List<Bool>) → (id: Nat) → bits_has(
 }
 
 // A marked entry of a bitmap is inside it.
-theorem bits_has_below(bits: List<Bool>): (id: Nat) → bits_has(bits, id).IsTrue() → Succ(id) <= bits.len() {
+theorem bits_has_below(bits: List<Bool>): (id: Nat) → bits_has(bits, id).IsTrue() → id + 1 <= bits.len() {
     match bits {
         Nil => λ id never => false_elim(never),
         Cons(_, rest) => λ id => match id { Zero => λ _ => trivial, Succ(k) => λ h => bits_has_below(rest, k, h) },
@@ -1641,15 +1641,15 @@ fn Marks::union(a, b: Marks) → Marks {
 theorem Marks::add_has(id: Nat, marks: Marks): marks.add(id).has(id).IsTrue() {
     match marks {
         Bitmap(bits) => bits_add_has(id, bits),
-        Under(top) => Succ(id).leb_complete(top.max(Succ(id)), top.le_max_r(Succ(id))),
+        Under(top) => (id + 1).leb_complete(top.max(id + 1), top.le_max_r(id + 1)),
     }
 }
 
 theorem Marks::add_keeps(id: Nat, marks: Marks, other: Nat): marks.has(other).IsTrue() → marks.add(id).has(other).IsTrue() {
     match marks {
         Bitmap(bits) => λ h => bits_add_keeps(id, bits, other, h),
-        Under(top) => λ h => Succ(other).leb_complete(top.max(Succ(id)),
-            Succ(other).le_trans(top, top.max(Succ(id)), Succ(other).leb_sound(top, h), top.le_max_l(Succ(id)))),
+        Under(top) => λ h => (other + 1).leb_complete(top.max(id + 1),
+            (other + 1).le_trans(top, top.max(id + 1), (other + 1).leb_sound(top, h), top.le_max_l(id + 1))),
     }
 }
 
@@ -1657,14 +1657,14 @@ theorem Marks::union_l(a, b: Marks, id: Nat): a.has(id).IsTrue() → Marks::unio
     match a {
         Bitmap(x) => match b {
             Bitmap(y) => λ h => bits_union_l(x, y, id, h),
-            Under(top) => λ h => Succ(id).leb_complete(top.max(x.len()),
-                Succ(id).le_trans(x.len(), top.max(x.len()), bits_has_below(x, id, h), top.le_max_r(x.len()))),
+            Under(top) => λ h => (id + 1).leb_complete(top.max(x.len()),
+                (id + 1).le_trans(x.len(), top.max(x.len()), bits_has_below(x, id, h), top.le_max_r(x.len()))),
         },
         Under(top) => match b {
-            Bitmap(y) => λ h => Succ(id).leb_complete(top.max(y.len()),
-                Succ(id).le_trans(top, top.max(y.len()), Succ(id).leb_sound(top, h), top.le_max_l(y.len()))),
-            Under(other) => λ h => Succ(id).leb_complete(top.max(other),
-                Succ(id).le_trans(top, top.max(other), Succ(id).leb_sound(top, h), top.le_max_l(other))),
+            Bitmap(y) => λ h => (id + 1).leb_complete(top.max(y.len()),
+                (id + 1).le_trans(top, top.max(y.len()), (id + 1).leb_sound(top, h), top.le_max_l(y.len()))),
+            Under(other) => λ h => (id + 1).leb_complete(top.max(other),
+                (id + 1).le_trans(top, top.max(other), (id + 1).leb_sound(top, h), top.le_max_l(other))),
         },
     }
 }
@@ -1673,14 +1673,14 @@ theorem Marks::union_r(a, b: Marks, id: Nat): b.has(id).IsTrue() → Marks::unio
     match a {
         Bitmap(x) => match b {
             Bitmap(y) => λ h => bits_union_r(x, y, id, h),
-            Under(top) => λ h => Succ(id).leb_complete(top.max(x.len()),
-                Succ(id).le_trans(top, top.max(x.len()), Succ(id).leb_sound(top, h), top.le_max_l(x.len()))),
+            Under(top) => λ h => (id + 1).leb_complete(top.max(x.len()),
+                (id + 1).le_trans(top, top.max(x.len()), (id + 1).leb_sound(top, h), top.le_max_l(x.len()))),
         },
         Under(top) => match b {
-            Bitmap(y) => λ h => Succ(id).leb_complete(top.max(y.len()),
-                Succ(id).le_trans(y.len(), top.max(y.len()), bits_has_below(y, id, h), top.le_max_r(y.len()))),
-            Under(other) => λ h => Succ(id).leb_complete(top.max(other),
-                Succ(id).le_trans(other, top.max(other), Succ(id).leb_sound(other, h), top.le_max_r(other))),
+            Bitmap(y) => λ h => (id + 1).leb_complete(top.max(y.len()),
+                (id + 1).le_trans(y.len(), top.max(y.len()), bits_has_below(y, id, h), top.le_max_r(y.len()))),
+            Under(other) => λ h => (id + 1).leb_complete(top.max(other),
+                (id + 1).le_trans(other, top.max(other), (id + 1).leb_sound(other, h), top.le_max_r(other))),
         },
     }
 }
@@ -2253,12 +2253,12 @@ theorem program_scan_at_drop_zero(functions: List<Function>, arities: List<Nat>)
 // for its largest function, not for the sum of them.
 theorem program_scan_at_drop(functions: List<Function>): (arities: List<Nat>) → (n: Nat) →
     program_scan_at_head(functions.drop(n), arities.drop(n)).IsTrue() →
-    program_scan_at(functions.drop(Succ(n)), arities.drop(Succ(n))).IsTrue() → program_scan_at(functions.drop(n), arities.drop(n)).IsTrue() {
+    program_scan_at(functions.drop(n + 1), arities.drop(n + 1)).IsTrue() → program_scan_at(functions.drop(n), arities.drop(n)).IsTrue() {
     match functions {
         Nil => λ _ _ _ _ => trivial,
         Cons(last, earlier) => λ arities n => match n as λ i =>
             program_scan_at_head(Cons(last, earlier).drop(i), arities.drop(i)).IsTrue() →
-            program_scan_at(Cons(last, earlier).drop(Succ(i)), arities.drop(Succ(i))).IsTrue() →
+            program_scan_at(Cons(last, earlier).drop(i + 1), arities.drop(i + 1)).IsTrue() →
             program_scan_at(Cons(last, earlier).drop(i), arities.drop(i)).IsTrue() {
             Zero => match arities as λ ns => program_scan_at_head(Cons(last, earlier), ns.drop(0)).IsTrue() →
                 program_scan_at(earlier.drop(0), ns.drop(1)).IsTrue() → program_scan_at(Cons(last, earlier), ns.drop(0)).IsTrue() {
@@ -2267,8 +2267,8 @@ theorem program_scan_at_drop(functions: List<Function>): (arities: List<Nat>) �
                 Cons(a, more) => λ head rest => Bool::is_true_and_intro(last.scan_at(earlier, Cons(a, more)), program_scan_at(earlier, more), head,
                     program_scan_at_drop_zero(earlier, more, rest)),
             },
-            Succ(k) => match arities as λ ns => program_scan_at_head(earlier.drop(k), ns.drop(Succ(k))).IsTrue() →
-                program_scan_at(earlier.drop(Succ(k)), ns.drop(Succ(Succ(k)))).IsTrue() → program_scan_at(earlier.drop(k), ns.drop(Succ(k))).IsTrue() {
+            Succ(k) => match arities as λ ns => program_scan_at_head(earlier.drop(k), ns.drop(k + 1)).IsTrue() →
+                program_scan_at(earlier.drop(k + 1), ns.drop(k + 2)).IsTrue() → program_scan_at(earlier.drop(k), ns.drop(k + 1)).IsTrue() {
                 Nil => λ head rest => program_scan_at_drop(earlier, Nil, k, head, rest),
                 Cons(_, more) => λ head rest => program_scan_at_drop(earlier, more, k, head, rest),
             },

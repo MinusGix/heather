@@ -47,3 +47,68 @@ theorem turned_left(): replay_function(rules_with(registered(RuleEntry)), turned
 
 theorem turned_searched(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan(spellings := 8)) =
     Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Move(64, 4, 1), Const(64, 5, 0), Const(64, 6, 0)], Ports([]))), 6, 1)) { refl }
+
+// A rule whose other side reads a node the code does not have.
+// `(x + 3) + 4` is `x + (3 + 4)` by `add_assoc`, and no word is `3 + 4`.
+// The searching walk asks for that node since `add_consts` makes it a
+// constant; `find_helped` puts it after the words the outer sum reads; and
+// the next walk writes the constant for it and `x + 7` for the outer sum,
+// reading the node put as the sum it was put as.
+fn sums() → Function {
+    Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 3)], Ports([]))),
+        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([])))))), 6, 1)
+}
+
+fn region_nodes(region: StructuredRegion) → List<Node> {
+    match region { Dataflow(body) => body.nodes, Compose(first, second) => region_nodes(first) ++ region_nodes(second), _ => [] }
+}
+
+fn made_nodes(found: Option<Function>) → List<Node> { match found { None => [], Some(function) => region_nodes(function.body) } }
+
+fn sums_helped() → Option<Function> { match sums().find_helped([]) { None => None, Some(found) => Some(found.made) } }
+
+fn sums_folded() → Option<Function> {
+    match sums_helped() { None => None, Some(function) => replay_function(rules_with(registered(RuleEntry)), function, function.learn_plan(spellings := 8, asking := 8)) }
+}
+
+theorem sums_asked(): made_nodes(sums_helped()) = [Const(64, 3, 3), Add(64, 4, 1, 3), Const(64, 5, 4), Add(64, 7, 3, 5), Add(64, 6, 4, 5)] { refl }
+
+theorem sums_found(): made_nodes(sums_folded()) = [Const(64, 3, 3), Add(64, 4, 1, 3), Const(64, 5, 4), Const(64, 7, 7), Add(64, 6, 1, 7)] { refl }
+
+// Nothing is asked for where the node would not fold: `(x + y) + 4`.
+fn sums_open() → Function {
+    Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 2)], Ports([]))),
+        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([]))))), 6, 1)
+}
+
+theorem open_not_asked(): made_nodes(match sums_open().find_helped([]) { None => None, Some(found) => Some(found.made) }) = [] { refl }
+
+// Nor where the inner sum is read again: the code would keep `x + 3` for
+// its other reader and compute `x + 7` beside it, which is no gain.
+fn sums_shared() → Function {
+    Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 3)], Ports([]))),
+        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([]))),
+            Dataflow(Region(Ports([]), [BitXor(64, 7, 6, 4)], Ports([]))))))), 7, 1)
+}
+
+theorem shared_not_asked(): made_nodes(match sums_shared().find_helped([]) { None => None, Some(found) => Some(found.made) }) = [] { refl }
+
+// A sum of two constants is written as the constant, but not where a load
+// indexes by it: the joins of byte loads into a word and the bounds the
+// lowering reads know an index as a base and a constant
+// (`Seen::settles`).
+fn consts_summed() → Function {
+    Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Const(64, 4, 4)], Ports([]))),
+        Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))))), 5, 1)
+}
+
+fn consts_indexing() → Function {
+    Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Const(64, 4, 4)], Ports([]))),
+        Compose(Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [BufferLoad(6, 0, 5)], Ports([])))))), 6, 1)
+}
+
+theorem consts_folded(): made_nodes(replay_function(rules_with(registered(RuleEntry)), consts_summed(), consts_summed().learn_plan(spellings := 8))) =
+    [Const(64, 3, 3), Const(64, 4, 4), Const(64, 5, 7)] { refl }
+
+theorem index_kept(): made_nodes(replay_function(rules_with(registered(RuleEntry)), consts_indexing(), consts_indexing().learn_plan(spellings := 8))) =
+    [Const(64, 3, 3), Const(64, 4, 4), Add(64, 5, 3, 4), BufferLoad(6, 0, 5)] { refl }

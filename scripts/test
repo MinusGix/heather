@@ -492,7 +492,7 @@ rm -f "$manifest"
 ulimit -v 6291456
 # The native write-elf gates take the runner's longer rail (CPU_RAIL_OVERRIDES
 # in run-test-targets.mjs, issues/native-sort-gate-rail.md) here too.
-if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]]; then
+if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]] || [[ "$requested" == *"--test native_linked"* ]]; then
   ulimit -t 900
 else
   ulimit -t 300

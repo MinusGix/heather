@@ -149,7 +149,7 @@ fn Prog::ComputesInto<M>(self code: Prog, machine: Machine<M>, f, room: Nat, bor
 // A buffer more in front moves every buffer's number up by one.
 theorem args_lent_shift(count: Nat): (buffer: Nat) → (arguments, addresses: List<BitVec(64)>) → (buffers: Buffers()) →
     (a: BitVec(64)) → (bytes: List<BitVec(8)>) → ArgsLent(count, buffer, arguments, addresses, buffers) →
-    ArgsLent(count, Succ(buffer), arguments, Cons(a, addresses), Cons(bytes, buffers)) {
+    ArgsLent(count, buffer + 1, arguments, Cons(a, addresses), Cons(bytes, buffers)) {
     match count {
         Zero => λ buffer arguments addresses buffers a bytes _ => trivial,
         Succ(more) => λ buffer arguments => match arguments {
@@ -157,7 +157,7 @@ theorem args_lent_shift(count: Nat): (buffer: Nat) → (arguments, addresses: Li
             Cons(_, after) => match after {
                 Nil => λ addresses buffers a bytes no => no,
                 Cons(_, rest) => λ addresses buffers a bytes lent => ⟨lent.left, ⟨lent.right.left,
-                    args_lent_shift(more, Succ(buffer), rest, addresses, buffers, a, bytes, lent.right.right)⟩⟩,
+                    args_lent_shift(more, buffer + 1, rest, addresses, buffers, a, bytes, lent.right.right)⟩⟩,
             },
         },
     }
@@ -202,14 +202,14 @@ theorem Prog::computes_on<M>(self code: Prog, machine: Machine<M>, f, room: Nat,
         let lent: ArgsLent(lent_count(counts, f), 0, Borrow::words(borrows) ++ words, Borrow::addresses(borrows), Borrow::bytes(borrows)) =
             j(sym(taken), λ n _ => ArgsLent(n, 0, Borrow::words(borrows) ++ words, Borrow::addresses(borrows), Borrow::bytes(borrows)),
                 borrows_args_lent(borrows, words));
-        let entered = site.returns_weaken(machine.stack, asm_labels(code, Succ(f)),
+        let entered = site.returns_weaken(machine.stack, asm_labels(code, f + 1),
             λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 machine.stack.LentOver(lending, top, f, Borrow::words(borrows) ++ words, Borrow::bytes(borrows))(i, s),
             λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
             machine.stack.AnsweredOver(lending, answer.word, answer.buffers), ran,
             λ i s held => ⟨held.left, ⟨lent, held.right⟩⟩);
-        site.returns_implies(machine.stack, asm_labels(code, Succ(f)),
+        site.returns_implies(machine.stack, asm_labels(code, f + 1),
             λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
             machine.stack.AnsweredOver(lending, answer.word, answer.buffers),

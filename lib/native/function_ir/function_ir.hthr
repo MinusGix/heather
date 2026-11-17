@@ -325,7 +325,7 @@ theorem input_entries_indexed_cons(
     {port: Port}, {rest: List<Port>},
     found: HasDirectoryPortAt(directory, port.id, port.width,
         InputAt(index)),
-    tail: InputEntriesIndexed(directory, rest, Succ(index))):
+    tail: InputEntriesIndexed(directory, rest, index + 1)):
     InputEntriesIndexed(directory, Cons(port, rest), index)
 {
     ⟨found, tail⟩
@@ -600,7 +600,7 @@ theorem nodes_indexed_cons(
     {directory: PortDirectory}, {index: Nat},
     {node: Node}, {rest: List<Node>},
     head: NodeIndexedIn(directory, index, node),
-    tail: NodesIndexed(directory, rest, Succ(index))):
+    tail: NodesIndexed(directory, rest, index + 1)):
     NodesIndexed(directory, Cons(node, rest), index)
 {
     ⟨head, tail⟩
@@ -1173,7 +1173,7 @@ theorem words_of_drop(values: Valuation(), ids: List<Nat>): (n: Nat) → words_o
     }
 }
 theorem words_of_len(values: Valuation(), ids: List<Nat>): words_of(values, ids).len() = ids.len() {
-    match ids { Nil => refl, Cons(_, rest) => cong_fn<Nat, Nat>(λ n => Succ(n), words_of_len(values, rest)) }
+    match ids { Nil => refl, Cons(_, rest) => cong_fn<Nat, Nat>(λ n => n + 1, words_of_len(values, rest)) }
 }
 
 // A loop's passes from `state` with `remaining` passes left, each pass's
@@ -1217,8 +1217,8 @@ theorem loop_runs_unexhausted(pass: Valuation() → Type, parameters: List<Nat>,
         Succ(rest) => λ state final exhausted held below ran => {
             let values = ran.witness;
             let here: invariant(words_of(values, parameters)) = j(sym(ran.proof.left), λ st _ => invariant(st), held);
-            let measured: (measure(words_of(values, parameters)) < Succ(rest)) =
-                j(sym(ran.proof.left), λ st _ => measure(st) < Succ(rest), below);
+            let measured: (measure(words_of(values, parameters)) < rest + 1) =
+                j(sym(ran.proof.left), λ st _ => measure(st) < rest + 1, below);
             (match values(1, exit).head_bit() as λ b => values(1, exit).head_bit() = b →
                 (match b {
                     False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
@@ -1228,7 +1228,7 @@ theorem loop_runs_unexhausted(pass: Valuation() → Type, parameters: List<Nat>,
                     let stepped = decreases(values, ran.proof.right.right.left, here, clear);
                     let smaller: (measure(words_of(values, next)) < measure(words_of(values, parameters))) = stepped.right;
                     let fits: (measure(words_of(values, next)) < rest) =
-                        Nat::le_trans(Succ(measure(words_of(values, next))), measure(words_of(values, parameters)), rest, smaller, measured);
+                        Nat::le_trans(measure(words_of(values, next)) + 1, measure(words_of(values, parameters)), rest, smaller, measured);
                     loop_runs_unexhausted(pass, parameters, count, exit, next, invariant, measure, decreases, rest,
                         words_of(values, next), final, exhausted, stepped.left, fits, later)
                 },

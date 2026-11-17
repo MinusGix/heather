@@ -604,7 +604,7 @@ fn Counter::tick_some(mut self c: Counter, m: Nat) → Nat {
         },
     }
 }
-theorem tick_some_succ(c: Counter, k: Nat): Counter::tick_some(c, Succ(k)) = Mutated(Counter(c.n + k, Cons(k, c.log)), k) { refl }
+theorem tick_some_succ(c: Counter, k: Nat): Counter::tick_some(c, k + 1) = Mutated(Counter(c.n + k, Cons(k, c.log)), k) { refl }
 theorem tick_some_zero(c: Counter): Counter::tick_some(c, 0) = Mutated(c, 0) { refl }
 theorem tick_some_open(c: Counter, m: Nat):
     Counter::tick_some(c, m) = (match m { Zero => Mutated(c, 0), Succ(k) => Mutated(Counter(c.n + k, Cons(k, c.log)), k) }) { refl }
@@ -678,7 +678,7 @@ fn Counter::tick_down(mut self c: Counter, m: Nat) → Nat {
 }
 theorem tick_down_lit(): Counter::tick_down(Counter(0, []), 3) = Mutated(Counter(3, [0, 1, 2]), 3) { refl }
 theorem tick_down_succ(c: Counter, k: Nat):
-    Counter::tick_down(c, Succ(k)) = Counter::tick_down(Counter(c.n + k, Cons(k, c.log)), k) { refl }
+    Counter::tick_down(c, k + 1) = Counter::tick_down(Counter(c.n + k, Cons(k, c.log)), k) { refl }
 
 // Negative controls. A branch that does not end the body is a value, and
 // its arms do not update the receiver.
