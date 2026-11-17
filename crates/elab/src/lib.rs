@@ -1204,14 +1204,6 @@ impl matching::MotiveSynthesisElab for Elaborator {
         let oracle = self.goal_oracle();
         typing::infer_type(oracle.world(), 0, Layer::Prog, &inner.gamma, motive, self.policy.fuel).is_ok()
     }
-
-    fn fold_declarations(&self, cx: &Cx, ty: &Type) -> Option<Type> {
-        crate::gendefs::GeneratedDefs(self).respell_ty_deep(cx, ty, 0)
-    }
-
-    fn unfold_declarations(&self, ty: &Type) -> Option<Type> {
-        crate::gendefs::GeneratedDefs(self).unspell_ty_deep(ty)
-    }
 }
 
 impl matching::MatchSpeculationState for Elaborator {

@@ -460,16 +460,6 @@ impl Holes<'_> {
 
     /// Record the first decline and answer `None`, which is what every
     /// caller does with it.
-    /// A checked intro form's optional annotation: both absent, or both
-    /// present and matching.
-    fn annotation(&mut self, template: &Option<Rc<Type>>, subject: &Option<Rc<Type>>, md: u32) -> Option<()> {
-        match (template, subject) {
-            (None, None) => Some(()),
-            (Some(a), Some(b)) => self.ty(a, b, md),
-            _ => self.stop("annotation", "one-side"),
-        }
-    }
-
     fn stop(&mut self, t: &'static str, s: &'static str) -> Option<()> {
         if self.why.is_none() {
             self.why = Some((t, s));
@@ -792,24 +782,6 @@ impl Holes<'_> {
             // on both sides only: step 2's walk is syntactic.
             (Term::FstAt { pair: p1 }, Term::FstAt { pair: p2 })
             | (Term::SndAt { pair: p1 }, Term::SndAt { pair: p2 }) => self.tm(p1, p2, md),
-            // The checked constructor values, `inr@`/`pair@`: a field that
-            // states what a call returns, `ec: st3(b) = Some(out)`, carries
-            // the parameter inside one, and without these arms that
-            // record's instances are never named, so a case split abstracts
-            // inside its lowering
-            // (issues/named-match-third-level-kernel-rejects.md).
-            (Term::PairAt { ty: t1, fst: f1, snd: s1 }, Term::PairAt { ty: t2, fst: f2, snd: s2 }) => {
-                self.annotation(t1, t2, md)?;
-                self.tm(f1, f2, md)?;
-                self.tm(s1, s2, md)
-            }
-            (Term::InlAt { ty: t1, val: v1 }, Term::InlAt { ty: t2, val: v2 })
-            | (Term::InrAt { ty: t1, val: v1 }, Term::InrAt { ty: t2, val: v2 })
-                if std::mem::discriminant(template) == std::mem::discriminant(subject) =>
-            {
-                self.annotation(t1, t2, md)?;
-                self.tm(v1, v2, md)
-            }
             // A tier-2 lowering's positions are a `case` over the shape
             // (docs/inductives/inductive-tier2-w-lowering.md), and a payload type sits
             // in its branch types. The motive and both branches bind the
