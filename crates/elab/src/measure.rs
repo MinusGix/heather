@@ -238,6 +238,10 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
 }
 
 pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
+    // A squashed fact (a loop's invariant) is read through its squash.
+    if let TyKind::Squash(inner) = &ty.kind {
+        return arithmetic_fact(inner, goal, scope);
+    }
     let shares = || scope.iter().any(|b| mentions_ty(goal, &b.name) && mentions_ty(ty, &b.name));
     // A `match h: e { … }` arm's equation: `omega` reads `n.leb(m) = False`
     // as the guard it states (issues/decreases-measure-record-field-unspelled.md)
@@ -2220,7 +2224,37 @@ impl<'a> Rewrite<'a> {
         let mut params = Vec::new();
         let mut args = Vec::new();
         let goal = lt_ty(at_args.clone(), refined.clone(), span);
-        let selected = select_scope(&self.scope, &goal, on.as_ref())?;
+        // The declaration's own parameters that state an arithmetic fact
+        // (a lifted loop's invariant, `j <= i`) go with the obligation: an
+        // alias it reads may hold a found proof that needs them
+        // (`s.put(j, v)` in a `while` body).
+        let facts: Vec<Expr> = self
+            .decl
+            .params
+            .iter()
+            .filter(|p| {
+                let ty = match &p.ty.kind { TyKind::Squash(inner) => &**inner, _ => &p.ty };
+                matches!(&ty.kind, TyKind::OfExpr(e)
+                    if matches!(&e.kind, ExprKind::App { head, .. }
+                        if matches!(&head.kind, ExprKind::OpSymbol { symbol, .. } if matches!(symbol.as_str(), "<" | "<="))))
+            })
+            .map(|p| var(&p.name, span))
+            .collect();
+        let evidence = match (&on, facts.is_empty()) {
+            (_, true) => on.clone(),
+            (on, false) => {
+                let mut stmts: Vec<Stmt> = facts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, f)| Stmt::Let { name: format!("__obl_fact_{k}"), ty: None, expr: f, span, opaque: false })
+                    .collect();
+                if let Some(on) = on {
+                    stmts.push(Stmt::Let { name: "__obl_on".into(), ty: None, expr: on.clone(), span, opaque: false });
+                }
+                Some(Expr { kind: ExprKind::Block(Box::new(Block { stmts, result: Box::new(var("__obl_on", span)), ons: Vec::new(), span })), span })
+            }
+        };
+        let selected = select_scope(&self.scope, &goal, evidence.as_ref())?;
         // Aliases are substituted by their values, earlier aliases first, in
         // the later binders' types and in the statement; the body keeps them
         // as the `let`s they are, for whatever proof names them.
@@ -2915,9 +2949,11 @@ impl<'a> Rewrite<'a> {
     /// value, unless that reads the recursion. [`Respell`] binds the same
     /// for a `let` it walks through, so an obligation it re-emits selects
     /// the binders `f#body`'s did.
-    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr) -> Binder {
+    fn let_binder(&self, name: &str, ty: &Option<Ty>, expr: &Expr, opaque: bool) -> Binder {
         let inferred = ty.clone().or_else(|| self.scrut_ty(expr));
-        let value = (!self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
+        // An opaque `let` is a binder of its type to every query after it:
+        // its value (a proof found once) is not elaborated again by each.
+        let value = (!opaque && !self.members.iter().any(|m| mentions_context(expr, &m.name))).then(|| expr.clone());
         Binder { name: name.to_string(), ty: inferred, value }
     }
 
@@ -2932,7 +2968,7 @@ impl<'a> Rewrite<'a> {
             } => {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
-                let binder = self.let_binder(name, ty, expr);
+                let binder = self.let_binder(name, ty, expr, *opaque);
                 let expr = self.expr(expr);
                 self.scope.push(binder);
                 Stmt::Let {
@@ -3778,7 +3814,7 @@ impl Respell<'_> {
                 let (scope_n, env_n) = (self.rw.scope.len(), self.let_env.len());
                 let mut out = Ok(());
                 for st in &b.stmts {
-                    let Stmt::Let { name, ty, expr, .. } = st else {
+                    let Stmt::Let { name, ty, expr, opaque, .. } = st else {
                         out = Err("a destructuring or `code` binding in the body".to_string());
                         break;
                     };
@@ -3800,7 +3836,7 @@ impl Respell<'_> {
                             _ => None,
                         })
                         .collect();
-                    let binder = self.rw.let_binder(name, ty, expr);
+                    let binder = self.rw.let_binder(name, ty, expr, *opaque);
                     self.rw.scope.push(binder);
                     let after = self.rw.scope.len();
                     // Each value is read before the statement's own
