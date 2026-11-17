@@ -872,21 +872,21 @@ theorem ETm::settle_end(region: StructuredRegion, id: Nat, call: Writers()): (va
 // in that port, where the port is fresh and the next one free after it;
 // anything else moved to a fresh word.
 fn ETm::placed_bit(b: Bool, l: Lowered) → Lowered {
-    match b { True => l, False => Lowered(ETm::moved(Bit, l), l.next, Succ(l.next)) }
+    match b { True => l, False => Lowered(ETm::moved(Bit, l), l.next, l.next + 1) }
 }
 
 fn ETm::bit_stays(next: Nat, l: Lowered) → Bool {
-    ETm::ends_at(l.region, l.result) && (next.leb(l.result) && l.next.matches(Succ(l.result)))
+    ETm::ends_at(l.region, l.result) && (next.leb(l.result) && l.next.matches(l.result + 1))
 }
 
 fn ETm::placed(t: Ty, next: Nat, l: Lowered) → Lowered {
     match t {
         Bit => ETm::placed_bit(ETm::bit_stays(next, l), l),
-        Word(_) => Lowered(ETm::moved(t, l), l.next, Succ(l.next)),
-        Bytes(_) => Lowered(ETm::moved(t, l), l.next, Succ(l.next)),
-        Lines => Lowered(ETm::moved(t, l), l.next, Succ(l.next)),
-        Named(_) => Lowered(ETm::moved(t, l), l.next, Succ(l.next)),
-        Count => Lowered(ETm::moved(t, l), l.next, Succ(l.next)),
+        Word(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        Bytes(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        Lines => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        Named(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        Count => Lowered(ETm::moved(t, l), l.next, l.next + 1),
     }
 }
 
@@ -906,7 +906,7 @@ fn ETm::lower_value(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat
 // region keeps every variable and leaves the value in a word at or past
 // `next`, the next one free after it.
 fn ETm::PlacedHolds(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, m: rt::Env(w.tys, g) → t.sem(w.tys), c: Lowered) → Type {
-    (c.next = Succ(c.result)) ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) → (env: Env) → (vals: rt::Env(w.tys, g)) →
+    (c.next = c.result + 1) ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) → (env: Env) → (vals: rt::Env(w.tys, g)) →
         LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
         (next <= c.result) ∧ LocsHold(w.tys, env.compute(call, c.region), Cons(t, g), Cons(InWord(c.result), locs), Pair(m(vals), vals)))
 }
@@ -916,7 +916,7 @@ fn ETm::PlacedHolds(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat
 fn ETm::ValueHolds(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<Lowered>) → Type {
     match r {
         None => True,
-        Some(c) => (c.next = Succ(c.result)) ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) → (env: Env) → (vals: rt::Env(w.tys, g)) →
+        Some(c) => (c.next = c.result + 1) ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) → ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) → (env: Env) → (vals: rt::Env(w.tys, g)) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
             (next <= c.result) ∧ LocsHold(w.tys, env.compute(call, c.region), Cons(Tm::ty(v, w, g), g), Cons(InWord(c.result), locs),
                 Pair(Tm::sem(v, w, g, vals), vals))),
@@ -1084,7 +1084,7 @@ fn ETm::Answered(e: Effect, w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g), 
     (Io::call(io, k.shape.cmd(env)).after = ETm::applied(e, w, g, vals, io, args).after) ∧
         (LocsHold(w.tys, k.shape.answer(env, Io::call(io, k.shape.cmd(env)).value), Ty::bind_onto(e.results(), g), k.locs,
             Effect::push(w.tys, e.results(), g, vals, ETm::applied(e, w, g, vals, io, args).value))
-        ∧ LocsBelow(k.locs, Succ(next)))
+        ∧ LocsBelow(k.locs, next + 1))
 }
 
 fn ETm::CallHolds(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, args: List<Nat>, r: Option<Called>) → Type {
@@ -1263,7 +1263,7 @@ theorem ETm::call_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, n
 // `program_writers` answers for a `runtime fn` lent a span
 // (`raise_span_called`, native_tool_spans).
 fn ETm::LentsAgree(ls: List<Lent>, call: Writers()) → Type {
-    (f: Nat) → Succ(f).leb(ls.len()).IsTrue() → (own: List<BitVec(8)>) → (rest: Buffers()) → (words: List<BitVec(64)>) →
+    (f: Nat) → (f + 1).leb(ls.len()).IsTrue() → (own: List<BitVec(8)>) → (rest: Buffers()) → (words: List<BitVec(64)>) →
         words.len() = Lent::at(ls, f).arity →
         call(Cons(own, rest), Lent::at(ls, f).entry, words) = Ending(Lent::at(ls, f).run(own, words).value, Cons(Lent::at(ls, f).run(own, words).after, rest))
 }
@@ -1315,7 +1315,7 @@ fn ETm::lend_call(entry, next: Nat, ids: List<Nat>, locs: List<Loc>) → LentCal
 // A function of the table, on as many words as it takes; the buffer
 // variable in buffer 0; each word variable in a word.
 fn ETm::lower_lend(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next, f, cap, buf: Nat, args: List<Nat>) → Option<LentCall> {
-    Tm::check_true(Succ(f).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())).and_then(λ _ =>
+    Tm::check_true((f + 1).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())).and_then(λ _ =>
         ETm::operand(g, locs, Bytes(cap), buf).and_then(λ b => Tm::check_true(b.matches(0)).and_then(λ _ =>
             ETm::word_ids(g, locs, args).and_then(λ ids => Some(ETm::lend_call(Lent::at(ls, f).entry, next, ids, locs))))))
 }
@@ -1330,7 +1330,7 @@ fn ETm::LendHolds(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, ne
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) →
             LocsHold(w.tys, env.compute(call, k.region), Ty::bind_onto(Lent::results(cap), g), k.locs,
                 Effect::push(w.tys, Lent::results(cap), g, vals, Lent::answer(w.tys, ls, g, vals, f, cap, buf, args)))
-            ∧ LocsBelow(k.locs, Succ(next)),
+            ∧ LocsBelow(k.locs, next + 1),
     }
 }
 
@@ -2113,7 +2113,7 @@ fn Part::dests(codes: List<Ty>, sy: List<Loc>, sn: List<Loc>, next: Nat) → Opt
                 Nil => None,
                 Cons(b, ns) => match t {
                     Bytes(_) => Loc::meet(t, a, b).and_then(λ m => Part::dests(rest, ys, ns, next).and_then(λ d => Some(Dests(Cons(m, d.locs), d.next)))),
-                    _ => Part::dests(rest, ys, ns, Succ(next)).and_then(λ d => Some(Dests(Cons(InWord(next), d.locs), d.next))),
+                    _ => Part::dests(rest, ys, ns, next + 1).and_then(λ d => Some(Dests(Cons(InWord(next), d.locs), d.next))),
                 },
             },
         },
@@ -2124,7 +2124,7 @@ fn Part::dests(codes: List<Ty>, sy: List<Loc>, sn: List<Loc>, next: Nat) → Opt
 fn Loc::below(locs: List<Loc>, next: Nat) → Bool {
     match locs {
         Nil => True,
-        Cons(l, rest) => match l { InWord(id) => Succ(id).leb(next) && Loc::below(rest, next), InBuffer(_) => Loc::below(rest, next), Gone => Loc::below(rest, next) },
+        Cons(l, rest) => match l { InWord(id) => (id + 1).leb(next) && Loc::below(rest, next), InBuffer(_) => Loc::below(rest, next), Gone => Loc::below(rest, next) },
     }
 }
 
@@ -2201,11 +2201,11 @@ fn ETm::lower(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List
                 Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next, lb.locs)))),
         // The body sees the call's results where it landed them.
         Invoke(e, args, body) => ETm::lower_call(e, g, locs, next, args).and_then(λ k =>
-            body.lower(w, ls, Ty::bind_onto(e.results(), g), k.locs, Succ(next)).and_then(λ lb =>
+            body.lower(w, ls, Ty::bind_onto(e.results(), g), k.locs, next + 1).and_then(λ lb =>
                 Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs)))),
         // The body sees the bytes left and the word where the call left them.
         Lend(f, cap, buf, args, body) => ETm::lower_lend(w, ls, g, locs, next, f, cap, buf, args).and_then(λ k =>
-            body.lower(w, ls, Ty::bind_onto(Lent::results(cap), g), k.locs, Succ(next)).and_then(λ lb =>
+            body.lower(w, ls, Ty::bind_onto(Lent::results(cap), g), k.locs, next + 1).and_then(λ lb =>
                 Some(ELowered(Then(Compute(k.region), lb.stmt), lb.result, lb.next, lb.locs)))),
         If(cond, yes, no, parts, body) => ETm::lower_if(w, g, locs, next, cond, yes, no, parts,
             λ n => yes.lower(w, ls, g, locs, n), λ n => no.lower(w, ls, g, locs, n), λ l2 n => body.lower(w, ls, Part::ctx(parts, g), l2, n)),

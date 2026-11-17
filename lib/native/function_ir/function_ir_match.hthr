@@ -183,7 +183,7 @@ fn premises_bind(premises: List<PatternFact>, at: Node, had: Walked, found: NatM
 fn numbers_found(found: NatMap<Nat>, from, count: Nat) → Option<List<Nat>> {
     match count {
         Zero => Some([]),
-        Succ(less) => nat_map_get(found, from).and_then(λ value => numbers_found(found, Succ(from), less).and_then(λ rest => Some(Cons(value, rest)))),
+        Succ(less) => nat_map_get(found, from).and_then(λ value => numbers_found(found, from + 1, less).and_then(λ rest => Some(Cons(value, rest)))),
     }
 }
 
@@ -264,7 +264,7 @@ fn numbers_keyed(xs: List<Nat>, skip, key: Nat) → Nat {
         Nil => key,
         Cons(x, rest) => match skip {
             Zero => numbers_keyed(rest, xs.len(), key),
-            Succ(less) => numbers_keyed(rest, less, key * 4096 + Succ(x)),
+            Succ(less) => numbers_keyed(rest, less, key * 4096 + (x + 1)),
         },
     }
 }
@@ -272,7 +272,7 @@ fn numbers_keyed(xs: List<Nat>, skip, key: Nat) → Nat {
 // Where the walk keeps a node by what it computes: two nodes alike have
 // one key, and two that are not seldom do (a word numbered past 4094
 // runs into its neighbour, and `Walked::earlier` compares what it finds).
-fn Node::alike_key(self node: Node) → Nat { unput() + numbers_keyed(node.numbers(), node.output_at(), Succ(node.kind())) }
+fn Node::alike_key(self node: Node) → Nat { unput() + numbers_keyed(node.numbers(), node.output_at(), node.kind() + 1) }
 
 // The node alike `node` a rule wrote another node for.
 fn Walked::earlier(self had: Walked, node: Node) → Option<Node> {
@@ -424,8 +424,8 @@ fn numbers_missing(found: NatMap<Nat>, from, count: Nat) → List<Nat> {
     match count {
         Zero => [],
         Succ(less) => match nat_map_get(found, from) {
-            Some(_) => numbers_missing(found, Succ(from), less),
-            None => Cons(from, numbers_missing(found, Succ(from), less)),
+            Some(_) => numbers_missing(found, from + 1, less),
+            None => Cons(from, numbers_missing(found, from + 1, less)),
         },
     }
 }
@@ -724,7 +724,7 @@ fn codes_same(a, b: List<Nat>) → Bool {
 fn entries_place(table: List<RuleEntry>, name: List<Nat>, place: Nat) → Option<Nat> {
     match table {
         Nil => None,
-        Cons(entry, rest) => match codes_same(entry.name, name) { True => Some(place), False => entries_place(rest, name, Succ(place)) },
+        Cons(entry, rest) => match codes_same(entry.name, name) { True => Some(place), False => entries_place(rest, name, place + 1) },
     }
 }
 

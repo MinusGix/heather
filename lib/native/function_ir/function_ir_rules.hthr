@@ -615,8 +615,8 @@ fn entries_rewriting(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     match entries {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
-            Makes(_, _, _) => Cons(entry.at(place), entries_rewriting(rest, Succ(place))),
-            _ => entries_rewriting(rest, Succ(place)),
+            Makes(_, _, _) => Cons(entry.at(place), entries_rewriting(rest, place + 1)),
+            _ => entries_rewriting(rest, place + 1),
         },
     }
 }
@@ -629,10 +629,10 @@ fn entries_ranging(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
             Ranges(_, _, _) => match entry.pattern.head() {
-                Some(_) => Cons(entry.at(place), entries_ranging(rest, Succ(place))),
-                None => entries_ranging(rest, Succ(place)),
+                Some(_) => Cons(entry.at(place), entries_ranging(rest, place + 1)),
+                None => entries_ranging(rest, place + 1),
             },
-            _ => entries_ranging(rest, Succ(place)),
+            _ => entries_ranging(rest, place + 1),
         },
     }
 }
@@ -642,13 +642,13 @@ fn entries_testing(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
             Ranges(_, _, _) => match entry.pattern.head() {
-                Some(_) => entries_testing(rest, Succ(place)),
+                Some(_) => entries_testing(rest, place + 1),
                 None => match entry.pattern.tested() {
-                    Some(_) => Cons(entry.at_test(place), entries_testing(rest, Succ(place))),
-                    None => entries_testing(rest, Succ(place)),
+                    Some(_) => Cons(entry.at_test(place), entries_testing(rest, place + 1)),
+                    None => entries_testing(rest, place + 1),
                 },
             },
-            _ => entries_testing(rest, Succ(place)),
+            _ => entries_testing(rest, place + 1),
         },
     }
 }

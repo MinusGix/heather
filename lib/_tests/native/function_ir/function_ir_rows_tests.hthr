@@ -21,7 +21,7 @@ theorem marks_or_longer(): marks_or([False, True], [True, False, True]) = [True,
 // stores(buffer): a store into buffer `buffer`, which it is lent with
 // those before it.
 fn stores(buffer: Nat) → Function {
-    Function(parameters := [0, 1, 2, 3, 4, 5], lent := Succ(buffer), result := 9,
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := buffer + 1, result := 9,
         body := leaf([BufferStore(output := 9, buffer := buffer, index := 4, value := 5)]))
 }
 

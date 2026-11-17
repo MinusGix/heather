@@ -667,7 +667,7 @@ fn Reader::Owes<A>(self r: Reader<A>, P: (width: Nat) → Nat → (A → BitVec(
 fn Reader::All<A>(rs: List<Reader<A>>, P: Nat → (width: Nat) → Nat → (A → BitVec(width)) → Type, R: Nat → (width: Nat) → Nat → Nat → (A → BitVec(64) → BitVec(width)) → Type) → Type {
     match rs {
         Nil => True,
-        Cons(r, rest) => r.Owes(P(Zero), R(Zero)) ∧ Reader::All(rest, λ (k: Nat) => P(Succ(k)), λ (k: Nat) => R(Succ(k))),
+        Cons(r, rest) => r.Owes(P(Zero), R(Zero)) ∧ Reader::All(rest, λ (k: Nat) => P(k + 1), λ (k: Nat) => R(k + 1)),
     }
 }
 
@@ -685,7 +685,7 @@ fn Writer::All<A>(ws: List<Writer<A>>, P: Nat → (width: Nat) → Nat → (A �
     Q: Nat → (words: Nat) → (A → List<BitVec(64)> → Mutated<A, BitVec(64)>) → Type, S: Nat → (width: Nat) → Nat → Nat → (A → BitVec(64) → BitVec(width) → A) → Type) → Type {
     match ws {
         Nil => True,
-        Cons(w, rest) => w.Owes(P(Zero), Q(Zero), S(Zero)) ∧ Writer::All(rest, λ (k: Nat) => P(Succ(k)), λ (k: Nat) => Q(Succ(k)), λ (k: Nat) => S(Succ(k))),
+        Cons(w, rest) => w.Owes(P(Zero), Q(Zero), S(Zero)) ∧ Writer::All(rest, λ (k: Nat) => P(k + 1), λ (k: Nat) => Q(k + 1), λ (k: Nat) => S(k + 1)),
     }
 }
 
@@ -754,11 +754,11 @@ fn Writer::lent<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, len
 fn FTm::kept<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair<Ty, Nat>>> → Bool {
     match t {
         Pure(_) => λ len known => True,
-        Let(e, body) => λ len known => e.kept(hw, len) && body.kept(hw, Succ(len), Cons(e.literal(), known)),
+        Let(e, body) => λ len known => e.kept(hw, len) && body.kept(hw, len + 1, Cons(e.literal(), known)),
         If(_, yes, no) => λ len known => yes.kept(hw, len, known) && no.kept(hw, len, known),
         IfEq(_, yes, no) => λ len known => yes.kept(hw, len, known) && no.kept(hw, len, known),
         Put(_, _, _, _) => λ len known => False,
-        Call(f, args, body) => λ len known => Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known) && body.kept(hw, Succ(len), Cons(None, known)),
+        Call(f, args, body) => λ len known => Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known) && body.kept(hw, len + 1, Cons(None, known)),
         Again(_) => λ len known => False,
         Lend(_, _, _, _) => λ len known => False,
     }

@@ -89,7 +89,7 @@ fn Tm::tail_sem(self t: Tm, w: World, skip: Nat, res: Ty, again: List<BitVec(64)
         Field(i, k, of) => λ g env => Tm::leaf(Field(i, k, of), w, res, g, env),
         Call(f, args) => match f {
             Zero => λ g env => again(Tm::words(w, g, env, args.drop(skip))),
-            Succ(h) => λ g env => Tm::leaf(Call(Succ(h), args), w, res, g, env),
+            Succ(h) => λ g env => Tm::leaf(Call(h + 1, args), w, res, g, env),
         },
         Fold(over, init, step) => λ g env => Tm::leaf(Fold(over, init, step), w, res, g, env),
         Case(c, zero, succ) => λ g env => Tm::leaf(Case(c, zero, succ), w, res, g, env),
@@ -381,7 +381,7 @@ fn Tm::lower_tail(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, kept, nex
             Tm::lower_tail(no, w, skip, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))),
         Call(f, args) => match f {
             Zero => Tm::self_args(w, g, ports, args.drop(skip)).and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs)),
-            Succ(h) => Tm::lower_leaf(Call(Succ(h), args), w, res, flag, nexts, g, ports, next),
+            Succ(h) => Tm::lower_leaf(Call(h + 1, args), w, res, flag, nexts, g, ports, next),
         },
         Var(i) => Tm::lower_leaf(Var(i), w, res, flag, nexts, g, ports, next),
         Lit(c, n) => Tm::lower_leaf(Lit(c, n), w, res, flag, nexts, g, ports, next),
@@ -850,20 +850,20 @@ theorem Fun::state_kept(values: Valuation(), os: List<Nat>, st: List<BitVec(64)>
 // `ns`, the flag, and the pass's own ids from there.
 
 fn Fun::fuel_c(ws: List<Ty>) → Nat { Fun::past(ws, 1) }
-fn Fun::fuel_ps(ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Succ(Fun::fuel_c(ws))) }
-fn Fun::fuel_k(ws: List<Ty>) → Nat { Fun::past(ws, Succ(Fun::fuel_c(ws))) }
-fn Fun::fuel_ns(ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Succ(Succ(Fun::fuel_k(ws)))) }
-fn Fun::fuel_flag(ws: List<Ty>) → Nat { Fun::past(ws, Succ(Succ(Fun::fuel_k(ws)))) }
+fn Fun::fuel_ps(ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Fun::fuel_c(ws) + 1) }
+fn Fun::fuel_k(ws: List<Ty>) → Nat { Fun::past(ws, Fun::fuel_c(ws) + 1) }
+fn Fun::fuel_ns(ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Fun::fuel_k(ws) + 2) }
+fn Fun::fuel_flag(ws: List<Ty>) → Nat { Fun::past(ws, Fun::fuel_k(ws) + 2) }
 
 // The pass's context: the predecessor, the words, the fuel.
 fn Fun::fuel_ctx(ws: List<Ty>) → List<Ty> { Ty::bind_onto(ws, [Count]) }
-fn Fun::fuel_ports(ws: List<Ty>) → List<Nat> { Cons(Fun::fuel_k(ws), Fun::ports_onto(ws, Succ(Fun::fuel_c(ws)), [Fun::fuel_c(ws)])) }
+fn Fun::fuel_ports(ws: List<Ty>) → List<Nat> { Cons(Fun::fuel_k(ws), Fun::ports_onto(ws, Fun::fuel_c(ws) + 1, [Fun::fuel_c(ws)])) }
 
 // A pass: the predecessor from the count, the `Succ` arm in tail mode, then
 // the exit bit from the flag word.
 fn Fun::fuel_pass(ws: List<Ty>, t: Lowered) → StructuredRegion {
-    Compose(nodes_region([Const(64, Succ(Fun::fuel_k(ws)), 1), Sub(64, Fun::fuel_k(ws), Fun::fuel_c(ws), Succ(Fun::fuel_k(ws)))]),
-        Compose(t.region, nodes_region([Const(64, t.next, 1), Equal(64, Succ(t.next), Fun::fuel_flag(ws), t.next)])))
+    Compose(nodes_region([Const(64, Fun::fuel_k(ws) + 1, 1), Sub(64, Fun::fuel_k(ws), Fun::fuel_c(ws), Fun::fuel_k(ws) + 1)]),
+        Compose(t.region, nodes_region([Const(64, t.next, 1), Equal(64, t.next + 1, Fun::fuel_flag(ws), t.next)])))
 }
 
 // The passes run out: the fuel is zero, held at `z`, and the `Zero` arm
@@ -874,16 +874,16 @@ fn Fun::fuel_zero_region(z, rr: Nat, lz: Lowered) → StructuredRegion {
 
 fn Fun::fuel_code(ws: List<Ty>, t: Lowered, lz: Lowered) → Function {
     Function(Cons(0, Fun::param_ids(ws, 1)),
-        Compose(Loop(Fun::param_ids(ws, 1), 0, Fun::fuel_ps(ws), Fun::fuel_c(ws), Fun::fuel_pass(ws, t), Succ(t.next), Fun::fuel_ns(ws),
-                Fun::param_ids(ws, Succ(Succ(Succ(t.next)))), Fun::past(ws, Succ(Succ(Succ(t.next))))),
-            Fun::post(Fun::past(ws, Succ(Succ(Succ(t.next)))), lz.next, Succ(Succ(Succ(t.next))),
-                Fun::fuel_zero_region(Succ(Succ(t.next)), lz.next, lz))),
+        Compose(Loop(Fun::param_ids(ws, 1), 0, Fun::fuel_ps(ws), Fun::fuel_c(ws), Fun::fuel_pass(ws, t), t.next + 1, Fun::fuel_ns(ws),
+                Fun::param_ids(ws, t.next + 3), Fun::past(ws, t.next + 3)),
+            Fun::post(Fun::past(ws, t.next + 3), lz.next, t.next + 3,
+                Fun::fuel_zero_region(t.next + 2, lz.next, lz))),
         lz.next)
 }
 
 fn Fun::fuel_zero_at(ws: List<Ty>, zero: Tm, w: World, t: Lowered) → Option<Lowered> {
-    Tm::lower(zero, w, Fun::fuel_ctx(ws), Fun::ports_onto(ws, Succ(Succ(Succ(t.next))), [Succ(Succ(t.next))]),
-        Succ(Fun::past(ws, Succ(Succ(Succ(t.next))))))
+    Tm::lower(zero, w, Fun::fuel_ctx(ws), Fun::ports_onto(ws, t.next + 3, [t.next + 2]),
+        Fun::past(ws, t.next + 3) + 1)
 }
 
 fn Fun::fuel_finish(ws: List<Ty>, res: Ty, zero: Tm, w: World, t: Lowered) → Option<Function> {
@@ -898,7 +898,7 @@ fn Fun::lower_fuel(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: World) �
     let ws = Cons(w0, wrest);
     Ty::check_one_words(w.tys, ws).and_then(λ _ => res.check_one_word(w.tys).and_then(λ _ =>
         Tm::lower_tail(succ, w, 1, res, Fun::fuel_flag(ws), Nil, Fun::fuel_ns(ws), Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws),
-            Succ(Fun::fuel_flag(ws))).and_then(λ t => Fun::fuel_finish(ws, res, zero, w, t))))
+            Fun::fuel_flag(ws) + 1).and_then(λ t => Fun::fuel_finish(ws, res, zero, w, t))))
 }
 
 // What a fuel loop's code promises: on a word `b` and the words, the
@@ -927,9 +927,9 @@ theorem Fun::count_words(r: Nat, small: r + 1 < Nat::pow(2, 64)):
 // `Succ` arm, its recursion on the predecessor answered by the function at
 // `r`.
 fn Fun::FuelStep(ws: List<Ty>, res: Ty, succ: Tm, w: World, h: Nat → Ty::Arrows(w.tys, ws, res), r: Nat) → Type {
-    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h(Succ(r)), xs) =
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h(r + 1), xs) =
         succ.tail_sem(w, 1, res, λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h(r), ys), Cons(Count, Fun::fuel_ctx(ws)),
-            Pair(r, Ty::extend(w.tys, ws, [Count], Pair(Succ(r), trivial), xs))))
+            Pair(r, Ty::extend(w.tys, ws, [Count], Pair(r + 1, trivial), xs))))
 }
 
 fn Fun::FuelZero(ws: List<Ty>, res: Ty, zero: Tm, w: World, h: Nat → Ty::Arrows(w.tys, ws, res)) → Type {
@@ -1128,11 +1128,11 @@ theorem Fun::fuel_sound(w0: Ty, wrest: List<Ty>, zero, succ: Tm, res: Ty, w: Wor
 // more in tail mode at ids of its own.
 
 fn Fun::meas_bnd(all: List<Ty>) → Nat { Fun::past(all, 0) }
-fn Fun::meas_ps(all: List<Ty>) → List<Nat> { Fun::param_ids(all, Succ(Fun::meas_bnd(all))) }
-fn Fun::meas_kept(all, ks: List<Ty>) → List<Nat> { Fun::param_ids(ks, Succ(Fun::meas_bnd(all))) }
-fn Fun::meas_c(all: List<Ty>) → Nat { Fun::past(all, Succ(Fun::meas_bnd(all))) }
-fn Fun::meas_ns(all, ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Succ(Fun::meas_c(all))) }
-fn Fun::meas_flag(all, ws: List<Ty>) → Nat { Fun::past(ws, Succ(Fun::meas_c(all))) }
+fn Fun::meas_ps(all: List<Ty>) → List<Nat> { Fun::param_ids(all, Fun::meas_bnd(all) + 1) }
+fn Fun::meas_kept(all, ks: List<Ty>) → List<Nat> { Fun::param_ids(ks, Fun::meas_bnd(all) + 1) }
+fn Fun::meas_c(all: List<Ty>) → Nat { Fun::past(all, Fun::meas_bnd(all) + 1) }
+fn Fun::meas_ns(all, ws: List<Ty>) → List<Nat> { Fun::param_ids(ws, Fun::meas_c(all) + 1) }
+fn Fun::meas_flag(all, ws: List<Ty>) → Nat { Fun::past(ws, Fun::meas_c(all) + 1) }
 
 // The loop's next state: the kept parameters themselves, then `ns`.
 fn Fun::meas_next(all, ks, ws: List<Ty>) → List<Nat> { Fun::meas_kept(all, ks) ++ Fun::meas_ns(all, ws) }
@@ -1141,35 +1141,35 @@ fn Fun::meas_next(all, ks, ws: List<Ty>) → List<Nat> { Fun::meas_kept(all, ks)
 fn Fun::meas_passes() → Nat { 18446744073709551615 }
 
 fn Fun::meas_pass(all, ws: List<Ty>, t: Lowered) → StructuredRegion {
-    Compose(t.region, nodes_region([Const(64, t.next, 1), Equal(64, Succ(t.next), Fun::meas_flag(all, ws), t.next)]))
+    Compose(t.region, nodes_region([Const(64, t.next, 1), Equal(64, t.next + 1, Fun::meas_flag(all, ws), t.next)]))
 }
 
 // The exhausted branch's own ids, past the loop's exhausted bit `x`.
-fn Fun::meas_ns2(ws: List<Ty>, x: Nat) → List<Nat> { Fun::param_ids(ws, Succ(x)) }
-fn Fun::meas_flag2(ws: List<Ty>, x: Nat) → Nat { Fun::past(ws, Succ(x)) }
+fn Fun::meas_ns2(ws: List<Ty>, x: Nat) → List<Nat> { Fun::param_ids(ws, x + 1) }
+fn Fun::meas_flag2(ws: List<Ty>, x: Nat) → Nat { Fun::past(ws, x + 1) }
 
 // The exhausted branch reads the loop's outputs, from `o`, the kept ones
 // first; its ids start past the exhausted bit `x`.
 fn Fun::meas_tail2(all, ks, ws: List<Ty>, res: Ty, body: Tm, w: World, o, x: Nat) → Option<Lowered> {
     Tm::lower_tail(body, w, 0, res, Fun::meas_flag2(ws, x), Fun::param_ids(ks, o), Fun::meas_ns2(ws, x), Ty::bind_onto(all, Nil),
-        Fun::ports_onto(all, o, Nil), Succ(Fun::meas_flag2(ws, x)))
+        Fun::ports_onto(all, o, Nil), Fun::meas_flag2(ws, x) + 1)
 }
 
 fn Fun::meas_code(all, ks, ws: List<Ty>, lent: Nat, t, t2: Lowered) → Function {
     Function(Fun::param_ids(all, 0),
         Compose(nodes_region([Const(64, Fun::meas_bnd(all), Fun::meas_passes())]),
-            Compose(Loop(Fun::param_ids(all, 0), Fun::meas_bnd(all), Fun::meas_ps(all), Fun::meas_c(all), Fun::meas_pass(all, ws, t), Succ(t.next),
-                    Fun::meas_next(all, ks, ws), Fun::param_ids(all, Succ(Succ(t.next))), Fun::past(all, Succ(Succ(t.next)))),
-                Fun::post(Fun::past(all, Succ(Succ(t.next))), t2.next, Fun::past(ks, Succ(Succ(t.next))),
-                    Compose(t2.region, nodes_region([Move(64, t2.next, Succ(Fun::past(all, Succ(Succ(t.next)))))]))))),
+            Compose(Loop(Fun::param_ids(all, 0), Fun::meas_bnd(all), Fun::meas_ps(all), Fun::meas_c(all), Fun::meas_pass(all, ws, t), t.next + 1,
+                    Fun::meas_next(all, ks, ws), Fun::param_ids(all, t.next + 2), Fun::past(all, t.next + 2)),
+                Fun::post(Fun::past(all, t.next + 2), t2.next, Fun::past(ks, t.next + 2),
+                    Compose(t2.region, nodes_region([Move(64, t2.next, Fun::past(all, t.next + 2) + 1)]))))),
         t2.next, lent)
 }
 
 fn Fun::lower_measured_at(all, ks, ws: List<Ty>, body: Tm, res: Ty, w: World, lent: Nat) → Option<Function> {
     Ty::check_one_words(w.tys, all).and_then(λ _ => res.check_one_word(w.tys).and_then(λ _ =>
         Tm::lower_tail(body, w, 0, res, Fun::meas_flag(all, ws), Fun::meas_kept(all, ks), Fun::meas_ns(all, ws), Ty::bind_onto(all, Nil),
-            Fun::ports_onto(all, Succ(Fun::meas_bnd(all)), Nil), Succ(Fun::meas_flag(all, ws))).and_then(λ t =>
-        Fun::meas_tail2(all, ks, ws, res, body, w, Succ(Succ(t.next)), Fun::past(all, Succ(Succ(t.next)))).and_then(λ t2 =>
+            Fun::ports_onto(all, Fun::meas_bnd(all) + 1, Nil), Fun::meas_flag(all, ws) + 1).and_then(λ t =>
+        Fun::meas_tail2(all, ks, ws, res, body, w, t.next + 2, Fun::past(all, t.next + 2)).and_then(λ t2 =>
             Some(Fun::meas_code(all, ks, ws, lent, t, t2))))))
 }
 

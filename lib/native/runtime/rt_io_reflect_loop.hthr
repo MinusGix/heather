@@ -125,7 +125,7 @@ fn rt_loop_components(fuel: Nat, k: Known, w: LoopWalk, base: Nat, parts: List<H
             let r <- rt_go(fuel, kw, w.st, p, True);
             let t <- kw.ty_of(p);
             let l = RSt::level(r.snd);
-            let fresh = Succ(l).leb(base).not().and(rt_has(taken, l).not());
+            let fresh = (l + 1).leb(base).not().and(rt_has(taken, l).not());
             let placed: Tac<Pair<RSt, Nat>> = match fresh {
                 True => pure(Pair(r.fst, l)),
                 False => match t {
@@ -244,8 +244,8 @@ fn rt_step_payload(h: Handle, which: String) → Tac<Handle> {
 // `e`: a component at its new value's level, any other at its own.
 fn rt_rebind(d: Nat, e: Nat, olds: List<Nat>, news: List<Nat>) → List<Nat> {
     List::range(d).map(λ i => {
-        let level = d - Succ(i);
-        match rt_assoc(olds.zip(news), level) { Some(l) => e - Succ(l), None => e - Succ(level) }
+        let level = d - (i + 1);
+        match rt_assoc(olds.zip(news), level) { Some(l) => e - (l + 1), None => e - (level + 1) }
     })
 }
 

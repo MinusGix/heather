@@ -200,7 +200,7 @@ fn LinePick::none() → LinePick { LinePick(0, []) }
 
 // Whether `a` comes before `b`: by bytes, then by place.
 fn LinePick::before(self a: LinePick, b: LinePick) → Bool {
-    a.line.bytes_before(b.line).or(b.line.bytes_before(a.line).not().and(Succ(a.at).leb(b.at)))
+    a.line.bytes_before(b.line).or(b.line.bytes_before(a.line).not().and((a.at + 1).leb(b.at)))
 }
 
 // The line of `lines` that comes just before this one in the order (the

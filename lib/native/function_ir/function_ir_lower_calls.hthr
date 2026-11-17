@@ -410,7 +410,7 @@ fn List::loads(self registers: List<Gpr>, count: Nat, prog: Prog, k: Nat) → Pr
         Zero => prog,
         Succ(c) => match registers {
             Nil => prog,
-            Cons(register, rest) => rest.loads(c, At(prog, 0, Reload(StackLoad(register, slot_offset(k)))), Succ(k)),
+            Cons(register, rest) => rest.loads(c, At(prog, 0, Reload(StackLoad(register, slot_offset(k)))), k + 1),
         },
     }
 }
@@ -605,9 +605,9 @@ fn StructuredRegion::Fits(self region: StructuredRegion, rooms: Nat → Nat, bou
         Sequence(_, continuation) => continuation.Fits(rooms, bound, avail),
         Compose(prefix, continuation) => prefix.Fits(rooms, bound, avail) ∧ continuation.Fits(rooms, bound, avail),
         Conditional(_, _, _, _, when_true, when_false) => when_true.Fits(rooms, bound, avail) ∧ when_false.Fits(rooms, bound, avail),
-        Call(callee, _, _) => Succ(callee) <= bound → rooms(callee) + 24 <= avail,
+        Call(callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
         Loop(_, _, _, _, body, _, _, _, _) => body.Fits(rooms, bound, avail),
-        Lend(_, callee, _, _) => Succ(callee) <= bound → rooms(callee) + 24 <= avail,
+        Lend(_, callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
     }
 }
 
@@ -664,7 +664,7 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
 // placement alone is asked under (`Function::lowers`, compile-x86's
 // probes), where the room is not what is asked; code is emitted under a
 // program's own table (`program_room`, `program_room_planned`).
-fn index_rooms() → Nat → Nat { λ (g: Nat) => 136 * Succ(g) }
+fn index_rooms() → Nat → Nat { λ (g: Nat) => 136 * (g + 1) }
 
 // The room a region's calls ask below a frame: the largest of its
 // callees' rooms, each with the call's 24 bytes, and none without a call.
@@ -711,8 +711,8 @@ theorem Stack::callee_keeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
 
 // Every function below `bound` meets its contract at its label.
 fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), rooms: Nat → Nat, bound: Nat) → Type {
-    (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalleePre(callees, rooms, f, arguments, result), stack.CalleePost(result))
+    (f: Nat) → f + 1 <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) →
+        site.Returns(stack, asm_labels(site.program)(f + 1), stack.CalleePre(callees, rooms, f, arguments, result), stack.CalleePost(result))
 }
 
 // What a program's functions are lent (docs/native/native-one-compiler-design.md
@@ -939,8 +939,8 @@ fn Stack::AnsweredOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, se
 // every file.
 fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat, lending: Lending,
     top: Nat) → Type {
-    (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
+    (f: Nat) → f + 1 <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
+        site.Returns(stack, asm_labels(site.program)(f + 1), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
             stack.AnsweredOver(lending, result, after))
 }
 
@@ -954,9 +954,9 @@ fn Site::CallsOver<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)
 fn Site::CallsLent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat, counts: List<Nat>,
     needs: Nat → Nat → Bool, top: Nat) → Type {
     (lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
-        (f: Nat) → Succ(f) <= bound → ((b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True) →
+        (f: Nat) → f + 1 <= bound → ((b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True) →
         (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) →
-        site.Returns(stack, asm_labels(site.program)(Succ(f)), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
+        site.Returns(stack, asm_labels(site.program)(f + 1), stack.CalledOver(effects, rooms, lending, top, f, arguments, result, before, after),
             stack.AnsweredOver(lending, result, after))
 }
 
@@ -1010,7 +1010,7 @@ fn call_staged(saved: List<Gpr>, prog: Prog, sources: List<Gpr>) → Prog {
     sources.spills(At(saved.spills(prog, 0), 0, Block(stack_lower(sources.len()))), 0)
 }
 fn call_prog(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, moves: List<Instruction>, callee: Nat) → Prog {
-    saved.reloads(At(At(At(call_staged(saved, prog, sources), 0, Block(moves)), 0, CallTo(Succ(callee))), 0,
+    saved.reloads(At(At(At(call_staged(saved, prog, sources), 0, Block(moves)), 0, CallTo(callee + 1)), 0,
         Block(stack_raise(sources.len()))), 0)
 }
 
@@ -1173,7 +1173,7 @@ fn File::emit_call_staged(self file: File, saved: List<Gpr>, staged: File, prog:
 // eight words, or the arguments do not all reach their registers and slots.
 fn File::emit_call_saving(self file: File, saved: List<Gpr>, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → Option<Emitted> {
-    match Succ(callee).leb(bound) && (args_lend(homes, lent_count(counts, callee), 0, arguments) && arguments.drop(6).len().leb(2)) {
+    match (callee + 1).leb(bound) && (args_lend(homes, lent_count(counts, callee), 0, arguments) && arguments.drop(6).len().leb(2)) {
         False => None,
         True => file.emit_call_staged(saved, file.write(Rsp, None), prog, callee, arguments, result, placement, names),
     }
@@ -1635,23 +1635,23 @@ fn shorts(short: List<Nat>, name: Nat) → Bool { match short { Nil => False, Co
 
 // The loop's code from the head (the four labels after `names`), each jump
 // in the form `short` says for its label.
-fn loop_head(prog: Prog, entry: LoopEntry, names: Nat) → Prog { At(At(prog, 0, Block(entry.code)), Succ(names), Block([])) }
+fn loop_head(prog: Prog, entry: LoopEntry, names: Nat) → Prog { At(At(prog, 0, Block(entry.code)), names + 1, Block([])) }
 fn loop_tested(prog: Prog, entry: LoopEntry, names: Nat, short: List<Nat>) → Prog {
-    loop_head(prog, entry, names).branch_label_by(entry.registers.counter, Succ(Succ(Succ(names))), shorts(short, Succ(Succ(Succ(names)))))
+    loop_head(prog, entry, names).branch_label_by(entry.registers.counter, names + 3, shorts(short, names + 3))
 }
 fn loop_jumped(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat, short: List<Nat>) → Prog {
-    At(At(At(pass.branched_by(exit.test, Succ(Succ(names)), shorts(short, Succ(Succ(names)))), 0, Block(exit.leave)), 0, Block([registers.clear()])), 0,
-        jmp_item(shorts(short, Succ(Succ(Succ(Succ(names))))), Succ(Succ(Succ(Succ(names))))))
+    At(At(At(pass.branched_by(exit.test, names + 2, shorts(short, names + 2)), 0, Block(exit.leave)), 0, Block([registers.clear()])), 0,
+        jmp_item(shorts(short, names + 4), names + 4))
 }
 fn loop_again(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat, short: List<Nat>) → Prog {
-    At(At(At(At(loop_jumped(pass, registers, exit, names, short), Succ(Succ(names)), Block([])), 0, Block(exit.back)), 0,
-        Block([registers.step()])), 0, jmp_item(shorts(short, Succ(names)), Succ(names)))
+    At(At(At(At(loop_jumped(pass, registers, exit, names, short), names + 2, Block([])), 0, Block(exit.back)), 0,
+        Block([registers.step()])), 0, jmp_item(shorts(short, names + 1), names + 1))
 }
 fn loop_set(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat, short: List<Nat>) → Prog {
-    At(At(loop_again(pass, registers, exit, names, short), Succ(Succ(Succ(names))), Block([])), 0, Block([registers.mark()]))
+    At(At(loop_again(pass, registers, exit, names, short), names + 3, Block([])), 0, Block([registers.mark()]))
 }
 fn loop_done(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat, short: List<Nat>) → Prog {
-    At(loop_set(pass, registers, exit, names, short), Succ(Succ(Succ(Succ(names)))), Block([]))
+    At(loop_set(pass, registers, exit, names, short), names + 4, Block([]))
 }
 
 fn Emitted::loop_close(self pass: Emitted, saves: Nat, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat,
@@ -1681,13 +1681,13 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, saves: Nat, slots
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => None,
-            Some(tested) => match when_true.emit_calls(saves, slots, short, prog.branched_by(tested.test, Succ(names), shorts(short, Succ(names))), file.know(Truth(condition)), placement,
-                Succ(Succ(names)), bound, counts, homes) {
+            Some(tested) => match when_true.emit_calls(saves, slots, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)), file.know(Truth(condition)), placement,
+                names + 2, bound, counts, homes) {
                 None => None,
-                Some(yes) => match when_false.emit_calls(saves, slots, short, yes.prog.else_label_by(Succ(names), Succ(Succ(names)), shorts(short, Succ(Succ(names)))), file.know(Falsity(condition)), yes.placement, yes.names, bound,
+                Some(yes) => match when_false.emit_calls(saves, slots, short, yes.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), yes.placement, yes.names, bound,
                     counts, homes) {
                     None => None,
-                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
+                    Some(no) => Some(Emitted(no.prog.join_label(names + 2), yes.file.meet(no.file, file.known), no.placement, no.names)),
                 },
             },
         },
@@ -1698,7 +1698,7 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, saves: Nat, slots
             match file.loop_entry(saves, inputs, limit, parameters, count, placement) {
                 None => None,
                 Some(entry) => match body.emit_calls(saves, slots, short, loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
-                    Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    names + 4, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                     None => None,
                     Some(pass) => pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names, short),
                 },
@@ -5996,7 +5996,7 @@ theorem Function::loads_few(self function: Function, fits: word_ports(function.p
 // A function's code after the label at `prog`: the words past the sixth
 // loaded from above the return address, the frame, the saves, the body,
 // the result into RAX, the saves loaded back, the frame freed, RET.
-fn function_loaded(prog: Prog, k, loads: Nat) → Prog { stack_registers().loads(loads, At(prog, Succ(k), Block([])), 1) }
+fn function_loaded(prog: Prog, k, loads: Nat) → Prog { stack_registers().loads(loads, At(prog, k + 1, Block([])), 1) }
 fn function_opened(prog: Prog, k, loads, slots, saves: Nat) → Prog {
     function_saves(saves).spills(At(function_loaded(prog, k, loads), 0, Block(frame_opening(frame_size(slots, saves)))), slots)
 }
@@ -6551,7 +6551,7 @@ fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<P
 // with the functions below `k` meeting their contracts, it meets its own.
 fn MayReturnOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     needs: Nat → Nat → Bool, function: Function, prog: Prog, out: Option<Emitted>) → Type {
-    out.All(λ (emitted: Emitted) => At(prog, Succ(k), Block([])).Within(emitted.prog) ∧
+    out.All(λ (emitted: Emitted) => At(prog, k + 1, Block([])).Within(emitted.prog) ∧
         (emitted.prog.Within(site.program) → site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top) →
             (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) → site.Returns(stack, prog_len(prog),
                 stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
@@ -6865,7 +6865,7 @@ fn places_slots(places: List<Place>) → Nat {
 fn places_slotted(places: List<Place>) → List<Place> { Cons(CallSlots(places_slots(places)), places) }
 
 fn places_saving(places: List<Place>) → List<Place> {
-    match places_saves(places) { Zero => places, Succ(more) => Cons(Saving(Succ(more)), places) }
+    match places_saves(places) { Zero => places, Succ(more) => Cons(Saving(more + 1), places) }
 }
 
 // A function's placement: its arguments where they arrive, its result

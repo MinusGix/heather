@@ -469,7 +469,7 @@ fn loop_eval(step: Valuation() → Valuation(), parameters: List<Nat>, count, ex
     match remaining {
         Zero => λ state => LoopEnd(state, True),
         Succ(rest) => λ state => {
-            let after = step(pass_valuation(parameters, count, Succ(rest), state));
+            let after = step(pass_valuation(parameters, count, rest + 1, state));
             match after(1, exit).head_bit() {
                 False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
                 True => LoopEnd(words_of(after, next), False),
@@ -1619,11 +1619,11 @@ theorem bits_has_below(bits: List<Bool>): (id: Nat) → bits_has(bits, id).IsTru
 inductive Marks { Bitmap(bits: List<Bool>), Under(top: Nat) }
 
 fn Marks::has(self marks: Marks, id: Nat) → Bool {
-    match marks { Bitmap(bits) => bits_has(bits, id), Under(top) => Succ(id).leb(top) }
+    match marks { Bitmap(bits) => bits_has(bits, id), Under(top) => (id + 1).leb(top) }
 }
 
 fn Marks::add(self marks: Marks, id: Nat) → Marks {
-    match marks { Bitmap(bits) => Bitmap(bits_add(bits, id)), Under(top) => Under(top.max(Succ(id))) }
+    match marks { Bitmap(bits) => Bitmap(bits_add(bits, id)), Under(top) => Under(top.max(id + 1)) }
 }
 
 // The same kind of marks with nothing marked.

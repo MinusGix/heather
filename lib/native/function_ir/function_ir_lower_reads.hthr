@@ -122,7 +122,7 @@ fn lent_homes(parameters: List<Nat>, count, buffer: Nat) → List<Lent> {
             Nil => [],
             Cons(base, after) => match after {
                 Nil => [],
-                Cons(length, rest) => Cons(Lent(buffer, base, length), lent_homes(rest, more, Succ(buffer))),
+                Cons(length, rest) => Cons(Lent(buffer, base, length), lent_homes(rest, more, buffer + 1)),
             },
         },
     }
@@ -138,7 +138,7 @@ fn ArgsLent(count: Nat) → Nat → List<BitVec(64)> → List<BitVec(64)> → Bu
             Cons(base, after) => match after {
                 Nil => False,
                 Cons(length, rest) => (base = address_of(addresses, buffer)) ∧
-                    ((length = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) ∧ ArgsLent(more, Succ(buffer), rest, addresses, buffers)),
+                    ((length = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) ∧ ArgsLent(more, buffer + 1, rest, addresses, buffers)),
             },
         },
     }
@@ -1197,7 +1197,7 @@ fn carry_slot(inputs, parameters, next: List<Nat>, id, at: Nat) → Option<State
                 Nil => None,
                 Cons(after, next_rest) => match input.same(id) && after.same(parameter) {
                     True => Some(StateSlot(at, parameter)),
-                    False => carry_slot(inputs_rest, parameters_rest, next_rest, id, Succ(at)),
+                    False => carry_slot(inputs_rest, parameters_rest, next_rest, id, at + 1),
                 },
             },
         },
@@ -1354,7 +1354,7 @@ fn args_lend(homes: List<Lent>, count: Nat) → Nat → List<Nat> → Bool {
             Nil => False,
             Cons(base, after) => match after {
                 Nil => False,
-                Cons(length, rest) => homes_have(homes, buffer, base, length) && args_lend(homes, more, Succ(buffer), rest),
+                Cons(length, rest) => homes_have(homes, buffer, base, length) && args_lend(homes, more, buffer + 1, rest),
             },
         },
     }
