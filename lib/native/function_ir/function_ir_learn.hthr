@@ -143,6 +143,12 @@ record Word { buffer: Nat, at: Nat, loaded: Nat, swapped: Nat, word: Nat }
 // `after`, which is where every test the bytes passed is behind.
 record Asked { buffer: Nat, at: Nat, after: Nat }
 
+// A node a rule would read the word of and no word is computed by, as
+// `a + b` where `(x + a) + b` is to be `x + (a + b)`: written to `unput()`
+// (function_ir_match), and wanted once the words `waits` are written,
+// which are the words the node the rule fits reads.
+record Helper { node: Node, waits: List<Nat> }
+
 // What is known of the buffers as they are where the walk stands, which is
 // what the replayer's facts keep of them (`Facts::forget`): the joins by
 // the word each is, the four-byte loads by the word each stage writes, and
@@ -159,7 +165,8 @@ fn Joins::none(ends: NatMap<Nat>) → Joins { Joins(NatMap::empty(), NatMap::emp
 // that it is long enough is the one worth making. And the spans below a
 // length that would decide the comparisons of words no range is known of.
 // `words` are the loads its joins of bytes wait on.
-record Wants { least: NatMap<Nat>, spans: List<Span>, words: List<Asked> }
+// `nodes` are the nodes a rule's other side reads that no word computes yet.
+record Wants { least: NatMap<Nat>, spans: List<Span>, words: List<Asked>, nodes: List<Helper> }
 
 record Seen {
     // The comparison that writes a bit, and the constant that writes a word.
@@ -243,7 +250,7 @@ fn Ordered::noting(self order: Ordered, made: NatMap<Node>, node: Node) → Orde
 }
 
 fn Seen::start(indexes: NatMap<Bool>, ends: NatMap<Nat>, tables: Tables) → Seen {
-    Seen(NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), [], indexes, NatMap::empty(), Wants(NatMap::empty(), [], []),
+    Seen(NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty(), [], indexes, NatMap::empty(), Wants(NatMap::empty(), [], [], []),
         Ordered::none(), Joins::none(ends), tables)
 }
 
@@ -279,10 +286,10 @@ fn Seen::want(self seen: Seen, id, least: Nat) → Seen {
         Some(parameter) => match least.leb(want_most()) {
             False => seen,
             True => match nat_map_get(seen.wants.least, parameter) {
-                None => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words)),
+                None => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words, seen.wants.nodes)),
                 Some(already) => match least.leb(already) {
                     True => seen,
-                    False => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words)),
+                    False => seen.wanting(Wants(nat_map_set(seen.wants.least, parameter, least), seen.wants.spans, seen.wants.words, seen.wants.nodes)),
                 },
             },
         },
@@ -563,7 +570,7 @@ fn Seen::span(self seen: Seen, base, least, length: Nat) → Seen {
         None => seen,
         Some(cone) => match least.leb(want_most()) {
             False => seen,
-            True => seen.wanting(Wants(seen.wants.least, spans_add(seen.wants.spans, Span(base, cone, least, length, 1)), seen.wants.words)),
+            True => seen.wanting(Wants(seen.wants.least, spans_add(seen.wants.spans, Span(base, cone, least, length, 1)), seen.wants.words, seen.wants.nodes)),
         },
     }
 }
@@ -671,6 +678,12 @@ fn Seen::settles(self seen: Seen, node: Node) → Bool {
     }
 }
 
+// The node that wrote a word before a rule wrote another for it, kept
+// beside the new one (`Walked::earlier`, function_ir_match).
+fn Seen::respelled(self seen: Seen, old: Node) → Seen {
+    match old.pure() { True => seen.making(unput() + node_output(old).id, old), False => seen }
+}
+
 // The steps that write the node an instance gives for the node it is of.
 fn Seen::rewritten(self seen: Seen, found: Matched) → Option<Passed> {
     match found.needs {
@@ -733,15 +746,42 @@ fn spellings_closed(fuel: Nat, table: List<Matchable>, had: Walked, todo: List<S
 // operand to keep, and the rest are alike.
 fn Node::weight(self node: Node) → Nat { match node { Move(_, _, _) => 0, Const(_, _, _) => 1, _ => 2 } }
 
-// The lightest of the spellings lighter than `most` that the lowering has
+fn depth_larger(a, b: Nat) → Nat { match a.leb(b) { True => b, False => a } }
+
+// How far back the deepest of the words `ids` is computed from, `fuel`
+// nodes at most: a parameter and a constant from nowhere.
+fn made_deepest(fuel: Nat, made: NatMap<Node>, ids: List<Nat>) → Nat {
+    match fuel {
+        Zero => 1,
+        Succ(less) => match ids {
+            Nil => 0,
+            Cons(id, rest) => depth_larger(match nat_map_get(made, id) {
+                None => 0,
+                Some(node) => match node { Const(_, _, _) => 0, _ => Succ(made_deepest(less, made, node.reads())) },
+            }, made_deepest(less, made, rest)),
+        },
+    }
+}
+
+fn made_depths(made: NatMap<Node>, ids: List<Nat>) → Nat {
+    match ids { Nil => 0, Cons(id, rest) => made_deepest(6, made, [id]) + made_depths(made, rest) }
+}
+
+// What a spelling costs: its weight first, and between two of a weight how
+// far back its operands are computed from. `x + (a + b)` with `a + b` a
+// constant is so cheaper than `(x + a) + b`, whose `x + a` is then read by
+// nothing; a node with its operands turned costs the same.
+fn Node::cost(self node: Node, made: NatMap<Node>) → Nat { node.weight() * 64 + made_depths(made, node.reads()) }
+
+// The cheapest of the spellings cheaper than `most` that the lowering has
 // code for, the first of them where several are.
-fn spellings_lightest(found: List<Spelling>, most: Nat, best: Option<Spelling>) → Option<Spelling> {
+fn spellings_lightest(found: List<Spelling>, made: NatMap<Node>, most: Nat, best: Option<Spelling>) → Option<Spelling> {
     match found {
         Nil => best,
-        Cons(first, rest) => match Succ(first.node.weight()).leb(most) && !first.node.moves_bit() {
-            True => spellings_lightest(rest, first.node.weight(), Some(first)),
-            False => spellings_lightest(rest, most, best),
-        },
+        Cons(first, rest) => shared(first.node.cost(made), λ cost => match Succ(cost).leb(most) && !first.node.moves_bit() {
+            True => spellings_lightest(rest, made, cost, Some(first)),
+            False => spellings_lightest(rest, made, most, best),
+        }),
     }
 }
 
@@ -783,11 +823,60 @@ fn Seen::searched(self seen: Seen, node: Node) → Option<Passed> {
     match seen.settles(node) {
         True => None,
         False => shared(seen.instance(node), λ direct =>
-            match spellings_lightest(seen.spellings(node), match direct { Some(found) => found.node.weight(), None => node.weight() }, None) {
+            match spellings_lightest(seen.spellings(node), seen.made, match direct { Some(found) => found.node.cost(seen.made), None => node.cost(seen.made) }, None) {
                 Some(best) => shared(seen.pass(best.node), λ written =>
-                    Some(Passed(Cons(Drop, best.why ++ Cons(Emit(best.node), written.after)), written.seen.computing(best.node)))),
-                None => direct.and_then(λ found => match found.node.moves_bit() { True => None, False => seen.rewritten(found) }),
+                    Some(Passed(Cons(Drop, best.why ++ Cons(Emit(best.node), written.after)), written.seen.computing(best.node).respelled(node)))),
+                None => direct.and_then(λ found => match found.node.moves_bit() {
+                    True => None,
+                    False => seen.rewritten(found).and_then(λ passed => Some(Passed(passed.after, passed.seen.respelled(node)))),
+                }),
             }),
+    }
+}
+
+// Whether a node not yet put would be worth its place: the rules give its
+// word a cheaper spelling, as a sum of two constants is a constant.
+fn Seen::folds(self seen: Seen, node: Node) → Bool {
+    match spellings_lightest(spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), [Spelling(node, [])], []), seen.made, node.cost(seen.made), None) {
+        Some(_) => True,
+        None => False,
+    }
+}
+
+fn helpers_have(asked: List<Helper>, node: Node) → Bool {
+    match asked { Nil => False, Cons(first, rest) => first.node.alike(node) || helpers_have(rest, node) }
+}
+
+fn ids_made(made: NatMap<Node>, ids: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match nat_map_get(made, id) { Some(_) => Cons(id, ids_made(made, rest)), None => ids_made(made, rest) },
+    }
+}
+
+// The nodes the rules that fit `node` but for one node would read, where
+// no word is computed by it and it folds.
+fn helpers_asked(table: List<Matchable>, node: Node, seen: Seen, asked: List<Helper>) → List<Helper> {
+    match table {
+        Nil => asked,
+        Cons(m, rest) => helpers_asked(rest, node, seen, match m.helped(node, seen.walked()) {
+            None => asked,
+            Some(help) => match help.node.pure() && (!helpers_have(asked, help.node) && seen.folds(help.node)) {
+                False => asked,
+                True => match made_alike(seen.made, help.node) {
+                    Some(_) => asked,
+                    None => Cons(Helper(help.node, ids_made(seen.made, node.reads())), asked),
+                },
+            },
+        }),
+    }
+}
+
+// The walk at a node it keeps, where it searches: what it would have put.
+fn Seen::helping(self seen: Seen, node: Node) → Seen {
+    match seen.tables.spellings {
+        Zero => seen,
+        Succ(_) => seen.wanting(Wants(seen.wants.least, seen.wants.spans, seen.wants.words, helpers_asked(seen.tables.rewriting, node, seen, seen.wants.nodes))),
     }
 }
 
@@ -876,7 +965,7 @@ fn words_find(words: List<Word>, buffer, at: Nat) → Option<Word> {
 fn Seen::asking(self seen: Seen, join: Join) → Seen {
     match seen.joins.last {
         None => seen,
-        Some(after) => seen.wanting(Wants(seen.wants.least, seen.wants.spans, Cons(Asked(join.buffer, join.at, after), seen.wants.words))),
+        Some(after) => seen.wanting(Wants(seen.wants.least, seen.wants.spans, Cons(Asked(join.buffer, join.at, after), seen.wants.words), seen.wants.nodes)),
     }
 }
 
@@ -970,7 +1059,7 @@ fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
         Nil => Swept([], seen),
         Cons(node, rest) => match seen.replaced(node) {
             Some(here) => shared(learn_nodes(here.seen, rest), λ later => Swept(here.after ++ later.steps, later.seen)),
-            None => shared(seen.pass(node), λ here => shared(here.seen.noted(node).joining(node), λ joined =>
+            None => shared(seen.helping(node).pass(node), λ here => shared(here.seen.noted(node).joining(node), λ joined =>
                 shared(learn_nodes(joined.seen, rest), λ later =>
                     Swept(Cons(match joined.drop { True => Drop, False => Keep }, here.after ++ (joined.after ++ later.steps)), later.seen)))),
         },

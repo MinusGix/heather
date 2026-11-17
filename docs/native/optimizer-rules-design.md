@@ -742,15 +742,54 @@ the matcher, for the rules whose conclusion is a node.
     zero by default). `compile-x86` asks with eight; the library's plan
     tests do not, so what their proofs cost has not moved
     (`turned_left`, `turned_searched` in `function_ir_identities_tests.hthr`).
-  - What it is not yet, against §9.4. No word is made, so a rule whose
-    other side needs a new word (associativity, folding two constants) has
-    nowhere to put it: that wants helper nodes put by an inlining stage
-    before the replay, as the word loads are. Two words that are equal are
+  - What it is not yet, against §9.4. Two words that are equal are
     one class only after a copy walk has read through the move between
     them, not during a search; the library's e-graph and its congruence
     are for that, and are not used here. Rules that read a range are taken
-    as the plain walk takes them, first fit. The weight is three classes
-    and not what the lowering emits.
+    as the plain walk takes them, first fit. The cost is a weight of three
+    classes and a depth, and not what the lowering emits.
+- **New words: a rule whose other side reads a node the code does not
+  have** (Minus, 2026-11-17: "Continue onto the next piece").
+  `(x + a) + b = x + (a + b)` was already read by the generator as §3's
+  table says: `a + b` is a premise of the clause with a word of its own,
+  which nothing leads to from the node the rule is read at. Three pieces
+  make it apply.
+  - **The matcher** (`Matchable::helped`, `found_helped` in
+    `function_ir_match.hthr`): where the premises leave exactly one number,
+    the clause is made with that word unput, which gives the node, and the
+    instance is found where some word the walk has is computed by a node
+    alike it (`made_alike`). A word a rule wrote another node for keeps
+    its earlier node beside the new one (`Seen::respelled`,
+    `Walked::earlier`): the sum of two constants is still that sum for
+    `add_assoc` once `add_consts` has written it as a constant, and the
+    replayer's facts have both.
+  - **The ask** (`Seen::helping`): where no word is, and the rules give
+    the node a cheaper spelling (`Seen::folds`), the walk asks for it,
+    with the words the fitted node reads as what to wait for
+    (`Wants.nodes`). Associativity alone asks for nothing; with
+    `add_consts`, a sum of two constants is asked for.
+  - **The stage** (`Function::find_helped`, `StructuredRegion::helped` in
+    `function_ir_optimize.hthr`): an inlining stage puts each node asked
+    for after the leaf that writes the last word it waits on, with an id
+    from the bound up, as the word loads are put. Nothing new is proved:
+    it is `Sites::Put`. `compile-x86` then walks, copies and sweeps, and
+    keeps the result where the lowering takes it.
+  - **The cost** has a second part for this: between two spellings of a
+    weight, the one whose operands are computed from less far back
+    (`Node::cost`). `x + c` reads `x` where `(x + a) + b` read `x + a`,
+    which the sweep then takes if nothing else reads it.
+
+  ```
+  t15 = 3 + 4 = 7   by add_consts
+  t12 = (t6 + t9) + t11 = t6 + (t9 + t11)   by add_assoc
+  ```
+
+  (`stepped` in `examples/x86-native/rule_set.hthr`, 53 bytes to 43;
+  `sums_asked`, `sums_found`, `open_not_asked` in
+  `function_ir_identities_tests.hthr`.) One node is put per instance and
+  one round is run, so a chain of three constants folds two of them; a
+  node that itself needs a node put waits for a schedule that repeats the
+  stage.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose

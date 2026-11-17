@@ -71,3 +71,15 @@ rule theorem and_comm({w: Nat}, a, b: BitVec(w)): a & b = b & a { BitVec::band_c
 rule theorem or_comm({w: Nat}, a, b: BitVec(w)): a | b = b | a { BitVec::bor_comm(w, a, b) }
 
 rule theorem xor_comm({w: Nat}, a, b: BitVec(w)): a.bxor(b) = b.bxor(a) { BitVec::bxor_comm(w, a, b) }
+
+// A sum of sums, the last two taken first, and a sum of two constants.
+// Neither pays alone: `x + (a + b)` reads a word `a + b` the code does
+// not have. Where the rules make that word cheaper, as `add_consts` does
+// of two constants, the search asks for the node, an inlining stage puts
+// it, and the next walk writes `x + c` for `(x + a) + b`
+// (`Function::find_helped`, function_ir_optimize).
+rule theorem add_assoc({w: Nat}, x, a, b: BitVec(w)): (x + a) + b = x + (a + b) { BitVec::add_assoc(w, x, a, b) }
+
+rule theorem add_consts({w: Nat}, a, b: Nat): (BitVec::ofNat(a): BitVec(w)) + BitVec::ofNat(b) = BitVec::ofNat((a + b).mod(Nat::pow(2, w))) {
+    trans(BitVec::ofNat_add(w, a, b), sym(BitVec::ofNat_mod(w, a + b)))
+}

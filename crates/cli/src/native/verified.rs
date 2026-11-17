@@ -803,6 +803,28 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                 }
             }
         }
+        // A rule whose other side reads a node the code does not have
+        // (`(x + a) + b = x + (a + b)`): the nodes a searching walk asks
+        // for are put, each after the words the rule's node reads, the
+        // walk writes the rule's node where the node put folds (a sum of
+        // two constants is a constant), and the sweep takes back what
+        // nothing reads then. Kept where the lowering takes it.
+        {
+            let past = if made.iter().any(|staged| staged.stage == Stage::Guard) { "_past" } else { "" };
+            let last = made.last().map(|last| last.function.clone());
+            let put = run(&mut fork, &mut modules, "h", &named(&made), last, &[(Stage::Inline, format!("find_helped{past}({earlier})"))])?;
+            if !put.is_empty() {
+                let mut helped = made.clone();
+                helped.extend(put);
+                let last = helped.last().map(|last| last.function.clone());
+                helped.extend(run(&mut fork, &mut modules, "i", &named(&helped), last,
+                    &[replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()"))])?);
+                if let Some(places) = lowers(&mut fork, &modules, &helped, "helped_")? {
+                    made = helped;
+                    placement = Some(places);
+                }
+            }
+        }
         placements.push(placement);
         // What the replays kept did, in the rules' words
         // (`function_ir_explain`): a read of each plan, a line for each

@@ -377,6 +377,85 @@ fn Function::find_worded_past(self function: Function, callees: List<Function>, 
 }
 
 // ---------------------------------------------------------------------------
+// The nodes a rule's other side reads, put for the walk to find
+
+fn ids_without(ids: List<Nat>, id: Nat) → List<Nat> {
+    match ids { Nil => [], Cons(first, rest) => match first.same(id) { True => ids_without(rest, id), False => Cons(first, ids_without(rest, id)) } }
+}
+
+fn Helper::passing(self helper: Helper, nodes: List<Node>) → Helper {
+    match nodes { Nil => helper, Cons(node, rest) => Helper(helper.node, ids_without(helper.waits, node_output(node).id)).passing(rest) }
+}
+
+// The helpers past `nodes`: each waits no more on a word they write.
+fn helpers_passing(asked: List<Helper>, nodes: List<Node>) → List<Helper> {
+    match asked { Nil => [], Cons(helper, rest) => Cons(helper.passing(nodes), helpers_passing(rest, nodes)) }
+}
+
+// Those that wait on nothing, each a leaf of its node writing an id from
+// `by` up; and those that still wait.
+fn helpers_leaves(asked: List<Helper>, by: Nat) → List<List<Node>> {
+    match asked {
+        Nil => [],
+        Cons(helper, rest) => match helper.waits {
+            Nil => Cons([helper.node.writing_to(by)], helpers_leaves(rest, Succ(by))),
+            Cons(_, _) => helpers_leaves(rest, by),
+        },
+    }
+}
+
+fn helpers_waiting(asked: List<Helper>) → List<Helper> {
+    match asked {
+        Nil => [],
+        Cons(helper, rest) => match helper.waits { Nil => helpers_waiting(rest), Cons(_, _) => Cons(helper, helpers_waiting(rest)) },
+    }
+}
+
+// Where to put them, in the region's shape: a helper goes after the leaf
+// that writes the last word it waits on, which is before the node whose
+// rule reads it, on the way to that node. One that waits on a word an arm
+// or a loop's body writes is put there and is not looked for after it.
+record Helping { sites: Sites, bound: Nat, asked: List<Helper> }
+
+fn StructuredRegion::helped(self region: StructuredRegion, asked: List<Helper>, by: Nat) → Helping {
+    match region {
+        Dataflow(body) => shared(helpers_passing(asked, body.nodes), λ passed => match helpers_leaves(passed, by) {
+            Nil => Helping(Stay, by, passed),
+            Cons(leaf, leaves) => Helping(Put(Succ(leaves.len()), Cons(leaf, leaves)), by + Succ(leaves.len()), helpers_waiting(passed)),
+        }),
+        Sequence(prefix, continuation) => shared(continuation.helped(helpers_passing(asked, prefix.nodes), by), λ c => Helping(Then(c.sites), c.bound, c.asked)),
+        Compose(prefix, continuation) => shared(prefix.helped(asked, by), λ a =>
+            shared(continuation.helped(a.asked, a.bound), λ c => Helping(Both(a.sites, c.sites), c.bound, c.asked))),
+        Conditional(_, _, _, _, when_true, when_false) => shared(when_true.helped(asked, by), λ a =>
+            shared(when_false.helped(asked, a.bound), λ c => Helping(Arms(a.sites, c.sites), c.bound, asked))),
+        Call(_, _, _) => Helping(Stay, by, asked),
+        Loop(_, _, _, _, body, _, _, _, _) => shared(body.helped(asked, by), λ b => Helping(Body(b.sites), b.bound, asked)),
+        Lend(_, _, _, _) => Helping(Stay, by, asked),
+    }
+}
+
+// The nodes a searching walk of the function asks for (`Seen::helping`).
+fn Function::helpers(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner), spellings: Nat := 8) → List<Helper> {
+    shared(function.body.learn(function.seen(Tables::of(entries, learners).searching(spellings))), λ learned => learned.seen.wants.nodes)
+}
+
+// The function with those nodes put: `a + b` where `(x + a) + b` is to be
+// `x + (a + b)` and the rules make `a + b` something cheaper. Nothing
+// reads a node put until the next walk writes the rule's node for the one
+// that fits, and the sweep takes back one no walk used.
+fn Function::find_helped(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 8) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.helped(function.helpers(entries := entries, learners := learners, spellings := spellings), function.top()).sites))
+}
+
+// The same of a function under a test at its entry, in the arm past the
+// test alone.
+fn Function::find_helped_past(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 8) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.helped(function.helpers(entries := entries, learners := learners, spellings := spellings), function.top()).sites.past_test()))
+}
+
+// ---------------------------------------------------------------------------
 // Four byte stores as one store of a word (step 5's store half)
 
 // A word stored a byte at a time, the bytes its shifts right narrowed, at
