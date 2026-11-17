@@ -33,8 +33,8 @@ theorem BitVec::toNat_ofNat_mod(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).t
             let h = Nat::half(x);
             let o = Nat::of_bit(BitVec::odd_bit(x));
             let s = h.mod(p);
-            let parts: (h.div(p) * Nat::pow(2, Succ(k)) + (o + s.twice()) = x) = calc {
-                h.div(p) * Nat::pow(2, Succ(k)) + (o + s.twice())
+            let parts: (h.div(p) * Nat::pow(2, k + 1) + (o + s.twice()) = x) = calc {
+                h.div(p) * Nat::pow(2, k + 1) + (o + s.twice())
                     = h.div(p) * p.twice() + (o + s.twice()) := prelude::cong(BitVec::pow_two_succ_twice(k)),
                     = (h.div(p) * p).twice() + (o + s.twice()) := prelude::cong(h.div(p).mul_twice(p)),
                     = o + ((h.div(p) * p).twice() + s.twice()) := (h.div(p) * p).twice().add_left_comm(o, s.twice()),
@@ -42,10 +42,10 @@ theorem BitVec::toNat_ofNat_mod(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).t
                     = o + h.twice() := prelude::cong(h.div_mul_add_mod(p)),
                     = x := BitVec::odd_bit_add_twice_half(x),
             };
-            let below: (o + s.twice() < Nat::pow(2, Succ(k))) =
+            let below: (o + s.twice() < Nat::pow(2, k + 1)) =
                 rewrite(BitVec::pow_two_succ_twice(k), BitVec::bit_twice_lt(BitVec::odd_bit(x), s, p, h.mod_lt(p)));
             trans(Nat::cong(λ (w: Nat) => o + w.twice(), ih(h)),
-                sym(x.div_mod_unique(Nat::pow(2, Succ(k)), h.div(p), o + s.twice(), parts, below).right))
+                sym(x.div_mod_unique(Nat::pow(2, k + 1), h.div(p), o + s.twice(), parts, below).right))
         },
     }
 }
@@ -153,8 +153,8 @@ theorem BitVec::iterate_decrement_ofNat(n, x, count: Nat):
         Zero => refl,
         Succ(c) => {
             let prev: (BitVec::ofNat(x + c, n := n).iterate_decrement(c) = BitVec::ofNat(x)) = BitVec::iterate_decrement_ofNat(n, x, c);
-            let back: (BitVec::ofNat(Succ(x + c), n := n).decrement() = BitVec::ofNat(x + c)) =
-                trans(@cong(λ (w: BitVec(n)) => w.decrement(), BitVec::ofNat(Succ(x + c), n := n), BitVec::ofNat(x + c).increment(),
+            let back: (BitVec::ofNat(x + c + 1, n := n).decrement() = BitVec::ofNat(x + c)) =
+                trans(@cong(λ (w: BitVec(n)) => w.decrement(), BitVec::ofNat(x + c + 1, n := n), BitVec::ofNat(x + c).increment(),
                     sym(BitVec::increment_ofNat(n, x + c))),
                     BitVec::decrement_increment(n, BitVec::ofNat(x + c)));
             trans(BitVec::cong_iterate_decrement(n, c, back), prev)
@@ -352,25 +352,25 @@ theorem toNat_add(n: Nat, a, b: BitVec(n),
 // A literal added to a word that stays below another word does not wrap.
 theorem BitVec::toNat_add_below(n: Nat, a, bound: BitVec(n), k: Nat, inside: a.toNat() + k < bound.toNat()): a.add(BitVec::ofNat(k)).toNat() = a.toNat() + k {
     let top: (a.toNat() + k < Nat::pow(2, n)) = Nat::lt_trans(a.toNat() + k, bound.toNat(), Nat::pow(2, n), inside, BitVec::toNat_lt_pow(n, bound));
-    let small: (k < Nat::pow(2, n)) = Nat::le_trans(Succ(k), Succ(a.toNat() + k), Nat::pow(2, n), a.toNat().le_add_r(k), top);
+    let small: (k < Nat::pow(2, n)) = Nat::le_trans(k + 1, a.toNat() + k + 1, Nat::pow(2, n), a.toNat().le_add_r(k), top);
     let literal: (BitVec::ofNat(k, n := n).toNat() = k) = BitVec::toNat_ofNat(n, k, small);
     trans(toNat_add(n, a, BitVec::ofNat(k), rewrite(literal, top)), rewrite(literal, refl))
 }
 
 // The machine's unsigned test decides the same strict bound as Nat.
 theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
-    a.unsigned_lt_bit(b) = Succ(a.toNat()).leb(b.toNat()) {
+    a.unsigned_lt_bit(b) = (a.toNat() + 1).leb(b.toNat()) {
     match yes: a.unsigned_lt_bit(b) {
-        True => sym(bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Succ(a.toNat()).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
-        False => match same: Succ(a.toNat()).leb(b.toNat()) {
+        True => sym(bool::eq_true_of_is_true((a.toNat() + 1).leb(b.toNat()), (a.toNat() + 1).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
+        False => match same: (a.toNat() + 1).leb(b.toNat()) {
             False => refl,
             True => absurd(trans(sym(yes), BitVec::borrow_sub_bit_of_borrow(n, a, b,
-                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(same, trivial))))),
+                (a.toNat() + 1).leb_sound(b.toNat(), rewrite(same, trivial))))),
         },
     }
 }
 
-theorem strict_complement(n: Nat): (m: Nat) → Succ(n).leb(m) = m.leb(n).not() {
+theorem strict_complement(n: Nat): (m: Nat) → (n + 1).leb(m) = m.leb(n).not() {
     match n {
         Zero => λ m => match m { Zero => refl, Succ(_) => refl },
         Succ(_, ih) => λ m => match m { Zero => refl, Succ(l) => ih(l) },
@@ -393,7 +393,7 @@ theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
 fn word_of_nat(n: Nat, value: Nat) → BitVec(n) { BitVec::zero().iterate_increment(value) }
 
 theorem word_of_nat_succ(value: Nat):
-    word_of_nat(64, Succ(value)) = word_of_nat(64, value).add(BitVec::ofNat(1)) {
+    word_of_nat(64, value + 1) = word_of_nat(64, value).add(BitVec::ofNat(1)) {
     BitVec::iter_add_eq_add(64, word_of_nat(64, value), BitVec::ofNat(1))
 }
 
@@ -414,7 +414,7 @@ theorem toNat_word_of_nat(n, value: Nat, bounded: value < Nat::pow(2, n)): word_
 theorem toNat_sub(n: Nat, a, b: BitVec(n), fits: b.toNat() <= a.toNat()):
     a.sub(b).toNat() = a.toNat() - b.toNat() {
     let d = a.toNat() - b.toNat();
-    let d_below: (d < Nat::pow(2, n)) = Nat::le_trans(Succ(d), Succ(a.toNat()), Nat::pow(2, n),
+    let d_below: (d < Nat::pow(2, n)) = Nat::le_trans(d + 1, a.toNat() + 1, Nat::pow(2, n),
         Nat::le_succ_succ(d, a.toNat(), Nat::sub_le(a.toNat(), b.toNat())), BitVec::toNat_lt_pow(n, a));
     let c = BitVec::ofNat(d, n := n);
     let c_value: (c.toNat() = d) = BitVec::toNat_ofNat(n, d, d_below);
