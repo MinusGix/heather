@@ -518,6 +518,71 @@ fn a_damaged_section_is_only_its_kernels_loss() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A save over a large base file appends a journal file of the entries it
+/// added instead of rewriting the base; a reader believes the journal as it
+/// would the base, a later save carries on from its last one, and enough
+/// journal files are folded back into the base
+/// (`issues/verdict-store-append-only-saves.md`).
+#[test]
+fn saves_over_a_large_base_append_a_journal() {
+    use heather_cache::store::COMPACT_AT_FILES;
+    let dir = tempdir("journal");
+    let (a, b) = (kernel(0xa1), kernel(0xb2));
+    let t = 1_800_000_000;
+    save_one(&dir, &a, 1, t);
+    save_one(&dir, &b, 2, t);
+    let base = std::fs::read_to_string(Store::path(&dir)).unwrap();
+
+    // One store saved twice: each save writes only what is new since the last.
+    let mut s = loaded(&dir, &a).unwrap();
+    s.insert(key(3), key(3), "decl3");
+    s.save_with(&a, t + 1, 0).unwrap();
+    s.insert(key(4), key(4), "decl4");
+    s.save_with(&a, t + 2, 0).unwrap();
+    s.save_with(&a, t + 3, 0).unwrap();
+    assert_eq!(std::fs::read_to_string(Store::path(&dir)).unwrap(), base, "the base is left alone");
+    let journal: Vec<String> = std::fs::read_dir(Store::journal(&dir)).unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap()).collect();
+    assert_eq!(journal.len(), 2, "one file per save that added something");
+    assert!(journal.iter().all(|t| t.lines().filter(|l| l.starts_with("ok\t")).count() == 1));
+
+    let sa = loaded(&dir, &a).unwrap();
+    assert!([1, 3, 4].iter().all(|&n| sa.contains(&key(n))), "base and journal together");
+    assert_eq!(sa.used, Some(t + 2), "the newest journal stamp");
+    let sb = loaded(&dir, &b).unwrap();
+    assert!(sb.contains(&key(2)) && !sb.contains(&key(3)), "b believes none of a's journal");
+
+    // A kernel whose every save went to the journal still loads.
+    let c = kernel(0xc3);
+    let mut sc = Store::load(dir.clone(), &c).err().unwrap().0;
+    sc.insert(key(5), key(5), "decl5");
+    sc.save_with(&c, t + 4, 0).unwrap();
+    assert!(loaded(&dir, &c).is_some_and(|s| s.contains(&key(5))));
+
+    // A damaged journal file is its own entries missed, nothing more.
+    let damaged = Store::journal(&dir).join("0-damaged.tsv");
+    std::fs::write(&damaged, format!("heather-cache\t{FORMAT}\nkernel\t{a}\t{t}\t{}\nok\t{}\t{}\tdecl6\n", "0".repeat(64), "06".repeat(32), "06".repeat(32))).unwrap();
+    let sa = loaded(&dir, &a).unwrap();
+    assert!(sa.contains(&key(4)) && !sa.contains(&key(6)));
+
+    // Enough journal files are folded into the base, and removed.
+    for n in 0..COMPACT_AT_FILES as u8 {
+        let mut s = loaded(&dir, &a).unwrap();
+        s.insert(key(10 + n), key(10 + n), "many");
+        s.save_with(&a, t + 10, 0).unwrap();
+    }
+    let left = std::fs::read_dir(Store::journal(&dir)).unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "tsv")).count();
+    assert!(left < 8 && !damaged.exists(), "compaction folded the journal in ({left} files written since)");
+    let base = std::fs::read_to_string(Store::path(&dir)).unwrap();
+    assert!(!base.contains("decl6"), "the damaged file's entry is not carried");
+    let sa = loaded(&dir, &a).unwrap();
+    assert!([1, 3, 4, 10, 10 + COMPACT_AT_FILES as u8 - 1].iter().all(|&n| sa.contains(&key(n))));
+    assert!(loaded(&dir, &b).is_some_and(|s| s.contains(&key(2))), "b's section survives compaction");
+    assert!(loaded(&dir, &c).is_some_and(|s| s.contains(&key(5))), "c's journal-only section moves into the base");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A format-3 file (one kernel, no sections) is read rather than discarded:
 /// its keys mean what they meant, so the bump costs no shared store a cold
 /// run. The first save rewrites it in sections.
