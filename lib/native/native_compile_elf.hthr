@@ -16,15 +16,23 @@
 // §4.2). `Source::runs_after` is the compiler's theorem behind any entry
 // code that is a block of instructions. There are two providers:
 //
-// - **The system's stack** (`stack_from_system`, the default): RDI is a copy
-//   of RSP and the stack is the one Linux made. The process is one of
-//   `X86Profile::process(size, top, depth)`, which relies on the segment and
-//   on `depth` bytes below the entry RSP (issues/io-image-process-stack.md).
-//   `LinuxStart` is what is asked of the system.
+// - **The system's stack** (`stack_touched_entry`, the default): the stack is
+//   the one Linux made, and the entry code stores into each page of the room
+//   below RSP before anything else runs, so that Linux has made the room the
+//   stack's or ended the process (linux_x86_64_stack_growth). The process is
+//   one of `X86Profile::io(size)`, and its theorem is a claim over every
+//   memory Linux may leave at those stores (`TouchedRuns`). `SystemStart` is
+//   what is asked of the system: nothing of what lies below RSP.
 // - **The program's own** (`stack_from_segment`): RSP is moved to the end of
 //   `room` bytes of the data segment past the layout. The process is one of
 //   `X86Profile::io(size)`. `SegmentStart` is what is asked of the system:
 //   less, at the price of a size fixed when the file is written.
+//
+// A third is proved and written by nothing: the system's stack with its room
+// presumed mapped (`stack_from_system`, a process of
+// `X86Profile::process`). It is kept for the converse it carries
+// (`Source::elf_runs_exact`), which the touched process does not have yet
+// (issues/elf-touched-runs-exact.md).
 //
 // Compiled calls push their return addresses and their callers' saved words
 // into the stack (docs/native/native-procedures-design.md §5): `main`'s
@@ -127,7 +135,13 @@ theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, bodies
 }
 
 // ---------------------------------------------------------------------------
-// The system's stack
+// The system's stack, its room presumed
+//
+// No written file is this one: `write-elf` checks the room (the section
+// after the next). Here the room below RSP is in the memory's type
+// (`X86Profile::process` relies on it), which is to presume that Linux has
+// mapped it: true when the stack limit leaves that much, and a fault in the
+// middle of the run when it does not (issues/io-stack-below-rsp-not-mapped.md).
 
 // RDI a copy of RSP: the stack is the one the process was started on, and
 // the command line is where its RSP was.
@@ -168,19 +182,6 @@ theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= 
         argv_at_kept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
 }
 
-// …so it simulates it.
-theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
-    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
-    after: List<BitVec(8)>, short: 288 + (entered(stack_from_system(), program).len() + after.len()) <= 65536,
-    header: List<BitVec(8)>, long: header.len() = 288, top, depth: Nat, placed: StackPlaced(size, top, depth),
-    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom(size, header ++ (entered(stack_from_system(), program) ++ after)),
-    deep: src.need(homes, bodies) <= depth, small: src.depth < Nat::pow(2, 64),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
-    Program::sim_of_paid(X86Profile::process(size, top, depth).linux(), src.denote(args), s, src.elf_simulates_paid(size, within, program, homes, bodies, compiled, fits, after, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, small, args, argv))
-}
-
 // …and every run of it, with answers Linux may give, is exactly a run of
 // the source: the events of a whole trace the source produces with `args`.
 // Its loops' silent steps are paid for, and at fuel `n` its cuts lie `n`
@@ -202,84 +203,6 @@ theorem Source::elf_runs_exact(self src: Source, size: Nat, within: size <= io_d
         src.elf_simulates_paid(size, within, program, homes, bodies, compiled, fits, after, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, small, args, argv), src.deepens(args), run, ran, valid)
 }
 
-// The same, of the file `write-elf` writes: the I/O profile's ELF of the
-// code with a segment of `size`, whose header is 288 bytes whatever their
-// length. The header holds the file's length in sixteen bits
-// (`io_elf_file`), so the file is at most 65535 bytes: at 65536 the header
-// would say an empty segment, and Linux would map none of the code the
-// `loaded` premise speaks of (issues/io-elf-file-length-sixteen-bits.md).
-theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
-    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
-    note: List<BitVec(8)>, short: 288 + (entered(stack_from_system(), program).len() + note.len()) <= 65535,
-    top, depth: Nat, placed: StackPlaced(size, top, depth),
-    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom(size, io_elf_file(entered(stack_from_system(), program), note, size)),
-    deep: src.need(homes, bodies) <= depth, small: src.depth < Nat::pow(2, 64),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
-    let length = 288 + (entered(stack_from_system(), program).len() + note.len());
-    src.elf_simulates(size, within, program, homes, bodies, compiled, fits, note, omega(short),
-        io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + entered(stack_from_system(), program).len(), note.len()),
-        io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + entered(stack_from_system(), program).len(), note.len()), top, depth, placed, s, entry, rsp, loaded, deep, small, args, argv)
-}
-
-// ---------------------------------------------------------------------------
-// What the theorem asks of the system (issues/elf-theorem-runtime-premises.md)
-
-// A process of `file` at its first instruction, as the system must have made
-// it for a theorem about the file to be about the run. Each field is an
-// assumption about that system, none is proved, and together they are all
-// that is assumed of it at the start; what it does afterwards is the
-// simulation's own (`LinuxAnswered`, linux_x86_64_io: each call answered as
-// `LinuxCmd::Answers` allows, RCX, R11 and the flags not kept).
-//
-// - `loaded`: the file's two PT_LOAD headers were honoured: its bytes at
-//   0x400000, readable and executable, and `size` zero bytes at 0x410000,
-//   readable and writable (the ELF gABI's loading rule; a fixed-address
-//   executable, so nothing else may hold those addresses).
-// - `entry`: RIP is the header's `e_entry`.
-// - `placed`, `rsp`, `stack`: RSP is `top`, above the segment and canonical,
-//   and the `room` bytes below it are data. On Linux that is the stack
-//   limit's to grant (RLIMIT_STACK, `ulimit -s`): the kernel maps the stack
-//   as it is touched, down to the limit, so it holds when the limit leaves
-//   `room` bytes below the entry RSP and fails under a smaller one. The
-//   memory's type says the same (`X86Profile::process` relies on it); the
-//   field is here so that the statement shows it.
-// - `argv`: argc, the argument pointers, a null word and the strings are at
-//   and above RSP as the x86-64 psABI's process start lays them out.
-//
-// Not asked: any register but RIP and RSP, any flag, what lies below the
-// stack room or between the regions, envp and auxv. Not modelled: a signal
-// (a process killed by one, the kernel's out-of-memory kill among them, ends
-// its run without an exit).
-record LinuxStart(size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>,
-    s: MachineState<X86Memory(X86Profile::process(size, top, room))>) {
-    loaded: s.memory.LoadedFrom(size, file),
-    entry: s.rip = io_entry(),
-    placed: StackPlaced(size, top, room),
-    rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    stack: DataAt(s.memory.perms, io_stack_low(top, room), room),
-    argv: ArgvAt(X86Profile::process(size, top, room).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
-}
-
-// The stack field is what the memory's profile relies on, so a memory of
-// the profile has it: nothing is asked twice.
-theorem process_stack_data(size, top, room: Nat, m: X86Memory(X86Profile::process(size, top, room))):
-    DataAt(m.perms, io_stack_low(top, room), room) { m.relied.right }
-
-// The theorem of the file `write-elf` writes, from what it asks of the
-// system: a process the system started as `LinuxStart` says, with the
-// source's stack room, simulates the source run with its command line.
-theorem Source::elf_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
-    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
-    note: List<BitVec(8)>, short: 288 + (entered(stack_from_system(), program).len() + note.len()) <= 65535, small: src.depth < Nat::pow(2, 64),
-    top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::process(size, top, src.need(homes, bodies)))>,
-    start: LinuxStart(size, io_elf_file(entered(stack_from_system(), program), note, size), top, src.need(homes, bodies), args, s)):
-    SimProgram(X86Profile::process(size, top, src.need(homes, bodies)).linux(), src.denote(args), s) {
-    src.elf_file_simulates(size, within, program, homes, bodies, compiled, fits, note, short, top, src.need(homes, bodies), start.placed, s, start.entry, start.rsp,
-        start.loaded, Nat::le_refl(src.need(homes, bodies)), small, args, start.argv)
-}
-
 // ---------------------------------------------------------------------------
 // The program's own stack (issues/native-target-minimal-system-assumptions.md)
 
@@ -294,10 +217,10 @@ fn Source::segment_entry(self src: Source, homes: Homes, bodies: List<Frame>) �
     stack_from_segment(Layout::of(io_data_low(), src.words, src.capacities(), homes).size(), src.need(homes, bodies))
 }
 
-// What a file with its own stack asks of the system: `LinuxStart` less
-// everything about the stack. `loaded` now covers the stack too, since it is
-// part of the segment's `size` bytes; `argv` is the one use of the stack the
-// system made.
+// What a file with its own stack asks of the system (`SystemStart`, below,
+// has each field's reading): the file loaded, which now covers the stack
+// too, since it is part of the segment's `size` bytes; the entry; and the
+// command line above the segment, the one use of its stack the system made.
 //
 // Not asked: that the system's stack has any room below RSP, is mapped any
 // deeper, grows, or has any limit. What this provider costs instead: the
@@ -361,12 +284,33 @@ theorem Source::elf_segment_file_runs(self src: Source, size: Nat, within: size 
 // The system's stack, checked where the program starts
 // (linux_x86_64_stack_growth, docs/native/system-contract-design.md §4.1)
 
-// What a file whose entry code touches its stack asks of the system:
-// `LinuxStart` less its `stack` field. Nothing is asked of what lies below
-// RSP: the entry code stores into each page of the `room` bytes there before
-// anything else runs, and Linux either makes them the stack's or ends the
-// process (`StackTouch`). `placed` asks a page more above the segment than
-// the room, the page a touch may reach into.
+// A process of `file` at its first instruction, as the system must have made
+// it for a theorem about the file to be about the run
+// (issues/elf-theorem-runtime-premises.md). Each field is an assumption
+// about that system, none is proved, and together they are all that is
+// assumed of it at the start; what it does afterwards is the growth rule's
+// (`StackTouch`: each touch extends the stack or ends the process) and the
+// simulation's own (`LinuxAnswered`, linux_x86_64_io: each call answered as
+// `LinuxCmd::Answers` allows, RCX, R11 and the flags not kept).
+//
+// - `loaded`: the file's two PT_LOAD headers were honoured: its bytes at
+//   0x400000, readable and executable, and `size` zero bytes at 0x410000,
+//   readable and writable (the ELF gABI's loading rule; a fixed-address
+//   executable, so nothing else may hold those addresses).
+// - `entry`: RIP is the header's `e_entry`.
+// - `placed`, `rsp`: RSP is `top`, canonical, and a page and the `room`
+//   above the segment's end: the page is the one a touch may reach into.
+//   Nothing written says where a system puts its stack, so this is taken on
+//   trust (`Presumes::StackAbove`).
+// - `argv`: argc, the argument pointers, a null word and the strings are at
+//   and above RSP as the x86-64 psABI's process start lays them out.
+//
+// Not asked: anything of what lies below RSP. The entry code stores into
+// each page of the `room` bytes there before anything else runs, and Linux
+// either makes them the stack's or ends the process. Nor any register but
+// RIP and RSP, any flag, what lies between the regions, envp and auxv. Not
+// modelled: a signal (a process killed by one, the kernel's out-of-memory
+// kill among them, ends its run without an exit).
 record SystemStart(size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>,
     s: MachineState<X86Memory(X86Profile::io(size))>) {
     loaded: s.memory.LoadedFrom(size, file),
@@ -388,7 +332,13 @@ fn TouchedRuns(size, top, room: Nat, p: Program<BitVec(64)>(Events::linux())) �
 }
 
 // The theorem of the file `write-elf --stack system` writes: the entry code
-// that touches the source's stack room, then the program.
+// that touches the source's stack room, then the program. The file is the
+// I/O profile's ELF of that code with a segment of `size`, whose header is
+// 288 bytes whatever their length. The header holds the file's length in
+// sixteen bits (`io_elf_file`), so the file is at most 65535 bytes: at 65536
+// the header would say an empty segment, and Linux would map none of the
+// code the `loaded` premise speaks of
+// (issues/io-elf-file-length-sixteen-bits.md).
 theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
     compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     note: List<BitVec(8)>,
@@ -396,7 +346,7 @@ theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io
     small: src.depth < Nat::pow(2, 64), top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
     start: SystemStart(size, io_elf_file(stack_touched_entry(src.need(homes, bodies)) ++ assemble(no_fills(), program, Nil), note, size), top,
         src.need(homes, bodies), args, s)):
-    TouchedRuns(size, top, src.need(homes, bodies), src.denote(args))(s) {
+    TouchedRuns(size, top, src.need(homes, bodies), src.denote(args), s) {
     let x = X86Profile::io(size);
     let room = src.need(homes, bodies);
     let y = X86Profile::process(size, top, room);

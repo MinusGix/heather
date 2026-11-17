@@ -107,7 +107,7 @@ theorem stack_touched_back(x: X86Profile, top: Nat, store: MemoryStore, then: Ma
     match deltas {
         Nil => λ known p q steps touched =>
             Exists(touched.witness, ⟨linux_steps_trans(x.linux(), p, q, touched.witness, steps, touched.proof.left), touched.proof.right⟩),
-        Cons(step, rest) => λ known p q steps touched =>
+        Cons(_, _) => λ known p q steps touched =>
             Exists(touched.witness, ⟨linux_steps_trans(x.linux(), p, q, touched.witness, steps, touched.proof.left), touched.proof.right⟩),
     }
 }

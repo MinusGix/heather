@@ -9,7 +9,7 @@
 // `runtime fn` over `Io` now (`tr_upper`,
 // lib/_tests/native/runtime/runtime_program_tests.hthr).
 // `native_compile_correct` is the proof of every one, so none has a theorem
-// of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
+// of its own (`write-elf`'s certificate states `<s>_elf_runs` of the
 // source the tool lowers to).
 import native_build;
 import native_decimal;
