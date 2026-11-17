@@ -181,18 +181,6 @@ theorem Nat::low_bit_succ_mul_two(self x: Nat): Succ(x * 2).low_bit() = 1 {
     trans(h, omega)
 }
 
-theorem Bool::not_not(self a: Bool): !(!a) = a {
-    match a { False => refl, True => refl }
-}
-
-theorem Bool::xor_false_r(self a: Bool): a.xor(False) = a {
-    match a { False => refl, True => refl }
-}
-
-theorem Bool::xor_true_r(self a: Bool): a.xor(True) = !a {
-    match a { False => refl, True => refl }
-}
-
 theorem Lit::code_true(self l: Lit, v: Nat → Bool): lit_true(l.code(), v) = l.value(v) {
     match l {
         Pos(x) => {
@@ -456,7 +444,6 @@ theorem Circ::and_gate_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node
     }⟩⟩
 }
 
-
 // `k` is the value `l` has wherever node 0 is false, when `k` is known.
 fn Lit::Means(k: Option<Bool>, l: Lit) → Type {
     (t: Bool) → k = Some(t) → (v: Nat → Bool) → v(0) = False → l.value(v) = t
@@ -474,8 +461,6 @@ theorem Lit::constant_means(self l: Lit): Lit::Means(l.constant(), l) {
         },
     }
 }
-
-
 
 theorem Circ::and_with_makes(self c: Circ, good: c.Good(), ka, kb: Option<Bool>, a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size, ma: Lit::Means(ka, a), mb: Lit::Means(kb, b)):
     c.Makes(c.and_with(ka, kb, a, b), λ v => a.value(v) && b.value(v)) {
@@ -506,20 +491,12 @@ theorem Circ::and_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < 
     c.and_with_makes(good, a.constant(), b.constant(), a, b, va, vb, a.constant_means(), b.constant_means())
 }
 
-theorem Bool::not_and_not(a, b: Bool): !(!a && !b) = a || b {
-    match a { False => match b { False => refl, True => refl }, True => refl }
-}
-
 theorem Circ::or_makes(self c: Circ, good: c.Good(), a, b: Lit, va: a.node() < c.size, vb: b.node() < c.size): c.Makes(c.or(a, b), λ v => a.value(v) || b.value(v)) {
     let r = c.and_makes(good, a.not(), b.not(), j(sym(a.not_node()), λ z _ => z < c.size, va), j(sym(b.not_node()), λ z _ => z < c.size, vb));
     ⟨r.left, ⟨j(sym(c.and(a.not(), b.not()).snd.not_node()), λ z _ => z < c.and(a.not(), b.not()).fst.size, r.right.left), λ d later env =>
         trans(c.and(a.not(), b.not()).snd.not_value(d.at(env)),
             trans(cong_fn(λ (x: Bool) => !x, r.right.right(d, later, env)),
                 trans(cong_fn(λ (x: Bool) => !x, Bool::and_cong(a.not_value(d.at(env)), b.not_value(d.at(env)))), Bool::not_and_not(a.value(d.at(env)), b.value(d.at(env))))))⟩⟩
-}
-
-theorem Bool::xor_by_and_or(a, b: Bool): (a && !b) || (!a && b) = a.xor(b) {
-    match a { False => match b { False => refl, True => refl }, True => match b { False => refl, True => refl } }
 }
 
 // A literal of `c` is one of every circuit grown from `c`.
@@ -582,14 +559,6 @@ fn Circ::BinOk(op: Circ → Lit → Lit → Pair<Circ, Lit>, f: Bool → Bool �
 theorem Circ::and_ok(): Circ::BinOk(λ c a b => c.and(a, b), λ x y => x && y) { λ c good a b va vb => c.and_makes(good, a, b, va, vb) }
 theorem Circ::or_ok(): Circ::BinOk(λ c a b => c.or(a, b), λ x y => x || y) { λ c good a b va vb => c.or_makes(good, a, b, va, vb) }
 theorem Circ::xor_ok(): Circ::BinOk(λ c a b => c.xor(a, b), λ x y => x.xor(y)) { λ c good a b va vb => c.xor_makes(good, a, b, va, vb) }
-
-// Bit by bit.
-fn BitVec::zip_with({n: Nat}, f: Bool → Bool → Bool, self x, y: BitVec(n)) → BitVec(n) {
-    match n {
-        Zero => BitVec::nil(),
-        Succ(_, ih) => ih(x.tail_bits(), y.tail_bits()).cons_bit(f(x.head_bit(), y.head_bit())),
-    }
-}
 
 fn Circ::cons_word({n: Nat}, h: Lit, rest: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; Succ(n)]> { Pair(rest.fst, cons(h, rest.snd)) }
 
@@ -790,13 +759,6 @@ theorem var_word_valid(n, K, o, w, size: Nat, kin: K < size): word_valid(var_wor
 // ---------------------------------------------------------------------------
 // Equality of two words: no bit's exclusive or is set.
 
-theorem BitVec::bool_eq_by_xor(a, b: Bool): !(a.xor(b)) = BitVec::bool_eq(a, b) {
-    match a {
-        False => refl,
-        True => b.not_not(),
-    }
-}
-
 fn Circ::equal_last(d: Lit, r2: Pair<Circ, Lit>) → Pair<Circ, Lit> { r2.fst.and(d.not(), r2.snd) }
 
 fn Circ::equal_join({n: Nat}, r1: Pair<Circ, Lit>, rest: Circ → [Lit; n] → [Lit; n] → Pair<Circ, Lit>, xs, ys: [Lit; n]) → Pair<Circ, Lit> {
@@ -894,10 +856,6 @@ theorem Circ::negated_blasts(K: Nat, b: Circ → Pair<Circ, Lit>, f: (Nat → Bo
     }
 }
 
-theorem BitVec::zip_with_cong({n: Nat}, f: Bool → Bool → Bool, {x1, x2, y1, y2: BitVec(n)}, ex: x1 = x2, ey: y1 = y2): BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x2, y2) {
-    j(ex, λ x _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x, y2), j(ey, λ y _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x1, y), refl))
-}
-
 // Two words, the second built after the first, joined bit by bit.
 fn Circ::word_pair({n: Nat}, r1, r2: Pair<Circ, [Lit; n]>, op: Circ → Lit → Lit → Pair<Circ, Lit>) → Pair<Circ, [Lit; n]> { r2.fst.zip(op, r1.snd, r2.snd) }
 
@@ -921,10 +879,6 @@ theorem Circ::zip_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa, f
             trans(m3.right.right(d, later, env), BitVec::zip_with_cong(g, m1.right.right(d, from1, env), m2.right.right(d, from2, env)))
         }⟩⟩
     }
-}
-
-theorem Bool::apply_cong(g: Bool → Bool → Bool, {a, b, c, d: Bool}, ab: a = b, cd: c = d): g(a, c) = g(b, d) {
-    j(ab, λ x _ => g(a, c) = g(x, d), j(cd, λ y _ => g(a, c) = g(a, y), refl))
 }
 
 // Two literals, the second built after the first, joined by a gate.
@@ -980,32 +934,6 @@ theorem Circ::equal_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa,
 // ---------------------------------------------------------------------------
 // Arithmetic: ripple-carry addition and the borrow of a subtraction, a cell
 // per bit, as `BitVec::add_bits` and `BitVec::borrow_bits` are written.
-
-theorem Bool::xor_assoc(a, b, c: Bool): a.xor(b).xor(c) = a.xor(b.xor(c)) {
-    match a {
-        False => refl,
-        True => match b {
-            False => refl,
-            True => sym(c.not_not()),
-        },
-    }
-}
-
-// The carry out of a full adder, through the propagate bit `a ⊕ b`.
-theorem BitVec::carry_by_propagate(a, b, c: Bool): (a && b) || (c && a.xor(b)) = BitVec::carry_majority(a, b, c) {
-    match a {
-        False => match b { False => match c { False => refl, True => refl }, True => match c { False => refl, True => refl } },
-        True => match b { False => match c { False => refl, True => refl }, True => match c { False => refl, True => refl } },
-    }
-}
-
-theorem BitVec::add_bits_next_eq({n: Nat}, a, b: BitVec(n), carry: Bool, rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)): BitVec::add_bits_next(a, b, carry, rest) = rest(a, b, carry) {
-    match carry { False => refl, True => refl }
-}
-
-theorem BitVec::borrow_bits_next_eq({n: Nat}, a, b: BitVec(n), borrow: Bool, rest: BitVec(n) → BitVec(n) → Bool → Bool): BitVec::borrow_bits_next(a, b, borrow, rest) = rest(a, b, borrow) {
-    match borrow { False => refl, True => refl }
-}
 
 // A full adder: the sum `(a ⊕ b) ⊕ cin` and the carry `ab ∨ cin(a ⊕ b)`.
 fn Circ::add_cell5(sum: Lit, r5: Pair<Circ, Lit>) → Pair<Circ, Pair<Lit, Lit>> { Pair(r5.fst, Pair(sum, r5.snd)) }
@@ -1149,10 +1077,6 @@ theorem Circ::borrower_makes(n: Nat, c: Circ, good: c.Good(), xs, ys: [Lit; n], 
             }⟩⟩
         },
     }
-}
-
-theorem cong_args<A, B, C>(f: A → B → C, {a1, a2: A}, {b1, b2: B}, ea: a1 = a2, eb: b1 = b2): f(a1, b1) = f(a2, b2) {
-    j(ea, λ x _ => f(a1, b1) = f(x, b2), j(eb, λ y _ => f(a1, b1) = f(a1, y), refl))
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,27 +1326,6 @@ fn BVPred::eval(self p: BVPred, bits: Nat → Bool) → Bool {
     }
 }
 
-theorem BitVec::zip_with_and(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a && b, x, y) = x.band(y) {
-    match n {
-        Zero => refl,
-        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_and(k, x.tail_bits(), y.tail_bits())),
-    }
-}
-
-theorem BitVec::zip_with_or(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a || b, x, y) = x.bor(y) {
-    match n {
-        Zero => refl,
-        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_or(k, x.tail_bits(), y.tail_bits())),
-    }
-}
-
-theorem BitVec::zip_with_xor(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a.xor(b), x, y) = x.bxor(y) {
-    match n {
-        Zero => refl,
-        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_xor(k, x.tail_bits(), y.tail_bits())),
-    }
-}
-
 fn BVExpr::blast(self e: BVExpr, K, n: Nat) → Circ → Pair<Circ, [Lit; n]> {
     match e {
         BVar(o, w) => λ c => Pair(c, var_word(K, o, w)),
@@ -1508,7 +1411,6 @@ theorem BVPred::blast_ok(self p: BVPred, K: Nat): Circ::BlastsLit(K, p.blast(K),
 // ---------------------------------------------------------------------------
 // Inputs read as the same bits wherever they appear.
 
-
 theorem window_ext(n: Nat, b1, b2: Nat → Bool, same: (k: Nat) → b1(k) = b2(k), o, w: Nat): window(b1, o, w, n := n) = window(b2, o, w, n := n) {
     match n {
         Zero => refl,
@@ -1582,13 +1484,6 @@ theorem Circ::inputs_good(K: Nat): Circ::inputs(K).Good() ∧ ((Circ::inputs(K).
     }
 }
 
-theorem Bool::and_cong_when(t: Bool, {x, y: Bool}, h: t = True → x = y): t && x = t && y {
-    (match t as λ s => (s = True → x = y) → s && x = s && y {
-        False => λ h => refl,
-        True => λ h => h(refl),
-    })(h)
-}
-
 // ---------------------------------------------------------------------------
 // The end: a predicate's circuit, its clauses, and what refuting them proves.
 
@@ -1631,17 +1526,6 @@ theorem BVPred::refuted_sound(self p: BVPred, K: Nat, steps: List<Step>, ok: che
 // ---------------------------------------------------------------------------
 // Reading words as inputs. A caller lays its words out in one bit sequence
 // and shows each `BVar` reads its word back.
-
-// Bit `k` of `x`, false past its width.
-fn BitVec::bit_at({n: Nat}, self x: BitVec(n), k: Nat) → Bool {
-    (match n as λ m => BitVec(m) → Nat → Bool {
-        Zero => λ x k => False,
-        Succ(_, ih) => λ x k => match k {
-            Zero => x.head_bit(),
-            Succ(i) => ih(x.tail_bits(), i),
-        },
-    })(x, k)
-}
 
 // The window at offset `o` reads `x` back when the bits there are `x`'s.
 theorem window_of(n: Nat, bits: Nat → Bool, o: Nat, x: BitVec(n), at: (i: Nat) → i < n → bits(o + i) = x.bit_at(i)): window(bits, o, n, n := n) = x {

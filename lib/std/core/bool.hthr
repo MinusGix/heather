@@ -592,3 +592,47 @@ theorem Bool::picked_true<A>(b: Bool, yes, no: A, e: b = True): (match b { True 
 theorem Bool::picked_false<A>(b: Bool, yes, no: A, e: b = False): (match b { True => yes, False => no }) = no {
     j(e, λ w _ => (match b { True => yes, False => no }) = (match w { True => yes, False => no }), refl)
 }
+
+// ---------------------------------------------------------------------------
+// Facts the bit-blaster (lib/std/tactic/bitblast.hthr) reads gates through.
+
+theorem Bool::not_not(self a: Bool): !(!a) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem Bool::xor_false_r(self a: Bool): a.xor(False) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem Bool::xor_true_r(self a: Bool): a.xor(True) = !a {
+    match a { False => refl, True => refl }
+}
+
+theorem Bool::not_and_not(a, b: Bool): !(!a && !b) = a || b {
+    match a { False => match b { False => refl, True => refl }, True => refl }
+}
+
+theorem Bool::xor_by_and_or(a, b: Bool): (a && !b) || (!a && b) = a.xor(b) {
+    match a { False => match b { False => refl, True => refl }, True => match b { False => refl, True => refl } }
+}
+
+theorem Bool::apply_cong(g: Bool → Bool → Bool, {a, b, c, d: Bool}, ab: a = b, cd: c = d): g(a, c) = g(b, d) {
+    j(ab, λ x _ => g(a, c) = g(x, d), j(cd, λ y _ => g(a, c) = g(a, y), refl))
+}
+
+theorem Bool::xor_assoc(a, b, c: Bool): a.xor(b).xor(c) = a.xor(b.xor(c)) {
+    match a {
+        False => refl,
+        True => match b {
+            False => refl,
+            True => sym(c.not_not()),
+        },
+    }
+}
+
+theorem Bool::and_cong_when(t: Bool, {x, y: Bool}, h: t = True → x = y): t && x = t && y {
+    (match t as λ s => (s = True → x = y) → s && x = s && y {
+        False => λ h => refl,
+        True => λ h => h(refl),
+    })(h)
+}
