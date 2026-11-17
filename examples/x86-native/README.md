@@ -258,6 +258,17 @@ through the other ways the word, and each word it reads, can be spelled
 (`add_comm` turns a sum round) and writes the cheapest it reaches, so a
 rule is stated once and found either way round.
 
+A rule may also need a word the code does not have. `stepped` in the same
+file returns `(x + 3) + 4`; `add_assoc`, `(x + a) + b = x + (a + b)`, reads
+the sum `3 + 4`, which nothing computes. The search asks for it because
+another rule, `add_consts`, makes it a constant; a stage puts the node;
+and the report says both:
+
+```console
+  t15 = 3 + 4 = 7   by add_consts
+  t12 = (t6 + t9) + t11 = t6 + (t9 + t11)   by add_assoc
+```
+
 `--explain-optimizer` prints what the optimizer did with the rules, a line
 for each one used, in the rule's own words and by its name:
 

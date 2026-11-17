@@ -208,6 +208,10 @@ the lanes are cut this way is `docs/infrastructure/testing-architecture-design.m
   the process's peak memory during it. A read keeps everything it evaluates
   until it ends, so the read with the steps is the one holding the memory
   (`issues/compile-x86-address-space-margin.md`).
+- **`compile-x86` carries the library it reads inside the binary** (the
+  `// lib-closure:` lists): after editing a `lib/native/function_ir` module,
+  rebuild `heather` before compiling with it, or the compile runs the
+  module as it was. `heather check` and `eval` read the files.
 - **A compile whose optimizer did less than expected**: set
   `HEATHER_OPTIMIZE_TRACE=1` and `compile-x86` says what each search found
   and each test of a function made answered, and prints a function the

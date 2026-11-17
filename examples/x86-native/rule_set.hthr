@@ -42,3 +42,17 @@ runtime fn tangled(s: List<u8>, n: u64) → u64 {
         0
     }
 }
+
+// The first byte of a span and seven, written as three and then four more.
+// `(x + a) + b = x + (a + b)` reads a sum the code does not have: the
+// search asks for `3 + 4` because the rules make it the constant `7`, a
+// stage puts it, and the outer sum is written `x + 7`.
+//
+//     heather compile-x86 examples/x86-native/rule_set.hthr stepped -o stepped.s --explain-optimizer
+runtime fn stepped(s: List<u8>, n: u64) → u64 {
+    if h: 0 < n {
+        (s.byte_within(n, 0).zero_extend(56) + 3) + 4
+    } else {
+        0
+    }
+}
