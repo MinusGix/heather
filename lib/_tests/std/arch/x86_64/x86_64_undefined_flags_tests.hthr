@@ -46,7 +46,7 @@ theorem setb_undefined_no_execute<M>(s: MachineState<M>, outcome: SemanticOutcom
 // flag are the same defined state, and one differing in a defined flag is
 // not.
 fn some_state() → MachineState<Nat> {
-    MachineState<Nat>(gprs := Gprs(at := λ _ => BitVec::zero()),
+    MachineState<Nat>(gprs := zero_gprs(),
         flags := Flags(False, False, False, False, False, False, DefinedFlags::but_af()),
         rip := BitVec::zero(), memory := 0)
 }
