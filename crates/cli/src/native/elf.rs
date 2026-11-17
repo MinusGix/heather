@@ -674,13 +674,13 @@ fn refused(symbol: &str, why: &[u64]) -> String {
 }
 
 /// The homes `Homes::spelled` (native_alloc) reads back as, spelled: how
-/// many words have one, each (0 the slot, `k + 1` register `k`), then each
-/// loop's set, its length first. With `rooms`, the functions' room table; with `places`, where the values of the
+/// many words have one, each (0 its slot, which for `main` is the one of its
+/// own number; `k + 1` register `k`), then each loop's set, its length first. With `rooms`, the functions' room table; with `places`, where the values of the
 /// functions the source calls go.
 fn homes_literal(numbers: &[u64], places: Option<&str>, rooms: Option<&str>) -> Option<String> {
     let (&count, rest) = numbers.split_first()?;
     let count = usize::try_from(count).ok().filter(|&c| c <= rest.len())?;
-    let of: Vec<String> = rest[..count].iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect();
+    let of: Vec<String> = rest[..count].iter().enumerate().map(|(id, &h)| if h == 0 { format!("InSlot({id})") } else { format!("InReg({})", h - 1) }).collect();
     let mut sets = Vec::new();
     let mut at = &rest[count..];
     while let Some((&len, more)) = at.split_first() {
@@ -694,8 +694,9 @@ fn homes_literal(numbers: &[u64], places: Option<&str>, rooms: Option<&str>) -> 
 }
 
 /// One procedure's placement as `List::frames_spelled` (native_alloc) spells
-/// it: its frame's words, its words' homes (their count first; 0 the slot,
-/// `k + 1` register `k`), and the registers it pins, the same way.
+/// it: its frame's words, its words' homes (their count first; `2 * k` slot
+/// `k`, `2 * k + 1` register `k`: `List::homes_numbered`), and the registers
+/// it pins (their count first; 0 none, `k + 1` register `k`).
 struct FrameRead<'a> { words: u64, of: &'a [u64], pins: &'a [u64] }
 
 fn frames_read(mut numbers: &[u64]) -> Option<Vec<FrameRead<'_>>> {
@@ -712,15 +713,25 @@ fn frames_read(mut numbers: &[u64]) -> Option<Vec<FrameRead<'_>>> {
     numbers.is_empty().then_some(frames)
 }
 
+/// A frame's homes, from their numbers.
 fn homes_list(homes: &[u64]) -> String {
-    homes.iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect::<Vec<_>>().join(", ")
+    homes.iter().map(|&h| if h % 2 == 0 { format!("InSlot({})", h / 2) } else { format!("InReg({})", h / 2) }).collect::<Vec<_>>().join(", ")
 }
+
+/// A frame's pins: a register, or no pin, which is written as a slot.
+fn pins_list(pins: &[u64]) -> String {
+    pins.iter().map(|&h| if h == 0 { "InSlot(0)".into() } else { format!("InReg({})", h - 1) }).collect::<Vec<_>>().join(", ")
+}
+
+/// A frame's homes as `Homes::spelled` has them (0 a slot, `k + 1` register
+/// `k`), which is how the pools are worked out.
+fn homes_as_spelled(of: &[u64]) -> Vec<u64> { of.iter().map(|&h| if h % 2 == 0 { 0 } else { h / 2 + 1 }).collect() }
 
 /// The procedures' placements, by name: every frame's loop sets are the
 /// source's (`homes`).
 fn frames_literal(frames: &str, homes: &str, numbers: &[u64]) -> Option<String> {
     let list: Vec<String> = frames_read(numbers)?.iter()
-        .map(|f| format!("Frame([{}], {homes}.loops, [{}], {})", homes_list(f.of), homes_list(f.pins), f.words)).collect();
+        .map(|f| format!("Frame([{}], {homes}.loops, [{}], {})", homes_list(f.of), pins_list(f.pins), f.words)).collect();
     Some(format!("fn {frames} → List<Frame> {{ [{}] }}\n", list.join(", ")))
 }
 
@@ -767,11 +778,11 @@ fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, siz
     let capacities = capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
     let mut text = String::new();
     for (i, f) in frames_read(numbers)?.iter().enumerate() {
-        let (pool, taken) = pools(&used_registers(f.of, f.pins));
+        let (pool, taken) = pools(&used_registers(&homes_as_spelled(f.of), f.pins));
         let name = emission::body_layout(p, i);
         text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}], {homes}.rooms), [{pool}], [{taken}], \
             {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i})) }}\n\
-            theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), homes_list(f.pins)));
+            theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), pins_list(f.pins)));
     }
     Some(text)
 }

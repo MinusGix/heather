@@ -434,7 +434,7 @@ theorem Target::at_similar(self t: Target, {at: Nat}, {live: List<Nat>}, {tree, 
 // runs with the bit, the set and what is live after the loop live after
 // it (`loop_after`), and needs no more than the set before it (`closed`).
 theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Writers(), perform: Performs(), n: Nat, p: Prog, names: Nat, b: Prog, out, set: List<Nat>,
-    inside: again < t.words,
+    inside: t.layout().word_fits(again).IsTrue(),
     within: then(b.tests(t.layout(), again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))).Within(t.program),
     head_within: p.label(Succ(names)).Within(t.program),
     closed: (i: Nat) → Mem(i, body.live_in(t.homes, loop_after(again, set, out))) → Mem(i, set),

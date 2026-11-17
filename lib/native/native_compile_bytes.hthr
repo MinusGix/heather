@@ -347,7 +347,7 @@ theorem Prog::byte_to_within(self p: Prog, layout: Layout, buf, index, cap, skip
 }
 
 // The byte at the word `index` of buffer `buf` in RAX, zero past the end.
-theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, cap, n: Nat, inside: index < t.words,
+theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, cap, n: Nat, inside: t.layout().word_fits(index).IsTrue(),
     holds: Mem(index, live), found: t.caps.nth(buf) = Some(cap), within: p.byte_to(t.layout(), buf, index, cap, Succ(n)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → X86Memory(t.r.profile) → Type,
     next: t.GoesR(prog_len(p.byte_to(t.layout(), buf, index, cap, Succ(n))), tree, q)):
@@ -438,7 +438,7 @@ theorem Prog::loads_within(self p: Prog, layout: Layout, out: List<Nat>, output,
 // The byte put in the word `output`'s home: the environment with it set is
 // the one the claim after reads.
 theorem Target::goes_loads(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, output, buf, index, cap, names: Nat,
-    inside_output: output < t.words, inside_index: index < t.words, holds: Mem(index, live),
+    inside_output: t.layout().word_fits(output).IsTrue(), inside_index: t.layout().word_fits(index).IsTrue(), holds: Mem(index, live),
     sub: (i: Nat) → Mem(i, out) → i ≠ output → Mem(i, live), apart: t.homes.apart(output, out).IsTrue(), found: t.caps.nth(buf) = Some(cap),
     within: p.loads(t.layout(), out, output, buf, index, cap, names).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     same: env.set_word(output, byte_word(buffer_byte(env.buffers, buf, env.word(index).toNat()))) = other,
@@ -482,7 +482,7 @@ theorem Prog::byte_from_within(self p: Prog, layout: Layout, buf, index, value, 
 // The word `value`'s low byte stored at the word `index` of buffer `buf`,
 // nothing stored past the end: on with the environment the source stores.
 theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, value, cap, n: Nat,
-    inside_index: index < t.words, inside_value: value < t.words, holds_index: Mem(index, live), holds_value: Mem(value, live),
+    inside_index: t.layout().word_fits(index).IsTrue(), inside_value: t.layout().word_fits(value).IsTrue(), holds_index: Mem(index, live), holds_value: Mem(value, live),
     found: t.caps.nth(buf) = Some(cap),
     within: p.byte_from(t.layout(), buf, index, value, cap, Succ(n)).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.byte_from(t.layout(), buf, index, value, cap, Succ(n))), live, tree, env.store_at(buf, index, value))):
@@ -572,7 +572,7 @@ theorem Prog::stores_within(self p: Prog, layout: Layout, out: List<Nat>, output
 
 // The byte stored, then read back to the word `output`.
 theorem Target::goes_stores(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, output, buf, index, value, cap, names: Nat,
-    inside_output: output < t.words, inside_index: index < t.words, inside_value: value < t.words,
+    inside_output: t.layout().word_fits(output).IsTrue(), inside_index: t.layout().word_fits(index).IsTrue(), inside_value: t.layout().word_fits(value).IsTrue(),
     holds_index: Mem(index, live), holds_value: Mem(value, live), sub: (i: Nat) → Mem(i, out) → i ≠ output → Mem(i, live),
     apart: t.homes.apart(output, out).IsTrue(), found: t.caps.nth(buf) = Some(cap),
     within: p.stores(t.layout(), out, output, buf, index, value, cap, names).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),

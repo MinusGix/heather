@@ -138,8 +138,10 @@ fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
     Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees)
 }
 
-// Word `id` has a slot.
-fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
+// Word `id`'s slot is in the frame; a word in a register needs none.
+fn Layout::word_fits(self layout: Layout, id: Nat) → Bool {
+    match layout.homes.home(id) { InSlot(k) => Succ(k).leb(layout.words), InReg(_) => True }
+}
 
 fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
     match ids { Nil => True, Cons(id, rest) => layout.word_fits(id) && layout.words_fit(rest) }
@@ -169,13 +171,14 @@ fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 16 }
 
 // A word's slot is in the running frame, which RSP points at between
 // statements (docs/native/native-procedures-are-functions-design.md §3, step 5b):
-// slot `id` is the word at RSP + 8·id.
+// slot `k` is the word at RSP + 8·k, and a word's slot is its home's
+// (`InSlot(k)`).
 //
 // The word in `register`: loaded from its slot, RBX the slot's address, or
 // moved from its home register through RBX, so RBX is written either way.
 fn Prog::word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
     match layout.homes.home(id) {
-        InSlot => then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Load(WordLoad(register, Rbx))),
+        InSlot(slot) => then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * slot)), AddRR(Rbx, Rsp)])), Load(WordLoad(register, Rbx))),
         InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
     }
 }
@@ -229,9 +232,9 @@ fn Prog::bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
     then(p.word_to(layout, id, register), Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]))
 }
 
-// `register` stored to the word's slot.
-fn Prog::word_store(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
-    then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * id)), AddRR(Rbx, Rsp)])), Store(WordStore(Rbx, register)))
+// `register` stored to slot `slot` of the frame.
+fn Prog::word_store(self p: Prog, layout: Layout, slot: Nat, register: Gpr) → Prog {
+    then(then(p, Block([MovRI(Rbx, BitVec::ofNat(8 * slot)), AddRR(Rbx, Rsp)])), Store(WordStore(Rbx, register)))
 }
 
 // `register` put in the word's home, where the word is live after (`out`).
@@ -239,7 +242,7 @@ fn Prog::word_from(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, regist
     match out.holds(id) {
         False => p,
         True => match layout.homes.home(id) {
-            InSlot => p.word_store(layout, id, register),
+            InSlot(slot) => p.word_store(layout, slot, register),
             InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
         },
     }
@@ -1192,7 +1195,10 @@ fn Source::layout(self src: Source, low: BitVec(64), homes: Homes, bodies: List<
 fn Prog::zeroes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
     match ids {
         Nil => p,
-        Cons(id, rest) => (match layout.word_fits(id) { False => p, True => p.word_store(layout, id, Rax) }).zeroes(layout, rest),
+        Cons(id, rest) => (match layout.homes.home(id) {
+            InSlot(slot) => match Succ(slot).leb(layout.words) { False => p, True => p.word_store(layout, slot, Rax) },
+            InReg(_) => p,
+        }).zeroes(layout, rest),
     }
 }
 
@@ -1734,7 +1740,7 @@ fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
 // RBP and R12 to R15 where no word of the frame lives, as homes.
 fn Frame::spare(self frame: Frame) → List<Home> {
     [InReg(0), InReg(1), InReg(2), InReg(3), InReg(4)].filter(λ (home: Home) => match home {
-        InSlot => False,
+        InSlot(_) => False,
         InReg(k) => !frame.of.homes_use(home_register(k)),
     })
 }

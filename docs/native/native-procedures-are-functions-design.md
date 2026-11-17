@@ -159,8 +159,9 @@ stack.at(i)                  the return address
 stack.at(i - 8·(s + W))      its W word slots; RSP for the whole body
 ```
 
-- **Slots.** Word `id` with home `InSlot` is the stack word at
-  `RSP + 8·id`. `InReg(k)` is `home_register(k)`, as now.
+- **Slots.** Word `id` with home `InSlot(k)` is the stack word at
+  `RSP + 8·k` (the word's own number until
+  native-procedure-frames-design.md §6.6). `InReg(k)` is `home_register(k)`, as now.
 - **Access.** `MovRR(Rbx, Rsp)`, `AddRI32(Rbx, 8·id)`, then the `Load` or
   `Store` a slot uses today. One instruction more than the static address
   costs; a `[rsp + disp32]` form in the stack model would make it one

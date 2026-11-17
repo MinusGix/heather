@@ -95,12 +95,12 @@ import omega;
 // What a call's proof reads off the compile's checks and the machine
 
 // Every word a fitting list names is in the file.
-theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → i < layout.words {
+theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → layout.word_fits(i).IsTrue() {
     match ids {
         Nil => λ i _ never => false_elim(never),
         Cons(id, rest) => λ i fit m => {
             match m {
-                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, known)),
+                Inl(e) => j(sym(e), λ x _ => layout.word_fits(x).IsTrue(), Bool::both(fit).left),
                 Inr(later) => layout.words_fit_mem(rest, i, known, later),
             }
         },
@@ -889,7 +889,7 @@ theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments
 // for it (`Target::ends_taken`), so the call runs as the callee's tree and
 // then, from each answer, the tree its site goes on with.
 theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog, label, lent: Nat, small: lent <= 3, arguments: List<Nat>,
-    inside: (i: Nat) → Mem(i, arguments) → (i < t.words) ∧ Mem(i, live),
+    inside: (i: Nat) → Mem(i, arguments) → (t.layout().word_fits(i).IsTrue()) ∧ Mem(i, live),
     within: p.calls(t.layout(), label, lent, arguments).Within(t.program),
     accepts: List<BitVec(64)> → Env → Type, callee: List<BitVec(64)> → Env → ITree<A>(Events::linux()), answer: List<BitVec(64)> → Env → A → Answer,
     performs: t.Callable(label, lent, accepts, callee, answer), accepted: accepts(env.words_at(arguments), env),

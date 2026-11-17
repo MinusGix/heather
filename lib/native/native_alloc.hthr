@@ -46,8 +46,10 @@ import set_tactic;
 // ---------------------------------------------------------------------------
 // Homes
 
-// A word's home: its slot, or register `k` of the pool.
-inductive Home { InSlot, InReg(k: Nat) }
+// A word's home: slot `k` of the running frame, the stack word at
+// RSP + 8·k, or register `k` of the pool
+// (docs/native/native-procedure-frames-design.md §2.2, §6.6).
+inductive Home { InSlot(k: Nat), InReg(k: Nat) }
 
 // The registers a word may live in: none of them is a statement's scratch,
 // the leaf's address register RBX, or one Linux's SYSCALL clobbers.
@@ -56,11 +58,15 @@ fn home_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp, R10] }
 fn home_register(k: Nat) → Gpr { match home_pool().nth(k) { None => R12, Some(r) => r } }
 
 fn Home::is_register(self home: Home, k: Nat) → Bool {
-    match home { InSlot => False, InReg(j) => j.same(k) }
+    match home { InSlot(_) => False, InReg(j) => j.same(k) }
+}
+
+fn Home::is_slot(self home: Home, k: Nat) → Bool {
+    match home { InSlot(j) => j.same(k), InReg(_) => False }
 }
 
 fn Home::in_pool(self home: Home) → Bool {
-    match home { InSlot => True, InReg(k) => Succ(k).leb(home_pool().len()) }
+    match home { InSlot(_) => True, InReg(k) => Succ(k).leb(home_pool().len()) }
 }
 
 // Each word's home, by id (past the list, its slot), and each loop's set:
@@ -99,7 +105,7 @@ fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
 }
 
 fn Homes::home(self homes: Homes, id: Nat) → Home {
-    match homes.of.nth(id) { None => InSlot, Some(home) => home }
+    match homes.of.nth(id) { None => InSlot(id), Some(home) => home }
 }
 
 // Every register home is in the pool.
@@ -107,13 +113,29 @@ fn List::homes_fit(self of: List<Home>) → Bool {
     match of { Nil => True, Cons(home, rest) => home.in_pool() && rest.homes_fit() }
 }
 
-fn Homes::fits(self homes: Homes) → Bool { homes.of.homes_fit() }
+// No listed word is in slot `k`.
+fn List::slot_free(self of: List<Home>, k: Nat) → Bool {
+    match of { Nil => True, Cons(home, rest) => !home.is_slot(k) && rest.slot_free(k) }
+}
+
+// No two listed words share a slot, and every listed slot is below `len`,
+// the list's length: a word past the list is in the slot of its own id
+// (`Homes::home`), which is then no listed word's.
+fn List::slots_apart(self of: List<Home>, len: Nat) → Bool {
+    match of {
+        Nil => True,
+        Cons(home, rest) => (match home { InSlot(k) => Succ(k).leb(len) && rest.slot_free(k), InReg(_) => True }) && rest.slots_apart(len),
+    }
+}
+
+// Every register home is in the pool, and no two words share a slot.
+fn Homes::fits(self homes: Homes) → Bool { homes.of.homes_fit() && homes.of.slots_apart(homes.of.len()) }
 
 // Whether some word lives in `register`.
 fn List::homes_use(self of: List<Home>, register: Gpr) → Bool {
     match of {
         Nil => False,
-        Cons(home, rest) => match home { InSlot => rest.homes_use(register), InReg(k) => home_register(k).same(register) || rest.homes_use(register) },
+        Cons(home, rest) => match home { InSlot(_) => rest.homes_use(register), InReg(k) => home_register(k).same(register) || rest.homes_use(register) },
     }
 }
 
@@ -209,7 +231,7 @@ fn Homes::misses(self homes: Homes, id, k: Nat, out: List<Nat>) → Bool {
 
 fn Homes::apart(self homes: Homes, id: Nat, out: List<Nat>) → Bool {
     match homes.home(id) {
-        InSlot => True,
+        InSlot(_) => True,
         InReg(k) => homes.misses(id, k, out),
     }
 }
@@ -231,7 +253,7 @@ fn Homes::nodes_apart(self homes: Homes, nodes: List<Node>, out: List<Nat>) → 
 fn Homes::slotted(self homes: Homes, ids: List<Nat>) → Bool {
     match ids {
         Nil => True,
-        Cons(id, rest) => match homes.home(id) { InSlot => homes.slotted(rest), InReg(_) => False },
+        Cons(id, rest) => match homes.home(id) { InSlot(_) => homes.slotted(rest), InReg(_) => False },
     }
 }
 
@@ -835,22 +857,52 @@ fn Homes::registers_of(self homes: Homes, row: List<Bool>, rows: List<List<Bool>
         Cons(other, rest) => match row.flag(at) || other.flag(id) {
             False => homes.registers_of(row, rest, id, Succ(at)),
             True => match homes.home(at) {
-                InSlot => homes.registers_of(row, rest, id, Succ(at)),
+                InSlot(_) => homes.registers_of(row, rest, id, Succ(at)),
                 InReg(k) => Cons(k, homes.registers_of(row, rest, id, Succ(at))),
             },
         },
     }
 }
 
-// The first register from `k` not in `used`, or the slot.
-fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
+// The first register from `k` not in `used`, or word `id`'s own slot.
+fn List::first_free(self used: List<Nat>, id, k, left: Nat) → Home {
     match left {
-        Zero => InSlot,
-        Succ(more) => match used.holds(k) { False => InReg(k), True => used.first_free(Succ(k), more) },
+        Zero => InSlot(id),
+        Succ(more) => match used.holds(k) { False => InReg(k), True => used.first_free(id, Succ(k), more) },
     }
 }
 
-fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops, homes.places, homes.pins, homes.rooms) }
+// Word `id`'s home set, the words before it that the list did not reach
+// each in the slot of its own id (`at` is the list's first word).
+fn List::home_put(self of: List<Home>, id: Nat, home: Home, at: Nat) → List<Home> {
+    match id {
+        Zero => match of { Nil => [home], Cons(_, rest) => Cons(home, rest) },
+        Succ(k) => match of { Nil => Cons(InSlot(at), List::home_put(Nil, k, home, Succ(at))), Cons(h, rest) => Cons(h, rest.home_put(k, home, Succ(at))) },
+    }
+}
+
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.home_put(id, home, 0), homes.loops, homes.places, homes.pins, homes.rooms) }
+
+// The homes of a frame's first `left` words with their slots numbered from
+// `next` in the words' order, a word in a register keeping it: a frame
+// then has one slot for each word that needs one.
+fn List::packed(self of: List<Home>, left, next: Nat) → List<Home> {
+    match left {
+        Zero => [],
+        Succ(more) => match of {
+            Nil => Cons(InSlot(next), List::packed(Nil, more, Succ(next))),
+            Cons(home, rest) => match home {
+                InSlot(_) => Cons(InSlot(next), rest.packed(more, Succ(next))),
+                InReg(k) => Cons(InReg(k), rest.packed(more, next)),
+            },
+        },
+    }
+}
+
+// How many of them are in slots.
+fn List::slot_count(self of: List<Home>) → Nat {
+    match of { Nil => 0, Cons(home, rest) => match home { InSlot(_) => Succ(rest.slot_count()), InReg(_) => rest.slot_count() } }
+}
 
 // Each word in turn, heaviest first, given the first register none of its
 // neighbours has, or its slot; a word live at the start keeps its slot.
@@ -859,7 +911,7 @@ fn List::colour(self order: List<Nat>, entry: List<Nat>, graph: List<List<Bool>>
         Nil => homes,
         Cons(id, rest) => match entry.holds(id) {
             True => rest.colour(entry, graph, homes),
-            False => rest.colour(entry, graph, homes.set(id, homes.registers_of(graph.row(id), graph, id, 0).first_free(0, home_pool().len()))),
+            False => rest.colour(entry, graph, homes.set(id, homes.registers_of(graph.row(id), graph, id, 0).first_free(id, 0, home_pool().len()))),
         },
     }
 }
@@ -906,7 +958,10 @@ fn Greedy::frame(self g: Greedy, loops: List<List<Nat>>, proc: Procedure) → Fr
     let words = proc.named();
     let rows = of.put(words - 1, of.row(words - 1), []);
     let coloured = proc.body.weights(g.loop_weight, 1, []).heaviest().colour([], rows, slots);
-    Frame(match proc.checks_under(coloured) { True => coloured.of, False => [] }, loops, [], words)
+    // One slot for each word the colouring left in one, numbered in the
+    // words' order; the frame is that many words.
+    let packed = coloured.of.packed(words, 0);
+    match proc.checks_under(Homes(packed, loops)) { True => Frame(packed, loops, [], packed.slot_count()), False => Frame([], loops, [], words) }
 }
 
 fn List::frames_by(self procs: List<Procedure>, g: Greedy, loops: List<List<Nat>>) → List<Frame> {
@@ -925,10 +980,17 @@ fn Greedy::frames(self g: Greedy, src: Source) → List<Frame> { src.procedures.
 fn Greedy::assign(self g: Greedy, src: Source) → Homes { g.colouring(src).or_else(src, Homes::slots(src)) }
 
 // Homes as numbers, for `write-elf` to read and spell (untrusted, like
-// every read): how many words have a home, each home (0 the slot, `k + 1`
-// register `k`), then each loop's set, its length first.
+// every read): how many words have a home, each home (0 the word's own
+// slot, as `main`'s are, `k + 1` register `k`), then each loop's set, its
+// length first.
 fn List::homes_spelled(self of: List<Home>) → List<Nat> {
-    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot => 0, InReg(k) => Succ(k) }, rest.homes_spelled()) }
+    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot(_) => 0, InReg(k) => Succ(k) }, rest.homes_spelled()) }
+}
+
+// A frame's homes, each slot with its number: `2k` slot `k`, `2k + 1`
+// register `k`.
+fn List::homes_numbered(self of: List<Home>) → List<Nat> {
+    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot(k) => 2 * k, InReg(k) => Succ(2 * k) }, rest.homes_numbered()) }
 }
 
 fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
@@ -943,7 +1005,7 @@ fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.
 fn List::frames_spelled(self frames: List<Frame>) → List<Nat> {
     match frames {
         Nil => [],
-        Cons(frame, rest) => Cons(frame.words, Cons(frame.of.len(), frame.of.homes_spelled() ++
+        Cons(frame, rest) => Cons(frame.words, Cons(frame.of.len(), frame.of.homes_numbered() ++
             Cons(frame.pins.len(), frame.pins.homes_spelled() ++ rest.frames_spelled()))),
     }
 }

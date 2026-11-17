@@ -51,8 +51,8 @@ theorem cat_within(): cat_size() <= io_data_limit() { Nat::leb_sound(cat_size(),
 // (native_alloc's `Source::homes`), spelled: the compile checks them, and
 // evaluating the allocator too would overrun the declaration's fuel.
 fn cat_homes() → Homes {
-    Homes([InSlot, InSlot, InSlot, InSlot, InReg(1), InReg(0), InReg(0), InReg(1), InReg(0), InSlot,
-            InSlot, InSlot, InReg(3), InReg(0), InReg(5), InSlot, InReg(2), InReg(4), InReg(4), InSlot],
+    Homes([InSlot(0), InSlot(1), InSlot(2), InSlot(3), InReg(1), InReg(0), InReg(0), InReg(1), InReg(0), InSlot(9),
+            InSlot(10), InSlot(11), InReg(3), InReg(0), InReg(5), InSlot(15), InReg(2), InReg(4), InReg(4), InSlot(19)],
         [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [1, 4, 5, 16, 3, 19, 10, 15, 0, 2, 11, 15], [0, 2, 16, 10, 11, 1, 19, 15]])
 }
 

@@ -53,7 +53,7 @@ Checked against master at `fee1d30`, 2026-11-17.
 
 - `Layout { low, words, capacities, homes, pool, taken, procedures, functions }`
   (`native_compile.hthr`): one `homes`, one `words`.
-- `Home { InSlot, InReg(k) }` (`native_alloc.hthr`). A slotted word `id`
+- `Home { InSlot, InReg(k) }` (`native_alloc.hthr`, before F3). A slotted word `id`
   is the stack word at `RSP + 8·id`, so a frame is `layout.words` words.
 - `Procedure::entry_code` counts the depth, pushes `layout.kept()`
   (`Homes::kept`: RBX and those of R12–R15 and RBP that some word lives
@@ -427,3 +427,39 @@ probe in `verified.rs` under `index_rooms()`, is left as it is. That call
 asks whether a placement lowers, yes or no, and reads nothing of the room;
 a smaller table would cost a table's evaluation at every probe and change
 no answer.
+
+### 6.6 F3: slots by index
+
+`Home` is `InSlot(k) | InReg(k)`: a slotted word is the stack word at
+`RSP + 8·k`, whatever its own number. The frame's file of words
+(`Target::Placed`, `Layout::Keeps`) was already a file of slots, so the
+region's lemmas did not change; `Homes::number` reads a word's entry at its
+slot, and the slot lemmas of `native_compile_homes` and the code of
+`native_compile_segments` take the slot from the home.
+
+- **A word fits by its slot.** `Layout::word_fits(id)` asks that the
+  word's slot is under `layout.words`, and nothing of a word in a
+  register. The proofs' premise for a word is that check itself
+  (`layout.word_fits(id).IsTrue()`), where it was `id < words`;
+  `Layout::home_inside` gives the slot's bound where a slot is read.
+- **No two words share a slot.** `Homes::fits` also checks
+  `List::slots_apart`: every listed slot is under the list's length, and
+  no two listed words have one. A word past the list has the slot of its
+  own number, which is past every listed one. `Homes::slots_differ` is
+  what a store to one word's slot needs of every other word
+  (`Homes::number_put_other`).
+- **A procedure's frame is packed.** `Greedy::frame` renumbers the slots
+  its colouring left from zero in the words' order (`List::packed`), and
+  the frame is `List::slot_count` words: a procedure whose words all live
+  in registers opens no frame words at all. `main` keeps each slotted word
+  in the slot of its own number, so its frame and `write-elf`'s literals
+  for it are as before.
+- **Not built: slots shared by liveness** (§2.2). Two words never live
+  together could share a slot, as they share a register. That needs the
+  interference check applied to slots and a `Held` whose file is read
+  only at live words' slots; the check here is the stronger "no two
+  words", which every packing satisfies.
+
+`List::frames_spelled` writes a frame's homes with their slots
+(`List::homes_numbered`: `2k` slot `k`, `2k + 1` register `k`), and
+`write-elf` reads them back.
