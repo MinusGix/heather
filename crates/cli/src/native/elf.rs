@@ -653,7 +653,7 @@ fn homes_literal(numbers: &[u64], places: Option<&str>) -> Option<String> {
         sets.push(format!("[{}]", more[..len].iter().map(u64::to_string).collect::<Vec<_>>().join(", ")));
         at = &more[len..];
     }
-    let places = places.map(|places| format!(", {places}")).unwrap_or_default();
+    let places = places.map(|places| format!(", places := {places}")).unwrap_or_default();
     Some(format!("Homes([{}], [{}]{places})", of.join(", "), sets.join(", ")))
 }
 

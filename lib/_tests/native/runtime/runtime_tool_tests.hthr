@@ -55,4 +55,5 @@ theorem raised_sum_status(): raise_sum(BitVec::ofNat(97), BitVec::ofNat(98)) = B
 // It compiles, the functions' values placed by the function compiler's
 // heuristic.
 theorem raised_sum_compiles(): raised_sum().source().refusal(io_data_low(),
-    Homes::slots(raised_sum().source()).placed(plan_program(raised_sum().source().functions))) = [] { refl }
+    Homes::slots(raised_sum().source()).placed(plan_program(raised_sum().source().functions)),
+    raised_sum().source().bodies()) = [] { refl }
