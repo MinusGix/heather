@@ -410,13 +410,16 @@ initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
 
-**The surface (built, 2026-11-16).** `b"valid\n"` is the name `b` with a
-string literal right after it, no space between (`Parser::byte_string`; `b`
-alone or `b "x"` is what it was). Its bytes are the string's characters,
-each ASCII, since a non-ASCII character is refused rather than read as its
-UTF-8 encoding; the escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`,
-`\"`, `\0`, `\u{…}` up to `7F`), and a byte above `0x7F` has no spelling
-yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_string_*`)
+**The surface (built, 2026-11-16).** `b"valid\n"` is one token, `ByteStr`,
+from its `b` (`b` alone or `b "x"` is what it was), cut the same by the
+Rust lexer (`lex_byte_string`) and Heather's own scanner
+(`lib/lang/lexer/lexer_scan.hthr`, `step_byte_string`). Its bytes are its
+characters, each ASCII, since a non-ASCII character is refused rather than
+read as its UTF-8 encoding (the message spells its bytes as escapes); the
+escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`) but
+`\u{…}`, which names a scalar value and not a byte, and `\xHH`, exactly
+two hexadecimal digits, for any byte (`b"\xC3\xA9"`). A string or
+character literal has no `\x`. It elaborates (`Literals::elab_byte_string_*`)
 to the collection literal of its numerals at `[u8; n]`, or at
 `List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
 exactly the term `[118, 97, …]` would be, with nothing new in the kernel;

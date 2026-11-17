@@ -164,6 +164,8 @@ def KIND_COMMENT: u64 = 68;
 // Added after the two a scanner has, so no code above moves.
 def KIND_OPLUS: u64 = 69;
 def KIND_TILDE: u64 = 70;
+// A byte string, `b"…"` (docs/native/io-programs-design.md §5 D3).
+def KIND_BYTE_STR: u64 = 71;
 
 // ---------------------------------------------------------------------------
 // States: the number in the low byte, the accepted kind above it.
@@ -273,6 +275,14 @@ def CHR_MORE_ESC: u64 = 0x00a1;
 def CHR_MORE_U: u64 = 0x00a2;
 def CHR_MORE_BRACE: u64 = 0x00a3;
 def CHR_MORE_HEX: u64 = 0x00a4;
+// The identifier `b`, which a `"` right after it makes a byte string's
+// opening (an identifier still, in the names' family, and accepted as one).
+def IDENT_B: u64 = 0x011d;
+// A byte string: its bytes, an escape, and `\x`'s two hexadecimal digits.
+def BSTR: u64 = 0x00a8;
+def BSTR_ESC: u64 = 0x00a9;
+def BSTR_X: u64 = 0x00aa;
+def BSTR_X1: u64 = 0x00ab;
 
 // ---------------------------------------------------------------------------
 // Refusals: why a source is refused, each the Rust lexer's message
@@ -328,6 +338,11 @@ def REFUSED_ESCAPE_HEX: u64 = 20;
 // A byte that cannot be where it is in UTF-8, which a source given as text
 // never holds.
 def REFUSED_NOT_UTF8: u64 = 21;
+// A byte string: the byte refused is not ASCII (a character past it is
+// more bytes than it shows); the byte refused is no hexadecimal digit of a
+// `\x` escape.
+def REFUSED_NOT_ASCII: u64 = 22;
+def REFUSED_BYTE_ESCAPE: u64 = 23;
 
 // The states that refuse, one for each reason a byte can be refused for.
 def FAIL_BANG_EQ: u64 = 0x0202;
@@ -350,6 +365,8 @@ def FAIL_ESCAPE: u64 = 0x1202;
 def FAIL_ESCAPE_BRACE: u64 = 0x1302;
 def FAIL_ESCAPE_HEX: u64 = 0x1402;
 def FAIL_NOT_UTF8: u64 = 0x1502;
+def FAIL_NOT_ASCII: u64 = 0x1602;
+def FAIL_BYTE_ESCAPE: u64 = 0x1702;
 
 // ---------------------------------------------------------------------------
 // A finished token of each kind that ends where it is first accepted: state 1,
@@ -407,6 +424,7 @@ def DONE_COLON_EQ: u64 = 0x4001;
 def DONE_COLON_COLON: u64 = 0x4101;
 def DONE_OPLUS: u64 = 0x4501;
 def DONE_TILDE: u64 = 0x4601;
+def DONE_BYTE_STR: u64 = 0x4701;
 
 // ---------------------------------------------------------------------------
 // The families: each state's way on, one byte further.
@@ -468,10 +486,11 @@ runtime fn step_start_mid(s, b: u64) → u64 {
 }
 
 // A token's first byte, from 64; `END` comes here too, and begins nothing.
-// Bytes: 95 `_`, 123 `{`, 125 `}`, 91 `[`, 93 `]`, 124 `|`, 64 `@`, 94 `^`,
-// 126 `~`.
+// Bytes: 98 `b`, 95 `_`, 123 `{`, 125 `}`, 91 `[`, 93 `]`, 124 `|`, 64 `@`,
+// 94 `^`, 126 `~`.
 runtime fn step_start_high(s, b: u64) → u64 {
-    if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { IDENT }
+    if b.eq_bit(98) { IDENT_B }
+    else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.eq_bit(95) { IDENT }
     else if b.eq_bit(123) { DONE_LBRACE }
     else if b.eq_bit(125) { DONE_RBRACE }
     else if b.eq_bit(91) { DONE_LBRACKET }
@@ -509,7 +528,15 @@ runtime fn step_trivia(s, b: u64) → u64 {
 
 // Identifiers and holes.
 runtime fn step_names(s, b: u64) → u64 {
-    if s.eq_bit(IDENT) {
+    if s.eq_bit(IDENT_B) {
+        // The identifier `b`: a `"` (34) right after it opens a byte
+        // string; anything else goes on as in an identifier.
+        // Bytes: 95 `_`, 58 `:`.
+        if b.eq_bit(34) { BSTR }
+        else if b.bor(32).sub(97).unsigned_lt_bit(26) || b.sub(48).unsigned_lt_bit(10) || b.eq_bit(95) { IDENT }
+        else if b.eq_bit(58) { ID_COLON }
+        else { DEAD }
+    } else if s.eq_bit(IDENT) {
         // In an identifier: more of it, or a `:` (58) that may begin a
         // `::` join.
         // Bytes: 95 `_`.
@@ -1049,6 +1076,40 @@ runtime fn step_char_more(s, b: u64) → u64 {
     }
 }
 
+// Byte strings, `b"…"` (docs/native/io-programs-design.md §5 D3): ASCII
+// characters, a string's escapes but `\u`, and `\x` with two hexadecimal
+// digits for any byte.
+runtime fn step_byte_string(s, b: u64) → u64 {
+    if s.eq_bit(BSTR) {
+        // In a byte string: the closing quote (34), an escape (92), an
+        // ASCII byte but a line feed; a byte past ASCII is refused.
+        if b.eq_bit(34) { DONE_BYTE_STR }
+        else if b.eq_bit(92) { BSTR_ESC }
+        else if b.eq_bit(10) { FAIL_UNTERMINATED }
+        else if b.unsigned_lt_bit(128) { BSTR }
+        else if b.unsigned_lt_bit(256) { FAIL_NOT_ASCII }
+        else { FAIL_UNTERMINATED }
+    } else if s.eq_bit(BSTR_ESC) {
+        // After `\` in a byte string: `n t r \ ' " 0`, or `x` (120).
+        // Bytes: 110 `n`, 116 `t`, 114 `r`, 92 `\`, 39 `'`, 34 `"`, 48
+        // `0`.
+        if b.eq_bit(110) || b.eq_bit(116) || b.eq_bit(114) || b.eq_bit(92) || b.eq_bit(39) || b.eq_bit(34) || b.eq_bit(48) { BSTR }
+        else if b.eq_bit(120) { BSTR_X }
+        else if b.unsigned_lt_bit(256) { FAIL_ESCAPE }
+        else { FAIL_ESCAPE_END }
+    } else if s.eq_bit(BSTR_X) {
+        // After `\x`: the first of two hexadecimal digits.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { BSTR_X1 }
+        else { FAIL_BYTE_ESCAPE }
+    } else if s.eq_bit(BSTR_X1) {
+        // The second.
+        if b.sub(48).unsigned_lt_bit(10) || b.bor(32).sub(97).unsigned_lt_bit(6) { BSTR }
+        else { FAIL_BYTE_ESCAPE }
+    } else {
+        DEAD
+    }
+}
+
 // `λ`, `¬` and argument slots.
 runtime fn step_two_byte(s, b: u64) → u64 {
     if s.eq_bit(LEAD_CE) {
@@ -1208,7 +1269,7 @@ runtime fn scan_choose(f, s, b: u64) → u64 {
             if f.unsigned_lt_bit(21) {
                 if f.unsigned_lt_bit(19) { step_char_escape(s, b) } else if f.unsigned_lt_bit(20) { step_two_byte(s, b) } else { step_three_byte(s, b) }
             } else {
-                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else if f.unsigned_lt_bit(24) { step_char_more(s, b) } else { DEAD }
+                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else if f.unsigned_lt_bit(24) { step_char_more(s, b) } else if f.unsigned_lt_bit(25) { step_byte_string(s, b) } else { DEAD }
             }
         }
     }

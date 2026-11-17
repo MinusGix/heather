@@ -972,53 +972,6 @@ impl Parser {
         })
     }
 
-    /// A byte-string literal `b"valid\n"`: the identifier `b` with a string
-    /// literal right after it, no space between (docs/native/io-programs-design.md
-    /// §5 D3). Adjacency decides, as it does for `?name` and `a::b` in the
-    /// lexer; here it is read off the two tokens' spans, so the lexer (and
-    /// the scanner held to it, `lib/lang/lexer`) needs no token kind of its
-    /// own. `b "x"` and `b` followed by a string on another line were parse
-    /// errors before, so nothing that parsed reads differently.
-    ///
-    /// The string's characters are its bytes, so each one must be ASCII: a
-    /// byte above `0x7F` has no spelling yet (`\xHH` is the escape it wants,
-    /// issues/byte-string-hex-escape.md), and a non-ASCII character is
-    /// refused rather than read as its UTF-8 encoding, so that a byte string
-    /// never means more bytes than it shows characters.
-    fn byte_string(&mut self) -> R<Option<Expr>> {
-        // Not `at_kw`: `b` is no keyword (a local named `b` reads as
-        // itself everywhere), only the prefix of a token-shaped literal,
-        // which the editor grammar spells as one token (`byte_string`).
-        if !matches!(self.peek(), TokKind::Ident(name) if name == "b") {
-            return Ok(None);
-        }
-        let Some(next) = self.toks.get(self.pos + 1) else {
-            return Ok(None);
-        };
-        let TokKind::Str(text) = &next.kind else {
-            return Ok(None);
-        };
-        let start = self.peek_span();
-        if next.span.start != start.end {
-            return Ok(None);
-        }
-        let span = start.join(next.span);
-        if let Some(c) = text.chars().find(|c| !c.is_ascii()) {
-            return Err(ParseError {
-                msg: format!(
-                    "a byte string holds ASCII characters, one byte each, and `{c}` (U+{:04X}) is not one; \
-                     write a byte above 0x7F as a numeral in a vector literal (`[0xC3, 0xA9]`)",
-                    u32::from(c)
-                ),
-                span: next.span,
-            });
-        }
-        let bytes = text.bytes().collect();
-        self.bump();
-        self.bump();
-        Ok(Some(Expr { kind: ExprKind::ByteStr(bytes), span }))
-    }
-
     /// Is the next token the identifier `kw`?
     fn at_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
@@ -6117,9 +6070,6 @@ impl Parser {
             self.bump();
             return Ok(Expr { kind: ExprKind::Refl, span: start });
         }
-        if let Some(bytes) = self.byte_string()? {
-            return Ok(bytes);
-        }
         // `by t` runs the tactic `t` against the expected type. Rule 1: only
         // when a name follows, so a local called `by` (`by(a)`, `by + 1`)
         // still reads as itself.
@@ -6336,6 +6286,13 @@ impl Parser {
                 let s = s.clone();
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Str(s), span: sp })
+            }
+            // `b"…"`, one token whose bytes the lexer has read
+            // (docs/native/io-programs-design.md §5 D3).
+            TokKind::ByteStr(bytes) => {
+                let bytes = bytes.clone();
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::ByteStr(bytes), span: sp })
             }
             TokKind::LParen => {
                 let open = self.bump().span;
@@ -7526,15 +7483,15 @@ mod tests {
         parse_file(&src).unwrap().items.remove(0).into_decl().body.result.kind
     }
 
-    // A byte string is `b` with a string right after it, its bytes the
-    // string's ASCII characters; `b` with a space before the string, or `b`
-    // alone, is the name it always was, and a character that is not ASCII is
-    // refused at the string (docs/native/io-programs-design.md §5 D3).
+    // A byte string is the token `b"…"`, its bytes ASCII characters and
+    // escapes; `b` with a space before a string, or `b` alone, is the name it
+    // always was, and a character that is not ASCII is refused where it
+    // stands (docs/native/io-programs-design.md §5 D3).
     #[test]
     fn byte_strings_are_b_against_a_string() {
         assert!(matches!(body(r#"b"hi\n""#), ExprKind::ByteStr(b) if b == b"hi\n"), "{:?}", body(r#"b"hi\n""#));
         assert!(matches!(body(r#"b"""#), ExprKind::ByteStr(b) if b.is_empty()));
-        assert!(matches!(body(r#"b"\u{7f}\0""#), ExprKind::ByteStr(b) if b == [0x7f, 0]));
+        assert!(matches!(body(r#"b"\x7f\0\xFF""#), ExprKind::ByteStr(b) if b == [0x7f, 0, 0xff]));
         assert!(matches!(body("b"), ExprKind::Var(name) if name == "b"));
         let call = body(r#"g(b"x", b)"#);
         let (head, args, _) = as_call(&call);
@@ -7543,9 +7500,10 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         assert!(parse_file(r#"fn f() -> X { b "x" }"#).is_err());
         assert!(parse_file(r#"fn f() -> X { bb"x" }"#).is_err());
-        let refused = parse_file(r#"fn f() -> X { b"\u{e9}" }"#).unwrap_err();
+        let refused = parse_file(r#"fn f() -> X { b"aé" }"#).unwrap_err();
         assert!(refused.msg.contains("a byte string holds ASCII characters"), "{}", refused.msg);
-        assert_eq!(refused.span.start, r#"fn f() -> X { b"#.len());
+        assert!(refused.msg.contains(r"`\xC3\xA9`"), "{}", refused.msg);
+        assert_eq!(refused.span.start, r#"fn f() -> X { b"a"#.len());
     }
 
     /// The head of an application, as a string — a name or an operator

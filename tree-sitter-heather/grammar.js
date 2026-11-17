@@ -783,10 +783,10 @@ module.exports = grammar({
     // the compiler. Tokens keep spaces and comment markers inside literals.
     character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
     string: _ => token(seq('"', repeat(choice(/[^"\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
-    // `b"…"`: a byte string (docs/native/io-programs-design.md §5 D3). The
-    // compiler reads it as the name `b` with a string right after it, and
-    // refuses a character that is not ASCII there.
-    byte_string: _ => token(seq('b"', repeat(choice(/[\x00-\x09\x0b\x0c\x0e-\x21\x23-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
+    // `b"…"`: a byte string (docs/native/io-programs-design.md §5 D3), one
+    // token to the compiler too: ASCII characters, a string's escapes but
+    // `\u{…}`, and `\xHH` for any byte.
+    byte_string: _ => token(seq('b"', repeat(choice(/[\x00-\x09\x0b\x0c\x0e-\x21\x23-\x5b\x5d-\x7f]/, /\\[ntr\\'"0]/, /\\x[0-9A-Fa-f]{2}/)), '"')),
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),
     argument_slot: _ => token(/·[₀₁₂₃₄₅₆₇₈₉]*/),
     comment: _ => token(seq('//', /[^\n]*/)),
