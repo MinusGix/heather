@@ -22,6 +22,7 @@ import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import bitvec_ring;
+import ring;
 import omega;
 import tactic;
 import char;
@@ -34,9 +35,7 @@ import function_ir_replay;
 import function_ir_rule;
 import runtime;
 
-rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 {
-    trans(cong_fn(λ (z: BitVec(w)) => z - a, sym(BitVec::zero_add(w, a))), BitVec::add_sub_cancel(w, 0, a))
-}
+rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 { ring }
 
 // The first byte of a span, or zero of an empty one, with the length
 // less itself added on.
