@@ -39,8 +39,9 @@ runtime fn List::newlines(self span: List<u8>, length, i, count: u64) → u64
 }
 
 // At most one newline a byte.
-theorem List::newlines_at_most(self span: List<u8>, length, i, count: u64, room: count.toNat() + (length.toNat() - i.toNat()) < 2 ^ 64):
-    span.newlines(length, i, count).toNat() <= count.toNat() + (length.toNat() - i.toNat()) {
+theorem List::newlines_at_most(self span: List<u8>, length, i, count: u64,
+    started: i <= length, room: count.toNat() + (length - i).toNat() < 2 ^ 64):
+    span.newlines(length, i, count) <= count + (length - i) {
     induct List::newlines(span, length, i, count); all_goals { bv_omega }
 }
 
@@ -50,6 +51,6 @@ runtime fn List::count_lines(self span: List<u8>, length: u64) → u64 {
 }
 
 theorem List::count_lines_at_most(self span: List<u8>, length: u64): span.count_lines(length) <= length {
-    let bound = span.newlines_at_most(length, 0, 0, bv_omega);
+    let bound = span.newlines_at_most(length, 0, 0, bv_omega, bv_omega);
     bv_omega
 }
