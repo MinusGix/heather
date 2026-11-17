@@ -79,7 +79,11 @@ word meet before any gate is built. Hash-consing every and gate instead
 (issues/bv-decide-shared-subcircuits.md) was built and set aside: each
 lookup and insertion in a `NatMap` table costs the kernel several hundred
 steps while it builds the circuit inside a conversion, ten times the gate
-itself, which put 64-bit circuits past one conversion's budget.
+itself, which put 64-bit circuits past one conversion's budget. A level of
+a lookup reads the key's low bit as `Nat::low_bit`, a recursion two at a
+time like `half` that the kernel runs on a numeral in a few steps (it was
+`n - 2·⌊n/2⌋`, a halving, a product and a difference); that took between a
+tenth and a third off each proof check in the probes.
 
 A rule is a case of `AC::merge` (with its equation in `AC::merge_ok`) or of
 `BVExpr::norm` (with its case in `BVExpr::norm_eval`).
@@ -159,10 +163,20 @@ numerals, `zero_extend`, `truncate`, `take_low`, `drop_low`,
 Atoms must be locals; anything else is unfolded, and refused when it
 cannot be.
 
+A claim is `a = b` between words, `p = q` between Booleans, `p = True`, or
+`a < b`, `a <= b`, `a ≠ b` between words (`BVClaim`): `<` reads as
+`unsigned_lt_bit`, `a <= b` as `!b.unsigned_lt_bit(a)`, `≠` as the negated
+equation. The goal is one; so is every hypothesis the reader can take, and
+a local it cannot read (a `Nat`, a claim over other types) is passed over,
+which is sound since dropping a hypothesis only weakens what is refuted. The
+predicate refuted is `¬h₁ ∨ … ∨ ¬hₖ ∨ goal` over one set of atoms, so a
+counterexample names values that meet every hypothesis. The read-back is
+the goal's, below `k` uses of `layout_imp`, each fed its hypothesis's proof
+carried to the layout by `layout_*_hyp`, the converse of the goal's
+bridge.
+
 ## Open
 
-- Hypotheses: a goal under word hypotheses (`h: x.unsigned_lt_bit(10) = True`)
-  is not read yet; the predicate would take them as `PNot(h) ∨ goal`.
 - Non-local atoms (a field, a call the reader cannot unfold) could be
   abstracted as fresh words instead of refused.
-- A `Prop` comparison (`x < y`) as a goal.
+- `a.toNat() = b.toNat()` and `a.toNat() = n` as claims.
