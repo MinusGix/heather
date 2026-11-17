@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,performance,native]
 area: heather-in-heather
 created: 2026-10-10
-updated: 2026-10-21
+updated: 2026-11-16
 ---
 
 `Straight(…)(vars, state)` (`lib/elf64_straight.hthr`,
@@ -68,3 +68,4 @@ time than their kernel gate, cold, with the same kernel step counts.
 - 2026-10-21: Straight (lib/elf64_straight.hthr), this issue's workload, was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0). The residual stays open: [[native-one-wp]]'s computed Wp is the same shape (a structural former whose continuations whnf respells) and is expected to show it again; re-measure there.
 - 2026-10-21: **Re-measured on `Wp`** ([[native-one-wp]], `--only --timings` over the two loop controls of `crates/elab/tests/linux_wp.rs`, cached prefix, width 8). It shows again, and only where a syscall is: `drain_pass` (the I/O loop's pass: a read whose three answer branches each check against the continuation over `linux_answered`'s state) spends most of its time in `elab_whnf_ns`, several times its kernel gate; `count_pass` (the pure loop's pass, seven items over the frame view, no syscall) elaborates in about its gate's time. So the view record and the extra continuation arguments are not the cost (no monomorphic split, design §6.4); the answered state copied into each branch's continuation is. `drain_pass` is this issue's workload now, and the cost is felt in the suite: its test (`linux_wp.rs`) takes most of a test process's CPU rail alone, so the pure loop's tests live in a file of their own.
 - 2026-11-05: gardener: cites a file it shares with [[elab-emits-normal-form-of-matched-type-argument]] (`docs/kernel/nbe-conversion-design.md`); [[refusal-tests-pin-their-reason]] (`crates/elab/tests/linux_wp.rs`).
+- 2026-11-16: The term side of the same split is [[small-step-reducer-on-computed-terms]]: `Readback::term_head` declines an annotated pair and a literal, and the declined term goes to the reducer at full fuel. `Sha256::pad_long` and `clamp_literal` are its workloads, and `reduce_steps`/`reduce_frames` in `--timings` measure it.

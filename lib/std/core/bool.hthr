@@ -420,6 +420,11 @@ theorem Bool::is_true_and(self a: Bool): (b: Bool) → (a && b).IsTrue() → a.I
     }
 }
 
+// The same with the two tests read off the hypothesis.
+theorem Bool::both({a, b: Bool}, both: (a && b).IsTrue()): a.IsTrue() ∧ b.IsTrue() {
+    Bool::is_true_and(a, b, both)
+}
+
 theorem Bool::is_true_or(self a: Bool): (b: Bool) → (a || b).IsTrue() → a.IsTrue() ∨ b.IsTrue() {
     match a {
         False => λ b h => Inr(h),

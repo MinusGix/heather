@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize function_ir_explain
+// lib-closure: function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize function_ir_explain function_ir_identities
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -94,4 +94,5 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_prune", include_str!("../../../../lib/native/function_ir/function_ir_prune.hthr")),
     ("function_ir_optimize", include_str!("../../../../lib/native/function_ir/function_ir_optimize.hthr")),
     ("function_ir_explain", include_str!("../../../../lib/native/function_ir/function_ir_explain.hthr")),
+    ("function_ir_identities", include_str!("../../../../lib/native/function_ir/function_ir_identities.hthr")),
 ];

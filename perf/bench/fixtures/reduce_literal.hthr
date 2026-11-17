@@ -1,0 +1,21 @@
+// `clamp_literal` of lib/_tests/std/tactic/simp_branch_tests.hthr on its own,
+// for scripts/bench-probes' `reduce/clamp-literal` case: a call at literals
+// that `simp_only` computes. The two comparisons of `u64` literals are done
+// by the substitution reducer (issues/small-step-reducer-on-computed-terms.md);
+// the case's `reduce_steps` and `reduce_frames` are what a fix moves. A copy,
+// because `--only` does not reach a declaration of a module that also holds
+// expected refusals.
+// bench-warm: lib/std/tactic
+import logic; import bool; import nat; import list; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import vector;
+
+fn clamp(x, lo, hi: u64) → u64 {
+    if x < lo {
+        lo
+    } else if hi < x {
+        hi
+    } else {
+        x
+    }
+}
+
+theorem clamp_literal(): clamp(70, 10, 50) = 50 { simp_only(clamp) }

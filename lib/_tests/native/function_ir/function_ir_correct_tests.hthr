@@ -87,11 +87,11 @@ theorem leaf_after_caller_rooms():
 }
 
 // The table the planner's placement asks for: neither function saves, so
-// the leaves ask for nothing, and the caller for its call slots and the
-// call.
+// the leaves ask for nothing, and the caller, which keeps nothing across
+// its call and so asks for no call slots, for the call's 24 bytes.
 theorem leaf_after_caller_planned():
     (program_room_planned(leaf_after_caller())(0) = 0) ∧
-        ((program_room_planned(leaf_after_caller())(1) = 88) ∧ (program_room_planned(leaf_after_caller())(2) = 0)) {
+        ((program_room_planned(leaf_after_caller())(1) = 24) ∧ (program_room_planned(leaf_after_caller())(2) = 0)) {
     ⟨refl, ⟨refl, refl⟩⟩
 }
 
@@ -105,7 +105,7 @@ theorem no_room_refused(): lower_program_roomed(leaf_after_caller(), plan_progra
 
 // And one that leaves the caller its frame but not its callee's room.
 theorem callee_room_refused():
-    lower_program_roomed(leaf_after_caller(), plan_program(leaf_after_caller()), [], λ (f: Nat) => match f { Zero => 8, Succ(_) => 88 }).is_some() = False {
+    lower_program_roomed(leaf_after_caller(), plan_program(leaf_after_caller()), [], λ (f: Nat) => match f { Zero => 8, Succ(_) => 24 }).is_some() = False {
     refl
 }
 

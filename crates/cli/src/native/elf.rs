@@ -235,7 +235,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
-fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, Spilling(mask) => 32 + mask }} }}
+fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask, Short(name) => 289 + name }} }}
 fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
 ");
     let mut fork = elab.fork();
@@ -287,7 +287,9 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let places = if functions == 0 { None } else {
         let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
             16 => Ok("Folded".to_string()),
-            n if n >= 32 => Ok(format!("Spilling({})", n - 32)),
+            n if n >= 289 => Ok(format!("Short({})", n - 289)),
+            n if n >= 33 => Ok(format!("Spilling({})", n - 33)),
+            n if n >= 24 => Ok(format!("CallSlots({})", n - 24)),
             n if n >= 17 => Ok(format!("Saving({})", n - 17)),
             n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
         }).collect::<Result<Vec<_>, String>>()?;

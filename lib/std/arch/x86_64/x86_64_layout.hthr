@@ -174,6 +174,41 @@ theorem jumps_back(origin: BitVec(64), from, size: Nat, displacement: BitVec(32)
                 trans(sym(rip_compose(origin, to, Nat::pow(2, 64))), BitVec::iterate_increment_period(64, next_rip(origin, to))))))
 }
 
+// A short jump (two bytes, `7x rel8` or `EB rel8`): the displacement a
+// jump ending at `end` takes to land on `to`, their distance modulo 2^8,
+// and its landing, ahead or behind. A distance past a byte's signed range
+// reads as another one, so the landing check is what refuses a short jump
+// too far from its target.
+fn short_rel(end, to: Nat) → BitVec(8) { BitVec::ofNat((Nat::pow(2, 8) + to) - end) }
+fn ShortForward(from: Nat, displacement: BitVec(8), to: Nat) → Type {
+    from + 2 + displacement.sign_extend(56).toNat() = to
+}
+fn ShortBack(from: Nat, displacement: BitVec(8), to: Nat) → Type {
+    from + 2 + displacement.sign_extend(56).toNat() = to + Nat::pow(2, 64)
+}
+theorem short_lands_forward(from: Nat, displacement: BitVec(8), to: Nat,
+    same: asm_same(from + 2 + displacement.sign_extend(56).toNat(), to) = True): ShortForward(from, displacement, to) {
+    asm_same_eq(from + 2 + displacement.sign_extend(56).toNat(), to, same)
+}
+theorem short_lands_back(from: Nat, displacement: BitVec(8), to: Nat,
+    same: asm_same(from + 2 + displacement.sign_extend(56).toNat(), to + Nat::pow(2, 64)) = True): ShortBack(from, displacement, to) {
+    asm_same_eq(from + 2 + displacement.sign_extend(56).toNat(), to + Nat::pow(2, 64), same)
+}
+theorem short_jumps_forward(origin: BitVec(64), from: Nat, displacement: BitVec(8), to: Nat, lands: ShortForward(from, displacement, to)):
+    short_branch_target(next_rip(origin, from), displacement) = next_rip(origin, to) {
+    let reading = displacement.sign_extend(56).toNat();
+    trans(short_branch_forward(next_rip(origin, from), reading, displacement, refl),
+        trans(rip_compose(origin, from, 2 + reading), rip_count(origin, trans(sym(Nat::add_assoc(from, 2, reading)), lands))))
+}
+theorem short_jumps_back(origin: BitVec(64), from: Nat, displacement: BitVec(8), to: Nat, lands: ShortBack(from, displacement, to)):
+    short_branch_target(next_rip(origin, from), displacement) = next_rip(origin, to) {
+    let reading = displacement.sign_extend(56).toNat();
+    trans(short_branch_forward(next_rip(origin, from), reading, displacement, refl),
+        trans(rip_compose(origin, from, 2 + reading),
+            trans(rip_count(origin, trans(sym(Nat::add_assoc(from, 2, reading)), lands)),
+                trans(sym(rip_compose(origin, to, Nat::pow(2, 64))), BitVec::iterate_increment_period(64, next_rip(origin, to))))))
+}
+
 // The same for a piece placed at `at`, whose jumps are closed facts about
 // its own offsets from its start: `from_at` and `to_at` are where `from` and
 // `to` are once it is placed.

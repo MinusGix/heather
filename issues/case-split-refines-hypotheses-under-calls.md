@@ -1,6 +1,6 @@
 ---
 title: A case split refines a hypothesis that reaches the test through a call, and match h: refines the context
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [elaborator,matching,proofs]
 area: language
@@ -44,3 +44,26 @@ which restates the callee's body in the motive: what [[goal-motive-by-scrutinee-
 ## Done when
 
 Both probes above check with `False => absurd(same)`, and `Region::paired`, `Prog::laid_of` and the four `Invoke` arms of `Stmt::emits_runs` are written with motive-free matches and no `(…)(refl, emitted)` application.
+
+## Log
+
+- 2026-11-16 (thread "Refine hypotheses through calls in case splits"):
+  built as `docs/elaborator/goal-motive-synthesis-design.md` §4.7. At a
+  computed scrutinee, an equation about one call's value that an arm names
+  is read as the goal is and refined at the reduced spelling
+  (`matching::hypothesis_through_calls`, checked well-formed as §4.6
+  checks); `match h:` refines as the plain form does, except a hypothesis
+  that takes an equation about the scrutinee or that an arm passes beside
+  `h` in one call. Both probes check with `False => absurd(same)`
+  (`lib/_tests/std/core/match_refines_through_calls_tests.hthr`).
+  `Prog::laid_of`, `Source::calls_laid` and the four `Invoke` arms are
+  motive-free; the arms moved into `Target::call_runs`, a lemma over
+  `p.call(…)`, because inside `emits_runs`' recursion `emits(Invoke(shape),
+  …)` does not reduce past the arm's hidden children binder.
+  `Region::paired` keeps its inner motive: its test is on a value the
+  callee let-binds and reads twice, which no stuck position reaches
+  (`case-split-refines-let-bound-call-values`). Reading every proposition
+  below its binders broke lemmas that take a proposition about the call
+  as written (`within: p.word_from(…).Within(…)`), so only equations are
+  read; `split_all` is still [[split-all-revise-hypotheses]].
+

@@ -88,6 +88,10 @@ struct Compile {
     /// binds nothing means the same term wherever it lands, which is §5.1's
     /// condition 1.
     binding: Vec<bool>,
+    /// The `_` arm each arm was expanded from, when it is one of
+    /// [`Patterns::rebind_default`]'s: reported as that `_`, once, and only
+    /// when none of its expansions is reached.
+    synthetic: Vec<Option<Arm>>,
 }
 
 impl Compile {
@@ -226,6 +230,10 @@ impl Patterns<'_> {
                 ..a.clone()
             })
             .collect();
+        let (arms, synthetic) = match independent {
+            true => { let n = arms.len(); (arms, vec![None; n]) }
+            false => self.rebind_default(cx, arms, scrut_t, scrut_ty, span),
+        };
         let deep = arms.iter().any(|a| a.binders.iter().any(|p| p.is_deep()));
         if deep {
             self.check_deep_allowed(cx, form, &arms, scrut_t, scrut_ty, span)?;
@@ -255,10 +263,118 @@ impl Patterns<'_> {
             next,
             uses: vec![0; arms.len()],
             binding: vec![false; arms.len()],
+            synthetic,
         };
         let out = self.emit_top(&mut st, &arms, rows, ctors, span)?;
         self.settle(cx, &arms, out, &st, result, independent, mlvl)
             .map(Some)
+    }
+
+    /// A `_` arm over a variable scrutinee sees that variable as the
+    /// constructor it stands for (issues/wildcard-arm-sees-its-constructor.md,
+    /// docs/language/matching/nested-match-patterns-design.md §4.1). A written
+    /// arm gets this by spelling the constructor again; `_` cannot, so it is
+    /// expanded here into one arm per constructor it can reach, each binding
+    /// the fields under names the source cannot spell and opening with
+    /// `let s: TypeOf(s) = C(fields);`. The annotation is elaborated before
+    /// the `let` binds, so it is the scrutinee's own type, and checking the
+    /// constructor there fills the type's parameters.
+    ///
+    /// Only where the motive depends on the scrutinee: there each arm's goal
+    /// is its constructor's, while a non-dependent `_ => s` already has the
+    /// type it needs, and keeps the shared body and the value it returns
+    /// (a `runtime fn` returns `s`, not a rebuilt copy). A hypothesis about
+    /// the scrutinee that the arm reads makes the motive dependent, since it
+    /// is generalized into it. Only when the `_` body names the scrutinee (a
+    /// body that does not means the same term either way, and keeps the old
+    /// expansion byte for byte),
+    /// over a declared inductive that is not an indexed family (where the
+    /// constructor's indices are not the variable's), and never for a body
+    /// with a `?goal`, which copying would raise more than once. The other
+    /// arms are returned unchanged; the second vector is
+    /// [`Compile::synthetic`].
+    fn rebind_default(&self, cx: &Cx, arms: Vec<Arm>, scrut_t: &Term, scrut_ty: &Type, span: Span) -> (Vec<Arm>, Vec<Option<Arm>>) {
+        let plain = |arms: Vec<Arm>| {
+            let n = arms.len();
+            (arms, vec![None; n])
+        };
+        let Some(d) = arms.iter().position(|a| a.default) else { return plain(arms) };
+        let Some(name) = scrutinee_name(cx, scrut_t) else { return plain(arms) };
+        let mut named = false;
+        crate::surface::walk_expr(&arms[d].body, &mut |e| {
+            if matches!(&e.kind, ExprKind::Var(n) if *n == name) {
+                named = true;
+            }
+        });
+        if !named || IwfFamily(self).iwf_of_at(cx, scrut_ty).is_some() || IndexedFamilies(self).indexed_of_at(cx, scrut_ty).is_some() {
+            return plain(arms);
+        }
+        let Ok(head) = self.whnf(cx, scrut_ty, span) else { return plain(arms) };
+        let Some(ind) = self.tag_of(&head) else { return plain(arms) };
+        // The constructors no earlier arm names get an arm each. One that
+        // only deep arms name keeps the plain `_`: its fields reach the arm
+        // as columns of a generated inner `match`, and those are not rebound
+        // to that match's constructors, so `C(fields)` would not be what the
+        // goal was refined to.
+        let named = |c: &str| arms[..d].iter().any(|a| a.ctor == c);
+        let covered = |c: &str| arms[..d].iter().any(|a| a.ctor == c && !a.binders.iter().any(Pat::is_deep));
+        let reach: Vec<&crate::inductive::Ctor> = ind.ctors.iter().filter(|c| !named(&c.name)).collect();
+        let partial = ind.ctors.iter().any(|c| named(&c.name) && !covered(&c.name));
+        if reach.is_empty() || (reach.len() + partial as usize > 1 && crate::count_holes_expr(&arms[d].body) > 0) {
+            return plain(arms);
+        }
+        let unnamed: Vec<&str> = reach.iter().map(|c| c.name.as_str()).collect();
+        let dflt = arms[d].clone();
+        let sp = dflt.span;
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span: sp };
+        let mut out: Vec<Arm> = arms[..d].to_vec();
+        let mut synthetic = vec![None; d];
+        for c in reach {
+            // §4's `sole` naming, kept: the one constructor no arm names
+            // binds its fields as `__else_…`, which `known` reads.
+            let fields: Vec<String> = (0..c.fields.len())
+                .map(|j| match unnamed.len() == 1 {
+                    true => format!("__else_{}_{j}", sp.start),
+                    false => format!("#w{}_{j}", sp.start),
+                })
+                .collect();
+            let built = match fields.is_empty() {
+                true => var(&c.name),
+                false => Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(var(&c.name)),
+                        args: fields.iter().map(|f| var(f)).collect(),
+                        named: vec![],
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span: sp,
+                },
+            };
+            let rebind = Stmt::Let {
+                name: name.clone(),
+                ty: Some(heather_syntax::Ty { kind: heather_syntax::TyKind::TypeOf(Box::new(var(&name))), span: sp }),
+                expr: built,
+                span: sp,
+                opaque: false,
+            };
+            out.push(Arm {
+                ctor: c.name.clone(),
+                default: false,
+                binders: fields.iter().map(|f| Pat::Var { name: f.clone(), span: sp }).collect(),
+                body: Expr {
+                    kind: ExprKind::Block(Box::new(Block { stmts: vec![rebind], result: Box::new(dflt.body.clone()), ons: vec![], span: dflt.body.span })),
+                    span: dflt.body.span,
+                },
+                span: sp,
+            });
+            synthetic.push(Some(dflt.clone()));
+        }
+        if partial {
+            out.push(dflt.clone());
+            synthetic.push(Some(dflt));
+        }
+        (out, synthetic)
     }
 
     // -- validation (§4, §6, §7) --------------------------------------------
@@ -729,6 +845,16 @@ impl Patterns<'_> {
                 // (docs/elaborator/diagnostic-warnings-design.md §7). The census is the
                 // one §5 already computes for sharing — reachability is not a
                 // new analysis, it is this number being zero.
+                0 if st.synthetic[i].is_some() => {
+                    let from = st.synthetic[i].as_ref().unwrap();
+                    let last = (i + 1..arms.len()).all(|k| st.synthetic[k].as_ref().is_none_or(|f| f.span != from.span));
+                    let reached = (0..arms.len())
+                        .any(|k| st.uses[k] > 0 && st.synthetic[k].as_ref().is_some_and(|f| f.span == from.span));
+                    // A `_` arm's message names no earlier arm, so it needs none.
+                    if last && !reached && !st.generated {
+                        self.emit_lint(crate::Lint::UnreachableMatchArm, unreachable_msg(from, &[], st.form), from.span);
+                    }
+                }
                 0 => {
                     if !st.generated {
                         self.emit_lint(
@@ -1245,6 +1371,35 @@ impl Patterns<'_> {
             _ => None,
         }
     }
+}
+
+/// The name a use of which, here, is the scrutinee: a local variable's own
+/// name, or an alias of exactly that term (a field of an enclosing arm, which
+/// the structural lowerings bind as a projection of the matched value). `None`
+/// when the name is shadowed, or the source cannot spell it.
+fn scrutinee_name(cx: &Cx, scrut_t: &Term) -> Option<String> {
+    let n = cx.names.len();
+    let spellable = |name: &str| name != "_" && !name.starts_with('#');
+    // The alias a name resolves to, when it does: the latest of that name,
+    // and only if no binder after it has the name too.
+    let alias_of = |name: &str| {
+        let alias = cx.aliases.iter().rev().find(|a| a.name == name)?;
+        match cx.names.lookup(name) {
+            Some(p) if p >= alias.depth => None,
+            _ => Some(alias),
+        }
+    };
+    if let Term::Var(LocalVar(i)) = scrut_t {
+        let at = n.checked_sub(1 + *i as usize)?;
+        let name = cx.names.get(at)?;
+        if spellable(name) && cx.names.lookup(name) == Some(at) && alias_of(name).is_none_or(|a| a.depth <= at) {
+            return Some(name.to_string());
+        }
+    }
+    let alias = cx.aliases.iter().rev().find(|a| {
+        spellable(&a.name) && a.depth <= n && a.at((n - a.depth) as u32).0 == *scrut_t
+    })?;
+    alias_of(&alias.name).is_some_and(|a| std::ptr::eq(&**a, &**alias)).then(|| alias.name.clone())
 }
 
 /// Every binder name written anywhere in a pattern list.

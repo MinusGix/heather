@@ -1,0 +1,27 @@
+// `block_spread` of lib/_tests/std/core/squash_conditions_tests.hthr on its
+// own, for scripts/bench-probes' `omega/block-spread` case: a `decreases`
+// function whose two index proofs are found by `bv_omega` and, their
+// defaults being blocks, are not lifted, so each copy of the body the
+// companions spell searches again
+// (issues/squashed-found-proof-searched-per-copy.md). What the case measures
+// is one `bv_omega` index goal times the copies: omega's reflection, and the
+// substitution reducer under its reduce-and-name step
+// (issues/small-step-reducer-on-computed-terms.md).
+// bench-warm: lib/std/tactic
+import vector;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import bool;
+import logic;
+import nat;
+
+fn word_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: ∥i.toNat() < n∥ := bv_omega) → BitVec(w) { vector_get(v, i.toNat(), BitVec::ofNat(0)) }
+fn word_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: ∥i.toNat() < n∥ := bv_omega) → [A; n] { vector_update(v, i.toNat(), a) }
+fn block_at({w, n: Nat}, v: [BitVec(w); n], i: u64, inside: ∥i.toNat() < n∥ := { bv_omega }) → BitVec(w) { word_at(v, i, inside := inside) }
+fn block_put<A>({n: Nat}, v: [A; n], i: u64, a: A, inside: ∥i.toNat() < n∥ := { bv_omega }) → [A; n] { word_put(v, i, a, inside := inside) }
+fn block_spread(v: [u32; 64], j: u64) → [u32; 64]
+    decreases (48 - j).toNat() {
+    if h: j < 48 { block_spread(block_put(v, j + 16, block_at(v, j + 14)), j + 1) } else { v }
+}

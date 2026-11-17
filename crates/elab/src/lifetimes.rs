@@ -407,7 +407,9 @@ pub(crate) struct DynamicScope {
     /// `ordered_sign`'s sign rules through it), even inside a default that
     /// runs in another declaring scope: `Rat(1, F.top())` in a float module runs
     /// `Rat`'s `den_pos` default in `rat`'s scope, which does not import
-    /// `float`, yet the rule about `F.top()` is the caller's to use.
+    /// `float`, yet the rule about `F.top()` is the caller's to use. A
+    /// tactic's generated instance cites its class the same way
+    /// (`host::publish_instance_member`), by the key the generator wrote.
     pub(crate) rule_citation: RefCell<Option<String>>,
     /// Set while a `by`'s tactic expression is elaborated: terms of the
     /// goal's context are quoted where it expects a `tactic::Expr`

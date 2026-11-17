@@ -342,13 +342,16 @@ for the goal alone (`STUCK_CANDIDATES`).
   `select_refined`. `synthesize_motive` then abstracts the term out of the
   generalized goal, Π domains included, so `h: e = True` becomes
   `h: z = True` in the motive.
-- **Not under `match h:`.** The convoy's equation is stated about the term
-  itself, and an arm that passes `h` to a hypothesis
-  (`k: (e = False) → Nat`, `False => k(h)`, goal_combinators.rs `PICK`)
-  needs that hypothesis about the same term. Refining it to `z = False`
-  while `h` stays `e = False` breaks the application, so a match with an
-  equation binding refines by occurrence nothing. Generalizing `h` and its
-  readers together is slice 5's business.
+- **Under `match h:`** (since 2026-11-16, goal-motive-synthesis-design
+  §4.7) the same binders are refined, except what `h` is passed to or
+  with: a hypothesis that takes an equation about the term
+  (`k: (e = False) → Nat`, `False => k(h)`, goal_combinators.rs `PICK`),
+  and one an arm passes beside `h` in one call. Until then a match with
+  an equation binding refined by occurrence nothing.
+- **Through a call** (the same section): an equation about one call's
+  value whose reduced side is stuck on the term is refined too, read as
+  the goal's rung 3 reads it. The paragraph above on rung 3 not being used
+  for hypotheses describes slice 2 as built.
 - **What it does not reach.**
   - **`split_all`'s `Cases`.** It builds its own motive (`host.rs`
     `cases_request`) and never goes through this route.

@@ -356,7 +356,71 @@ fn rt_io_eloop(fuel: Nat, k: Known, names: LoopNames, w: LoopWalk, t: Handle) �
 // An effectful function with loops read, with what the bridge needs: the
 // world and the parameters as the locals it opened them at (the most
 // recent first), and the body under them.
-record LoopOpened { read: LoopFun, proof: LoopProof, io: LocalRef, params: List<LocalRef>, surface: Handle }
+//
+// `consts` are the buffers the body makes for itself, each read as one
+// more parameter after the function's own, the first found the first: the
+// byte strings it writes (`b"…"`, `Known::consts`) and the zeroed buffers
+// its locals start as (`List::replicate(0, n)`,
+// docs/native/io-programs-design.md §5 D2).
+record LoopOpened { read: LoopFun, proof: LoopProof, io: LocalRef, params: List<LocalRef>, surface: Handle, consts: List<ConstInit> := [] }
+
+// The codes of the byte strings' parameters.
+fn rt_const_tys(k: Known, hs: List<Handle>) → Tac<List<Ty>> {
+    match hs { Nil => pure([]), Cons(h, rest) => k.ty_of(h).bind(λ t => rt_const_tys(k, rest).bind(λ ts => pure(Cons(t, ts)))) }
+}
+
+// The buffers a body makes, in the order first met: each byte string it
+// writes once (docs/native/io-programs-design.md §5 D3), every closed list
+// of byte literals of more than none, by its bytes; and each zeroed
+// buffer, `List::replicate(0, n)` at a numeral `n` (§5 D2), by its term:
+// a local is one term however often it is read, and two locals are two
+// buffers. With a handle to each. The walk is the generator's
+// `program_lends_in`'s. `replicate` is `List::replicate`'s id.
+fn rt_const_scan(fuel: Nat, k: Known, st: RSt, replicate: Nat, hs: List<Handle>, found: List<Pair<ConstInit, Handle>>) → Tac<List<Pair<ConstInit, Handle>>> {
+    match fuel {
+        Zero => pure(found),
+        Succ(fl) => match hs {
+            Nil => pure(found),
+            Cons(h, rest) => {
+                let v <- view(h);
+                let here: Pair<List<Handle>, List<Pair<ConstInit, Handle>>> <- match v {
+                    HCtor(ty, _, _, fields) => match ty.id.same(k.list) {
+                        True => rt_const_bytes(4096, k, st, h).bind(λ c => match c {
+                            Some(bs) => match bs {
+                                Nil => pure(Pair([], found)),
+                                Cons(_, _) => match Known::const_level(ConstInit::strings(found), bs) {
+                                    Some(_) => pure(Pair([], found)),
+                                    None => pure(Pair([], found ++ [Pair(Written(bs), h)])),
+                                },
+                            },
+                            None => pure(Pair(fields, found)),
+                        }),
+                        False => pure(Pair(fields, found)),
+                    },
+                    HGlobal(g, _, args) => match g.id.same(replicate) {
+                        False => pure(Pair(args, found)),
+                        True => rt_const_zeros(k, st, args).bind(λ c => match c {
+                            None => rt_refuse("a buffer a program makes for itself starts zeroed, `List::replicate(0, n)` at a numeral `n`; one that starts as given bytes is a byte string, `b\"…\"`"),
+                            Some(n) => match found.any_bit(λ p => p.snd.id.same(h.id)) {
+                                True => pure(Pair([], found)),
+                                False => pure(Pair([], found ++ [Pair(Zeros(n), h)])),
+                            },
+                        }),
+                    },
+                    HLam(_) => open(h, "x").bind(λ c => match c { Accepted(o) => pure(Pair([o.body], found)), Refused(_) => pure(Pair([], found)) }),
+                    HMatch(s) => arms(h).bind(λ c => match c {
+                        Accepted(m) => pure(Pair(Cons(m.scrut, m.args ++ m.arms.map(λ a => a.body)), found)),
+                        Refused(_) => pure(Pair([s], found)),
+                    }),
+                    HLocal(_, args) => pure(Pair(args, found)),
+                    HField(of, _, args) => pure(Pair(Cons(of, args), found)),
+                    _ => pure(Pair([], found)),
+                };
+                rt_const_scan(fl, k, st, replicate, here.fst ++ rest, here.snd)
+            },
+        },
+    }
+}
 
 // An effectful function with loops: its first parameter the world, the
 // rest data.
@@ -373,8 +437,21 @@ fn rt_io_read_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat>, 
                     let io = IoKnown(o.local.ref.id, names.io.methods, [], lends, [], names.io.io, names.io.mutated, []);
                     let p <- rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body);
                     let under = match p.fst.fst.locals { Cons(x, _) => LocalRef(x.fst), Nil => o.local.ref };
-                    let r <- rt_io_eloop(fuel, k, names, LoopWalk(p.fst.fst, [], io, under), p.snd);
-                    pure(LoopOpened(LoopFun(p.fst.snd, r.ty, r.prog), r.proof, o.local.ref, p.fst.fst.locals.map(λ x => LocalRef(x.fst)), p.snd))
+                    // The buffers it makes, as parameters after the function's
+                    // own: a byte string by its bytes wherever it is written,
+                    // a zeroed local by its term.
+                    let st0 = p.fst.fst;
+                    let replicate <- rt_global(name_of(List::replicate));
+                    let found <- rt_const_scan(1048576, k.at_world(io), st0, replicate, [p.snd], []);
+                    let levels = List::range(found.len()).map(λ i => st0.depth + i);
+                    let const_tys <- rt_const_tys(k.at_world(io), found.map(λ c => c.snd));
+                    let placed = found.zip(levels);
+                    let kc = k.with_consts(ConstInit::string_levels(placed));
+                    let zeroed = ConstInit::zeroed_handles(placed);
+                    let st = RSt(st0.depth + found.len(), st0.lets, st0.memo, zeroed ++ st0.handles, st0.locals, st0.funs);
+                    let r <- rt_io_eloop(fuel, kc, names, LoopWalk(st, [], io, under), p.snd);
+                    pure(LoopOpened(LoopFun(p.fst.snd ++ const_tys, r.ty, r.prog), r.proof, o.local.ref, p.fst.fst.locals.map(λ x => LocalRef(x.fst)), p.snd,
+                        found.map(λ c => c.fst)))
                 },
             }
         },
@@ -388,12 +465,12 @@ fn rt_io_reflect_loop_fun(fuel: Nat, k: Known, names: LoopNames, lends: List<Nat
 
 fn rt_loop_names() → Tac<LoopNames> {
     let ms <- rt_globals(rt_io_method_names());
-    let io <- rt_global("Io");
+    let io <- rt_global(name_of(Io));
     let mu <- rt_global("Mutated");
-    let then <- rt_global("Iterate::then");
+    let then <- rt_global("itree::Iterate::then");
     let ret <- rt_global("Pointed::ret");
-    let state <- rt_global("Io::state");
-    let itself <- rt_global("rt_loop_itself");
+    let state <- rt_global(name_of(Io::state));
+    let itself <- rt_global(name_of(rt_loop_itself));
     pure(LoopNames(IoNames(io, mu, ms), then, ret, state, itself))
 }
 

@@ -212,4 +212,17 @@ counters! {
     /// `Tc::tm_infer_syn` (the λ inference arms), `Tc::whnf` of a
     /// description, and the refusal note.
     ity_materialized,
+    /// Steps of the substitution reducer (`reduce::step_term_delta`,
+    /// `step_type_delta`), whoever asked: the elaborator's `whnf` after the
+    /// value probe, `omega`'s reduce-and-name, the kernel's reference
+    /// domain. Each step rewrites the term, so a workload that takes many is
+    /// paying by substitution for what the value machine shares
+    /// (`issues/small-step-reducer-on-computed-terms.md`).
+    reduce_steps,
+    /// Native frames those steps stood on (`reduce::Frames::enter`): one per
+    /// blocked head or scrutinee a step walked through to reach its redex,
+    /// each of which the step then rebuilds. `reduce_frames / reduce_steps`
+    /// is the mean depth of the redex; steps times depth is the reducer's
+    /// quadratic term.
+    reduce_frames,
 }

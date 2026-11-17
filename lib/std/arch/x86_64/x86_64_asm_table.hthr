@@ -44,6 +44,8 @@ fn LabelTable::targets_ok(self t: LabelTable, item: Asm) → Bool {
     match item {
         Jcc(_, target) => t.target_ok(target),
         Jmp(target) => t.target_ok(target),
+        JccShort(_, target) => t.target_ok(target),
+        JmpShort(target) => t.target_ok(target),
         CallTo(target) => t.target_ok(target),
         _ => True,
     }
@@ -272,6 +274,15 @@ theorem LabelTable::item_lands_by(self t: LabelTable, whole: Prog, here: Nat, it
             Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ =>
                 (asm_item_lands(λ _ => x, here, 5, CallTo(Succ(k)), x) || asm_item_lands_back(λ _ => x, here, 5, CallTo(Succ(k)), x)).IsTrue(), lands),
         },
+        JccShort(cc, target) => match target {
+            Zero => λ _ no => false_elim(no),
+            Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ => asm_short_lands(λ _ => x, here, JccShort(cc, Succ(k)), x).IsTrue(), lands),
+        },
+        JmpShort(target) => match target {
+            Zero => λ _ no => false_elim(no),
+            Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ =>
+                (asm_short_lands(λ _ => x, here, JmpShort(Succ(k)), x) || asm_short_lands_back(λ _ => x, here, JmpShort(Succ(k)), x)).IsTrue(), lands),
+        },
         Block(_) => λ _ _ => trivial,
         Code(_) => λ _ _ => trivial,
         Load(_) => λ _ _ => trivial,
@@ -302,6 +313,14 @@ theorem LabelTable::item_named_by(self t: LabelTable, whole: Prog, item: Asm,
             Succ(k) => λ has => named(k, has),
         },
         CallTo(target) => match target {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => named(k, has),
+        },
+        JccShort(_, target) => match target {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => named(k, has),
+        },
+        JmpShort(target) => match target {
             Zero => λ no => false_elim(no),
             Succ(k) => λ has => named(k, has),
         },
@@ -469,6 +488,16 @@ theorem LabelTable::bytes_by(self t: LabelTable, whole: Prog, fills: Nat → Lis
             Zero => λ no => false_elim(no),
             Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, CallTo(Succ(k))) =
                 CallNear(near_rel(here + 5, x)).bytes(), refl),
+        },
+        JccShort(cc, target) => match target {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, JccShort(cc, Succ(k))) =
+                short_control_bytes(JumpIf(cc, short_rel(here + 2, x))), refl),
+        },
+        JmpShort(target) => match target {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, JmpShort(Succ(k))) =
+                short_control_bytes(Jump(short_rel(here + 2, x))), refl),
         },
         Refer(_, _, _) => λ no => false_elim(no),
         Block(_) => λ _ => refl,

@@ -18,6 +18,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_asm;
+import relation_props;
 import bitvec;
 import bool;
 import list;
@@ -48,18 +49,22 @@ theorem Prog::within_self(self p: Prog): p.Within(p) { Exists(Zero, refl) }
 
 theorem Prog::within_then(self p: Prog, name: Nat, item: Asm): p.Within(At(p, name, item)) { Exists(Succ(Zero), refl) }
 
-theorem Prog::within_trans(self a: Prog, b, c: Prog, first: a.Within(b), second: b.Within(c)): a.Within(c) {
+theorem Prog::within_trans({a, b, c: Prog}, first: a.Within(b), second: b.Within(c)): a.Within(c) {
     Exists(first.witness + second.witness,
         trans(sym(asm_back_back(second.witness, c, first.witness)),
             trans(cong_fn<Prog, Prog>(λ x => asm_back(x, first.witness), second.proof), first.proof)))
 }
 
+// `q <= p` reads "`q` is within `p`", so a chain of extensions is a `calc`.
+designation <= at Prog := Prog::Within
+instance Transitive<Prog>(Prog::Within) { rel_trans := λ a b c first second => Prog::within_trans(first, second) }
+
 theorem Prog::within_step(self a: Prog, p: Prog, name: Nat, item: Asm, within: a.Within(p)): a.Within(At(p, name, item)) {
-    a.within_trans(p, At(p, name, item), within, p.within_then(name, item))
+    Prog::within_trans(within, p.within_then(name, item))
 }
 
 theorem Prog::within_before(self q: Prog, name: Nat, item: Asm, p: Prog, within: At(q, name, item).Within(p)): q.Within(p) {
-    q.within_trans(At(q, name, item), p, q.within_then(name, item), within)
+    Prog::within_trans(q.within_then(name, item), within)
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +87,8 @@ theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, 
             StoreByte(_) => λ ok => before.no_holes_fit(ok),
             Jcc(_, _) => λ ok => before.no_holes_fit(ok),
             Jmp(_) => λ ok => before.no_holes_fit(ok),
+            JccShort(_, _) => λ ok => before.no_holes_fit(ok),
+            JmpShort(_) => λ ok => before.no_holes_fit(ok),
             Syscall => λ ok => before.no_holes_fit(ok),
             Proved(_, _, _, _) => λ ok => before.no_holes_fit(ok),
             CallTo(_) => λ ok => before.no_holes_fit(ok),
@@ -190,6 +197,9 @@ fn item_lands(labels: Nat → Nat, here: Nat, item: Asm) → Bool {
             asm_item_lands_back(labels, here, 5, Jmp(target), labels(target)),
         CallTo(target) => asm_item_lands(labels, here, 5, CallTo(target), labels(target)) ||
             asm_item_lands_back(labels, here, 5, CallTo(target), labels(target)),
+        JccShort(cc, target) => asm_short_lands(labels, here, JccShort(cc, target), labels(target)),
+        JmpShort(target) => asm_short_lands(labels, here, JmpShort(target), labels(target)) ||
+            asm_short_lands_back(labels, here, JmpShort(target), labels(target)),
         _ => True,
     }
 }
@@ -278,6 +288,83 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
     }
 }
 
+// A JCC or JMP item, near (`Jcc`, `Jmp`) or short (`JccShort`,
+// `JmpShort`): what a lowering emits where a hint chose the form.
+fn jcc_item(short: Bool, cc: ConditionCode, target: Nat) → Asm { match short { False => Jcc(cc, target), True => JccShort(cc, target) } }
+fn jmp_item(short: Bool, target: Nat) → Asm { match short { False => Jmp(target), True => JmpShort(target) } }
+
+// A short JMP lands ahead or behind.
+fn ShortLands(from: Nat, displacement: BitVec(8), to: Nat) → Type { ShortForward(from, displacement, to) ∨ ShortBack(from, displacement, to) }
+
+// Where a JCC item at `here` goes taken (ahead), and a JMP item (either
+// way), in either form.
+fn JccLands(labels: Nat → Nat, here: Nat, short: Bool, cc: ConditionCode, target, to: Nat) → Type {
+    match short {
+        False => JumpsForward(here, 6, asm_jump_of(labels, here, Jcc(cc, target)), to),
+        True => ShortForward(here, asm_short_of(labels, here, JccShort(cc, target)), to),
+    }
+}
+fn JmpLands(labels: Nat → Nat, here: Nat, short: Bool, target, to: Nat) → Type {
+    match short {
+        False => NearLands(here, asm_jump_of(labels, here, Jmp(target)), to),
+        True => ShortLands(here, asm_short_of(labels, here, JmpShort(target)), to),
+    }
+}
+
+// The landing check at a label, whatever its item.
+theorem item_lands_at(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat) → (item: Asm) →
+    jumps_land_in(labels, p).IsTrue() → asm_back(p, k) = At(before, name, item) → item_lands(labels, prog_len(before), item).IsTrue() {
+    match k {
+        Zero => λ p before name item lands at =>
+            Bool::is_true_and(item_lands(labels, prog_len(before), item), jumps_land_in(labels, before),
+                j(at, λ x _ => jumps_land_in(labels, x).IsTrue(), lands)).left,
+        Succ(i) => λ p => match p {
+            Start => λ before name item _ no => absurd(no),
+            At(earlier, _, item) => λ before name found lands at =>
+                item_lands_at(labels, i, earlier, before, name, found,
+                    Bool::is_true_and(item_lands(labels, prog_len(earlier), item), jumps_land_in(labels, earlier), lands).right, at),
+        },
+    }
+}
+theorem jcc_item_lands(labels: Nat → Nat, k: Nat, p, before: Prog, name: Nat, short: Bool, cc: ConditionCode, target: Nat,
+    lands: jumps_land_in(labels, p).IsTrue(), at: asm_back(p, k) = At(before, name, jcc_item(short, cc, target))):
+    JccLands(labels, prog_len(before), short, cc, target, labels(target)) {
+    let checked = item_lands_at(labels, k, p, before, name, jcc_item(short, cc, target), lands, at);
+    (match short as λ b => item_lands(labels, prog_len(before), jcc_item(b, cc, target)).IsTrue() →
+        JccLands(labels, prog_len(before), b, cc, target, labels(target)) {
+        False => λ here => asm_lands_forward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target),
+            eq_true_of_is_true(asm_item_lands(labels, prog_len(before), 6, Jcc(cc, target), labels(target)), here)),
+        True => λ here => short_lands_forward(prog_len(before), asm_short_of(labels, prog_len(before), JccShort(cc, target)), labels(target),
+            eq_true_of_is_true(asm_short_lands(labels, prog_len(before), JccShort(cc, target), labels(target)), here)),
+    })(checked)
+}
+theorem jmp_item_lands(labels: Nat → Nat, k: Nat, p, before: Prog, name: Nat, short: Bool, target: Nat,
+    lands: jumps_land_in(labels, p).IsTrue(), at: asm_back(p, k) = At(before, name, jmp_item(short, target))):
+    JmpLands(labels, prog_len(before), short, target, labels(target)) {
+    let checked = item_lands_at(labels, k, p, before, name, jmp_item(short, target), lands, at);
+    let here = prog_len(before);
+    (match short as λ b => item_lands(labels, here, jmp_item(b, target)).IsTrue() → JmpLands(labels, here, b, target, labels(target)) {
+        False => λ ok => {
+            let ahead = asm_item_lands(labels, here, 5, Jmp(target), labels(target));
+            let behind = asm_item_lands_back(labels, here, 5, Jmp(target), labels(target));
+            let displacement = asm_jump_of(labels, here, Jmp(target));
+            match ahead.is_true_or(behind, ok) {
+                Inl(yes) => Inl(asm_lands_forward(here, 5, displacement, labels(target), eq_true_of_is_true(ahead, yes))),
+                Inr(yes) => Inr(asm_lands_back(here, 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
+            }
+        },
+        True => λ ok => {
+            let ahead = asm_short_lands(labels, here, JmpShort(target), labels(target));
+            let behind = asm_short_lands_back(labels, here, JmpShort(target), labels(target));
+            let displacement = asm_short_of(labels, here, JmpShort(target));
+            match ahead.is_true_or(behind, ok) {
+                Inl(yes) => Inl(short_lands_forward(here, displacement, labels(target), eq_true_of_is_true(ahead, yes))),
+                Inr(yes) => Inr(short_lands_back(here, displacement, labels(target), eq_true_of_is_true(behind, yes))),
+            }
+        },
+    })(checked)
+}
+
 // Every jump's and call's target is a name `whole` gives. A missing name
 // sits at offset 0, which a JMP or CALL can reach backwards, so landing
 // alone does not refuse it.
@@ -285,6 +372,8 @@ fn item_named(whole: Prog, item: Asm) → Bool {
     match item {
         Jcc(_, target) => !whole.lacks(target),
         Jmp(target) => !whole.lacks(target),
+        JccShort(_, target) => !whole.lacks(target),
+        JmpShort(target) => !whole.lacks(target),
         CallTo(target) => !whole.lacks(target),
         _ => True,
     }
@@ -551,6 +640,99 @@ theorem Site::runs_jump<M>(self site: Site<M>, fits: FillsFit(site.program, no_f
     }
 }
 
+// A short JMP at a label runs to where it lands, the registers as they were.
+theorem Site::runs_short_jump<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name, target: Nat,
+    at: asm_back(site.program, k) = At(before, name, JmpShort(target)), to: Nat,
+    lands: ShortLands(prog_len(before), asm_short_of(asm_labels(site.program), prog_len(before), JmpShort(target)), to),
+    pre: Gprs → Type): site.Runs(prog_len(before), to, pre, pre) {
+    λ s here resident holds => {
+        let displacement = asm_short_of(asm_labels(site.program), prog_len(before), JmpShort(target));
+        let control = Jump(displacement);
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, JmpShort(target), at);
+        let step = short_fetched_step(site.fetch, site.data, control, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, short_control_bytes(control), address), item), refl);
+        let landed: (short_branch_target(next_rip(site.origin, prog_len(before)), displacement) = next_rip(site.origin, to)) = match lands {
+            Inl(ahead) => short_jumps_forward(site.origin, prog_len(before), displacement, to, ahead),
+            Inr(behind) => short_jumps_back(site.origin, prog_len(before), displacement, to, behind),
+        };
+        Exists(execute_short_control(control, s), ⟨fetched_steps_one(site.fetch, site.data, s, execute_short_control(control, s), step),
+            ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ address => short_branch_target(address, displacement), here), landed), ⟨refl, holds⟩⟩⟩)
+    }
+}
+
+// A JMP item at a label, near or short, runs to where it lands.
+theorem Site::runs_jump_item<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
+    short: Bool, target: Nat, at: asm_back(site.program, k) = At(before, name, jmp_item(short, target)), to: Nat,
+    lands: JmpLands(asm_labels(site.program), prog_len(before), short, target, to),
+    pre: Gprs → Type): site.Runs(prog_len(before), to, pre, pre) {
+    (match short as λ b => asm_back(site.program, k) = At(before, name, jmp_item(b, target)) →
+        JmpLands(asm_labels(site.program), prog_len(before), b, target, to) → site.Runs(prog_len(before), to, pre, pre) {
+        False => λ at lands => site.runs_jump(fits, k, before, name, target, at, to, lands, pre),
+        True => λ at lands => site.runs_short_jump(fits, k, before, name, target, at, to, lands, pre),
+    })(at, lands)
+}
+
+// The state after a JCC item, near or short, and what it is: the
+// registers and memory as they were, and the RIP at the target where the
+// condition holds or after the item where it does not.
+fn jcc_after<M>(labels: Nat → Nat, here: Nat, short: Bool, cc: ConditionCode, target: Nat, u: MachineState<M>) → MachineState<M> {
+    match short {
+        False => execute_near_control(JumpIfNear(cc, asm_jump_of(labels, here, Jcc(cc, target))), u),
+        True => execute_short_control(JumpIf(cc, asm_short_of(labels, here, JccShort(cc, target))), u),
+    }
+}
+theorem jcc_after_gprs<M>(labels: Nat → Nat, here: Nat, short: Bool, cc: ConditionCode, target: Nat, u: MachineState<M>):
+    jcc_after(labels, here, short, cc, target, u).gprs = u.gprs { match short { False => refl, True => refl } }
+theorem jcc_after_memory<M>(labels: Nat → Nat, here: Nat, short: Bool, cc: ConditionCode, target: Nat, u: MachineState<M>):
+    jcc_after(labels, here, short, cc, target, u).memory = u.memory { match short { False => refl, True => refl } }
+
+theorem Site::rip_after_of<M>(self site: Site<M>, s: MachineState<M>, from, length: Nat, here: s.rip = next_rip(site.origin, from)):
+    next_rip(s.rip, length) = next_rip(site.origin, from + length) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, length), here), rip_compose(site.origin, from, length))
+}
+
+theorem Site::jcc_item_steps<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
+    short: Bool, cc: ConditionCode, target: Nat, at: asm_back(site.program, k) = At(before, name, jcc_item(short, cc, target)), to: Nat,
+    lands: JccLands(asm_labels(site.program), prog_len(before), short, cc, target, to),
+    u: MachineState<M>, u_rip: u.rip = next_rip(site.origin, prog_len(before)), resident: site.Resident(u.memory),
+    reads: condition_defined(cc, u.flags.defined) = True):
+    FetchedStep(site.fetch, site.data, u, jcc_after(asm_labels(site.program), prog_len(before), short, cc, target, u)) ∧
+    ((condition_holds(cc, u.flags) = False →
+        jcc_after(asm_labels(site.program), prog_len(before), short, cc, target, u).rip =
+            next_rip(site.origin, prog_len(before) + asm_len(jcc_item(short, cc, target)))) ∧
+     (condition_holds(cc, u.flags) = True →
+        jcc_after(asm_labels(site.program), prog_len(before), short, cc, target, u).rip = next_rip(site.origin, to))) {
+    let labels = asm_labels(site.program);
+    let here = prog_len(before);
+    (match short as λ b => asm_back(site.program, k) = At(before, name, jcc_item(b, cc, target)) → JccLands(labels, here, b, cc, target, to) →
+        FetchedStep(site.fetch, site.data, u, jcc_after(labels, here, b, cc, target, u)) ∧
+        ((condition_holds(cc, u.flags) = False → jcc_after(labels, here, b, cc, target, u).rip = next_rip(site.origin, here + asm_len(jcc_item(b, cc, target)))) ∧
+         (condition_holds(cc, u.flags) = True → jcc_after(labels, here, b, cc, target, u).rip = next_rip(site.origin, to))) {
+        False => λ at lands => {
+            let displacement = asm_jump_of(labels, here, Jcc(cc, target));
+            let control = JumpIfNear(cc, displacement);
+            let item = site.item_resident(fits, u.memory, resident, k, before, name, Jcc(cc, target), at);
+            ⟨near_fetched_step(site.fetch, site.data, control, u,
+                j(sym(u_rip), λ address _ => CodeResident(site.fetch, u.memory, near_control_bytes(control), address), item), reads),
+             ⟨λ no => trans(near_if_not_taken_rip(cc, displacement, u, no), site.rip_after_of(u, here, 6, u_rip)),
+              λ yes => trans(near_if_taken_rip(cc, displacement, u, yes),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
+                    jumps_forward(site.origin, here, 6, displacement, to, lands)))⟩⟩
+        },
+        True => λ at lands => {
+            let displacement = asm_short_of(labels, here, JccShort(cc, target));
+            let control = JumpIf(cc, displacement);
+            let item = site.item_resident(fits, u.memory, resident, k, before, name, JccShort(cc, target), at);
+            ⟨short_fetched_step(site.fetch, site.data, control, u,
+                j(sym(u_rip), λ address _ => CodeResident(site.fetch, u.memory, short_control_bytes(control), address), item), reads),
+             ⟨λ no => trans(short_if_not_taken_rip(cc, displacement, u, no), site.rip_after_of(u, here, 2, u_rip)),
+              λ yes => trans(short_if_taken_rip(cc, displacement, u, yes),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ address => short_branch_target(address, displacement), u_rip),
+                    short_jumps_forward(site.origin, here, displacement, to, lands)))⟩⟩
+        },
+    })(at, lands)
+}
+
 // ---------------------------------------------------------------------------
 // Two arms on whether a register is zero
 
@@ -564,6 +746,7 @@ fn Gpr::tests_zero(self register: Gpr, gprs: Gprs) → Bool {
 // arm's label, and (after the second arm) the join.
 fn Prog::test_label(self start: Prog, register: Gpr) → Prog { At(start, 0, Block([TestRR(register, register)])) }
 fn Prog::branch_label(self start: Prog, register: Gpr, else_name: Nat) → Prog { At(start.test_label(register), 0, Jcc(E, else_name)) }
+fn Prog::branch_label_by(self start: Prog, register: Gpr, else_name: Nat, short: Bool) → Prog { At(start.test_label(register), 0, jcc_item(short, E, else_name)) }
 fn Prog::else_label(self yes_end: Prog, else_name, join_name: Nat) → Prog { At(At(yes_end, 0, Jmp(join_name)), else_name, Block([])) }
 fn Prog::join_label(self no_end: Prog, join_name: Nat) → Prog { At(no_end, join_name, Block([])) }
 
@@ -619,6 +802,9 @@ theorem Test::jcc_reads<M>(self test: Test, s: MachineState<M>):
 
 fn Prog::tested(self start: Prog, test: Test) → Prog { At(start, 0, Block([test.instruction()])) }
 fn Prog::branched(self start: Prog, test: Test, else_name: Nat) → Prog { At(start.tested(test), 0, Jcc(test.cc(), else_name)) }
+// The same with the JCC (and the first arm's JMP) in the form a hint chose.
+fn Prog::branched_by(self start: Prog, test: Test, else_name: Nat, short: Bool) → Prog { At(start.tested(test), 0, jcc_item(short, test.cc(), else_name)) }
+fn Prog::else_label_by(self yes_end: Prog, else_name, join_name: Nat, short: Bool) → Prog { At(At(yes_end, 0, jmp_item(short, join_name)), else_name, Block([])) }
 
 // The first arm runs where the JCC is not taken, the second where it is,
 // both to the join.

@@ -100,7 +100,7 @@ fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
 
 fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
 
-fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io), k.nat, k.recursion, k.reprs, k.lent, k.file, k.named) }
+fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io), k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts) }
 
 record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
 
@@ -165,9 +165,9 @@ fn rt_lend_find(fuel: Nat, io: IoKnown, hs: List<Handle>) → Tac<List<Handle>> 
 
 // Whether `length` is `BitVec::ofNat(bytes.len())`, the span's own length.
 fn rt_lend_length(bytes: Handle, length: Handle) → Tac<Bool> {
-    lookup("BitVec::ofNat").bind(λ c => match c {
+    lookup(name_of(BitVec::ofNat)).bind(λ c => match c {
         Refused(_) => pure(False),
-        Accepted(of) => lookup("List::len").bind(λ c2 => match c2 {
+        Accepted(of) => lookup(name_of(List::len)).bind(λ c2 => match c2 {
             Refused(_) => pure(False),
             Accepted(len) => defeq(Hd(length), App(App(Global(of), NatLit(64)), App(App(Global(len), Blank), Hd(bytes)))),
         }),
@@ -505,7 +505,7 @@ fn rt_io_reflect(efuns: List<String>, funs: List<String>, recs: List<String>) �
     rt_known(funs, recs).bind(λ k =>
     rt_globals(efuns).bind(λ es =>
     rt_globals(rt_io_method_names()).bind(λ ms =>
-    rt_global("Io").bind(λ io =>
+    rt_global(name_of(Io)).bind(λ io =>
     rt_global("Mutated").bind(λ mu =>
     rt_io_reflect_funs(4096, k, IoNames(io, mu, ms), es))))))
 }

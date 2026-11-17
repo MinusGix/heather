@@ -870,11 +870,11 @@ impl FunctionInduction<'_> {
                     let want = &c.name[CASE_PREFIX.len()..];
                     match arms.iter().find(|a| a.ctor.replace("::", "_") == want) {
                         Some(a) => (INDUCT_LEAF, a.body.clone()),
-                        None => (INDUCT_LEAF_DEFAULT, Expr { kind: ExprKind::Str(want.replace('_', "::")), span }),
+                        None => (INDUCT_LEAF_DEFAULT, Expr { kind: ExprKind::Var(crate::tested::KNOWN.to_string()), span }),
                     }
                 }
             };
-            let mut leaf_args = vec![leaf_body];
+            let mut leaf_args = vec![leaf_body, Expr { kind: ExprKind::Str(c.name[CASE_PREFIX.len()..].replace('_', "::")), span }];
             leaf_args.extend(c.ihs.iter().map(|&i| var(&names[i], span)));
             let leaf = marker(leaf_head, leaf_args, span);
             let leaf = if reverted_names.is_empty() {
@@ -910,26 +910,23 @@ impl FunctionInduction<'_> {
     /// A case's leaf: each induction hypothesis restated in the goal's
     /// spelling, after its premises where `discharge` proves them with the
     /// block, then the block at the goal.
-    pub(crate) fn induct_leaf(&self, cx: &Cx, args: &[Expr], discharge: bool, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let [body, ihs @ ..] = args else {
+    pub(crate) fn induct_leaf(&self, cx: &Cx, args: &[Expr], discharge: bool, is_default: bool, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let [body, case, ihs @ ..] = args else {
             return err("internal `induct` leaf has the wrong arity", span);
         };
-        // A case the arms leave out (`INDUCT_LEAF_DEFAULT`): `known`, and a
-        // refusal names the case.
-        let (case, known);
-        let body = match &body.kind {
-            ExprKind::Str(name) => {
-                case = Some(name.clone());
-                known = Expr { kind: ExprKind::Var(crate::tested::KNOWN.to_string()), span };
-                &known
-            }
-            _ => {
-                case = None;
-                body
-            }
+        let ExprKind::Str(case) = &case.kind else {
+            return err("internal `induct` leaf has no case name", span);
         };
-        let out = self.induct_leaf_with(cx, body, ihs, discharge, expected, lvl, span);
-        match (case, out) {
+        // A case the arms leave out (`INDUCT_LEAF_DEFAULT`) is `known`, and a
+        // refusal names the case.
+        let default = is_default;
+        // A hole in the block is this case's own goal.
+        let out = if crate::count_holes_expr(body) > 0 {
+            self.attempt.goal_arena.in_leaf(format!("induct:{case}"), || self.induct_leaf_with(cx, body, ihs, discharge, expected, lvl, span))
+        } else {
+            self.induct_leaf_with(cx, body, ihs, discharge, expected, lvl, span)
+        };
+        match (default.then_some(case), out) {
             (Some(case), Err(crate::ElabError::Elab { msg, span })) => err(
                 format!("`induct`: no arm for the case `{case}`, and its default did not close it: {msg}; write an arm `{case} => …`"),
                 span,
@@ -948,7 +945,10 @@ impl FunctionInduction<'_> {
             let mut term = Term::Var(heather_kernel::term::LocalVar(ix));
             let mut ty = normal(&ty);
             let mut level = level;
-            while discharge {
+            // A block with a hole proves no premise: the hole would be a goal
+            // at the premise rather than the case's, and a premise left
+            // standing is what the case's report should show.
+            while discharge && crate::count_holes_expr(body) == 0 {
                 let Type::Pi { dom_level, cod_level, dom, cod } = &ty else { break };
                 let premise = normal(dom);
                 let mark = crate::resolve::SearchMark::of(self);

@@ -3800,6 +3800,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "byte_string"
+        },
+        {
+          "type": "SYMBOL",
           "name": "hole"
         },
         {
@@ -5000,6 +5004,10 @@
         {
           "type": "SYMBOL",
           "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "byte_string"
         },
         {
           "type": "SYMBOL",
@@ -7228,6 +7236,10 @@
         {
           "type": "SYMBOL",
           "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "byte_string"
         },
         {
           "type": "SYMBOL",
@@ -10952,6 +10964,42 @@
                 {
                   "type": "PATTERN",
                   "value": "[^\"\\\\\\r\\n]"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "\\\\[ntr\\\\'\"0]"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "\\\\u\\{[0-9A-Fa-f]+\\}"
+                }
+              ]
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "\""
+          }
+        ]
+      }
+    },
+    "byte_string": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "b\""
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "PATTERN",
+                  "value": "[\\x00-\\x09\\x0b\\x0c\\x0e-\\x21\\x23-\\x5b\\x5d-\\x7f]"
                 },
                 {
                   "type": "PATTERN",

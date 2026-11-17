@@ -322,10 +322,17 @@ same program over `utf8_valid_from`).
   `compile-x86`'s is, then placeless, rowed, and the emitted functions), so
   a program that links a validator's eight functions fits the kernel's
   per-declaration fuel.
-- The span functions live in a module that imports `runtime` and the
-  program in one that imports `runtime_program`: a generated `Compile`
-  instance names its class unqualified, and a module that imports both
-  generators has two `runtime`s.
+- A module of programs imports `runtime_program` and what its own text
+  spells, nothing of the generators' (since 2026-11-16): `bitvec` (`u8`,
+  `u64`), `itree` (a `while`'s `Iterate`), `coitree` (`Partial`),
+  `linux_world` (`Io`), `rt` (`byte_within`), `rt_io` (`read_into`). The
+  generators name what they state by key, `name_of(X)` where they can see
+  `X` and `"module::X"` otherwise, and a generated instance cites its class
+  by key (`runtime::Compile`, `runtime_file::CompileSpan`), so each needs
+  its module only in the program's import closure; `runtime_program`
+  imports `runtime_file`, so span functions can sit beside the program.
+  Before, a generated name resolved where the program was, and a program
+  imported the generators' whole vocabulary (about forty modules).
 
 ## 4. Three nodes a real program needs
 
@@ -403,6 +410,39 @@ initial contents, emitted into the data segment as `emission::Inits`).
 What is missing is the surface: a program writing `"valid\n"`. Two shapes,
 §5 D3.
 
+**The surface (built, 2026-11-16).** `b"valid\n"` is the name `b` with a
+string literal right after it, no space between (`Parser::byte_string`; `b`
+alone or `b "x"` is what it was). Its bytes are the string's characters,
+each ASCII, since a non-ASCII character is refused rather than read as its
+UTF-8 encoding; the escapes are a string's (`\n`, `\t`, `\r`, `\\`, `\'`,
+`\"`, `\0`, `\u{…}` up to `7F`), and a byte above `0x7F` has no spelling
+yet (`issues/byte-string-hex-escape.md`). It elaborates (`Literals::elab_byte_string_*`)
+to the collection literal of its numerals at `[u8; n]`, or at
+`List<u8>` where a list is expected (a `ByteBuffer(n)` is one), so it is
+exactly the term `[118, 97, …]` would be, with nothing new in the kernel;
+`lib/_tests/std/bitvec/byte_string_tests.hthr` pins it.
+
+**The native half (built, 2026-11-16): a byte string is one more buffer
+parameter.** D2's move, applied by the reflector: before reading a program,
+`rt_const_scan` finds every closed list of byte literals in its body (each
+once, by its bytes, in the order the walk meets them), and the reading
+takes each as a parameter after the function's own (`Known::consts`, its
+level; `rt_const_bytes` reads a `Cons` spine at a byte buffer as that
+parameter, where it used to refuse it as a `Cons` onto a buffer). So
+nothing below the reflector is new: the lowering places the parameter in
+a buffer like any other (`Program::locs`), and its theorem is unchanged.
+The generator gives the `Source` one buffer per string after the
+parameters' (`Program::all_buffers`: `Program::constant(bs)`, of its own
+length, `initial := bs`), states `f::reads` at no argument for the strings,
+and proves the reading's environment holds each, `rt_bytes([…])` of its
+bytes, by `refl` at `Source::start` (`Program::held_cons`), as it does for
+the zeroed buffers; the bridge's environment holds the same terms
+(`bridge_consts`), which convert with the literal in the body. A string the
+program reads into is then a buffer the read overwrites, as a parameter
+is, and the lowering forgets it there, so "never written" needs no check
+of its own. `ascii_say` in `runtime_program_tests` says its verdict with
+two strings by an `if`, and `native_tools.rs` holds its output.
+
 ## 5. Decisions (Minus, 2026-11-15)
 
 **D1. What a program is.** Any `runtime fn` whose first parameter is the
@@ -449,6 +489,23 @@ argument" in their own proofs; it is a lemma about the reflected
 `ELoop` (substituting a variable's initial value), proved once, not
 per program.
 
+**As built (2026-11-16): a zeroed local is read like a byte string.** A
+local `let mut buf: List<u8> = List::replicate(0, n);` at a numeral `n`
+is one more parameter of the reading after the function's own, as a byte
+string is (`rt_const_scan` records it as `ConstInit::Zeros(n)`, one buffer
+per local even where two start alike, in the order the body makes them).
+The `Source` holds it as `Program::zeroed(n)`, a zeroed buffer of that
+capacity, and `f::reads` is stated with no argument for it, its
+environment holding `List::replicate(zero_byte(), n)` by `refl` at
+`Source::start`. So the general abstraction lemma above was not needed:
+the reading never holds the local's value, only a variable for it, and
+the parameter form and the local form read alike
+(`ascii_local::eloop = ascii_check::eloop` by `refl`,
+`lib/_tests/native/runtime/runtime_program_tests.hthr`). A local that
+starts as other bytes is refused, naming a byte string as the spelling:
+the data segment starts a program's own buffer zeroed.
+`examples/utf8/utf8check.hthr`'s `main` makes its buffer this way.
+
 **D3. Constant bytes.** Agreed: byte-string literals `b"valid\n"` of
 type `[u8; 6]`; a literal reaching a write is a constant buffer of the
 `Source` (initial bytes in the data segment, never written). After the
@@ -483,3 +540,10 @@ it, so it can run in another thread at the same time.
    gone), then D3's literals (§4.3), then the rest of
    effects design §6 item 5 (`cat FILE…`, `wc`, `head -n` rewritten, the
    builder deleted).
+6. **After the UTF-8 program (2026-11-16, Minus's order).** Generated
+   declarations resolve outside the program's own imports (§3, built);
+   then D2's local buffers (§5, built). Filed for
+   later: printing (`issues/io-program-prints-output.md`), the sort and binary-search
+   demos as programs (`issues/io-program-demo-mains.md`), and the
+   whole-program theorem over the read loop and exit
+   (`issues/io-program-whole-theorem.md`).
