@@ -308,7 +308,7 @@ theorem Homes::pinned_used(self homes: Homes, x: Gpr, pinned: homes.pinned(x) = 
 
 theorem Homes::pinned_unlived(self homes: Homes, x: Gpr, pinned: homes.pinned(x) = True): homes.lives(x) = False {
     match e: homes.lives(x) {
-        True => absurd(trans(sym(pinned), j(sym(e), λ b _ => (!b && (homes.pins.homes_use(x) && !x.same(R10))) = False, refl))),
+        True => absurd(pinned),
         False => refl,
     }
 }
