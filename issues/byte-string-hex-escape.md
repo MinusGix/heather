@@ -1,6 +1,6 @@
 ---
 title: A byte string cannot spell a byte above 0x7F (`\xHH`)
-status: open
+status: closed
 labels: [surface-syntax,literals,lexer]
 area: language
 created: 2026-11-16
@@ -30,3 +30,15 @@ byte to the parser:
 
 The first is the honest one; the parser's adjacency rule was chosen only
 because it needed no scanner change.
+
+## Log
+
+- 2026-11-16: Built the first way: a `ByteStr` token kind (code 71, a row
+  of `TOKEN_KINDS`), cut by the Rust lexer (`lex_byte_string`) and by the
+  scanner (`IDENT_B` after a `b`, then `step_byte_string`'s four states),
+  with two new refusals, `NotAscii` (22) and `ByteEscape` (23). The parser
+  reads the token and `Parser::byte_string` is gone. `\xHH` is a byte
+  string's alone, and a byte string no longer takes `\u{…}` (as Rust's
+  do not): `\x` in a string or character literal, the `\x00`–`\x7F`
+  half of the plan above, was left out, since `\u{…}` already spells
+  those scalar values; it is a separate lexer change if it is wanted.

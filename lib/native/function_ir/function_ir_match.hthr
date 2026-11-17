@@ -334,6 +334,20 @@ fn Matchable::found_at(self m: Matchable, at: Node, had: Walked) → Option<Matc
     }))
 }
 
+// A node that is another with its two operands the other way round, as
+// `a + b = b + a` writes one. A walk that wrote it would have gained
+// nothing, and would write it back at the next: such an instance is only
+// a step on the way to another (`instances_among`).
+fn Node::turned(self node: Node, of: Node) → Bool {
+    match node {
+        Add(w, o, l, r) => match of { Add(w2, o2, l2, r2) => w.same(w2) && o.same(o2) && l.same(r2) && r.same(l2), _ => False },
+        BitAnd(w, o, l, r) => match of { BitAnd(w2, o2, l2, r2) => w.same(w2) && o.same(o2) && l.same(r2) && r.same(l2), _ => False },
+        BitOr(w, o, l, r) => match of { BitOr(w2, o2, l2, r2) => w.same(w2) && o.same(o2) && l.same(r2) && r.same(l2), _ => False },
+        BitXor(w, o, l, r) => match of { BitXor(w2, o2, l2, r2) => w.same(w2) && o.same(o2) && l.same(r2) && r.same(l2), _ => False },
+        _ => False,
+    }
+}
+
 // The bit a rule's instance decides: its conclusion is that the word the
 // node writes, a bit, is a constant.
 fn Matched::bit(self found: Matched) → Option<Bool> {
@@ -347,8 +361,27 @@ fn matched_among(table: List<Matchable>, at: Node, had: Walked) → Option<Match
     match table {
         Nil => None,
         Cons(m, rest) => match m.found_at(at, had) {
-            Some(found) => match found.bit() { None => Some(found), Some(_) => matched_among(rest, at, had) },
+            Some(found) => match found.bit() {
+                None => match found.node.turned(at) { False => Some(found), True => matched_among(rest, at, had) },
+                Some(_) => matched_among(rest, at, had),
+            },
             None => matched_among(rest, at, had),
+        },
+    }
+}
+
+// Every instance at a node that writes another node for it and reads no
+// range, the node turned among them: what a search through a word's other
+// spellings follows (`Seen::spellings`, function_ir_learn).
+fn instances_among(table: List<Matchable>, at: Node, had: Walked) → List<Matched> {
+    match table {
+        Nil => [],
+        Cons(m, rest) => match m.found_at(at, had) {
+            Some(found) => match found.bit() {
+                None => match found.needs { Nil => Cons(found, instances_among(rest, at, had)), Cons(_, _) => instances_among(rest, at, had) },
+                Some(_) => instances_among(rest, at, had),
+            },
+            None => instances_among(rest, at, had),
         },
     }
 }

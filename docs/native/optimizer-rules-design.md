@@ -572,19 +572,21 @@ the matcher, for the rules whose conclusion is a node.
   is: `compile-x86`'s reads and its certificate are modules that import
   the program, so they get the program's rules with no text naming them.
 - **`examples/x86-native/own_rule.hthr`** is a program that declares
-  `add_sub_left` (first `or_zero`, which the standard set now has) and is
-  compiled with it: the add and the subtraction are gone from its code,
-  and stay without the rule (`crates/cli/tests/native_own_rule.rs`).
+  `sub_self` (first `or_zero`, which the standard set now has, then
+  `add_sub_left`, which the search of §9.4 now finds from `add_sub`) and
+  is compiled with it: the subtraction and the add are gone from its
+  code, and stay without the rule (`crates/cli/tests/native_own_rule.rs`).
 
 - **`compile-x86 --explain-optimizer`** prints, for each function, a line
   for each rule the replays it kept used (§8): the conclusion at the
   instance, the rule's name, and the premises it stood on.
 
   ```
-  function 0: 6 rules used
+  function 0: 7 rules used
     t5 = t4 < t1 = 1   by below_yes   (t4 within 0 ..= 0, t1 within 1 ..= u64::MAX)
     t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
-    t10 = (t1 + t8) - t1 = t8   by add_sub_left
+    t9 = t1 - t1 = 0   by sub_self
+    t10 = t8 + 0 = t8   by add_zero
   ```
 
   A line is read off the clause the rule makes at the plan's numbers, the
@@ -717,6 +719,38 @@ the matcher, for the rules whose conclusion is a node.
   `compile-x86` say what each search found and each test of a function
   made answered, and prints a function the lowering refused, which is how
   a stage the compile declined is seen.
+- **Saturation, the first version: a search through a word's other
+  spellings** (§9.4; Minus, 2026-11-16: "Let's start on saturation").
+  A rule's node is over words the function already has, so a word is a
+  class and the nodes the rules give for it are the class's members, with
+  no graph beside the walk. At a node the walk closes the node under every
+  rewriting rule that reads no range (`spellings_closed`), then does the
+  same with each word the node reads spelled each other way the rules give
+  (`Seen::spellings_reading`), and writes the lightest spelling
+  (`Node::weight`: a move, then a constant, then the rest) with the steps
+  that derive it: `Drop`, a `Derive` for each rule on the way, `Emit`
+  (`Seen::searched`). The replayer and the report are as they were; the
+  report says each step, `t9 = t1 + t8 = t8 + t1   by add_comm` and then
+  `t10 = (t8 + t1) - t1 = t8   by add_sub`.
+  - The standard set has `add_comm`, `and_comm`, `or_comm`, `xor_comm`. A
+    node with its operands turned gains nothing, so no walk writes one
+    (`Node::turned`, `matched_among`); the search follows them. A rule is
+    then stated one way round: `zero_or` and the example's first
+    `add_sub_left` are found from `or_zero` and `add_sub`.
+  - It is asked for: `learn_plan(spellings := n)`, `find_learned(spellings
+    := n)`, with `n` the spellings followed from one node (`Tables.spellings`,
+    zero by default). `compile-x86` asks with eight; the library's plan
+    tests do not, so what their proofs cost has not moved
+    (`turned_left`, `turned_searched` in `function_ir_identities_tests.hthr`).
+  - What it is not yet, against §9.4. No word is made, so a rule whose
+    other side needs a new word (associativity, folding two constants) has
+    nowhere to put it: that wants helper nodes put by an inlining stage
+    before the replay, as the word loads are. Two words that are equal are
+    one class only after a copy walk has read through the move between
+    them, not during a search; the library's e-graph and its congruence
+    are for that, and are not used here. Rules that read a range are taken
+    as the plain walk takes them, first fit. The weight is three classes
+    and not what the lowering emits.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose
