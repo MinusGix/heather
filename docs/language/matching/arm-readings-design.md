@@ -43,7 +43,8 @@ Words used below. In the arm for `C(x̄)` of a split on `e`, with
 fact about the *type each use of `w` is checked against*. The beside rule
 approximates that by "`w` and `h` are arguments of one call somewhere in
 some arm". It is decided once for the whole match, so one arm's call
-unrefines `w` in every arm.
+unrefines `w` in every arm, and it is decided from names, so a name that
+means something else in the arm misleads it (§6 has one on master).
 
 **The error lands far from the cause.**
 `issues/named-match-third-level-kernel-rejects.md`, point 2: the last arm
@@ -309,11 +310,56 @@ Stage 2 is a separate change with its own sweep. It inserts `subst` terms
 where there was a refusal before, so it cannot change a term that checks
 today.
 
-## 6. Census
+## 6. Census, and the prototype
 
-Instrumented `select_refined` on master `fde9b6fa` and re-elaborated
-every library module. **(Running; this section is filled in before the
-PR leaves draft.)**
+**Census.** `select_refined` instrumented on master `fde9b6fa`, every
+library module re-elaborated (2026-11-17). Under `match h:`, a hypothesis
+about the scrutinee that an arm names is a candidate for refinement at 61
+sites. At 16 of them an exception leaves it as written:
+
+| | computed scrutinee | variable scrutinee |
+|---|---|---|
+| refined | 43 | 2 |
+| beside rule | 6 | (not applied) |
+| takes-an-equation rule | 6 | 4 |
+
+Thirteen of the sixteen are in `lib/_tests`, most of them probes written
+to pin the exceptions. The library proper has three: `Bisim::of_obs`'s `e`
+(§1) and two in `lib/std/parser/parser.hthr` (`right_bound` and
+`right_law`, beside `shape`). The idioms #727's sweep
+named (`goes_word_to_slot`, `j(s, …, spare)`) do not appear: their
+hypotheses are not about the scrutinee by occurrence, so no rule touches
+them. The exceptions guard few sites, and they cost every other site
+their unpredictability.
+
+**The same sweep found a defect of the current rule.**
+`lib/_tests/std/core/branch_equations_tests.hthr` is refused on master
+when re-elaborated (the PR lane replays it). `first_seen`'s generated
+branch equation takes a hypothesis `got: first_of(xs) = None` and matches
+`match got: first_of(xs)`. The arm's `got` is the equation, but the name
+scan sees `got` in the arm, takes it for the hypothesis and refines it,
+and the refined copy shadows the equation. A hypothesis named like the
+equation cannot be named by an arm; the prototype says so in
+`select_refined`.
+
+**Prototype** (this branch, `crates/elab/src/readings.rs`): §3.1 to §3.3
+as written, both exceptions deleted, without §3.4's use-based selection
+and without §3.5's messages. `Cx::readings` records each refined copy's
+outer binder and the equation's name; the checking form and the
+application engine's inferred-argument branch ask it. It is small: the
+readings module, one field, two call sites.
+
+- `lib/_tests/std/core/match_readings_tests.hthr` checks: each row of
+  §3.3, both spellings of §1's pairs (`chain_by_trans` and
+  `chain_refined`, `beside_written` and `beside_and_refined`), both
+  readings of one hypothesis in one arm, a hypothesis refined by two
+  nested splits used at its outermost spelling, and a refusal where
+  neither reading fits.
+- The probes that pinned the exceptions check unchanged: `pick_by` with
+  `pick_by_true` by `refl`, the `taken_*` family, `passed_h`,
+  `passed_beside`, `Bisim::of_obs`.
+- The whole-library sweep with the prototype: **(running; filled in
+  before this leaves draft).**
 
 ## 7. What it costs, and what could go wrong
 
