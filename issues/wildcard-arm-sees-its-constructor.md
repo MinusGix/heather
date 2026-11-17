@@ -1,6 +1,6 @@
 ---
 title: A wildcard arm sees the scrutinee as the constructor it stands for
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [elaborator,matching,proofs]
 area: language
@@ -37,3 +37,12 @@ In a `_` arm (and a binding arm `other => …`), a scrutinee that is a local var
 ## Done when
 
 `wild_runs` checks as written (a probe in `lib/_tests/lang/`, with a negative control that the arm cannot use a field it did not bind), and the four blocks in `native_compile_correct.hthr` are `Dataflow(body) => …, _ => λ … => region.region_extends(…)`.
+
+## Resolution (2026-11-16)
+
+Where the motive depends on the scrutinee, a `_` arm that names it expands to one arm per constructor no earlier arm names, each opening with `let s: TypeOf(s) = C(fields);` (`Patterns::rebind_default`, design `docs/language/matching/nested-match-patterns-design.md` §4.1). The scrutinee may be a local or an enclosing arm's field, which the structural lowerings bind as an alias. `wild_runs` and its controls are in `lib/_tests/lang/wildcard_arm_tests.hthr`. The four blocks in `native_compile_correct.hthr` are now `Dataflow(body) => …, _ => …` and `_ => t.then_nil(first, …)`.
+
+Left out:
+
+- The binding arm `other => …` / `r @ _` for a computed scrutinee. It is new syntax, so it waits for a design decision.
+- A constructor that only deep arms name keeps the plain `_` (the §4.1 list says why).
