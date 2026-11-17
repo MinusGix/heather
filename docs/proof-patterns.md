@@ -6,6 +6,9 @@ retired). Each rule says why, so it can be dropped when the reason goes.
 A rule that names an open issue is a workaround for that issue, not a
 property of Heather.
 
+What a proof costs is this document; how definitions, data and proofs
+should read is `docs/library/program-and-proof-style.md`.
+
 ## 1. Closed facts: evaluate once, in the kernel
 
 - **A closed verdict is evaluated once, by the kernel, in any of its three

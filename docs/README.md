@@ -10,6 +10,7 @@ CLAUDE.md says when each one applies.
 - `roadmap.md`: the areas, their priority, the milestones.
 - `compilation-vision.md`: the settled principles of native compilation.
 - `proof-patterns.md`: how to write proofs that check cheaply.
+- `library/program-and-proof-style.md`: how definitions, data and proofs about programs should read.
 - `testing-generated-terms.md`: the axes a test of generated terms varies.
 - `test-value-audit.md`: when a claim is a Rust test and when a theorem.
 - `agent-policy.md`: what a thread may decide and what it asks.
@@ -26,7 +27,7 @@ CLAUDE.md says when each one applies.
 | `language/matching/` | The dependent match compiler, nested patterns, equation binding, `if let` |
 | `language/recursion/` | `decreases`, course-of-values, mutual recursion, recursion at the top |
 | `metaprogramming/` | Reflection, meta defs, generators, the host elaboration interface, registered values |
-| `tactics/` | `rewrite`, `simp`, `grind`, `omega`, `linarith`, `ring`, `calc`, `norm_num`, `mono`, `induct` |
+| `tactics/` | `rewrite`, `simp`, `grind`, `omega`, `linarith`, `ring`, `calc`, `norm_num`, `mono`, `induct`, `bv_decide` |
 | `native/` | The compiler: program logic, FunctionIR, one compiler, procedures, exports, layout, `runtime fn` setups, datarepr, the emitted code's benchmarks |
 | `itrees/` | Interaction trees and coinductive itrees |
 | `library/` | Library design: algebra, orders, division, reals (`creal.md`), float, strings, the parser, lib layout and style |

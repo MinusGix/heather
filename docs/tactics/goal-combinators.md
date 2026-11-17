@@ -226,13 +226,17 @@ checked in the case the previous one made:
 - `subst(h, rest)` when it equates one constructor's applications with a
   local in a field (`Some(x) = Some(c)`), which replaces `c` and ends the
   inversion;
-- otherwise `match e: test { C(x̄) => <next step>, … }` on the test `h` is
-  stuck on. The test is found by `split_all`'s search for what blocks a
-  goal, except that it takes the test **as the callee wrote it**: a
-  pipeline stage `st1(n)` is split as `st1(n)`, not on the `n.leb(5)`
-  inside it, which `split_all`'s deeper-first order would reach. The
-  case split itself refines `h`, the goal and the other hypotheses it
-  reads (`docs/elaborator/goal-motive-synthesis-design.md` §4.7);
+- otherwise a case split on the test `h` is stuck on, of `Π(h). goal` as
+  `split_all` splits a goal, applied to `h`: `(match e: test { C(x̄) => λ h
+  => <next step>, … })(h)`. The test is found by `split_all`'s search for
+  what blocks a goal, except that it takes the test **as the callee wrote
+  it**: a pipeline stage `st1(n)` is split as `st1(n)`, not on the
+  `n.leb(5)` inside it, which `split_all`'s deeper-first order would reach.
+  In each case `h` is the reduct the test was found in with the test
+  replaced, so a structural recursion's later call reads as the call
+  (`yes.emits(…)`, not the kernel's copy of its eliminator) and is split
+  and named in turn. The goal is refined where it mentions the test as the
+  split spells it;
 - the rest of the block, once `h` is stuck on nothing.
 
 `as e1, e2(x, y)` names the splits' equations in the order they are taken
@@ -241,14 +245,21 @@ along a path, and the fields of a constructor with that many fields (the
 takes one split and then only closes or substitutes, so `emitted:
 (match region.scopes() { …, True => region.code(…) }) = Some(c)` stops at
 `region.code(…) = Some(c)` for a lemma about `code` rather than taking
-`code` apart too. Without names, every split is taken until `h` is stuck on
-nothing, each with a hidden name that `known` still finds. A hypothesis stuck on nothing at the start is refused (`there
-is nothing to take apart`). A split that does not refine `h` (the rest of
-the block passes `h` beside the split's equation in one call, which keeps
-`h` as written) is refused at the `cases`, not looped on.
+`code` apart too, and `cases emitted as one(c1);` on a `Then`'s emission
+leaves `emitted` the rest's `rest.emits(c1.prog, …) = Some(c)`. Without
+names, every split is taken until `h` is stuck on nothing, each with a
+hidden name that `known` still finds. A hypothesis stuck on nothing at the
+start is refused (`there is nothing to take apart`, with what `h` reads).
+A hypothesis whose type a definition computes (a premise of
+`t.EmitsRun(s, …)`) is read as the equation it decodes to.
 
 So the proof is ordinary nested matches; the kernel checks it as it checks
-the hand proof. Probes: `lib/_tests/std/tactic/cases_hypothesis_tests.hthr`.
+the hand proof. A goal that mentions the test only through a definition
+(`s.checks(…)` over the `apart` tested) keeps it: use the split's named
+equation (`Bool::is_true_of_eq(apart)`). Probes:
+`lib/_tests/std/tactic/cases_hypothesis_tests.hthr`; uses across
+`lib/native/` (`Stmt::emits_extends`, `Stmt::emits_runs`,
+`Stmt::checked_sound`, `StructuredRegion::faithful`).
 
 ## `decide`
 

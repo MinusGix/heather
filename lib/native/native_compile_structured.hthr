@@ -302,56 +302,24 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
     match region {
         Dataflow(body) => λ s t scoped => Scope::wide_of(body.nodes, s, t, scoped),
         Sequence(prefix, continuation) => λ s t scoped => {
-            let chain: (s.nodes(prefix.nodes).and_then(λ m => continuation.scoped(m)) = Some(t)) = scoped;
-            Option::and_then_with(chain, λ m got rest => {
-                let r: Sequence(prefix, continuation).Ok() = ⟨Scope::wide_of(prefix.nodes, s, m, got), continuation.ok_of_scoped(m, t, rest)⟩;
-                r
-            })
+            cases scoped as got(m);
+            ⟨Scope::wide_of(prefix.nodes, s, m, got), continuation.ok_of_scoped(m, t, scoped)⟩
         },
         Compose(prefix, continuation) => λ s t scoped => {
-            let chain: (prefix.scoped(s).and_then(λ m => continuation.scoped(m)) = Some(t)) = scoped;
-            Option::and_then_with(chain, λ m got rest => {
-                let r: Compose(prefix, continuation).Ok() = ⟨prefix.ok_of_scoped(s, m, got), continuation.ok_of_scoped(m, t, rest)⟩;
-                r
-            })
+            cases scoped as got(m);
+            ⟨prefix.ok_of_scoped(s, m, got), continuation.ok_of_scoped(m, t, scoped)⟩
         },
-        Conditional(_, condition, _, _, when_true, when_false) => λ s t => (match s.bit(condition) {
-            False => λ none => absurd(none),
-            True => λ scoped => {
-                let chain: (when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ c => Some(a.join(c)))) = Some(t)) = scoped;
-                Option::and_then_with(chain, λ a yes rest => Option::and_then_with(rest, λ c no _ => {
-                    let r: when_true.Ok() ∧ when_false.Ok() = ⟨when_true.ok_of_scoped(s, a, yes), when_false.ok_of_scoped(s, c, no)⟩;
-                    r
-                }))
-            },
-        }),
+        Conditional(_, condition, _, _, when_true, when_false) => λ s t scoped => {
+            cases scoped as bit, yes(a), no(c);
+            ⟨when_true.ok_of_scoped(s, a, yes), when_false.ok_of_scoped(s, c, no)⟩
+        },
         Lend(_, _, _, _) => λ s t none => absurd(none),
         Call(_, _, _) => λ s t _ => trivial,
-        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
-            let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
-            let goal = body.Ok() ∧ (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
-                Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()));
-            (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
-                False => λ none => absurd(none),
-                True => λ scoped => {
-                    let parts = Bool::both(j(sym(ok), λ b _ => b.IsTrue(), trivial));
-                    let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
-                    let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
-                            False => None,
-                            True => Some(s.looped(outputs, exhausted)),
-                        }) = Some(t)) = scoped;
-                    Option::and_then_with(chain, λ bs got rest => {
-                        let bits: (bs.bit(exit) && bs.all_defined(next)).IsTrue() =
-                            (match bs.bit(exit) && bs.all_defined(next) as λ c =>
-                                    (match c as λ _ => Option<Scope> { False => None, True => Some(s.looped(outputs, exhausted)) }) = Some(t) → c.IsTrue() {
-                                False => λ none => absurd(none),
-                                True => λ _ => trivial,
-                            })(rest);
-                        let g: goal = ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, bits⟩)⟩⟩;
-                        g
-                    })
-                },
-            })
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t scoped => {
+            cases scoped as ok, got(bs), bits;
+            let parts = Bool::both(Bool::is_true_of_eq(ok));
+            let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
+            ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
         },
     }
 }

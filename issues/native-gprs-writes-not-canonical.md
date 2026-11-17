@@ -57,3 +57,19 @@ done in the same pass over the model.
 `rbx_gprs`, `rbx_known_gprs`, `slot_gprs` and their lemmas are gone from
 `native_compile_segments.hthr`, and a slot access's effect on the
 register file is stated by conversion.
+
+## Log
+
+- 2026-11-17: option 1 done for the model. `Gprs` is a record of sixteen
+  words; `write_gpr` builds one with `Gpr::written` at each field, so at a
+  register that is known two writes are the one write, writes commute and a
+  write of what is held is the file, by conversion
+  (`lib/_tests/std/arch/x86_64/x86_64_gprs_tests.hthr`). At a register that
+  is not known, `read_gpr_write` gives the read after a write as the match
+  the function form unfolded to; the eight proofs that read it by
+  conversion now cite it. Left: `rbx_gprs`, `rbx_known_gprs`, `slot_gprs`
+  and their lemmas are still there, and `GprsAgree` in
+  `function_ir_lower.hthr` is now equality at known registers.
+  One proof (`in_place_settle`) lost an inferred motive: the goal no longer
+  unfolds far enough to show the callee's test, so its match is written
+  with its motive.

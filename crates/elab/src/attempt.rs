@@ -148,6 +148,10 @@ pub(super) struct DeclAttempt {
     /// elaborated without the equation.
     pub(super) match_eq_next: Cell<u32>,
     pub(super) match_eq_wanted: RefCell<Vec<u32>>,
+    /// The identities whose equation would carry a term an arm produced at
+    /// the other spelling of its type
+    /// (docs/language/matching/arm-readings-design.md §5).
+    pub(super) match_eq_carried: RefCell<Vec<u32>>,
     /// The declaration's parameter names, in telescope order: the kernel's
     /// outermost binders when it locates a refusal no recorded site
     /// explains, and so the names its note uses for them
@@ -200,6 +204,7 @@ impl DeclAttempt {
         self.emitted_entries.get_mut().clear();
         self.weakened_entries.get_mut().clear();
         self.match_eq_wanted.get_mut().clear();
+        self.match_eq_carried.get_mut().clear();
         self.goal_arena.prepare();
     }
 
@@ -263,6 +268,7 @@ impl DeclAttempt {
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,
+            match_eq_carried,
             telescope,
             recursion_decs,
         } = self;
@@ -285,6 +291,7 @@ impl DeclAttempt {
             motive_redundancy_probe: motive_redundancy_probe.get(),
             match_eq_next: match_eq_next.get(),
             match_eq_wanted: match_eq_wanted.borrow().len(),
+            match_eq_carried: match_eq_carried.borrow().len(),
             telescope: telescope.borrow().clone(),
             recursion_decs: recursion_decs.borrow().len(),
         }
@@ -334,6 +341,7 @@ impl DeclAttempt {
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,
+            match_eq_carried,
             telescope,
             recursion_decs,
         } = self;
@@ -360,6 +368,7 @@ impl DeclAttempt {
         // handed out or asked for, go with it.
         match_eq_next.set(mark.match_eq_next);
         match_eq_wanted.borrow_mut().truncate(mark.match_eq_wanted);
+        match_eq_carried.borrow_mut().truncate(mark.match_eq_carried);
         *telescope.borrow_mut() = mark.telescope;
         recursion_decs.borrow_mut().truncate(mark.recursion_decs);
     }
@@ -385,6 +394,7 @@ pub(super) struct AttemptMark {
     motive_redundancy_probe: bool,
     match_eq_next: u32,
     match_eq_wanted: usize,
+    match_eq_carried: usize,
     telescope: crate::spine::Binders,
     recursion_decs: usize,
 }

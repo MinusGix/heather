@@ -2,7 +2,7 @@
 
 Design for `issues/match-eqbind-generalizes-passed-hypotheses.md`
 (2026-11-17). **Status: adopted (Minus, 2026-11-17: stage 1, then stage
-2). Stage 1 is built (§6); stage 2 (§5) is not.**
+2). Both are built: stage 1 in §6, stage 2 in §5's "As built".**
 
 It replaces two syntactic exceptions in `generalize::select_refined`:
 
@@ -348,6 +348,67 @@ Stage 2 is a separate change with its own sweep. It inserts `subst` terms
 where there was a refusal before, so it cannot change a term that checks
 today.
 
+### 5.1 As built
+
+`Readings::coerce` (`crates/elab/src/readings.rs`), called at the checking
+form's last resort, after inference and after `Tested::coerce`.
+
+- **Only a decided disagreement.** The two types are compared once, and
+  only an answer of "not convertible" goes on; convertible or out of fuel
+  leaves the term exactly as it was. The comparison runs only when an
+  enclosing match's test is spelled in one of the two types, which is a
+  syntactic scan. So a declaration that checked before stage 2 has the
+  term it had.
+- **The transport is a `J` written out**, as `rewrite` writes its own, so
+  it needs no library: forward along `h` when the term's type spells the
+  test, and along `sym(h)` (itself a `J`) when the expected type does.
+  The motive is the type with the test abstracted, checked well-formed
+  (`motive_well_formed`) before it is used.
+- **Every match with an equation records it**, not only one that
+  generalized a hypothesis (stage 1 registered the equation's `refl`
+  reading inside the generalizing path only).
+- **A plain `match`** hands its arms its test beside the pending
+  equation's identity (`Cx::pending_tests`). A term that would be carried
+  marks the match (`match_eq_carried`) and the arm goes on unchanged. Once
+  the arms are done, a marked match is elaborated again as its convoy with
+  the equation registered; that version stands if it elaborates. If it
+  does not, the match is elaborated a third time with its test out of
+  sight, which is the match as it was before stage 2, error and all. The
+  mark is not an error on purpose: the first version raised the mismatch
+  at the use, and a recursion's own refusal (`argument n has to be _`)
+  was replaced by a worse one wherever the convoy failed too.
+- **Cost shape.** Nothing on a declaration whose types convert. On one
+  with a decided mismatch that spells a test, each marked plain match is
+  elaborated two or three times, so nesting multiplies: the worst case is
+  exponential in the depth of marked matches, and it is reached only by a
+  declaration that is being refused.
+
+What the first sweep showed (every `lib/**/*.hthr`, fresh cache): no
+library proof changed, and three probes that pinned a refusal check.
+
+- `walk_shape` (`recursion_case_split_tests.hthr`,
+  `issues/recursion-case-split-dependent-ih.md`): a recursive call's
+  result, stated at the split parameter `n`, where the arm's goal is at
+  `Zero`. The issue's log had named the fix as "a match refinement, not a
+  recursion one".
+- `wild_under_deep` (`wildcard_arm_tests.hthr`): a `_` arm whose
+  scrutinee is not rebound.
+- `loose_or` (`match_refines_through_calls_tests.hthr`): a record value
+  at the record as written, where the motive read inside it.
+
+Not built, and where it would go:
+
+- **One site only.** The dot-call and projection branches of the checking
+  form record their mismatch without asking (`note_check_mismatch` at five
+  sites in `checking.rs`), and so do literals. A method call's result
+  that needs carrying is not carried.
+- **Arguments the application engine infers** before the parameter's type
+  is settled are compared there (`argument_type_converts`), not at the
+  checking form.
+- **One equation per term.** A type that needs two enclosing matches'
+  equations at once is not reached; innermost first, the first that
+  closes the gap wins.
+
 ## 6. Census, and the prototype
 
 **Census.** `select_refined` instrumented on master `fde9b6fa`, every
@@ -516,4 +577,6 @@ and is open for `split_all`.
    (only the declared-spine inferred-argument branch does), and §3.4's
    second lowering is not applied at a plain `match` (its "As built").
 4. Stage 2 (§5), with its sweep; then delete the proofs' remaining
-   hand transports where the sweep's review lint finds them.
+   hand transports where the sweep's review lint finds them. Built
+   (§5.1) except the lint, which does not exist: nothing yet finds a
+   hand transport that has become redundant.
