@@ -618,12 +618,20 @@ impl Checking<'_> {
                     cx, arms, (&scrut_t, &scrut_ty, &scrut_lvl), dec, expected, eqbind.as_deref(), e.span,
                 );
                 let unrefined = std::mem::take(&mut positions);
+                // The equation's `refl` reading, and what the match could
+                // not refine, are recorded whether or not it generalizes
+                // anything (arm-readings-design §3.3, §3.5, §5).
                 let kept_cx;
-                let cx = if refined.kept.is_empty() {
+                let cx = if refined.kept.is_empty() && eqbind.is_none() {
                     cx
                 } else {
                     let mut with = cx.clone();
                     crate::readings::Readings::register_kept(&mut with, &refined.kept);
+                    let mut shadowed: Vec<&str> = Vec::new();
+                    for arm in arms.iter() {
+                        arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
+                    }
+                    crate::readings::Readings::register(&mut with, &[], &[], &shadowed, eqbind.as_deref());
                     kept_cx = with;
                     &kept_cx
                 };
@@ -681,7 +689,7 @@ impl Checking<'_> {
                         arm.binders.iter().for_each(|pat| generalize::pattern_names(pat, &mut shadowed));
                     }
                     let mut gcx = cx.clone();
-                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, eqbind.as_deref());
+                    let registered = crate::readings::Readings::register(&mut gcx, &positions, &unrefined, &shadowed, None);
                     crate::readings::Readings::register_kept(&mut gcx, &kept);
                     let arms = Generalize(self).wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
@@ -1606,6 +1614,13 @@ impl Checking<'_> {
                 // (docs/language/when-design.md §5).
                 if let Some(value) = crate::tested::Tested(self).coerce(cx, e, &t, &got, &head, lvl)? {
                     return Ok(value);
+                }
+                // Inside an arm, a term stated with the match's test where
+                // the arm's constructor is wanted, or the other way round,
+                // is carried along the match's equation
+                // (docs/language/matching/arm-readings-design.md §5).
+                if let Some(carried) = crate::readings::Readings(self).coerce(cx, &t, &got, &head, lvl) {
+                    return Ok(carried);
                 }
                 MismatchNotes(self).note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)
