@@ -72,17 +72,18 @@ records already get. A counted loop's agreement is the analogue of
 A loop lifted to a method (§22 of the sequencing note) is a function of its
 own; what the body proves must come from its parameters. Three pieces:
 
-1. **Captured facts.** A hypothesis in scope about captures only (the
-   enclosing `for`'s `i < s.len()`) is passed to the lifted loop as a
-   squashed parameter and found again by `bv_omega` inside.
-2. **`invariant P`.** A `while` may state an invariant, checked at the entry
+1. **`invariant P`.** A `while` may state an invariant, checked at the entry
    and at each recursion (found proofs at the call), assumed in the body as
    a squashed parameter, and available after the loop together with the
-   negated test. The insertion sort's inner loop needs `j ≤ i < s.len()`.
-3. **Short-circuit `∧` in a condition.** `0 < j ∧ key < s[j - 1]` lowers
-   to nested tests, so `s[j - 1]` is elaborated under `0 < j`, and `j - 1`
-   does not wrap. (Rust's `&&` reads the same once the parser gives `&&`
-   lower precedence than comparisons; that is a surface change for Minus.)
+   negated test. The insertion sort's inner loop needs `j <= i ∧ i < s.len()`.
+   A fact about captures only (the enclosing `for`'s `i < s.len()`) is
+   stated the same way.
+2. **Short-circuit tests.** `0 < j && key < s[j - 1]` lowers to nested
+   tests, so `s[j - 1]` is elaborated under `0 < j`, and `j - 1` does not
+   wrap. `&&` and `||` bind looser than the relations (Minus,
+   2026-11-17), so this reads as in Rust.
+
+As built: `docs/language/sequencing-surface-design.md` §22.4.
 
 ## Probed so far
 
@@ -95,17 +96,25 @@ In a scratch module, before any of it is in the library:
   type mentions as a capture, placed before the receiver whose type names
   it.
 - A `for` whose upper bound reads the state (`0..s.len()` while `s` is
-  stored to) reads the bound once at the entry, as Rust does, and the
-  lifted loop takes it as a capture; before, the measure read the rebound
-  receiver and its decrease was not provable.
+  stored to): `s.len()` steps to `n`, which no store changes, and
+  `bv_omega` reads a word call that steps to a local as that local
+  (`Shape::Alias`), so the measure's decrease is proved as written.
 - The sort written as nested lifted loops over `List<u8>` with a word key
   compiles (`compile-x86`) and agrees with `qsort` on random inputs.
+- The whole insertion sort over `Bytes(n)` elaborates and sorts by
+  evaluation (`lib/_tests/native/runtime/runtime_lifted_loops_tests.hthr`,
+  `Bytes::sort`): the final `s[j] := key` reads `j <= i` at the inner
+  loop's result.
+- The insertion sort's inner loop over `Bytes(n)`, with its invariant,
+  elaborates in about 2 s. It took 15 s while a found proof that reads a
+  `let`'s value was searched for at every copy of the body the
+  companions make (`issues/squashed-found-proof-searched-per-copy.md`).
 
 ## Not built
 
 - `Bytes` in the library, `FTm::over` and its agreement, the generator
   reading a `Bytes(n)` parameter.
-- Captured facts, `invariant`, short-circuit `∧`.
+- `let key = s[i]` unannotated before a loop (the sort writes `: u8`).
 - `u8` parameters across the native boundary (span writers take and return
   64-bit words for now; `issues/runtime-repr-narrow-words.md`).
 - A loop whose state is two locals besides the receiver (its state record

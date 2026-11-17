@@ -123,6 +123,46 @@ fn base_name(name: &str) -> &str { name.rsplit("::").next().unwrap_or(name) }
 
 fn var(name: &str, span: Span) -> Expr { Expr { kind: ExprKind::Var(name.into()), span } }
 
+/// A loop's fact restated at its result: each `(local, field)` read as
+/// that field of the result (`recv`), `j` as `result.value`. Each read
+/// takes the span of the name it replaces, so two reads in one fact are
+/// two expressions to a cache keyed by span (`Cx::dot_receiver`).
+fn at_result(fact: &Ty, fields: &[(&str, &str)], recv: &dyn Fn(Span) -> Expr) -> Ty {
+    let read = |x: &Expr| -> Option<Expr> {
+        let ExprKind::Var(n) = &x.kind else { return None };
+        let (_, f) = fields.iter().find(|(l, _)| l == n)?;
+        Some(Expr {
+            kind: ExprKind::Dot { recv: Box::new(recv(x.span)), name: f.to_string(), tyargs: vec![], args: None, named: vec![] },
+            span: x.span,
+        })
+    };
+    let mut out = fact.clone();
+    let mut restate = |e: &mut Expr| {
+        crate::alpha::walk_expr_mut(e, &mut |x| match read(x) {
+            Some(r) => {
+                *x = r;
+                true
+            }
+            None => false,
+        })
+    };
+    match &mut out.kind {
+        TyKind::Squash(inner) => match &mut inner.kind {
+            TyKind::OfExpr(e) => restate(e),
+            _ => {
+                return fields.iter().fold(fact.clone(), |t, (l, f)| {
+                    let at = fact.span;
+                    let field = Expr { kind: ExprKind::Dot { recv: Box::new(recv(at)), name: f.to_string(), tyargs: vec![], args: None, named: vec![] }, span: at };
+                    measure::subst_surface_ty(&t, l, &field)
+                });
+            }
+        },
+        TyKind::OfExpr(e) => restate(e),
+        _ => {}
+    }
+    out
+}
+
 fn call(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
     Expr {
         kind: ExprKind::App { head: Box::new(head), args, named: vec![], explicit: false, goal_oriented: false },
@@ -160,6 +200,20 @@ struct Lift<'a> {
     next: usize,
     parts: Vec<Part>,
     designations: Vec<(String, String)>,
+    /// What the last loop lifted leaves known after it: each invariant
+    /// fact restated at the loop's result, and the call of the theorem
+    /// that proves it ([`Lift::keeps`]), for [`Lift::block_after`] to bind.
+    held: Vec<Held>,
+}
+
+/// An invariant fact after its loop: `fact` over the loop's state, the
+/// receiver `receiver` and the local `local` the loop returns, and
+/// `proof`, the call of the theorem proving it at the loop's result.
+struct Held {
+    fact: Ty,
+    receiver: String,
+    local: String,
+    proof: Expr,
 }
 
 /// How a loop's result holds its state, for the `\0proj`s after it: the
@@ -239,8 +293,9 @@ impl<'a> Lift<'a> {
     /// first: a body's operators may resolve through them.
     fn solver_params(&self) -> Vec<Param> { self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect() }
 
-    /// The declaration's implicit parameters that the types of a loop's
-    /// captures or state mention (`{n: u64}` of a receiver at `Bytes(n)`),
+    /// The declaration's parameters that only the types of a loop's
+    /// captures or state mention (`{n: u64}` of a receiver at `Bytes(n)`,
+    /// or the same `n` once an outer loop's lifting has made it a capture),
     /// captured too, first: a lifted loop takes them as it takes any
     /// capture, so its calls and its own recursion pass them.
     fn implicit_captures<'t>(&self, captures: &mut Vec<(String, Ty)>, tys: impl Iterator<Item = &'t Ty>) {
@@ -249,7 +304,7 @@ impl<'a> Lift<'a> {
             .decl
             .params
             .iter()
-            .filter(|p| p.implicit && p.solver.is_none() && p.default.is_none())
+            .filter(|p| p.solver.is_none() && p.default.is_none())
             .filter(|p| !captures.iter().any(|(n, _)| *n == p.name))
             .filter(|p| tys.iter().any(|t| measure::mentions_ty(t, &p.name)))
             .map(|p| (p.name.clone(), p.ty.clone()))
@@ -339,6 +394,16 @@ impl<'a> Lift<'a> {
                     };
                     scope.push(Local { name: name.clone(), written: ty.clone(), value: Some(expr.clone()) });
                     stmts.push(Stmt::Let { name: name.clone(), ty, expr, span, opaque });
+                    // The loop's invariant, at its result: read by the code
+                    // after it as the facts in scope (`s[j] := key` after a
+                    // loop that keeps `j <= i`).
+                    for (k, held) in std::mem::take(&mut self.held).into_iter().enumerate() {
+                        let fact = at_result(&held.fact, &[(&held.receiver, "after"), (&held.local, "value")], &|at| var(&name, at));
+                        self.next_if += 1;
+                        let local = format!("__held{}_{k}", self.next_if);
+                        scope.push(Local { name: local.clone(), written: Some(fact.clone()), value: None });
+                        stmts.push(Stmt::Let { name: local, ty: Some(fact), expr: held.proof, span, opaque: true });
+                    }
                     if let Some((s, init)) = alias {
                         let read = Expr {
                             kind: ExprKind::Dot { recv: Box::new(var(&name, span)), name: "state".into(), tyargs: vec![], args: Some(vec![init]), named: vec![] },
@@ -843,7 +908,7 @@ impl Lift<'_> {
             let inner = match &ty.kind { TyKind::Squash(p) => (**p).clone(), _ => ty.clone() };
             let head = Expr { kind: ExprKind::TyApp { head: Box::new(var("bitvec_omega::found_fact", end)), args: vec![inner] }, span: end };
             let found = call(head, vec![], end);
-            again.stmts.push(Stmt::Let { name: next.clone(), ty: Some(ty), expr: found, span: end, opaque: true });
+            again.stmts.push(Stmt::Let { name: next.clone(), ty: Some(ty), expr: found, span: end, opaque: false });
         }
         let done = || call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), var(o, span)], span);
         let branch = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);
@@ -859,12 +924,29 @@ impl Lift<'_> {
             elaborates: None,
             name: run.clone(),
             tyvars: self.decl.tyvars.clone(),
-            params,
+            params: params.clone(),
             result,
             decreases: Some(measure.clone()),
             body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
             span,
         }));
+        let keeps = self.keeps(&run, &params, &r, o, cond, &facts, span);
+        // The theorems take the method's parameters in order, the receiver
+        // among them; the facts are found at the entry, as the loop's are.
+        let entry: Vec<Expr> = params
+            .iter()
+            .map(|p| if facts.iter().any(|f| f.name == p.name) { var("bv_omega", span) } else { var(&p.name, span) })
+            .collect();
+        self.held = keeps
+            .into_iter()
+            .zip(&facts)
+            .map(|(theorem, fact)| Held {
+                fact: fact.ty.clone(),
+                receiver: r.name.clone(),
+                local: o.to_string(),
+                proof: call(var(&theorem, span), entry.clone(), span),
+            })
+            .collect();
         self.methods.push(run);
         Ok((marked(heather_syntax::MUTATED_WHOLE, dot(args(span), span), span), Shape::Mutated { receiver: r.name.clone() }, None))
     }
@@ -873,6 +955,71 @@ impl Lift<'_> {
     /// => otherwise }, False => otherwise }`: a `while`'s condition tested
     /// conjunct by conjunct ([`tests_of`]), each match's equation in scope
     /// for the tests after it and for the body.
+    /// `theorem T::f_loop#keepsK(p̄, r, c̄, o, h̄): ∥Pₖ[r, o := the
+    /// loop's result]∥`, one per invariant fact, by induction along the
+    /// loop (`induct T::f_loop(…)`): where the loop stops, the result is
+    /// the state it was given, and the fact is found from its own `hₖ`
+    /// (`bv_omega`, so a fact about words); where it recurs, the induction
+    /// hypothesis (the case's default, `known`).
+    #[allow(clippy::too_many_arguments)]
+    fn keeps(&mut self, run: &str, params: &[Param], r: &Param, o: &str, cond: &Expr, facts: &[Param], span: Span) -> Vec<String> {
+        let at: Vec<Expr> = params.iter().map(|p| var(&p.name, span)).collect();
+        let result = call(var(run, span), at, span);
+        let tests = tests_of(cond).len();
+        let theorem_params: Vec<Param> = params.iter().map(|p| Param { is_self: false, ..p.clone() }).collect();
+        facts
+            .iter()
+            .enumerate()
+            .map(|(k, fact)| {
+                let name = format!("{run}#keeps{k}");
+                let stated = at_result(&fact.ty, &[(&r.name, "after"), (o, "value")], &|at| {
+                    call(var(run, at), params.iter().map(|p| var(&p.name, at)).collect(), at)
+                });
+                // The cases where the loop stops: its `t`-th test false
+                // after `t` true ones (`False`, `True::False`, …).
+                let arms: Vec<Arm> = (0..tests)
+                    .map(|t| Arm {
+                        ctor: (0..t).map(|_| "True").chain(std::iter::once("False")).collect::<Vec<_>>().join("::"),
+                        default: false,
+                        binders: vec![],
+                        body: var("bv_omega", span),
+                        span,
+                    })
+                    .collect();
+                let cases = Expr {
+                    kind: ExprKind::Match {
+                        form: MatchForm::Match,
+                        generated: false,
+                        scrut: Box::new(result.clone()),
+                        eqbind: None,
+                        motive: None,
+                        arms,
+                    },
+                    span,
+                };
+                let proof = call(var(heather_syntax::INDUCT_CASES, span), vec![cases], span);
+                self.parts.push(Part::Decl(Decl {
+                    kind: DeclKind::Theorem,
+                    is_meta: false,
+                    is_interface: false,
+                    partial: None,
+                    unfolding: Vec::new(),
+                    is_evidence: false,
+                    value: false,
+                    elaborates: None,
+                    name: name.clone(),
+                    tyvars: self.decl.tyvars.clone(),
+                    params: theorem_params.clone(),
+                    result: stated,
+                    decreases: None,
+                    body: Block { stmts: vec![], result: Box::new(proof), ons: vec![], span },
+                    span,
+                }));
+                name
+            })
+            .collect()
+    }
+
     fn tested(&mut self, cond: &Expr, then: Expr, otherwise: &dyn Fn() -> Expr, span: Span) -> Expr {
         let mut out = then;
         for mut test in tests_of(cond).into_iter().rev() {
@@ -1385,6 +1532,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Famil
         next: 0,
         parts: Vec::new(),
         designations: Vec::new(),
+        held: Vec::new(),
     };
     let mut scope: Vec<Local> =
         decl.params.iter().map(|p| Local { name: p.name.clone(), written: Some(p.ty.clone()), value: None }).collect();

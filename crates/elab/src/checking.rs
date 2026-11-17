@@ -428,7 +428,15 @@ impl Checking<'_> {
         if let Some(released) = self.release_squashed_facts(cx, e, expected, lvl) {
             return released;
         }
-        if let Type::Squash { level, ty } = expected {
+        // A search at a goal that steps to a squash (a motive applied, as
+        // in an `induct` arm) is the search at the squash.
+        let stepped = match expected {
+            Type::Squash { .. } => None,
+            _ if matches!(&e.kind, ExprKind::Var(v) if ["omega", "bv_omega", "linarith", "nlinarith"].contains(&v.as_str())) => self.whnf(cx, expected, e.span).ok().filter(|w| matches!(w, Type::Squash { .. })),
+            _ => None,
+        };
+        if let Type::Squash { level, ty } = stepped.as_ref().unwrap_or(expected) {
+            let expected = stepped.as_ref().unwrap_or(expected);
             match self.check_condition_squashed(cx, e, expected, ty, level, lvl)? {
                 Squashed::Payload(payload) => return Ok(Term::Squash { level: level.clone(), ty: Rc::clone(ty), tm: Rc::new(payload) }),
                 Squashed::Whole(whole) => return Ok(whole),

@@ -103,6 +103,55 @@ runtime fn sum_below(n: u64) → u64 {
 theorem sum_below_5(): sum_below(5) = 10 { refl }
 
 // ---------------------------------------------------------------------------
+// A span that carries its length (docs/native/span-record-design.md): an
+// element is read and stored with a found proof that its index is inside,
+// and a loop states what it keeps (`invariant`), which its body reads and
+// the code after it reads at the loop's result. Not yet a `runtime fn`.
+
+record Bytes(n: u64) { bytes: List<u8>, sized: bytes.len() = n.toNat() }
+
+fn Bytes::len({n: u64}, self s: Bytes(n)) → u64 { n }
+
+fn Bytes::at({n: u64}, self s: Bytes(n), i: u64, inside: ∥i < s.len()∥ := bv_omega) → u8 { s.bytes.byte_within(n, i) }
+
+fn Bytes::put({n: u64}, self s: Bytes(n), i: u64, v: u8, inside: ∥i < s.len()∥ := bv_omega) → Bytes(n) {
+    Bytes(s.bytes.with_byte_within(n, i, v), trans(s.bytes.len_with_byte_within(n, i, v), s.sized))
+}
+
+// The final store reads `j <= i` after the inner loop, and its reads in the
+// test read `0 < j` before `s[j - 1]`.
+fn Bytes::sort({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        let key: u8 = s[i];
+        let mut j = i;
+        while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases j.toNat() {
+            s[j] := s[j - 1];
+            j := j - 1;
+        }
+        s[j] := key;
+    }
+    n
+}
+
+theorem sort_sorts(): Bytes::sort(Bytes([3, 1, 2, 0, 2], refl), n := 5).after.bytes = [0, 1, 2, 2, 3] { refl }
+
+// Without `j <= i` kept, the store after the loop has no proof that `j` is
+// inside.
+// expect-error: did not give
+fn Bytes::sort_unkept({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        let key: u8 = s[i];
+        let mut j = i;
+        while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases j.toNat() {
+            s[j] := s[j - 1];
+            j := j - 1;
+        }
+        s[j + 1] := key;
+    }
+    n
+}
+
+// ---------------------------------------------------------------------------
 // Refused, each by its reason.
 
 // A loop's state of two locals is a generated record, which a `runtime fn`
