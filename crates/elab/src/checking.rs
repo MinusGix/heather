@@ -445,8 +445,42 @@ impl Checking<'_> {
                     && named.is_empty() =>
             {
                 let ExprKind::Var(name) = &head.kind else { unreachable!("guarded above") };
-                let step = crate::hypothesis_cases::step(self, cx, name, args, expected, e.span)?;
-                self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots)
+                match crate::hypothesis_cases::step(self, cx, name, args, expected, lvl, e.span)? {
+                    crate::hypothesis_cases::Stepped::Expr(step) => self.elab_check_skel_slots(cx, &step, expected, lvl, hint, skel, capture_slots),
+                    // `Π(h). goal` split as `split_all` splits a goal, then
+                    // applied to `h`.
+                    crate::hypothesis_cases::Stepped::Split { split, premise, level, hypothesis } => {
+                        let (scrut, ty, scrut_level) = self.elab_infer(cx, &split.scrut)?;
+                        let mut split = split;
+                        // The test as the split spells it may be written
+                        // otherwise in the goal than where the search found
+                        // it (`fits(b)` against a constructor's field read
+                        // `fits(…)`): abstract it as written too.
+                        if split.dependent.is_none()
+                            && let Some(motive) = split.motive.inst_top(0, &scrut).abstract_local_any(std::slice::from_ref(&scrut))
+                        {
+                            split.motive = motive;
+                        }
+                        goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &premise, &level, "case split's motive, at its scrutinee,", e.span)?;
+                        goal_combinators::motive_is_a_type(self, cx, &split.motive, split.dependent.as_ref(), &premise, &scrut, &ty, &scrut_level, &level, e.span)?;
+                        let split_term = match split.dependent {
+                            None => Inference(self).elab_convoy(
+                                cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                                scrut, &ty, &scrut_level, split.motive, &level, &premise, e.span,
+                            )?,
+                            Some(dependent) => {
+                                let refl = Term::Refl { level: scrut_level.clone(), ty: Rc::new(ty.clone()), tm: Rc::new(scrut.clone()) };
+                                let at = dependent.inst_top_above(0, 1, &scrut).inst_top(0, &refl);
+                                goal_combinators::restates(self, cx, &at, &premise, &level, "case split's motive, at its scrutinee and `refl`,", e.span)?;
+                                Inference(self).elab_convoy_dependent(
+                                    cx, &split.equation, &split.arms, scrut, &ty, &scrut_level, split.motive, dependent, &level, &premise, e.span,
+                                )?
+                            }
+                        };
+                        let Type::Pi { dom_level, cod_level, dom, cod } = premise else { unreachable!("a step's premise is a Π") };
+                        Ok(Term::App { fun: Rc::new(split_term), dom_level, cod_level, dom, cod, arg: Rc::new(hypothesis) })
+                    }
+                }
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
