@@ -90,7 +90,8 @@ theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, 
     entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(cat_size(), top, depth).linux(), cat(cat_capacity()).denote(args), s) {
-    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
+    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep,
+        Nat::leb_sound(Succ(cat(cat_capacity()).depth), Nat::pow(2, 64), trivial), args, argv)
 }
 
 // So every run of that process that Linux can give cat's answers, along a

@@ -436,3 +436,33 @@ theorem view_source_read_refused(): view_refused(False) = [0, 5, 17, 0, 0] { ref
 // callee stored through the view and read back.
 fn view_program() → Source { view_source(True) }
 fn view_program_read() → Source { view_source(False) }
+
+// ---------------------------------------------------------------------------
+// The stack a program needs (`Source::need`)
+
+fn need_slotted(src: Source) → Nat { src.need(Homes::slots(src), SpillAll().frames(src)) }
+// `main`'s frame and saved RSP's word, then a level a call: `sum`'s seven
+// words, the six registers it saves and its return address, five deep.
+theorem summing_need(): need_slotted(summing()) = 88 + 5 * 112 { refl }
+// With no room a call leaves in the callee's entry: nothing below `main`.
+theorem summing_need_no_room(): need_slotted(summing_to(20, 0)) = 88 { refl }
+
+// The bound follows the calls a body makes, not the depth alone: `main`
+// performs only `double`, which performs nothing, so whatever the depth
+// the program needs one level of `double` and never a level of `sum`,
+// which nothing reaches.
+fn double() → Procedure { Procedure(params := [1], results := [2], body := ops([Add(64, 2, 1, 1)])) }
+fn doubling(depth: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], depth := depth)
+}
+theorem doubling_compiles(): refused(doubling(5)) = [] { refl }
+theorem doubling_performs(): doubling(5).main.performed() = [0] { refl }
+theorem doubling_need(): need_slotted(doubling(5)) = 88 + SpillAll().frames(doubling(5)).frame(0).level([]) { refl }
+theorem doubling_need_any_depth(): need_slotted(doubling(5)) = need_slotted(doubling(1)) { refl }
+
+// A call of a procedure the running body's layout does not list is refused.
+theorem unlisted_call_refused():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
+theorem listed_call_fits():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0]).call_fits([], 0, [0], [7]) = True { refl }

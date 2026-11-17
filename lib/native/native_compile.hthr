@@ -120,18 +120,22 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // procedure's own placement: the layout is the running body's, and
 // `Layout::body` is the one a procedure's code is compiled with.
 record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
-    procedures: List<Procedure> := [], functions: List<Function> := [], bodies: List<Frame> := [] }
+    procedures: List<Procedure> := [], functions: List<Function> := [], bodies: List<Frame> := [],
+    // The procedures the running body may call: a call of another is
+    // refused (`Layout::call_fits`), so the stack an activation needs
+    // below it is the deepest of these (`List::reach`).
+    callees: List<Nat> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees)
 }
 
 fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees)
 }
 
 fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees)
 }
 
 // Word `id` has a slot.
@@ -360,18 +364,37 @@ fn Layout::placed(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, 
 // The layout of a program's first activation: the region keeps its words' room.
 fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout::placed(low, words, words, capacities, homes) }
 
-// A layout with its tables: the procedures, the functions and the
-// procedures' placements.
+// The procedures a statement performs, one entry a call.
+fn Stmt::performed(self s: Stmt) → List<Nat> {
+    match s {
+        Then(first, rest) => first.performed() ++ rest.performed(),
+        Branch(_, yes, no) => yes.performed() ++ no.performed(),
+        Repeat(body, _) => body.performed(),
+        Perform(index, _, _) => [index],
+        Compute(_) => [],
+        Invoke(_) => [],
+        Exit(_) => [],
+        Arg(_, _, _) => [],
+    }
+}
+
+// The procedures procedure `index`'s body performs.
+fn List::performed_by(self procedures: List<Procedure>, index: Nat) → List<Nat> {
+    match procedures.nth(index) { None => [], Some(proc) => proc.body.performed() }
+}
+
+// A layout with its tables: the procedures, the functions, the
+// procedures' placements and the running body's callees.
 fn Layout::tabled(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes, procedures: List<Procedure>, functions: List<Function>,
-    bodies: List<Frame>) → Layout {
-    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies)
+    bodies: List<Frame>, callees: List<Nat>) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies, callees)
 }
 
 // The layout procedure `index`'s code is compiled with: the same region,
 // tables and placements, and the procedure's own frame and homes.
 fn Layout::body(self layout: Layout, index: Nat) → Layout {
     Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places),
-        layout.procedures, layout.functions, layout.bodies)
+        layout.procedures, layout.functions, layout.bodies, layout.procedures.performed_by(index))
 }
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
 theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
@@ -984,7 +1007,7 @@ fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, resu
         None => False,
         Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
             (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-            layout.homes.moves_apart(out, results))))),
+            (layout.homes.moves_apart(out, results) && layout.callees.holds(index)))))),
     }
 }
 
@@ -1160,7 +1183,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
 fn Source::layout(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Layout {
-    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies)
+    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies, src.main.performed())
 }
 
 // A word of the frame set to RAX, where the file has the word: a word past
@@ -1219,6 +1242,46 @@ fn kept_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp] }
 fn Homes::kept(self homes: Homes) → List<Gpr> { Cons(Rbx, kept_pool().filter(λ (register: Gpr) => !homes.pinned(register))) }
 fn Layout::kept(self layout: Layout) → List<Gpr> { layout.homes.kept() }
 
+// ---------------------------------------------------------------------------
+// The stack a program needs (docs/native/native-procedure-frames-design.md §2.5)
+
+// What one activation of a procedure takes of the stack: its frame, the
+// registers it saves and its return address.
+fn Frame::level(self frame: Frame, places: List<Place>) → Nat { (8 * frame.words + 8 * frame.homes(places).kept().len()) + 8 }
+
+// A row's entry for a procedure: nothing where the row has none.
+fn List::deep_at(self row: List<Nat>, index: Nat) → Nat { match row.nth(index) { None => 0, Some(deep) => deep } }
+
+// The most a call of one of `callees` takes: the callee's level, and below
+// it what `row` says the callee's own calls take.
+fn List::deepest(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, row: List<Nat>) → Nat {
+    match callees {
+        Nil => 0,
+        Cons(callee, rest) => Nat::max(bodies.frame(callee).level(places) + row.deep_at(callee), rest.deepest(bodies, places, row)),
+    }
+}
+
+// For each procedure, the most its calls take with `d` levels of room
+// left: a row from the row before it, so the table costs the depth times
+// the call sites and not a walk of every chain of calls.
+fn List::deep_row(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → List<Nat> {
+    match d {
+        Zero => [],
+        Succ(k) => {
+            let row = procedures.deep_row(bodies, places, k);
+            procedures.map(λ (proc: Procedure) => proc.body.performed().deepest(bodies, places, row))
+        },
+    }
+}
+
+// The stack the calls of a body take below its frame, the body calling
+// `callees` with `d` levels of room: none with no room (a call then leaves
+// in the callee's entry), else the deepest of its callees with one level
+// less.
+fn List::reach(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → Nat {
+    match d { Zero => 0, Succ(k) => callees.deepest(bodies, places, procedures.deep_row(bodies, places, k)) }
+}
+
 // Its way in: the label, the depth counted, the registers it keeps pushed
 // (docs/native/native-procedures-are-functions-design.md steps 5b and 5c), its
 // frame opened below them, the arguments into the parameters' homes…
@@ -1274,6 +1337,13 @@ fn program_linkable(functions: List<Function>) → Bool {
 // needs nothing of the placement.
 fn program_calls_room(functions: List<Function>) → Nat {
     match functions { Nil => 0, Cons(_, _) => rooms_top(program_rooms(functions)) + 8 }
+}
+
+// What a program needs of its stack: `main`'s frame and its saved RSP's
+// word, the deepest its calls go, the room of a function a region calls,
+// and one return address more.
+fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
+    (src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + program_calls_room(src.functions)) + 8 * (src.words + 1)
 }
 
 theorem program_calls_room_above(functions: List<Function>, f: Nat, called: Succ(f) <= functions.len()):
@@ -1646,7 +1716,7 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 // Whether every leaf of the procedure's body has the registers it needs
 // under the frame: the scan's verdict, over the frame's own layout.
 fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
-    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([]), src.procedures, src.functions, []),
+    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([]), src.procedures, src.functions, [], proc.body.performed()),
             proc.results, 1) {
         Passed(_) => True,
         Refused(_) => False,

@@ -431,7 +431,8 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     // Of the literal, then of the source by its equation.
     let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {frames}, {p}_compiles(), {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep, args, argv)");
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep,
+        Nat::leb_sound(Succ({src}().depth), Nat::pow(2, 64), trivial), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
@@ -528,14 +529,16 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
-// bytes of stack below RSP, enough for the source's words (`main`'s
-// frame) and its calls of procedures and of functions, and the command
-// line `args` on the stack above,
+// bytes of stack below RSP, enough for what the source needs under this
+// placement (`Source::need`: `main`'s frame, the deepest its calls of
+// procedures go, each level the callee's own frame and saved registers,
+// and its calls of functions), and the command line `args` on the stack
+// above,
 // simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: ({src}().depth * (8 * ({src}().words + 7)) + program_calls_room({src}().functions)) + 8 * ({src}().words + 1) <= depth, args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().need({homes}, {frames}) <= depth, args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
@@ -719,7 +722,7 @@ fn layout_literal(src: &str, homes: &str, frames: &str, sizes: &[u64], spelled: 
     let (&count, rest) = spelled.split_first()?;
     let of = rest.get(..usize::try_from(count).ok()?)?;
     let (pool, taken) = pools(&used_registers(of, &[]));
-    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames})",
+    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames}, {src}().main.performed())",
         capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
 }
 
@@ -734,7 +737,7 @@ fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, siz
         let (pool, taken) = pools(&used_registers(f.of, f.pins));
         let name = emission::body_layout(p, i);
         text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}]), [{pool}], [{taken}], \
-            {src}().procedures, {src}().functions, {frames}) }}\n\
+            {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i})) }}\n\
             theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), homes_list(f.pins)));
     }
     Some(text)

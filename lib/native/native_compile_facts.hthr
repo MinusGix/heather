@@ -5,6 +5,8 @@
 // and the source each spell their own way.
 import native_source;
 import native_compile;
+import native_alloc;
+import function_ir_lower;
 import function_ir;
 import function_ir_eval;
 import linux_calls;
@@ -229,4 +231,63 @@ theorem source_errno_word(e: Nat, error: Errno(e)): native_source::errno_word(e)
         trans(BitVec::iterate_increment_compose(64, BitVec::zero(), top - e, e),
         trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), Nat::sub_add_cancel(e, top, below)), BitVec::zero_iterate_period(64))))));
     trans(sym(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(b), sum)), BitVec::add_sub_cancel(64, y, b))
+}
+
+// ---------------------------------------------------------------------------
+// The stack a call takes (`List::reach`)
+
+// A callee's level and its row's entry are within the deepest.
+theorem List::deepest_mem(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, row: List<Nat>): (index: Nat) → Mem(index, callees) →
+    bodies.frame(index).level(places) + row.deep_at(index) <= callees.deepest(bodies, places, row) {
+    match callees {
+        Nil => λ index never => false_elim(never),
+        Cons(callee, rest) => λ index m => {
+            let here = bodies.frame(callee).level(places) + row.deep_at(callee);
+            match m {
+                Inl(e) => j(sym(e), λ x _ => bodies.frame(x).level(places) + row.deep_at(x) <= Nat::max(here, rest.deepest(bodies, places, row)),
+                    Nat::le_max_l(here, rest.deepest(bodies, places, row))),
+                Inr(later) => Nat::le_trans(bodies.frame(index).level(places) + row.deep_at(index), rest.deepest(bodies, places, row),
+                    Nat::max(here, rest.deepest(bodies, places, row)), rest.deepest_mem(bodies, places, row, index, later),
+                    Nat::le_max_r(here, rest.deepest(bodies, places, row))),
+            }
+        },
+    }
+}
+
+// A row has no entry where the procedures have none.
+theorem List::deep_map_none(self procedures: List<Procedure>, f: Procedure → Nat): (index: Nat) → procedures.nth(index) = None →
+    procedures.map(f).deep_at(index) = 0 {
+    match procedures {
+        Nil => λ index _ => refl,
+        Cons(_, rest) => λ index => match index {
+            Zero => λ none => absurd(none),
+            Succ(k) => λ none => rest.deep_map_none(f, k, none),
+        },
+    }
+}
+
+// A row's entry for a procedure is what its body's calls take.
+theorem List::deep_row_at(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d, index: Nat):
+    procedures.deep_row(bodies, places, d).deep_at(index) = procedures.performed_by(index).reach(procedures, bodies, places, d) {
+    match d {
+        Zero => refl,
+        Succ(k) => {
+            let row = procedures.deep_row(bodies, places, k);
+            let f = λ (proc: Procedure) => proc.body.performed().deepest(bodies, places, row);
+            match found: procedures.nth(index) {
+                None => procedures.deep_map_none(f, index, found),
+                Some(proc) => j(sym(procedures.nth_map_some(f, index, proc, found)), λ o _ => (match o { None => 0, Some(deep) => deep }) = f(proc), refl),
+            }
+        },
+    }
+}
+
+// A call of a procedure the body may call, with room: the callee's level
+// and what the callee's own calls take, within what the body's calls take.
+theorem List::reach_call(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d, index: Nat,
+    held: callees.holds(index) = True):
+    bodies.frame(index).level(places) + procedures.performed_by(index).reach(procedures, bodies, places, d) <=
+        callees.reach(procedures, bodies, places, Succ(d)) {
+    j(procedures.deep_row_at(bodies, places, d, index), λ deep _ => bodies.frame(index).level(places) + deep <= callees.reach(procedures, bodies, places, Succ(d)),
+        callees.deepest_mem(bodies, places, procedures.deep_row(bodies, places, d), index, callees.holds_mem(index, held)))
 }
