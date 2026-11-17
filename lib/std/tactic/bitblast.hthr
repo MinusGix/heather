@@ -710,3 +710,193 @@ theorem var_word_valid(n, K, o, w, size: Nat, kin: K < size): word_valid(var_wor
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Equality of two words: no bit's exclusive or is set.
+
+theorem BitVec::bool_eq_by_xor(a, b: Bool): !(a.xor(b)) = BitVec::bool_eq(a, b) {
+    match a {
+        False => refl,
+        True => b.not_not(),
+    }
+}
+
+fn Circ::equal_last(d: Lit, r2: Pair<Circ, Lit>) → Pair<Circ, Lit> { r2.fst.and(d.not(), r2.snd) }
+
+fn Circ::equal_join({n: Nat}, r1: Pair<Circ, Lit>, rest: Circ → [Lit; n] → [Lit; n] → Pair<Circ, Lit>, xs, ys: [Lit; n]) → Pair<Circ, Lit> {
+    Circ::equal_last(r1.snd, rest(r1.fst, xs, ys))
+}
+
+fn Circ::equal({n: Nat}, self c: Circ, xs, ys: [Lit; n]) → Pair<Circ, Lit> {
+    (match n as λ k => Circ → [Lit; k] → [Lit; k] → Pair<Circ, Lit> {
+        Zero => λ c xs ys => Pair(c, Neg(0)),
+        Succ(_, ih) => λ c xs ys => Circ::equal_join(c.xor(head(xs), head(ys)), ih, tail(xs), tail(ys)),
+    })(c, xs, ys)
+}
+
+theorem Circ::equal_makes(n: Nat, c: Circ, good: c.Good(), xs, ys: [Lit; n], vx: word_valid(xs, c.size), vy: word_valid(ys, c.size)):
+    c.Makes(c.equal(xs, ys), λ v => word_value(xs, v).eq_bit(word_value(ys, v))) {
+    match n {
+        Zero => ⟨c.grows_refl(good), ⟨good.right.left, λ d later env => cong_fn(λ (b: Bool) => !b, later.left.right.right(env))⟩⟩,
+        Succ(k) => {
+            let r1 = c.xor(head(xs), head(ys));
+            let m1 = c.xor_makes(good, head(xs), head(ys), vx.left, vy.left);
+            let r2 = r1.fst.equal(tail(xs), tail(ys));
+            let m2 = Circ::equal_makes(k, r1.fst, m1.left.left, tail(xs), tail(ys),
+                word_valid_grows(k, tail(xs), c.size, r1.fst.size, vx.right, m1.left.right.left),
+                word_valid_grows(k, tail(ys), c.size, r1.fst.size, vy.right, m1.left.right.left));
+            let nv: (r1.snd.not().node() < r2.fst.size) = j(sym(r1.snd.not_node()), λ z _ => z < r2.fst.size, r1.fst.grows_valid(r2.fst, m2.left, r1.snd, m1.right.left));
+            let r3 = r2.fst.and(r1.snd.not(), r2.snd);
+            let m3 = r2.fst.and_makes(m2.left.left, r1.snd.not(), r2.snd, nv, m2.right.left);
+            ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+                let v = d.at(env);
+                let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+                let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+                let bit: (r1.snd.not().value(v) = BitVec::bool_eq(head(xs).value(v), head(ys).value(v))) =
+                    trans(r1.snd.not_value(v), trans(cong_fn(λ (b: Bool) => !b, m1.right.right(d, from1, env)), BitVec::bool_eq_by_xor(head(xs).value(v), head(ys).value(v))));
+                trans(m3.right.right(d, later, env), Bool::and_cong(bit, m2.right.right(d, from2, env)))
+            }⟩⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Builders as functions of the circuit they start from. `BlastsWord(K, b, f)`:
+// from every circuit whose first `K` nodes after node 0 are the inputs, `b`
+// builds a word meaning `f`.
+
+fn Circ::BlastsWord({n: Nat}, K: Nat, build: Circ → Pair<Circ, [Lit; n]>, f: (Nat → Bool) → BitVec(n)) → Type {
+    (c: Circ) → c.Good() → K < c.size → c.MakesWord(build(c), f)
+}
+
+fn Circ::BlastsLit(K: Nat, build: Circ → Pair<Circ, Lit>, f: (Nat → Bool) → Bool) → Type {
+    (c: Circ) → c.Good() → K < c.size → c.Makes(build(c), f)
+}
+
+theorem Circ::blasts_word_eq(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f, g: (Nat → Bool) → BitVec(n), h: Circ::BlastsWord(K, b, f), e: (v: Nat → Bool) → f(v) = g(v)): Circ::BlastsWord(K, b, g) {
+    λ c good kin => {
+        let m = h(c, good, kin);
+        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env)))⟩⟩
+    }
+}
+
+theorem Circ::blasts_lit_eq(K: Nat, b: Circ → Pair<Circ, Lit>, f, g: (Nat → Bool) → Bool, h: Circ::BlastsLit(K, b, f), e: (v: Nat → Bool) → f(v) = g(v)): Circ::BlastsLit(K, b, g) {
+    λ c good kin => {
+        let m = h(c, good, kin);
+        ⟨m.left, ⟨m.right.left, λ d later env => trans(m.right.right(d, later, env), e(d.at(env)))⟩⟩
+    }
+}
+
+// A word that needs no gates.
+theorem Circ::pure_blasts(n, K: Nat, ws: [Lit; n], f: (Nat → Bool) → BitVec(n), valid: (size: Nat) → K < size → word_valid(ws, size), value: (v: Nat → Bool) → v(0) = False → word_value(ws, v) = f(v)):
+    Circ::BlastsWord(K, λ c => Pair(c, ws), f) {
+    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right(env))⟩⟩
+}
+
+theorem Circ::pure_lit_blasts(K: Nat, l: Lit, f: (Nat → Bool) → Bool, valid: (size: Nat) → K < size → l.node() < size, value: (v: Nat → Bool) → v(0) = False → l.value(v) = f(v)):
+    Circ::BlastsLit(K, λ c => Pair(c, l), f) {
+    λ c good kin => ⟨c.grows_refl(good), ⟨valid(c.size, kin), λ d later env => value(d.at(env), later.left.right.right(env))⟩⟩
+}
+
+fn Circ::not_word({n: Nat}, r: Pair<Circ, [Lit; n]>) → Pair<Circ, [Lit; n]> { Pair(r.fst, word_not(r.snd)) }
+
+theorem Circ::not_blasts(n, K: Nat, b: Circ → Pair<Circ, [Lit; n]>, f: (Nat → Bool) → BitVec(n), h: Circ::BlastsWord(K, b, f)):
+    Circ::BlastsWord(K, λ c => Circ::not_word(b(c)), λ v => f(v).complement()) {
+    λ c good kin => {
+        let m = h(c, good, kin);
+        ⟨m.left, ⟨word_not_valid(n, b(c).snd, b(c).fst.size, m.right.left), λ d later env =>
+            trans(word_not_value(n, b(c).snd, d.at(env)), cong_fn(λ (x: BitVec(n)) => x.complement(), m.right.right(d, later, env)))⟩⟩
+    }
+}
+
+theorem Circ::negated_blasts(K: Nat, b: Circ → Pair<Circ, Lit>, f: (Nat → Bool) → Bool, h: Circ::BlastsLit(K, b, f)):
+    Circ::BlastsLit(K, λ c => Circ::negated(b(c)), λ v => !f(v)) {
+    λ c good kin => {
+        let m = h(c, good, kin);
+        ⟨m.left, ⟨j(sym(b(c).snd.not_node()), λ z _ => z < b(c).fst.size, m.right.left), λ d later env =>
+            trans(b(c).snd.not_value(d.at(env)), cong_fn(λ (x: Bool) => !x, m.right.right(d, later, env)))⟩⟩
+    }
+}
+
+theorem BitVec::zip_with_cong({n: Nat}, f: Bool → Bool → Bool, {x1, x2, y1, y2: BitVec(n)}, ex: x1 = x2, ey: y1 = y2): BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x2, y2) {
+    j(ex, λ x _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x, y2), j(ey, λ y _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x1, y), refl))
+}
+
+// Two words, the second built after the first, joined bit by bit.
+fn Circ::word_pair({n: Nat}, r1, r2: Pair<Circ, [Lit; n]>, op: Circ → Lit → Lit → Pair<Circ, Lit>) → Pair<Circ, [Lit; n]> { r2.fst.zip(op, r1.snd, r2.snd) }
+
+fn Circ::word_then({n: Nat}, r1: Pair<Circ, [Lit; n]>, next: Circ → Pair<Circ, [Lit; n]>, op: Circ → Lit → Lit → Pair<Circ, Lit>) → Pair<Circ, [Lit; n]> {
+    Circ::word_pair(r1, next(r1.fst), op)
+}
+
+theorem Circ::zip_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa, fb: (Nat → Bool) → BitVec(n), ha: Circ::BlastsWord(K, ba, fa), hb: Circ::BlastsWord(K, bb, fb),
+    op: Circ → Lit → Lit → Pair<Circ, Lit>, g: Bool → Bool → Bool, ok: Circ::BinOk(op, g)):
+    Circ::BlastsWord(K, λ c => Circ::word_then(ba(c), bb, op), λ v => BitVec::zip_with(g, fa(v), fb(v))) {
+    λ c good kin => {
+        let r1 = ba(c);
+        let m1 = ha(c, good, kin);
+        let r2 = bb(r1.fst);
+        let m2 = hb(r1.fst, m1.left.left, Nat::lt_of_lt_of_le(K, c.size, r1.fst.size, kin, m1.left.right.left));
+        let r3 = r2.fst.zip(op, r1.snd, r2.snd);
+        let m3 = Circ::zip_makes(n, r2.fst, m2.left.left, op, g, ok, r1.snd, r2.snd, word_valid_grows(n, r1.snd, r1.fst.size, r2.fst.size, m1.right.left, m2.left.right.left), m2.right.left);
+        ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+            let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+            let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+            trans(m3.right.right(d, later, env), BitVec::zip_with_cong(g, m1.right.right(d, from1, env), m2.right.right(d, from2, env)))
+        }⟩⟩
+    }
+}
+
+theorem Bool::apply_cong(g: Bool → Bool → Bool, {a, b, c, d: Bool}, ab: a = b, cd: c = d): g(a, c) = g(b, d) {
+    j(ab, λ x _ => g(a, c) = g(x, d), j(cd, λ y _ => g(a, c) = g(a, y), refl))
+}
+
+// Two literals, the second built after the first, joined by a gate.
+fn Circ::lit_pair(r1, r2: Pair<Circ, Lit>, op: Circ → Lit → Lit → Pair<Circ, Lit>) → Pair<Circ, Lit> { op(r2.fst, r1.snd, r2.snd) }
+
+fn Circ::lit_then(r1: Pair<Circ, Lit>, next: Circ → Pair<Circ, Lit>, op: Circ → Lit → Lit → Pair<Circ, Lit>) → Pair<Circ, Lit> {
+    Circ::lit_pair(r1, next(r1.fst), op)
+}
+
+theorem Circ::lit_blasts(K: Nat, ba, bb: Circ → Pair<Circ, Lit>, fa, fb: (Nat → Bool) → Bool, ha: Circ::BlastsLit(K, ba, fa), hb: Circ::BlastsLit(K, bb, fb),
+    op: Circ → Lit → Lit → Pair<Circ, Lit>, g: Bool → Bool → Bool, ok: Circ::BinOk(op, g)):
+    Circ::BlastsLit(K, λ c => Circ::lit_then(ba(c), bb, op), λ v => g(fa(v), fb(v))) {
+    λ c good kin => {
+        let r1 = ba(c);
+        let m1 = ha(c, good, kin);
+        let r2 = bb(r1.fst);
+        let m2 = hb(r1.fst, m1.left.left, Nat::lt_of_lt_of_le(K, c.size, r1.fst.size, kin, m1.left.right.left));
+        let r3 = op(r2.fst, r1.snd, r2.snd);
+        let m3 = ok(r2.fst, m2.left.left, r1.snd, r2.snd, r1.fst.grows_valid(r2.fst, m2.left, r1.snd, m1.right.left), m2.right.left);
+        ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+            let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+            let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+            trans(m3.right.right(d, later, env), Bool::apply_cong(g, m1.right.right(d, from1, env), m2.right.right(d, from2, env)))
+        }⟩⟩
+    }
+}
+
+// Two words, the second built after the first, compared.
+fn Circ::equal_pair({n: Nat}, r1, r2: Pair<Circ, [Lit; n]>) → Pair<Circ, Lit> { r2.fst.equal(r1.snd, r2.snd) }
+
+fn Circ::equal_then({n: Nat}, r1: Pair<Circ, [Lit; n]>, next: Circ → Pair<Circ, [Lit; n]>) → Pair<Circ, Lit> {
+    Circ::equal_pair(r1, next(r1.fst))
+}
+
+theorem Circ::equal_blasts(n, K: Nat, ba, bb: Circ → Pair<Circ, [Lit; n]>, fa, fb: (Nat → Bool) → BitVec(n), ha: Circ::BlastsWord(K, ba, fa), hb: Circ::BlastsWord(K, bb, fb)):
+    Circ::BlastsLit(K, λ c => Circ::equal_then(ba(c), bb), λ v => fa(v).eq_bit(fb(v))) {
+    λ c good kin => {
+        let r1 = ba(c);
+        let m1 = ha(c, good, kin);
+        let r2 = bb(r1.fst);
+        let m2 = hb(r1.fst, m1.left.left, Nat::lt_of_lt_of_le(K, c.size, r1.fst.size, kin, m1.left.right.left));
+        let r3 = r2.fst.equal(r1.snd, r2.snd);
+        let m3 = Circ::equal_makes(n, r2.fst, m2.left.left, r1.snd, r2.snd, word_valid_grows(n, r1.snd, r1.fst.size, r2.fst.size, m1.right.left, m2.left.right.left), m2.right.left);
+        ⟨c.grows_trans(r1.fst, r3.fst, m1.left, r1.fst.grows_trans(r2.fst, r3.fst, m2.left, m3.left)), ⟨m3.right.left, λ d later env => {
+            let from2 = r2.fst.grows_trans(r3.fst, d, m3.left, later);
+            let from1 = r1.fst.grows_trans(r2.fst, d, m2.left, from2);
+            trans(m3.right.right(d, later, env), j(m1.right.right(d, from1, env), λ x _ => word_value(r1.snd, d.at(env)).eq_bit(word_value(r2.snd, d.at(env))) = x.eq_bit(fb(d.at(env))),
+                j(m2.right.right(d, from2, env), λ y _ => word_value(r1.snd, d.at(env)).eq_bit(word_value(r2.snd, d.at(env))) = word_value(r1.snd, d.at(env)).eq_bit(y), refl)))
+        }⟩⟩
+    }
+}
