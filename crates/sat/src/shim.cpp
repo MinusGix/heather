@@ -2,6 +2,8 @@
 // keeps every derived clause and its antecedents (an LRAT step), in memory.
 #include "cadical.hpp"
 #include "tracer.hpp"
+#include <cstdlib>
+#include <string>
 
 #include <cstdint>
 #include <vector>
@@ -50,6 +52,21 @@ void *heather_sat_new () {
   Session *s = new Session;
   s->solver.set ("quiet", 1);
   s->solver.set ("lrat", 1);
+  // Experiments only: `HEATHER_SAT_OPTIONS="name=value,..."` sets CaDiCaL
+  // options, to compare the proofs they give.
+  if (const char *opts = getenv ("HEATHER_SAT_OPTIONS")) {
+    std::string all (opts);
+    size_t at = 0;
+    while (at < all.size ()) {
+      size_t end = all.find (',', at);
+      if (end == std::string::npos) end = all.size ();
+      std::string one = all.substr (at, end - at);
+      size_t eq = one.find ('=');
+      if (eq != std::string::npos)
+        s->solver.set (one.substr (0, eq).c_str (), atoi (one.substr (eq + 1).c_str ()));
+      at = end + 1;
+    }
+  }
   s->solver.connect_proof_tracer (&s->collector, true);
   return s;
 }
