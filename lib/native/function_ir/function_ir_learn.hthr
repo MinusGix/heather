@@ -653,6 +653,37 @@ fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
     }
 }
 
+// A bit's move, which the lowering has no code for (`Node::lower`): a rule
+// that would write one for a node (`x | 0 = x` over bits) is not applied.
+fn Node::moves_bit(self node: Node) → Bool { match node { Move(w, _, _) => w.same(1), _ => False } }
+
+fn Seen::has_settled(self seen: Seen, node: Node) → Bool { match seen.settled_bit(node, []) { Some(_) => True, None => False } }
+
+// Whether a rule decides the bit a node writes. The walk then keeps the
+// node and the bit: a rule that writes another node for it (`x | 0 = x`
+// where both are clear) would leave a move the walk knows less of, and the
+// tests that read the bit undecided.
+fn Seen::settles(self seen: Seen, node: Node) → Bool {
+    match node {
+        UnsignedLessThan(w, _, _, _) => w.same(64) && seen.has_settled(node),
+        BitOr(w, _, _, _) => w.same(1) && seen.has_settled(node),
+        _ => False,
+    }
+}
+
+// The steps that write the node an instance gives for the node it is of.
+fn Seen::rewritten(self seen: Seen, found: Matched) → Option<Passed> {
+    match found.needs {
+        Nil => shared(seen.pass(found.node), λ written =>
+            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen.computing(found.node)))),
+        Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
+            shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)
+                .pass(found.node), λ written =>
+                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))),
+                    written.seen.computing(found.node))))),
+    }
+}
+
 // A node a rule's statement fits (function_ir_match), written as the node
 // the rule's conclusion gives: the old one is dropped once the facts have
 // its equation, the rule gives the new one, and that is written. Where the
@@ -661,14 +692,9 @@ fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
 // move of the word it was (rule 15), and a word swapped, widened, narrowed
 // and swapped again a move of the word (rule 44).
 fn Seen::matched(self seen: Seen, node: Node) → Option<Passed> {
-    seen.instance(node).and_then(λ found => match found.needs {
-        Nil => shared(seen.pass(found.node), λ written =>
-            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen.computing(found.node)))),
-        Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
-            shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)
-                .pass(found.node), λ written =>
-                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))),
-                    written.seen.computing(found.node))))),
+    seen.instance(node).and_then(λ found => match seen.settles(node) || found.node.moves_bit() {
+        True => None,
+        False => seen.rewritten(found),
     })
 }
 

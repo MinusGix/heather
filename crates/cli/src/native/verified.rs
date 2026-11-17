@@ -484,10 +484,11 @@ theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     Ok(())
 }
 
-/// What the optimizer needs besides: its stage, the plans' types, and the
-/// search.
+/// What the optimizer needs besides: its stage, the plans' types, the
+/// search, and the standard set of rules (`function_ir_identities`), which
+/// is so registered in every compilation beside the program's own.
 const OPTIMIZE_IMPORTS: &[&str] = &["function_ir_stage", "function_ir_inline", "function_ir_replay", "function_ir_rule", "function_ir_rules", "function_ir_tidy",
-    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "pair"];
+    "function_ir_guard", "function_ir_learn", "function_ir_prune", "function_ir_optimize", "function_ir_identities", "pair"];
 
 /// The stage a search's answer is a plan of, in the order
 /// `optimize_stage()` composes them (`function_ir_optimize`): a test at the
@@ -620,6 +621,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 }}
 "));
     let mut modules = vec![source, placed];
+    // `HEATHER_OPTIMIZE_TRACE=1`: what each search found and each test of a
+    // function made answered, so a stage that was declined is seen.
+    let trace = std::env::var_os("HEATHER_OPTIMIZE_TRACE").is_some();
     let (mut stated, mut statements) = (String::new(), String::new());
     let mut placements = Vec::with_capacity(m);
     for k in 0..m {
@@ -633,7 +637,9 @@ fn {prefix}_opt_placed(function: Function, k: Nat, places: List<Place>) → List
 fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False => [0] }} }}
 ", uses(modules));
             fork.define(&module, &text);
-            Ok(read(fork, &module, item)? == [1])
+            let yes = read(fork, &module, item)? == [1];
+            if trace { eprintln!("optimize: function {k} `{question}`: {}", if yes { "yes" } else { "no" }); }
+            Ok(yes)
         };
         // The stages `searches` name, in turn from the function `from`: each
         // search is asked of the function the one before it made, and what
@@ -652,6 +658,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
                 fork.define(&find, &text);
                 let unread = || format!("function {k}'s `{search}` did not read back");
                 let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
+                if trace { eprintln!("optimize: function {k} `{search}` ({tag}{at}): {}", if found == "None" { "nothing" } else { "a plan" }); }
                 if found == "None" { continue; }
                 let (plan, function) = match found.split_once('\n') {
                     Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
@@ -683,7 +690,12 @@ fn {name}() → Function {{
 fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {function}.plan()) }}
 ", uses(modules));
             fork.define(&module, &text);
-            match read(fork, &module, &item)?.split_first() {
+            let answer = read(fork, &module, &item)?;
+            if trace {
+                eprintln!("optimize: function {k} lowering `{item}`: {}", if answer.first() == Some(&1) { "placed" } else { "refused" });
+                if answer.first() != Some(&1) && let Some(last) = made.last() { eprintln!("optimize: refused: {}", last.function); }
+            }
+            match answer.split_first() {
                 Some((0, [])) => Ok(None),
                 Some((1, places)) => Ok(Some(places.to_vec())),
                 _ => Err(format!("`{prefix}_opt_{item}` did not read back")),

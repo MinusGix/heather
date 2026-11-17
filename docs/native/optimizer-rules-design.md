@@ -572,8 +572,9 @@ the matcher, for the rules whose conclusion is a node.
   is: `compile-x86`'s reads and its certificate are modules that import
   the program, so they get the program's rules with no text naming them.
 - **`examples/x86-native/own_rule.hthr`** is a program that declares
-  `or_zero` and is compiled with it: the `or` is gone from its code, and
-  stays without the rule (`crates/cli/tests/native_own_rule.rs`).
+  `add_sub_left` (first `or_zero`, which the standard set now has) and is
+  compiled with it: the add and the subtraction are gone from its code,
+  and stay without the rule (`crates/cli/tests/native_own_rule.rs`).
 
 - **`compile-x86 --explain-optimizer`** prints, for each function, a line
   for each rule the replays it kept used (§8): the conclusion at the
@@ -583,7 +584,7 @@ the matcher, for the rules whose conclusion is a node.
   function 0: 6 rules used
     t5 = t4 < t1 = 1   by below_yes   (t4 within 0 ..= 0, t1 within 1 ..= u64::MAX)
     t8 = t6.resize(8).resize(64) = t6   by narrow_back   (t6 within 0 ..= 255)
-    t10 = t8 | 0 = t8   by or_zero
+    t10 = (t1 + t8) - t1 = t8   by add_sub_left
   ```
 
   A line is read off the clause the rule makes at the plan's numbers, the
@@ -690,15 +691,32 @@ the matcher, for the rules whose conclusion is a node.
   derives each range before a step reads it, `explain` and `pending`),
   which is the statement about a whole plan.
 
-- **A set of rules is a module** (§6). `function_ir_identities.hthr` has
-  the plain identities of words as `rule theorem`s (`or_zero`, `zero_or`,
-  `zero_add`, `sub_zero`, `xor_self`, `and_zero`, `add_sub`, `sub_add`,
-  the shifts by no places). They are not among the library's placed
-  rules: a program that imports the module is compiled with them, as with
-  its own, and one that does not is as it was
-  (`examples/x86-native/rule_set.hthr`). Whether a default set is on for
-  every compilation is not decided; `own_rule.hthr`'s control would need
-  another rule than `or_zero` then.
+- **A set of rules is a module, and the standard set is on** (§6; Minus,
+  2026-11-16: on by default, "we'll want a big standard list").
+  `function_ir_identities.hthr` has the plain identities of words as
+  `rule theorem`s (`or_zero`, `zero_or`, `zero_add`, `sub_zero`,
+  `xor_self`, `and_zero`, `add_sub`, `sub_add`, the shifts by no places).
+  They are not among the library's placed rules: `compile-x86` imports the
+  module into every compilation's reads and certificate
+  (`OPTIMIZE_IMPORTS`, `verified.rs`), so they are registered there as a
+  program's own rules are (`examples/x86-native/rule_set.hthr`). A rule
+  added to the module is in every compilation with nothing else written.
+  The library's own tests do not import it, so their plans and what their
+  proofs cost do not move with the list.
+- **A rewrite gives way to a decision, and never writes a bit's move.**
+  With the set on, `x | 0 = x` fitted an or of two clear bits before the
+  rule that decides it (`or_of_clear`) was asked, and left a move of a bit:
+  the walk knew nothing of that bit, the tests that read it stayed
+  undecided, and the lowering has no code for a bit's move, so it refused
+  the function and the compile kept the one before the walk (the linked
+  SHA-256 grew). `Seen::matched` now asks first whether a rule decides the
+  node's bit (`Seen::settles`) and does not apply a rule whose node is a
+  bit's move (`Node::moves_bit`); `bits_kept` in
+  `function_ir_identities_tests.hthr` holds both. A copy of a bit in the
+  lowering would retire the second. `HEATHER_OPTIMIZE_TRACE=1` makes
+  `compile-x86` say what each search found and each test of a function
+  made answered, and prints a function the lowering refused, which is how
+  a stage the compile declined is seen.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose

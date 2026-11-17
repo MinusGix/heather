@@ -208,6 +208,11 @@ the lanes are cut this way is `docs/infrastructure/testing-architecture-design.m
   the process's peak memory during it. A read keeps everything it evaluates
   until it ends, so the read with the steps is the one holding the memory
   (`issues/compile-x86-address-space-margin.md`).
+- **A compile whose optimizer did less than expected**: set
+  `HEATHER_OPTIMIZE_TRACE=1` and `compile-x86` says what each search found
+  and each test of a function made answered, and prints a function the
+  lowering refused; a stage it declines is otherwise silent, the compile
+  keeping the function before it.
 - When `compile-x86` answers "the verified lowering refused this program
   with the planner's placement", it names the node refused, its place and
   what each register held (`lib/native/function_ir/function_ir_refusal.hthr`
