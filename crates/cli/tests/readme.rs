@@ -1,13 +1,14 @@
-//! The README's Heather is checked Heather.
+//! The README's code is checked code.
 //!
-//! Every ` ```heather ` block in `README.md` sits under a comment
-//! `<!-- checked: <path> -->` naming the file it is taken from, and each of
-//! its declarations (a run of lines between blank lines) is in that file, as
-//! written but for where its lines break. A `…` in a declaration stands for
-//! text the README leaves out (a proof body), so a statement can be shown
-//! without its proof. The README's own examples are files in
-//! `examples/readme/`, which are checked here like a showcase row; the
-//! library's are checked by the whole-library gate.
+//! Every ` ```rust ` block in `README.md` (Heather is fenced as Rust for the
+//! syntax highlighting) sits under a comment `<!-- checked: <path> -->`
+//! naming the file it is taken from, and each of its declarations (a run of
+//! lines between blank lines) is in that file, as written but for where its
+//! lines break. A `…` in a declaration stands for text the README leaves out
+//! (a proof body), so a statement can be shown without its proof. The
+//! README's own examples are files in `examples/readme/`, which are checked
+//! here like a showcase row; the library's are checked by the whole-library
+//! gate.
 //!
 //! The README is read by `include_str!`, so `scripts/test --pr` selects this
 //! binary when the README changes (its dep-info names the file).
@@ -55,7 +56,7 @@ fn blocks() -> Vec<Block> {
     let mut out = vec![];
     let mut i = 0;
     while i < lines.len() {
-        if lines[i].trim() != "```heather" {
+        if lines[i].trim() != "```rust" {
             i += 1;
             continue;
         }
@@ -63,7 +64,7 @@ fn blocks() -> Vec<Block> {
             .and_then(|j| lines[j].trim().strip_prefix("<!-- checked:"))
             .and_then(|rest| rest.strip_suffix("-->"))
             .map(|path| path.trim().to_string())
-            .unwrap_or_else(|| panic!("README.md:{}: a `heather` block needs `<!-- checked: <path> -->` on the line above it", i + 1));
+            .unwrap_or_else(|| panic!("README.md:{}: a `rust` block needs `<!-- checked: <path> -->` on the line above it", i + 1));
         let start = i + 1;
         let mut end = start;
         while end < lines.len() && lines[end].trim() != "```" {
@@ -91,7 +92,7 @@ fn holds_in_order(haystack: &str, pieces: &[String]) -> bool {
 #[test]
 fn every_readme_declaration_is_in_its_file() {
     let blocks = blocks();
-    assert!(!blocks.is_empty(), "README.md has no `heather` blocks; this test reads the wrong file");
+    assert!(!blocks.is_empty(), "README.md has no `rust` blocks; this test reads the wrong file");
     let mut missing = vec![];
     for block in &blocks {
         let path = root().join(&block.source);

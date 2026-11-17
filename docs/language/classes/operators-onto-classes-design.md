@@ -827,3 +827,20 @@ that do not import each other can each synthesize the class, and a third
 importing both sees two classes of one name; nothing in the library does
 that yet. A *named* constraint (`requires m: …`) does not merge, since its
 body reaches the dictionary by name.
+
+## 18. Postscript (2026-11-17): `(<=)` anywhere an expression stands
+
+§4's bare symbol was only writable directly between an argument list's
+delimiters, so the order in `s.SortedPerm(BitVec::unsigned_le, out)` could be
+spelled `<=` there but nowhere else. A parenthesised symbol, `(` operator `)`,
+is now that same unapplied `OpSymbol` in any expression position (the
+Haskell section, `crates/syntax/src/parser.rs`'s `(` arm of the primary). It
+claims nothing: an infix token cannot begin an expression, so `( <=` had no
+reading before. The parser is the whole change; resolution is §16's ladder
+unchanged, so the carrier comes from the checking position's first domain
+and a position whose domain is still a meta (`List::insertion_sort((<=), [3,
+1])`, the symbol read before the list) declines exactly as the bare `<=`
+does there. `(-)` is the infix symbol, subtraction. Fixing one operand stays
+the argument slot's job (`· <= 10`, issues/argument-slot-sections.md).
+Probes: `lib/_tests/std/data/sorting_tests.hthr`
+(issues/parenthesized-operator-symbols.md).

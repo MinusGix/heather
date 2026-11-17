@@ -440,39 +440,26 @@ theorem Target::goes_node_alone(self t: Target, out: List<Nat>, env: Env, p, q: 
 
 theorem Prog::within_one_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat, c: Compiled,
     emitted: p.one_node(layout, out, node, names) = Some(c)): p.Within(c.prog) {
-    (match node.pure() as λ b => (match b {
-            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.byte_node(layout, out, node, names),
-        }) = Some(c) → p.Within(c.prog) {
-        True => (match alone: p.node_alone(layout, out, node) {
-            None => λ none => absurd(none),
-            Some(q) => λ same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, out, node, q, alone)),
-        }),
-        False => p.within_byte_node(layout, out, names, c, node),
-    })(emitted)
+    match node.pure() {
+        True => {
+            cases emitted as alone(q);
+            p.within_node_alone(layout, out, node, q, alone)
+        },
+        False => p.within_byte_node(layout, out, names, c, node, emitted),
+    }
 }
 
 theorem Target::goes_one_node(self t: Target, out: List<Nat>, env: Env, p: Prog, names: Nat, c: Compiled, tree: ITree<BitVec(64)>(Events::linux()), node: Node,
     apart: t.homes.apart(node_output(node).id, out).IsTrue(),
     emitted: p.one_node(t.layout(), out, node, names) = Some(c), within: c.prog.Within(t.program), next: t.At(prog_len(c.prog), out, tree, env.computes([node]))):
     t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
-    let layout = t.layout();
-    let live = live_before(function_ir_eval::Node::reads(node), node_output(node).id, out);
-    (match node.pure() as λ b => node.pure() = b → (match b {
-            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.byte_node(layout, out, node, names),
-        }) = Some(c) → t.At(prog_len(p), live, tree, env) {
-        True => λ pure => (match alone: p.node_alone(layout, out, node) {
-            None => λ none => absurd(none),
-            Some(q) => λ same => {
-                let c_is = Option::some_inj(Compiled(q, names), c, same);
-                t.goes_node_alone(out, env, p, q, node, j(sym(pure), λ b _ => b.IsTrue(), trivial), apart, alone,
-                    j(sym(c_is), λ x _ => x.prog.Within(t.program), within), tree,
-                    j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes([node])), next))
-            },
-        }),
-        False => λ _ byte => t.goes_byte_node(out, env, p, names, c, tree, node, apart, byte, within, next),
-    })(refl, emitted)
+    match pure: node.pure() {
+        True => {
+            cases emitted as alone(q);
+            t.goes_node_alone(out, env, p, q, node, Bool::is_true_of_eq(pure), apart, alone, within, tree, next)
+        },
+        False => t.goes_byte_node(out, env, p, names, c, tree, node, apart, emitted, within, next),
+    }
 }
 
 theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>): (p: Prog) → (names: Nat) → (c: Compiled) →

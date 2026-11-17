@@ -5,7 +5,7 @@ labels: [frontend,syntax,elaboration,ergonomics]
 area: language
 milestone: [lang-sequencing]
 created: 2026-10-31
-updated: 2026-11-02
+updated: 2026-11-17
 ---
 
 Round R3 of `docs/native/compiler-milestones-proposal.md` (§3.1, §3.3, §7): local state and loops in pure functions.
@@ -44,3 +44,4 @@ R3a: `wc`'s step is written imperatively, and its facts are proved by the existi
 - 2026-11-02: Early exit built (docs/language/sequencing-surface-design.md §15): break/continue/return in a for body, lowered in tail position by the parser and lifted to ForStep leaves over List::for_in; a returning loop splits the body (`match #forN { Return(r) => r, _ => rest }`), and a stateless search is a loop with an empty state record. Refused at parse time: exits outside a loop, code after an exit, and return from a loop nested in another loop or statement form (needs §6.3). Still open: labels, nested return, ranges, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, wc's step.
 - 2026-11-02: `while c decreases m { … }` built (docs/language/sequencing-surface-design.md §16), reusing the for marker. It lifts to a decreases `f::run` with the state as separate parameters, the body hoisted in SSA form above `match h: decide_bit<c>()`, and `f::run_unfold`. Fixed on the way: select_scope keeps an arm's equation for an argument passed through a let. Filed [[decreases-shadowed-let]]. Open for R3b: exits in a while, the fuelled form, a while holding a for, and the decimal formatter as a while.
 - 2026-11-02: Ranges built (docs/language/sequencing-surface-design.md §17): `for i in a..b` is List::range_from(a, b - a), and `0..n` is List::range(n), both written only in a for header.
+- 2026-11-17: `return` outside a loop built (docs/language/sequencing-surface-design.md §22): a statement `if`/`match` that returns takes the rest of the function's body into its arms in the parser (`imperative::lower_body`), in plain, `decreases`, `mut self` and `runtime fn` bodies and beside `?`. The sort example's `sift` is written with guards that return; probes in lib/_tests/std/core/early_return_tests.hthr.

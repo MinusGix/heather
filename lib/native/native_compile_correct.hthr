@@ -188,102 +188,67 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             _ => λ p out known names c emitted => region.region_extends(layout, p, out, names, c, emitted),
         },
         Invoke(shape) => λ p out known names c => match shape {
-            Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(buf) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
-                },
+            Reads(fd, buf, at, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)
             },
-            Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(buf) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
-                },
+            Writes(fd, buf, from, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)
             },
-            Opens(path, len, result) => match layout.words_fit([len, result]) {
-                False => λ none => absurd(none),
-                True => match layout.capacities.nth(path) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same, p.within_opens(layout, known, out, path, len, result, capacity, names)),
-                },
+            Opens(path, len, result) => λ emitted => {
+                cases emitted as fit, found(capacity);
+                p.within_opens(layout, known, out, path, len, result, capacity, names)
             },
-            Closes(fd, result) => match layout.words_fit([fd, result]) {
-                False => λ none => absurd(none),
-                True => λ same => subst(same, p.within_closes(layout, known, out, fd, result)),
+            Closes(fd, result) => λ emitted => {
+                cases emitted;
+                p.within_closes(layout, known, out, fd, result)
             },
             StatsPath(_, _, _, _) => λ none => absurd(none),
             StatsFd(_, _, _) => λ none => absurd(none),
         },
-        Then(first, rest) => λ p out known names c => {
+        Then(first, rest) => λ p out known names c emitted => {
             let carried = first.carried(rest, layout.homes, out);
             let before = rest.live_with(layout.homes, carried, out);
-            (match one: first.emits(p, layout, before, first.first_known(known), names) {
-                None => λ none => absurd(none),
-                Some(c1) => λ two => Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
-                    rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, two)),
-            })
+            cases emitted as one(c1);
+            Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
+                rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, emitted))
         },
-        Branch(condition, yes, no) => λ p out known names c => {
+        Branch(condition, yes, no) => λ p out known names c emitted => {
             let tested = p.tests(layout, condition, Succ(names));
-            match layout.word_fits(condition) {
-                False => λ none => absurd(none),
-                True => (match y_is: yes.emits(tested, layout, out, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(y) => {
-                        let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
-                        (match n_is: no.emits(other, layout, out, Nil, y.names) {
-                            None => λ none => absurd(none),
-                            Some(n) => λ same => subst(same,
-                                calc {
-                                    p <= tested := p.within_tests(layout, condition, Succ(names)),
-                                    <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
-                                    <= other := Exists(2, refl),
-                                    <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
-                                    <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
-                                }),
-                        })
-                    },
-                }),
+            cases emitted as fits, y_is(y), n_is(n);
+            let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+            calc {
+                p <= tested := p.within_tests(layout, condition, Succ(names)),
+                <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
+                <= other := Exists(2, refl),
+                <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
+                <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
             }
         },
-        Repeat(body, again) => λ p out known names c => {
+        Repeat(body, again) => λ p out known names c emitted => {
             let head = p.label(Succ(names));
             let inner = Repeat(body, again).loop_out(layout.homes, out);
-            match layout.word_fits(again) {
-                False => λ none => absurd(none),
-                True => (match b_is: body.emits(head, layout, inner, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(b) => λ same => {
-                        let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
-                        subst(same,
-                            calc {
-                                p <= head := p.within_label(Succ(names)),
-                                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
-                                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
-                                <= closed := Exists(2, refl),
-                            })
-                    },
-                }),
+            cases emitted as fits, b_is(b);
+            let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
+            calc {
+                p <= head := p.within_label(Succ(names)),
+                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
+                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
+                <= closed := Exists(2, refl),
             }
         },
-        Exit(status) => λ p out known names c => match layout.word_fits(status) {
-            False => λ none => absurd(none),
-            True => λ same => subst(same,
-                p.within_exits(layout, known, status)),
+        Exit(status) => λ p out known names c emitted => {
+            cases emitted;
+            p.within_exits(layout, known, status)
         },
-        Arg(index, buf, len) => λ p out known names c => match layout.words_fit([index, len]) {
-            False => λ none => absurd(none),
-            True => match layout.capacities.nth(buf) {
-                None => λ none => absurd(none),
-                Some(capacity) => λ same => subst(same, p.within_args(layout, out, index, buf, len, capacity, names)),
-            },
+        Arg(index, buf, len) => λ p out known names c emitted => {
+            cases emitted as fit, found(capacity);
+            p.within_args(layout, out, index, buf, len, capacity, names)
         },
-        Perform(index, args, results) => λ p out known names c => match layout.call_fits(out, index, args, results) {
-            False => λ none => absurd(none),
-            True => λ same => subst(same,
-                p.within_performs(layout, out, index, args, results)),
+        Perform(index, args, results) => λ p out known names c emitted => {
+            cases emitted;
+            p.within_performs(layout, out, index, args, results)
         },
     }
 }
@@ -371,53 +336,9 @@ theorem Region::paired(self body: Region, rest: Stmt, homes: Homes, out: List<Na
     carried: Compute(Dataflow(body)).pair_known(rest, homes, out) = Cons(f, fs)):
     (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
         && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-    (match rest.reads_known() as λ b => rest.reads_known() = b →
-            (match b as λ _ => List<Fact> {
-                False => Nil,
-                True => {
-                    let known = body.nodes.leaves_known();
-                    let before = rest.live_with(homes, known, out);
-                    match (homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) {
-                        False => Nil,
-                        True => known,
-                    }
-                },
-            }) = Cons(f, fs) → (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-        False => λ _ none => absurd(none),
-        True => λ _ => (match body.nodes.leaves_known() as λ l => body.nodes.leaves_known() = l →
-                (match (homes.nodes_apart(body.nodes, rest.live_with(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_with(homes, l, out)))
-                    && nodes_live_in(body.nodes, rest.live_with(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) as λ _ => List<Fact> {
-                    False => Nil,
-                    True => l,
-                }) = Cons(f, fs) → (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-            Nil => λ _ none => {
-                let g = (homes.nodes_apart(body.nodes, rest.live_in(homes, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_in(homes, out)))
-                    && nodes_live_in(body.nodes, rest.live_in(homes, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)));
-                false_elim((match g as λ b => (match b as λ _ => List<Fact> { False => Nil, True => Nil }) = Cons(f, fs) → False {
-                    False => λ e => absurd(e),
-                    True => λ e => absurd(e),
-                })(none))
-            },
-            Cons(g1, gs) => λ at same => {
-                let before = rest.live_head(homes, Cons(g1, gs), out);
-                (match (homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) as λ b =>
-                        ((homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
-                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))) = b →
-                        (match b as λ _ => List<Fact> { False => Nil, True => Cons(g1, gs) }) = Cons(f, fs) →
-                        (body.nodes.leaves_known() = Cons(f, fs)) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, Cons(f, fs), out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, Cons(f, fs), out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, Cons(f, fs), out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()) {
-                    False => λ _ none => absurd(none),
-                    True => λ passed e => j(e, λ l _ => (body.nodes.leaves_known() = l) ∧ (((homes.nodes_apart(body.nodes, rest.live_head(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_head(homes, l, out)))
-        && nodes_live_in(body.nodes, rest.live_head(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()),
-                        ⟨at, j(sym(passed), λ b _ => b.IsTrue(), trivial)⟩),
-                })(refl, same)
-            },
-        })(refl),
-    })(refl, carried)
+    cases carried as reads, passed;
+    ⟨carried, j(carried, λ l _ => (((homes.nodes_apart(body.nodes, rest.live_with(homes, l, out)) && homes.all_apart(nodes_writes(body.nodes), rest.live_with(homes, l, out)))
+        && nodes_live_in(body.nodes, rest.live_with(homes, l, out)).within(nodes_live_in(body.nodes, rest.live_in(homes, out)))).IsTrue()), Bool::is_true_of_eq(passed))⟩
 }
 
 // A tree the same as one the code runs as.
@@ -715,112 +636,79 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                     t.then_nil(first, rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
             })(ih_first)
         },
-        Branch(condition, yes, no) => λ p out facts names c => {
+        Branch(condition, yes, no) => λ p out facts names c emitted => {
             let tested = p.tests(layout, condition, Succ(names));
-            (match fit: layout.word_fits(condition) {
-                False => λ none => absurd(none),
-                True => (match y_is: yes.emits(tested, layout, out, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(y) => {
-                        let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
-                        (match n_is: no.emits(other, layout, out, Nil, y.names) {
-                            None => λ none => absurd(none),
-                            Some(nc) => λ same => subst(same,
-                                λ within checked => {
-                                    let jumped = then(y.prog, Jmp(Succ(Succ(names))));
-                                    let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
-                                    let w_other = Prog::within_trans(no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
-                                    let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
-                                    let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
-                                    let w_tested = Prog::within_trans(yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
-                                    let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, known));
-                                    let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, known));
-                                    let inside = layout.word_inside(condition, known);
-                                    let arms = yes.live_in(t.homes, out).union(no.live_in(t.homes, out));
-                                    let live = Cons(condition, arms);
-                                    λ n env k _ exits next => t.goes_tests(live, env, p, condition, names, inside, Inl(refl), w_tested, w_other.witness, jumped, Block([]), w_other.proof,
-                                        ITree::bind(Events::linux(), match env.bit(condition) as λ _ => ITree<Flow>(Events::linux()) {
-                                            True => yes.denote(call, perform, n, env),
-                                            False => no.denote(call, perform, n, env),
-                                        }, k),
-                                        λ (set: env.bit(condition) = True) => j(sym(set), λ bit _ => t.At(prog_len(tested), live,
-                                                ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
-                                                    True => yes.denote(call, perform, n, env),
-                                                    False => no.denote(call, perform, n, env),
-                                                }, k), env),
-                                            t.at_sub(run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
-                                                    k(Onward(after)), out, after, next(after))),
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)))),
-                                        λ (clear: env.bit(condition) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), live,
-                                                ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
-                                                    True => yes.denote(call, perform, n, env),
-                                                    False => no.denote(call, perform, n, env),
-                                                }, k), env),
-                                            t.at_sub(run_no(n, env, k, exits, next),
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)))))
-                                }),
-                        })
-                    },
-                }),
-            })
+            cases emitted as fit, y_is(y), n_is(nc);
+            let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+            λ within checked => {
+                let jumped = then(y.prog, Jmp(Succ(Succ(names))));
+                let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
+                let w_other = Prog::within_trans(no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
+                let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
+                let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
+                let w_tested = Prog::within_trans(yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
+                let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, known));
+                let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, known));
+                let inside = layout.word_inside(condition, known);
+                let arms = yes.live_in(t.homes, out).union(no.live_in(t.homes, out));
+                let live = Cons(condition, arms);
+                λ n env k _ exits next => t.goes_tests(live, env, p, condition, names, inside, Inl(refl), w_tested, w_other.witness, jumped, Block([]), w_other.proof,
+                    ITree::bind(Events::linux(), match env.bit(condition) as λ _ => ITree<Flow>(Events::linux()) {
+                        True => yes.denote(call, perform, n, env),
+                        False => no.denote(call, perform, n, env),
+                    }, k),
+                    λ (set: env.bit(condition) = True) => j(sym(set), λ bit _ => t.At(prog_len(tested), live,
+                            ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
+                                True => yes.denote(call, perform, n, env),
+                                False => no.denote(call, perform, n, env),
+                            }, k), env),
+                        t.at_sub(run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
+                                k(Onward(after)), out, after, next(after))),
+                            λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)))),
+                    λ (clear: env.bit(condition) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), live,
+                            ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
+                                True => yes.denote(call, perform, n, env),
+                                False => no.denote(call, perform, n, env),
+                            }, k), env),
+                        t.at_sub(run_no(n, env, k, exits, next),
+                            λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)))))
+            }
         },
-        Repeat(body, again) => λ p out facts names c => {
+        Repeat(body, again) => λ p out facts names c emitted => {
             let head = p.label(Succ(names));
             let inner = Repeat(body, again).loop_out(t.homes, out);
-            (match fit: layout.word_fits(again) {
-                False => λ none => absurd(none),
-                True => (match b_is: body.emits(head, layout, inner, Nil, Succ(Succ(names))) {
-                    None => λ none => absurd(none),
-                    Some(cb) => λ same => {
-                        let tested = cb.prog.tests(layout, again, Succ(Succ(names)));
-                        let closed = then(tested, Jmp(Succ(names))).label(Succ(Succ(names)));
-                        subst(same,
-                            λ within checked => {
-                                let set = Repeat(body, again).live_in(t.homes, out);
-                                let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
-                                let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
-                                let w_body = Prog::within_trans(cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
-                                let w_head = Prog::within_trans(body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
-                                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, known));
-                                let inside = layout.word_inside(again, known);
-                                λ n env k _ exits next => t.goes_repeat(body, again, call, perform, n, p, names, cb.prog, out, set, inside, within, w_head,
-                                    body.live_in(t.homes, loop_after(again, set, out)).within_mem(set, known), runs, k, exits, next, n, env)
-                            })
-                    },
-                }),
-            })
+            cases emitted as fit, b_is(cb);
+            let tested = cb.prog.tests(layout, again, Succ(Succ(names)));
+            λ within checked => {
+                let set = Repeat(body, again).live_in(t.homes, out);
+                let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
+                let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
+                let w_body = Prog::within_trans(cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
+                let w_head = Prog::within_trans(body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
+                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, known));
+                let inside = layout.word_inside(again, known);
+                λ n env k _ exits next => t.goes_repeat(body, again, call, perform, n, p, names, cb.prog, out, set, inside, within, w_head,
+                    body.live_in(t.homes, loop_after(again, set, out)).within_mem(set, known), runs, k, exits, next, n, env)
+            }
         },
-        Exit(status) => λ p out facts names c => (match fit: layout.word_fits(status) {
-            False => λ none => absurd(none),
-            True => λ same => subst(same,
-                λ within _ n env k knows exits next => t.goes_exits(facts.unknown([status]), env, p, facts, status,
-                    layout.word_inside(status, known),
-                    env.reads_of(facts, knows, [status], facts.unknown([status]), status, Inl(refl), λ i m => m),
-                    within, k(Exited(env.word(status))), λ u at exited => exits(env.word(status), u, at, exited))),
-        }),
-        Arg(index, buf, len) => λ p out facts names c => (match layout.words_fit([index, len]) as λ b => layout.words_fit([index, len]) = b → (match b {
-                False => None,
-                True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.args(layout, out, index, buf, len, capacity, names)) },
-            }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(len, out).IsTrue() → t.RunsK(Arg(index, buf, len), facts, call, perform, out, p, c.prog) {
-            False => λ _ none => absurd(none),
-            True => λ fit => {
-                (match found: t.caps.nth(buf) {
-                    None => λ none => absurd(none),
-                    Some(capacity) => λ same => subst(same,
-                        λ within apart n env k _ exits next => t.goes_args(live_before([index], len, out), out, env, p, index, buf, len, capacity, names,
-                            layout.word_inside(index, known), layout.word_inside(len, known), live_before_reads([index], len, out, index, Inl(refl)),
-                            λ i m ne => live_before_keeps([index], len, out, i, m, ne), apart, found, within,
-                            k(Onward(env.arg(env.number(index), buf, len))), next(env.arg(env.number(index), buf, len)))),
-                })
-            },
-        })(refl),
-        Perform(index, args, results) => λ p out facts names c => (match layout.call_fits(out, index, args, results) as λ b => layout.call_fits(out, index, args, results) = b →
-                b.guard(Some(Compiled(p.performs(layout, out, index, args, results), names))) = Some(c) → c.prog.Within(t.program) →
-                t.homes.all_apart(results, out).IsTrue() → t.RunsK(Perform(index, args, results), facts, call, perform, out, p, c.prog) {
-            False => λ _ none => absurd(none),
-            True => λ fit same => subst(same,
-                λ within apart n env k _ => calls(p, out, index, args, results, known, within, apart)(n, env, k)),
-        })(refl),
+        Exit(status) => λ p out facts names c emitted => {
+            cases emitted;
+            λ within _ n env k knows exits next => t.goes_exits(facts.unknown([status]), env, p, facts, status,
+                layout.word_inside(status, known),
+                env.reads_of(facts, knows, [status], facts.unknown([status]), status, Inl(refl), λ i m => m),
+                within, k(Exited(env.word(status))), λ u at exited => exits(env.word(status), u, at, exited))
+        },
+        Arg(index, buf, len) => λ p out facts names c emitted => {
+            cases emitted as fit, found(capacity);
+            λ within apart n env k _ exits next => t.goes_args(live_before([index], len, out), out, env, p, index, buf, len, capacity, names,
+                layout.word_inside(index, known), layout.word_inside(len, known), live_before_reads([index], len, out, index, Inl(refl)),
+                λ i m ne => live_before_keeps([index], len, out, i, m, ne), apart, found, within,
+                k(Onward(env.arg(env.number(index), buf, len))), next(env.arg(env.number(index), buf, len)))
+        },
+        Perform(index, args, results) => λ p out facts names c emitted => {
+            cases emitted;
+            λ within apart n env k _ => calls(p, out, index, args, results, known, within, apart)(n, env, k)
+        },
     }
 }
 
@@ -850,27 +738,17 @@ theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, bodi
 // client need not evaluate it again.
 theorem Source::compile_laid(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program)):
     program.laid_out().IsTrue() {
-    let emitted = src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0);
-    let bare: Option<Prog> = match emitted { None => None, Some(c) => c.prog.finish() };
-    (match src.allocation_ok(homes) as λ a => (match a {
-            False => None,
-            True => match src.procedures {
-                Nil => match src.functions { Nil => bare, Cons(_, _) => src.compile_calls(low, homes, bodies) },
-                Cons(_, _) => src.compile_calls(low, homes, bodies),
+    cases compiled as allocated;
+    match src.procedures {
+        Nil => match src.functions {
+            Nil => {
+                cases compiled as made(c);
+                then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, compiled)
             },
-        }) = Some(program) → program.laid_out().IsTrue() {
-        False => λ none => absurd(none),
-        True => (match src.procedures {
-            Nil => (match src.functions {
-                Nil => (match emitted {
-                    None => λ none => absurd(none),
-                    Some(c) => λ same => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).laid_of(program, same),
-                }),
-                Cons(_, _) => λ calls => src.calls_laid(low, homes, bodies, program, calls),
-            }),
-            Cons(_, _) => λ calls => src.calls_laid(low, homes, bodies, program, calls),
-        }),
-    })(compiled)
+            Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
+        },
+        Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
+    }
 }
 
 // A source without procedures or functions compiles as before them: `main`
@@ -880,26 +758,7 @@ theorem Source::compile_bare(self src: Source, low: BitVec(64), homes: Homes, bo
         False => None,
         True => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
     }) {
-    let plain: Option<Prog> = match src.allocation_ok(homes) {
-        False => None,
-        True => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
-    };
-    j(sym(bare), λ ps _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
-        False => None,
-        True => match ps {
-            Nil => match src.functions {
-                Nil => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
-                Cons(_, _) => src.compile_calls(low, homes, bodies),
-            },
-            Cons(_, _) => src.compile_calls(low, homes, bodies),
-        },
-    }) = plain, j(sym(none), λ fs _ => (match src.allocation_ok(homes) as λ _ => Option<Prog> {
-        False => None,
-        True => match fs {
-            Nil => match src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() },
-            Cons(_, _) => src.compile_calls(low, homes, bodies),
-        },
-    }) = plain, refl))
+    simp_only(Source::compile, bare, none)
 }
 
 // The converse, for a reader that has the program: homes that pass the
@@ -938,30 +797,7 @@ theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Home
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
     whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile_calls(low, homes, bodies) = Some(program) {
-    let layout = src.layout(low, homes, bodies);
-    let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
-        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
-    let finished = j(sym(whole), λ o _ => (match o as λ _ => Option<Prog> {
-            None => None,
-            Some(x) => match x.laid_out() { False => None, True => Some(x) },
-        }) = Some(program), laid_here);
-    let after_main = j(sym(code), λ o _ => (match o {
-            None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
-                None => None,
-                Some(x) => match x.laid_out() { False => None, True => Some(x) },
-            },
-        }) = Some(program), finished);
-    j(sym(emitted), λ o _ => (match o {
-            None => None,
-            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
-                None => None,
-                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
-                    None => None,
-                    Some(x) => match x.laid_out() { False => None, True => Some(x) },
-                },
-            },
-        }) = Some(program), after_main)
+    simp_only(Source::compile_calls, emitted, code, whole, eq_true_of_is_true(program.laid_out(), laid))
 }
 
 // The same with procedures (`Source::compile_calls`): the converse
@@ -1022,21 +858,14 @@ theorem Procedure::code_of(self proc: Procedure, p, entry, body, out: Prog, layo
     fits: proc.fits(layout) = True, entered: proc.entry_code(p, layout, index) = entry,
     emitted: proc.body.emit(entry, layout, proc.results, names) = Some(Compiled(body, after)), left: proc.exit_code(body, layout) = out):
     proc.code(p, layout, index, names) = Some(Compiled(out, after)) {
-    j(sym(fits), λ f _ => (match f as λ _ => Option<Compiled> {
-            False => None,
-            True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) },
-        }) = Some(Compiled(out, after)),
-        j(sym(entered), λ e _ => (match proc.body.emit(e, layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
-            j(sym(emitted), λ o _ => (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
-                j(left, λ x _ => Some(Compiled(proc.exit_code(body, layout), after)) = Some(Compiled(x, after)), refl))))
+    simp_only(Procedure::code, fits, entered, emitted, left)
 }
 
 // The procedures' code from the first's and the rest's.
 theorem List::procedures_code_of(self procs: List<Procedure>, first: Procedure, rest: List<Procedure>, is: procs = Cons(first, rest), p: Prog, layout: Layout, index, names: Nat,
     c, d: Compiled, here: first.code(p, layout.body(index), index, names) = Some(c), later: rest.procedures_code(c.prog, layout, Succ(index), c.names) = Some(d)):
     procs.procedures_code(p, layout, index, names) = Some(d) {
-    j(sym(is), λ ps _ => ps.procedures_code(p, layout, index, names) = Some(d),
-        j(sym(here), λ o _ => (match o { None => None, Some(x) => rest.procedures_code(x.prog, layout, Succ(index), x.names) }) = Some(d), later))
+    simp_only(is, List::procedures_code, here, later)
 }
 
 // A statement's emission from its parts', so a reader can state a long
@@ -1053,10 +882,7 @@ theorem Stmt::emits_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, lay
     left: s.left().emits(p, layout, s.right().live_with(layout.homes, s.left().carried(s.right(), layout.homes, out), out), s.left().first_known(known), names) = Some(c)):
     s.emits(p, layout, out, known, names) = s.right().emits(c.prog, layout, out, s.left().carried(s.right(), layout.homes, out), c.names) {
     match s {
-        Then(first, rest) => j(sym(left), λ o _ => (match o as λ _ => Option<Compiled> {
-                None => None,
-                Some(d) => rest.emits(d.prog, layout, out, first.carried(rest, layout.homes, out), d.names),
-            }) = rest.emits(c.prog, layout, out, first.carried(rest, layout.homes, out), c.names), refl),
+        Then(first, rest) => simp_only(Stmt::emits, left),
         _ => false_elim(is),
     }
 }
@@ -1099,20 +925,7 @@ theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog,
     b: Compiled, body: s.left().emits(p.label(Succ(names)), layout, s.loop_out(layout.homes, out), Nil, Succ(Succ(names))) = Some(b)):
     s.emits(p, layout, out, known, names) = Some(Compiled(then(b.prog.tests(layout, s.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
     match s {
-        Repeat(inner, again) => {
-            let closed = Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names));
-            let ran = j(sym(body), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
-                }) = closed, refl);
-            j(sym(eq_true_of_is_true(layout.word_fits(again), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
-                    False => None,
-                    True => match inner.emits(p.label(Succ(names)), layout, Repeat(inner, again).loop_out(layout.homes, out), Nil, Succ(Succ(names))) {
-                        None => None,
-                        Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
-                    },
-                }) = closed, ran)
-        },
+        Repeat(inner, again) => simp_only(Stmt::emits, eq_true_of_is_true(layout.word_fits(again), fits), body),
         _ => false_elim(is),
     }
 }
@@ -1122,30 +935,7 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
     no: s.right().emits(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, y.names) = Some(n)):
     s.emits(p, layout, out, known, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
     match s {
-        Branch(condition, first, second) => {
-            let joined = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names));
-            let second_ran = j(sym(no), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                }) = joined, refl);
-            let first_ran = j(sym(yes), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(d) => match second.emits(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, d.names) {
-                        None => None,
-                        Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                    },
-                }) = joined, second_ran);
-            j(sym(eq_true_of_is_true(layout.word_fits(condition), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
-                    False => None,
-                    True => match first.emits(p.tests(layout, condition, Succ(names)), layout, out, Nil, Succ(Succ(names))) {
-                        None => None,
-                        Some(d) => match second.emits(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, d.names) {
-                            None => None,
-                            Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                        },
-                    },
-                }) = joined, first_ran)
-        },
+        Branch(condition, first, second) => simp_only(Stmt::emits, eq_true_of_is_true(layout.word_fits(condition), fits), yes, no),
         _ => false_elim(is),
     }
 }
@@ -1157,7 +947,7 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
 theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Homes, out, mid, l: List<Nat>,
     rest: s.right().checked(homes, out) = Some(mid), first: s.left().checked(homes, mid) = Some(l)): s.checked(homes, out) = Some(l) {
     match s {
-        Then(f, r) => j(sym(rest), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), first),
+        Then(f, r) => simp_only(Stmt::checked, rest, first),
         _ => false_elim(is),
     }
 }
@@ -1165,11 +955,7 @@ theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Hom
 theorem Stmt::checked_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), homes: Homes, out, y, n: List<Nat>,
     yes: s.left().checked(homes, out) = Some(y), no: s.right().checked(homes, out) = Some(n)): s.checked(homes, out) = Some(Cons(s.word(), y.union(n))) {
     match s {
-        Branch(c, ys, ns) => j(sym(yes), λ o _ => (match o as λ _ => Option<List<Nat>> {
-                None => None,
-                Some(a) => match ns.checked(homes, out) { None => None, Some(b) => Some(Cons(c, a.union(b))) },
-            }) = Some(Cons(c, y.union(n))),
-            j(sym(no), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
+        Branch(c, ys, ns) => simp_only(Stmt::checked, yes, no),
         _ => false_elim(is),
     }
 }
@@ -1178,11 +964,7 @@ theorem Stmt::checked_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), homes:
     body: s.left().checked(homes, loop_after(s.word(), homes.loop_set(s.word()), out)) = Some(b), within: b.within(homes.loop_set(s.word())) = True):
     s.checked(homes, out) = Some(homes.loop_set(s.word())) {
     match s {
-        Repeat(bd, again) => j(sym(body), λ o _ => (match o as λ _ => Option<List<Nat>> {
-                None => None,
-                Some(x) => match x.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
-            }) = Some(homes.loop_set(again)),
-            j(sym(within), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
+        Repeat(bd, again) => simp_only(Stmt::checked, body, within),
         _ => false_elim(is),
     }
 }
@@ -1452,26 +1234,20 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
 
 // Each procedure from `index` on is in a program its code is in, procedure
 // `i` of them at label `index + i`.
-theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p: Prog) → (index, names: Nat) → (d: Compiled) →
-    procs.procedures_code(p, layout, index, names) = Some(d) → (whole: Prog) → d.prog.Within(whole) →
+theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout, p: Prog, index, names: Nat, d: Compiled,
+    code: procs.procedures_code(p, layout, index, names) = Some(d), whole: Prog, w: d.prog.Within(whole)):
     p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → Hosted(proc, layout.body(index + i), index + i, whole)) {
-    match procs {
-        Nil => λ p index names d code whole w => subst(code,
-            ⟨p.within_self(), λ i proc none => absurd(none)⟩),
-        Cons(first, rest) => λ p index names d => (match first.code(p, layout.body(index), index, names) as λ o => first.code(p, layout.body(index), index, names) = o →
-                (match o { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) }) = Some(d) →
-                (whole: Prog) → d.prog.Within(whole) →
-                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → Hosted(proc, layout.body(index + i), index + i, whole)) {
-            None => λ _ none => absurd(none),
-            Some(c) => λ code others whole w => {
-                let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
-                let here = first.code_hosted(p, layout.body(index), index, names, c, code, whole, Prog::within_trans(later.left, w));
-                ⟨Prog::within_trans(here.right, later.left), λ i => match i {
-                    Zero => λ proc same => subst(same, here.left),
-                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => Hosted(proc, layout.body(x), x, whole), later.right(k, proc, found)),
-                }⟩
-            },
-        })(refl),
+    induct List::procedures_code(procs, p, layout, index, names) {
+        Nil => subst(code, ⟨p.within_self(), λ i proc none => absurd(none)⟩),
+        Cons::None => absurd(code),
+        Cons::Some => {
+            let later = ih(d, code, whole, w);
+            let here = proc.code_hosted(p, layout.body(index), index, names, c, h, whole, Prog::within_trans(later.left, w));
+            ⟨Prog::within_trans(here.right, later.left), λ i => match i {
+                Zero => λ found same => subst(same, here.left),
+                Succ(k) => λ found there => j(Nat::add_succ_left(index, k), λ x _ => Hosted(found, layout.body(x), x, whole), later.right(k, found, there)),
+            }⟩
+        },
     }
 }
 
@@ -1510,7 +1286,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
                         let linked_p: (base.links(src.functions, homes.places, homes.room_table(src.functions), d.names) = Some(program)) = subst(same, linked);
                         let w_base: base.Within(program) = base.links_grows(homes.places, homes.room_table(src.functions), d.names, program, src.functions, linked_p);
                         let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
-                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, coded, program, w_d);
+                        let hosted = src.procedures.procedures_hosted(layout, exit0(c.prog), 0, c.names, d, coded, program, w_d);
                         CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
                             λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout.body(x), x, program), hosted.right(i, proc, found)),
                             d.prog, w_base, laid, base, d.names, linked_p)

@@ -31,17 +31,11 @@ uint64_t sort_in_place(uint8_t *bytes, uint64_t length);
 
 ```text
 runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
-    if h: 0 < j {
-        let below = s.byte_within(n, j - 1);
-        if larger: key < below.zero_extend(56) {
-            s.put_within(n, j, below);
-            s.sift(n, j - 1, key)
-        } else {
-            j
-        }
-    } else {
-        j
-    }
+    if j = 0 { return j; }
+    let below = s.byte_within(n, j - 1);
+    if below.zero_extend(56) <= key { return j; }
+    s.put_within(n, j, below);
+    s.sift(n, j - 1, key)
 }
 
 runtime fn List::sort_from(mut self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
@@ -84,10 +78,10 @@ headline:
 
 ```text
 theorem sort_in_place_sorts(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    s.SortedPerm(BitVec::unsigned_le, sort_in_place(s, n).after)
+    s.SortedPerm((<=), sort_in_place(s, n).after)
 
 theorem sort_in_place_is_insertion_sort(s: List<u8>, n: u64, sized: s.len() = n.toNat()):
-    sort_in_place(s, n).after = s.insertion_sort(BitVec::unsigned_le)
+    sort_in_place(s, n).after = s.insertion_sort((<=))
 ```
 
 `.after` is the span as the function leaves it. The second theorem follows from
@@ -104,8 +98,8 @@ rest. Then
 
 ```text
 theorem insert_at_inserts(ys: List<u8>, z: u8, rest: List<u8>, n, j: u64, b: u8,
-    sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted(BitVec::unsigned_le)):
-    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered(BitVec::unsigned_le, b) ++ rest
+    sized: (ys ++ Cons(z, rest)).len() = n.toNat(), at: ys.len() = j.toNat(), sorted: ys.Sorted((<=))):
+    (ys ++ Cons(z, rest)).insert_at(n, j, b) = ys.insert_ordered((<=), b) ++ rest
 ```
 
 The loop that shuffles bytes up a buffer, followed by the store into the hole,

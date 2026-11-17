@@ -356,6 +356,46 @@ fn dependent_motive(motive: &Type) -> Option<Type> {
 /// disagreed about their types under `z`, and the kernel refused the split
 /// that the motive's instance at the scrutinee had passed
 /// (issues/split-all-nested-if-omega-kernel-refusal.md).
+/// A call some of whose arguments no source spells, with each such
+/// argument replaced by its weak head normal form when that one spells:
+/// the recursion's `(λ i q̄. emits(nth(children; i), q̄))(0, …)` read as
+/// `first.emits(…)`. `None` when the
+/// call already spells or an argument stays unspellable.
+fn readable_call(elab: &Elaborator, cx: &Cx, scrut: &Rc<Term>) -> Option<Rc<Term>> {
+    if elab.spell_term_source(cx, scrut).is_some() || !crate::spelling::is_app(scrut) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let readable = |arg: &Rc<Term>| -> Option<Rc<Term>> {
+        if elab.spell_term_source(cx, arg).is_some() {
+            return Some(Rc::clone(arg));
+        }
+        let whnf = oracle.bounded(64).whnf_term(&cx.gamma, arg).ok()?;
+        elab.spell_term_source(cx, &whnf)?;
+        Some(Rc::new(whnf))
+    };
+    fn rebuilt(t: &Rc<Term>, readable: &dyn Fn(&Rc<Term>) -> Option<Rc<Term>>) -> Option<Rc<Term>> {
+        Some(Rc::new(match &**t {
+            Term::App { fun, dom_level, cod_level, dom, cod, arg } => Term::App {
+                fun: rebuilt(fun, readable)?,
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: readable(arg)?,
+            },
+            Term::AppAt { fun, arg } => Term::AppAt { fun: rebuilt(fun, readable)?, arg: readable(arg)? },
+            _ => return Some(Rc::clone(t)),
+        }))
+    }
+    // The refolded hypothesis is `(λ i q̄. g(…, nth(children; i), q̄, …))`
+    // applied to the child's index: contract it first.
+    let scrut = crate::spelling::beta_head(scrut).map(Rc::new).unwrap_or_else(|| Rc::clone(scrut));
+    let call = rebuilt(&scrut, &readable)?;
+    elab.spell_term_source(cx, &call)?;
+    Some(call)
+}
+
 fn lifted(reduct: &Term, found: &Blocked) -> Option<Rc<Term>> {
     let pairs = [(found.original.clone(), (*found.replacement).clone())];
     Some(payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), &found.scrutinee, &pairs)?))
@@ -451,11 +491,16 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
         // stage call as its body spells it, not what that call is stuck on
         // in turn, when it has a spelling to split on
         // (issues/cases-on-hypothesis-tactic.md).
-        if (deep || elab.spell_term_source(cx, scrut).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
+        // The callee's recursive call reads its descended argument as the
+        // constructor's child (`nth(children; 0)`), which no source spells;
+        // `cases h` splits on that call with the child computed (`first`).
+        let readable = if deep { None } else { readable_call(elab, cx, scrut) };
+        let test = readable.as_ref().unwrap_or(scrut);
+        if (deep || elab.spell_term_source(cx, test).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
             return Some(Blocked { original: term.clone(), replacement: lifted(&reduct, &found)?, ..found });
         }
         if let Some(inductive) = &domain
-            && let Some(comparison) = comparison_of(elab, cx, scrut)
+            && let Some(comparison) = comparison_of(elab, cx, test)
         {
             return Some(Blocked {
                 original: term.clone(),
@@ -473,11 +518,11 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
             continue;
         }
         let inductive = domain?;
-        elab.spell_term_source(cx, scrut)?;
+        elab.spell_term_source(cx, test)?;
         return Some(Blocked {
             original: term.clone(),
             replacement: payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), scrut, &[])?),
-            scrutinee: scrut.clone(),
+            scrutinee: Rc::clone(test),
             constructors: constructors(&inductive),
             comparison: None,
         });
@@ -1105,6 +1150,25 @@ fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<T
                 if selected == reduct || eliminator_headed(&selected) {
                     return None;
                 }
+            }
+            // The arm selected, itself a match on what nothing decides yet:
+            // a later stage's result (`match rest.checked(out) { None =>
+            // None, Some(m) => first.checked(m) }`). It has no surface
+            // spelling, but its scrutinee does, and that is what a
+            // hypothesis about the stage rewrites until the match selects
+            // its arm: taken as [`unfolded_by_name`] takes such a body
+            // (issues/simp-adoption-native-gaps.md, item 17).
+            if fired
+                && !fires
+                && let Term::Case { scrut, .. } = &reduct
+                && !matches!(&**scrut, Term::Inl { .. } | Term::InlAt { .. } | Term::Inr { .. } | Term::InrAt { .. })
+            {
+                let arm = contracted(elab, cx, &oracle, &reduct, &mut 256);
+                let Term::Case { scrut, .. } = &arm else {
+                    return None;
+                };
+                elab.spell_term_source(cx, scrut)?;
+                return Some(arm);
             }
             fired = true;
             continue;

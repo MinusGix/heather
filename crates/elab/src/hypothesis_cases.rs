@@ -10,23 +10,27 @@
 //! - `subst(emitted, rest)` when it equates one constructor's applications
 //!   with a local in a field (`Some(Out(w, n)) = Some(c)`), which replaces
 //!   `c` and ends the inversion;
-//! - otherwise `match e: test { C(x̄) => <next step>, … }` on the test it is
-//!   stuck on, found as `split_all` finds the test a goal is stuck on
-//!   (`goal_combinators::split_stuck`), with `emitted` refined in every arm
-//!   by the case split's own reading of hypotheses through calls
-//!   (`docs/elaborator/goal-motive-synthesis-design.md` §4.7);
+//! - otherwise a split of `Π(emitted). goal` on the test it is stuck on,
+//!   found as `split_all` finds the test a goal is stuck on
+//!   (`goal_combinators::split_stuck`), elaborated with the motive that
+//!   search built and applied to `emitted`: `(match e: test { C(x̄) => λ
+//!   emitted => <next step>, … })(emitted)`. In each case `emitted` is the
+//!   reduct the test was found in with the test replaced, so a structural
+//!   recursion's later call reads as the call (`yes.emits(…)`) and the next
+//!   step splits on it in turn;
 //! - the rest of the block, once `emitted` is stuck on nothing, or once
 //!   the splits `cases h as e1, e2` names have all been taken.
 //!
-//! So the proof built is the hand proof, nested motive-less matches, and the
-//! kernel checks it as it checks that. Each step is an unspellable call
-//! (`heather_syntax::CASES_HYPOTHESIS`) checked in its arm, where the arm's
-//! refinement has already happened, as `split_all`'s steps are.
+//! So the proof built is the hand proof, nested matches, and the kernel
+//! checks it as it checks that. Each step is an unspellable call
+//! (`heather_syntax::CASES_HYPOTHESIS`) checked in its arm, as `split_all`'s
+//! steps are; the split itself is elaborated by the checker
+//! (`checking.rs`, [`Stepped::Split`]).
 
 use heather_kernel::level::Level;
 use heather_kernel::rc::Rc;
-use heather_kernel::term::Type;
-use heather_syntax::{Arm, CasesName, Expr, ExprKind, MatchForm, Pat, Span};
+use heather_kernel::term::{Term, Type};
+use heather_syntax::{Arm, CasesName, Expr, ExprKind, Pat, Span};
 
 use crate::inductive::Inductives;
 use crate::subst_local::LocalSubsts;
@@ -40,7 +44,7 @@ const MAX_SPLITS: usize = 64;
 /// module doc. `head` is the step's own head (the names still to give and
 /// the last split's fingerprint), `args` the hypothesis and the rest of the
 /// block.
-pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expected: &Type, span: Span) -> R<Expr> {
+pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expected: &Type, lvl: &Level, span: Span) -> R<Stepped> {
     let Some((names, bounded, last)) = heather_syntax::cases_of_head(head) else {
         return err("internal `cases` form has a malformed head", span);
     };
@@ -55,31 +59,37 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
         kind: ExprKind::App { head: Box::new(var(head)), args, named: vec![], explicit: false, goal_oriented: false },
         span,
     };
-    let (term, ty, level) = elab.resolve_reading(cx, name, hypothesis.span)?;
-    if !matches!(elab.whnf(cx, &ty, span), Ok(Type::Id { .. })) {
-        return err(
-            format!("`cases {name}` takes apart an equation, and `{name}` is not one"),
-            hypothesis.span,
-        );
-    }
+    let (term, written, level) = elab.resolve_reading(cx, name, hypothesis.span)?;
+    // The equation itself: a hypothesis whose type a definition computes
+    // (`t.EmitsRun(s, …)`'s premise) reads as the code of one until its
+    // head is decoded, and the split searches its sides.
+    let ty = match elab.whnf(cx, &written, span) {
+        Ok(id @ Type::Id { .. }) => id,
+        _ => {
+            return err(
+                format!("`cases {name}` takes apart an equation, and `{name}` is not one"),
+                hypothesis.span,
+            );
+        }
+    };
     // A case the split refutes: `emitted` now equates two constructors.
     if Inductives(elab).refuted_by_computation(cx, &var(name)) {
-        return Ok(app("absurd", vec![var(name)]));
+        return Ok(Stepped::Expr(app("absurd", vec![var(name)])));
     }
     // The case that survives: the call's value against the local it names.
-    if LocalSubsts(elab).injected(cx, term, &ty, span, true, 0).is_some() {
-        return Ok(app("subst", vec![var(name), (*body).clone()]));
+    if LocalSubsts(elab).injected(cx, term.clone(), &ty, span, true, 0).is_some() {
+        return Ok(Stepped::Expr(app("subst", vec![var(name), (*body).clone()])));
     }
     // `cases h as e1, e2` takes the two splits it names, and then only
     // closes or substitutes: what `h` is still stuck on past them is the
     // rest of the block's (`region.code(…) = Some(c)` after `scopes()`).
     if bounded && names.is_empty() && last.is_some() {
-        return Ok((*body).clone());
+        return Ok(Stepped::Expr((*body).clone()));
     }
     let premise = Type::Pi {
         dom_level: level,
-        cod_level: Level::Zero,
-        dom: Rc::new(ty),
+        cod_level: *lvl,
+        dom: Rc::new(ty.clone()),
         cod: Rc::new(expected.shift_local(1)),
     };
     let Some(split) = crate::goal_combinators::split_stuck(elab, cx, &premise, body, span, false) else {
@@ -87,12 +97,13 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
             return err(
                 format!(
                     "`cases {name}`: `{name}` is not stuck on any test of the call it states, \
-                     so there is nothing to take apart"
+                     so there is nothing to take apart (it reads `{}`)",
+                    elab.display_type(cx, &ty)
                 ),
                 hypothesis.span,
             );
         }
-        return Ok((*body).clone());
+        return Ok(Stepped::Expr((*body).clone()));
     };
     // The same test found again in a case of its own split: the split did
     // not refine `h`, and taking it again would not either.
@@ -101,8 +112,8 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
     if last.as_deref().is_some_and(|last| last.rsplit('.').next() == Some(&fingerprint)) {
         return err(
             format!(
-                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}` \
-                 (a hypothesis passed beside the split's equation in one call is kept as written)"
+                "`cases {name}`: the split on the test `{name}` is stuck on did not refine `{name}`, \
+                 so taking it again would not either"
             ),
             hypothesis.span,
         );
@@ -124,7 +135,7 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
     };
     let next = heather_syntax::cases_head(&later, bounded, Some(&path));
     let depth = cx.names.len();
-    let arms = split
+    let arms: Vec<Arm> = split
         .arms
         .iter()
         .enumerate()
@@ -136,32 +147,36 @@ pub(crate) fn step(elab: &Elaborator, cx: &Cx, head: &str, args: &[Expr], expect
                 }
                 _ => (0..arity).map(|field| Pat::Var { name: format!("__cases_{depth}_{index}_{field}"), span }).collect(),
             };
-            Arm {
-                ctor: arm.ctor.clone(),
-                default: false,
-                binders,
-                body: app(&next, vec![var(name), shielded(body)]),
+            // The arm takes `h` at the split's own reading of it in this
+            // case, the reduct the split abstracted the test from: a later
+            // call in it reads as the call (`yes.emits(…)`), which the next
+            // step splits on in turn.
+            let refined = Expr {
+                kind: ExprKind::Lam {
+                    binders: vec![heather_syntax::LamBinder { name: name.clone(), ty: None, implicit: false, span }],
+                    body: Box::new(app(&next, vec![var(name), shielded(body)])),
+                },
                 span,
-            }
+            };
+            Arm { ctor: arm.ctor.clone(), default: false, binders, body: refined, span }
         })
         .collect();
-    Ok(Expr {
-        kind: ExprKind::Match {
-            form: MatchForm::Match,
-            generated: true,
-            scrut: Box::new(split.scrut),
-            eqbind: Some(equation),
-            motive: None,
-            arms,
-        },
-        span,
-    })
+    let level = Level::max(level, *lvl);
+    Ok(Stepped::Split { split: crate::goal_combinators::StuckSplit { equation, arms, ..split }, premise, level, hypothesis: term })
 }
 
-/// The rest of the block, as an argument of a step beside `h` that is not
-/// itself a name: a bare `fa` there would read as `h` passed beside the
-/// split's equation `fa`, which keeps `h` as written
-/// (`generalize::passed_beside`).
+/// What one step of `cases h` hands its checker: an expression to check at
+/// the goal, or a split of `Π(h). goal` to elaborate and apply to `h`.
+pub(crate) enum Stepped {
+    Expr(Expr),
+    Split { split: crate::goal_combinators::StuckSplit, premise: Type, level: Level, hypothesis: Term },
+}
+
+/// The rest of the block, as an argument of a step that is not itself a
+/// name. It was written to keep a bare `fa` from reading as `h` passed
+/// beside the split's equation under the rule
+/// docs/language/matching/arm-readings-design.md replaced; nothing needs
+/// it now, and it changes no meaning.
 fn shielded(body: &Expr) -> Expr {
     match &body.kind {
         ExprKind::Var(_) => Expr {

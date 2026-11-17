@@ -1,0 +1,52 @@
+// Probes of a term carried along a case split's equation
+// (docs/language/matching/arm-readings-design.md §5): inside an arm, a term
+// whose type spells the match's test where the arm's constructor is
+// expected, or the other way round, is accepted, with or without a named
+// equation. Tests, not library: nothing imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option;
+
+fn fits(w: Nat) → Bool { w.leb(8) }
+
+// A lemma's result stated about the test, where the arm's goal is at its
+// constructor.
+theorem result_as_written(w: Nat, lemma: (v: Nat) → fits(v).and(True) = fits(v)): fits(w).and(True) = fits(w) {
+    match h: fits(w) { False => lemma(w), True => lemma(w) }
+}
+theorem result_as_written_plain(w: Nat, lemma: (v: Nat) → fits(v).and(True) = fits(v)): fits(w).and(True) = fits(w) {
+    match fits(w) { False => lemma(w), True => lemma(w) }
+}
+
+// A value at the constructor, where a callee states the test as written.
+theorem value_at_case(w: Nat, k: fits(w) = fits(w) → Nat, mk: (b: Bool) → b = b): Nat {
+    match h: fits(w) { False => 0, True => k(mk(True)) }
+}
+theorem value_at_case_plain(w: Nat, k: fits(w) = fits(w) → Nat, mk: (b: Bool) → b = b): Nat {
+    match fits(w) { False => 0, True => k(mk(True)) }
+}
+
+// An open element type, and a test that is a variable.
+theorem open_carrier<A>(b: Bool, x: A, lemma: (c: Bool) → (if c { x } else { x }) = x, same: (y: A) → y = y): (if b { x } else { x }) = x {
+    match h: b { False => lemma(b), True => lemma(b) }
+}
+
+// Two splits: the result is carried along the inner equation, the arm's
+// goal already at the outer one.
+theorem nested(a, b: Nat, lemma: (v: Nat) → fits(v).and(True) = fits(v)): fits(a).and(fits(b).and(True)) = fits(a).and(fits(b)) {
+    match fits(a) {
+        False => refl,
+        True => match fits(b) { False => lemma(b), True => lemma(b) },
+    }
+}
+
+// A function body, not only a proof: the value computes once the test does.
+fn pad(w: Nat, k: fits(w) = fits(w) → Nat, mk: (b: Bool) → b = b) → Nat {
+    match fits(w) { False => 0, True => k(mk(True)) }
+}
+
+// The negative control: a result that is about something else is refused
+// with the two types, as before.
+// expect-error: but `False && True = False` is expected here
+theorem unrelated(w: Nat, lemma: (v: Nat) → fits(v).or(True) = fits(v)): fits(w).and(True) = fits(w) {
+    match fits(w) { False => lemma(w), True => lemma(w) }
+}

@@ -64,10 +64,11 @@ theorem Node::extends(self s: Node): (k: Nat) → (c: Nat) → s.emits(k) = Some
 // expect-error: unbound name `m`
 fn Shape::wild_field(self s: Shape) -> Nat { match s { Dot(n) => n, _ => m } }
 
-// Negative control: a constructor only deep arms name keeps the plain `_`,
-// whose scrutinee is not rebound (the generated inner match's columns are
-// not its constructor's), so the goal it was refined to is not met.
-// expect-error: is expected here
+// A constructor only deep arms name keeps the plain `_`, whose scrutinee
+// is not rebound (the generated inner match's columns are not its
+// constructor's): the value at the scrutinee as written is carried along
+// the match's equation to the goal the arm was refined to
+// (docs/language/matching/arm-readings-design.md §5).
 theorem wild_under_deep(p: (x: Option<Shape>) → Type, other: (x: Option<Shape>) → p(x)): (o: Option<Shape>) → p(o) {
     λ o => match o { Some(Dot(n)) => other(Some(Dot(n))), _ => other(o) }
 }

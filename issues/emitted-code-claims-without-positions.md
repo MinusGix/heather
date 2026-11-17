@@ -6,7 +6,7 @@ labels: [native,design,proofs,program-logic]
 area: heather-in-heather
 milestone: [hih-program-logic]
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 Every lemma about emitted code (`Target::goes_*`, `lib/native/native_compile_*.hthr`) is a weakest-precondition step written against positions in the whole program: it takes `within: <the code after this piece>.Within(t.program)` and `next: t.GoesR(prog_len(<end>), tree, q)` and answers `t.GoesR(prog_len(p), tree, <pre>)`. A proof that composes three pieces rebuilds each intermediate program, derives where each one sits, and names both predicates of every weakening with their binder types. `Target::goes_closes` (`native_compile_opens.hthr`), for `mov rax, 3; <fd to rdi>; syscall; <rax to result>`:
@@ -48,3 +48,7 @@ Questions for the design: whether the tree a syscall consumes fits the `wp` tran
 A design note is agreed. Then: `Target::goes_closes` and `goes_clamp` contain no `Within` term and no `prog_len`, and a builder's `within_` lemma is an instance nobody cites.
 
 Related: [[wp-obligation-tactic]] (the closed-code side), [[transition-run-tactics]], [[native-compile-correct-proof-forms]].
+
+## Log
+
+- 2026-11-17: Minus's review (docs/library/program-and-proof-style.md §3) adds a simpler reading to weigh in the design: an emitter returns the code it adds and sequencing appends, so that an emitter only appends holds by construction and the within_<builder> lemmas are not instances but gone. Related: native-assembler-builder, native-emission-context.

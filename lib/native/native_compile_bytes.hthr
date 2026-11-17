@@ -612,27 +612,13 @@ theorem Env::computes_store(self env: Env, output, buf, index, value: Nat):
 theorem Prog::within_byte_node(self p: Prog, layout: Layout, out: List<Nat>, names: Nat, c: Compiled): (node: Node) →
     p.byte_node(layout, out, node, names) = Some(c) → p.Within(c.prog) {
     λ node => match node {
-        BufferLoad(output, buf, index) => match layout.words_fit([output, index]) {
-            False => λ none => absurd(none),
-            True => match layout.capacities.nth(buf) {
-                None => λ none => absurd(none),
-                Some(cap) => λ same => {
-                    let q = p.loads(layout, out, output, buf, index, cap, names);
-                    j(Option::some_inj(Compiled(q, Succ(names)), c, same), λ x _ => p.Within(x.prog),
-                        p.loads_within(layout, out, output, buf, index, cap, names, q, Exists(0, refl)))
-                },
-            },
+        BufferLoad(output, buf, index) => λ emitted => {
+            cases emitted as fit, found(cap);
+            p.loads_within(layout, out, output, buf, index, cap, names, p.loads(layout, out, output, buf, index, cap, names), Exists(0, refl))
         },
-        BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
-            False => λ none => absurd(none),
-            True => match layout.capacities.nth(buf) {
-                None => λ none => absurd(none),
-                Some(cap) => λ same => {
-                    let q = p.stores(layout, out, output, buf, index, value, cap, names);
-                    j(Option::some_inj(Compiled(q, Succ(Succ(names))), c, same), λ x _ => p.Within(x.prog),
-                        p.stores_within(layout, out, output, buf, index, value, cap, names, q, Exists(0, refl)))
-                },
-            },
+        BufferStore(output, buf, index, value) => λ emitted => {
+            cases emitted as fit, found(cap);
+            p.stores_within(layout, out, output, buf, index, value, cap, names, p.stores(layout, out, output, buf, index, value, cap, names), Exists(0, refl))
         },
         _ => λ none => absurd(none),
     }
@@ -646,45 +632,23 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
     t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
     let layout = t.layout();
     λ node => match node {
-        BufferLoad(output, buf, index) => λ apart => {
-            let live = live_before([index], output, out);
-            (match fit: layout.words_fit([output, index]) {
-                False => λ none => absurd(none),
-                True => {
-                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    (match found: t.caps.nth(buf) {
-                        None => λ none => absurd(none),
-                        Some(cap) => λ same => j(Option::some_inj(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names)), c, same),
-                            λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
-                                t.At(prog_len(p), live, tree, env),
-                            λ within next => t.goes_loads(live, out, env, env.computes([BufferLoad(output, buf, index)]), p, output, buf, index, cap, names,
-                                layout.word_inside(output, ok.left), layout.word_inside(index, known), live_before_reads([index], output, out, index, Inl(refl)),
-                                λ i m ne => live_before_keeps([index], output, out, i, m, ne), apart, found, within, tree,
-                                env.computes_load(output, buf, index), next)),
-                    })
-                },
-            })
+        BufferLoad(output, buf, index) => λ apart emitted => {
+            cases emitted as fit, found(cap);
+            let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+            λ within next => t.goes_loads(live_before([index], output, out), out, env, env.computes([BufferLoad(output, buf, index)]), p, output, buf, index, cap, names,
+                layout.word_inside(output, ok.left), layout.word_inside(index, known), live_before_reads([index], output, out, index, Inl(refl)),
+                λ i m ne => live_before_keeps([index], output, out, i, m, ne), apart, found, within, tree,
+                env.computes_load(output, buf, index), next)
         },
-        BufferStore(output, buf, index, value) => λ apart => {
-            let live = live_before([index, value], output, out);
-            (match fit: layout.words_fit([output, index, value]) {
-                False => λ none => absurd(none),
-                True => {
-                    let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    (match found: t.caps.nth(buf) {
-                        None => λ none => absurd(none),
-                        Some(cap) => λ same => j(Option::some_inj(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names))), c, same),
-                            λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
-                                t.At(prog_len(p), live, tree, env),
-                            λ within next => t.goes_stores(live, out, env, env.computes([BufferStore(output, buf, index, value)]), p, output, buf, index, value, cap, names,
-                                layout.word_inside(output, ok.left), layout.word_inside(index, known), layout.word_inside(value, known),
-                                live_before_reads([index, value], output, out, index, Inl(refl)),
-                                live_before_reads([index, value], output, out, value, Inr(Inl(refl))),
-                                λ i m ne => live_before_keeps([index, value], output, out, i, m, ne), apart, found, within, tree,
-                                env.computes_store(output, buf, index, value), next)),
-                    })
-                },
-            })
+        BufferStore(output, buf, index, value) => λ apart emitted => {
+            cases emitted as fit, found(cap);
+            let ok = Bool::both(j(sym(fit), λ v _ => v.IsTrue(), trivial));
+            λ within next => t.goes_stores(live_before([index, value], output, out), out, env, env.computes([BufferStore(output, buf, index, value)]), p, output, buf, index, value, cap, names,
+                layout.word_inside(output, ok.left), layout.word_inside(index, known), layout.word_inside(value, known),
+                live_before_reads([index, value], output, out, index, Inl(refl)),
+                live_before_reads([index, value], output, out, value, Inr(Inl(refl))),
+                λ i m ne => live_before_keeps([index, value], output, out, i, m, ne), apart, found, within, tree,
+                env.computes_store(output, buf, index, value), next)
         },
         _ => λ _ none => absurd(none),
     }

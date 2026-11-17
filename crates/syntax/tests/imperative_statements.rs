@@ -86,7 +86,12 @@ fn an_early_exit_is_refused_where_no_loop_lowers_it() {
         // No loop around it.
         ("fn f() -> Nat { let mut n = 0; break; n }", "is outside any loop"),
         ("fn f() -> Nat { let mut n = 0; continue; n }", "is outside any loop"),
-        ("fn f(k: Nat) -> Nat { return k; }", "supported inside a `for` for now"),
+        // A λ or a block in value position is not the function's body.
+        ("fn f(k: Nat) -> Nat { let g = λ (x: Nat) => { return x; }; g(k) }", "not from a λ"),
+        ("fn f(k: Nat) -> Nat { let y = { if c { return 1; } 2 }; y }", "not from a λ"),
+        ("fn f(k: Nat) -> Nat { if c { return k; break; } k }", "nothing after `return` runs"),
+        ("fn f(k: Nat) -> Nat { if c { break; } k }", "is outside any loop"),
+        ("fn f(k: Nat) -> Nat { if c { return k; } else { break; } k }", "is outside any loop"),
         // Code after an exit never runs.
         ("fn f(xs: L) -> Nat { let mut n = 0; for x in xs { break; n := x } n }", "nothing after `break` runs"),
         // A returning loop nested in another loop or in a statement `if`:
@@ -100,6 +105,25 @@ fn an_early_exit_is_refused_where_no_loop_lowers_it() {
     ] {
         let error = parse_file(src).unwrap_err();
         assert!(error.msg.contains(says), "{src}: {}", error.msg);
+    }
+}
+
+#[test]
+fn a_return_outside_a_loop_splits_the_body() {
+    // §5.5: `if c { return e; } rest` is a branch that ends the body, so no
+    // exit marker survives, in a plain function or a `mut self` method.
+    for src in [
+        "fn f(k: Nat) -> Nat { return k; }",
+        "fn f(k: Nat) -> Nat { if c { return 0; } k }",
+        "fn f(k: Nat) -> Nat { let mut n = k; if c { n := 1; if d { return n; } n := 2; } n }",
+        "fn f(o: O) -> Nat { match o { A => { return 0; }, B => {} } 1 }",
+        "fn C::f(mut self c: C, k: Nat) -> Nat { if k = 0 { return 0; } c.tick(k); c.n }",
+        "fn f(xs: L) -> Nat { if c { return 1; } for x in xs { if d { return x } } 0 }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        for marker in ["\\0return", "\\0stmt", "\\0assign", "\\0mut\""] {
+            assert!(!parsed.contains(marker), "{src} keeps {marker}");
+        }
     }
 }
 

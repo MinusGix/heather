@@ -116,6 +116,9 @@ at the call as `x⁻¹`'s is (a hypothesis, a sign, a closed divisor, or
 value. Their meaning is resolved from a local binder
 symbol, a carrier-specific `designation`, or a built-in fallback where one
 exists.
+An infix operator alone in parentheses, `(<=)`, is the operation itself as a
+value, resolved the same way at the carrier its position asks for
+([Operator designations](classes-and-operators.md#operator-designations)).
 
 ## Conditional expressions
 
