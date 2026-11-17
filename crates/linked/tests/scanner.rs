@@ -336,7 +336,7 @@ fn the_automaton_is_one_export() {
         .filter_map(|line| line.strip_prefix("runtime fn step_"))
         .map(|rest| &rest[..rest.find('(').expect("parameters")])
         .collect();
-    assert_eq!(families.len(), 25);
+    assert_eq!(families.len(), 26);
     for family in families {
         assert_eq!(choose.matches(&format!("step_{family}(s, b)")).count(), 1, "step_{family} in scan_choose");
     }
@@ -460,6 +460,17 @@ fn literals_end_at_their_quote() {
     ]);
     assert_eq!(kinds("'é' '→' '😀' \"// not a comment\""), [Char, Char, Char, Str, Eof]);
     assert_eq!(kinds("f('x',\"y\")"), [Ident, LParen, Char, Comma, Str, RParen, Eof]);
+    // A byte character is one token from its `b`; `b` apart from its quote
+    // is a name.
+    assert_eq!(spans(r"b'a' b'\'' b'\xFF' b 'c' bb"), [
+        (ByteChar, 0, 4),
+        (ByteChar, 5, 10),
+        (ByteChar, 11, 18),
+        (Ident, 19, 20),
+        (Char, 21, 24),
+        (Ident, 25, 27),
+        (Eof, 27, 27)
+    ]);
 }
 
 #[test]
@@ -531,6 +542,18 @@ fn what_is_refused_and_where() {
         ("b\"\\x4g\"", 0),
         ("b\"\\x", 0),
         ("b\"\\", 0),
+        // Byte characters: empty, two bytes, unterminated at the end and
+        // across a line, a character past ASCII, a string's `\u`, a short
+        // `\x`, and the end inside an escape.
+        ("b''", 0),
+        ("x b'ab'", 2),
+        ("b'a", 0),
+        ("b'", 0),
+        ("b'\n'", 0),
+        ("b'é'", 0),
+        ("b'\\u{41}'", 0),
+        ("b'\\x4'", 0),
+        ("b'\\", 0),
     ];
     let mut reasons = std::collections::HashSet::new();
     for (source, at) in refused {
@@ -728,6 +751,7 @@ const THEMES: &[&[&str]] = &[
     &["\"", "'", "\\", "u", "{", "}", "4", "1", "D800", "n", "q", "a", "é", "→", "😀", "\n", " ", "//"],
     &["<", ">", "-", "=", "|", "&", ":", "+", "!", "/", "?", "a", "_", " ", "(", ",", "\n", "//", "0"],
     &["·", "₀", "₁", "₉", "⁻", "¹", "⁻¹", "→", "∀", "λ", "¬", "\u{e2}", "\u{2080}", "\u{2189}", "a", "1", " "],
+    &["b", "b'", "b\"", "'", "\"", "\\", "x", "4", "f", "g", "n", "u", "a", "é", "\n", " "],
 ];
 
 #[test]
@@ -913,6 +937,9 @@ const PROBES: &[&str] = &[
     "b\"a\\x7F\\n\" b \"c\" bb\"\"",
     "b\"\\xg\"",
     "b\"é\"",
+    "b'\\n' b'\"' b 'a' b'\\x7f'",
+    "b'ab'",
+    "b''",
 ];
 
 /// A Heather string literal for a source.

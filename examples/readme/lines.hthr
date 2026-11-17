@@ -28,7 +28,7 @@ import runtime_file;
 runtime fn List::newlines(self span: List<u8>, length, i, count: u64) → u64
     decreases (length - i).toNat() {
     if h: i < length {
-        if span.byte_within(length, i) = 10 {
+        if span.byte_within(length, i) = b'\n' {
             span.newlines(length, i + 1, count + 1)
         } else {
             span.newlines(length, i + 1, count)

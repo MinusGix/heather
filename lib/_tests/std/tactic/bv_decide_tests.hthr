@@ -12,16 +12,24 @@ import bv_decide;
 theorem demorgan(x, y: u8): (x & y).complement() = x.complement() | y.complement() { by bv_decide() }
 theorem xor_twice(x, y: u8): x.bxor(y).bxor(y) = x { by bv_decide() }
 
-// Arithmetic. A proof's check is linear in the solver's proof, which grows
-// fast with adders in series: these stay at a few bits where a byte costs
-// seconds (docs/tactics/bv-decide-design.md).
-theorem add_comm(x, y: u8): x + y = y + x { by bv_decide() }
-theorem add_assoc(x, y, z: BitVec(3)): x + y + z = x + (y + z) { by bv_decide() }
-theorem sub_add(x, y: BitVec(3)): x - y + y = x { by bv_decide() }
+// Arithmetic the normalizer decides: a chain of `+`, `-`, `*`, `&`, `|` or
+// `bxor` is flattened, sorted and merged before it is blasted, so these
+// reach the solver as constants, at any width.
+theorem add_comm(x, y: u64): x + y = y + x { by bv_decide() }
+theorem add_assoc(x, y, z: u64): x + y + z = z + (y + x) { by bv_decide() }
+theorem sub_add(x, y: u64): x - y + y = x { by bv_decide() }
+theorem mul_comm(x, y: u64): x * y = y * x { by bv_decide() }
+theorem constants(x, y: u8): (x + 1) + (y - 1) = x + y { by bv_decide() }
+theorem xor_cancel(x, y: u64): x.bxor(y).bxor(x) = y { by bv_decide() }
+theorem and_idem(x, y: u32): (x & y) & x = y & x { by bv_decide() }
+theorem neg_neg(x: u64): -(-x) = x { by bv_decide() }
+
+// Arithmetic the solver decides. A proof's check is linear in the solver's
+// proof, which grows fast with adders in series: these stay at a few bits
+// where a byte costs seconds (docs/tactics/bv-decide-design.md).
 theorem neg_is(x: u8): -x = x.complement() + 1 { by bv_decide() }
 theorem mul_three(x: BitVec(4)): x * 3 = x + x + x { by bv_decide() }
 theorem mul_two(x: u8): x * 2 = x << 1 { by bv_decide() }
-theorem mul_comm(x, y: BitVec(3)): x * y = y * x { by bv_decide() }
 
 // Shifts by a numeral.
 theorem shifts(x: u8): (x >> 4) << 4 = x & 0xF0 { by bv_decide() }

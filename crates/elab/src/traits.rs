@@ -1072,6 +1072,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Char(c) => Char(*c),
         Str(text) => Str(text.clone()),
         ByteStr(bytes) => ByteStr(bytes.clone()),
+        ByteChar(byte) => ByteChar(*byte),
         ArgSlot(index) => ArgSlot(*index),
         Refl => Refl,
         AutoRefl => AutoRefl,

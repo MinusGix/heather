@@ -94,6 +94,35 @@ fn argument() -> X { g(b"", b) }
           (identifier))))))
 
 ==================
+Byte characters
+==================
+
+fn bare() -> X { b'\n' }
+fn argument() -> X { g(b'\xFF', b'"', b, 'c') }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (byte_character)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (byte_character)
+          (byte_character)
+          (identifier)
+          (character))))))
+
+==================
 Setoid calc chains
 ==================
 

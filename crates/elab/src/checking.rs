@@ -1330,6 +1330,7 @@ impl Checking<'_> {
             ExprKind::Scaled(lit) => Literals(self).elab_scaled_check(cx, lit, e, expected, lvl),
             ExprKind::Str(text) => Literals(self).elab_string_check(cx, text, e, expected, lvl),
             ExprKind::ByteStr(bytes) => Literals(self).elab_byte_string_check(cx, bytes, e, expected),
+            ExprKind::ByteChar(byte) => Literals(self).elab_byte_char_check(cx, *byte, e, expected),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
