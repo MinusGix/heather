@@ -4,7 +4,7 @@ status: open
 labels: [proofs,solver,bitvec,x86,design,research]
 area: tactics
 created: 2026-09-24
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 Build (or first cost) a **kerneltime decision procedure for bitvector goals
@@ -102,3 +102,31 @@ before a generator is worth writing.
   multipliers, which stay hard for any SAT solver. Gotcha: the tracer's ids
   for the input clauses skip where the input has units, so `heather-sat`
   maps them by the order and contents of the clauses reported, never by id.
+- 2026-11-17: the bit-blaster, `lib/std/tactic/bitblast.hthr`, proved once.
+  Expressions `BVExpr` (inputs `BVar(offset, width)` read zero-extended or
+  truncated at the width a predicate chooses, constants, not/and/or/xor,
+  addition, shifts by a constant) under predicates `BVPred` (equality,
+  unsigned less-than, Boolean connectives, iff) are built into an
+  and-inverter graph whose node 0 is false and whose next `K` nodes are the
+  input bits, so every occurrence of an input shares its nodes. Tseitin
+  clauses over the graph, numbered as the checker numbers literals, and the
+  end theorem `BVPred::unsat_sound`: if no assignment satisfies
+  `p.clauses(K)`, `p.eval` is true at every input. The proof is a growth
+  invariant: a literal built from circuit `c` means its value in every
+  circuit grown from `c`, which composes without separate stability lemmas.
+  Ands with a constant input fold away; without that, UTF-8's 64-bit masks
+  on zero-extended bytes made thousands of clauses, with it tens.
+  `scripts/lrat-probes blast` takes the clauses from `heather eval`, refutes
+  them with CaDiCaL and writes the stages plus `<name>_holds`;
+  `lib/_tests/std/tactic/bitblast_tests.hthr` has De Morgan, `x + y = y + x`
+  and `x + x = x << 1` over bytes, `x < x + 1` unless `x = 255`, and the
+  decoder's continuation and overlong tests at 64 bits, each in under a
+  second, with `x + y = y + x` and De Morgan carried back to `BitVec` through
+  `BitVec::pair_bits`. Cost shape: computing the clauses by `refl` is cheap
+  (64-bit De Morgan well under a second); the limit is the formula literal
+  and the stages, as before. 64-bit addition commuting (4193 clauses) runs
+  out of fuel building its formula literal in one `refl`, so the generator
+  must build the formula in chunks too. Next: chunked formulas; the tactic
+  that reflects a `BitVec` goal into `BVPred` and lays out its words;
+  subtraction, multiplication, extraction and concatenation; folding equal
+  and opposite operands.
