@@ -350,6 +350,12 @@ struct Holes<'a> {
     /// `decode_deep (El l c)` and is derived once, in [`GeneratedDefs::instance_match`].
     types: Vec<Option<Rc<Term>>>,
     values: Vec<Option<Rc<Term>>>,
+    /// Whether the walk reads through the checked constructor values
+    /// (`pair@`, `inl@`, `inr@`). Only a case split's fold asks
+    /// ([`DeclAttempt::folding_for_motive`]): every other reader's answers
+    /// were settled without it, and the runtime generator's accessor lookup
+    /// is one that a newly named instance moves.
+    constructor_values: bool,
     /// The **first** shape the walk stopped on, as a `template/subject` former
     /// pair, for the decline listing.
     ///
@@ -797,15 +803,19 @@ impl Holes<'_> {
             // the parameter inside one, and without these arms that
             // record's instances are never named, so a case split abstracts
             // inside its lowering
-            // (issues/named-match-third-level-kernel-rejects.md).
-            (Term::PairAt { ty: t1, fst: f1, snd: s1 }, Term::PairAt { ty: t2, fst: f2, snd: s2 }) => {
+            // (issues/named-match-third-level-kernel-rejects.md). Read for
+            // that fold alone ([`Holes::constructor_values`]).
+            (Term::PairAt { ty: t1, fst: f1, snd: s1 }, Term::PairAt { ty: t2, fst: f2, snd: s2 })
+                if self.constructor_values =>
+            {
                 self.annotation(t1, t2, md)?;
                 self.tm(f1, f2, md)?;
                 self.tm(s1, s2, md)
             }
             (Term::InlAt { ty: t1, val: v1 }, Term::InlAt { ty: t2, val: v2 })
             | (Term::InrAt { ty: t1, val: v1 }, Term::InrAt { ty: t2, val: v2 })
-                if std::mem::discriminant(template) == std::mem::discriminant(subject) =>
+                if self.constructor_values
+                    && std::mem::discriminant(template) == std::mem::discriminant(subject) =>
             {
                 self.annotation(t1, t2, md)?;
                 self.tm(v1, v2, md)
@@ -3053,6 +3063,7 @@ impl GeneratedDefs<'_> {
             d,
             g,
             scope: self.psi.bindings.len() as u32,
+            for_motive: self.attempt.folding_for_motive.get(),
         };
         if let Some((_, known)) = self.attempt.instance_matches.borrow().get(&key).and_then(|seen| seen.iter().find(|(t, _)| t == ty)) {
             return known.clone();
@@ -3109,6 +3120,7 @@ impl GeneratedDefs<'_> {
             np: np as u32,
             types: vec![None; np],
             values: vec![None; arity - np],
+            constructor_values: self.attempt.folding_for_motive.get(),
             why: None,
         };
         if holes.ty(&entry.template, ty, 0).is_none() {
@@ -3156,6 +3168,7 @@ impl GeneratedDefs<'_> {
             np: 0,
             types: Vec::new(),
             values: Vec::new(),
+            constructor_values: self.attempt.folding_for_motive.get(),
             why: None,
         };
         if proof.ty(&copy, ty, 0).is_none() {

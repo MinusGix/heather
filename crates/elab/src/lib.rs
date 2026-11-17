@@ -1206,7 +1206,12 @@ impl matching::MotiveSynthesisElab for Elaborator {
     }
 
     fn fold_declarations(&self, cx: &Cx, ty: &Type) -> Option<Type> {
-        crate::gendefs::GeneratedDefs(self).respell_ty_deep(cx, ty, 0)
+        // The fold reads through constructor values; no other reader of
+        // the instance matcher does (`Holes::constructor_values`).
+        let outer = self.attempt.folding_for_motive.replace(true);
+        let folded = crate::gendefs::GeneratedDefs(self).respell_ty_deep(cx, ty, 0);
+        self.attempt.folding_for_motive.set(outer);
+        folded
     }
 
     fn unfold_declarations(&self, ty: &Type) -> Option<Type> {
