@@ -594,7 +594,15 @@ record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Mat
     // through at a node, where it searches them (`Seen::searched`,
     // function_ir_learn); none where it is zero. And, where it searches, how
     // many times the function reads each word (`Function::seen`).
-    spellings: Nat, reads: NatMap<Nat> }
+    spellings: Nat, reads: NatMap<Nat>,
+    // How many spellings it follows of a node a rule would read and the
+    // code does not have, to say whether to ask for it (`Seen::helping`);
+    // it asks for none where it is zero. A walk that asks need not search:
+    // the stage that puts the nodes walks plainly, which is a tenth of the
+    // work. `lending` are then the rules that could want one
+    // (`RulePattern::lends`, function_ir_match): few, so a node is tried
+    // against those alone.
+    asking: Nat, lending: List<Matchable> }
 
 fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     match entries {
@@ -654,13 +662,25 @@ fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rule
 fn Tables::of(entries: List<RuleEntry>, learners: List<Learner>) → Tables {
     shared(entries_added(entries), λ added => shared(rules(), λ library => shared(library.len(), λ first =>
         Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first),
-            testing() ++ entries_testing(added, first), entries_placed(entries), learners, 0, NatMap::empty()))))
+            testing() ++ entries_testing(added, first), entries_placed(entries), learners, 0, NatMap::empty(), 0, []))))
 }
 
 fn Tables::searching(self tables: Tables, spellings: Nat) → Tables {
-    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings, tables.reads)
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings, tables.reads, tables.asking, tables.lending)
+}
+
+fn matchables_lending(table: List<Matchable>) → List<Matchable> {
+    match table {
+        Nil => [],
+        Cons(m, rest) => match m.pattern.lends() { True => Cons(m, matchables_lending(rest)), False => matchables_lending(rest) },
+    }
+}
+
+fn Tables::asking_for(self tables: Tables, asking: Nat) → Tables {
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, tables.reads, asking,
+        match asking { Zero => [], Succ(_) => matchables_lending(tables.rewriting) })
 }
 
 fn Tables::reading(self tables: Tables, reads: NatMap<Nat>) → Tables {
-    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, reads)
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, reads, tables.asking, tables.lending)
 }

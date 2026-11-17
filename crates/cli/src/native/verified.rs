@@ -818,7 +818,7 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
                 helped.extend(put);
                 let last = helped.last().map(|last| last.function.clone());
                 helped.extend(run(&mut fork, &mut modules, "i", &named(&helped), last,
-                    &[replay(&format!("find_learned{past}(spellings := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()"))])?);
+                    &[replay(&format!("find_learned{past}(spellings := 8, asking := 8)")), replay(&format!("find_copied{past}()")), replay(&format!("find_swept{past}()"))])?);
                 if let Some(places) = lowers(&mut fork, &modules, &helped, "helped_")? {
                     made = helped;
                     placement = Some(places);

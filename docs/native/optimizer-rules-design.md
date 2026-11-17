@@ -803,6 +803,18 @@ the matcher, for the rules whose conclusion is a node.
   one round is run, so a chain of three constants folds two of them; a
   node that itself needs a node put waits for a schedule that repeats the
   stage.
+  - **Only the walk after a node was put pays for this.** Reading the
+    nodes rules wrote others for, the read counts and the weighing by what
+    a spelling frees are on where the walk is given `asking`
+    (`Seen::lends`): `find_learned(spellings := 8, asking := 8)`, which
+    `compile-x86` runs after `find_helped` found something. The walk that
+    asks is a plain walk with `asking` alone, tried against the rules that
+    could want a node (`Tables.lending`). On in every searching walk, the
+    piece cost SHA-256's compile a quarter more search; so confined, the
+    one asking walk per function, about a twelfth. The linked gate was at
+    its CPU rail before and is past it with that, so it has the long rail
+    (`issues/optimizer-search-compile-cost.md`, which is also where the
+    search's own cost is taken up: half of a warm SHA-256 compile).
   - **A sum that indexes stays a sum** (`Seen::settles`). The hand-written
     recognisers know an index as a base and a constant (`Ordered.sums`):
     the joins of byte loads into one load, and the comparison of a wide

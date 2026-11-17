@@ -28,9 +28,12 @@ theorem Range::inside_trans(self a: Range, b, c: Range, first: a.inside(b) = Tru
 
 // The replayer's facts have what the walk has where a rule is read at the
 // node `at`: the node that made each word, each bit decided as the
-// constant it is, and a range at least as narrow of each word.
+// constant it is, a range at least as narrow of each word, and each node
+// a rule wrote another for, which the walk keeps beside the new one
+// (`Walked::earlier`).
 record Among(had: Walked, at: Node, facts: Facts) {
     nodes: (id: Nat) → (node: Node) → had.writing(at, id) = Some(node) → facts.has(node) = True,
+    earlier: (node: Node) → (known: Node) → had.earlier(node) = Some(known) → facts.has(known) = True,
     bits: (id: Nat) → (node: Node) → had.bit(id) = Some(node) → facts.has(node) = True,
     ranges: (id: Nat) → facts.range(id).inside(range_known(had.range, id)) = True,
 }
@@ -61,8 +64,19 @@ theorem same_as_found(o: Option<Node>, node: Node): (match o { None => False, So
     match o { None => λ h => absurd(h), Some(known) => λ h => cong_fn(λ (n: Node) => Some(n), sym(node.same_sound(known, h))) }
 }
 
+theorem same_as_either(o, late: Option<Node>, node: Node):
+    (match o { Some(known) => node.same(known), None => match late { None => False, Some(known) => node.same(known) } }) = True → (o = Some(node)) ∨ (late = Some(node)) {
+    match o {
+        Some(known) => λ h => Inl(cong_fn(λ (n: Node) => Some(n), sym(node.same_sound(known, h)))),
+        None => λ h => Inr(same_as_found(late, node, h)),
+    }
+}
+
 theorem Among::is_known({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), node: Node, h: Is(node).passed(at, had) = True): facts.has(node) = True {
-    among.of_kind(node_output(node).id, node.kind(), node, same_as_found(had.of_kind(at, node_output(node).id, node.kind()), node, h))
+    match same_as_either(had.of_kind(at, node_output(node).id, node.kind()), had.earlier(node), node, h) {
+        Inl(wrote) => among.of_kind(node_output(node).id, node.kind(), node, wrote),
+        Inr(kept) => among.earlier(node, node, kept),
+    }
 }
 
 // A premise the walk passes is one the facts know.

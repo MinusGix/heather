@@ -276,7 +276,10 @@ fn Node::alike_key(self node: Node) → Nat { unput() + numbers_keyed(node.numbe
 
 // The node alike `node` a rule wrote another node for.
 fn Walked::earlier(self had: Walked, node: Node) → Option<Node> {
-    nat_map_get(had.made, node.alike_key()).and_then(λ known => known.alike(node).then(Some(known)))
+    match nat_map_get(had.made, unput()) {
+        None => None,
+        Some(_) => nat_map_get(had.made, node.alike_key()).and_then(λ known => known.alike(node).then(Some(known))),
+    }
 }
 
 // A premise the replayer's facts have where the walk's do: a node passed,
@@ -508,6 +511,12 @@ fn Matchable::found_either(self m: Matchable, at: Node, had: Walked) → Option<
     match m.found_at(at, had) { Some(found) => Some(found), None => m.found_helped(at, had) }
 }
 
+// An instance at a node, and with `lend` one that reads a node a rule wrote
+// another for: only a walk after nodes were put looks for those.
+fn Matchable::found_lending(self m: Matchable, at: Node, had: Walked, lend: Bool) → Option<Matched> {
+    match lend { True => m.found_either(at, had), False => m.found_at(at, had) }
+}
+
 // A node with its output another word.
 fn Node::writing_to(self node: Node, o: Nat) → Node {
     match node {
@@ -575,15 +584,15 @@ fn matched_among(table: List<Matchable>, at: Node, had: Walked) → Option<Match
 // Every instance at a node that writes another node for it and reads no
 // range, the node turned among them: what a search through a word's other
 // spellings follows (`Seen::spellings`, function_ir_learn).
-fn instances_among(table: List<Matchable>, at: Node, had: Walked) → List<Matched> {
+fn instances_among(table: List<Matchable>, at: Node, had: Walked, lend: Bool) → List<Matched> {
     match table {
         Nil => [],
-        Cons(m, rest) => match m.found_either(at, had) {
+        Cons(m, rest) => match m.found_lending(at, had, lend) {
             Some(found) => match found.bit() {
-                None => match found.needs { Nil => Cons(found, instances_among(rest, at, had)), Cons(_, _) => instances_among(rest, at, had) },
-                Some(_) => instances_among(rest, at, had),
+                None => match found.needs { Nil => Cons(found, instances_among(rest, at, had, lend)), Cons(_, _) => instances_among(rest, at, had, lend) },
+                Some(_) => instances_among(rest, at, had, lend),
             },
-            None => instances_among(rest, at, had),
+            None => instances_among(rest, at, had, lend),
         },
     }
 }

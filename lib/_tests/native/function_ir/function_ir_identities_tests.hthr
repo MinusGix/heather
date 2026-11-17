@@ -68,7 +68,7 @@ fn made_nodes(found: Option<Function>) → List<Node> { match found { None => []
 fn sums_helped() → Option<Function> { match sums().find_helped([]) { None => None, Some(found) => Some(found.made) } }
 
 fn sums_folded() → Option<Function> {
-    match sums_helped() { None => None, Some(function) => replay_function(rules_with(registered(RuleEntry)), function, function.learn_plan(spellings := 8)) }
+    match sums_helped() { None => None, Some(function) => replay_function(rules_with(registered(RuleEntry)), function, function.learn_plan(spellings := 8, asking := 8)) }
 }
 
 theorem sums_asked(): made_nodes(sums_helped()) = [Const(64, 3, 3), Add(64, 4, 1, 3), Const(64, 5, 4), Add(64, 7, 3, 5), Add(64, 6, 4, 5)] { refl }
