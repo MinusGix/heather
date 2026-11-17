@@ -1119,7 +1119,7 @@ fn host_proofs(t: Tac<Expr>) → List<Expr> {
     match t { Pure(_) => [], Ask(r, _) => match r { Close(_, proofs) => proofs, Simp(laws, _) => laws, SimpCheck(laws) => laws, _ => [] } }
 }
 
-fn exprs_len(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_len(rest)) } }
+fn exprs_len(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => exprs_len(rest) + 1 } }
 
 fn exprs_at(es: List<Expr>, i: Nat) → Expr {
     match es {
@@ -1157,7 +1157,7 @@ fn host_under(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
         Ask(r, _) => match r {
-            Assume(_, _, under) => match under { None => 0, Some(x) => Succ(x.id) },
+            Assume(_, _, under) => match under { None => 0, Some(x) => x.id + 1 },
             _ => 0,
         },
     }
@@ -1169,7 +1169,7 @@ fn host_decls(t: Tac<Expr>) → List<Decl> {
     match t { Pure(_) => [], Ask(r, _) => match r { Publish(ds) => ds, _ => [] } }
 }
 
-fn decls_len(ds: List<Decl>) → Nat { match ds { Nil => 0, Cons(_, rest) => Succ(decls_len(rest)) } }
+fn decls_len(ds: List<Decl>) → Nat { match ds { Nil => 0, Cons(_, rest) => decls_len(rest) + 1 } }
 
 fn host_decl_count(t: Tac<Expr>) → Nat { decls_len(host_decls(t)) }
 
@@ -1197,7 +1197,7 @@ fn decl_instance_arg(d: Decl, i: Nat) → Expr { exprs_at(decl_instance_args(d),
 
 fn decl_instance_names(d: Decl) → List<String> { match d.form { AsInstance(_, _, index) => index, _ => [] } }
 
-fn strings_len(ss: List<String>) → Nat { match ss { Nil => 0, Cons(_, rest) => Succ(strings_len(rest)) } }
+fn strings_len(ss: List<String>) → Nat { match ss { Nil => 0, Cons(_, rest) => strings_len(rest) + 1 } }
 
 fn strings_at(ss: List<String>, i: Nat) → String {
     match ss { Nil => "", Cons(s, rest) => match i { Zero => s, Succ(k) => strings_at(rest, k) } }
@@ -1213,7 +1213,7 @@ fn decl_result(d: Decl) → Expr { d.result }
 
 fn decl_body(d: Decl) → Expr { d.body }
 
-fn params_len(ps: List<Param>) → Nat { match ps { Nil => 0, Cons(_, rest) => Succ(params_len(rest)) } }
+fn params_len(ps: List<Param>) → Nat { match ps { Nil => 0, Cons(_, rest) => params_len(rest) + 1 } }
 
 fn params_at(ps: List<Param>, i: Nat) → Param {
     match ps {
@@ -1247,7 +1247,7 @@ fn host_notes(t: Tac<Expr>) → List<Note> {
     match t { Pure(_) => [], Ask(r, _) => match r { Fail(_, notes) => notes, Say(_, notes) => notes, _ => [] } }
 }
 
-fn notes_len(ns: List<Note>) → Nat { match ns { Nil => 0, Cons(_, rest) => Succ(notes_len(rest)) } }
+fn notes_len(ns: List<Note>) → Nat { match ns { Nil => 0, Cons(_, rest) => notes_len(rest) + 1 } }
 
 fn notes_at(ns: List<Note>, i: Nat) → Note {
     match ns {
@@ -1317,7 +1317,7 @@ fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, Equation(l, _) => l, _ 
 // `App`'s argument; `Lam`'s and `Pi`'s body; `Equation`'s right side.
 fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Lam(_, b) => b, Pi(_, b) => b, Equation(_, r) => r, _ => e } }
 
-fn chars_len(cs: List<Char>) → Nat { match cs { Nil => 0, Cons(_, rest) => Succ(chars_len(rest)) } }
+fn chars_len(cs: List<Char>) → Nat { match cs { Nil => 0, Cons(_, rest) => chars_len(rest) + 1 } }
 
 fn chars_code(cs: List<Char>, i: Nat) → Nat {
     match cs {

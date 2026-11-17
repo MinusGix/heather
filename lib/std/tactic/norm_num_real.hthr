@@ -55,7 +55,7 @@ fn NumReal::real(self t: NumReal) → CReal {
 fn NumReal::zpow(q: Rat, n: Int) → Rat {
     match n {
         OfNat(m) => q.npow(m),
-        NegSucc(k) => q.recip().npow(Succ(k)),
+        NegSucc(k) => q.recip().npow(k + 1),
     }
 }
 

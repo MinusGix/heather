@@ -101,7 +101,7 @@ inductive Step { Add(id: Nat, clause: List<Nat>, hints: List<Nat>) }
 fn formula_from(cs: List<List<Nat>>, k: Nat, f: NatMap<List<Nat>>) → NatMap<List<Nat>> {
     match cs {
         Nil => f,
-        Cons(c, rest) => formula_from(rest, Succ(k), nat_map_set(f, k, c)),
+        Cons(c, rest) => formula_from(rest, k + 1, nat_map_set(f, k, c)),
     }
 }
 fn formula_of(cs: List<List<Nat>>) → NatMap<List<Nat>> { formula_from(cs, 1, MEmpty) }

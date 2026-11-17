@@ -35,7 +35,7 @@ fn decimal_name(fuel: Nat, n: Nat) → String {
 // A field's name, or `x{i}` for the `i`th field when it has none.
 fn field_name(f: FieldInfo, i: Nat) → String {
     match f.name.chars {
-        Nil => "x" ++ decimal_name(Succ(i), i),
+        Nil => "x" ++ decimal_name(i + 1, i),
         Cons(_, _) => f.name,
     }
 }
@@ -48,7 +48,7 @@ fn fields_from(fs: List<FieldInfo>, i: Nat) → Option<Fields> {
         Nil => Some(Fields([], [])),
         Cons(f, rest) => match f.ty {
             None => None,
-            Some(ty) => match fields_from(rest, Succ(i)) {
+            Some(ty) => match fields_from(rest, i + 1) {
                 None => None,
                 Some(r) => Some(Fields(Cons(field_name(f, i), r.names), Cons(ty, r.tys))),
             },
@@ -133,7 +133,7 @@ fn apps(f: Expr, args: List<Expr>) → Expr {
 // The step that rewrites field `i`: `cong(λ z => C(y<i, z, x>i), p_i)`, from
 // `C(y<i, x_i, x>i)` to `C(y<i, y_i, x>i)`.
 fn step(cong: GlobalRef, c: Expr, xs: List<Expr>, ys: List<Expr>, i: Nat, z: LocalRef, p: LocalRef) → Expr {
-    let f = Lam(z, apps(c, ys.take(i) ++ Cons(Local(z), xs.drop(Succ(i)))));
+    let f = Lam(z, apps(c, ys.take(i) ++ Cons(Local(z), xs.drop(i + 1))));
     apps(Global(cong), [Blank, Blank, f, Blank, Blank, Local(p)])
 }
 
@@ -142,7 +142,7 @@ fn steps(cong: GlobalRef, c: Expr, xs: List<Expr>, ys: List<Expr>, i: Nat, zs: L
         Nil => [],
         Cons(z, zr) => match ps {
             Nil => [],
-            Cons(p, pr) => Cons(step(cong, c, xs, ys, i, z, p), steps(cong, c, xs, ys, Succ(i), zr, pr)),
+            Cons(p, pr) => Cons(step(cong, c, xs, ys, i, z, p), steps(cong, c, xs, ys, i + 1, zr, pr)),
         },
     }
 }

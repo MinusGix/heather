@@ -13,7 +13,7 @@ fn Q::at(n: Nat) → Q { Q(OfNat(n), P::of(n)) }
 fn Q::twice(n: Nat) → Q { Q(OfNat(n), P::of(n + n)) }
 record R { inner: Q, tag: Nat }
 fn R::at(n: Nat) → R { R(Q::at(n), n) }
-fn bump(b: Bool, n: Nat) → Nat { match b { True => Succ(n), False => n } }
+fn bump(b: Bool, n: Nat) → Nat { match b { True => n + 1, False => n } }
 fn Q::bumped(b: Bool, n: Nat) → Q { Q(OfNat(n), P(bump(b, n))) }
 
 // One field put as a variable, then two and three receivers deep.
@@ -355,7 +355,7 @@ theorem guard_hypothesis_refined(n: Nat, h: n.leb(3) = True): n <= 3 {
 fn half(n: Nat) → Nat decreases n {
     match Nat::leb(n, 1) {
         True => 0,
-        False => Succ(half(n - 2)),
+        False => half(n - 2) + 1,
     }
 }
 theorem half_step(n: Nat, h: n.leb(1) = False): half(n) = half(n - 2) + 1 {

@@ -124,14 +124,14 @@ record BVAtoms { words: List<BVWord>, bools: List<LocalRef> }
 fn bv_word_index(ws: List<BVWord>, x: LocalRef, i: Nat) → Option<Nat> {
     match ws {
         Nil => None,
-        Cons(a, rest) => match a.x.id.same(x.id) { True => Some(i), False => bv_word_index(rest, x, Succ(i)) },
+        Cons(a, rest) => match a.x.id.same(x.id) { True => Some(i), False => bv_word_index(rest, x, i + 1) },
     }
 }
 
 fn bv_bool_index(bs: List<LocalRef>, x: LocalRef, i: Nat) → Option<Nat> {
     match bs {
         Nil => None,
-        Cons(b, rest) => match b.id.same(x.id) { True => Some(i), False => bv_bool_index(rest, x, Succ(i)) },
+        Cons(b, rest) => match b.id.same(x.id) { True => Some(i), False => bv_bool_index(rest, x, i + 1) },
     }
 }
 
@@ -507,7 +507,7 @@ fn bv_lemmas() → Tac<BVLemmas> {
 fn bv_lay_bools(l: BVLemmas, bs: List<LocalRef>, o: Nat) → Expr {
     match bs {
         Nil => Hd(l.no_bits),
-        Cons(b, rest) => bv_app(l.lay_bool, [Local(b), NatLit(o), bv_lay_bools(l, rest, Succ(o))]),
+        Cons(b, rest) => bv_app(l.lay_bool, [Local(b), NatLit(o), bv_lay_bools(l, rest, o + 1)]),
     }
 }
 
@@ -579,10 +579,10 @@ fn bv_decimal(fuel, n: Nat) → String {
     }
 }
 
-fn bv_model_bit(model: List<Bool>, k: Nat) → Bool { match model.nth(Succ(k)) { Some(b) => b, None => False } }
+fn bv_model_bit(model: List<Bool>, k: Nat) → Bool { match model.nth(k + 1) { Some(b) => b, None => False } }
 
 fn bv_model_word(model: List<Bool>, o, w: Nat) → Nat {
-    match w { Zero => 0, Succ(r) => (match bv_model_bit(model, o) { True => 1, False => 0 }) + 2 * bv_model_word(model, Succ(o), r) }
+    match w { Zero => 0, Succ(r) => (match bv_model_bit(model, o) { True => 1, False => 0 }) + 2 * bv_model_word(model, o + 1, r) }
 }
 
 fn bv_name(locals: List<LocalInfo>, x: LocalRef) → String {
@@ -602,7 +602,7 @@ fn bv_show_words(locals: List<LocalInfo>, ws: List<BVWord>, o: Nat, model: List<
 fn bv_show_bools(locals: List<LocalInfo>, bs: List<LocalRef>, o: Nat, model: List<Bool>) → List<String> {
     match bs {
         Nil => [],
-        Cons(b, rest) => Cons(bv_name(locals, b) ++ " = " ++ (match bv_model_bit(model, o) { True => "True", False => "False" }), bv_show_bools(locals, rest, Succ(o), model)),
+        Cons(b, rest) => Cons(bv_name(locals, b) ++ " = " ++ (match bv_model_bit(model, o) { True => "True", False => "False" }), bv_show_bools(locals, rest, o + 1, model)),
     }
 }
 
@@ -675,7 +675,7 @@ fn bv_decide() → Tac<Expr> {
     let q <- bv_quotes();
     let l <- bv_lemmas();
     let pe = pred.quote(q);
-    let verdict <- sat(bv_app(l.clauses, [bv_app(l.norm, [pe]), NatLit(k)]), Succ(k)).or_fail("bv_decide: ");
+    let verdict <- sat(bv_app(l.clauses, [bv_app(l.norm, [pe]), NatLit(k)]), k + 1).or_fail("bv_decide: ");
     match verdict {
         Satisfiable(model) => fail(bv_counterexample(g.locals, ws, bs, wbits, model), []),
         Unsatisfiable(r) => {

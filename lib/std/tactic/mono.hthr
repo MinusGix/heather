@@ -349,7 +349,7 @@ fn mono_class_carrier(es: List<MonoEntry>, ls: List<LocalInfo>, rel: OpKey, give
 // ---------------------------------------------------------------------------
 // Reading the two sides.
 
-fn mono_len(args: List<Handle>) → Nat { match args { Nil => 0, Cons(_, rest) => Succ(mono_len(rest)) } }
+fn mono_len(args: List<Handle>) → Nat { match args { Nil => 0, Cons(_, rest) => mono_len(rest) + 1 } }
 
 fn mono_has(ns: List<Nat>, n: Nat) → Bool { match ns { Nil => False, Cons(m, rest) => match m.same(n) { True => True, False => mono_has(rest, n) } } }
 
@@ -411,7 +411,7 @@ fn mono_diffs(i: Nat, as, bs: List<Handle>) → Tac<List<Nat>> {
             Nil => pure([]),
             Cons(b, rb) => {
                 let s <- mono_same(4096, [a], [b]);
-                let rest <- mono_diffs(Succ(i), ra, rb);
+                let rest <- mono_diffs(i + 1, ra, rb);
                 Pure(match s { True => rest, False => Cons(i, rest) })
             },
         },
