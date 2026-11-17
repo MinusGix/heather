@@ -21,6 +21,7 @@ A false claim fails with values that falsify it:
 |---|---|---|
 | `BVExpr`, `BVPred`, their `eval` | `lib/std/tactic/bitblast.hthr` | statement only |
 | Bit-blaster to an and-inverter graph, Tseitin clauses, `BVPred::unsat_sound` | `lib/std/tactic/bitblast.hthr` | proved |
+| The normalizer, `BVPred::norm_eval`, `BVPred::norm_unsat_sound` | `lib/std/tactic/bv_normalize.hthr` | proved |
 | LRAT checker and the staged refutation lemmas (`Reaches`, `reaches_*`) | `lib/std/tactic/lrat.hthr` | proved |
 | The `Sat(cs, vars)` request: CaDiCaL, the proof's layout as one term | `crates/elab/src/host/sat.rs`, `crates/sat` | no: the kernel checks the term |
 | The reader, the layout of the atoms, the read-back | `lib/std/tactic/bv_decide.hthr` | no: an ordinary tactic |
@@ -34,11 +35,14 @@ A false claim fails with values that falsify it:
    as `PBit(8, c, 7)` through `drop_low` and `head_bit`. Atoms are laid into
    one bit stream, words first at the sum of the widths before them, then
    Booleans, one bit each; `K` is the stream's length.
-2. **Decide.** The tactic asks `sat(BVPred::clauses(p, K), K + 1)`. The host
+2. **Normalize.** `p.norm()` (below) is what is blasted: chains of one
+   associative and commutative operation flattened, sorted and merged, so
+   that `x + y = y + x` and `x - y + y = x` arrive as constants.
+3. **Decide.** The tactic asks `sat(BVPred::clauses(p.norm(), K), K + 1)`. The host
    evaluates the clause term (closed: the predicate is a literal), runs
    CaDiCaL, and answers with a model or a refutation term
    `reaches_refutes(cs, …) : (v) → all_true(cs, v) = False`.
-3. **Bridge.** `BVPred::unsat_sound(p, K, refutation, L)` gives
+4. **Bridge.** `BVPred::norm_unsat_sound(p, K, refutation, L)` gives
    `p.eval(λ k => Succ(k).leb(K) && L(k)) = True` at the layout
    `L = lay_word(x, 0, lay_word(y, 8, …, lay_bool(b, 16, no_bits)))`.
    Each side of the claim is abstracted over the word atoms
@@ -53,6 +57,32 @@ conversion, so each constructor's `eval` is the library operation the
 reader read it from (`BAdd` is `BitVec::add`, `PXor` is `Bool::xor`). An
 operation read as a combination of others (`xor` as `¬(p ↔ q)`) does not
 meet, and fails at the kernel; give it a constructor of its own.
+
+## Normalizing first
+
+`lib/std/tactic/bv_normalize.hthr` rewrites the predicate before it is
+blasted, and proves once that the result means the same at every input
+(`BVPred::norm_eval`), so nothing it does is trusted. A chain of `+`, `*`,
+`&`, `|` or `bxor` (`AC`) is flattened (`AC::flat`, with `a - b` as
+`a + -b`), its operands sorted by a structural order (`BVExpr::key`:
+constants first, a negation just after what it negates), and neighbours
+merged (`AC::merge`): constants folded for `+` and `*`, `x & x` and `x | x`
+to `x`, `x bxor x` and `t + -t` cancelled, units dropped. The sort compares
+anything it likes: a sort is a permutation, and the chain's value
+(`AC::fold`) is invariant under permutations of an associative and
+commutative operation. An equation whose sides normalize to one expression
+(`BVExpr::same`) becomes `PConst(True)`, which blasts to a single clause
+refuted in one step.
+
+This is where sharing equal subcircuits pays off most: two spellings of one
+word meet before any gate is built. Hash-consing every and gate instead
+(issues/bv-decide-shared-subcircuits.md) was built and set aside: each
+lookup and insertion in a `NatMap` table costs the kernel several hundred
+steps while it builds the circuit inside a conversion, ten times the gate
+itself, which put 64-bit circuits past one conversion's budget.
+
+A rule is a case of `AC::merge` (with its equation in `AC::merge_ok`) or of
+`BVExpr::norm` (with its case in `BVExpr::norm_eval`).
 
 ## The refutation as one term
 
@@ -108,8 +138,13 @@ term; built any other way they are compared by evaluation, which is slow.
   arithmetic, tens of seconds for 64-bit `x + y = y + x`. The checker's
   constant (`lib/std/tactic/lrat.hthr`'s lookups through two tries) is the
   lever for every claim at once.
-- Multiplication is hard for any SAT solver: 8-bit `x * y = y * x` is over a
-  million hints, out of reach. Multiplication by a constant is cheap.
+- Multiplication is hard for any SAT solver: blasted, 8-bit `x * y = y * x`
+  is over a million hints. The normalizer decides it at any width before
+  any solver runs; a claim it cannot close (`x * (y + z) = x * y + x * z`)
+  is out of reach past a few bits. Multiplication by a constant is cheap.
+- Claims the normalizer closes cost the reader and one tiny refutation:
+  64-bit `x + y = y + x` or reassociating three words checks in about a
+  tenth of a second.
 
 `HEATHER_SAT_TRACE=1` prints the clause and step counts, each stage, and
 the fraction of the budget each obligation needs (found by bisection, so
