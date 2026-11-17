@@ -257,8 +257,9 @@ covers the CALLs as it covers the jumps.
   above the region, its top at RSP, the command line above it at RDI, and
   at least `Source::need` bytes deep. Entry code in front of the
   program provides it (`Source::runs_after`, native_compile_elf): the
-  system's stack, whose room below the entry RSP is then a premise of the
-  ELF theorem (`LinuxStart`), or the program's own in its data segment
+  system's stack, whose room below the entry RSP the entry code touches a
+  page at a time before the program starts (`SystemStart`,
+  `Source::elf_touched_runs`), or the program's own in its data segment
   (`SegmentStart`). Neither is a cap of the compiler's.
 
 ## 6. Why the stack holds the caller's words, not the callee's words

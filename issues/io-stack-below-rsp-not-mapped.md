@@ -47,3 +47,16 @@ default with the premise above; `write-elf --stack segment` gives a program
 its own stack in its data segment and drops the premise
 (`issues/native-target-minimal-system-assumptions.md`). A startup check of
 the stack limit is designed in `docs/native/system-contract-design.md`.
+
+## 2026-11-17: the room is checked, not presumed
+
+A file on the system's stack now stores into each page of its stack room
+before anything else runs (`stack_touched_entry`,
+`lib/std/os/linux/linux_x86_64_stack_growth.hthr`), and its theorem asks
+nothing of what lies below RSP (`SystemStart` replaces `LinuxStart`, whose
+`stack` field is gone). Growth is a stated rule of the model (`StackTouch`:
+a store within a page below the stack extends it or ends the process), so
+the theorem uses what this issue found the old one used unsaid. Under a
+stack limit below the room the process now dies in its entry code, before
+any system call, where before it produced output and then faulted
+(`docs/native/system-contract-design.md` §3, §4.3).

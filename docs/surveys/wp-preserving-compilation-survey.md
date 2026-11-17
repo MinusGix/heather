@@ -394,7 +394,7 @@ every program. Nothing to adopt here. If anything, Heather is ahead.
   statement about final states, because Iris adequacy is not mechanised
   there. Heather's chain from compiled program to Linux runs is complete
   and kernel-checked: `SimProgram`, then `sim_run_sends`, then the ELF
-  theorem (`Source::elf_file_simulates`).
+  theorem (`Source::elf_runs`).
 - UB↔Exit is the paper's choice: a target exit may match source undefined
   behaviour, which the source WP excludes anyway. Heather's source has no
   undefined behaviour to match. What the compiler cannot place it refuses

@@ -267,29 +267,45 @@ states it (`<source>_elf_contract`, its lines by name in
 them as an ELF note after its code (`Contract::note`, a claim a reader can
 check only against the certificate), and the file's theorem,
 `<source>_elf_runs` by `Source::elf_runs`, is about the file with that note
-and takes the contract's `Start` as its one premise about the system.
+and takes the contract's `Start` as its one premise about the system. Its
+conclusion is the contract's `Runs`.
 
-**The system's stack** (`--stack system`, the default; `stack_from_system`).
-The contract's `Start` is `LinuxStart` (the theorem behind it is
-`Source::elf_file_runs`):
+**The system's stack** (`--stack system`, the default;
+`stack_touched_entry`). The contract's `Start` is `SystemStart` (the theorem
+behind it is `Source::elf_touched_runs`):
 
 - **`loaded`**: the file's two `PT_LOAD` headers were honoured (its bytes at
   0x400000 readable and executable, the data segment zero-filled, readable
   and writable). The ELF loading rule, not proved of Linux.
 - **`entry`**: the process starts at the header's entry address.
-- **`placed`, `rsp`, `stack`**: the program's stack room below the entry RSP
-  is usable. On Linux the stack limit grants it (`RLIMIT_STACK`,
-  `ulimit -s`): the kernel maps the stack as it is touched, down to the
-  limit. A process started under a smaller limit is outside the theorem,
-  and in practice starts and then dies mid-run.
+- **`placed`, `rsp`**: the entry RSP is a page and the program's stack room
+  above the data segment's end, in the lower half of the address space.
+  Nothing written says where a system puts its stack; this is taken on
+  trust.
 - **`argv`**: the command line is at and above RSP as the psABI lays it out.
+
+Nothing is asked of what lies below RSP. The entry code stores a byte into
+each page of the stack room before anything else runs, and the model has a
+rule for what Linux does at such a store (`StackTouch`,
+`lib/std/os/linux/linux_x86_64_stack_growth.hthr`): it extends the stack to
+the address or ends the process with a signal, which is what mmap(2) and
+getrlimit(2) say of a stack. So `Runs` is not the bare simulation: it says
+the process runs to each store, that in every memory Linux may leave there
+it runs to the next, and that after the last it simulates the source
+(`TouchedRuns`). A process started under a stack limit below its room is
+ended at one of those stores, before it has made a system call, and the
+theorem says nothing false of it; before the touch it produced output and
+then died mid-run (`docs/native/system-contract-design.md` §3, §4.3). The
+last step identifies the state reached with one whose memory's type relies
+on the room (`Alike`); that the two run alike is by inspection of the model,
+not yet a lemma (`issues/elf-touched-runs-exact.md`).
 
 **The program's own stack** (`--stack segment`; `stack_from_segment`). The
 data segment is sized for the layout and the stack room after it, and the
 entry code points RSP at the end of that room. The contract's `Start` is
 `SegmentStart` (the theorem behind it is `Source::elf_segment_file_runs`), which is
 `loaded`, `entry` and `argv` only: nothing is asked of the stack limit, of
-growth, or of how much stack exec maps. What it costs: the stack's size is
+growth, or of how much stack exec maps, and `Runs` is the simulation itself. What it costs: the stack's size is
 fixed when the file is written, a limit on the data segment or the address
 space kills the process at exec with a signal (before its first
 instruction), and there is no guard page under the stack, so the proved

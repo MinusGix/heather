@@ -39,3 +39,13 @@ premise.
 - The answers Linux gives during the run are in the simulation relation
   (`LinuxAnswered`), not in `LinuxStart`: a reader finds them in
   `linux_x86_64_io`. A signal is not modelled at all.
+
+## 2026-11-17: the stack room left the premise
+
+The premise of a file on the system's stack is `SystemStart`: `LinuxStart`
+less its `stack` field, with a page more asked above the segment. The room
+is tested by the program's entry code (`docs/native/system-contract-design.md`
+§4.3) and the theorem is `Source::elf_touched_runs`; `LinuxStart`,
+`Source::elf_file_runs` and `Source::elf_file_simulates` are gone. The
+certificate's `<source>_elf_runs` is unchanged in name: its premise is the
+contract's `Start` and its conclusion the contract's `Runs`.
