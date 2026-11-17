@@ -1410,7 +1410,7 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
 - `break`, `continue` and `return` in a loop over words (refused by name).
 - A loop over words whose state is the receiver and other locals: it is
   lifted as a plain `f#run` returning the state, which a `runtime fn`
-  does not compile.
+  does not compile. (Built for one other local, §22.)
 - A `mut self` method whose result is only its receiver (`→ ()`): each
   SHA-256 step returns its count. And the method a loop is lifted to is
   called by a one-call function, which the linked code keeps as a call
@@ -1419,3 +1419,73 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
 - `xs[i]` at a numeral on `[A; n]` in a `runtime fn` is the kernel's
   `nth`, which the reflector does not read; the SHA-256 round still
   writes `vector_index(s.working, 7, trivial)`.
+
+## 22. Loops over a span in a `runtime fn`, as built (2026-11-17)
+
+Minus asked that a compiled function over a byte span get what a laid
+record's methods have: `for`, `while`, `let mut` locals, a loop in a
+loop. Probes: `lib/_tests/native/runtime/runtime_lifted_loops_tests.hthr`.
+
+### 22.1 The receiver and one other local: a method returning it
+
+A `for` over words or a `while c decreases m` whose state is the receiver
+`r` of a `mut self` method and **one** other local `o` lifts
+(`crates/elab/src/loops.rs`, `Lift::receiver_in`) to a `mut self` method
+of the receiver's type, named as §21.1 names one, `T::f_loop`:
+
+```heather
+fn T::f_loop(mut self r: T, c̄, o: O) → Mutated<T, O> decreases m {
+    if c { body; r.f_loop(c̄, o′) } else { Mutated(r, o) }
+}
+```
+
+(a `for` also takes its counter, and tests `i < hi`), and the loop is
+the `Mutated` its call returns, read back by `.after` for `r` and
+`.value` for `o` (`Shape::Mutated`). With the receiver alone the method
+returns the counter, as §21.1 built. This is the shape a hand-written
+span loop has (`sift` in examples/sort), so the generator compiles it as
+one, and the function calls it.
+
+Unlike §16's pure `while`, the body is **under** the test, not hoisted
+above it: a store into the receiver may not run where the condition
+fails, and the code would run it. Its claimed method calls on the
+receiver are spelled as plain `let`s and put in SSA form first
+(`measure::rebind_marked`, `alpha::ssa`): the test's equation reads the
+receiver the method was called with, and a later rebinding of the same
+name otherwise made the kernel compare it against the stored span
+(a `∧` condition that reads the span, with a store in the body).
+
+### 22.2 Loops nest
+
+A `decreases` function's loops lift as any function's (`loops::lower` no
+longer refuses one; its equation is the measure lowering's own
+`f_unfold`, so §7.1's is not generated for it). A loop in a loop is a
+loop in the method the outer one lifted to. An arm whose equation binder
+is private (`__…`, the lifted test's own) may hold a loop: no source
+names it.
+
+### 22.3 A plain loop in a `runtime fn` is compiled
+
+A loop whose state is not the receiver is still `f#run` (designed
+`f::run`), but a prefix generator now runs over it as over the methods
+(`Family::methods`), by its designed name, which a lookup resolves; its
+measure companions (`body`, `rec`, `ext`, `irrel`) are designated under
+that name too. The reflector finds a minted `f#run`'s code under
+`f::run` (`rt_designed`). Its self-call is spelled by its base name, which
+is how a member recurses (a qualified self-call is not in scope while the
+member is checked).
+
+### 22.4 Not built
+
+- A loop's state of two locals besides the receiver, or of two locals in
+  a plain loop: `f#State` is a record, which the generator has no layout
+  for (refused with that reason).
+- A byte (`u8`) local captured by a loop in a function that writes a
+  span: such a function's code takes 64-bit words
+  (`issues/runtime-repr-narrow-words.md`), so the probes carry the key
+  as a `u64`.
+- `&&` binds tighter than the comparisons (`0 < j && key < b` reads as
+  `0 < (j && key) < b`); a loop's condition writes `∧`.
+- What a span is (a record carrying its length), its elements read and
+  stored with a proof that the index is inside, and the facts a lifted
+  loop needs for that proof (invariants): the next rounds.
