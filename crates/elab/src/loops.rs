@@ -204,6 +204,13 @@ struct Lift<'a> {
     /// fact restated at the loop's result, and the call of the theorem
     /// that proves it ([`Lift::keeps`]), for [`Lift::block_after`] to bind.
     held: Vec<Held>,
+    /// The tests known where the walk is (a `True` arm of `decide_bit<P>()`,
+    /// as an `if` and a lifted loop spell their tests), each with the
+    /// length of the scope where it became known: a loop below passes on
+    /// the ones it cannot change ([`Lift::free_facts`]).
+    known: Vec<(Ty, usize)>,
+    /// Whether loops are given the facts they cannot change at all.
+    free: bool,
 }
 
 /// An invariant fact after its loop: `fact` over the loop's state, the
@@ -310,6 +317,46 @@ impl<'a> Lift<'a> {
             .map(|p| (p.name.clone(), p.ty.clone()))
             .collect();
         captures.splice(0..0, found);
+    }
+
+    /// The facts known where a loop starts that it cannot change, which it
+    /// is given as it is given its invariant's, so its body and its own
+    /// loops read them without an `invariant` naming them
+    /// (docs/language/sequencing-surface-design.md §23.6): a test it runs
+    /// under, and a fact in scope (`h: ∥P∥`: a parameter, an outer loop's
+    /// invariant, a fact an earlier loop keeps). Each one names no local the
+    /// loop assigns, nor one rebound since it became known, and only typed
+    /// locals; the receiver of a `mut self` loop only as `r.len()` where its
+    /// type carries its length.
+    fn free_facts(&self, scope: &[Local], vars: &[&str]) -> Vec<Ty> {
+        if !self.free {
+            return Vec::new();
+        }
+        let typed = self.typed(scope);
+        let receiver = self.decl.params.iter().find(|p| p.is_self && value_indexed(&p.ty)).map(|p| p.name.clone());
+        let held = scope.iter().enumerate().filter_map(|(i, l)| match l.written.as_ref().map(|t| &t.kind) {
+            Some(TyKind::Squash(p)) => Some(((**p).clone(), i + 1)),
+            _ => None,
+        });
+        let mut out: Vec<Ty> = Vec::new();
+        for (fact, at) in held.chain(self.known.iter().cloned()) {
+            let read = match &receiver {
+                Some(r) if vars.contains(&r.as_str()) => without_len(&fact, r),
+                _ => fact.clone(),
+            };
+            let mut names: Vec<&str> = typed.iter().map(|b| b.name.as_str()).filter(|n| measure::mentions_ty(&read, n)).collect();
+            names.dedup();
+            let unchanged = names.iter().all(|n| {
+                !vars.contains(n)
+                    && !n.starts_with('#')
+                    && !scope[at.min(scope.len())..].iter().any(|l| l.name == *n)
+                    && typed.iter().rev().find(|b| b.name == *n).is_some_and(|b| b.ty.is_some())
+            });
+            if unchanged && !out.iter().any(|o| format!("{o:?}") == format!("{fact:?}")) {
+                out.push(fact);
+            }
+        }
+        out
     }
 
     /// The receiver of a `mut self` method when it is among a loop's state
@@ -504,7 +551,13 @@ impl<'a> Lift<'a> {
                         );
                     }
                     let mut inner = scope.clone();
-                    arm.body = self.expr(arm.body, &mut inner)?;
+                    // Under a test's `True` arm, its proposition is known.
+                    let tested = if arm.ctor == "True" { tested_props(&scrut) } else { vec![] };
+                    let depth = self.known.len();
+                    self.known.extend(tested.into_iter().map(|p| (p, inner.len())));
+                    let body = self.expr(arm.body, &mut inner);
+                    self.known.truncate(depth);
+                    arm.body = body?;
                     out.push(arm);
                 }
                 Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out }, span })
@@ -713,7 +766,9 @@ impl Lift<'_> {
                 }
             }
         }
-        // Captures: what the body, the condition or the measure reads.
+        // The facts it cannot change, passed on as its invariant's are.
+        let free = self.free_facts(scope, &vars);
+        // Captures: what the body, the condition, the measure or a fact reads.
         let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
         let mut captures: Vec<(String, Ty)> = Vec::new();
         for (i, b) in typed.iter().enumerate() {
@@ -724,7 +779,8 @@ impl Lift<'_> {
                 || !(measure::mentions_context(&whole, &b.name)
                     || measure::mentions_context(cond, &b.name)
                     || measure::mentions_context(measure, &b.name)
-                    || invariant.is_some_and(|p| measure::mentions_context(p, &b.name)))
+                    || invariant.is_some_and(|p| measure::mentions_context(p, &b.name))
+                    || free.iter().any(|p| measure::mentions_ty(p, &b.name)))
             {
                 continue;
             }
@@ -744,16 +800,24 @@ impl Lift<'_> {
         // releases them). Squashed, so two proofs of one are one, as the
         // companions of a `decreases` function need.
         self.next_if += 1;
-        let facts: Vec<Param> = invariant_facts(invariant)
+        let mut facts: Vec<Param> = invariant_facts(invariant)
             .into_iter()
             .enumerate()
             .map(|(k, p)| param(&format!("__inv{}_{k}", self.next_if), Ty { span: p.span, kind: TyKind::Squash(Box::new(p)) }, span))
             .collect();
+        // The free facts after the invariant's: kept by the loop with
+        // nothing to prove, and known after it already.
+        let explicit = facts.len();
+        facts.extend(
+            free.into_iter()
+                .enumerate()
+                .map(|(k, p)| param(&format!("__free{}_{k}", self.next_if), Ty { span: p.span, kind: TyKind::Squash(Box::new(p)) }, span)),
+        );
         let found = |at: Span| -> Vec<Expr> { facts.iter().map(|_| var("bv_omega", at)).collect() };
         // At a `mut self` receiver with one other local, the loop is a
         // method of the receiver's type returning that local.
         if let Some((r, Some(k))) = self.receiver_in(&vars) {
-            return self.lift_while_method(span, body, captures, r, (vars[k], state_tys[k].clone()), cond, measure, facts);
+            return self.lift_while_method(span, body, captures, r, (vars[k], state_tys[k].clone()), cond, measure, facts, explicit);
         }
         let (run, state, run_designed, state_designed) = self.names("run");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
@@ -835,6 +899,7 @@ impl Lift<'_> {
         cond: &Expr,
         measure: &Expr,
         facts: Vec<Param>,
+        explicit: usize,
     ) -> R<(Expr, Shape, Option<Expr>)> {
         let _ = self.names("run");
         let run = self.method_name();
@@ -864,7 +929,13 @@ impl Lift<'_> {
         // end of the body, proved once there and passed by name: a search
         // left in the call's arguments runs again at each of the call's
         // elaborations.
-        let next_facts: Vec<String> = (0..facts.len()).map(|k| format!("__inv_next{}_{k}", self.next_if)).collect();
+        // A free fact that does not name the receiver is passed on as it was
+        // given, as it names no local the body assigns; one that reads the
+        // receiver's length is found again, as an invariant's fact is.
+        let passed = |k: usize| k >= explicit && !measure::mentions_ty(&facts[k].ty, &r.name);
+        let next_facts: Vec<String> = (0..facts.len())
+            .map(|k| if passed(k) { facts[k].name.clone() } else { format!("__inv_next{}_{k}", self.next_if) })
+            .collect();
         let recur_args = |at: Span| -> Vec<Expr> {
             captures
                 .iter()
@@ -901,7 +972,10 @@ impl Lift<'_> {
                 entry.1 = name.clone();
             }
         }
-        for (fact, next) in facts.iter().zip(&next_facts) {
+        for (k, (fact, next)) in facts.iter().zip(&next_facts).enumerate() {
+            if passed(k) {
+                continue;
+            }
             let ty = latest.iter().fold(fact.ty.clone(), |t, (was, now)| {
                 if was == now { t } else { measure::subst_surface_ty(&t, was, &var(now, end)) }
             });
@@ -930,7 +1004,7 @@ impl Lift<'_> {
             body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
             span,
         }));
-        let keeps = self.keeps(&run, &params, &r, o, cond, &facts, span);
+        let keeps = self.keeps(&run, &params, &r, o, cond, &facts[..explicit], span);
         // The theorems take the method's parameters in order, the receiver
         // among them; the facts are found at the entry, as the loop's are.
         let entry: Vec<Expr> = params
@@ -1211,7 +1285,9 @@ impl Lift<'_> {
                 }
             }
         }
-        // Captures: what the body or the upper bound reads.
+        // The facts it cannot change, which its body reads as its own.
+        let free = self.free_facts(scope, &vars);
+        // Captures: what the body, the upper bound or a fact reads.
         let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
         let mut captures: Vec<(String, Ty)> = Vec::new();
         for (i, b) in typed.iter().enumerate() {
@@ -1219,7 +1295,9 @@ impl Lift<'_> {
                 || b.name == x.name
                 || vars.contains(&b.name.as_str())
                 || b.name.starts_with('#')
-                || !(measure::mentions_context(&whole, &b.name) || measure::mentions_context(&hi, &b.name))
+                || !(measure::mentions_context(&whole, &b.name)
+                    || measure::mentions_context(&hi, &b.name)
+                    || free.iter().any(|p| measure::mentions_ty(p, &b.name)))
             {
                 continue;
             }
@@ -1260,7 +1338,7 @@ impl Lift<'_> {
         let end = again.result.span;
         let next = op("+", vec![i.clone(), num(1, end)], end);
         let capture_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
-        let (result, recur, done, entry, shape) = match &receiver {
+        let (result, recur, done, mut entry, shape) = match &receiver {
             Some((r, other)) => {
                 // The receiver first, after only the captures its type names.
                 params.extend(captures[..named].iter().map(|(n, t)| param(n, t.clone(), span)));
@@ -1323,6 +1401,35 @@ impl Lift<'_> {
             }
         };
         *again.result = recur;
+        // The facts after the count: found where the loop starts, and passed
+        // on at each round, by name where they do not read the receiver,
+        // otherwise found again (its length, which its type fixes) by a
+        // `let` at the body's end, a search the call's elaborations share.
+        self.next_if += 1;
+        let facts: Vec<Param> = free
+            .into_iter()
+            .enumerate()
+            .map(|(k, p)| param(&format!("__free{}_{k}", self.next_if), Ty { span: p.span, kind: TyKind::Squash(Box::new(p)) }, span))
+            .collect();
+        let receiver_name = receiver.as_ref().map(|(r, _)| r.name.clone());
+        let mut passed: Vec<Expr> = Vec::new();
+        for (k, fact) in facts.iter().enumerate() {
+            match &receiver_name {
+                Some(r) if measure::mentions_ty(&fact.ty, r) => {
+                    let name = format!("__free_next{}_{k}", self.next_if);
+                    let inner = match &fact.ty.kind { TyKind::Squash(p) => (**p).clone(), _ => fact.ty.clone() };
+                    let head = Expr { kind: ExprKind::TyApp { head: Box::new(var("bitvec_omega::found_fact", end)), args: vec![inner] }, span: end };
+                    again.stmts.push(Stmt::Let { name: name.clone(), ty: Some(fact.ty.clone()), expr: call(head, vec![], end), span: end, opaque: false });
+                    passed.push(var(&name, end));
+                }
+                _ => passed.push(var(&fact.name, end)),
+            }
+        }
+        if !facts.is_empty() {
+            params.extend(facts.iter().cloned());
+            add_args(&mut again.result, passed);
+            add_args(&mut entry, facts.iter().map(|_| var("bv_omega", span)).collect());
+        }
         // `if i < hi { body; again } else { done }`, spelled as the parser
         // spells an `if` whose branches do not name its evidence: a match on
         // the comparison's bit with the bit's equation bound, which a search
@@ -1457,6 +1564,69 @@ fn tests_of(cond: &Expr) -> Vec<Expr> {
     vec![cond.clone()]
 }
 
+/// `call` with `more` after its arguments: a function's application, a
+/// method's call, or either under a marker (`\0mutated_whole(…)`).
+fn add_args(call: &mut Expr, more: Vec<Expr>) {
+    match &mut call.kind {
+        ExprKind::App { head, args, .. } => {
+            if let [inner] = args.as_mut_slice()
+                && matches!(&head.kind, ExprKind::Var(n) if n.starts_with('\0'))
+            {
+                return add_args(inner, more);
+            }
+            args.extend(more);
+        }
+        ExprKind::Dot { args: Some(args), .. } => args.extend(more),
+        _ => {}
+    }
+}
+
+/// The propositions a test `decide_bit<P>()` decides, conjunct by conjunct
+/// as [`tests_of`] splits it; none for anything else.
+fn tested_props(scrut: &Expr) -> Vec<Ty> {
+    tests_of(scrut)
+        .iter()
+        .filter_map(|t| match &t.kind {
+            ExprKind::App { head, args, .. } if args.is_empty() => match &head.kind {
+                ExprKind::TyApp { head: bit, args: tys } if matches!(&bit.kind, ExprKind::Var(n) if n == "decide_bit") && tys.len() == 1 => {
+                    Some(tys[0].clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a type takes a value as an index (`Bytes(n)`), not only types
+/// (`List<u8>`).
+fn value_indexed(t: &Ty) -> bool {
+    match &t.kind {
+        TyKind::OfExpr(e) => matches!(&e.kind, ExprKind::App { args, .. } if !args.is_empty()),
+        TyKind::Named { args, .. } => args.iter().any(|a| matches!(a.kind, TyKind::OfExpr(_))),
+        _ => false,
+    }
+}
+
+/// `fact` with each `r.len()` read as a name of its own: the length of a
+/// receiver whose type carries it (`Bytes(n)`) is that index, which no
+/// store into the receiver changes, as the receiver keeps its type.
+fn without_len(fact: &Ty, r: &str) -> Ty {
+    let mut out = fact.clone();
+    if let TyKind::OfExpr(e) = &mut out.kind {
+        crate::alpha::walk_expr_mut(e, &mut |x| match &x.kind {
+            ExprKind::Dot { recv, name, args: Some(args), .. }
+                if name == "len" && args.is_empty() && matches!(&recv.kind, ExprKind::Var(n) if n == r) =>
+            {
+                *x = var("#len", x.span);
+                true
+            }
+            _ => false,
+        });
+    }
+    out
+}
+
 /// The invariant's facts, one squashed parameter each.
 fn invariant_facts(invariant: Option<&Expr>) -> Vec<Ty> {
     match invariant.map(|e| &e.kind) {
@@ -1517,7 +1687,10 @@ fn contains_loop(e: &Expr) -> bool {
 }
 
 /// Lower a declaration whose body holds loops (module docs).
-pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Family> {
+/// `free`: whether a loop is given the facts it cannot change
+/// ([`Lift::free_facts`]); not under a prefix generator, which reflects the
+/// lifted loops as programs and has no parameter that is a proof yet.
+pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges, free: bool) -> R<Family> {
     // A `decreases` function's loops are lifted as any are (a loop nested
     // in a loop is one, in the function the outer loop lifts to); its
     // equation is the measure lowering's own `f_unfold`, not §7.1's.
@@ -1533,6 +1706,8 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Famil
         parts: Vec::new(),
         designations: Vec::new(),
         held: Vec::new(),
+        known: Vec::new(),
+        free,
     };
     let mut scope: Vec<Local> =
         decl.params.iter().map(|p| Local { name: p.name.clone(), written: Some(p.ty.clone()), value: None }).collect();

@@ -863,7 +863,10 @@ impl DeclarationsMut<'_> {
     }
 
     fn elab_loop_family(&mut self, decl: &Decl, ranges: loops::Ranges) -> R<()> {
-        let family = loops::lower(decl, self.0, ranges)?;
+        // Under a prefix generator (`runtime fn`), which reflects the lifted
+        // loops as programs, a loop is given no fact it did not state.
+        let free = self.scope.loop_methods.is_none();
+        let family = loops::lower(decl, self.0, ranges, free)?;
         for part in &family.parts {
             match part {
                 loops::Part::State(d) => self.elab_inductive(d)?,
