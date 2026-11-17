@@ -340,7 +340,7 @@ fn Fragment::path_copy(out: Nat) → Fragment {
 theorem Run::path_round(self r: Run, env: Env, buf, cap: Nat, found: r.t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
     of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), o, n: Nat, s: r.State(), resident: r.t.site().Resident(s.memory),
     i: Nat, left: i + n = path.before_nul().len(), at: r.t.PathAt(env, buf, path, vals, i, s.gprs, s.memory)):
-    Fragment::path_copy(Succ(o)).inside(r, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
+    Fragment::path_copy(Succ(o)).inside(r, λ _ _ _ _ => False, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
         λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = path.before_nul().len()) ∧ r.t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory))))(s) {
     let t = r.t;
     let g = s.gprs;
