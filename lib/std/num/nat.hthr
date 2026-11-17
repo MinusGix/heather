@@ -289,13 +289,6 @@ theorem Nat::same_sound(self n: Nat): (m: Nat) → n.same(m) = True → n = m {
 
 theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
 
-theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
-    match e: n.same(m) {
-        True => false_elim(ne(n.same_sound(m, e))),
-        False => refl,
-    }
-}
-
 fn Nat::sub(self m, n: Nat) → Nat {
     match m {
         Zero => Zero,
