@@ -56,3 +56,7 @@ hypothesis that is not stuck (refused with a reason), and one whose last arm
 needs a further split of the goal.
 
 Related: [[split-all-revise-hypotheses]], [[case-split-refines-let-bound-call-values]].
+
+## Log
+
+- 2026-11-17: Built as a block statement `cases h;` / `cases h as e1, e2(x, y);` (docs/tactics/goal-combinators.md, `cases h`; crates/elab/src/hypothesis_cases.rs). Each step is absurd / subst / a motive-less `match e: test`, re-entered in each arm; the test is `split_all`'s blocker search with `deep` off, which takes the stage call the callee wrote and unfolds the callee before searching its arguments. Names bound the splits taken (`region_extends` stops at `region.code(…) = Some(c)`). Rewritten: `call_runs`, `laid_of`, `calls_laid` (two lines), `region_extends`, `within_leaf_into`. Not yet covered: a case whose surviving arms need different proofs (`within_one_node`, `within_computes_best`): the rest of the block is one proof for every surviving case.
