@@ -987,8 +987,7 @@ theorem Procedure::code_of(self proc: Procedure, p, entry, body, out: Prog, layo
 theorem List::procedures_code_of(self procs: List<Procedure>, first: Procedure, rest: List<Procedure>, is: procs = Cons(first, rest), p: Prog, layout: Layout, index, names: Nat,
     c, d: Compiled, here: first.code(p, layout.body(index), index, names) = Some(c), later: rest.procedures_code(c.prog, layout, Succ(index), c.names) = Some(d)):
     procs.procedures_code(p, layout, index, names) = Some(d) {
-    j(sym(is), λ ps _ => ps.procedures_code(p, layout, index, names) = Some(d),
-        j(sym(here), λ o _ => (match o { None => None, Some(x) => rest.procedures_code(x.prog, layout, Succ(index), x.names) }) = Some(d), later))
+    simp_only(is, List::procedures_code, here, later)
 }
 
 // A statement's emission from its parts', so a reader can state a long
@@ -1005,10 +1004,7 @@ theorem Stmt::emits_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, lay
     left: s.left().emits(p, layout, s.right().live_with(layout.homes, s.left().carried(s.right(), layout.homes, out), out), s.left().first_known(known), names) = Some(c)):
     s.emits(p, layout, out, known, names) = s.right().emits(c.prog, layout, out, s.left().carried(s.right(), layout.homes, out), c.names) {
     match s {
-        Then(first, rest) => j(sym(left), λ o _ => (match o as λ _ => Option<Compiled> {
-                None => None,
-                Some(d) => rest.emits(d.prog, layout, out, first.carried(rest, layout.homes, out), d.names),
-            }) = rest.emits(c.prog, layout, out, first.carried(rest, layout.homes, out), c.names), refl),
+        Then(first, rest) => simp_only(Stmt::emits, left),
         _ => false_elim(is),
     }
 }
@@ -1051,20 +1047,7 @@ theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog,
     b: Compiled, body: s.left().emits(p.label(Succ(names)), layout, s.loop_out(layout.homes, out), Nil, Succ(Succ(names))) = Some(b)):
     s.emits(p, layout, out, known, names) = Some(Compiled(then(b.prog.tests(layout, s.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
     match s {
-        Repeat(inner, again) => {
-            let closed = Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names));
-            let ran = j(sym(body), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
-                }) = closed, refl);
-            j(sym(eq_true_of_is_true(layout.word_fits(again), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
-                    False => None,
-                    True => match inner.emits(p.label(Succ(names)), layout, Repeat(inner, again).loop_out(layout.homes, out), Nil, Succ(Succ(names))) {
-                        None => None,
-                        Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
-                    },
-                }) = closed, ran)
-        },
+        Repeat(inner, again) => simp_only(Stmt::emits, eq_true_of_is_true(layout.word_fits(again), fits), body),
         _ => false_elim(is),
     }
 }
@@ -1074,30 +1057,7 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
     no: s.right().emits(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, y.names) = Some(n)):
     s.emits(p, layout, out, known, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
     match s {
-        Branch(condition, first, second) => {
-            let joined = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names));
-            let second_ran = j(sym(no), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                }) = joined, refl);
-            let first_ran = j(sym(yes), λ o _ => (match o as λ _ => Option<Compiled> {
-                    None => None,
-                    Some(d) => match second.emits(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, d.names) {
-                        None => None,
-                        Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                    },
-                }) = joined, second_ran);
-            j(sym(eq_true_of_is_true(layout.word_fits(condition), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
-                    False => None,
-                    True => match first.emits(p.tests(layout, condition, Succ(names)), layout, out, Nil, Succ(Succ(names))) {
-                        None => None,
-                        Some(d) => match second.emits(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, d.names) {
-                            None => None,
-                            Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
-                        },
-                    },
-                }) = joined, first_ran)
-        },
+        Branch(condition, first, second) => simp_only(Stmt::emits, eq_true_of_is_true(layout.word_fits(condition), fits), yes, no),
         _ => false_elim(is),
     }
 }
@@ -1109,7 +1069,7 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
 theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Homes, out, mid, l: List<Nat>,
     rest: s.right().checked(homes, out) = Some(mid), first: s.left().checked(homes, mid) = Some(l)): s.checked(homes, out) = Some(l) {
     match s {
-        Then(f, r) => j(sym(rest), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), first),
+        Then(f, r) => simp_only(Stmt::checked, rest, first),
         _ => false_elim(is),
     }
 }
@@ -1117,11 +1077,7 @@ theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Hom
 theorem Stmt::checked_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), homes: Homes, out, y, n: List<Nat>,
     yes: s.left().checked(homes, out) = Some(y), no: s.right().checked(homes, out) = Some(n)): s.checked(homes, out) = Some(Cons(s.word(), y.union(n))) {
     match s {
-        Branch(c, ys, ns) => j(sym(yes), λ o _ => (match o as λ _ => Option<List<Nat>> {
-                None => None,
-                Some(a) => match ns.checked(homes, out) { None => None, Some(b) => Some(Cons(c, a.union(b))) },
-            }) = Some(Cons(c, y.union(n))),
-            j(sym(no), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
+        Branch(c, ys, ns) => simp_only(Stmt::checked, yes, no),
         _ => false_elim(is),
     }
 }
@@ -1130,11 +1086,7 @@ theorem Stmt::checked_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), homes:
     body: s.left().checked(homes, loop_after(s.word(), homes.loop_set(s.word()), out)) = Some(b), within: b.within(homes.loop_set(s.word())) = True):
     s.checked(homes, out) = Some(homes.loop_set(s.word())) {
     match s {
-        Repeat(bd, again) => j(sym(body), λ o _ => (match o as λ _ => Option<List<Nat>> {
-                None => None,
-                Some(x) => match x.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
-            }) = Some(homes.loop_set(again)),
-            j(sym(within), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
+        Repeat(bd, again) => simp_only(Stmt::checked, body, within),
         _ => false_elim(is),
     }
 }
