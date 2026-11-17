@@ -206,6 +206,50 @@ form adds a trusted rule or a new kernel term.
 to Omega. Other goal producers and more concise sequencing syntax can reuse it
 later without teaching individual solvers about finite case analysis.
 
+## `cases h`
+
+`cases h;` takes apart a hypothesis that says what a call returned, along
+the tests the call makes, and the rest of the block is every case that
+survives (issues/cases-on-hypothesis-tactic.md):
+
+```text
+theorem pipe_stage(n, out: Nat, ran: pipe(n) = Some(out), k: (a: Nat) → st1(n) = Some(a) → Nat): Nat {
+    cases ran as e1(a), e2(b);
+    k(a, e1)
+}
+```
+
+It is the inversion a proof writes by hand, one step at a time, each step
+checked in the case the previous one made:
+
+- `absurd(h)` when `h` now equates two constructors (`None = Some(c)`);
+- `subst(h, rest)` when it equates one constructor's applications with a
+  local in a field (`Some(x) = Some(c)`), which replaces `c` and ends the
+  inversion;
+- otherwise `match e: test { C(x̄) => <next step>, … }` on the test `h` is
+  stuck on. The test is found by `split_all`'s search for what blocks a
+  goal, except that it takes the test **as the callee wrote it**: a
+  pipeline stage `st1(n)` is split as `st1(n)`, not on the `n.leb(5)`
+  inside it, which `split_all`'s deeper-first order would reach. The
+  case split itself refines `h`, the goal and the other hypotheses it
+  reads (`docs/elaborator/goal-motive-synthesis-design.md` §4.7);
+- the rest of the block, once `h` is stuck on nothing.
+
+`as e1, e2(x, y)` names the splits' equations in the order they are taken
+along a path, and the fields of a constructor with that many fields (the
+`Some(a)` of a stage). Names also **bound** the inversion: `cases h as e1;`
+takes one split and then only closes or substitutes, so `emitted:
+(match region.scopes() { …, True => region.code(…) }) = Some(c)` stops at
+`region.code(…) = Some(c)` for a lemma about `code` rather than taking
+`code` apart too. Without names, every split is taken until `h` is stuck on
+nothing, each with a hidden name that `known` still finds. A hypothesis stuck on nothing at the start is refused (`there
+is nothing to take apart`). A split that does not refine `h` (the rest of
+the block passes `h` beside the split's equation in one call, which keeps
+`h` as written) is refused at the `cases`, not looped on.
+
+So the proof is ordinary nested matches; the kernel checks it as it checks
+the hand proof. Probes: `lib/_tests/std/tactic/cases_hypothesis_tests.hthr`.
+
 ## `decide`
 
 `decide` is a leaf, not a goal producer: at a goal `P` with a `Decide<P>`

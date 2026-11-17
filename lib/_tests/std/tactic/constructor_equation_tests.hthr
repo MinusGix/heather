@@ -127,10 +127,10 @@ fn Run::twice(self r: Run, p: List<Nat>, names: Nat) → Option<Out> {
 }
 
 // A hole under `all_goals` is one goal per case, each at its case's
-// context; a stuck match on a call's result reads as the match.
+// context; the match on a call's result is split too, `e` read at its case.
 // expect-error: ?g2 :
 // expect-error: e : leaf(w, p, names) = Some(c)
-// expect-error: match twice(body, p, names) { None => None, Some(v) => leaf(1, v.code, v.names) } = Some(c)
+// expect-error: e : leaf(1, c2.code, c2.names) = Some(c)
 theorem twice_holes(r: Run, p: List<Nat>, names: Nat, c: Out, e: r.twice(p, names) = Some(c)): Within(p, c.code) {
     induct Run::twice(r, p, names); all_goals { ? }
 }

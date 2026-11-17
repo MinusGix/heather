@@ -254,17 +254,9 @@ theorem Prog::within_leaf_into(self p: Prog, layout: Layout, out: List<Nat>, nod
     let outs = layout.leaf_outputs(nodes);
     let inputs = nodes_inputs(nodes);
     let region = leaf_region(nodes);
-    (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
-            None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs))),
-        } }) = Some(q) → p.Within(q) {
-        False => λ none => absurd(none),
-        True => (match loaded_is: p.ports_to(layout, inputs, ins) {
-            None => λ none => absurd(none),
-            Some(loaded) => λ stored => Prog::within_trans(Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
-                loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, stored)),
-        }),
-    })(emitted)
+    cases emitted as checked, loaded_is(loaded);
+    Prog::within_trans(Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+        loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, emitted))
 }
 
 theorem Prog::within_leaf(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, out, nodes) = Some(q)): p.Within(q) {

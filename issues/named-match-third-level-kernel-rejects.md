@@ -1,6 +1,6 @@
 ---
 title: Three nested match h: over one pipeline equation, and the kernel rejects what the elaborator built
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [elaborator,matching,proofs]
 area: language
@@ -41,3 +41,7 @@ Repro: `/mnt/project-files/compile-proofs/calls_built_named_match_kernel_reject.
 ## Done when
 
 `Source::calls_built` checks in the form above, and a refusal to refine a hypothesis is reported where the hypothesis is used beside `h`.
+
+## Log
+
+- 2026-11-17: fixed. The depth was not the cause: one `match h:` at a goal that is a record whose field writes the test is enough (`Found(n)` with `one: first(n) = Some(a)`), with or without a refined hypothesis. A value-parameterized record is its lowering in the goal, so the motive abstracted the test inside the field's type and the arm was to build a `Σ` that displays as the record and is not it. At a computed scrutinee the motive now reads the goal with declarations spelled as their references and abstracts at their arguments (`docs/elaborator/goal-motive-synthesis-design.md` §4.8); the "case-split" thread drafted the respelling (c9d68fb9) and this thread finished it: the exposed goal no longer leaks its respelling when the goal itself did not fold, a variable scrutinee skips it, the hypotheses a match refines by occurrence are read the same way, and a refusal inside `match h:` names the hypotheses left as written beside `h`. `Source::calls_built` is motive-free in the form above, without the annotation on its result. The kernel was never wrong and the elaborator never unsound here: the elaborator compares nothing at a `let` annotation and leaves the conversion to the gate, so "accepted then rejected" was the ordinary route with a message that could not show the difference. Left: a record with an unused parameter does not fold and still reads inside (pinned as `loose_or`).

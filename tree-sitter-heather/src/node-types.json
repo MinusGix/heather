@@ -929,6 +929,10 @@
           "named": true
         },
         {
+          "type": "cases_statement",
+          "named": true
+        },
+        {
           "type": "exit_statement",
           "named": true
         },
@@ -1092,6 +1096,58 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "cases_name",
+    "named": true,
+    "fields": {
+      "equation": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "field": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "cases_statement",
+    "named": true,
+    "fields": {
+      "hypothesis": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "cases_name",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -7127,6 +7183,10 @@
   },
   {
     "type": "calc",
+    "named": false
+  },
+  {
+    "type": "cases",
     "named": false
   },
   {

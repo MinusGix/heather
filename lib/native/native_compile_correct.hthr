@@ -176,10 +176,8 @@ theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out
 // A structured region is emitted only where it is scoped from every word.
 theorem StructuredRegion::region_extends(self region: StructuredRegion, layout: Layout, p: Prog, out: List<Nat>, names: Nat, c: Compiled,
     emitted: (match region.scopes() { False => None, True => region.code(p, layout, out, names) }) = Some(c)): p.Within(c.prog) {
-    (match region.scopes() as λ b => (match b as λ _ => Option<Compiled> { False => None, True => region.code(p, layout, out, names) }) = Some(c) → p.Within(c.prog) {
-        False => λ none => absurd(none),
-        True => λ code => region.within_code(layout, p, out, names, c, code),
-    })(emitted)
+    cases emitted as scoped;
+    region.within_code(layout, p, out, names, c, emitted)
 }
 
 theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: List<Nat>) → (known: List<Fact>) → (names: Nat) → (c: Compiled) →
@@ -642,48 +640,35 @@ theorem Target::call_runs(self t: Target, shape: CallShape, call: Writers(), per
     c.prog.Within(t.program) → t.homes.apart(shape.result(), out).IsTrue() → t.RunsK(Invoke(shape), facts, call, perform, out, p, c.prog) {
     let layout = t.layout();
     match shape {
-        Reads(fd, buf, at, len, result) => match fit: layout.words_fit([fd, at, len, result]) {
-            False => absurd(emitted),
-            True => match found: t.caps.nth(buf) {
-                None => absurd(emitted),
-                Some(capacity) => subst(emitted,
-                    λ within apart n env k knows exits next => t.goes_reads(out, env, p, facts, knows, fd, buf, at, len, result, capacity, names,
-                        layout.word_inside(fd, known), layout.word_inside(at, known), layout.word_inside(len, known),
-                        layout.word_inside(result, known), found, apart, within,
-                        λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
-                        λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))),
-            },
+        Reads(fd, buf, at, len, result) => {
+            cases emitted as fit, found(capacity);
+            λ within apart n env k knows exits next => t.goes_reads(out, env, p, facts, knows, fd, buf, at, len, result, capacity, names,
+                layout.word_inside(fd, known), layout.word_inside(at, known), layout.word_inside(len, known),
+                layout.word_inside(result, known), found, apart, within,
+                λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
+                λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))
         },
-        Writes(fd, buf, from, len, result) => match fit: layout.words_fit([fd, from, len, result]) {
-            False => absurd(emitted),
-            True => match found: t.caps.nth(buf) {
-                None => absurd(emitted),
-                Some(capacity) => subst(emitted,
-                    λ within apart n env k knows exits next => t.goes_writes(out, env, p, facts, knows, fd, buf, from, len, result, capacity, names,
-                        layout.word_inside(fd, known), layout.word_inside(from, known), layout.word_inside(len, known),
-                        layout.word_inside(result, known), found, apart, within,
-                        λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
-                        λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))),
-            },
+        Writes(fd, buf, from, len, result) => {
+            cases emitted as fit, found(capacity);
+            λ within apart n env k knows exits next => t.goes_writes(out, env, p, facts, knows, fd, buf, from, len, result, capacity, names,
+                layout.word_inside(fd, known), layout.word_inside(from, known), layout.word_inside(len, known),
+                layout.word_inside(result, known), found, apart, within,
+                λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
+                λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))
         },
-        Opens(path, len, result) => match fit: layout.words_fit([len, result]) {
-            False => absurd(emitted),
-            True => match found: t.caps.nth(path) {
-                None => absurd(emitted),
-                Some(capacity) => subst(emitted,
-                    λ within apart n env k knows exits next => t.goes_opens(out, env, p, facts, knows, path, len, result, capacity, names,
-                        layout.word_inside(len, known), layout.word_inside(result, known), found, apart, within,
-                        λ a => k(Onward(Opens(path, len, result).answer(env, a))),
-                        λ a answers => next(Opens(path, len, result).answer(env, a)))),
-            },
+        Opens(path, len, result) => {
+            cases emitted as fit, found(capacity);
+            λ within apart n env k knows exits next => t.goes_opens(out, env, p, facts, knows, path, len, result, capacity, names,
+                layout.word_inside(len, known), layout.word_inside(result, known), found, apart, within,
+                λ a => k(Onward(Opens(path, len, result).answer(env, a))),
+                λ a answers => next(Opens(path, len, result).answer(env, a)))
         },
-        Closes(fd, result) => match fit: layout.words_fit([fd, result]) {
-            False => absurd(emitted),
-            True => subst(emitted,
-                λ within apart n env k knows exits next => t.goes_closes(out, env, p, facts, knows, fd, result, layout.word_inside(fd, known), layout.word_inside(result, known),
-                    apart, within,
-                    λ a => k(Onward(Closes(fd, result).answer(env, a))),
-                    λ a answers => next(Closes(fd, result).answer(env, a)))),
+        Closes(fd, result) => {
+            cases emitted;
+            λ within apart n env k knows exits next => t.goes_closes(out, env, p, facts, knows, fd, result, layout.word_inside(fd, known), layout.word_inside(result, known),
+                apart, within,
+                λ a => k(Onward(Closes(fd, result).answer(env, a))),
+                λ a answers => next(Closes(fd, result).answer(env, a)))
         },
         StatsPath(_, _, _, _) => absurd(emitted),
         StatsFd(_, _, _) => absurd(emitted),
@@ -851,26 +836,14 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Writers(), perform: Perfo
 // A program is laid out where the check that gave it said so.
 theorem Prog::laid_of(self whole: Prog, program: Prog, same: (match whole.laid_out() { False => None, True => Some(whole) }) = Some(program)):
     program.laid_out().IsTrue() {
-    match laid: whole.laid_out() {
-        False => absurd(same),
-        True => subst(same, Bool::is_true_of_eq(laid)),
-    }
+    cases same as laid;
+    Bool::is_true_of_eq(laid)
 }
 
 theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, program: Prog, compiled: src.compile_calls(low, homes) = Some(program)):
     program.laid_out().IsTrue() {
-    let layout = src.layout(low, homes);
-    let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
-    match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
-        None => absurd(compiled),
-        Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
-            None => absurd(compiled),
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                None => absurd(compiled),
-                Some(whole) => whole.laid_of(program, compiled),
-            },
-        },
-    }
+    cases compiled as emitted, coded, linked, laid;
+    Bool::is_true_of_eq(laid)
 }
 
 // What `compile` builds is laid out: read off the check it made, so a
@@ -1524,52 +1497,29 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
     let layout = src.layout(low, homes);
     let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     let laid = src.calls_laid(low, homes, program, compiled);
-    (match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) as λ o => src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = o →
-            (match o {
-                None => None,
-                Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
-                    None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                        None => None,
-                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+    match emitted: src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+        None => absurd(compiled),
+        Some(c) => match coded: src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
+            None => absurd(compiled),
+            Some(d) => match linked: d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
+                None => absurd(compiled),
+                Some(whole) => match whole.laid_out() {
+                    False => absurd(compiled),
+                    True => {
+                        let base = d.prog.deep_exit(layout);
+                        let same: (Some(whole) = Some(program)) = compiled;
+                        let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) = subst(same, linked);
+                        let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
+                        let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
+                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, coded, program, w_d);
+                        CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
+                            λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
+                            d.prog, w_base, laid, base, d.names, linked_p)
                     },
                 },
-            }) = Some(program) → CallsBuilt(src, low, homes, program) {
-        None => λ _ none => absurd(none),
-        Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
-                src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
-                    None => None,
-                    Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, d.names) {
-                        None => None,
-                        Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
-                    },
-                }) = Some(program) → CallsBuilt(src, low, homes, program) {
-            None => λ _ none => absurd(none),
-            Some(d) => λ code => {
-                let base = d.prog.deep_exit(layout);
-                (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
-                        (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
-                        CallsBuilt(src, low, homes, program) {
-                    None => λ _ none => absurd(none),
-                    Some(whole) => λ linked => (match whole.laid_out() as λ b => (match b as λ _ => Option<Prog> { False => None, True => Some(whole) }) = Some(program) →
-                            CallsBuilt(src, low, homes, program) {
-                        False => λ none => absurd(none),
-                        True => λ same => {
-                            let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
-                                subst(same, linked);
-                            let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
-                            let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
-                            let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
-                            let r: CallsBuilt(src, low, homes, program) = CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
-                                λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
-                                d.prog, w_base, laid, base, d.names, linked_p);
-                            r
-                        },
-                    }),
-                })(refl)
             },
-        })(refl),
-    })(refl, compiled)
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

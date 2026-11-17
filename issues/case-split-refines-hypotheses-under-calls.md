@@ -66,4 +66,4 @@ Both probes above check with `False => absurd(same)`, and `Region::paired`, `Pro
   below its binders broke lemmas that take a proposition about the call
   as written (`within: p.word_from(…).Within(…)`), so only equations are
   read; `split_all` is still [[split-all-revise-hypotheses]].
-
+- 2026-11-17: Follow-ups filed: [[cases-on-hypothesis-tactic]], [[elab-whnf-stuck-on-children-binder]], [[match-eqbind-generalizes-passed-hypotheses]]; `split_all` reuse logged on [[split-all-revise-hypotheses]].

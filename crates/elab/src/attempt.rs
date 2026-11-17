@@ -124,6 +124,11 @@ pub(super) struct DeclAttempt {
     pub(super) slot_probe_target: Cell<Option<Span>>,
     /// Prevents nested motive-less match speculation.
     pub(super) motive_speculation: Cell<bool>,
+    /// Inside a case split's fold of the goal's records to their arguments
+    /// (`MotiveSynthesisElab::fold_declarations`): the instance matcher then
+    /// reads through constructor values too. Set and restored around the
+    /// fold itself, so no mark carries it.
+    pub(super) folding_for_motive: Cell<bool>,
     /// Inside the redundant-motive probe (`elab_check_skel_slots`): a written
     /// motive nested under a probed one is not probed again there. Each
     /// probe re-elaborates and kernel-checks its whole match, so probing at
@@ -161,6 +166,9 @@ pub(super) struct InstanceMatchKey {
     pub(super) d: u32,
     pub(super) g: u32,
     pub(super) scope: u32,
+    /// [`DeclAttempt::folding_for_motive`] at the time: the two modes read
+    /// different shapes and must not share an answer.
+    pub(super) for_motive: bool,
 }
 
 impl DeclAttempt {
@@ -241,6 +249,7 @@ impl DeclAttempt {
             char_literals,
             slot_probe_target,
             motive_speculation,
+            folding_for_motive: _,
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,
@@ -310,6 +319,7 @@ impl DeclAttempt {
             char_literals,
             slot_probe_target,
             motive_speculation,
+            folding_for_motive: _,
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,

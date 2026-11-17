@@ -101,8 +101,8 @@ theorem passed_h(w: Nat, k: fits(w) = False → Nat): Nat {
     match h: fits(w) { False => k(h), True => 0 }
 }
 
-// One passed beside `h` in a call stays as written too: the callee states
-// both about the test as written.
+// One passed beside `h` in a call is read as written there: the callee
+// states both about the test as written.
 theorem passed_beside(w: Nat, p, c: List<Nat>, same: Leaf(w).emits(p) = Some(c), k: fits(w) = True → Leaf(w).emits(p) = Some(c) → Nat): Nat {
     match fit: fits(w) { False => 0, True => k(fit, same) }
 }
@@ -117,5 +117,129 @@ theorem arg_not_waited(w, k: Nat, same: k.leb(sel(w)) = True): fits(w) = False �
     match fits(w) {
         False => λ _ => same,
         True => λ e => absurd(e),
+    }
+}
+
+// A record in the goal is abstracted at its arguments, never inside its
+// fields (docs/elaborator/goal-motive-synthesis-design.md §4.8,
+// issues/named-match-third-level-kernel-rejects.md): `Ran(n, out)` states
+// what `first(n)` returned, and in an arm of `match one: first(n)` it is
+// still `Ran(n, out)`, built from `one` as written.
+fn first(n: Nat) → Option<Nat> { match n.leb(3) { True => Some(n + 1), False => None } }
+fn second(n: Nat) → Option<Nat> { match n.leb(5) { True => Some(n + 2), False => None } }
+fn third(n: Nat) → Option<Nat> { match n.leb(7) { True => Some(n + 3), False => None } }
+
+fn staged(n: Nat) → Option<Nat> {
+    match first(n) {
+        None => None,
+        Some(a) => match second(a) {
+            None => None,
+            Some(b) => match third(b) {
+                None => None,
+                Some(c) => match fits(c) { False => None, True => Some(c) },
+            },
+        },
+    }
+}
+
+record Staged(n: Nat, out: Nat) {
+    a: Nat,
+    one: first(n) = Some(a),
+    b: Nat,
+    two: second(a) = Some(b),
+    three: third(b) = Some(out),
+}
+
+// Three named splits over one equation, each stage's equation a field.
+theorem staged_parts(n, out: Nat, ran: staged(n) = Some(out)): Staged(n, out) {
+    match one: first(n) {
+        None => absurd(ran),
+        Some(a) => match two: second(a) {
+            None => absurd(ran),
+            Some(b) => match three: third(b) {
+                None => absurd(ran),
+                Some(c) => match fits(c) {
+                    False => absurd(ran),
+                    True => {
+                        let same: (Some(c) = Some(out)) = ran;
+                        Staged(a, one, b, two, subst(same, three))
+                    },
+                },
+            },
+        },
+    }
+}
+
+record Found(n: Nat) { a: Nat, one: first(n) = Some(a) }
+
+// No hypothesis refined, and the arm's value stated at the record.
+theorem found_or(n: Nat, other: Found(n)): Found(n) {
+    match one: first(n) {
+        None => other,
+        Some(a) => { let r: Found(n) = Found(a, one); r },
+    }
+}
+
+// The plain form: the record is the record there too, so the field takes
+// the equation and not `refl`.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem found_plain(n: Nat, other: Found(n)): Found(n) {
+    match first(n) {
+        None => other,
+        Some(a) => Found(a, refl),
+    }
+}
+
+// A hypothesis at the record goes with the goal, as written.
+theorem found_kept(n: Nat, given: Found(n)): Found(n) {
+    match first(n) {
+        None => given,
+        Some(_) => given,
+    }
+}
+
+// A test in a record's argument is abstracted, as in any other position.
+record Holds(o: Option<Nat>) { is: o = o }
+
+theorem holds_at(n: Nat): Holds(first(n)) {
+    match first(n) {
+        None => Holds(refl),
+        Some(a) => { let r: Holds(Some(a)) = Holds(refl); r },
+    }
+}
+
+// An open element type.
+fn keep<A>(n: Nat, a: A) → Option<A> { match n.leb(3) { True => Some(a), False => None } }
+record Kept<A>(n: Nat, a: A) { x: A, is: keep(n, a) = Some(x) }
+
+theorem kept_or<A>(n: Nat, a: A, other: Kept<A>(n, a)): Kept<A>(n, a) {
+    match is: keep(n, a) {
+        None => other,
+        Some(x) => Kept(x, is),
+    }
+}
+
+// The limit: a record that does not use one of its parameters is not
+// recovered from its fields, so the motive still reads inside it and the
+// arm's value at the record as written is refused.
+record Loose(n: Nat, unused: Nat) { a: Nat, one: first(n) = Some(a) }
+
+// expect-error: they differ in something the display does not show
+theorem loose_or(n, k: Nat, other: Loose(n, k)): Loose(n, k) {
+    match one: first(n) {
+        None => other,
+        Some(a) => { let r: Loose(n, k) = Loose(a, one); r },
+    }
+}
+
+// A hypothesis one arm passes beside the equation and another needs at its
+// case: each use is read on its own
+// (docs/language/matching/arm-readings-design.md).
+fn taken(n, a, out: Nat, one: first(n) = Some(a), ran: staged(n) = Some(out)) → Nat { a }
+
+theorem beside_told(n, out: Nat, ran: staged(n) = Some(out)): Nat {
+    match one: first(n) {
+        None => absurd(ran),
+        Some(a) => taken(n, a, out, one, ran),
     }
 }

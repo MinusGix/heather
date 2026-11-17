@@ -219,7 +219,7 @@ impl Generalize<'_> {
             }
         }
         Refined {
-            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h)))),
+            positions: self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind),
             retyped: Vec::new(),
         }
     }
@@ -245,9 +245,16 @@ impl Generalize<'_> {
             .rev()
             .find(|&p| wrapped.abstract_local(&Term::Var(LocalVar((m - 1 - p) as u32))).is_some())
             .map_or(0, |p| p + 1);
+        // A record's type is about the scrutinee where its arguments are,
+        // not where a field's type happens to spell it, as the motive reads
+        // the goal (`matching::synthesize_motive`,
+        // issues/named-match-third-level-kernel-rejects.md).
         let contains = |q: usize| {
             cx.gamma.entries.get(q).is_some_and(|entry| {
-                entry.ty.shift_local((m - q) as u32).abstract_local(scrutinee).is_some()
+                let ty = entry.ty.shift_local((m - q) as u32);
+                ty.abstract_local(scrutinee).is_some()
+                    && crate::matching::MotiveSynthesisElab::fold_declarations(self.0, cx, &ty)
+                        .is_none_or(|folded| folded.abstract_local(scrutinee).is_some())
             })
         };
         let named = arm_names(arms);
@@ -276,21 +283,17 @@ impl Generalize<'_> {
         if about.is_empty() {
             return Refined::default();
         }
-        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))));
+        let positions = self.select_refined(cx, arms, expected, about, eqbind.map(|h| (scrutinee, Some(h))), eqbind);
         retyped.retain(|(q, _)| positions.contains(q));
         Refined { positions, retyped }
     }
 
     /// Of the binders `about` the scrutinee, what an arm names or the goal
-    /// mentions, closed under what their types need. Under `match h:`
-    /// (`convoy`, the scrutinee scoped in `cx`), a binder an arm names that
-    /// takes an equation about the scrutinee is left as written: it is what
-    /// the arm passes `h` to, and `h` is about the scrutinee as written. At a
-    /// computed scrutinee (`convoy`'s name of `h`), so is one an arm passes
-    /// beside `h` in one call, `InSlot => t.goes_slot(…, slot, within, …)`:
-    /// the callee states the two about the test as written, which is what
-    /// passing the evidence along is for
-    /// (issues/case-split-refines-hypotheses-under-calls.md).
+    /// mentions, closed under what their types need. Nothing is left as
+    /// written for what an arm passes it to or with: the arm has both
+    /// readings (`readings.rs`). A hypothesis named like the equation
+    /// `eqbind` is not refined for its name: the arms' mention of that name
+    /// is the equation, which a refined copy of the hypothesis would shadow.
     fn select_refined(
         &self,
         cx: &Cx,
@@ -298,6 +301,7 @@ impl Generalize<'_> {
         expected: &Type,
         about: Vec<usize>,
         convoy: Option<(&Term, Option<&str>)>,
+        eqbind: Option<&str>,
     ) -> Vec<usize> {
         let m = cx.gamma.entries.len();
         let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
@@ -311,17 +315,15 @@ impl Generalize<'_> {
         // Nothing is left as written for what the arm's source passes it
         // to or with: the arm has both readings, and each use takes the one
         // its position asks for (docs/language/matching/arm-readings-design.md).
-        // A hypothesis called what the equation is called is shadowed by it
-        // in every arm: the name an arm writes is the equation.
-        let equation = convoy.and_then(|(_, h)| h);
-        let takes_h = |q: usize| equation.is_some_and(|h| h == &cx.names[q]);
+        let _ = convoy;
         let machinery = |q: usize| machinery(cx, q);
         let mut refined: Vec<usize> = about
             .iter()
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && ((named.iter().any(|n| n == &cx.names[q]) && !takes_h(q))
+                    && ((named.iter().any(|n| n == &cx.names[q])
+                        && eqbind.is_none_or(|h| h != &cx.names[q]))
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
@@ -501,33 +503,6 @@ fn arm_names(arms: &[Arm]) -> Vec<String> {
     named
 }
 
-/// The names an arm passes as arguments of one call beside `h`, the
-/// equation of a `match h:` (a method call's receiver is not one of them).
-fn passed_beside(arms: &[Arm], h: &str) -> Vec<String> {
-    let mut beside: Vec<String> = Vec::new();
-    for arm in arms {
-        walk_expr(&arm.body, &mut |e| {
-            let (args, named) = match &e.kind {
-                ExprKind::App { args, named, .. } => (args, named),
-                ExprKind::Dot { args: Some(args), named, .. } => (args, named),
-                _ => return,
-            };
-            let names: Vec<&str> = args
-                .iter()
-                .chain(named.iter().map(|arg| &arg.expr))
-                .filter_map(|arg| match &arg.kind {
-                    ExprKind::Var(name) => Some(name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            if names.contains(&h) {
-                beside.extend(names.into_iter().filter(|&n| n != h).map(str::to_string));
-            }
-        });
-    }
-    beside
-}
-
 /// A hidden `#` binder or a reserved `__` one: the machinery's, never refined.
 fn machinery(cx: &Cx, q: usize) -> bool {
     cx.names[q].starts_with('#') || cx.names[q].starts_with("__")
@@ -628,30 +603,6 @@ mod tests {
         let back =
             cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Var(LocalVar(0)))));
         assert_eq!(back, goal);
-    }
-}
-
-/// Does `ty` take an equation about `scrutinee` — is one of its Π
-/// telescope's domains `scrutinee = c` or `c = scrutinee`? Both scoped in
-/// the same context; the scrutinee is weakened past each Π it crosses.
-fn takes_equation_about(ty: &Type, scrutinee: &Term) -> bool {
-    let mut ty = ty;
-    let mut s = scrutinee.clone();
-    loop {
-        let Type::Pi { dom, cod, .. } = ty else { return false };
-        let sides = match &**dom {
-            Type::Id { lhs, rhs, .. } => Some((lhs, rhs)),
-            Type::El { tm, .. } => match &**tm {
-                Term::TmId { lhs, rhs, .. } => Some((lhs, rhs)),
-                _ => None,
-            },
-            _ => None,
-        };
-        if sides.is_some_and(|(l, r)| **l == s || **r == s) {
-            return true;
-        }
-        s = s.shift_local(1);
-        ty = cod;
     }
 }
 

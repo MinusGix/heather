@@ -70,7 +70,7 @@ fn argument() -> X { g("text") }
 Byte strings
 ==================
 
-fn bare() -> X { b"valid\n" }
+fn bare() -> X { b"valid\n\xC3\xa9" }
 fn argument() -> X { g(b"", b) }
 
 ---

@@ -4,7 +4,9 @@
 // numerals and character literals a reader would write instead, in
 // inference and checking position, before an open list, at the escapes and
 // past the length where a literal becomes one kernel node; the last probes
-// are the negative controls. Tests, not library: nothing outside lib/_tests
+// are the negative controls (a refusal of the lexer, a character past
+// ASCII or a short `\x`, refuses the whole file, so those are the Rust
+// lexer's tests). Tests, not library: nothing outside lib/_tests
 // imports this module.
 import list; import bitvec; import byte;
 
@@ -23,9 +25,13 @@ theorem valid_list_length(): valid_list().len() = 6 { refl }
 // decides.
 theorem after_open(x: u8): Cons(x, b"ab") = [x, 'a', 'b'] { refl }
 
-// The escapes a string has, each one byte.
-fn escapes() → List<u8> { b"\t\r\\\"\'\0\u{7f}" }
+// The escapes a string has but `\u{…}`, each one byte, and `\xHH` for
+// any byte, past ASCII too, in either case.
+fn escapes() → List<u8> { b"\t\r\\\"\'\0\x7f" }
 theorem escapes_are(): escapes() = [9, 13, 92, 34, 39, 0, 127] { refl }
+fn high() → [u8; 4] { b"\xff\x80\xC3\xa9" }
+theorem high_is_numerals(): high() = [0xFF, 0x80, 0xC3, 0xA9] { refl }
+theorem hex_is_the_character(): b"\x41\x0a" = b"A\n" { refl }
 
 // The empty byte string, and `b` as an ordinary name beside one.
 fn nothing() → [u8; 0] { b"" }
