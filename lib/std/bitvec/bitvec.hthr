@@ -2526,3 +2526,97 @@ fn BitVec::bit_at({n: Nat}, self x: BitVec(n), k: Nat) → Bool {
         },
     })(x, k)
 }
+
+theorem BitVec::sub_bits_next_eq({n: Nat}, a, b: BitVec(n), borrow: Bool, rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)): BitVec::sub_bits_next(a, b, borrow, rest) = rest(a, b, borrow) {
+    match borrow { False => refl, True => refl }
+}
+
+// Subtraction is addition of the complement with the borrow flipped: the
+// difference bit is the sum bit, and no borrow out is a carry out.
+theorem BitVec::sum_bit_flip(a, b, t: Bool): BitVec::sum_bit(a, b, t) = BitVec::sum_bit(a, !b, !t) {
+    match a {
+        False => match b { False => match t { False => refl, True => refl }, True => match t { False => refl, True => refl } },
+        True => match b { False => match t { False => refl, True => refl }, True => match t { False => refl, True => refl } },
+    }
+}
+
+theorem BitVec::borrow_by_carry(a, b, t: Bool): !BitVec::borrow_next(a, b, t) = BitVec::carry_majority(a, !b, !t) {
+    match a {
+        False => match b { False => match t { False => refl, True => refl }, True => match t { False => refl, True => refl } },
+        True => match b { False => match t { False => refl, True => refl }, True => match t { False => refl, True => refl } },
+    }
+}
+
+theorem BitVec::sub_bits_by_add(n: Nat, a, b: BitVec(n), t: Bool): a.sub_bits(b, t) = a.add_bits(b.complement(), !t) {
+    match n {
+        Zero => refl,
+        Succ(k) => {
+            let ah = a.head_bit();
+            let bh = b.head_bit();
+            let at = a.tail_bits();
+            let bt = b.tail_bits();
+            let bn = BitVec::borrow_next(ah, bh, t);
+            let rest: (BitVec::sub_bits_next(at, bt, bn, λ x y s => x.sub_bits(y, s)) = BitVec::add_bits_next(at, bt.complement(), BitVec::carry_majority(ah, !bh, !t), λ x y s => x.add_bits(y, s))) =
+                trans(BitVec::sub_bits_next_eq(at, bt, bn, λ x y s => x.sub_bits(y, s)),
+                    trans(BitVec::sub_bits_by_add(k, at, bt, bn),
+                        trans(@cong(λ (s: Bool) => at.add_bits(bt.complement(), s), !bn, BitVec::carry_majority(ah, !bh, !t), BitVec::borrow_by_carry(ah, bh, t)),
+                            sym(BitVec::add_bits_next_eq(at, bt.complement(), BitVec::carry_majority(ah, !bh, !t), λ x y s => x.add_bits(y, s))))));
+            BitVec::cons_bit_cong(k, BitVec::sum_bit_flip(ah, bh, t), rest)
+        },
+    }
+}
+
+theorem BitVec::not_bool_eq(a, b: Bool): !BitVec::bool_eq(a, b) = a.xor(b) {
+    match a { False => match b { False => refl, True => refl }, True => match b { False => refl, True => refl } }
+}
+
+// The sign is the top bit.
+theorem BitVec::get_last(k: Nat, x: BitVec(Succ(k))): x.get(BitVec::last_index(k)) = x.bit_at(k) {
+    match k {
+        Zero => refl,
+        Succ(j) => BitVec::get_last(j, x.tail_bits()),
+    }
+}
+
+theorem BitVec::sign_bit_at(n: Nat, x: BitVec(n)): x.sign_bit() = x.bit_at(n.pred()) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::get_last(k, x),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words given bit by bit. Each shape operation (`concat`, `zero_extend`,
+// `truncate`, `sign_extend`, slices) is, at a closed width, the word whose
+// bit `k` is read off its operands by `bit_at`; these spell that reading
+// once, for the bit-blaster (`lib/std/tactic/bitblast.hthr`).
+
+fn BitVec::tabulate({n: Nat}, f: Nat → Bool) → BitVec(n) {
+    (match n as λ k => (Nat → Bool) → BitVec(k) {
+        Zero => λ f => BitVec::nil(),
+        Succ(_, ih) => λ f => ih(λ i => f(Succ(i))).cons_bit(f(0)),
+    })(f)
+}
+
+theorem BitVec::tabulate_cong(n: Nat, f, g: Nat → Bool, same: (k: Nat) → f(k) = g(k)): BitVec::tabulate(f, n := n) = BitVec::tabulate(g, n := n) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, same(0), BitVec::tabulate_cong(k, λ i => f(Succ(i)), λ i => g(Succ(i)), λ i => same(Succ(i)))),
+    }
+}
+
+fn BitVec::choose_bit(c, a, b: Bool) → Bool { match c { True => a, False => b } }
+
+// Bits `skip, skip + 1, …` of `x`, zeros past its width: an extract, a
+// truncation or a zero extension.
+fn BitVec::bits_from({m, n: Nat}, self x: BitVec(m), skip: Nat) → BitVec(n) { BitVec::tabulate(λ k => x.bit_at(skip + k)) }
+
+// `x` read in two's complement at width `n`: its bits, then its sign.
+fn BitVec::sign_bits({m, n: Nat}, self x: BitVec(m)) → BitVec(n) {
+    BitVec::tabulate(λ k => BitVec::choose_bit(Succ(k).leb(m), x.bit_at(k), x.bit_at(m.pred())))
+}
+
+// `lo`'s bits, then `hi`'s.
+fn BitVec::join_bits({m1, m2, n: Nat}, self lo: BitVec(m1), hi: BitVec(m2)) → BitVec(n) {
+    BitVec::tabulate(λ k => BitVec::choose_bit(Succ(k).leb(m1), lo.bit_at(k), hi.bit_at(k - m1)))
+}

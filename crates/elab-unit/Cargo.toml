@@ -29,6 +29,8 @@ value-metrics = ["heather-kernel-lib/value-metrics"]
 [dependencies]
 heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
+# CaDiCaL, which the `Sat` host request asks (`src/host/sat.rs`).
+heather-sat = { path = "../sat" }
 heather-syntax = { path = "../syntax" }
 # The process allocator (`ALLOC` in crates/elab/src/lib.rs; issues/global-allocator.md).
 # mimalloc 2, not 3: Rust states an alignment with every request, and

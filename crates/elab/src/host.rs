@@ -80,6 +80,8 @@ use crate::app_unify::AppUnify;
 use crate::inference::Inference;
 use crate::traits::ClassesMut;
 
+mod sat;
+
 /// Fuel for **one force** of the tree's value graph — the kernel's own
 /// default, deliberately not a bespoke larger one. Each force runs on the
 /// **shared** graph, where the bounded cache avoids recent repeated work, so
@@ -100,11 +102,74 @@ pub(crate) struct Reader<'a, 'v> {
     /// read, which is the soundness condition `GlobalCache` states for
     /// itself.
     cache: reduce::GlobalCache,
+    /// What one force may spend.
+    fuel: u64,
 }
 
 impl<'a, 'v> Reader<'a, 'v> {
     pub(crate) fn new(psi: &'a GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
-        Reader { psi, arena, cache: reduce::GlobalCache::for_psi(psi) }
+        Reader { psi, arena, cache: reduce::GlobalCache::for_psi(psi), fuel: READ_FUEL }
+    }
+
+    /// A reader whose forces may each spend `fuel`.
+    pub(crate) fn with_fuel(psi: &'a GlobalCtx, arena: &'v ValueArena<'v>, fuel: u64) -> Reader<'a, 'v> {
+        Reader { fuel, ..Reader::new(psi, arena) }
+    }
+
+    /// A two-constructor inductive's value: the constructor's number (0 or
+    /// 1), its non-recursive fields and its recursive children, in
+    /// declaration order (`List`: `Nil`, and `Cons`'s head and tail).
+    pub(crate) fn ctor(&self, c: &'v TmClo<'v>) -> Result<(usize, Vec<&'v TmClo<'v>>, Vec<&'v TmClo<'v>>), String> {
+        let w = self.force(c)?;
+        let (label, children) = match &*w {
+            Val::Supf { label, children, .. } => (*label, self.spine(children)?),
+            _ => (self.arena.tm(TmClo::val(w)), vec![]),
+        };
+        let (index, payload) = match &*self.force(label)? {
+            Val::Inl { val, .. } => (0, *val),
+            Val::Inr { val, .. } => (1, *val),
+            other => return Err(format!("a value that is not a constructor: {other:?}")),
+        };
+        let Val::Pair { snd, .. } = &*self.force(payload)? else {
+            return Err("a constructor whose payload is not a pair".into());
+        };
+        Ok((index, self.spine(snd)?, children))
+    }
+
+    /// The components of a right-nested tuple ending in `⟨⟩`.
+    fn spine(&self, c: &'v TmClo<'v>) -> Result<Vec<&'v TmClo<'v>>, String> {
+        let mut out = Vec::new();
+        let mut v = self.force(c)?;
+        loop {
+            let next = match &*v {
+                Val::Triv { .. } => return Ok(out),
+                Val::Pair { fst, snd, .. } => {
+                    out.push(*fst);
+                    *snd
+                }
+                _ => return Err("a tuple that is not a chain of pairs".into()),
+            };
+            v = self.force(next)?;
+        }
+    }
+
+    /// A `List`'s elements, at most `cap` of them.
+    pub(crate) fn list(&self, c: &'v TmClo<'v>, cap: usize) -> Result<Vec<&'v TmClo<'v>>, String> {
+        let mut out = Vec::new();
+        let mut cell = c;
+        loop {
+            match self.ctor(cell)? {
+                (0, _, _) => return Ok(out),
+                (1, fields, children) if fields.len() == 1 && children.len() == 1 => {
+                    if out.len() >= cap {
+                        return Err(format!("a list longer than {cap}"));
+                    }
+                    out.push(fields[0]);
+                    cell = children[0];
+                }
+                _ => return Err("a value that is not a list".into()),
+            }
+        }
     }
 
     /// A closed term as a sub-structure of the value graph — the root a read
@@ -118,7 +183,7 @@ impl<'a, 'v> Reader<'a, 'v> {
     /// bounded cache shares recent forces while allowing values the walk has
     /// left behind to be reclaimed.
     pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, String> {
-        let mut ev = Eval::new(READ_FUEL, Defs::transparent_cached(self.psi, &self.cache), CtxBase::Nil, self.arena);
+        let mut ev = Eval::new(self.fuel, Defs::transparent_cached(self.psi, &self.cache), CtxBase::Nil, self.arena);
         ev.force(c).and_then(|v| ev.delta_whnf(v)).map_err(|_| "the host query ran out of fuel".to_string())
     }
 
@@ -441,6 +506,18 @@ pub enum Request {
     SimpCheck(Vec<RExpr>),
     /// The numeral a closed term of type `Nat` computes to.
     Numeral(RExpr),
+    /// A closed clause list, given to the SAT solver, and how many
+    /// variables' values a model reports.
+    Sat(RExpr, u64),
+}
+
+/// The solver's verdict, as `Sat` answers it (`tactic::SatVerdict`): a
+/// handle to the refutation, or the model's values of the variables asked
+/// about, the lowest first.
+#[derive(Clone, Debug)]
+pub enum SatView {
+    Refuted(u64),
+    Model(Vec<bool>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -516,6 +593,7 @@ pub enum Answer {
     /// The type's reference, and each field's name and a handle to its
     /// projection (`Fields`).
     Fields(Result<(u64, Vec<(String, u64)>), String>),
+    Sat(Result<SatView, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -892,6 +970,15 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Fields(Err(why)) => self.call("host_no_fields", vec![self.string_value(why)?]),
+            Answer::Sat(Ok(SatView::Refuted(h))) => self.call("host_sat_refuted", vec![self.lit(*h)]),
+            Answer::Sat(Ok(SatView::Model(bits))) => {
+                let mut out = self.call("host_sat_model", vec![])?;
+                for b in bits {
+                    out = self.call("host_sat_model_next", vec![out, self.lit(*b as u64)])?;
+                }
+                Ok(out)
+            }
+            Answer::Sat(Err(why)) => self.call("host_sat_refused", vec![self.string_value(why)?]),
         }
     }
 
@@ -1025,6 +1112,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             37 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Numeral(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
+            38 => {
+                let mut budget = READ_BUDGET;
+                let cs = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Sat(cs, self.nat_of("host_hole_count", vec![tree])?)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -2007,6 +2099,7 @@ impl Host<'_> {
                 Request::Simp(laws, goal) => Answer::Handle(refusable(self.simp_request(run, &laws, goal, span))?),
                 Request::SimpCheck(laws) => Answer::Handle(refusable(self.simp_check_request(run, &laws, span))?),
                 Request::Numeral(e) => Answer::Handle(refusable(self.numeral_request(run, &e))?),
+                Request::Sat(cs, vars) => Answer::Sat(refusable(self.sat_request(run, &cs, vars))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
