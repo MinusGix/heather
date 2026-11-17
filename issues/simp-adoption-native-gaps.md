@@ -156,7 +156,11 @@ function returns what its stages returned: `Source::compile_calls_ran`,
 transports with written motives stood). Ten more of the same shape stay by
 hand, and why (each line of the call that was tried is in the theorem named):
 
-17. **A structural function at a constructor is not computed.** In the
+17. ~~**A structural function at a constructor is not computed.**~~ (fixed
+    2026-11-17: the selected arm is taken when it is a match whose scrutinee
+    spells; `procedures_code_of`, `emits_then_of`, `emits_repeat_of`,
+    `emits_branch_of` and the three `checked_*_of` are one call each, which
+    also retires item 19.) As found: In the
     `Then(f, r)` arm of `Stmt::checked_then_of`, `simp_only(Stmt::checked,
     rest, first)` reports `checked(Then(f, r), homes, out)` and "no law
     fired"; the same for `Stmt::emits` at `Then`/`Branch`/`Repeat`
@@ -197,3 +201,4 @@ read through `reads_known`'s own unfolding, which is 17 again.
 A conditional law blocked at its first instance hides the rest
 (span read-over-write laws, 2026-11-16): [[simp-blocked-instance-hides-later-ones]].
 - 2026-11-17: The compile converses (section above): three converses of native_compile_correct.hthr are one simp_only each; items 17 to 20 keep ten more by hand.
+- 2026-11-17: Item 17 fixed (recursion_at_constructor takes an arm that is a match on a spelled scrutinee); seven more converses converted; 18 and 20 and live_head_plain remain.

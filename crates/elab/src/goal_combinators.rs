@@ -1106,6 +1106,25 @@ fn recursion_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<T
                     return None;
                 }
             }
+            // The arm selected, itself a match on what nothing decides yet:
+            // a later stage's result (`match rest.checked(out) { None =>
+            // None, Some(m) => first.checked(m) }`). It has no surface
+            // spelling, but its scrutinee does, and that is what a
+            // hypothesis about the stage rewrites until the match selects
+            // its arm: taken as [`unfolded_by_name`] takes such a body
+            // (issues/simp-adoption-native-gaps.md, item 17).
+            if fired
+                && !fires
+                && let Term::Case { scrut, .. } = &reduct
+                && !matches!(&**scrut, Term::Inl { .. } | Term::InlAt { .. } | Term::Inr { .. } | Term::InrAt { .. })
+            {
+                let arm = contracted(elab, cx, &oracle, &reduct, &mut 256);
+                let Term::Case { scrut, .. } = &arm else {
+                    return None;
+                };
+                elab.spell_term_source(cx, scrut)?;
+                return Some(arm);
+            }
             fired = true;
             continue;
         }

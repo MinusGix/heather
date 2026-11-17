@@ -489,3 +489,50 @@ theorem below_forall_result<A>(xs, ys: List<A>): ((a: A) → Mem(a, xs ++ ys)) �
 theorem below_exists_result<A>(xs, ys: List<A>): Exists(λ (a: A) => Mem(a, xs ++ ys)) → False {
     simp_show(List::mem_append_iff)
 }
+
+// ---- A recursive definition's arm that is a match on a stage's result ----
+// (issues/simp-adoption-native-gaps.md, item 17). The arm `Seq` selects is
+// `match rest.checked(out) { … }`, which no source spells; its scrutinee
+// does, and the hypothesis about the stage rewrites it.
+
+inductive Staged<A> { Leaf(w: A), Seq(first: Staged<A>, rest: Staged<A>), Loop(body: Staged<A>, again: A) }
+
+fn Staged::checked<A>(self s: Staged<A>, out: List<A>) → Option<List<A>> {
+    match s {
+        Leaf(w) => Some(Cons(w, out)),
+        Seq(first, rest) => match rest.checked(out) { None => None, Some(m) => first.checked(m) },
+        Loop(body, again) => match body.checked(out) { None => None, Some(m) => Some(Cons(again, m)) },
+    }
+}
+
+fn Staged::left<A>(self s: Staged<A>) → Staged<A> { match s { Seq(first, _) => first, Loop(body, _) => body, _ => s } }
+fn Staged::right<A>(self s: Staged<A>) → Staged<A> { match s { Seq(_, rest) => rest, _ => s } }
+fn Staged::is_seq<A>(self s: Staged<A>) → Bool { match s { Seq(_, _) => True, _ => False } }
+
+// The stages' results as hypotheses, at an open element type.
+theorem staged_seq_of<A>(f, r: Staged<A>, out, mid, l: List<A>, rest: r.checked(out) = Some(mid), first: f.checked(mid) = Some(l)):
+    Seq(f, r).checked(out) = Some(l) {
+    simp_only(Staged::checked, rest, first)
+}
+
+// A literal stage computes whole; the neutral one waits for its hypothesis.
+theorem staged_literal(f: Staged<Nat>, l: List<Nat>, first: f.checked([7]) = Some(l)): Seq(f, Leaf(7)).checked([]) = Some(l) {
+    simp_only(Staged::checked, first)
+}
+
+// The statement at a variable with its parts by position, proved in the
+// arm: the hypotheses are read at the constructor.
+theorem staged_by_parts<A>(s: Staged<A>, is: s.is_seq().IsTrue(), out, mid, l: List<A>, rest: s.right().checked(out) = Some(mid),
+    first: s.left().checked(mid) = Some(l)): s.checked(out) = Some(l) {
+    match s {
+        Seq(_, _) => simp_only(Staged::checked, rest, first),
+        _ => false_elim(is),
+    }
+}
+
+// A stage nothing says the result of: the match stays, and the report
+// spells its scrutinee's call.
+// expect-error: the two sides do not meet
+theorem staged_undecided<A>(f, r: Staged<A>, out, l: List<A>): Seq(f, r).checked(out) = Some(l) {
+    simp_only(Staged::checked)
+}

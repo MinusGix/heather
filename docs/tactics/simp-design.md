@@ -625,6 +625,17 @@ rewrite the scrutinee until the match selects its arm. A recursive
 definition's body is its recursor, never such a match, so this admits no
 raw recursion.
 
+A structurally recursive definition at a constructor computes to the arm
+selected, its recursive calls spelled as calls
+(`goal_combinators::recursion_at_constructor`), and the same exception
+holds for that arm: one that is a match on a stage's result (`Seq`'s arm of
+a checker, `match rest.checked(out) { None => None, Some(m) =>
+first.checked(m) }`) is taken when its scrutinee spells, so a hypothesis
+`rest.checked(out) = Some(mid)` rewrites it and the match selects. The
+converses of `lib/native/native_compile_correct.hthr` (`Stmt::emits_then_of`,
+`checked_branch_of`, …) are one call each by it
+(`issues/simp-adoption-native-gaps.md`, item 17).
+
 ### 14.1 What the native chains needed besides (2026-11-12, second pass)
 
 Each of these was found by converting a chain in `rt_loop.hthr` and is
