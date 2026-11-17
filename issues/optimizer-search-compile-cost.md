@@ -30,3 +30,7 @@ Routes, cheapest first:
 4. The e-graph of §9.4 in `docs/native/optimizer-rules-design.md`: classes shared across the whole function, built once.
 
 Measure with `scripts/perf ab` on a SHA-256 export's `compile-x86`, and with the gate's own CPU figures in the suite's "processes past 60% of their own CPU rail" section.
+
+## Log
+
+- 2026-11-17: 2026-11-17: the reads now run on the untrusted evaluator (`crates/run`, `docs/infrastructure/untrusted-evaluator-design.md`), since profiling showed the cost was the kernel's evaluator doing an interpreter's work (glue, motives, an arena that frees nothing) and, inside the walks, `NatMap` gets and sets over `Nat` arithmetic, not rule matching. On SHA-256's compress every read runs there and the assembly is unchanged; the reads' share of a compile over warm modules fell from the largest part to about a quarter. What is largest now is not the search: each stage's output is spelled as text and elaborated again (the `opt_made_*` modules), some of them twice. The rule tables are also indexed by node kind (`ByKind`), a small gain. Routes 1 to 4 above still apply to what the walks cost on the new machine. The gate keeps its 900 s rail until the stage re-elaboration is cut.
