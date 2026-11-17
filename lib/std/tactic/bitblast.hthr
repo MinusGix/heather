@@ -176,12 +176,12 @@ theorem Nat::half_succ_mul_two(self x: Nat): (x * 2 + 1).half() = x {
 
 theorem Nat::low_bit_mul_two(self x: Nat): (x * 2).low_bit() = 0 {
     let h: (x * 2 - (x * 2).half() * 2 = x * 2 - x * 2) = rewrite(x.half_mul_two(), refl);
-    trans(h, omega)
+    trans((x * 2).low_bit_sub(), trans(h, omega))
 }
 
 theorem Nat::low_bit_succ_mul_two(self x: Nat): (x * 2 + 1).low_bit() = 1 {
     let h: (x * 2 + 1 - (x * 2 + 1).half() * 2 = x * 2 + 1 - x * 2) = rewrite(x.half_succ_mul_two(), refl);
-    trans(h, omega)
+    trans((x * 2 + 1).low_bit_sub(), trans(h, omega))
 }
 
 theorem Lit::code_true(self l: Lit, v: Nat → Bool): lit_true(l.code(), v) = l.value(v) {

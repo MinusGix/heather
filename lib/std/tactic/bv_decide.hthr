@@ -22,8 +22,14 @@
 // Read: `+ - *`, negation, `& | ^`, complement, shifts by a numeral,
 // `zero_extend`, `truncate`, `take_low`, `drop_low`, `sign_extend`, `concat`,
 // numerals, and at the Boolean level `&& || !`, `xor`, `bool_eq`, `eq_bit`,
-// `unsigned_lt_bit`, `signed_lt_bit`, `bit_at` at a numeral, `head_bit`. A goal is `a = b` between words,
-// `p = q` between Booleans, or `p = True`.
+// `unsigned_lt_bit`, `signed_lt_bit`, `bit_at` at a numeral, `head_bit`.
+//
+// A claim (`BVClaim`) is `a = b` between words, `p = q` between Booleans,
+// `p = True`, or `a < b`, `a <= b`, `a ≠ b` between words. The goal is one,
+// and so is each hypothesis the tactic can read; the rest are passed over.
+// The predicate refuted is `¬h₁ ∨ … ∨ ¬hₖ ∨ goal`, and the read-back peels
+// one hypothesis at a time (`layout_imp`), each discharged by its own proof
+// carried to the layout (`layout_*_hyp`).
 import tactic;
 import list;
 import bool;
