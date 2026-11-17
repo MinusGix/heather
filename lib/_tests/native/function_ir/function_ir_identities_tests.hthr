@@ -1,0 +1,23 @@
+// The identities as a set of rules (lib/native/function_ir/function_ir_identities.hthr):
+// a module that imports them searches and replays with them, by the
+// registry alone. Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_identities;
+import function_ir_learn;
+import function_ir_optimize;
+import function_ir_replay;
+import function_ir_rule;
+import function_ir_rules;
+import bool; import list; import nat; import option;
+
+// `((x + y) - y) | (x ^ x)`: the sum taken back is `x`, the xor is zero,
+// and then the or with that zero is `x` again, which is found on the walk
+// after the first, since a rule reads what the walk has made.
+fn tangled() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Sub(64, 4, 3, 2), BitXor(64, 5, 1, 1), BitOr(64, 6, 4, 5)], Ports([]))), 6, 1)
+}
+
+fn untangled() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), tangled(), tangled().learn_plan()) }
+
+theorem tangled_untangled(): untangled() =
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Move(64, 4, 1), Const(64, 5, 0), Move(64, 6, 4)], Ports([]))), 6, 1)) { refl }

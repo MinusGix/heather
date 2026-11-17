@@ -70,7 +70,10 @@ import omega;
 // Where each piece starts, inside what it builds
 
 theorem Prog::within_exits(self p: Prog, layout: Layout, known: List<Fact>, status: Nat): p.Within(p.exits(layout, known, status)) {
-    p.within_trans(p.known_to(layout, known, status, Rdi), p.exits(layout, known, status), p.within_known_to(layout, known, status, Rdi), Exists(2, refl))
+    calc {
+        p <= p.known_to(layout, known, status, Rdi) := p.within_known_to(layout, known, status, Rdi),
+        <= p.exits(layout, known, status) := Exists(2, refl),
+    }
 }
 
 // The calls' code from its start: fixed runs of items between the words'
@@ -88,12 +91,15 @@ theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out:
     let asked = then(r4, Syscall);
     let done = Succ(Succ(Succ(Succ(names))));
     let copied = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, done)).copy_in(layout, buf, Succ(Succ(Succ(names))), done).label(done);
-    p.within_trans(r0, whole, p.within_known_to(layout, known, at, R8),
-        r0.within_trans(r1, whole, Exists(6, refl),
-            r1.within_trans(r2, whole, r1.within_known_to(layout, known, len, Rdx),
-                r2.within_trans(r3, whole, Exists(5, refl),
-                    r3.within_trans(r4, whole, r3.within_known_to(layout, known, fd, Rdi),
-                        r4.within_trans(copied, whole, Exists(12, refl), copied.within_word_from(layout, out, result, Rax)))))))
+    calc {
+        p <= r0 := p.within_known_to(layout, known, at, R8),
+        <= r1 := Exists(6, refl),
+        <= r2 := r1.within_known_to(layout, known, len, Rdx),
+        <= r3 := Exists(5, refl),
+        <= r4 := r3.within_known_to(layout, known, fd, Rdi),
+        <= copied := Exists(12, refl),
+        <= whole := copied.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result, capacity, names: Nat):
@@ -107,12 +113,15 @@ theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out
     let w3 = then(room, Block([MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))]));
     let w4 = w3.known_to(layout, known, fd, Rdi);
     let asked = then(w4, Syscall);
-    p.within_trans(w0, whole, p.within_known_to(layout, known, from, R8),
-        w0.within_trans(w1, whole, Exists(6, refl),
-            w1.within_trans(w2, whole, w1.within_known_to(layout, known, len, Rdx),
-                w2.within_trans(w3, whole, Exists(5, refl),
-                    w3.within_trans(w4, whole, w3.within_known_to(layout, known, fd, Rdi),
-                        w4.within_trans(asked, whole, w4.within_then(0, Syscall), asked.within_word_from(layout, out, result, Rax)))))))
+    calc {
+        p <= w0 := p.within_known_to(layout, known, from, R8),
+        <= w1 := Exists(6, refl),
+        <= w2 := w1.within_known_to(layout, known, len, Rdx),
+        <= w3 := Exists(5, refl),
+        <= w4 := w3.within_known_to(layout, known, fd, Rdi),
+        <= asked := w4.within_then(0, Syscall),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, capacity, names: Nat):
@@ -126,9 +135,12 @@ theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, b
     let copied = then(then(counted, Block([CmpRR(Rcx, R9)])), Jcc(AE, past)).arg_pointer(layout, buf, capacity, head).arg_copy(head, Succ(Succ(head)), Succ(head));
     let found = then(then(copied.label(Succ(Succ(head))), Block([MovRR(Rax, R8)])), Jmp(after));
     let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(after);
-    p.within_trans(loaded, whole, Exists(3, refl),
-        loaded.within_trans(counted, whole, loaded.within_word_to(layout, index, Rcx),
-            counted.within_trans(missing, whole, Exists(21, refl), missing.within_word_from(layout, out, len, Rax))))
+    calc {
+        p <= loaded := Exists(3, refl),
+        <= counted := loaded.within_word_to(layout, index, Rcx),
+        <= missing := Exists(21, refl),
+        <= whole := missing.within_word_from(layout, out, len, Rax),
+    }
 }
 
 theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result, capacity, names: Nat):
@@ -140,8 +152,11 @@ theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out:
     let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
     let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
     let asked = then(then(ended, Block(asking)), Syscall);
-    p.within_trans(r0, whole, p.within_known_to(layout, known, len, Rcx),
-        r0.within_trans(asked, whole, Exists(20, refl), asked.within_word_from(layout, out, result, Rax)))
+    calc {
+        p <= r0 := p.within_known_to(layout, known, len, Rcx),
+        <= asked := Exists(20, refl),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat): p.Within(p.closes(layout, known, out, fd, result)) {
@@ -149,9 +164,12 @@ theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out
     let c0 = then(p, Block([MovRI(Rax, BitVec::ofNat(3))]));
     let c1 = c0.known_to(layout, known, fd, Rdi);
     let asked = then(c1, Syscall);
-    p.within_trans(c0, whole, p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
-        c0.within_trans(c1, whole, c0.within_known_to(layout, known, fd, Rdi),
-            c1.within_trans(asked, whole, c1.within_then(0, Syscall), asked.within_word_from(layout, out, result, Rax))))
+    calc {
+        p <= c0 := p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
+        <= c1 := c0.within_known_to(layout, known, fd, Rdi),
+        <= asked := c1.within_then(0, Syscall),
+        <= whole := asked.within_word_from(layout, out, result, Rax),
+    }
 }
 
 // What a statement compiles to starts where it was given its start.
@@ -169,42 +187,33 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
     match s {
         Compute(region) => match region {
             Dataflow(body) => λ p out known names c emitted => p.within_computes_best(layout, out, body.nodes, names, c, emitted),
-            Sequence(prefix, continuation) => λ p out known names c emitted => Sequence(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
-            Compose(prefix, continuation) => λ p out known names c emitted => Compose(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
-            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_extends(layout, p, out, names, c, emitted),
-            Lend(views, callee, arguments, result) => λ p out known names c emitted => Lend(views, callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
-            Call(callee, arguments, result) => λ p out known names c emitted => Call(callee, arguments, result).region_extends(layout, p, out, names, c, emitted),
-            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_extends(layout, p, out, names, c, emitted),
+            _ => λ p out known names c emitted => region.region_extends(layout, p, out, names, c, emitted),
         },
         Invoke(shape) => λ p out known names c => match shape {
             Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
                 False => λ none => absurd(none),
                 True => match layout.capacities.nth(buf) {
                     None => λ none => absurd(none),
-                    Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names), c, same),
-                        λ x _ => p.Within(x.prog), p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
+                    Some(capacity) => λ same => subst(same, p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
                 },
             },
             Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
                 False => λ none => absurd(none),
                 True => match layout.capacities.nth(buf) {
                     None => λ none => absurd(none),
-                    Some(capacity) => λ same => j(Option::some_inj(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names), c, same),
-                        λ x _ => p.Within(x.prog), p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
+                    Some(capacity) => λ same => subst(same, p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
                 },
             },
             Opens(path, len, result) => match layout.words_fit([len, result]) {
                 False => λ none => absurd(none),
                 True => match layout.capacities.nth(path) {
                     None => λ none => absurd(none),
-                    Some(capacity) => λ same => j(Option::some_inj(p.opens(layout, known, out, path, len, result, capacity, names), c, same),
-                        λ x _ => p.Within(x.prog), p.within_opens(layout, known, out, path, len, result, capacity, names)),
+                    Some(capacity) => λ same => subst(same, p.within_opens(layout, known, out, path, len, result, capacity, names)),
                 },
             },
             Closes(fd, result) => match layout.words_fit([fd, result]) {
                 False => λ none => absurd(none),
-                True => λ same => j(Option::some_inj(Compiled(p.closes(layout, known, out, fd, result), names), c, same),
-                    λ x _ => p.Within(x.prog), p.within_closes(layout, known, out, fd, result)),
+                True => λ same => subst(same, p.within_closes(layout, known, out, fd, result)),
             },
             StatsPath(_, _, _, _) => λ none => absurd(none),
             StatsFd(_, _, _) => λ none => absurd(none),
@@ -214,7 +223,7 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             let before = rest.live_with(layout.homes, carried, out);
             (match one: first.emits(p, layout, before, first.first_known(known), names) {
                 None => λ none => absurd(none),
-                Some(c1) => λ two => p.within_trans(c1.prog, c.prog, first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
+                Some(c1) => λ two => Prog::within_trans(first.emits_extends(layout, p, before, first.first_known(known), names, c1, one),
                     rest.emits_extends(layout, c1.prog, out, carried, c1.names, c, two)),
             })
         },
@@ -228,13 +237,14 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
                         let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
                         (match n_is: no.emits(other, layout, out, Nil, y.names) {
                             None => λ none => absurd(none),
-                            Some(n) => λ same => j(Option::some_inj(Compiled(n.prog.join_label(Succ(Succ(names))), n.names), c, same),
-                                λ x _ => p.Within(x.prog),
-                                p.within_trans(tested, n.prog.join_label(Succ(Succ(names))), p.within_tests(layout, condition, Succ(names)),
-                                    tested.within_trans(y.prog, n.prog.join_label(Succ(Succ(names))), yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
-                                        y.prog.within_trans(other, n.prog.join_label(Succ(Succ(names))), Exists(2, refl),
-                                            other.within_trans(n.prog, n.prog.join_label(Succ(Succ(names))), no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
-                                                n.prog.within_label(Succ(Succ(names)))))))),
+                            Some(n) => λ same => subst(same,
+                                calc {
+                                    p <= tested := p.within_tests(layout, condition, Succ(names)),
+                                    <= y.prog := yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is),
+                                    <= other := Exists(2, refl),
+                                    <= n.prog := no.emits_extends(layout, other, out, Nil, y.names, n, n_is),
+                                    <= n.prog.join_label(Succ(Succ(names))) := n.prog.within_label(Succ(Succ(names))),
+                                }),
                         })
                     },
                 }),
@@ -249,31 +259,32 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
                     None => λ none => absurd(none),
                     Some(b) => λ same => {
                         let closed = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
-                        j(Option::some_inj(Compiled(closed, b.names), c, same), λ x _ => p.Within(x.prog),
-                            p.within_trans(head, closed, p.within_label(Succ(names)),
-                                head.within_trans(b.prog, closed, body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
-                                    b.prog.within_trans(b.prog.tests(layout, again, Succ(Succ(names))), closed, b.prog.within_tests(layout, again, Succ(Succ(names))),
-                                        Exists(2, refl)))))
+                        subst(same,
+                            calc {
+                                p <= head := p.within_label(Succ(names)),
+                                <= b.prog := body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), b, b_is),
+                                <= b.prog.tests(layout, again, Succ(Succ(names))) := b.prog.within_tests(layout, again, Succ(Succ(names))),
+                                <= closed := Exists(2, refl),
+                            })
                     },
                 }),
             }
         },
         Exit(status) => λ p out known names c => match layout.word_fits(status) {
             False => λ none => absurd(none),
-            True => λ same => j(Option::some_inj(Compiled(p.exits(layout, known, status), names), c, same), λ x _ => p.Within(x.prog),
+            True => λ same => subst(same,
                 p.within_exits(layout, known, status)),
         },
         Arg(index, buf, len) => λ p out known names c => match layout.words_fit([index, len]) {
             False => λ none => absurd(none),
             True => match layout.capacities.nth(buf) {
                 None => λ none => absurd(none),
-                Some(capacity) => λ same => j(Option::some_inj(p.args(layout, out, index, buf, len, capacity, names), c, same),
-                    λ x _ => p.Within(x.prog), p.within_args(layout, out, index, buf, len, capacity, names)),
+                Some(capacity) => λ same => subst(same, p.within_args(layout, out, index, buf, len, capacity, names)),
             },
         },
         Perform(index, args, results) => λ p out known names c => match layout.call_fits(out, index, args, results) {
             False => λ none => absurd(none),
-            True => λ same => j(Option::some_inj(Compiled(p.performs(layout, out, index, args, results), names), c, same), λ x _ => p.Within(x.prog),
+            True => λ same => subst(same,
                 p.within_performs(layout, out, index, args, results)),
         },
     }
@@ -333,12 +344,7 @@ fn Target::RunsK(self t: Target, s: Stmt, known: List<Fact>, call: Writers(), pe
 // Nothing known: what is live before a statement is what `live_in` says.
 theorem CallShape::live_head_nil(self shape: CallShape, homes: Homes, out: List<Nat>): Invoke(shape).live_head(homes, Nil, out) = Invoke(shape).live_in(homes, out) {
     match shape {
-        Reads(_, _, _, _, _) => refl,
-        Writes(_, _, _, _, _) => refl,
-        Opens(_, _, _) => refl,
-        Closes(_, _) => refl,
-        StatsPath(_, _, _, _) => refl,
-        StatsFd(_, _, _) => refl,
+        _ => refl,
     }
 }
 
@@ -348,19 +354,9 @@ theorem Stmt::live_head_nil(self s: Stmt, homes: Homes, out: List<Nat>): s.live_
         Exit(_) => refl,
         Then(first, rest) => (match first {
             Invoke(shape) => shape.live_head_nil(homes, rest.live_in(homes, out)),
-            Exit(_) => refl,
-            Compute(_) => refl,
-            Then(_, _) => refl,
-            Branch(_, _, _) => refl,
-            Repeat(_, _) => refl,
-            Arg(_, _, _) => refl,
-            Perform(_, _, _) => refl,
+            _ => refl,
         }),
-        Compute(_) => refl,
-        Branch(_, _, _) => refl,
-        Repeat(_, _) => refl,
-        Arg(_, _, _) => refl,
-        Perform(_, _, _) => refl,
+        _ => refl,
     }
 }
 
@@ -427,9 +423,9 @@ theorem Region::paired(self body: Region, rest: Stmt, homes: Homes, out: List<Na
 }
 
 // A tree the same as one the code runs as.
-theorem Target::at_similar(self t: Target, at: Nat, live: List<Nat>, tree, other: ITree<BitVec(64)>(Events::linux()), env: Env,
+theorem Target::at_similar(self t: Target, {at: Nat}, {live: List<Nat>}, {tree, other: ITree<BitVec(64)>(Events::linux())}, {env: Env},
     same: ITree::Same(Events::linux(), tree, other), goes: t.At(at, live, other, env)): t.At(at, live, tree, env) {
-    t.site().goes_same(t.io(), at, tree, other, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), same, goes)
+    t.site().goes_same(t.io(), at, tree, other, λ s => t.Held(live, env, s.gprs, s.memory), same, goes)
 }
 
 // A loop of `m` more rounds over its set `set` (what is live at its head):
@@ -479,12 +475,11 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Writer
                         after_set, after,
                         λ s here resident held =>
                             t.goes_repeat(body, again, call, perform, n, p, names, b, out, set, inside, within, head_within, closed, runs, k, exits, next, m2, after,
-                                s, here, resident, t.held_sub(set, after_set, after, s.gprs, s.memory, held, widen)))),
+                                s, here, resident, t.held_sub(held, widen)))),
                 λ (clear: after.bit(again) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), after_set,
                         after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
-                    t.at_sub(prog_len(jumped), out, after_set, k(Onward(after)), after, outer, next(after))));
-            t.at_similar(prog_len(p), set, ITree::bind(Events::linux(), ITree::iter(Events::linux(), Succ(m2), f, env), k), ITree::bind(Events::linux(), d, k2), env,
-                same, t.at_sub(prog_len(p), body.live_in(t.homes, after_set), set, ITree::bind(Events::linux(), d, k2), env, closed, runs(n, env, k2, exits, looped)))
+                    t.at_sub(next(after), outer)));
+            t.at_similar(same, t.at_sub(runs(n, env, k2, exits, looped), closed))
         },
     }
 }
@@ -534,6 +529,28 @@ fn Target::EmitsRun(self t: Target, s: Stmt, call: Writers(), perform: Performs(
         s.emits(p, t.layout(), out, known, names) = Some(c) → c.prog.Within(t.program) → s.checks(t.homes, out).IsTrue() → t.RunsK(s, known, call, perform, out, p, c.prog)
 }
 
+// What follows a `Then`'s first part: the rest and then `k`, or the exit.
+fn Stmt::and_then(self rest: Stmt, call: Writers(), perform: Performs(), n: Nat, k: Flow → ITree<BitVec(64)>(Events::linux()), flow: Flow) →
+    ITree<BitVec(64)>(Events::linux()) {
+    ITree::bind(Events::linux(), match flow as λ _ => ITree<Flow>(Events::linux()) {
+        Onward(after) => rest.denote(call, perform, n, after),
+        Exited(status) => Ret(Exited(status)),
+    }, k)
+}
+
+// The first part run into `rest.and_then(k)` is the sequence run into `k`:
+// the step the three lemmas below share.
+theorem Target::then_at(self t: Target, {first, rest: Stmt}, {call: Writers()}, {perform: Performs()}, {n: Nat}, {env: Env},
+    {k: Flow → ITree<BitVec(64)>(Events::linux())}, {at: Nat}, {live: List<Nat>},
+    goes: t.At(at, live, ITree::bind(Events::linux(), first.denote(call, perform, n, env), rest.and_then(call, perform, n, k)), env)):
+    t.At(at, live, ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
+    let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
+        Onward(after) => rest.denote(call, perform, n, after),
+        Exited(status) => Ret(Exited(status)),
+    };
+    t.at_similar(ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k), goes)
+}
+
 // A `Then` whose parts run with nothing known: the first part, then the
 // rest.
 theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), perform: Performs(),
@@ -545,26 +562,18 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
     within: c.prog.Within(t.program), checked: (first.checks(t.homes, rest.live_in(t.homes, out)) && rest.checks(t.homes, out)).IsTrue()):
     t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
     let layout = t.layout();
-    let ok = Bool::is_true_and(first.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
     (match first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), Nil, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
             t.Runs(Then(first, rest), call, perform, out, p, c.prog) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
             let run_first = t.runs_of(first, call, perform, rest.live_in(t.homes, out), p, c1.prog,
-                ih_first(p, rest.live_in(t.homes, out), Nil, names, c1, one, w_first, ok.left));
-            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
+                ih_first(p, rest.live_in(t.homes, out), Nil, names, c1, one, w_first, known));
+            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, known));
             λ n env k exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(prog_len(p), first.live_in(t.homes, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), ITree::bind(Events::linux(), first.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), first.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
-                    run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
+                let k2 = rest.and_then(call, perform, n, k);
+                t.then_at(run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
     })(refl, emitted)
@@ -573,38 +582,29 @@ theorem Target::then_nil(self t: Target, first, rest: Stmt, call: Writers(), per
 // A `Then` whose first part is a call or an exit: that part starts with
 // what the sequence knows, the rest with nothing.
 theorem Target::then_known(self t: Target, first, rest: Stmt, call: Writers(), perform: Performs(),
-    ih_first: t.EmitsRun(first, call, perform), ih_rest: t.EmitsRun(rest, call, perform), p: Prog, out: List<Nat>, known: List<Fact>, names: Nat, c: Compiled,
-    emitted: (match first.emits(p, t.layout(), rest.live_in(t.homes, out), known, names) as λ _ => Option<Compiled> {
+    ih_first: t.EmitsRun(first, call, perform), ih_rest: t.EmitsRun(rest, call, perform), p: Prog, out: List<Nat>, facts: List<Fact>, names: Nat, c: Compiled,
+    emitted: (match first.emits(p, t.layout(), rest.live_in(t.homes, out), facts, names) as λ _ => Option<Compiled> {
         None => None,
         Some(c1) => rest.emits(c1.prog, t.layout(), out, Nil, c1.names),
     }) = Some(c),
     within: c.prog.Within(t.program), checked: (first.checks(t.homes, rest.live_in(t.homes, out)) && rest.checks(t.homes, out)).IsTrue()):
-    (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(known) → t.Exiting(k) →
+    (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(facts) → t.Exiting(k) →
         ((after: Env) → t.At(prog_len(c.prog), out, k(Onward(after)), after)) →
-        t.At(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
+        t.At(prog_len(p), first.live_head(t.homes, facts, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
     let layout = t.layout();
-    let ok = Bool::is_true_and(first.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
-    (match first.emits(p, layout, rest.live_in(t.homes, out), known, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), known, names) = o →
+    (match first.emits(p, layout, rest.live_in(t.homes, out), facts, names) as λ o => first.emits(p, layout, rest.live_in(t.homes, out), facts, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Nil, c1.names) }) = Some(c) →
-            (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(known) → t.Exiting(k) →
+            (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → env.Knows(facts) → t.Exiting(k) →
             ((after: Env) → t.At(prog_len(c.prog), out, k(Onward(after)), after)) →
-            t.At(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
+            t.At(prog_len(p), first.live_head(t.homes, facts, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), Then(first, rest).denote(call, perform, n, env), k), env) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
-            let run_first = ih_first(p, rest.live_in(t.homes, out), known, names, c1, one, w_first, ok.left);
-            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, ok.right));
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Nil, c1.names, c, two), within);
+            let run_first = ih_first(p, rest.live_in(t.homes, out), facts, names, c1, one, w_first, known);
+            let run_rest = t.runs_of(rest, call, perform, out, c1.prog, c.prog, ih_rest(c1.prog, out, Nil, c1.names, c, two, within, known));
             λ n env k knows exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
-                t.at_similar(prog_len(p), first.live_head(t.homes, known, rest.live_in(t.homes, out)),
-                    ITree::bind(Events::linux(), ITree::bind(Events::linux(), first.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), first.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), first.denote(call, perform, n, env), h, k),
-                    run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
+                let k2 = rest.and_then(call, perform, n, k);
+                t.then_at(run_first(n, env, k2, knows, exits, λ after => run_rest(n, after, k, exits, next)))
             }
         },
     })(refl, emitted)
@@ -628,33 +628,21 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
     let before = rest.live_head(t.homes, Cons(f, fs), out);
     let leaf = Compute(Dataflow(body));
     let pair = body.paired(rest, t.homes, out, f, fs, carried);
-    let guard = Bool::is_true_and(t.homes.nodes_apart(nodes, before) && t.homes.all_apart(nodes_writes(nodes), before),
-        nodes_live_in(nodes, before).within(nodes_live_in(nodes, rest.live_in(t.homes, out))), pair.right);
-    let ok = Bool::is_true_and(leaf.checks(t.homes, rest.live_in(t.homes, out)), rest.checks(t.homes, out), checked);
     (match p.computes_best(layout, before, nodes, names) as λ o => p.computes_best(layout, before, nodes, names) = o →
             (match o as λ _ => Option<Compiled> { None => None, Some(c1) => rest.emits(c1.prog, layout, out, Cons(f, fs), c1.names) }) = Some(c) →
             t.Runs(Then(Compute(Dataflow(body)), rest), call, perform, out, p, c.prog) {
         None => λ _ none => absurd(none),
         Some(c1) => λ one two => {
-            let w_first = c1.prog.within_trans(c.prog, t.program, rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
-            let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, two, within, ok.right);
+            let w_first = Prog::within_trans(rest.emits_extends(layout, c1.prog, out, Cons(f, fs), c1.names, c, two), within);
+            let run_rest = ih_rest(c1.prog, out, Cons(f, fs), c1.names, c, two, within, known);
             λ n env k exits next => {
-                let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
-                    Onward(after) => rest.denote(call, perform, n, after),
-                    Exited(status) => Ret(Exited(status)),
-                };
-                let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
+                let k2 = rest.and_then(call, perform, n, k);
                 let after = env.computes(nodes);
                 let knows = j(pair.left, λ l _ => after.Knows(l), env.computes_knows(nodes));
-                t.at_similar(prog_len(p), nodes_live_in(nodes, rest.live_in(t.homes, out)),
-                    ITree::bind(Events::linux(), ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), h), k),
-                    ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env,
-                    ITree::bind_assoc(Events::linux(), leaf.denote(call, perform, n, env), h, k),
-                    t.at_sub(prog_len(p), nodes_live_in(nodes, before), nodes_live_in(nodes, rest.live_in(t.homes, out)),
-                        ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env,
-                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), guard.right),
-                        t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), guard.left,
-                            run_rest(n, after, k, knows, exits, next))))
+                let run_leaf: t.At(prog_len(p), nodes_live_in(nodes, rest.live_in(t.homes, out)), ITree::bind(Events::linux(), leaf.denote(call, perform, n, env), k2), env) =
+                    t.at_sub(t.goes_computes_best(before, env, p, nodes, names, c1, one, w_first, k2(Onward(after)), known, run_rest(n, after, k, knows, exits, next)),
+                        nodes_live_in(nodes, before).within_mem(nodes_live_in(nodes, rest.live_in(t.homes, out)), known));
+                t.then_at(run_leaf)
             }
         },
     })(refl, emitted)
@@ -662,79 +650,53 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
 
 // A system call's code runs as the call's tree, from what `Prog::call`
 // emitted for it.
-theorem Target::call_runs(self t: Target, shape: CallShape, call: Writers(), perform: Performs(), p: Prog, out: List<Nat>, known: List<Fact>, names: Nat, c: Compiled,
-    emitted: p.call(t.layout(), known, out, shape, names) = Some(c)):
-    c.prog.Within(t.program) → t.homes.apart(shape.result(), out).IsTrue() → t.RunsK(Invoke(shape), known, call, perform, out, p, c.prog) {
+theorem Target::call_runs(self t: Target, shape: CallShape, call: Writers(), perform: Performs(), p: Prog, out: List<Nat>, facts: List<Fact>, names: Nat, c: Compiled,
+    emitted: p.call(t.layout(), facts, out, shape, names) = Some(c)):
+    c.prog.Within(t.program) → t.homes.apart(shape.result(), out).IsTrue() → t.RunsK(Invoke(shape), facts, call, perform, out, p, c.prog) {
     let layout = t.layout();
     match shape {
         Reads(fd, buf, at, len, result) => match fit: layout.words_fit([fd, at, len, result]) {
             False => absurd(emitted),
-            True => {
-                let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(at) && (layout.word_fits(len) && (layout.word_fits(result) && True)),
-                    Bool::is_true_of_eq(fit));
-                let ok2 = Bool::is_true_and(layout.word_fits(at), layout.word_fits(len) && (layout.word_fits(result) && True), ok.right);
-                let ok3 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok2.right);
-                let ok4 = Bool::is_true_and(layout.word_fits(result), True, ok3.right);
-                match found: t.caps.nth(buf) {
-                    None => absurd(emitted),
-                    Some(capacity) => j(Option::some_inj(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names), c, emitted),
-                        λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Reads(fd, buf, at, len, result)), known, call, perform, out, p, x.prog),
-                        λ within apart n env k knows exits next => t.goes_reads(out, env, p, known, knows, fd, buf, at, len, result, capacity, names,
-                            layout.word_inside(fd, ok.left), layout.word_inside(at, ok2.left), layout.word_inside(len, ok3.left),
-                            layout.word_inside(result, ok4.left), found, apart, within,
-                            λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
-                            λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))),
-                }
+            True => match found: t.caps.nth(buf) {
+                None => absurd(emitted),
+                Some(capacity) => subst(emitted,
+                    λ within apart n env k knows exits next => t.goes_reads(out, env, p, facts, knows, fd, buf, at, len, result, capacity, names,
+                        layout.word_inside(fd, known), layout.word_inside(at, known), layout.word_inside(len, known),
+                        layout.word_inside(result, known), found, apart, within,
+                        λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
+                        λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))),
             },
         },
         Writes(fd, buf, from, len, result) => match fit: layout.words_fit([fd, from, len, result]) {
             False => absurd(emitted),
-            True => {
-                let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(from) && (layout.word_fits(len) && (layout.word_fits(result) && True)),
-                    Bool::is_true_of_eq(fit));
-                let ok2 = Bool::is_true_and(layout.word_fits(from), layout.word_fits(len) && (layout.word_fits(result) && True), ok.right);
-                let ok3 = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, ok2.right);
-                let ok4 = Bool::is_true_and(layout.word_fits(result), True, ok3.right);
-                match found: t.caps.nth(buf) {
-                    None => absurd(emitted),
-                    Some(capacity) => j(Option::some_inj(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names), c, emitted),
-                        λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Writes(fd, buf, from, len, result)), known, call, perform, out, p, x.prog),
-                        λ within apart n env k knows exits next => t.goes_writes(out, env, p, known, knows, fd, buf, from, len, result, capacity, names,
-                            layout.word_inside(fd, ok.left), layout.word_inside(from, ok2.left), layout.word_inside(len, ok3.left),
-                            layout.word_inside(result, ok4.left), found, apart, within,
-                            λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
-                            λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))),
-                }
+            True => match found: t.caps.nth(buf) {
+                None => absurd(emitted),
+                Some(capacity) => subst(emitted,
+                    λ within apart n env k knows exits next => t.goes_writes(out, env, p, facts, knows, fd, buf, from, len, result, capacity, names,
+                        layout.word_inside(fd, known), layout.word_inside(from, known), layout.word_inside(len, known),
+                        layout.word_inside(result, known), found, apart, within,
+                        λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
+                        λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))),
             },
         },
         Opens(path, len, result) => match fit: layout.words_fit([len, result]) {
             False => absurd(emitted),
-            True => {
-                let ok = Bool::is_true_and(layout.word_fits(len), layout.word_fits(result) && True, Bool::is_true_of_eq(fit));
-                let ok2 = Bool::is_true_and(layout.word_fits(result), True, ok.right);
-                match found: t.caps.nth(path) {
-                    None => absurd(emitted),
-                    Some(capacity) => j(Option::some_inj(p.opens(layout, known, out, path, len, result, capacity, names), c, emitted),
-                        λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Opens(path, len, result)), known, call, perform, out, p, x.prog),
-                        λ within apart n env k knows exits next => t.goes_opens(out, env, p, known, knows, path, len, result, capacity, names,
-                            layout.word_inside(len, ok.left), layout.word_inside(result, ok2.left), found, apart, within,
-                            λ a => k(Onward(Opens(path, len, result).answer(env, a))),
-                            λ a answers => next(Opens(path, len, result).answer(env, a)))),
-                }
+            True => match found: t.caps.nth(path) {
+                None => absurd(emitted),
+                Some(capacity) => subst(emitted,
+                    λ within apart n env k knows exits next => t.goes_opens(out, env, p, facts, knows, path, len, result, capacity, names,
+                        layout.word_inside(len, known), layout.word_inside(result, known), found, apart, within,
+                        λ a => k(Onward(Opens(path, len, result).answer(env, a))),
+                        λ a answers => next(Opens(path, len, result).answer(env, a)))),
             },
         },
         Closes(fd, result) => match fit: layout.words_fit([fd, result]) {
             False => absurd(emitted),
-            True => {
-                let ok = Bool::is_true_and(layout.word_fits(fd), layout.word_fits(result) && True, Bool::is_true_of_eq(fit));
-                let ok2 = Bool::is_true_and(layout.word_fits(result), True, ok.right);
-                j(Option::some_inj(Compiled(p.closes(layout, known, out, fd, result), names), c, emitted),
-                    λ x _ => x.prog.Within(t.program) → t.homes.apart(result, out).IsTrue() → t.RunsK(Invoke(Closes(fd, result)), known, call, perform, out, p, x.prog),
-                    λ within apart n env k knows exits next => t.goes_closes(out, env, p, known, knows, fd, result, layout.word_inside(fd, ok.left), layout.word_inside(result, ok2.left),
-                        apart, within,
-                        λ a => k(Onward(Closes(fd, result).answer(env, a))),
-                        λ a answers => next(Closes(fd, result).answer(env, a))))
-            },
+            True => subst(emitted,
+                λ within apart n env k knows exits next => t.goes_closes(out, env, p, facts, knows, fd, result, layout.word_inside(fd, known), layout.word_inside(result, known),
+                    apart, within,
+                    λ a => k(Onward(Closes(fd, result).answer(env, a))),
+                    λ a answers => next(Closes(fd, result).answer(env, a)))),
         },
         StatsPath(_, _, _, _) => absurd(emitted),
         StatsFd(_, _, _) => absurd(emitted),
@@ -746,65 +708,42 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
     let layout = t.layout();
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ p out known names c emitted within checked n env k _ exits next => t.goes_computes_best(out, env, p, body.nodes, names, c, emitted, within,
+            Dataflow(body) => λ p out facts names c emitted within checked n env k _ exits next => t.goes_computes_best(out, env, p, body.nodes, names, c, emitted, within,
                 k(Onward(env.compute(call, Dataflow(body)))), checked, next(env.compute(call, Dataflow(body)))),
-            Sequence(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Sequence(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Compose(prefix, continuation) => λ p out known names c emitted within checked n env k _ => Compose(prefix, continuation).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out known names c emitted within checked n env k _ => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Lend(views, callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Lend(views, callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Call(callee, arguments, result) => λ p out known names c emitted within checked n env k _ => Call(callee, arguments, result).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
-            Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out known names c emitted within checked n env k _ => Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
+            _ => λ p out facts names c emitted within checked n env k _ => region.region_runs(t, call, fns, p, out, names, c, emitted, within, checked)(n, env, k),
         },
-        Invoke(shape) => λ p out known names c emitted within checked => t.call_runs(shape, call, perform, p, out, known, names, c, emitted, within, checked),
+        Invoke(shape) => λ p out facts names c emitted within checked => t.call_runs(shape, call, perform, p, out, facts, names, c, emitted, within, checked),
         Then(first, rest) => {
             let ih_first = first.emits_runs(t, call, perform, calls, fns);
             let ih_rest = rest.emits_runs(t, call, perform, calls, fns);
             (match first as λ x => t.EmitsRun(x, call, perform) → t.EmitsRun(Then(x, rest), call, perform) {
-                Invoke(shape) => λ ih p out known names c emitted within checked =>
-                    t.then_known(Invoke(shape), rest, call, perform, ih, ih_rest, p, out, known, names, c, emitted, within, checked),
-                Exit(status) => λ ih p out known names c emitted within checked =>
-                    t.then_known(Exit(status), rest, call, perform, ih, ih_rest, p, out, known, names, c, emitted, within, checked),
+                Invoke(shape) => λ ih p out facts names c emitted within checked =>
+                    t.then_known(Invoke(shape), rest, call, perform, ih, ih_rest, p, out, facts, names, c, emitted, within, checked),
+                Exit(status) => λ ih p out facts names c emitted within checked =>
+                    t.then_known(Exit(status), rest, call, perform, ih, ih_rest, p, out, facts, names, c, emitted, within, checked),
                 Compute(region) => match region {
-                    Dataflow(body) => λ ih p out known names c => {
+                    Dataflow(body) => λ ih p out facts names c => {
                         let leaf = Compute(Dataflow(body));
                         (match leaf.pair_known(rest, t.homes, out) as λ l => leaf.pair_known(rest, t.homes, out) = l →
                                 (match leaf.emits(p, layout, rest.live_with(t.homes, l, out), Nil, names) as λ _ => Option<Compiled> {
                                     None => None,
                                     Some(c1) => rest.emits(c1.prog, layout, out, l, c1.names),
                                 }) = Some(c) → c.prog.Within(t.program) → Then(leaf, rest).checks(t.homes, out).IsTrue() →
-                                t.RunsK(Then(leaf, rest), known, call, perform, out, p, c.prog) {
+                                t.RunsK(Then(leaf, rest), facts, call, perform, out, p, c.prog) {
                             Nil => λ _ emitted within checked n env k _ =>
                                 t.then_nil(leaf, rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                             Cons(f, fs) => λ carried emitted within checked n env k _ =>
                                 t.then_pair(body, rest, call, perform, ih_rest, p, out, names, c, f, fs, carried, emitted, within, checked)(n, env, k),
                         })(refl)
                     },
-                    Sequence(a, b) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Sequence(a, b)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Compose(a, b) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Compose(a, b)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Conditional(i, d, a, o, y, w) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Conditional(i, d, a, o, y, w)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Lend(v, e, a, o) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Lend(v, e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Call(e, a, o) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Call(e, a, o)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                    Loop(i, b, a, d, y, x, e, o, h) => λ ih p out known names c emitted within checked n env k _ =>
-                        t.then_nil(Compute(Loop(i, b, a, d, y, x, e, o, h)), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
+                    _ => λ ih p out facts names c emitted within checked n env k _ =>
+                        t.then_nil(Compute(region), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
                 },
-                Then(a, b) => λ ih p out known names c emitted within checked n env k _ =>
-                    t.then_nil(Then(a, b), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Branch(d, y, w) => λ ih p out known names c emitted within checked n env k _ =>
-                    t.then_nil(Branch(d, y, w), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Repeat(b, a) => λ ih p out known names c emitted within checked n env k _ =>
-                    t.then_nil(Repeat(b, a), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Arg(i, b, l) => λ ih p out known names c emitted within checked n env k _ =>
-                    t.then_nil(Arg(i, b, l), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
-                Perform(g, a, r) => λ ih p out known names c emitted within checked n env k _ =>
-                    t.then_nil(Perform(g, a, r), rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
+                _ => λ ih p out facts names c emitted within checked n env k _ =>
+                    t.then_nil(first, rest, call, perform, ih, ih_rest, p, out, names, c, emitted, within, checked)(n, env, k),
             })(ih_first)
         },
-        Branch(condition, yes, no) => λ p out known names c => {
+        Branch(condition, yes, no) => λ p out facts names c => {
             let tested = p.tests(layout, condition, Succ(names));
             (match fit: layout.word_fits(condition) {
                 False => λ none => absurd(none),
@@ -814,20 +753,17 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                         let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
                         (match n_is: no.emits(other, layout, out, Nil, y.names) {
                             None => λ none => absurd(none),
-                            Some(nc) => λ same => j(Option::some_inj(Compiled(nc.prog.join_label(Succ(Succ(names))), nc.names), c, same),
-                                λ x _ => x.prog.Within(t.program) → Branch(condition, yes, no).checks(t.homes, out).IsTrue() →
-                                    t.RunsK(Branch(condition, yes, no), known, call, perform, out, p, x.prog),
+                            Some(nc) => λ same => subst(same,
                                 λ within checked => {
-                                    let ok = Bool::is_true_and(yes.checks(t.homes, out), no.checks(t.homes, out), checked);
                                     let jumped = then(y.prog, Jmp(Succ(Succ(names))));
                                     let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
-                                    let w_other = other.within_trans(nc.prog, t.program, no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
+                                    let w_other = Prog::within_trans(no.emits_extends(layout, other, out, Nil, y.names, nc, n_is), w_no);
                                     let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
                                     let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
-                                    let w_tested = tested.within_trans(y.prog, t.program, yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
-                                    let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, ok.left));
-                                    let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, ok.right));
-                                    let inside = layout.word_inside(condition, Bool::is_true_of_eq(fit));
+                                    let w_tested = Prog::within_trans(yes.emits_extends(layout, tested, out, Nil, Succ(Succ(names)), y, y_is), w_yes);
+                                    let run_yes = t.runs_of(yes, call, perform, out, tested, y.prog, yes.emits_runs(t, call, perform, calls, fns, tested, out, Nil, Succ(Succ(names)), y, y_is, w_yes, known));
+                                    let run_no = t.runs_of(no, call, perform, out, other, nc.prog, no.emits_runs(t, call, perform, calls, fns, other, out, Nil, y.names, nc, n_is, w_no, known));
+                                    let inside = layout.word_inside(condition, known);
                                     let arms = yes.live_in(t.homes, out).union(no.live_in(t.homes, out));
                                     let live = Cons(condition, arms);
                                     λ n env k _ exits next => t.goes_tests(live, env, p, condition, names, inside, Inl(refl), w_tested, w_other.witness, jumped, Block([]), w_other.proof,
@@ -840,25 +776,23 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                                                     True => yes.denote(call, perform, n, env),
                                                     False => no.denote(call, perform, n, env),
                                                 }, k), env),
-                                            t.at_sub(prog_len(tested), yes.live_in(t.homes, out), live, ITree::bind(Events::linux(), yes.denote(call, perform, n, env), k), env,
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)),
-                                                run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
-                                                    k(Onward(after)), out, after, next(after))))),
+                                            t.at_sub(run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
+                                                    k(Onward(after)), out, after, next(after))),
+                                                λ i m => Inr(yes.live_in(t.homes, out).union_left(no.live_in(t.homes, out), i, m)))),
                                         λ (clear: env.bit(condition) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), live,
                                                 ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
                                                     True => yes.denote(call, perform, n, env),
                                                     False => no.denote(call, perform, n, env),
                                                 }, k), env),
-                                            t.at_sub(prog_len(jumped), no.live_in(t.homes, out), live, ITree::bind(Events::linux(), no.denote(call, perform, n, env), k), env,
-                                                λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)),
-                                                run_no(n, env, k, exits, next))))
+                                            t.at_sub(run_no(n, env, k, exits, next),
+                                                λ i m => Inr(yes.live_in(t.homes, out).union_right(no.live_in(t.homes, out), i, m)))))
                                 }),
                         })
                     },
                 }),
             })
         },
-        Repeat(body, again) => λ p out known names c => {
+        Repeat(body, again) => λ p out facts names c => {
             let head = p.label(Succ(names));
             let inner = Repeat(body, again).loop_out(t.homes, out);
             (match fit: layout.word_fits(again) {
@@ -868,59 +802,52 @@ theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Perf
                     Some(cb) => λ same => {
                         let tested = cb.prog.tests(layout, again, Succ(Succ(names)));
                         let closed = then(tested, Jmp(Succ(names))).label(Succ(Succ(names)));
-                        j(Option::some_inj(Compiled(closed, cb.names), c, same),
-                            λ x _ => x.prog.Within(t.program) → Repeat(body, again).checks(t.homes, out).IsTrue() → t.RunsK(Repeat(body, again), known, call, perform, out, p, x.prog),
+                        subst(same,
                             λ within checked => {
                                 let set = Repeat(body, again).live_in(t.homes, out);
-                                let ok = Bool::is_true_and(body.live_in(t.homes, loop_after(again, set, out)).within(set), body.checks(t.homes, loop_after(again, set, out)), checked);
                                 let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
                                 let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
-                                let w_body = cb.prog.within_trans(tested, t.program, cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
-                                let w_head = head.within_trans(cb.prog, t.program, body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
-                                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, ok.right));
-                                let inside = layout.word_inside(again, Bool::is_true_of_eq(fit));
+                                let w_body = Prog::within_trans(cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
+                                let w_head = Prog::within_trans(body.emits_extends(layout, head, inner, Nil, Succ(Succ(names)), cb, b_is), w_body);
+                                let runs = t.runs_of(body, call, perform, inner, head, cb.prog, body.emits_runs(t, call, perform, calls, fns, head, inner, Nil, Succ(Succ(names)), cb, b_is, w_body, known));
+                                let inside = layout.word_inside(again, known);
                                 λ n env k _ exits next => t.goes_repeat(body, again, call, perform, n, p, names, cb.prog, out, set, inside, within, w_head,
-                                    body.live_in(t.homes, loop_after(again, set, out)).within_mem(set, ok.left), runs, k, exits, next, n, env)
+                                    body.live_in(t.homes, loop_after(again, set, out)).within_mem(set, known), runs, k, exits, next, n, env)
                             })
                     },
                 }),
             })
         },
-        Exit(status) => λ p out known names c => (match fit: layout.word_fits(status) {
+        Exit(status) => λ p out facts names c => (match fit: layout.word_fits(status) {
             False => λ none => absurd(none),
-            True => λ same => j(Option::some_inj(Compiled(p.exits(layout, known, status), names), c, same),
-                λ x _ => x.prog.Within(t.program) → Exit(status).checks(t.homes, out).IsTrue() → t.RunsK(Exit(status), known, call, perform, out, p, x.prog),
-                λ within _ n env k knows exits next => t.goes_exits(known.unknown([status]), env, p, known, status,
-                    layout.word_inside(status, Bool::is_true_of_eq(fit)),
-                    env.reads_of(known, knows, [status], known.unknown([status]), status, Inl(refl), λ i m => m),
+            True => λ same => subst(same,
+                λ within _ n env k knows exits next => t.goes_exits(facts.unknown([status]), env, p, facts, status,
+                    layout.word_inside(status, known),
+                    env.reads_of(facts, knows, [status], facts.unknown([status]), status, Inl(refl), λ i m => m),
                     within, k(Exited(env.word(status))), λ u at exited => exits(env.word(status), u, at, exited))),
         }),
-        Arg(index, buf, len) => λ p out known names c => (match layout.words_fit([index, len]) as λ b => layout.words_fit([index, len]) = b → (match b {
+        Arg(index, buf, len) => λ p out facts names c => (match layout.words_fit([index, len]) as λ b => layout.words_fit([index, len]) = b → (match b {
                 False => None,
                 True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.args(layout, out, index, buf, len, capacity, names)) },
-            }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(len, out).IsTrue() → t.RunsK(Arg(index, buf, len), known, call, perform, out, p, c.prog) {
+            }) = Some(c) → c.prog.Within(t.program) → t.homes.apart(len, out).IsTrue() → t.RunsK(Arg(index, buf, len), facts, call, perform, out, p, c.prog) {
             False => λ _ none => absurd(none),
             True => λ fit => {
-                let ok = Bool::is_true_and(layout.word_fits(index), layout.word_fits(len) && True, Bool::is_true_of_eq(fit));
-                let ok2 = Bool::is_true_and(layout.word_fits(len), True, ok.right);
                 (match found: t.caps.nth(buf) {
                     None => λ none => absurd(none),
-                    Some(capacity) => λ same => j(Option::some_inj(p.args(layout, out, index, buf, len, capacity, names), c, same),
-                        λ x _ => x.prog.Within(t.program) → t.homes.apart(len, out).IsTrue() → t.RunsK(Arg(index, buf, len), known, call, perform, out, p, x.prog),
+                    Some(capacity) => λ same => subst(same,
                         λ within apart n env k _ exits next => t.goes_args(live_before([index], len, out), out, env, p, index, buf, len, capacity, names,
-                            layout.word_inside(index, ok.left), layout.word_inside(len, ok2.left), live_before_reads([index], len, out, index, Inl(refl)),
+                            layout.word_inside(index, known), layout.word_inside(len, known), live_before_reads([index], len, out, index, Inl(refl)),
                             λ i m ne => live_before_keeps([index], len, out, i, m, ne), apart, found, within,
                             k(Onward(env.arg(env.number(index), buf, len))), next(env.arg(env.number(index), buf, len)))),
                 })
             },
         })(refl),
-        Perform(index, args, results) => λ p out known names c => (match layout.call_fits(out, index, args, results) as λ b => layout.call_fits(out, index, args, results) = b →
+        Perform(index, args, results) => λ p out facts names c => (match layout.call_fits(out, index, args, results) as λ b => layout.call_fits(out, index, args, results) = b →
                 b.guard(Some(Compiled(p.performs(layout, out, index, args, results), names))) = Some(c) → c.prog.Within(t.program) →
-                t.homes.all_apart(results, out).IsTrue() → t.RunsK(Perform(index, args, results), known, call, perform, out, p, c.prog) {
+                t.homes.all_apart(results, out).IsTrue() → t.RunsK(Perform(index, args, results), facts, call, perform, out, p, c.prog) {
             False => λ _ none => absurd(none),
-            True => λ fit same => j(Option::some_inj(Compiled(p.performs(layout, out, index, args, results), names), c, same),
-                λ x _ => x.prog.Within(t.program) → t.homes.all_apart(results, out).IsTrue() → t.RunsK(Perform(index, args, results), known, call, perform, out, p, x.prog),
-                λ within apart n env k _ => calls(p, out, index, args, results, Bool::is_true_of_eq(fit), within, apart)(n, env, k)),
+            True => λ fit same => subst(same,
+                λ within apart n env k _ => calls(p, out, index, args, results, known, within, apart)(n, env, k)),
         })(refl),
     }
 }
@@ -939,7 +866,7 @@ theorem Prog::laid_of(self whole: Prog, program: Prog, same: (match whole.laid_o
     program.laid_out().IsTrue() {
     match laid: whole.laid_out() {
         False => absurd(same),
-        True => j(Option::some_inj(whole, program, same), λ x _ => x.laid_out().IsTrue(), Bool::is_true_of_eq(laid)),
+        True => subst(same, Bool::is_true_of_eq(laid)),
     }
 }
 
@@ -1170,13 +1097,7 @@ theorem Stmt::emits_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, lay
                 None => None,
                 Some(d) => rest.emits(d.prog, layout, out, first.carried(rest, layout.homes, out), d.names),
             }) = rest.emits(c.prog, layout, out, first.carried(rest, layout.homes, out), c.names), refl),
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Branch(_, _, _) => false_elim(is),
-        Repeat(_, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1194,11 +1115,7 @@ theorem Stmt::live_head_plain(self s: Stmt, homes: Homes, known: List<Fact>, out
                 True => first.live_head(homes, known, rest.live_in(homes, out)),
                 False => Then(first, rest).live_in(homes, out),
             }) = Then(first, rest).live_in(homes, out), refl),
-        Compute(_) => refl,
-        Branch(_, _, _) => refl,
-        Repeat(_, _) => refl,
-        Arg(_, _, _) => refl,
-        Perform(_, _, _) => refl,
+        _ => refl,
     }
 }
 
@@ -1236,13 +1153,7 @@ theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog,
                     },
                 }) = closed, ran)
         },
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Then(_, _) => false_elim(is),
-        Branch(_, _, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1275,13 +1186,7 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
                     },
                 }) = joined, first_ran)
         },
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Then(_, _) => false_elim(is),
-        Repeat(_, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1293,13 +1198,7 @@ theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Hom
     rest: s.right().checked(homes, out) = Some(mid), first: s.left().checked(homes, mid) = Some(l)): s.checked(homes, out) = Some(l) {
     match s {
         Then(f, r) => j(sym(rest), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), first),
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Branch(_, _, _) => false_elim(is),
-        Repeat(_, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1311,13 +1210,7 @@ theorem Stmt::checked_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), homes:
                 Some(a) => match ns.checked(homes, out) { None => None, Some(b) => Some(Cons(c, a.union(b))) },
             }) = Some(Cons(c, y.union(n))),
             j(sym(no), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Then(_, _) => false_elim(is),
-        Repeat(_, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1330,13 +1223,7 @@ theorem Stmt::checked_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), homes:
                 Some(x) => match x.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
             }) = Some(homes.loop_set(again)),
             j(sym(within), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
-        Compute(_) => false_elim(is),
-        Invoke(_) => false_elim(is),
-        Then(_, _) => false_elim(is),
-        Branch(_, _, _) => false_elim(is),
-        Exit(_) => false_elim(is),
-        Arg(_, _, _) => false_elim(is),
-        Perform(_, _, _) => false_elim(is),
+        _ => false_elim(is),
     }
 }
 
@@ -1488,8 +1375,8 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
                                     t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
-                                let w_entry = entry.within_trans(c.prog, whole, src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), Exists(2, refl));
-                                let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
+                                let w_entry = calc { entry <= c.prog := src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), <= whole := Exists(2, refl), };
+                                let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
                                 let caps = λ (k: Nat) => {
                                     let shifted: (0 + k = k) = omega();
                                     cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
@@ -1497,7 +1384,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
                                     paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
                                 let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
-                                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
+                                    λ u => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
                                 λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
@@ -1517,54 +1404,59 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
 
 // Procedure `index` is in `whole` as its compile put it: it fits, its body
 // emits after its way in from some prefix, and its way out is in `whole`.
-fn Procedure::Hosted(self proc: Procedure, layout: Layout, index: Nat, whole: Prog) → Type {
-    Exists<Prog>(λ pre => Exists<Nat>(λ names => Exists<Compiled>(λ b =>
-        (proc.fits(layout) = True) ∧ ((proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b)) ∧
-        proc.exit_code(b.prog, layout).Within(whole)))))
+record Hosted(proc: Procedure, layout: Layout, index: Nat, whole: Prog) {
+    pre: Prog,
+    names: Nat,
+    b: Compiled,
+    fits: proc.fits(layout) = True,
+    emitted: proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b),
+    within: proc.exit_code(b.prog, layout).Within(whole),
 }
 
 // The program holds every procedure of the target, and the shared exit of
 // a call too deep.
-fn Target::Hosts(self t: Target) → Type {
-    ((i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → proc.Hosted(t.layout(), i, t.program)) ∧
-        Exists<Prog>(λ dp => dp.deep_exit(t.layout()).Within(t.program))
+record Hosts(t: Target) {
+    hosted: (i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → Hosted(proc, t.layout(), i, t.program),
+    deep: Prog,
+    deep_within: deep.deep_exit(t.layout()).Within(t.program),
 }
 
 theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat, c: Compiled, code: proc.code(p, layout, index, names) = Some(c)):
-    (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+    (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
     (match proc.fits(layout) as λ f => proc.fits(layout) = f → (match f {
             False => None,
             True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
                 None => None,
                 Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)),
             },
-        }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+        }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
         False => λ _ none => absurd(none),
         True => λ fits same0 => (match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) as λ o =>
                 proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) = o →
                 (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(c) →
-                (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+                (whole: Prog) → c.prog.Within(whole) → Hosted(proc, layout, index, whole) ∧ p.Within(c.prog) {
             None => λ _ none => absurd(none),
-            Some(b) => λ emitted same => j(Option::some_inj(Compiled(proc.exit_code(b.prog, layout), b.names), c, same),
-                λ x _ => (whole: Prog) → x.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(x.prog),
+            Some(b) => λ emitted same => subst(same,
                 λ whole w => {
                     let labelled = p.label(layout.procedure_label(index));
                     let entry = proc.entry_code(p, layout, index);
                     let counted = labelled.count_down(layout);
                     let saved = counted.saves(layout.kept());
                     let framed = then(saved, Block(frame_down(layout.words)));
-                    let w_framed: p.Within(framed) = p.within_trans(counted, framed, p.within_trans(labelled, counted, Exists(1, refl), Exists(6, refl)),
-                        counted.within_trans(saved, framed, Prog::within_saves(layout.kept(), counted), Exists(1, refl)));
-                    let w_entry: p.Within(entry) = p.within_trans(framed, entry, w_framed,
-                        Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed));
-                    let w_body: p.Within(b.prog) = p.within_trans(entry, b.prog, w_entry, proc.body.emit_extends(layout, entry, proc.results, names, b, emitted));
                     let moved = b.prog.words_to(layout, proc.results, result_registers());
-                    let w_moved: b.prog.Within(moved) = Prog::within_words_to(layout, proc.results, result_registers(), b.prog);
                     let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
-                    let w_exit: moved.Within(proc.exit_code(b.prog, layout)) = moved.within_trans(lowered, proc.exit_code(b.prog, layout), Exists(5, refl),
-                        lowered.within_trans(lowered.restores(layout.kept()), proc.exit_code(b.prog, layout), Prog::within_restores(layout.kept(), lowered), Exists(1, refl)));
-                    ⟨Exists(p, Exists(names, Exists(b, ⟨fits, ⟨emitted, w⟩⟩))),
-                        p.within_trans(b.prog, proc.exit_code(b.prog, layout), w_body, b.prog.within_trans(moved, proc.exit_code(b.prog, layout), w_moved, w_exit))⟩
+                    ⟨Hosted(p, names, b, fits, emitted, w), calc {
+                        p <= labelled := Exists(1, refl),
+                        <= counted := Exists(6, refl),
+                        <= saved := Prog::within_saves(layout.kept(), counted),
+                        <= framed := Exists(1, refl),
+                        <= entry := Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed),
+                        <= b.prog := proc.body.emit_extends(layout, entry, proc.results, names, b, emitted),
+                        <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
+                        <= lowered := Exists(5, refl),
+                        <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
+                        <= proc.exit_code(b.prog, layout) := Exists(1, refl),
+                    }⟩
                 }),
         })(refl, same0),
     })(refl, code)
@@ -1582,15 +1474,23 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
     let framed = then(saved, Block(frame_down(layout.words)));
     let moved = b.prog.words_to(layout, proc.results, result_registers());
     let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
-    let w_moved: moved.Within(whole) = moved.within_trans(lowered, whole, Exists(5, refl),
-        lowered.within_trans(lowered.restores(layout.kept()), whole, Prog::within_restores(layout.kept(), lowered),
-            lowered.restores(layout.kept()).within_trans(proc.exit_code(b.prog, layout), whole, Exists(1, refl), w_exit)));
-    let w_b: b.prog.Within(whole) = b.prog.within_trans(moved, whole, Prog::within_words_to(layout, proc.results, result_registers(), b.prog), w_moved);
-    let w_entry: entry.Within(whole) = entry.within_trans(b.prog, whole, proc.body.emit_extends(layout, entry, proc.results, names, b, emitted), w_b);
-    let w_counted: counted.Within(whole) = counted.within_trans(framed, whole,
-        counted.within_trans(saved, framed, Prog::within_saves(layout.kept(), counted), Exists(1, refl)),
-        framed.within_trans(entry, whole,
-            Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed), w_entry));
+    let w_b: b.prog.Within(whole) = calc {
+        b.prog <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
+        <= lowered := Exists(5, refl),
+        <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
+        <= proc.exit_code(b.prog, layout) := Exists(1, refl),
+        <= whole := w_exit,
+    };
+    let w_entry: entry.Within(whole) = calc {
+        entry <= b.prog := proc.body.emit_extends(layout, entry, proc.results, names, b, emitted),
+        <= whole := w_b,
+    };
+    let w_counted: counted.Within(whole) = calc {
+        counted <= saved := Prog::within_saves(layout.kept(), counted),
+        <= framed := Exists(1, refl),
+        <= entry := Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed),
+        <= whole := w_entry,
+    };
     ⟨w_counted, ⟨w_entry, w_b⟩⟩
 }
 
@@ -1598,22 +1498,21 @@ theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Na
 // `i` of them at label `index + i`.
 theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p: Prog) → (index, names: Nat) → (d: Compiled) →
     procs.procedures_code(p, layout, index, names) = Some(d) → (whole: Prog) → d.prog.Within(whole) →
-    p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+    p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
     match procs {
-        Nil => λ p index names d code whole w => j(Option::some_inj(Compiled(p, names), d, code), λ x _ => p.Within(x.prog) ∧
-                ((i: Nat) → (proc: Procedure) → List::nth<Procedure>(Nil, i) = Some(proc) → proc.Hosted(layout, index + i, whole)),
+        Nil => λ p index names d code whole w => subst(code,
             ⟨p.within_self(), λ i proc none => absurd(none)⟩),
         Cons(first, rest) => λ p index names d => (match first.code(p, layout, index, names) as λ o => first.code(p, layout, index, names) = o →
                 (match o { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) }) = Some(d) →
                 (whole: Prog) → d.prog.Within(whole) →
-                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → Hosted(proc, layout, index + i, whole)) {
             None => λ _ none => absurd(none),
             Some(c) => λ code others whole w => {
                 let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
-                let here = first.code_hosted(p, layout, index, names, c, code, whole, c.prog.within_trans(d.prog, whole, later.left, w));
-                ⟨p.within_trans(c.prog, d.prog, here.right, later.left), λ i => match i {
-                    Zero => λ proc same => j(Option::some_inj(first, proc, same), λ x _ => x.Hosted(layout, index, whole), here.left),
-                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => proc.Hosted(layout, x, whole), later.right(k, proc, found)),
+                let here = first.code_hosted(p, layout, index, names, c, code, whole, Prog::within_trans(later.left, w));
+                ⟨Prog::within_trans(here.right, later.left), λ i => match i {
+                    Zero => λ proc same => subst(same, here.left),
+                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => Hosted(proc, layout, x, whole), later.right(k, proc, found)),
                 }⟩
             },
         })(refl),
@@ -1623,17 +1522,21 @@ theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p
 // What `compile_calls` built: `main` emitted, exit 0 after it in the
 // program, the program hosting every procedure and the shared exit, laid
 // out, and the functions linked after some code of its own.
-fn Source::CallsBuilt(self src: Source, low: BitVec(64), homes: Homes, program: Prog) → Type {
-    let layout = src.layout(low, homes);
-    Exists<Compiled>(λ c => (src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = Some(c)) ∧
-        (then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program) ∧
-        (((i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → proc.Hosted(layout, i, program)) ∧
-        (Exists<Prog>(λ dp => dp.deep_exit(layout).Within(program)) ∧ (program.laid_out().IsTrue() ∧
-        Exists<Prog>(λ base => Exists<Nat>(λ names => base.links(src.functions, homes.places, names) = Some(program))))))))
+record CallsBuilt(src: Source, low: BitVec(64), homes: Homes, program: Prog) {
+    c: Compiled,
+    emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(c),
+    exit_within: then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program),
+    hosted: (i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → Hosted(proc, src.layout(low, homes), i, program),
+    deep: Prog,
+    deep_within: deep.deep_exit(src.layout(low, homes)).Within(program),
+    laid: program.laid_out().IsTrue(),
+    base: Prog,
+    names: Nat,
+    linked: base.links(src.functions, homes.places, names) = Some(program),
 }
 
 theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, program: Prog, compiled: src.compile_calls(low, homes) = Some(program)):
-    src.CallsBuilt(low, homes, program) {
+    CallsBuilt(src, low, homes, program) {
     let layout = src.layout(low, homes);
     let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     let laid = src.calls_laid(low, homes, program, compiled);
@@ -1647,7 +1550,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
                 },
-            }) = Some(program) → src.CallsBuilt(low, homes, program) {
+            }) = Some(program) → CallsBuilt(src, low, homes, program) {
         None => λ _ none => absurd(none),
         Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
                 src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
@@ -1656,26 +1559,26 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
                         None => None,
                         Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
                     },
-                }) = Some(program) → src.CallsBuilt(low, homes, program) {
+                }) = Some(program) → CallsBuilt(src, low, homes, program) {
             None => λ _ none => absurd(none),
             Some(d) => λ code => {
                 let base = d.prog.deep_exit(layout);
                 (match base.links(src.functions, homes.places, d.names) as λ o => base.links(src.functions, homes.places, d.names) = o →
                         (match o as λ _ => Option<Prog> { None => None, Some(whole) => match whole.laid_out() { False => None, True => Some(whole) } }) = Some(program) →
-                        src.CallsBuilt(low, homes, program) {
+                        CallsBuilt(src, low, homes, program) {
                     None => λ _ none => absurd(none),
                     Some(whole) => λ linked => (match whole.laid_out() as λ b => (match b as λ _ => Option<Prog> { False => None, True => Some(whole) }) = Some(program) →
-                            src.CallsBuilt(low, homes, program) {
+                            CallsBuilt(src, low, homes, program) {
                         False => λ none => absurd(none),
                         True => λ same => {
                             let linked_p: (base.links(src.functions, homes.places, d.names) = Some(program)) =
-                                j(Option::some_inj(whole, program, same), λ x _ => base.links(src.functions, homes.places, d.names) = Some(x), linked);
+                                subst(same, linked);
                             let w_base: base.Within(program) = base.links_grows(homes.places, d.names, program, src.functions, linked_p);
-                            let w_d: d.prog.Within(program) = d.prog.within_trans(base, program, Exists(3, refl), w_base);
+                            let w_d: d.prog.Within(program) = calc { d.prog <= base := Exists(3, refl), <= program := w_base, };
                             let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, program, w_d);
-                            let r: src.CallsBuilt(low, homes, program) = Exists(c, ⟨emitted, ⟨exit0(c.prog).within_trans(d.prog, program, hosted.left, w_d),
-                                ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, program), hosted.right(i, proc, found)),
-                                ⟨Exists(d.prog, w_base), ⟨laid, Exists(base, Exists(d.names, linked_p))⟩⟩⟩⟩⟩);
+                            let r: CallsBuilt(src, low, homes, program) = CallsBuilt(c, emitted, Prog::within_trans(hosted.left, w_d),
+                                λ i proc found => j(Nat::add_left_zero(i), λ x _ => Hosted(proc, layout, x, program), hosted.right(i, proc, found)),
+                                d.prog, w_base, laid, base, d.names, linked_p);
                             r
                         },
                     }),
@@ -1689,72 +1592,58 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, pro
 // The call's checks, read off
 
 theorem Nat::same_as_eq(self n: Nat, m: Nat, same: n.same_as(m).IsTrue()): n = m {
-    let both = Bool::is_true_and(n.leb(m), m.leb(n), same);
-    let a: (n <= m) = Nat::leb_sound(n, m, both.left);
-    let b: (m <= n) = Nat::leb_sound(m, n, both.right);
-    let e: (n = m) = omega(a, b);
-    e
+    omega(same)
 }
 
 // What a fitting call gives the proof: its procedure, and each check.
-fn Layout::CallFits(self layout: Layout, out: List<Nat>, args, results: List<Nat>, proc: Procedure) → Type {
-    (args.len() = proc.params.len()) ∧ ((results.len() = proc.results.len()) ∧ ((args.len() <= 6) ∧ ((results.len() <= 6) ∧
-        (layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue() ∧ layout.homes.moves_apart(out, results).IsTrue()))))
+record CallFits(layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) {
+    proc: Procedure,
+    found: layout.procedures.nth(index) = Some(proc),
+    args_len: args.len() = proc.params.len(),
+    results_len: results.len() = proc.results.len(),
+    args_few: args.len() <= 6,
+    results_few: results.len() <= 6,
+    words: layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue(),
+    apart: layout.homes.moves_apart(out, results).IsTrue(),
 }
 
 theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>, fit: layout.call_fits(out, index, args, results).IsTrue()):
-    Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+    CallFits(layout, out, index, args, results) {
     (match layout.procedures.nth(index) as λ o => layout.procedures.nth(index) = o → Bool::IsTrue(match o {
             None => False,
             Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
                 (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
                 layout.homes.moves_apart(out, results))))),
-        }) → Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+        }) → CallFits(layout, out, index, args, results) {
         None => λ _ no => false_elim(no),
         Some(proc) => λ found f => {
-            let b1 = Bool::is_true_and(args.len().same_as(proc.params.len()), results.len().same_as(proc.results.len()) &&
-                (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results)))), f);
-            let b2 = Bool::is_true_and(results.len().same_as(proc.results.len()), args.len().leb(6) && (results.len().leb(6) &&
-                (layout.words_fit(args ++ (results ++ out.minus(results))) && layout.homes.moves_apart(out, results))), b1.right);
-            let b3 = Bool::is_true_and(args.len().leb(6), results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results)), b2.right);
-            let b4 = Bool::is_true_and(results.len().leb(6), layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                layout.homes.moves_apart(out, results), b3.right);
-            let b5 = Bool::is_true_and(layout.words_fit(args ++ (results ++ out.minus(results))), layout.homes.moves_apart(out, results), b4.right);
-            Exists(proc, ⟨found, ⟨args.len().same_as_eq(proc.params.len(), b1.left), ⟨results.len().same_as_eq(proc.results.len(), b2.left),
-                ⟨Nat::leb_sound(args.len(), 6, b3.left), ⟨Nat::leb_sound(results.len(), 6, b4.left), ⟨b5.left, b5.right⟩⟩⟩⟩⟩⟩)
+            CallFits(proc, found, args.len().same_as_eq(proc.params.len(), known), results.len().same_as_eq(proc.results.len(), known),
+                Nat::leb_sound(args.len(), 6, known), Nat::leb_sound(results.len(), 6, known), known, known)
         },
     })(refl, fit)
 }
 
 // What a procedure that fits gives the proof.
-fn Procedure::FitsParts(self proc: Procedure, layout: Layout) → Type {
-    proc.body.checks(layout.homes, proc.results).IsTrue() ∧ (proc.body.live_in(layout.homes, proc.results).within(proc.params).IsTrue() ∧
-        (layout.homes.moves_apart(proc.body.live_in(layout.homes, proc.results), proc.params).IsTrue() ∧
-        (layout.words_fit(proc.params ++ proc.results).IsTrue() ∧ ((proc.params.len() <= 6) ∧ (proc.results.len() <= 6)))))
+record ProcedureFits(proc: Procedure, layout: Layout) {
+    checks: proc.body.checks(layout.homes, proc.results).IsTrue(),
+    entry_within: proc.body.live_in(layout.homes, proc.results).within(proc.params).IsTrue(),
+    entry_apart: layout.homes.moves_apart(proc.body.live_in(layout.homes, proc.results), proc.params).IsTrue(),
+    words: layout.words_fit(proc.params ++ proc.results).IsTrue(),
+    params_few: proc.params.len() <= 6,
+    results_few: proc.results.len() <= 6,
 }
 
-theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): proc.FitsParts(layout) {
+theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): ProcedureFits(proc, layout) {
     let entry = proc.body.live_in(layout.homes, proc.results);
     (match proc.body.checked(layout.homes, proc.results) as λ o => proc.body.checked(layout.homes, proc.results) = o → (match o as λ _ => Bool {
             None => False,
             Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
                 (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
-        }) = True → proc.FitsParts(layout) {
+        }) = True → ProcedureFits(proc, layout) {
         None => λ _ none => absurd(none),
         Some(l) => λ got same => {
             let sound = proc.body.checked_sound(layout.homes, proc.results, l, got);
-            let f: Bool::IsTrue(entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
-                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))))) =
-                j(sym(same), λ v _ => v.IsTrue(), trivial);
-            let b1 = Bool::is_true_and(entry.within(proc.params), layout.homes.moves_apart(entry, proc.params) &&
-                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))), f);
-            let b2 = Bool::is_true_and(layout.homes.moves_apart(entry, proc.params),
-                layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)), b1.right);
-            let b3 = Bool::is_true_and(layout.words_fit(proc.params ++ proc.results), proc.params.len().leb(6) && proc.results.len().leb(6), b2.right);
-            let b4 = Bool::is_true_and(proc.params.len().leb(6), proc.results.len().leb(6), b3.right);
-            ⟨sound.right, ⟨b1.left, ⟨b2.left, ⟨b3.left, ⟨Nat::leb_sound(proc.params.len(), 6, b4.left), Nat::leb_sound(proc.results.len(), 6, b4.right)⟩⟩⟩⟩⟩
+            ProcedureFits(sound.right, known, known, known, Nat::leb_sound(proc.params.len(), 6, known), Nat::leb_sound(proc.results.len(), 6, known))
         },
     })(refl, fits)
 }
@@ -1829,15 +1718,15 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     tree: ITree<BitVec(64)>(Events::linux()), g0: Gprs, top: List<BitVec(64)>,
     zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
     more: (d: Nat) → t.room = Succ(d) →
-        t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ (v: MachineState<X86Memory(t.r.profile)>) =>
+        t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ v =>
             t.Bare(env, d, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]))):
-    t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+    t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ s =>
         t.Bare(env, t.room, t.index - 8, top, s.gprs, s.memory) ∧ (s.gprs = g0)) {
     let layout = t.layout();
     let label = layout.procedure_label(index);
     let lbl = Prog::At(pre_i, label, Block([]));
     let counted = lbl.count_down(layout);
-    let w_lbl: lbl.Within(t.program) = lbl.within_trans(counted, t.program, Exists(6, refl), w_count);
+    let w_lbl: lbl.Within(t.program) = calc { lbl <= counted := Exists(6, refl), <= t.program := w_count, };
     let i1 = t.index - 8;
     let so = layout.stack_offset();
     let slots: (so + 16 <= t.r.size) = t.fits;
@@ -1845,10 +1734,11 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     // What the count keeps: the stack's words, RSP, and the registers it
     // does not write.
     let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
-    let after = λ (d: Nat) (eq: t.room = Succ(d)) => t.goes_weaken(prog_len(counted), tree,
-        λ (v: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, d, i1, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]),
-        λ (v: MachineState<X86Memory(t.r.profile)>) => based(d, v.memory) ∧ r(v.gprs, v.memory),
-        more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
+    let after = λ (d: Nat) (eq: t.room = Succ(d)) => {
+        let weak: t.Goes(prog_len(counted), tree, λ v => based(d, v.memory) ∧ r(v.gprs, v.memory)) =
+            t.goes_weaken(more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
+        weak
+    };
     let count = t.goes_count_down(env, t.room, lbl, w_count, deep_k, deep_before, deep_item, deep_at, tree, r,
         λ g g2 m h same => ⟨h.left, ⟨trans(same(Rsp, refl, refl), h.right.left),
             λ x absent => trans(same(x, x.absent_head(Rax, [R11, Rsp], absent), x.absent_head(R11, [Rsp], x.absent_rest(Rax, [R11, Rsp], absent))),
@@ -1861,30 +1751,26 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
         },
         zero, after);
     let labelled = t.goes_block(pre_i, label, [], w_lbl, tree,
-        λ (v: MachineState<X86Memory(t.r.profile)>) => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
-    let entered = t.goes_weaken(prog_len(pre_i), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => based(t.room, s.memory) ∧ r(s.gprs, s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0),
-        labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
+        λ v => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
+    let entered: t.Goes(prog_len(pre_i), tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
             λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩⟩⟩);
     j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
-        λ at _ => t.Goes(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
+        λ at _ => t.Goes(at, tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
 }
 
 // No room: every procedure's count goes to the shared exit, as the
 // source's call past the depth.
-theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n: Nat, room: t.room = 0, hosts: t.Hosts()):
+theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n: Nat, room: t.room = 0, hosts: Hosts(t)):
     t.Procedures(src, call, n, 0) {
     let layout = t.layout();
     λ index proc found env values long g0 passed ret above fits_above k ends => {
-        let hosted = hosts.left(index, proc, found);
-        let pre_i = hosted.witness;
-        let hw = proc.hosted_within(layout, index, t.program, pre_i, hosted.proof.witness, hosted.proof.proof.witness,
-            hosted.proof.proof.proof.right.left, hosted.proof.proof.proof.right.right);
-        let dp = hosts.right.witness;
-        let w_deep = hosts.right.proof;
+        let hosted = hosts.hosted(index, proc, found);
+        let pre_i = hosted.pre;
+        let hw = proc.hosted_within(layout, index, t.program, pre_i, hosted.names, hosted.b, hosted.emitted, hosted.within);
+        let dp = hosts.deep;
+        let w_deep = hosts.deep_within;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), w_deep);
+            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := w_deep, };
         let tree: ITree<BitVec(64)>(Events::linux()) = k(Exited(call_depth_status()));
         t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, Cons(ret, above),
             λ _ => t.goes_deep(dp, w_deep, tree, λ _ => True, λ s at exited => ends(Exited(call_depth_status()))(s, at, exited)),
@@ -1900,34 +1786,33 @@ theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n:
 // from past the return address up as they were, no code of the procedure
 // storing above its own activation.
 theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n, d: Nat, room: t.room = Succ(d),
-    tp: t.procedures = src.procedures, hosts: t.Hosts(), answers: t.Answered(call),
-    ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
+    tp: t.procedures = src.procedures, hosts: Hosts(t), answers: t.Answered(call),
+    ih: (c: Target) → c.procedures = src.procedures → Hosts(c) → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
     t.Procedures(src, call, n, Succ(d)) {
     let layout = t.layout();
     let kept = t.homes.kept();
     λ index proc found env values long g0 passed ret above fits_above k ends s here resident pre => {
         // The procedure in the program.
-        let hosted = hosts.left(index, proc, found);
-        let pre_i = hosted.witness;
-        let names_i = hosted.proof.witness;
-        let b_i = hosted.proof.proof.witness;
-        let fits_eq = hosted.proof.proof.proof.left;
-        let emitted_i = hosted.proof.proof.proof.right.left;
-        let w_exit = hosted.proof.proof.proof.right.right;
-        let pf = proc.fits_parts(layout, fits_eq);
+        let hosted = hosts.hosted(index, proc, found);
+        let pre_i = hosted.pre;
+        let names_i = hosted.names;
+        let b_i = hosted.b;
+        let emitted_i = hosted.emitted;
+        let w_exit = hosted.within;
+        let pf = proc.fits_parts(layout, hosted.fits);
         let entry_live = proc.body.live_in(t.homes, proc.results);
         let entry = proc.entry_code(pre_i, layout, index);
         let counted = pre_i.label(layout.procedure_label(index)).count_down(layout);
         let hw = proc.hosted_within(layout, index, t.program, pre_i, names_i, b_i, emitted_i, w_exit);
         let w_entry = hw.right.left;
         let w_b = hw.right.right;
-        let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+        let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
             proc.params.mem_append_l(proc.results, i, m));
-        let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+        let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
             proc.params.mem_append_r(proc.results, i, m));
-        let dp = hosts.right.witness;
+        let dp = hosts.deep;
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), hosts.right.proof);
+            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := hosts.deep_within, };
         let start = Env(Nil, env.buffers, env.args).set_words(proc.params, values);
         let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, start), k);
         let few: (kept.len() <= 6) = t.homes.kept_few();
@@ -1961,13 +1846,13 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
                     ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.room, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
                         kept_s, holding_s)
                 });
-            let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
+            let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
                 n, start, k, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
             let next_c = c.at_like(prog_len(entry), entry_live, tree, start, env.set_words(proc.params, values),
-                env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.right.left)), body);
+                env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
             let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, passed,
-                tree, w_entry, inside_params, pf.right.right.left, pf.right.left, pf.right.right.right.right.left, long, next_c);
-            j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ (v: MachineState<X86Memory(t.r.profile)>) =>
+                tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
+            j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
                 t.Bare(env, d2, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
         };
         t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, top,
@@ -1984,22 +1869,20 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
     let layout = t.layout();
     let rets = result_registers();
     λ p out index args results fit within apart n2 env k exits next => {
-        let parts = layout.call_fits_parts(out, index, args, results, fit);
-        let proc = parts.witness;
-        let found = parts.proof.left;
-        let fp = parts.proof.right;
+        let fp = layout.call_fits_parts(out, index, args, results, fit);
+        let proc = fp.proc;
+        let found = fp.found;
         let found_src: (src.procedures.nth(index) = Some(proc)) = trans(cong_fn<List<Procedure>, Option<Procedure>>(λ ps => ps.nth(index), sym(tp)), found);
         let saved = out.minus(results);
         let live = args.union(saved);
-        let names_fit = fp.right.right.right.right.left;
+        let names_fit = fp.words;
         let inside_args = λ (i: Nat) (m: Mem(i, args)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit, args.mem_append_l(results ++ saved, i, m));
         let inside_results = λ (i: Nat) (m: Mem(i, results)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit,
             args.mem_append_r(results ++ saved, i, results.mem_append_l(saved, i, m)));
         let cb = p.calls(layout, layout.procedure_label(index), 0, args);
-        let w_cb: cb.Within(t.program) = cb.within_trans(p.performs(layout, out, index, args, results), t.program,
-            Prog::within_words_from(layout, out, results, rets, cb), within);
+        let w_cb: cb.Within(t.program) = Prog::within_trans(Prog::within_words_from(layout, out, results, rets, cb), within);
         let va = env.words_at(args);
-        let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.left);
+        let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.args_len);
         let none: (0 <= 3) = omega();
         let k2 = λ (flow: Flow) => k(proc.leave(env, results, flow));
         // Each answer taken: the results from their registers, or the exit.
@@ -2008,18 +1891,13 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
                 let aw = after.words_at(proc.results);
                 let mixed = Env(env.words, after.buffers, env.args);
                 let tk = k2(Onward(after));
-                let res_le6: (results.len() <= rets.len()) = fp.right.right.right.left;
-                let res_le_aw: (results.len() <= aw.len()) = omega(after.words_at_len(proc.results), fp.right.left);
+                let res_le6: (results.len() <= rets.len()) = fp.results_few;
+                let res_le_aw: (results.len() <= aw.len()) = omega(after.words_at_len(proc.results), fp.results_len);
                 let gf = t.goes_words_from(out, tk, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, mixed.set_words(results, aw), g, m), results)(
                     rets, aw, cb, live, mixed, λ i m => args.union_right(saved, i, m),
-                    inside_results, fp.right.right.right.right.right, trivial, trivial, res_le6, res_le_aw, within,
+                    inside_results, fp.apart, trivial, trivial, res_le6, res_le_aw, within,
                     next(mixed.set_words(results, aw)));
-                t.goes_weaken(prog_len(cb), tk,
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, mixed, s.gprs, s.memory) ∧ (s.gprs.Holding(rets, aw) ∧
-                        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, mixed.set_words(results, aw), g2, m2) → t.Spares(s.gprs, g2) →
-                            t.Held(out, mixed.set_words(results, aw), g2, m2))),
-                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, mixed, s.gprs, s.memory) ∧ s.gprs.Holding(rets, aw),
-                    gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩)
+                t.goes_weaken(gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩)
             },
             Exited(status) => λ u at exited => exits(status, u, at, exited),
         };
@@ -2029,7 +1907,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
             λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow), callable(index, proc, found), long, k2, taken);
         t.site().goes_same(t.io(), prog_len(p), ITree::bind(Events::linux(), src.performs(call, n, d)(index, args, results, env), k),
             ITree::bind(Events::linux(), src.procedure_tree(call, n, d, proc)(va, env), k2),
-            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
+            λ s => t.Held(live, env, s.gprs, s.memory),
             src.performs_tree(call, n, d, index, proc, found_src, args, results, env, k), main)
     }
 }
@@ -2038,7 +1916,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
 // procedures are callable with `d` calls of room, their bodies' calls by
 // the depth below.
 theorem Source::calls_at(self src: Source, call: Writers(), n: Nat, d: Nat):
-    (t: Target) → t.procedures = src.procedures → t.Hosts() → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
+    (t: Target) → t.procedures = src.procedures → Hosts(t) → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
     match d {
         Zero => λ t tp hosts _ room => t.calls_of(src, call, n, 0, tp, t.procedures_deep(src, call, n, room, hosts)),
         Succ(d1) => λ t tp hosts answers room => t.calls_of(src, call, n, Succ(d1), tp,
@@ -2064,34 +1942,30 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let ok = src.allocation_sound(homes, allocated);
     let ok2 = ok.right;
     let built = src.calls_built(r.low, homes, program, compiled);
-    let c = built.witness;
-    let emitted = built.proof.left;
-    let w_whole = built.proof.right.left;
+    let c = built.c;
+    let emitted = built.emitted;
+    let w_whole = built.exit_within;
     // `main`'s frame: the stack's top words.
     let index = stack.size - 8 * src.words;
     let top_i: (stack.size = index + 8 * src.words) = omega(deep);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
     let roomy: ((src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 <= index) = omega(top_i, deep);
-    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right.left, args,
+    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
         src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, index, [], src.depth, framed, roomy);
-    let hosts: t.Hosts() = ⟨built.proof.right.right.left, built.proof.right.right.right.left⟩;
-    let linked = built.proof.right.right.right.right.right;
-    let meets = linked.witness.links_calls<X86Memory(r.profile)>(homes.places, linked.proof.witness, program, t.site(), t.laid, stack, program.within_self(),
-        src.functions, linked.proof.proof);
-    let linking = Bool::is_true_and(program_evaluable(src.functions), program_placeless(src.functions),
-        Bool::is_true_and(program_evaluable(src.functions) && program_placeless(src.functions), program_rowed(src.functions), meets.left).left);
-    let answers: t.Answered(call) = t.answers_of(linking.left, linking.right, meets.right);
+    let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
+    let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, built.names, program, t.site(), t.laid, stack, program.within_self(),
+        src.functions, built.linked);
+    let answers: t.Answered(call) = t.answers_of(known, known, meets.right);
     let fns = t.functions_run(call, answers);
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
     let live = src.main.live_in(homes, []);
     let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
-    let w_c: c.prog.Within(program) = c.prog.within_trans(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
-        program, Exists(2, refl), w_whole);
+    let w_c: c.prog.Within(program) = calc { c.prog <= then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall) := Exists(2, refl), <= program := w_whole, };
     let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, answers, refl), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
-    let w_entry = entry.within_trans(c.prog, program, src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
-    let w_saved = saved.within_trans(entry, program, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
+    let w_entry = Prog::within_trans(src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
+    let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
     let caps = λ (k: Nat) => {
         let shifted: (0 + k = k) = omega();
         cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
@@ -2099,7 +1973,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
         paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
     let after = λ (end: Env) => t.goes_finish(c.prog, w_whole, Ret(BitVec::zero()),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
+        λ u => t.Held([], end, u.gprs, u.memory),
         λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
     let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
     λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),

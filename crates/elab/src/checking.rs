@@ -412,7 +412,8 @@ impl Checking<'_> {
                     && named.is_empty() =>
             {
                 let discharge = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_ALL || name == crate::function_induction::INDUCT_LEAF_DEFAULT);
-                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, expected, lvl, e.span)
+                let is_default = matches!(&head.kind, ExprKind::Var(name) if name == crate::function_induction::INDUCT_LEAF_DEFAULT);
+                crate::function_induction::FunctionInduction(self).induct_leaf(cx, args, discharge, is_default, expected, lvl, e.span)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
@@ -477,7 +478,16 @@ impl Checking<'_> {
                         goal_combinators::check_refl_leaf(self, cx, body, &goal, e.span)?;
                         // A leaf that fails says which case it failed in, as
                         // the source tests it.
-                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots).map_err(|error| match error {
+                        // A hole in the block is this case's own goal.
+                        let leaf = || self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots);
+                        let checked = if crate::count_holes_expr(body) > 0 {
+                            let names: Vec<&str> = cx.names.iter().collect();
+                            let key = format!("{}|{}", goal_combinators::case_path(self, cx, e.span).unwrap_or_default(), names.join(","));
+                            self.attempt.goal_arena.in_leaf(key, leaf)
+                        } else {
+                            leaf()
+                        };
+                        checked.map_err(|error| match error {
                             crate::ElabError::Elab { msg, span } if !msg.contains("in the case") => match goal_combinators::case_path(self, cx, e.span) {
                                 Some(cases) => crate::ElabError::Elab { msg: format!("{msg}\n  in the `split_all` case {cases}"), span },
                                 None => crate::ElabError::Elab { msg, span },

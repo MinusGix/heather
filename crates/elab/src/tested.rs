@@ -530,6 +530,11 @@ impl Tested<'_> {
                 return self.elab_check(cx, &pair, expected, lvl);
             }
         }
+        // A Bool guard, from the guards in scope taken apart by structure
+        // (issues/bool-guard-facts-by-known.md).
+        if let Some(term) = self.known_guard(cx, &names, expected, lvl, span) {
+            return Ok(term);
+        }
         let closer = Expr { kind: ExprKind::Var(crate::measure::CLOSER.to_string()), span };
         self.elab_check(cx, &closer, expected, lvl).map_err(|error| {
             let goal = self.spell_type_source(cx, expected).or_else(|| self.spell_type(cx, expected)).unwrap_or_else(|| "it".into());

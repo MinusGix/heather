@@ -1,0 +1,22 @@
+// What a `runtime fn` program may not make for itself
+// (docs/native/io-programs-design.md §5 D2). Apart from
+// runtime_program_tests, whose programs `crates/cli/tests/native_tools.rs`
+// builds with `write-elf`, which takes no expected errors.
+
+import bitvec;
+import itree;
+import coitree;
+import linux_world;
+import rt;
+import rt_io;
+import runtime_program;
+
+// A buffer that starts as other bytes than zeros is not a local's: the
+// data segment starts it zeroed, and given bytes are a byte string.
+// expect-error: a buffer a program makes for itself starts zeroed
+runtime fn ones_local(mut io: Io) → Partial(Mutated<Io, u64>) {
+    let mut buf: List<u8> = List::replicate(1, 8);
+    let r = io.read_into(Io::stdin(), buf, 0, 8);
+    buf := r.buf;
+    Pointed::ret(Mutated(io, r.result))
+}

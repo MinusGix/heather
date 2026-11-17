@@ -101,13 +101,20 @@ theorem split_swapped_made(): split_swapped_entry.rule.make([1, 2, 3, 4, 5, 6, 7
 theorem moves(): move_move_entry.rule.make([64, 1, 2, 3]) = Some(Clause([Is(Move(64, 2, 1)), Is(Move(64, 3, 2))], Is(Move(64, 3, 1)))) { refl }
 
 // The clause's shape, published beside the rule: a number of the rule by
-// its place, a literal as computed.
+// its place, a literal as itself, anything else as computed.
 theorem add_zero_shape(): add_zero_r_entry.pattern = RulePattern(4,
-    [Makes(0, 1, [Numbered(0), Numbered(3), Computed]), Makes(2, 1, [Numbered(0), Numbered(2), Numbered(1), Numbered(3)])],
+    [Makes(0, 1, [Numbered(0), Numbered(3), Exactly(0)]), Makes(2, 1, [Numbered(0), Numbered(2), Numbered(1), Numbered(3)])],
     Makes(1, 1, [Numbered(0), Numbered(2), Numbered(1)])) { refl }
 
 theorem within_add_shape(): within_add_r_entry.pattern = RulePattern(7,
-    [Ranges(Numbered(0), Numbered(2), Numbered(3)), Ranges(Numbered(1), Numbered(4), Numbered(5)), Makes(2, 1, [Computed, Numbered(6), Numbered(0), Numbered(1)])],
+    [Ranges(Numbered(0), Numbered(2), Numbered(3)), Ranges(Numbered(1), Numbered(4), Numbered(5)), Makes(2, 1, [Exactly(64), Numbered(6), Numbered(0), Numbered(1)])],
     Ranges(Numbered(6), Computed, Computed)) { refl }
 
 theorem order_join_shape(): order_join_r_entry.pattern.premises = [Unread, Unread] { refl }
+
+// `Succ(b)` is the number after the rule's own: a range read gives `b`
+// back from it.
+theorem below_left_shape(): below_left_r_entry.pattern = RulePattern(4,
+    [Makes(10, 1, [Exactly(64), Numbered(3), Numbered(0), Numbered(1)]), Makes(0, 1, [Exactly(1), Numbered(3), Exactly(1)]),
+        Ranges(Numbered(1), Exactly(0), After(2))],
+    Ranges(Numbered(0), Exactly(0), Numbered(2))) { refl }

@@ -1,6 +1,6 @@
 ---
 title: A Bool guard's conjuncts as facts: past the first, and for guard goals
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [tactics,omega,proofs]
 area: tactics
@@ -37,3 +37,7 @@ What exists (probed 2026-11-16, `/mnt/project-files/compile-proofs/`):
 ## Done when
 
 `ih_first(…, ok.left)` in `Target::then_nil` is written `ih_first(…, known)` (or with an implicit found proof) from `checked: (first.checks(…) && rest.checks(…)).IsTrue()`, and no `Bool::is_true_and` is left in `native_compile_correct.hthr`.
+
+## Log
+
+- 2026-11-16: Built: `known` reads Bool guards in scope by structure and proves guard goals from their parts (`crates/elab/src/known_guards.rs`, docs/language/when-design.md stage 3). native_compile_correct.hthr has no `Bool::both`/`is_true_and` left: `then_nil`'s `ih_first(…, known)` and the syscall cases' `layout.word_inside(fd, known)`. The lambda parameters named `known` (a `List<Fact>`) in the `then_*` lemmas and `Stmt::emits_runs` are `facts` now, so the name reaches the search. The `omega` bullet moved to [[omega-guard-opens-recursion-and-case-arms]]; the truth-table alternative (`by bools()`) was not needed.

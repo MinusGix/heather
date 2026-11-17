@@ -210,6 +210,45 @@ nothing about the rule is trusted beyond the theorem the kernel checked.
 `or` and its constant are gone (`crates/cli/tests/native_own_rule.rs`;
 `docs/native/optimizer-rules-design.md`).
 
+`own_learner.hthr` goes one step further. Its rule says a mask of the low
+`k` bits does nothing to a word below `2^k`:
+
+```heather
+rule theorem mask_low(x: u64, k, high: Nat, small: x.within(0, high), fits: Succ(high) <= Nat::pow(2, k)):
+    x & BitVec::ofNat(Nat::pow(2, k) - 1) = x { … }
+```
+
+The search finds a rule's instance by reading its statement against the
+code, and here nothing in the code is `k`: the mask is one constant. So the
+program also registers a *learner*, a function the search asks at every
+node no statement rewrote, which reads the constant, finds `k` and names
+the rule and its numbers:
+
+```heather
+register def mask_learner: Learner = Learner(λ had at => match at {
+    BitAnd(_, o, x, c) => … Some(Proposed(mask_low_entry, [x, k, range_known(had.range, x).high, o, c])) …
+});
+```
+
+A learner is as untrusted as the rest of the search. What it proposes is
+the rule's own clause at those numbers, checked against what the search
+knows and then by the certificate's replay, which uses the rule's
+soundness and nothing of the learner. `first_masked` compiles to 39 bytes
+with the learner and 48 without; without it `--explain-optimizer=all`
+says `not applied at t10 = t6 & t9: mask_low   (known: t6 within 0 ..= 255)`.
+
+A set of rules is a module. `lib/native/function_ir/function_ir_identities.hthr`
+states the plain identities of words (`x | 0 = x`, `(a + b) - b = a`,
+`x.bxor(x) = 0` and the like), each a one-line `rule theorem`, and
+`rule_set.hthr` imports it. `tangled` compiles to 39 bytes with the import
+and 54 without, and the report shows one rule's result read by the next:
+
+```console
+  t10 = (t8 + t1) - t1 = t8   by add_sub
+  t11 = t1 ^ t1 = 0   by xor_self
+  t12 = t10 | 0 = t10   by or_zero
+```
+
 `--explain-optimizer` prints what the optimizer did with the rules, a line
 for each one used, in the rule's own words and by its name:
 
@@ -224,6 +263,24 @@ function 0: 6 rules used
 
 `t10` is the word the `or` computed; the line says what it was, what the
 rule makes it, and (in brackets) the facts the rule needed.
+
+`--explain-optimizer=all` also says where a rule was not applied though
+the nodes it states were there, which is what to read where a rule was
+expected and the code shows it was not used. A line names the node, the
+rules, and what was known of the words whose ranges they read:
+
+```console
+$ heather compile-x86 examples/binary-search/search.hthr lower_bound \
+    -o target/x86-native/lower_bound.s --explain-optimizer=all
+function 0: no rule used
+  not applied at t17 = t10 - t9: within_sub   (known: t10 within 1 ..= u64::MAX, t9 within 0 ..= 18446744073709551614)
+  not applied at t24 = t23 < t8: below_yes, below_no   (known: t23 within 0 ..= 255)
+  …
+```
+
+The ranges do not say `t9` is at most `t10`, so `within_sub` gives the
+difference no range. Every test the program really makes has such a line,
+which is why they are asked for apart.
 
 ## Per-function certificates and `build-x86`: burned
 

@@ -592,9 +592,31 @@ the matcher, for the rules whose conclusion is a node.
   said as that computation, so the line reads as the statement does, and
   only the premises the line's words do not already say are listed. The
   name is the theorem's, which a `RuleEntry` carries as character codes.
-  Not built: a word by its source name, the "not applied" lines (they need
-  the matcher to say what it tried), and the page of every registered
+  Not built: a word by its source name, and the page of every registered
   rule.
+
+- **`--explain-optimizer=all` also says where a rule was not applied.** A
+  line names a node of the function kept, the rules whose nodes are the
+  ones there and that made no instance, and what was known of the words
+  whose ranges they read:
+
+  ```
+    not applied at t6 = t5.resize(64): narrow_back   (known: t4 within 0 ..= 4095)
+    not applied at t24 = t23 < t8: below_yes, below_no   (known: t23 within 0 ..= 255)
+  ```
+
+  A rule's shape is its premises that are nodes (`Matchable::shaped`,
+  `function_ir_match.hthr`): where those fit and the rule gives nothing, a
+  range or its condition kept it. The report walks the function as the
+  search does (`StructuredRegion::missing` beside `StructuredRegion::learn`,
+  in `function_ir_explain.hthr`, so a plan's proof pays nothing for it) and
+  asks at each node kept (`node_missed`). A rule that reads ranges is
+  listed only where something is known of a word it reads, and one that
+  gives a range only where every word it reads is known, so a sum of a
+  word nothing is known of has no line. It differs from §8's sketch in one
+  thing: it says what was known and not what was needed, since a rule's
+  condition is a function and has no statement to print. The lines are
+  under `=all` because every test a program really makes has one.
 
 - **A rule that decides a bit is found the same way.** A rule whose
   conclusion is that a bit is a constant (`l.below(r) = 1`, `a | b = 0`)
@@ -613,10 +635,85 @@ the matcher, for the rules whose conclusion is a node.
   by `refl`, so what a table costs is steps of every such proof: without
   this each node paid for every rule of the table.
 
+- **What a branch's test says in its arm is found the same way.**
+  `below_left`, `below_right`, `above_left` and `above_right` conclude a
+  range of an operand, a word no premise writes, so they are read at the
+  node whose bit their premises test (`RulePattern::tested`,
+  `RuleEntry::at_test`, the table `testing()`), where the walk has taken
+  the arm and knows the bit. `Seen::narrowed` narrows a word's range where
+  a rule says more than is known (`narrowed_among`); the arithmetic that
+  named rules 9 to 12 is gone. A program's own rule with a premise
+  `l.below(r) = 1` and a range for its conclusion joins that table.
+- **A pattern keeps literals, and `Succ` of a rule's number.** A slot is
+  `Exactly(n)` for a literal, so a node of another width or a bit of the
+  other value fails as it is read and the rule is not made; in a range it
+  is an end the known range need only be inside. `After(k)` is `Succ` of
+  the rule's number `k`: `r.within(0, Succ(b))` gives `b` from the range
+  read, which a computed slot could not.
+- **Premises are read until every number is found**, which is one round
+  for most rules.
+
+- **A program registers a learner.** `Learner` (`function_ir_match.hthr`)
+  is a function from what the walk has (`Walked`) and a node to a proposal,
+  `Proposed(rule, numbers)`: a rule's entry and its numbers there.
+  `register def name: Learner = …` enters one, and the searches take the
+  learners as a parameter whose default is `registered(Learner)`, read
+  where the call is as the rules are, so `compile-x86` asks a program's
+  learners with nothing naming them. The walk asks them at a node no
+  rule's statement rewrote (`Seen::instance`, `proposed_among`). A
+  proposal is made an instance exactly as the matcher's are: the rule's
+  place is found by its name in the table, the rule's clause at the
+  numbers must write another node for the one read, and its premises must
+  be what the walk has (`Proposed::instance`); the walk then derives the
+  ranges it needs and the replayer checks the step. So a learner says only
+  where to look, and one that proposes too much is not believed.
+  `examples/x86-native/own_learner.hthr` is a program whose rule `mask_low`
+  has a number (`k`, of the mask `2^k - 1`) no node gives, with the learner
+  that finds it (`crates/cli/tests/native_own_rule.rs`). This is the
+  learner for a rule's instance; a learner of §7's other kind, a strategy
+  over a whole function (the word load, the word store, the guard), is
+  not registered yet: those are searches `compile-x86` names in its own
+  order (`verified.rs`, `optimize`).
+
+- **"Accepted" is proved for a step** (§7.1,
+  `function_ir_accepted.hthr`). `Among(had, at, facts)` says the
+  replayer's facts have what the walk has where a rule is read: the node
+  that made each word, each bit decided, and a range at least as narrow of
+  each word. Under it an instance found is a step the replayer takes:
+  `Matchable::found_accepted` (a rewrite or a bit), `ranged_accepted`,
+  `told_accepted`, and `Proposed::accepted` for what a learner proposes.
+  Each is one theorem for every rule, a program's own included, because
+  an instance is the rule's own clause with each premise checked against
+  the walk (`Among::knows_all`, `Among::derives`). So a rule or a learner
+  a program adds cannot be why a plan is refused at its step. What is
+  not proved is that the walk keeps `Among` from node to node (that it
+  derives each range before a step reads it, `explain` and `pending`),
+  which is the statement about a whole plan.
+
+- **A set of rules is a module** (§6). `function_ir_identities.hthr` has
+  the plain identities of words as `rule theorem`s (`or_zero`, `zero_or`,
+  `zero_add`, `sub_zero`, `xor_self`, `and_zero`, `add_sub`, `sub_add`,
+  the shifts by no places). They are not among the library's placed
+  rules: a program that imports the module is compiled with them, as with
+  its own, and one that does not is as it was
+  (`examples/x86-native/rule_set.hthr`). Whether a default set is on for
+  every compilation is not decided; `own_rule.hthr`'s control would need
+  another rule than `or_zero` then.
+- **The walk keeps every node that computes a word** as what made it
+  (`Seen::computing`), and the node a rule wrote for another. Before, it
+  kept the kinds the hand-written recognisers read, so a rule whose
+  statement has two nodes fired only where the inner one was of such a
+  kind, and a rule did not read what an earlier rule had made
+  (`tangled_untangled` in `function_ir_identities_tests.hthr`: `add_sub`,
+  then `xor_self`, then `or_zero` of that zero). A node that reads or
+  writes a span is not kept: the replayer's facts have it only where it
+  stands.
+
 What is left of step 3: the rules that decide a bit from an order or give
-an order, and the ones a branch's test gives in an arm, are still proposed
-by hand; the
-strategies are not registered learners yet, and "Accepted" is not proved.
+an order are still proposed by hand, and go with the order graph of §9.3;
+the library's strategies are not registered learners yet, a learner
+proposes rewrites only (no bit, no range), and "Accepted" is a step's, not
+yet a whole plan's.
 The library's own rules keep their hand-written places (`library()`,
 `matchable()`, `ranging()`) while recognisers in `learn` still name rules
 by place; a user's rule needs no list.

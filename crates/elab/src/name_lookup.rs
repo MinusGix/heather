@@ -79,6 +79,22 @@ impl NameLookup<'_> {
             });
         match res {
             NameRes::Ambiguous(modules) => self.same_generated(name, &modules).map_or(NameRes::Ambiguous(modules), NameRes::Found),
+            // A cited *class*'s bare name, where nothing in scope is called
+            // that: the class a tactic's generated instance cites
+            // (`host::publish_instance_member`) is then spelled as a written
+            // instance spells it, in its head and its members' owner. An
+            // evidence rule is a lemma, never a class, so a search's
+            // citation opens no bare name.
+            NameRes::NotFound if !name.contains("::") => {
+                let cited = self.scope.rule_citation.borrow();
+                let class = cited.as_deref().filter(|key| self.traits.class(key).is_some());
+                match class.and_then(split_qual) {
+                    Some((module, base)) if base == name && self.names.declares(module, base) && self.names.reaches(module) => {
+                        NameRes::Found(module.to_string())
+                    }
+                    _ => NameRes::NotFound,
+                }
+            }
             other => other,
         }
     }

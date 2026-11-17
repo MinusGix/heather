@@ -1,0 +1,229 @@
+// "Accepted" (docs/native/optimizer-rules-design.md §7.1): an instance the
+// search proposes is one the replayer takes. The search is untrusted, and
+// a wrong proposal is only a plan refused; this says a refusal cannot come
+// from the matcher or from a registered learner, for any rule, a
+// program's own included: where the replayer's facts have what the walk
+// has (`Among`), the step `Derive(place, numbers)` of an instance found
+// (`Matchable::found_at`, `Proposed::instance`) derives.
+//
+// It is one theorem for every rule because an instance is found the same
+// way for each: the rule's own clause at the numbers, with every premise
+// checked against the walk (`facts_passed`).
+import function_ir;
+import function_ir_match;
+import function_ir_replay;
+import function_ir_rule;
+import bool;
+import list;
+import logic;
+import nat;
+import nat_map;
+import option;
+
+theorem Range::inside_trans(self a: Range, b, c: Range, first: a.inside(b) = True, second: b.inside(c) = True): a.inside(c) = True {
+    let p = Bool::and_true_parts(b.low.leb(a.low), a.high.leb(b.high), first);
+    let q = Bool::and_true_parts(c.low.leb(b.low), b.high.leb(c.high), second);
+    Bool::and_true_of(c.low.leb(a.low), a.high.leb(c.high), Nat::leb_trans(c.low, b.low, a.low, q.left, p.left), Nat::leb_trans(a.high, b.high, c.high, p.right, q.right))
+}
+
+// The replayer's facts have what the walk has where a rule is read at the
+// node `at`: the node that made each word, each bit decided as the
+// constant it is, and a range at least as narrow of each word.
+record Among(had: Walked, at: Node, facts: Facts) {
+    nodes: (id: Nat) → (node: Node) → had.writing(at, id) = Some(node) → facts.has(node) = True,
+    bits: (id: Nat) → (node: Node) → had.bit(id) = Some(node) → facts.has(node) = True,
+    ranges: (id: Nat) → facts.range(id).inside(range_known(had.range, id)) = True,
+}
+
+theorem first_or_late(o, late: Option<Node>, node: Node): (match o { Some(n) => Some(n), None => late }) = Some(node) → (o = Some(node)) ∨ (late = Some(node)) {
+    match o { Some(n) => λ h => Inl(h), None => λ h => Inr(h) }
+}
+
+theorem bit_of_kind(had: Walked, id, kind: Nat, node: Node): (match kind { Zero => had.bit(id), Succ(_) => None }) = Some(node) → had.bit(id) = Some(node) {
+    match kind { Zero => λ h => h, Succ(_) => λ h => absurd(h) }
+}
+
+// A node the walk gives for a word, of a kind, is one the facts have.
+theorem Among::of_kind({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), id, kind: Nat, node: Node,
+    h: had.of_kind(at, id, kind) = Some(node)): facts.has(node) = True {
+    match first_or_late(had.writing(at, id).and_then(λ (made: Node) => made.kind().same(kind).then(Some(made))),
+        match kind { Zero => had.bit(id), Succ(_) => None }, node, h) {
+        Inl(wrote) => {
+            let a = Option::and_then_some(had.writing(at, id), λ (made: Node) => made.kind().same(kind).then(Some(made)), node, wrote);
+            let b = Bool::then_some(a.witness.kind().same(kind), Some(a.witness), node, a.proof.right);
+            j(Option::some_inj(a.witness, node, b.right), λ n _ => facts.has(n) = True, among.nodes(id, a.witness, a.proof.left))
+        },
+        Inr(late) => among.bits(id, node, bit_of_kind(had, id, kind, node, late)),
+    }
+}
+
+theorem same_as_found(o: Option<Node>, node: Node): (match o { None => False, Some(known) => node.same(known) }) = True → o = Some(node) {
+    match o { None => λ h => absurd(h), Some(known) => λ h => cong_fn(λ (n: Node) => Some(n), sym(node.same_sound(known, h))) }
+}
+
+theorem Among::is_known({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), node: Node, h: Is(node).passed(at, had) = True): facts.has(node) = True {
+    among.of_kind(node_output(node).id, node.kind(), node, same_as_found(had.of_kind(at, node_output(node).id, node.kind()), node, h))
+}
+
+// A premise the walk passes is one the facts know.
+theorem Among::knows({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), fact: Fact): fact.passed(at, had) = True → facts.knows(fact) = True {
+    match fact {
+        Is(node) => λ h => among.is_known(node, h),
+        Within(id, low, high) => λ h => facts.range(id).inside_trans(range_known(had.range, id), Range(low, high), among.ranges(id), h),
+        _ => λ h => absurd(h),
+    }
+}
+
+theorem Among::knows_all({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), wanted: List<Fact>):
+    facts_passed(wanted, at, had) = True → facts.knows_all(wanted) = True {
+    match wanted {
+        Nil => λ _ => refl,
+        Cons(fact, rest) => λ h => {
+            let both = Bool::and_true_parts(fact.passed(at, had), facts_passed(rest, at, had), h);
+            Bool::and_true_of(facts.knows(fact), facts.knows_all(rest), among.knows(fact, both.left), among.knows_all(rest, both.right))
+        },
+    }
+}
+
+// The step of an instance derives: the table has the rule at the place,
+// the rule makes a clause at the numbers, and the walk passes its
+// premises.
+theorem Among::derives({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), table: List<Rule>, rule: Rule, place: Nat, numbers: List<Nat>,
+    clause: Clause, placed: table.nth(place) = Some(rule), made: rule.make(numbers) = Some(clause), passed: facts_passed(clause.premises, at, had) = True):
+    facts.derive(table, place, numbers) = Some(facts.with(clause.conclusion)) {
+    j(sym(placed), λ o _ => o.and_then(λ (found: Rule) => found.make(numbers).and_then(λ c => facts.knows_all(c.premises).then(Some(facts.with(c.conclusion))))) =
+            Some(facts.with(clause.conclusion)),
+        j(sym(made), λ o _ => o.and_then(λ (c: Clause) => facts.knows_all(c.premises).then(Some(facts.with(c.conclusion)))) = Some(facts.with(clause.conclusion)),
+            j(sym(among.knows_all(clause.premises, passed)), λ ok _ => ok.then(Some(facts.with(clause.conclusion))) = Some(facts.with(clause.conclusion)), refl)))
+}
+
+// What an instance is made of once the rule's clause at the numbers is
+// had, as `Matchable::found_at` and `Proposed::instance` both end.
+fn concluding(at: Node, had: Walked, place: Nat, numbers: List<Nat>, clause: Clause) → Option<Matched> {
+    match clause.conclusion {
+        Is(node) => (node_output(node).id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
+            Some(Matched(place, numbers, node, facts_ranged(clause.premises)))),
+        _ => None,
+    }
+}
+
+theorem concluded_passed(conclusion: Fact, premises: List<Fact>, at: Node, had: Walked, place: Nat, numbers: List<Nat>, found: Matched):
+    concluding(at, had, place, numbers, Clause(premises, conclusion)) = Some(found) →
+    (facts_passed(premises, at, had) = True) ∧ ((place = found.place) ∧ (numbers = found.numbers)) {
+    match conclusion {
+        Is(node) => λ h => {
+            let c = Bool::then_some(node_output(node).id.same(node_output(at).id) && facts_passed(premises, at, had),
+                Some(Matched(place, numbers, node, facts_ranged(premises))), found, h);
+            let same = Option::some_inj(Matched(place, numbers, node, facts_ranged(premises)), found, c.right);
+            ⟨Bool::and_true_parts(node_output(node).id.same(node_output(at).id), facts_passed(premises, at, had), c.left).right,
+                ⟨cong_fn(λ (m: Matched) => m.place, same), cong_fn(λ (m: Matched) => m.numbers, same)⟩⟩
+        },
+        _ => λ h => absurd(h),
+    }
+}
+
+// The step of what `concluding` gives derives.
+theorem Among::concluded({had: Walked}, {at: Node}, {facts: Facts}, self among: Among(had, at, facts), table: List<Rule>, rule: Rule, place: Nat, numbers: List<Nat>,
+    clause: Clause, found: Matched, placed: table.nth(place) = Some(rule), made: rule.make(numbers) = Some(clause),
+    h: concluding(at, had, place, numbers, clause) = Some(found)): facts.derive(table, found.place, found.numbers) = Some(facts.with(clause.conclusion)) {
+    match clause {
+        Clause(premises, conclusion) => {
+            let c = concluded_passed(conclusion, premises, at, had, place, numbers, found, h);
+            j(c.right.right, λ ns _ => facts.derive(table, found.place, ns) = Some(facts.with(conclusion)),
+                j(c.right.left, λ p _ => facts.derive(table, p, numbers) = Some(facts.with(conclusion)),
+                    among.derives(table, rule, place, numbers, Clause(premises, conclusion), placed, made, c.left)))
+        },
+    }
+}
+
+// Accepted, for the matcher: an instance a rule's statement gives at a
+// node is a step the replayer takes, whatever the rule.
+theorem Matchable::found_accepted(self m: Matchable, table: List<Rule>, at: Node, had: Walked, facts: Facts, found: Matched, among: Among(had, at, facts),
+    placed: table.nth(m.place) = Some(m.rule), h: m.found_at(at, had) = Some(found)):
+    Exists<Facts>(λ after => facts.derive(table, found.place, found.numbers) = Some(after)) {
+    let a = Option::and_then_some(m.numbers(at, had), λ (numbers: List<Nat>) => m.rule.make(numbers).and_then(λ clause => concluding(at, had, m.place, numbers, clause)), found, h);
+    let b = Option::and_then_some(m.rule.make(a.witness), λ (clause: Clause) => concluding(at, had, m.place, a.witness, clause), found, a.proof.right);
+    Exists(facts.with(b.witness.conclusion), among.concluded(table, m.rule, m.place, a.witness, b.witness, found, placed, b.proof.left, b.proof.right))
+}
+
+// Accepted, for a learner: what it proposes, where the search makes an
+// instance of it, is a step the replayer takes. The table has the rule at
+// the place its name is found at.
+theorem Proposed::accepted(self proposed: Proposed, entries: List<RuleEntry>, table: List<Rule>, at: Node, had: Walked, facts: Facts, found: Matched,
+    among: Among(had, at, facts), placed: (place: Nat) → entries_place(entries, proposed.rule.name, 0) = Some(place) → table.nth(place) = Some(proposed.rule.rule),
+    h: proposed.instance(entries, at, had) = Some(found)): Exists<Facts>(λ after => facts.derive(table, found.place, found.numbers) = Some(after)) {
+    let a = Option::and_then_some(entries_place(entries, proposed.rule.name, 0), λ (place: Nat) => proposed.rule.rule.make(proposed.numbers).and_then(λ clause =>
+        concluding(at, had, place, proposed.numbers, clause)), found, h);
+    let b = Option::and_then_some(proposed.rule.rule.make(proposed.numbers), λ (clause: Clause) => concluding(at, had, a.witness, proposed.numbers, clause), found, a.proof.right);
+    Exists(facts.with(b.witness.conclusion), among.concluded(table, proposed.rule.rule, a.witness, proposed.numbers, b.witness, found, placed(a.witness, a.proof.left),
+        b.proof.left, b.proof.right))
+}
+
+// The same of the rules that give a range (`Matchable::ranged_at`) and of
+// those that say what a test gives (`Matchable::told_at`).
+theorem ranged_passed(conclusion: Fact, premises: List<Fact>, at: Node, had: Walked, place: Nat, numbers: List<Nat>, found: Ranged):
+    (match conclusion {
+        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(premises, at, had)).then(Some(Ranged(place, numbers, Range(low, high), facts_ranged(premises)))),
+        _ => None,
+    }) = Some(found) → (facts_passed(premises, at, had) = True) ∧ ((place = found.place) ∧ (numbers = found.numbers)) {
+    match conclusion {
+        Within(id, low, high) => λ h => {
+            let c = Bool::then_some(id.same(node_output(at).id) && facts_passed(premises, at, had), Some(Ranged(place, numbers, Range(low, high), facts_ranged(premises))), found, h);
+            let same = Option::some_inj(Ranged(place, numbers, Range(low, high), facts_ranged(premises)), found, c.right);
+            ⟨Bool::and_true_parts(id.same(node_output(at).id), facts_passed(premises, at, had), c.left).right,
+                ⟨cong_fn(λ (r: Ranged) => r.place, same), cong_fn(λ (r: Ranged) => r.numbers, same)⟩⟩
+        },
+        _ => λ h => absurd(h),
+    }
+}
+
+theorem Matchable::ranged_accepted(self m: Matchable, table: List<Rule>, at: Node, had: Walked, facts: Facts, found: Ranged, among: Among(had, at, facts),
+    placed: table.nth(m.place) = Some(m.rule), h: m.ranged_at(at, had) = Some(found)):
+    Exists<Facts>(λ after => facts.derive(table, found.place, found.numbers) = Some(after)) {
+    let a = Option::and_then_some(m.numbers(at, had), λ (numbers: List<Nat>) => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
+        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
+            Some(Ranged(m.place, numbers, Range(low, high), facts_ranged(clause.premises)))),
+        _ => None,
+    }), found, h);
+    let b = Option::and_then_some(m.rule.make(a.witness), λ (clause: Clause) => match clause.conclusion {
+        Within(id, low, high) => (id.same(node_output(at).id) && facts_passed(clause.premises, at, had)).then(
+            Some(Ranged(m.place, a.witness, Range(low, high), facts_ranged(clause.premises)))),
+        _ => None,
+    }, found, a.proof.right);
+    let c = ranged_passed(b.witness.conclusion, b.witness.premises, at, had, m.place, a.witness, found, b.proof.right);
+    Exists(facts.with(b.witness.conclusion), j(c.right.right, λ ns _ => facts.derive(table, found.place, ns) = Some(facts.with(b.witness.conclusion)),
+        j(c.right.left, λ p _ => facts.derive(table, p, a.witness) = Some(facts.with(b.witness.conclusion)),
+            among.derives(table, m.rule, m.place, a.witness, b.witness, placed, b.proof.left, c.left))))
+}
+
+theorem told_passed(conclusion: Fact, premises: List<Fact>, at: Node, had: Walked, place: Nat, numbers: List<Nat>, found: Told):
+    (match conclusion {
+        Within(id, low, high) => facts_passed(premises, at, had).then(Some(Told(place, numbers, id, Range(low, high), facts_ranged(premises)))),
+        _ => None,
+    }) = Some(found) → (facts_passed(premises, at, had) = True) ∧ ((place = found.place) ∧ (numbers = found.numbers)) {
+    match conclusion {
+        Within(id, low, high) => λ h => {
+            let c = Bool::then_some(facts_passed(premises, at, had), Some(Told(place, numbers, id, Range(low, high), facts_ranged(premises))), found, h);
+            let same = Option::some_inj(Told(place, numbers, id, Range(low, high), facts_ranged(premises)), found, c.right);
+            ⟨c.left, ⟨cong_fn(λ (t: Told) => t.place, same), cong_fn(λ (t: Told) => t.numbers, same)⟩⟩
+        },
+        _ => λ h => absurd(h),
+    }
+}
+
+theorem Matchable::told_accepted(self m: Matchable, table: List<Rule>, at: Node, had: Walked, facts: Facts, found: Told, among: Among(had, at, facts),
+    placed: table.nth(m.place) = Some(m.rule), h: m.told_at(at, had) = Some(found)):
+    Exists<Facts>(λ after => facts.derive(table, found.place, found.numbers) = Some(after)) {
+    let a = Option::and_then_some(m.numbers(at, had), λ (numbers: List<Nat>) => m.rule.make(numbers).and_then(λ clause => match clause.conclusion {
+        Within(id, low, high) => facts_passed(clause.premises, at, had).then(Some(Told(m.place, numbers, id, Range(low, high), facts_ranged(clause.premises)))),
+        _ => None,
+    }), found, h);
+    let b = Option::and_then_some(m.rule.make(a.witness), λ (clause: Clause) => match clause.conclusion {
+        Within(id, low, high) => facts_passed(clause.premises, at, had).then(Some(Told(m.place, a.witness, id, Range(low, high), facts_ranged(clause.premises)))),
+        _ => None,
+    }, found, a.proof.right);
+    let c = told_passed(b.witness.conclusion, b.witness.premises, at, had, m.place, a.witness, found, b.proof.right);
+    Exists(facts.with(b.witness.conclusion), j(c.right.right, λ ns _ => facts.derive(table, found.place, ns) = Some(facts.with(b.witness.conclusion)),
+        j(c.right.left, λ p _ => facts.derive(table, p, a.witness) = Some(facts.with(b.witness.conclusion)),
+            among.derives(table, m.rule, m.place, a.witness, b.witness, placed, b.proof.left, c.left))))
+}

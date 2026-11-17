@@ -1,0 +1,43 @@
+// A module of programs imports `runtime_program` and only what its own text
+// spells (docs/native/io-programs-design.md §3): the generators name what
+// they state by key, so none of their modules is imported here. The span
+// function sits beside the program, its `CompileSpan` instance citing the
+// class by key.
+
+import bitvec;
+import itree;
+import coitree;
+import linux_world;
+import rt;
+import rt_io;
+import runtime_program;
+
+// 1 when the span's first byte is zero, else 0; 2 when the read failed.
+runtime fn first_status(span: List<u8>, length, filled, failed: u64) → Mutated<List<u8>, u64> {
+    if failed = 0 {
+        if span.byte_within(length, 0) = 0 { Mutated(span, 1) } else { Mutated(span, 0) }
+    } else {
+        Mutated(span, 2)
+    }
+}
+
+runtime fn first_check(mut io: Io, buf: ByteBuffer(64)) → Partial(Mutated<Io, u64>) {
+    let mut buf = buf;
+    let mut filled: u64 = 0;
+    let mut going: u64 = 1;
+    let mut failed: u64 = 0;
+    while 0 < going {
+        let room = 64 - filled;
+        let r = io.read_into(Io::stdin(), buf, filled, room);
+        let bad = room < r.result;
+        buf := r.buf;
+        failed := if bad { 1 } else { 0 };
+        going := if bad { 0 } else if r.result = 0 { 0 } else { 1 };
+        filled := if bad { filled } else { filled + r.result };
+    }
+    let m = first_status(buf, BitVec::ofNat(buf.len()), filled, failed);
+    Pointed::ret(Mutated(io, m.value))
+}
+
+// The published theorem, cited where only these imports are in scope.
+def first_whole = first_check::reads;
