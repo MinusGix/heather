@@ -172,10 +172,11 @@ pub(crate) enum Stepped {
     Split { split: crate::goal_combinators::StuckSplit, premise: Type, level: Level, hypothesis: Term },
 }
 
-/// The rest of the block, as an argument of a step beside `h` that is not
-/// itself a name: a bare `fa` there would read as `h` passed beside the
-/// split's equation `fa`, which keeps `h` as written
-/// (`generalize::passed_beside`).
+/// The rest of the block, as an argument of a step that is not itself a
+/// name. It was written to keep a bare `fa` from reading as `h` passed
+/// beside the split's equation under the rule
+/// docs/language/matching/arm-readings-design.md replaced; nothing needs
+/// it now, and it changes no meaning.
 fn shielded(body: &Expr) -> Expr {
     match &body.kind {
         ExprKind::Var(_) => Expr {

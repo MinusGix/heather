@@ -7406,6 +7406,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "operator_section"
+        },
+        {
+          "type": "SYMBOL",
           "name": "ascription_expression"
         },
         {
@@ -7564,6 +7568,23 @@
         {
           "type": "SYMBOL",
           "name": "_expression"
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
+    },
+    "operator_section": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "SYMBOL",
+          "name": "operator"
         },
         {
           "type": "STRING",

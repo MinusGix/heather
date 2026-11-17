@@ -176,7 +176,8 @@ impl MismatchNotes<'_> {
         let (got_s, want_s, unfolds) = self.check_sides(cx, got, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{unfolds}{}{}{}",
+                "this has type `{g}`, but `{w}` is expected here{unfolds}{}{}{}{}",
+                crate::readings::Readings(self.0).refusal_note(cx, *span, got),
                 clash.as_ref().map(|c| self.slot_clash_note(cx, c)).unwrap_or_default(),
                 self.opaque_equation_note(cx, got, expected),
                 Casts(self).cast_help(cx, got, expected, *span),

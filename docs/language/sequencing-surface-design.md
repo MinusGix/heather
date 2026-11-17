@@ -1260,7 +1260,7 @@ own call) is unchanged.
   yield a value (`let got = if b { c.tick(1); 1 } else { 0 };`): the
   statement spelling with a `let mut` for the value works, at the cost
   `issues/statement-form-join-copies-calls.md` records.
-- `return` outside a loop (§5.5), which this does not touch.
+- `return` outside a loop (§5.5): built later, §22.
 - An arm that binds (`let x <- e;`) before it updates: the arm's binds are
   lowered when it closes (§13), which puts what follows them under a λ, and
   the update is refused there as it was.
@@ -1419,3 +1419,62 @@ lifted as `xs.at(i)`'s is (`measure::lift_found`).
 - `xs[i]` at a numeral on `[A; n]` in a `runtime fn` is the kernel's
   `nth`, which the reflector does not read; the SHA-256 round still
   writes `vector_index(s.working, 7, trivial)`.
+
+## 22. `return` outside a loop as built (2026-11-17)
+
+§5.5 for straight-line code. A function's body may `return` from its own
+statements and from a statement `if`/`match` among them, at any depth of
+statement forms:
+
+```heather
+runtime fn List::sift(mut self s: List<u8>, n, j, key: u64) → u64 decreases j.toNat() {
+    if j = 0 { return j; }
+    let below = s.byte_within(n, j - 1);
+    if below.zero_extend(56) <= key { return j; }
+    s.put_within(n, j, below);
+    s.sift(n, j - 1, key)
+}
+```
+
+1. **The parser splits the body in tail position**, as `imperative::tail` does for
+   a loop body's exits (§15): a statement form that returns takes the rest
+   of the body into each of its arms, and a `return e;` ends the arm it
+   stands in (`imperative::lower_body`, run instead of `lower_block` on
+   the block the parser marks as a declaration's body). So `if c { return
+   e; } rest` is `match decide_bit<c>() { True => e, False => rest }`, and
+   the function's equations are its branches: `simp_only(…, List::sift,
+   …)` takes the one the facts in scope decide, as it took the nested
+   `if`s' before.
+2. **The arms are a branch that ends the body**, so they update the
+   body's `let mut` locals as §19.1's arms do; the prefix before the
+   split is lowered first, and each arm continues with its locals.
+3. **In a `mut self` method** `return e` is `Mutated(x, e)` over the
+   receiver as it stands there, which lexical scope makes the receiver
+   the statements before it have threaded. The body's own end was already
+   written (`Parser::receiver_end`, §19.2–19.3) before the split, so the
+   arms that fall through end exactly as the body did: the method's own
+   tail call stays `\0mutated_whole`, which the `decreases` companions and
+   the `runtime fn` generator's loop rule need.
+4. **The rest is the `False` arm**, so it knows the test failed: a
+   `decreases` call there decreases (`sift`'s `j - 1` needs no `h:`), and
+   `if h: c { return e; }` names the failed test `h` in the rest.
+5. **The rest is copied into every arm that falls through.** One does, as
+   usual, so the body stays linear; a continuation reached from several
+   arms is copied, not bound once as §5.5's join point.
+6. **Refused, at parse time:** `return` in a λ or a block in value
+   position ("not from a λ or a block in value position"), `break` or
+   `continue` outside a loop, and a statement after a `return` in its
+   block. A returning `for` after a returning guard is a statement of
+   the guard's arm, which ends the function, so `lower_returns` follows
+   the split's arms; one in a statement form that does not itself return
+   is still refused as §15 (5) says.
+7. **Beside `?`** a `return e` is the function's whole result, as `?`'s
+   own exit is (§6.3's agreement for `Result` and `Option`): the binds are
+   lowered after the split, inside the arm that holds them.
+8. **Not built:** a `return` in a `let x <- e;` block of another carrier
+   (not probed), a `return` whose value is itself a call that updates the
+   `mut self` receiver, and §5.5's join point.
+
+Probes: `lib/_tests/std/core/early_return_tests.hthr`; parse-level facts
+in `crates/syntax/tests/imperative_statements.rs`
+(`a_return_outside_a_loop_splits_the_body`).
