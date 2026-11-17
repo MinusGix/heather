@@ -67,7 +67,7 @@ use super::{allocator, check_file, emission, labels, lowered, parts, refuse_assu
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
 const MAX_FILE: usize = 65535;
-const HEADER: usize = 232;
+const HEADER: usize = 288;
 /// Bytes a piece of the code is cut at, at least. A piece's statement costs
 /// about its bytes' assembly, linear in them (its addresses are `add_nat`
 /// from the page, which compare by their arguments), so the pieces together
@@ -461,16 +461,22 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     let code = emission::code(p, &items, &cuts);
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
-    let header = format!("io_elf_header(BitVec::ofNat(232 + {total}), BitVec::ofNat((232 + {total}).shr(8)), {size})");
+    // The header names the file's length and where its note is: the note's
+    // length is read with the header, and stated in the certificate as the
+    // number read (`header_of`).
+    let contract = format!("{src}().contract({from}, {size}, {homes}, {frames})");
+    let header_of = |note_len: &str| format!("io_elf_header(BitVec::ofNat(288 + ({total} + {note_len})), BitVec::ofNat((288 + ({total} + {note_len})).shr(8)), {size}, 288 + {total}, {note_len})");
     // The bytes: a part's as its read gave them, the items' around parts
     // read on the same fork, and every jump's displacement written here,
     // now that the labels are laid out (`labels::link`). So only the
     // certificate elaborates the literal, and its table.
     let (byte_text, byte_reads) = emission::byte_reads(p, &spans);
     let reads = format!("import {root};\nimport {parts};\n{imports}\n{byte_text}\
-        fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_header_numbers() → List<Nat> {{ {}.map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_note_numbers() → List<Nat> {{ {contract}.note().map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_lines_numbers() → List<Nat> {{ {contract}.lines_text().map(λ (b: BitVec(8)) => b.toNat()) }}\n\
         fn {p}_enter_numbers() → List<Nat> {{ canonical_block_bytes({enter_code}).map(λ (b: BitVec(8)) => b.toNat()) }}\n\
-        fn {p}_contract_numbers() → List<Nat> {{ {src}().contract({from}, {size}, {homes}, {frames}).spelled() }}\n");
+        fn {p}_contract_numbers() → List<Nat> {{ {contract}.spelled() }}\n", header_of(&format!("{contract}.note().len()")));
     let read = format!("{p}_read");
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
@@ -492,10 +498,16 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     labels::link(&items, &offsets, &mut bytes).map_err(|why| format!("`{symbol}`'s bytes did not read back: {why}"))?;
     let head = numbers(&fork, &read, &format!("{p}_header_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     let enter = numbers(&fork, &read, &format!("{p}_enter_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
-    // What the file presumes of the system, line by line, as the library
-    // lists it (`Contract::lines`): printed below and stated in the
-    // certificate, so what is printed is what the kernel checked.
+    // What the file presumes of the system, as the library lists and words
+    // it (`Contract::lines`, `Contract::lines_text`, native_contract): the
+    // lines by name for the certificate, their text to print below, and the
+    // note the file carries, which the certificate states is the contract's
+    // (`<p>_note_is`). So what is printed and what is embedded are what the
+    // kernel checked.
     let presumed = presumes(&numbers(&fork, &read, &format!("{p}_contract_numbers"))?).ok_or_else(|| format!("`{symbol}`'s contract did not read back"))?;
+    let printed = String::from_utf8(numbers(&fork, &read, &format!("{p}_lines_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?)
+        .map_err(|_| format!("`{symbol}`'s contract did not read back as text"))?;
+    let note = numbers(&fork, &read, &format!("{p}_note_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     drop(fork);
     if enter.len() != enter_len {
         return Err("the entry code did not read back".into());
@@ -505,6 +517,12 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
         return Err("the header did not read back".into());
     }
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+    let note_len = note.len();
+    if HEADER + total + note_len > MAX_FILE {
+        return Err(format!("`{symbol}` compiles to {total} bytes, past the profile's {MAX_FILE} with its header and its contract's note of {note_len}"));
+    }
+    let note_literal: Vec<String> = note.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+    let header = header_of(&note_len.to_string());
 
     // Of the literal, then of the source by its equation.
     let profile = format!("{p}_contract().profile(top)");
@@ -622,33 +640,50 @@ theorem {p}_total(): ({p}_enter() ++ {p}_upto_0()).len() = {total} {{
     trans({p}_enter().len_append({p}_upto_0()), cong_fn<Nat, Nat>(λ n => {p}_enter().len() + n, {p}_length()))
 }}
 
-// The file written: its header, the entry code, then the program.
-fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ ({p}_enter() ++ {p}_upto_0()) }}
+// The file's note: its contract as text in an ELF note (`Contract::note`,
+// native_contract), which the fourth program header names. A reader of the
+// file alone cannot tell it from a false one; this certificate is what
+// shows it is the contract of this file.
+fn {p}_note() → List<BitVec(8)> {{ [{note_bytes}] }}
+theorem {p}_note_is(): {p}_contract().note() = {p}_note() {{ refl }}
+theorem {p}_note_length(): {p}_note().len() = {note_len} {{ refl }}
 
-theorem {p}_file_is(): io_elf_file({p}_enter() ++ {p}_upto_0(), {p}_size()) = {p}_file() {{
-    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8)), {p}_size()), {p}_enter() ++ {p}_upto_0()), {p}_total()),
-        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, {p}_enter() ++ {p}_upto_0()), {p}_header_is()))
+// The file written: its header, the entry code, the program, then the note.
+fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ (({p}_enter() ++ {p}_upto_0()) ++ {p}_note()) }}
+
+theorem {p}_file_is(): io_elf_file({p}_enter() ++ {p}_upto_0(), {p}_note(), {p}_size()) = {p}_file() {{
+    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(288 + (n + {p}_note().len())), BitVec::ofNat((288 + (n + {p}_note().len())).shr(8)), {p}_size(), 288 + n, {p}_note().len()),
+            ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_total()),
+        trans(cong_fn<Nat, List<BitVec(8)>>(λ k => List::append(io_elf_header(BitVec::ofNat(288 + ({total} + k)), BitVec::ofNat((288 + ({total} + k)).shr(8)), {p}_size(), 288 + {total}, k),
+                ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_note_length()),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_header_is())))
 }}
 
-// Whatever names the compile's program, its file is the one written.
+// Whatever names the compile's program, its file with its contract's note
+// is the one written.
 theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}, {frames}) = Some(program)):
-    io_elf_file(entered({p}_stack(), program), {p}_size()) = {p}_file() {{
+    io_elf_file(entered({p}_stack(), program), {p}_contract().note(), {p}_size()) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
-    j(same, λ q _ => io_elf_file(entered({p}_stack(), q), {p}_size()) = {p}_file(),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(canonical_block_bytes({p}_stack()) ++ x, {p}_size()), {p}_bytes()),
-            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => io_elf_file(e ++ {p}_upto_0(), {p}_size()), {p}_enter_is()), {p}_file_is())))
+    j(same, λ q _ => io_elf_file(entered({p}_stack(), q), {p}_contract().note(), {p}_size()) = {p}_file(),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(canonical_block_bytes({p}_stack()) ++ x, {p}_contract().note(), {p}_size()), {p}_bytes()),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => io_elf_file(e ++ {p}_upto_0(), {p}_contract().note(), {p}_size()), {p}_enter_is()),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ n => io_elf_file({p}_enter() ++ {p}_upto_0(), n, {p}_size()), {p}_note_is()), {p}_file_is()))))
 }}
 
-theorem {p}_short(): 232 + entered({p}_stack(), {p}_code()).len() <= 65535 {{
-    j(sym(entered_len({p}_stack(), {p}_code())), λ n _ => 232 + n <= 65535,
-        j(sym({p}_bytes()), λ b _ => 232 + (block_length({p}_stack()) + b.len()) <= 65535,
-            j(sym({p}_length()), λ n _ => 232 + (block_length({p}_stack()) + n) <= 65535, Nat::leb_sound(232 + (block_length({p}_stack()) + {length}), 65535, trivial))))
+theorem {p}_short(): 288 + (entered({p}_stack(), {p}_code()).len() + {p}_contract().note().len()) <= 65535 {{
+    j(sym({p}_note_is()), λ n _ => 288 + (entered({p}_stack(), {p}_code()).len() + n.len()) <= 65535,
+        j(sym({p}_note_length()), λ k _ => 288 + (entered({p}_stack(), {p}_code()).len() + k) <= 65535,
+            j(sym(entered_len({p}_stack(), {p}_code())), λ n _ => 288 + (n + {note_len}) <= 65535,
+                j(sym({p}_bytes()), λ b _ => 288 + ((block_length({p}_stack()) + b.len()) + {note_len}) <= 65535,
+                    j(sym({p}_length()), λ n _ => 288 + ((block_length({p}_stack()) + n) + {note_len}) <= 65535,
+                        Nat::leb_sound(288 + ((block_length({p}_stack()) + {length}) + {note_len}), 65535, trivial))))))
 }}
 
-{theorems}", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length), enter_bytes = enter_literal.join(", "), theorems = theorems));
+{theorems}", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length), enter_bytes = enter_literal.join(", "), note_bytes = note_literal.join(", "), theorems = theorems));
     let mut file = head;
     file.extend_from_slice(&enter);
     file.extend_from_slice(&bytes);
+    file.extend_from_slice(&note);
 
     let unchecked = certificate.with_extension("unchecked.hthr");
     if unchecked.symlink_metadata().is_ok() {
@@ -684,37 +719,36 @@ theorem {p}_short(): 232 + entered({p}_stack(), {p}_code()).len() <= 65535 {{
         StackFrom::Segment => format!("the program's own, {room} bytes of its data segment"),
     });
     println!("`{symbol}` presumes of the system that runs it:");
-    for line in &presumed.printed {
+    for line in printed.lines() {
         println!("  {line}");
     }
+    println!("the file carries these lines as an ELF note (`readelf -n`, `strings`): the compiler's claim, which the certificate is what verifies");
     println!("certificate: {}", certificate.display());
     Ok(())
 }
 
 /// A contract's lines as `Contract::spelled` gives them, three numbers a
 /// line (which, its basis, its figure): each by its constructor's name, for
-/// the certificate, and in words with its basis, for the person compiling.
-struct Presumed { names: Vec<String>, printed: Vec<String> }
+/// the certificate to state. Their words are the library's
+/// (`Contract::lines_text`), read back and printed as they are.
+struct Presumed { names: Vec<String> }
 fn presumes(numbers: &[u64]) -> Option<Presumed> {
     if numbers.len() % 3 != 0 { return None; }
-    let (mut names, mut printed) = (Vec::new(), Vec::new());
+    let mut names = Vec::new();
     for line in numbers.chunks(3) {
-        let &[which, basis, figure] = line else { return None };
-        let basis = match basis { 0 => "[standard]", 1 => "[checked] ", 2 => "[presumed]", _ => return None };
-        let (name, words) = match which {
-            0 => ("Processor".to_string(), "the processor is an x86-64, as the vendors' manuals describe the instructions it runs".to_string()),
-            1 => (format!("FileLoaded({figure})"), format!("the file is loaded as its two PT_LOAD headers say, its data segment {figure} zero bytes (ELF gABI)")),
-            2 => ("EntryAddress".to_string(), "execution starts at the header's entry address (ELF gABI)".to_string()),
-            3 => ("CommandLine".to_string(), "the command line is at the stack pointer as the process starts (x86-64 psABI)".to_string()),
-            4 => (format!("StackRoom({figure})"), format!("{figure} bytes below the stack pointer as the process starts are usable (Linux grants it when the stack limit leaves that much)")),
-            5 => ("CallsAnswered".to_string(), "system calls follow the Linux x86-64 convention and answer as their manual pages allow".to_string()),
-            6 => ("NoFatalSignal".to_string(), "no fatal signal is delivered, the kernel's out-of-memory kill included".to_string()),
+        let &[which, _, figure] = line else { return None };
+        names.push(match which {
+            0 => "Processor".to_string(),
+            1 => format!("FileLoaded({figure})"),
+            2 => "EntryAddress".to_string(),
+            3 => "CommandLine".to_string(),
+            4 => format!("StackRoom({figure})"),
+            5 => "CallsAnswered".to_string(),
+            6 => "NoFatalSignal".to_string(),
             _ => return None,
-        };
-        names.push(name);
-        printed.push(format!("{basis}  {words}"));
+        });
     }
-    Some(Presumed { names, printed })
+    Some(Presumed { names })
 }
 
 /// A tool's lowering, read and stated a part at a time (`parts`): the

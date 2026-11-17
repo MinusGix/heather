@@ -1,9 +1,10 @@
 # The system contract: what a compiled program presumes of where it runs
 
-Status: **partly built.** Built (`lib/native/native_compile_elf.hthr`,
-`heather write-elf`): the contract record and its printing (§2), and two
-stack providers, the system's and the program's own segment (§4.2). Not
-built: the contract embedded in the file (§2.1), the startup check and the
+Status: **partly built.** Built (`lib/native/native_contract.hthr`,
+`lib/native/native_compile_elf.hthr`, `heather write-elf`): the contract
+record, its printing and its note in the file (§2, §2.1), and two stack
+providers, the system's and the program's own segment (§4.2). Not built: the
+startup check and the
 refusal outcome (§2, §4.2), room as an expression and the explicit-stack
 combinator (§4.1), the mapped provider and memory acquired during the run
 (§5), signals (§6). Written 2026-11-17 after the audit of the Linux model
@@ -49,13 +50,17 @@ single premise about the system, and the driver prints it in plain words:
 ```
 
 As built: `Contract` (where the stack is from, the segment's size, the stack
-room) and `Contract::lines`, a list of `Presumes`, each with its `Basis`.
+room) and `Contract::lines`, a list of `Presumes`, each with its `Basis`
+(`lib/native/native_contract.hthr`, which also words them:
+`Contract::lines_text`, `Contract::text`, `Contract::note`).
 `Contract::Start` is the premise the file's theorem takes, by provider
 (`LinuxStart` or `SegmentStart`), and `Source::elf_runs` is the one theorem
 over either. A certificate states `<p>_contract()`, proves its lines equal a
 literal list (`<p>_presumes`), and `write-elf` prints that same list after
-the kernel has checked it. So the printed lines are the ones the certificate
-names. What is not yet mechanical: that each line corresponds to a field of
+the kernel has checked it. The words printed are the library's
+(`Contract::lines_text`), read back from the kernel's evaluation, not a
+second spelling in the driver. So the printed lines are the ones the
+certificate names. What is not yet mechanical: that each line corresponds to a field of
 `Contract::Start` or a rule of the model is by the comments on `Presumes`,
 not by a theorem. The stack line is still `presumed`: it becomes `checked`
 with the startup check (§4.2). The line for system calls does not yet list
@@ -89,6 +94,19 @@ with any bytes. What can be had, from weakest to strongest:
 
 So the note says what the compiler claimed, and its header says it is
 unverified unless checked against a certificate.
+
+As built: the file has a fourth program header, a `PT_NOTE` naming bytes
+after the code (`io_elf_header`, `io_elf_file(code, note, size)`,
+`lib/std/os/linux/linux_x86_64_image.hthr`; the header is 288 bytes and the
+entry 0x400120). The note is an ELF note of name `Heather`, type 1, whose
+description is `Contract::text`: two lines saying what it is and what it is
+worth, then the contract's lines as `write-elf` prints them. The file's
+theorem is about the file with that note: `Source::elf_runs` takes
+`io_elf_file(code, contract.note(), size)`, and a certificate proves its
+literal note equal to `<p>_contract().note()` (`<p>_note_is`). The loader
+maps the note with the code (it lies inside the RX mapping) and the program
+never reads it (`X86Memory::loaded_entry_before`). `readelf -n` lists it,
+and `strings` shows its text.
 
 Each line has one of three kinds.
 
@@ -234,8 +252,7 @@ default?
 2. Done: providers as a compile option (`--stack system|segment`), the
    compiler proved once against "RSP is the top of a stack with the room,
    RDI is where the command line is" (`Source::runs_after`).
-3. The contract in the file as a note (§2.1): a fourth program header and
-   the note's bytes after the code.
+3. Done: the contract in the file as a note (§2.1).
 4. The refusal outcome in the ELF theorem, and the startup check of the
    system stack as its first use (§4.2).
 5. Room as an expression and the explicit-stack combinator (§4.1), with the
@@ -243,5 +260,5 @@ default?
 6. `mmap` in the model; the mapped provider; memory acquired during the run.
 7. Signals (§6).
 
-Steps 3 and 4 are independent of the rest. Step 5 belongs with the function
+Step 4 is independent of the rest. Step 5 belongs with the function
 compiler's work, step 6 with the heap's.

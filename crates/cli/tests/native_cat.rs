@@ -191,6 +191,18 @@ fn every_written_program_gets_its_theorem() {
         "bytes below the stack pointer as the process starts are usable", "  [presumed]  no fatal signal is delivered, the kernel's out-of-memory kill included"] {
         assert!(printed.contains(line), "the compile prints `{line}`:\n{printed}");
     }
+    // The file carries the same lines as an ELF note after its code, and the
+    // certificate states that note is the contract's.
+    assert!(certificate.contains("theorem head10_elf_note_is(): head10_elf_contract().note() = head10_elf_note()"), "the certificate states the note");
+    let file = std::fs::read(&binary).unwrap();
+    let text = String::from_utf8_lossy(&file).to_string();
+    for line in ["Heather contract 1: what this program presumes of the system that runs it.\nA claim by its compiler, unverified unless checked against the file's certificate.\n",
+        "[presumed]  no fatal signal is delivered, the kernel's out-of-memory kill included\n"] {
+        assert!(text.contains(line), "the file carries `{line}`");
+    }
+    // The fourth program header is a PT_NOTE.
+    assert_eq!(u16::from_le_bytes(file[56..58].try_into().unwrap()), 4, "four program headers");
+    assert_eq!(u32::from_le_bytes(file[64 + 3 * 56..][..4].try_into().unwrap()), 4, "the fourth a PT_NOTE");
     let every: Vec<u8> = (0..700u32).map(|i| (i * 7 % 256) as u8).collect();
     for input in [&b"hello, head\n"[..], &every] {
         let (code, out) = run(&binary, input, Stdio::piped());

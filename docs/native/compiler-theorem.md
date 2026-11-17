@@ -263,9 +263,11 @@ code is a choice made when the file is written (`write-elf --stack`). Either
 way the file has one record of what it presumes of the system, its
 `Contract` (`docs/native/system-contract-design.md` §2): the certificate
 states it (`<source>_elf_contract`, its lines by name in
-`<source>_elf_presumes`), `write-elf` prints those lines, and the file's
-theorem, `<source>_elf_runs` by `Source::elf_runs`, takes the contract's
-`Start` as its one premise about the system.
+`<source>_elf_presumes`), `write-elf` prints those lines, the file carries
+them as an ELF note after its code (`Contract::note`, a claim a reader can
+check only against the certificate), and the file's theorem,
+`<source>_elf_runs` by `Source::elf_runs`, is about the file with that note
+and takes the contract's `Start` as its one premise about the system.
 
 **The system's stack** (`--stack system`, the default; `stack_from_system`).
 The contract's `Start` is `LinuxStart` (the theorem behind it is

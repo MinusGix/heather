@@ -29,8 +29,18 @@ theorem probe_placed(): StackPlaced(4096, probe_top(), probe_depth()) {
         canonical := Nat::leb_sound(probe_top(), Nat::pow(2, 47), trivial))
 }
 
-// A file of one RET, and the process the loader maps of it.
-fn probe_file() → List<BitVec(8)> { io_elf_file([BitVec::ofNat(0xc3)], 4096) }
+// A file of one RET and a note of four bytes after it, and the process the
+// loader maps of it.
+fn probe_note() → List<BitVec(8)> { [BitVec::ofNat(1), BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4)] }
+fn probe_file() → List<BitVec(8)> { io_elf_file([BitVec::ofNat(0xc3)], probe_note(), 4096) }
+
+// The header is 288 bytes, four program headers, and the fourth names the
+// note: a PT_NOTE, readable, at offset 289 of the file, four bytes.
+theorem probe_file_length(): probe_file().len() = 293 { refl }
+theorem probe_note_header(): probe_file().drop(232).take(16) =
+    [BitVec::ofNat(4), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(4), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0),
+     BitVec::ofNat(0x21), BitVec::ofNat(0x01), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)] { refl }
+theorem probe_note_there(): probe_file().drop(289) = probe_note() { refl }
 fn probe_memory() → X86Memory(probe_profile()) {
     X86Memory::process_load(4096, probe_within(), probe_top(), probe_depth(), probe_placed(), probe_file())
 }
@@ -41,8 +51,8 @@ theorem probe_loaded(): probe_memory().LoadedFrom(4096, probe_file()) {
 
 // Its code at the entry, and its segment zero.
 theorem probe_code(): CodeResident(probe_profile().fetch(), probe_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
-    probe_memory().loaded_entry(4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
-        [BitVec::ofNat(0xc3)], refl, Nat::leb_sound(233, 65536, trivial), probe_loaded())
+    probe_memory().loaded_entry_before(4096, probe_within(), io_elf_header(BitVec::ofNat(293), BitVec::ofNat((293).shr(8)), 4096, 289, 4),
+        [BitVec::ofNat(0xc3)], probe_note(), refl, Nat::leb_sound(293, 65536, trivial), probe_loaded())
 }
 theorem probe_zero(): DataRegion::process_data(4096, probe_within(), probe_top(), probe_depth()).Holds(io_zero(), probe_memory()) {
     probe_memory().loaded_data(4096, probe_within(), probe_top(), probe_depth(), probe_file(), probe_loaded())
@@ -104,8 +114,8 @@ theorem own_loaded(): own_memory().LoadedFrom(4096, probe_file()) {
 
 // Its code at the entry, and its data zero.
 theorem own_code(): CodeResident(own_profile().fetch(), own_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
-    own_memory().loaded_entry(4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
-        [BitVec::ofNat(0xc3)], refl, Nat::leb_sound(233, 65536, trivial), own_loaded())
+    own_memory().loaded_entry_before(4096, probe_within(), io_elf_header(BitVec::ofNat(293), BitVec::ofNat((293).shr(8)), 4096, 289, 4),
+        [BitVec::ofNat(0xc3)], probe_note(), refl, Nat::leb_sound(293, 65536, trivial), own_loaded())
 }
 theorem own_zero(): DataRegion::own_data(4096, probe_within(), 1024, own_inside()).Holds(io_zero(), own_memory()) {
     own_memory().loaded_own_data(4096, probe_within(), 1024, own_inside(), probe_file(), own_loaded())
