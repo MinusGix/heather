@@ -58,7 +58,9 @@ pub(crate) struct Family {
     pub(crate) methods: Vec<String>,
     /// `f_unfold : f(x̄) = <the lowered body>` by `refl` (§7.1), attempted
     /// after the family and skipped, with its reason recorded, if refused.
-    pub(crate) unfold: Decl,
+    /// None for a `decreases` function, whose equation the measure
+    /// lowering writes.
+    pub(crate) unfold: Option<Decl>,
     pub(crate) designations: Vec<(String, String)>,
 }
 
@@ -116,6 +118,9 @@ fn count_loops(b: &Block) -> usize {
     n
 }
 
+/// A declaration's name past its type's qualifier, `f` of `T::f`.
+fn base_name(name: &str) -> &str { name.rsplit("::").next().unwrap_or(name) }
+
 fn var(name: &str, span: Span) -> Expr { Expr { kind: ExprKind::Var(name.into()), span } }
 
 fn call(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
@@ -155,6 +160,21 @@ struct Lift<'a> {
     next: usize,
     parts: Vec<Part>,
     designations: Vec<(String, String)>,
+}
+
+/// How a loop's result holds its state, for the `\0proj`s after it: the
+/// one local itself, a field of `f#State` per local, or a `Mutated` whose
+/// `after` is the receiver of a `mut self` method and whose `value` is the
+/// one other local beside it.
+#[derive(Clone)]
+enum Shape {
+    Single,
+    Record,
+    Mutated { receiver: String },
+}
+
+impl Shape {
+    fn of(single: bool) -> Shape { if single { Shape::Single } else { Shape::Record } }
 }
 
 /// A local in scope: its name, and its type once one is needed.
@@ -215,6 +235,30 @@ impl<'a> Lift<'a> {
         self.tys.infer_local(self.decl, &[], &selected, e)
     }
 
+    /// The receiver of a `mut self` method when it is among a loop's state
+    /// with at most one other local beside it (the position of that local
+    /// in `vars`): such a loop is lifted as a `mut self` method of the
+    /// receiver's type, which returns the other local
+    /// (docs/language/sequencing-surface-design.md §22).
+    fn receiver_in(&self, vars: &[&str]) -> Option<(Param, Option<usize>)> {
+        if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
+            return None;
+        }
+        let r = self.decl.params.iter().find(|p| p.is_self)?;
+        let at = vars.iter().position(|v| *v == r.name)?;
+        match vars.len() {
+            1 => Some((r.clone(), None)),
+            2 => Some((r.clone(), Some(1 - at))),
+            _ => None,
+        }
+    }
+
+    /// The name of a loop lifted as a method of the receiver's type,
+    /// `T::f_loop`, or `T::f_loop2`, … where `f` has several.
+    fn method_name(&self) -> String {
+        if self.loops == 1 { format!("{}_loop", self.decl.name) } else { format!("{}_loop{}", self.decl.name, self.next) }
+    }
+
     /// The minted and designed names of the next loop's function (`step`
     /// for a `for`, `run` for a `while`) and state record (§5.4).
     fn names(&mut self, word: &str) -> (String, String, String, String) {
@@ -240,7 +284,7 @@ impl<'a> Lift<'a> {
     /// [`Self::block`] with the loops before it already lowered: `results`
     /// names them for the `\0proj`s in `b` (the rest of a body after a loop
     /// that may `return`, which the parser nests in `\0after`).
-    fn block_after(&mut self, mut b: Block, scope: &mut Vec<Local>, mut results: Vec<(String, bool)>) -> R<Block> {
+    fn block_after(&mut self, mut b: Block, scope: &mut Vec<Local>, mut results: Vec<(String, Shape)>) -> R<Block> {
         let mut stmts = Vec::with_capacity(b.stmts.len());
         // `results`: a loop's name, whether its state is a single local, for
         // its `\0proj`s. With an early exit, the state is read through
@@ -258,14 +302,14 @@ impl<'a> Lift<'a> {
                     let expr = if let Some(read) = self.proj(&expr, &results) {
                         read
                     } else if loop_parts(&expr).is_some() {
-                        let (lowered, single, exit_init) = self.lift(&expr, scope)?;
+                        let (lowered, shape, exit_init) = self.lift(&expr, scope)?;
                         match exit_init {
                             Some(init) => {
                                 let s = format!("{name}#s");
-                                results.push((s.clone(), single));
+                                results.push((s.clone(), shape));
                                 alias = Some((s, init));
                             }
-                            None => results.push((name.clone(), single)),
+                            None => results.push((name.clone(), shape)),
                         }
                         lowered
                     } else {
@@ -328,18 +372,22 @@ impl<'a> Lift<'a> {
     }
 
     /// `\0proj(#forN, v)`: the loop's state, or its field `v`.
-    fn proj(&self, e: &Expr, results: &[(String, bool)]) -> Option<Expr> {
+    fn proj(&self, e: &Expr, results: &[(String, Shape)]) -> Option<Expr> {
         let ExprKind::App { head, args, .. } = &e.kind else { return None };
         if args.len() != 2 || !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::PROJ) {
             return None;
         }
         let (ExprKind::Var(l), ExprKind::Var(v)) = (&args[0].kind, &args[1].kind) else { return None };
-        let (found, single) = results.iter().rev().find(|(n, _)| n == l || *n == format!("{l}#s"))?;
+        let (found, shape) = results.iter().rev().find(|(n, _)| n == l || *n == format!("{l}#s"))?;
         let state = var(found, e.span);
-        Some(if *single {
-            state
-        } else {
-            Expr { kind: ExprKind::Dot { recv: Box::new(state), name: v.clone(), tyargs: vec![], args: None, named: vec![] }, span: e.span }
+        let field = |name: &str| Expr {
+            kind: ExprKind::Dot { recv: Box::new(state.clone()), name: name.to_string(), tyargs: vec![], args: None, named: vec![] },
+            span: e.span,
+        };
+        Some(match shape {
+            Shape::Single => state.clone(),
+            Shape::Record => field(v),
+            Shape::Mutated { receiver } => field(if v == receiver { "after" } else { "value" }),
         })
     }
 
@@ -358,7 +406,10 @@ impl<'a> Lift<'a> {
             ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
                 let mut out: Vec<Arm> = Vec::with_capacity(arms.len());
                 for mut arm in arms {
-                    if contains_loop(&arm.body) && (!arm.binders.is_empty() || eqbind.is_some()) {
+                    // A test's own equation, which a lifted loop's `if` binds
+                    // under a private name, is read by no source.
+                    let private = eqbind.as_deref().is_some_and(|n| n.starts_with("__"));
+                    if contains_loop(&arm.body) && (!arm.binders.is_empty() || (eqbind.is_some() && !private)) {
                         return err(
                             "a `for` under a `match` arm that binds is not supported yet: move the loop \
                              out of the arm, or into a function of its own",
@@ -377,7 +428,7 @@ impl<'a> Lift<'a> {
 
     /// Lift one loop (module docs): returns its replacement and whether its
     /// state is a single local.
-    fn lift(&mut self, e: &Expr, scope: &[Local]) -> R<(Expr, bool, Option<Expr>)> {
+    fn lift(&mut self, e: &Expr, scope: &[Local]) -> R<(Expr, Shape, Option<Expr>)> {
         let (iter, x, body, vars) = loop_parts(e).expect("a loop");
         if let Some((cond, measure)) = while_parts(iter) {
             return self.lift_while(e, scope, cond, measure);
@@ -545,7 +596,7 @@ impl<'a> Lift<'a> {
             kind: ExprKind::Dot { recv: Box::new(iter.clone()), name: member.into(), tyargs: vec![], args: Some(vec![lam, init.clone()]), named: vec![] },
             span,
         };
-        Ok((fold, single, exits.then_some(init)))
+        Ok((fold, Shape::of(single), exits.then_some(init)))
     }
 }
 
@@ -556,7 +607,7 @@ impl Lift<'_> {
     /// parameters so the measure obligation reads them plainly, its result
     /// the state as a `for`'s step returns it. The match's equation is what
     /// the obligation's `omega` reads the condition from.
-    fn lift_while(&mut self, e: &Expr, scope: &[Local], cond: &Expr, measure: &Expr) -> R<(Expr, bool, Option<Expr>)> {
+    fn lift_while(&mut self, e: &Expr, scope: &[Local], cond: &Expr, measure: &Expr) -> R<(Expr, Shape, Option<Expr>)> {
         let (_, x, body, vars) = loop_parts(e).expect("a loop");
         let span = e.span;
         let typed = self.typed(scope);
@@ -597,6 +648,11 @@ impl Lift<'_> {
             };
             captures.push((b.name.clone(), t));
         }
+        // At a `mut self` receiver with one other local, the loop is a
+        // method of the receiver's type returning that local.
+        if let Some((r, Some(k))) = self.receiver_in(&vars) {
+            return self.lift_while_method(span, body, captures, r, (vars[k], state_tys[k].clone()), cond, measure);
+        }
         let (run, state, run_designed, state_designed) = self.names("run");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
         let single = vars.len() == 1;
@@ -623,7 +679,9 @@ impl Lift<'_> {
         // the parameters, which the obligation compares.
         let mut again = body.clone();
         let end = again.result.span;
-        *again.result = call(var(&run, end), args(end), end);
+        // The self-call by its base name: a member recurses under it, and a
+        // qualified one is not yet in scope while the member is checked.
+        *again.result = call(var(base_name(&run), end), args(end), end);
         let telescope: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
         crate::alpha::ssa(&mut again, &telescope);
         let next = std::mem::replace(&mut *again.result, var("", end));
@@ -657,11 +715,94 @@ impl Lift<'_> {
             body: again,
             span,
         }));
+        // A prefix generator over the declaration runs over the loop too, so
+        // a `runtime fn`'s loop is compiled and its call can be; by its
+        // designed name, which a lookup resolves (a minted one has a `#`).
+        self.methods.push(run_designed.clone());
         // A `decreases` function's equation, `f#run_unfold`, is a member
         // proofs cite too (§7.3).
         self.designations.push((measure::unfold_name(&run_designed), measure::unfold_name(&run)));
         self.designations.push((run_designed, run.clone()));
-        Ok((call(var(&run, span), args(span), span), single, None))
+        Ok((call(var(&run, span), args(span), span), Shape::of(single), None))
+    }
+
+    /// A `while` whose state is the receiver `r` of a `mut self` method and
+    /// one other local `o`: the method `T::f_loop(mut self r, c̄, o) →
+    /// Mutated<T, O> decreases m { if c { body; r.f_loop(c̄, o′) } else {
+    /// Mutated(r, o) } }`, the body under the test (not hoisted above it,
+    /// as a pure `while`'s is: a store into the receiver may not run where
+    /// the condition fails), and the loop the `Mutated` its call returns.
+    /// The test is spelled as a `for` over words spells its own, so a search
+    /// in the body reads the condition.
+    #[allow(clippy::too_many_arguments)]
+    fn lift_while_method(
+        &mut self,
+        span: Span,
+        body: &Block,
+        captures: Vec<(String, Ty)>,
+        r: Param,
+        (o, o_ty): (&str, Ty),
+        cond: &Expr,
+        measure: &Expr,
+    ) -> R<(Expr, Shape, Option<Expr>)> {
+        let _ = self.names("run");
+        let run = self.method_name();
+        let method = run.rsplit("::").next().unwrap_or(&run).to_string();
+        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+        params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+        params.push(param(o, o_ty.clone(), span));
+        let dot = |args: Vec<Expr>, at: Span| Expr {
+            kind: ExprKind::Dot { recv: Box::new(var(&r.name, at)), name: method.clone(), tyargs: vec![], args: Some(args), named: vec![] },
+            span: at,
+        };
+        let args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).chain(std::iter::once(var(o, at))).collect() };
+        let mut again = body.clone();
+        let end = again.result.span;
+        *again.result = marked(heather_syntax::MUTATED_WHOLE, dot(args(end), end), end);
+        // The body's claimed method calls on the receiver rebind it as plain
+        // `let`s, and every rebinding gets a fresh name (SSA): the
+        // condition's equation, which reads the receiver the method is
+        // called with, then names no binder the body shadows.
+        again.stmts = measure::rebind_marked(&again.stmts, end, false).map_err(|m| crate::ElabError::Elab { msg: m, span })?;
+        let telescope: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        crate::alpha::ssa(&mut again, &telescope);
+        let done = call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), var(o, span)], span);
+        self.next_if += 1;
+        let branch = Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                generated: true,
+                scrut: Box::new(cond.clone()),
+                eqbind: Some(format!("__while_h{}", self.next_if)),
+                motive: None,
+                arms: vec![
+                    Arm { ctor: "True".into(), default: false, binders: vec![], body: Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, span },
+                    Arm { ctor: "False".into(), default: false, binders: vec![], body: done, span },
+                ],
+            },
+            span,
+        };
+        let result = Ty { kind: TyKind::Named { name: heather_syntax::MUTATED_RECORD.into(), args: vec![r.ty.clone(), o_ty] }, span };
+        self.parts.push(Part::Decl(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_interface: false,
+            partial: None,
+            unfolding: Vec::new(),
+            is_evidence: false,
+            value: false,
+            elaborates: None,
+            name: run.clone(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result,
+            decreases: Some(measure.clone()),
+            body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
+            span,
+        }));
+        self.methods.push(run);
+        Ok((marked(heather_syntax::MUTATED_WHOLE, dot(args(span), span), span), Shape::Mutated { receiver: r.name.clone() }, None))
     }
 
     /// `record f#State { v₁: T₁, … }`, the state of a loop with several locals.
@@ -789,7 +930,7 @@ impl Lift<'_> {
     /// if i < hi { body; x.f#run(c̄, i + 1) } else { i } }`, the shape a
     /// `runtime fn` of a laid record compiles as a loop; otherwise
     /// `f#run(c̄, v̄, i: W) → S`, returning the state.
-    fn lift_counted(&mut self, e: &Expr, scope: &[Local], lo: Expr, hi: Expr, word: Ty) -> R<(Expr, bool, Option<Expr>)> {
+    fn lift_counted(&mut self, e: &Expr, scope: &[Local], lo: Expr, hi: Expr, word: Ty) -> R<(Expr, Shape, Option<Expr>)> {
         let (_, x, body, vars) = loop_parts(e).expect("a loop");
         let span = e.span;
         if has_leaf(&body.result, &[heather_syntax::NEXT, heather_syntax::BRK, heather_syntax::RET]) {
@@ -831,26 +972,20 @@ impl Lift<'_> {
             };
             captures.push((b.name.clone(), t));
         }
-        // The receiver of a `mut self` method, when it is the whole state.
-        let receiver = self
-            .decl
-            .params
-            .iter()
-            .find(|p| p.is_self)
-            .filter(|p| vars.as_slice() == [p.name.as_str()])
-            .filter(|_| matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD))
-            .cloned();
+        // The receiver of a `mut self` method among the state, with at most
+        // one other local beside it.
+        let receiver = self.receiver_in(&vars);
         let (mut run, state, run_designed, state_designed) = self.names("run");
         // A method of the receiver's type is a member under a name of its
         // own, `T::f_loop` (`T::f_loop2` for a second loop): a generator
         // over it, and a proof about it, name it as they name `T::f`.
         if receiver.is_some() {
-            run = if self.loops == 1 { format!("{}_loop", self.decl.name) } else { format!("{}_loop{}", self.decl.name, self.next) };
+            run = self.method_name();
         }
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
         let single = vars.len() == 1;
         let state_ty = if single { state_tys[0].clone() } else { named_ty(&state, tyargs, span) };
-        if !single {
+        if !single && receiver.is_none() {
             self.push_state(&state, &vars, &state_tys, span);
             self.designations.push((state_designed, state.clone()));
         }
@@ -860,12 +995,16 @@ impl Lift<'_> {
         let end = again.result.span;
         let next = op("+", vec![i.clone(), num(1, end)], end);
         let capture_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
-        let (result, recur, done, entry) = match &receiver {
-            Some(r) => {
+        let (result, recur, done, entry, shape) = match &receiver {
+            Some((r, other)) => {
                 params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
                 params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+                let other = other.map(|k| (vars[k], state_tys[k].clone()));
+                if let Some((o, t)) = &other {
+                    params.push(param(o, t.clone(), span));
+                }
                 params.push(param(&x.name, word.clone(), span));
-                // `x.f#run(c̄, i + 1)`, as a `mut self` method's own call
+                // `x.f#run(c̄, o, i + 1)`, as a `mut self` method's own call
                 // that ends its body (§19.3).
                 let method = run.rsplit("::").next().unwrap_or(&run).to_string();
                 let dot = |args: Vec<Expr>, at: Span| Expr {
@@ -873,15 +1012,29 @@ impl Lift<'_> {
                     span: at,
                 };
                 let mut on = capture_args(end);
+                on.extend(other.iter().map(|(o, _)| var(o, end)));
                 on.push(next);
                 let recur = marked(heather_syntax::MUTATED_WHOLE, dot(on, end), end);
-                let done = call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), i.clone()], span);
+                // The loop's value: the other local where there is one,
+                // otherwise the count where it stopped.
+                let (value, value_ty) = match &other {
+                    Some((o, t)) => (var(o, span), t.clone()),
+                    None => (i.clone(), word.clone()),
+                };
+                let done = call(var(heather_syntax::MUTATED_RECORD, span), vec![var(&r.name, span), value], span);
                 let mut first = capture_args(span);
+                first.extend(other.iter().map(|(o, _)| var(o, span)));
                 first.push(lo.clone());
-                let entry = marked(heather_syntax::MUTATED_AFTER, dot(first, span), span);
-                let result = Ty { kind: TyKind::Named { name: heather_syntax::MUTATED_RECORD.into(), args: vec![r.ty.clone(), word.clone()] }, span };
+                // With the receiver alone, the loop is the receiver after
+                // the call; with another local, the `Mutated` the call
+                // returns, read back by its fields.
+                let (entry, shape) = match &other {
+                    None => (marked(heather_syntax::MUTATED_AFTER, dot(first, span), span), Shape::Single),
+                    Some(_) => (marked(heather_syntax::MUTATED_WHOLE, dot(first, span), span), Shape::Mutated { receiver: r.name.clone() }),
+                };
+                let result = Ty { kind: TyKind::Named { name: heather_syntax::MUTATED_RECORD.into(), args: vec![r.ty.clone(), value_ty] }, span };
                 self.methods.push(run.clone());
-                (result, recur, done, entry)
+                (result, recur, done, entry, shape)
             }
             None => {
                 params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
@@ -894,11 +1047,12 @@ impl Lift<'_> {
                 let mut on = capture_args(end);
                 on.extend(vars.iter().map(|v| var(v, end)));
                 on.push(next);
-                let recur = call(var(&run, end), on, end);
+                let recur = call(var(base_name(&run), end), on, end);
                 let mut first = capture_args(span);
                 first.extend(vars.iter().map(|v| var(v, span)));
                 first.push(lo.clone());
-                (state_ty.clone(), recur, state_of(span), call(var(&run, span), first, span))
+                self.methods.push(run_designed.clone());
+                (state_ty.clone(), recur, state_of(span), call(var(&run, span), first, span), Shape::of(single))
             }
         };
         *again.result = recur;
@@ -961,7 +1115,7 @@ impl Lift<'_> {
             self.designations.push((measure::unfold_name(&run_designed), measure::unfold_name(&run)));
             self.designations.push((run_designed, run.clone()));
         }
-        Ok((entry, single, None))
+        Ok((entry, shape, None))
     }
 }
 
@@ -1027,9 +1181,10 @@ fn contains_loop(e: &Expr) -> bool {
 
 /// Lower a declaration whose body holds loops (module docs).
 pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Family> {
-    if decl.decreases.is_some() {
-        return err("a `for` in a `decreases` function is not supported yet: lift the loop into a function of its own", decl.span);
-    }
+    // A `decreases` function's loops are lifted as any are (a loop nested
+    // in a loop is one, in the function the outer loop lifts to); its
+    // equation is the measure lowering's own `f_unfold`, not §7.1's.
+    let measured = decl.decreases.is_some();
     let mut lift = Lift {
         decl,
         tys,
@@ -1084,5 +1239,5 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges) -> R<Famil
         span,
     };
     parts.push(Part::Decl(Decl { body, ..decl.clone() }));
-    Ok(Family { parts, methods: lift.methods, unfold, designations: lift.designations })
+    Ok(Family { parts, methods: lift.methods, unfold: (!measured).then_some(unfold), designations: lift.designations })
 }

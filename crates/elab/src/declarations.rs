@@ -873,13 +873,24 @@ impl DeclarationsMut<'_> {
         // §7.1: always attempted, and never a reason to refuse `f` — the
         // generated statement is untrusted, so a refusal is recorded for a
         // later `f_unfold` reference to report.
-        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
-            self.pass.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        if let Some(unfold) = &family.unfold
+            && let Err(e) = self.elab_decl_one(unfold, None)
+        {
+            self.pass.unfold_refusals.borrow_mut().insert(unfold.name.clone(), format!("the generated `{}` was refused ({e})", unfold.name));
         }
         // Designated last: the generated parts above are spelled with the
         // minted names, which a designation takes out of the surface.
         for (designed, minted) in &family.designations {
             self.designate_access(designed, minted);
+            // A lifted `while` or counted loop is a `decreases` function:
+            // its companions, designated under the minted name, are
+            // designated under the loop's own too (`f::run::body`), which
+            // is where a generator over `f::run` looks them up.
+            for part in ["body", "rec", "ext", "irrel"] {
+                if let Some(target) = self.access_alias(&format!("{minted}::{part}")).map(str::to_string) {
+                    self.designate_access(&format!("{designed}::{part}"), &target);
+                }
+            }
         }
         // Recorded once the family stands: a prefix generator runs over the
         // loops lifted as methods (`HostMut::elab_prefixed`).
