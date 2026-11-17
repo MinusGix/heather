@@ -9,7 +9,9 @@
 //     heather compile-x86 examples/x86-native/rule_set.hthr tangled -o rule_set.s --explain-optimizer
 //
 // The byte is returned as it is: the add, the subtraction, the xor and
-// the or are gone, each by a rule the report names.
+// the or are gone, each by a rule the report names. The sum is written
+// with the length first, which `add_sub`, `(a + b) - b = a`, does not fit
+// as it stands: the search follows `add_comm` to the spelling it fits.
 import logic;
 import bool;
 import nat;
@@ -35,7 +37,7 @@ import runtime;
 // taken away, and a word xored with itself joined in.
 runtime fn tangled(s: List<u8>, n: u64) → u64 {
     if h: 0 < n {
-        ((s.byte_within(n, 0).zero_extend(56) + n) - n) | n.bxor(n)
+        ((n + s.byte_within(n, 0).zero_extend(56)) - n) | n.bxor(n)
     } else {
         0
     }

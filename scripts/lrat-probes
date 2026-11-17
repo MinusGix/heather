@@ -3,12 +3,15 @@
 `lib/std/tactic/lrat.hthr`.
 
     scripts/lrat-probes addcomm|mulcomm <width> [--per N] [--every K]
+                        [--solver cadical|naive] [--heather <binary>]
 
 prints a module body: the Tseitin clauses of a miter saying `a + b ≠ b + a`
-(or `a * b ≠ b * a`) over `width`-bit words, a refutation from the small
-CDCL solver below, cut into stage theorems, and `<name>_refuted`, the
-theorem the stages prove. The solver is untrusted: the kernel replays its
-proof. `--per` bounds the hinted literals one stage reads (a stage's cost is
+(or `a * b ≠ b * a`) over `width`-bit words, a refutation, cut into stage
+theorems, and `<name>_refuted`, the
+theorem the stages prove. The refutation comes from CaDiCaL through
+`heather sat` (`crates/sat`), or with `--solver naive` from the small CDCL
+solver below, whose proofs are tens of times longer. Either is untrusted:
+the kernel replays the proof. `--per` bounds the hinted literals one stage reads (a stage's cost is
 mostly one variable lookup per hinted literal); `--every` makes every K-th
 stage's formula a literal, so later stages do not replay the insertions
 before it.
@@ -18,6 +21,9 @@ would bit-blast inside the elaborator and ask the host for the proof
 (issues/lrat-certified-bitvector-decision.md).
 """
 import argparse
+import os
+import subprocess
+import tempfile
 
 # ---------------------------------------------------------------------------
 # A naive CDCL solver with first-UIP learning, writing LRAT. Literals are
@@ -265,20 +271,41 @@ def emit_staged(name, cls, proof, per, literal):
     o.append(f"theorem {name}_refuted(v: Nat → Bool): all_true({name}_cnf(), v) = False {{\n    match e: all_true({name}_cnf(), v) {{\n        False => refl,\n        True => {{\n" + "\n".join(body) + "\n        },\n    }\n}")
     return "\n".join(o) + "\n"
 
+def cadical(heather, n, cls):
+    # `heather sat` prints `s UNSATISFIABLE` and the trimmed LRAT text.
+    with tempfile.NamedTemporaryFile("w", suffix=".cnf", delete=False) as f:
+        f.write(f"p cnf {n} {len(cls)}\n")
+        for c in cls:
+            f.write(" ".join(map(str, c)) + " 0\n")
+    try:
+        r = subprocess.run([heather, "sat", f.name], capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    if r.returncode != 20:
+        raise SystemExit(f"heather sat: exit {r.returncode}: {r.stderr.strip()}")
+    proof = []
+    for line in r.stdout.splitlines()[1:]:
+        t = list(map(int, line.split()))
+        z = t.index(0, 1)
+        proof.append((t[0], t[1:z], t[z + 1:-1]))
+    return proof
+
 def main():
     ap = argparse.ArgumentParser(description="Write an LRAT refutation as a staged Heather proof.")
     ap.add_argument("kind", choices=["addcomm", "mulcomm"])
     ap.add_argument("width", type=int)
     ap.add_argument("--per", type=int, default=1100)
     ap.add_argument("--every", type=int, default=8)
+    ap.add_argument("--solver", choices=["cadical", "naive"], default="cadical")
+    ap.add_argument("--heather", default=os.path.join(os.path.dirname(__file__), "..", "target", "release", "heather"))
     args = ap.parse_args()
     global EVERY
     EVERY = args.every
     n, cls = problem(args.kind, args.width)
-    proof = solve(n, cls)
+    proof = cadical(args.heather, n, cls) if args.solver == "cadical" else solve(n, cls)
     assert proof is not None and check(cls, proof)
     hints = sum(len(h) for _, _, h in proof)
-    print(f"// {args.kind} w={args.width}: {n} variables, {len(cls)} clauses, {len(proof)} steps, {hints} hints")
+    print(f"// {args.kind} w={args.width}: {n} variables, {len(cls)} clauses, {len(proof)} steps, {hints} hints ({args.solver})")
     print(emit_staged(f"{args.kind}{args.width}", cls, proof, args.per, True), end="")
 
 if __name__ == '__main__':

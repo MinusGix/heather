@@ -60,43 +60,39 @@ pub(crate) fn gtm(var: u32, ctx: &LocalCtx) -> Term {
     Term::GlobalTm { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
-/// Weaken every binding of Ψ by `by` universe variables (all bindings are
-/// scoped in the same L).
+/// Weaken Ψ by `by` universe variables. Only the variables move: a
+/// constant was checked with no universe variable in scope
+/// ([`crate::typing::check_signature_extension`]), so it is closed in them
+/// and reads the same under any number, and the signature is shared as it
+/// stands. Every variable binding is scoped in the same L, and shifts.
 pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
-    if by == 0 {
+    let consts = psi.consts();
+    if by == 0 || consts == psi.bindings.len() {
         return psi.clone();
     }
-    let mut out = GlobalCtx::new(
-        psi.bindings
-            .iter()
-            .map(|b| match b {
-                GlobalBinding::Ctx => GlobalBinding::Ctx,
-                GlobalBinding::Ty { ctx, layer, level } => GlobalBinding::Ty {
-                    ctx: ctx.shift_univ(by),
-                    layer: *layer,
-                    level: level.shift(by, 0),
-                },
-                GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
-                    ctx: ctx.shift_univ(by),
-                    layer: *layer,
-                    ty: Rc::new(ty.shift_univ(by)),
-                    level: level.shift(by, 0),
-                    // A definition's body lives in the same universe scope
-                    // as its type, so it shifts with it.
-                    body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
-                },
-            })
-            .collect(),
-    )
-    // The same bindings, so the same signature: a position names what it
-    // named.
-    .with_consts(psi.consts());
+    let mut out = psi.prefix(consts);
+    out.extend(psi.bindings.iter().skip(consts).map(|b| match b {
+        GlobalBinding::Ctx => GlobalBinding::Ctx,
+        GlobalBinding::Ty { ctx, layer, level } => GlobalBinding::Ty {
+            ctx: ctx.shift_univ(by),
+            layer: *layer,
+            level: level.shift(by, 0),
+        },
+        GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
+            ctx: ctx.shift_univ(by),
+            layer: *layer,
+            ty: Rc::new(ty.shift_univ(by)),
+            level: level.shift(by, 0),
+            // A definition's body lives in the same universe scope as its
+            // type, so it shifts with it.
+            body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
+        },
+    }));
     // A sealed proof shifts with its binding, as a body does — when it is
     // first needed, so a telescope does not load every lazily kept proof.
-    for (i, t) in psi.sealed.iter() {
+    for (i, t) in psi.sealed.iter().filter(|(i, _)| *i >= consts) {
         out.seal_kept(i, Rc::new(SealedProof::derived(Rc::clone(t), move |t| t.shift_univ(by))));
     }
-    out.withheld = psi.withheld.clone();
     out
 }
 
@@ -5540,6 +5536,27 @@ mod tests {
     /// drift would shift a branch's free variables by the difference, a
     /// silently wrong substitution (issues/kernel-binder-count-tables.md).
     /// The counts do not depend on Γ; two are tried all the same.
+    /// Going under universe binders moves Ψ's variables and leaves the
+    /// signature as it stands: a constant is closed in universe variables
+    /// (`typing::check_signature_extension`).
+    #[test]
+    fn a_universe_shift_moves_only_the_variables() {
+        let konst = GlobalBinding::Ty { ctx: LocalCtx::nil(), layer: crate::layer::Layer::Code, level: Level::Zero };
+        let var = GlobalBinding::Ty { ctx: LocalCtx::nil(), layer: crate::layer::Layer::Code, level: lvar(0) };
+        let mut psi = GlobalCtx::default();
+        psi.commit(konst.clone());
+        psi.push(var);
+        let shifted = shift_univ_psi(&psi, 2);
+        assert_eq!(shifted.consts(), 1);
+        assert_eq!(shifted.bindings[0], konst);
+        assert!(matches!(&shifted.bindings[1], GlobalBinding::Ty { level, .. } if *level == lvar(2)));
+        // No variable: nothing to move, and the very same world.
+        let mut sig = GlobalCtx::default();
+        sig.commit(konst);
+        let same = shift_univ_psi(&sig, 2);
+        assert!(Rc::ptr_eq(same.bindings.identity_ref(), sig.bindings.identity_ref()));
+    }
+
     #[test]
     fn branch_depths_match_the_telescopes() {
         let motives = identity_motives();

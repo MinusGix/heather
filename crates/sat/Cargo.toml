@@ -1,0 +1,21 @@
+[package]
+name = "heather-sat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The SAT solver of certified bit-level decisions: CaDiCaL (`vendor/cadical`,
+# compiled by `build.rs`), asked for LRAT refutations the kernel checks.
+[lib]
+name = "heather_sat"
+
+[dependencies]
+
+[build-dependencies]
+cc = { version = "1", features = ["parallel"] }
+
+# `deny` where the workspace says `forbid`: the solver is C++ behind an
+# `unsafe extern` block, in one module (`src/ffi.rs`). Everything else is
+# still refused.
+[lints.rust]
+unsafe_code = "deny"

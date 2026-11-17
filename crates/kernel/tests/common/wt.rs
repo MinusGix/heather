@@ -118,31 +118,29 @@ pub struct WtEnv {
     pub at_forms: bool,
 }
 
-/// `shift_univ_psi` replica (the kernel's is crate-private): weaken every
-/// binding of Ψ by `by` universe variables.
+/// `shift_univ_psi` replica (the kernel's is crate-private): weaken Ψ's
+/// variables by `by` universe variables. The signature is closed in them and
+/// stays as it is.
 fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
-    if by == 0 {
+    let consts = psi.consts();
+    if by == 0 || consts == psi.bindings.len() {
         return psi.clone();
     }
-    GlobalCtx::new(psi
-            .bindings
-            .iter()
-            .map(|b| match b {
-                GlobalBinding::Ctx => GlobalBinding::Ctx,
-                GlobalBinding::Ty { ctx, layer, level } => GlobalBinding::Ty {
-                    ctx: ctx.shift_univ(by),
-                    layer: *layer,
-                    level: level.shift(by, 0),
-                },
-                GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
-                    ctx: ctx.shift_univ(by),
-                    layer: *layer,
-                    ty: Rc::new(ty.shift_univ(by)),
-                    level: level.shift(by, 0),
-                    body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
-                },
-            })
-            .collect())
+    psi.prefix(consts).extended(psi.bindings.iter().skip(consts).map(|b| match b {
+        GlobalBinding::Ctx => GlobalBinding::Ctx,
+        GlobalBinding::Ty { ctx, layer, level } => GlobalBinding::Ty {
+            ctx: ctx.shift_univ(by),
+            layer: *layer,
+            level: level.shift(by, 0),
+        },
+        GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
+            ctx: ctx.shift_univ(by),
+            layer: *layer,
+            ty: Rc::new(ty.shift_univ(by)),
+            level: level.shift(by, 0),
+            body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
+        },
+    }))
 }
 
 impl WtEnv {

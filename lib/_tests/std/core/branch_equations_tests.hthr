@@ -6,7 +6,7 @@
 // argument, an open element type, a checking position, and negative
 // controls. Tests, not library: nothing outside lib/_tests imports this
 // module (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import list; import omega; import tactic; import bitvec; import bitvec_omega;
+import logic; import bool; import nat; import list; import omega; import tactic; import bitvec; import bitvec_omega; import option; import result;
 
 // `if P` on a `Nat` comparison: the hypothesis is `P`, and `¬P` for the else.
 fn clamp(n: Nat) → Nat { if n < 10 { n } else { 10 } }
@@ -70,6 +70,77 @@ theorem sign_of_mid(n, k, m: Nat, h: n = Succ(m), lt: m < k): sign_of(n, k) = 1 
 fn is_one(n: Nat) → Bool { match n { Succ(m) => m.same(0), _ => False } }
 theorem is_one_succ(n, m: Nat, h: n = Succ(m)): is_one(n) = m.same(0) { is_one::Succ(n, m, h) }
 
+// A `match` on a call's result (issues/induct-through-result-matches.md):
+// one equation per constructor, the arm's fields as parameters and
+// `h: g(ā) = C(ȳ)`, the call stated as the body spells it.
+fn half_even(n: Nat) → Option<Nat> { if n.half() + n.half() = n { Some(n.half()) } else { None } }
+fn quarter(n: Nat) → Option<Nat> { match half_even(n) { None => None, Some(k) => half_even(k) } }
+theorem quarter_none(n: Nat, h: half_even(n) = None): quarter(n) = None { quarter::None(n, h) }
+theorem quarter_some(n, k: Nat, h: half_even(n) = Some(k)): quarter(n) = half_even(k) { quarter::Some(n, k, h) }
+// At a literal, the hypothesis is a closed fact the call computes.
+theorem quarter_eight(): quarter(8) = half_even(4) { quarter::Some(8, 4, refl) }
+// A `match h:` names the equation, and an arm that passes it on is stated
+// with the hypothesis in its place.
+fn first_of<A>(xs: List<A>) → Option<A> { match xs { Nil => None, Cons(x, _) => Some(x) } }
+fn first_len<A>(xs: List<A>, x: A, got: first_of(xs) = Some(x)) → Nat { xs.len() }
+fn first_seen<A>(xs: List<A>) → Nat { match got: first_of(xs) { None => 0, Some(x) => first_len(xs, x, got) } }
+theorem first_seen_some<A>(xs: List<A>, x: A, got: first_of(xs) = Some(x)): first_seen(xs) = first_len(xs, x, got) {
+    first_seen::Some(xs, x, got)
+}
+// Nested, over an open element type, after a constructor test: the path
+// names every arm, and a later test reads an earlier arm's field.
+fn second_of<A>(xs, ys: List<A>) → Option<A> {
+    match xs {
+        Nil => None,
+        Cons(_, rest) => match first_of(rest) {
+            None => first_of(ys),
+            Some(a) => match first_of(ys) { None => Some(a), Some(b) => Some(b) },
+        },
+    }
+}
+theorem second_of_both<A>(xs, ys: List<A>, x: A, rest: List<A>, h: xs = Cons(x, rest), a: A, h2: first_of(rest) = Some(a), b: A, h3: first_of(ys) = Some(b)):
+    second_of(xs, ys) = Some(b) {
+    second_of::Cons::Some::Some(xs, ys, x, rest, h, a, h2, b, h3)
+}
+// In a checking position.
+theorem quarter_some_le(n, k: Nat, h: half_even(n) = Some(k), none: half_even(k) = None): quarter(n) = None {
+    let e: (quarter(n) = half_even(k)) = quarter::Some(n, k, h);
+    trans(e, none)
+}
+// Negative control: the arm at `Some` is not the `None` one.
+// expect-error: but `quarter(n) = None` is expected here
+theorem quarter_wrong(n, k: Nat, h: half_even(n) = Some(k)): quarter(n) = None { quarter::Some(n, k, h) }
+// A `_` arm leaves the `match` a leaf: there is no `Some` equation.
+fn quarter_or(n: Nat) → Nat { match half_even(n) { Some(k) => k, _ => 0 } }
+// expect-error: quarter_or::Some
+theorem quarter_or_some(n, k: Nat, h: half_even(n) = Some(k)): quarter_or(n) = k { quarter_or::Some(n, k, h) }
+
+// A pipeline written as calls reads as the `match` each call is: `and_then`
+// and `map` on an `Option`, and a postfix `?` (which lowers to `Result`'s).
+fn quarter_then(n: Nat) → Option<Nat> { half_even(n).and_then(λ k => half_even(k)) }
+theorem quarter_then_some(n, k: Nat, h: half_even(n) = Some(k)): quarter_then(n) = half_even(k) { quarter_then::Some(n, k, h) }
+theorem quarter_then_none(n: Nat, h: half_even(n) = None): quarter_then(n) = None { quarter_then::None(n, h) }
+fn half_succ(n: Nat) → Option<Nat> { half_even(n).map(λ k => k + 1) }
+theorem half_succ_some(n, k: Nat, h: half_even(n) = Some(k)): half_succ(n) = Some(k + 1) { half_succ::Some(n, k, h) }
+fn small(n: Nat) → Result<Nat, Nat> { if n < 10 { Ok(n) } else { Err(n) } }
+fn small_sum(a, b: Nat) → Result<Nat, Nat> {
+    let x = small(a)?;
+    let y = small(b)?;
+    Ok(x + y)
+}
+theorem small_sum_ok(a, b, x, y: Nat, h: small(a) = Ok(x), h2: small(b) = Ok(y)): small_sum(a, b) = Ok(x + y) {
+    small_sum::Ok::Ok(a, b, x, h, y, h2)
+}
+theorem small_sum_err(a, b, e: Nat, h: small(a) = Err(e)): small_sum(a, b) = Err(e) { small_sum::Err(a, b, e, h) }
+
+// A call read by its name is checked like any equation: a `guard` that is
+// not the guard (it keeps the value on `False`) gets no equation, and a
+// reference says why.
+fn Bool::guard<B>(self b: Bool, o: Option<B>) → Option<B> { match b { False => o, True => None } }
+fn inverted(b: Bool) → Option<Nat> { b.guard(Some(1)) }
+// expect-error: inverted::True
+theorem inverted_true(): inverted(True) = Some(1) { inverted::True(True, refl) }
+
 // As a `simp` law: the side condition is found among the hypotheses in scope.
 theorem clamp_simp(n: Nat, h: n < 10): clamp(n) + 1 = n + 1 { simp_only(clamp::True) }
 
@@ -104,6 +175,20 @@ fn hop(n: Nat) → Nat decreases n {
     on ?dec1 := { let pos = h; omega };
 }
 theorem hop_on(n: Nat, h: 0 < n, z: ¬(n.min(2) = 0)): hop(n) = 1 + hop(n - n.min(2)) { hop::True::False(n, h, z) }
+
+// A measured recursion through a call's result: the recursive call under
+// the arm is the leaf, and the arm's field is an argument of it.
+fn halving(n, acc: Nat) → Option<Nat> decreases n {
+    if h: 0 < n {
+        match half_even(n) { None => None, Some(k) => halving(n - 1, acc + k) }
+    } else {
+        Some(acc)
+    }
+    on ?dec1 := { let pos = h; omega };
+}
+theorem halving_some(n, acc, k: Nat, h: 0 < n, e: half_even(n) = Some(k)): halving(n, acc) = halving(n - 1, acc + k) {
+    halving::True::Some(n, acc, h, k, e)
+}
 
 // An unmeasured recursion's equations would be its unfolding's, which it
 // has none of.
