@@ -14,18 +14,21 @@ files and whatnot". Not urgent. Today a written program's theorem asks what
 shrink that list to the ELF loading rule, the entry address, and the calls
 the program makes.
 
-## Done (2026-11-17): the stack is the program's own
+## Done (2026-11-17): a program can carry its own stack
 
-Every program `write-elf` writes now carries its stack in its data segment.
-The segment is sized for the layout and `Source::stack_room` after it; the
-entry code saves the entry RSP for the command line and moves RSP to the
-room's end (`Prog::saves_rsp`, `Layout::stack_top`); the regions are
-`DataRegion::own_data` and `DataRegion::own_stack` of `X86Profile::io(size)`.
-`X86Profile::process`, `StackPlaced` and the `top`, `depth`, `placed`, `rsp`
-and `deep` premises are gone, and `LinuxStart` is `loaded`, `entry`, `argv`.
-This replaced the kernel-stack target outright: there is one target, and it
-is the one that asks less. Cost: one more instruction at the entry and a
-segment larger by the stack room (zero-filled, nothing in the file).
+`write-elf --stack segment` writes a program whose stack is in its data
+segment. The segment is sized for the layout and `Source::stack_room` after
+it; entry code in front of the compiled program copies RSP to RDI (where
+the command line is) and moves RSP to the room's end (`stack_from_segment`);
+the regions are `DataRegion::own_data` and `DataRegion::own_stack` of
+`X86Profile::io(size)`. Its theorem's premise is `SegmentStart`: `loaded`,
+`entry`, `argv`.
+
+It is an option, not the default (Minus, 2026-11-17): the size is fixed
+when the file is written, which is wrong for software that recurses, a
+data-segment limit kills at exec, and there is no guard page. The default
+is the system's stack; the general design, with a startup check and a
+mapped stack, is `docs/native/system-contract-design.md`.
 
 Left: the command line only of sources that read it, naming the calls a
 source makes, and signals, as below.

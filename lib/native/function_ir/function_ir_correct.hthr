@@ -42,7 +42,8 @@ import option;
 // that can be stored to and read back, that holds no code, and above which
 // code reads as data. These laws are the theorem's premises about the
 // platform. The byte memory model meets them (`DataRegion::stack`), and
-// the Linux image model gives a program such a stack inside its own data
+// the Linux image model places such a stack where the loader puts the
+// process's (`DataRegion::process_stack`) or inside the program's own data
 // segment (`DataRegion::own_stack`).
 record Machine<M> {
     fetch: FetchAccess<M>,

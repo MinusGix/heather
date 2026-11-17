@@ -562,15 +562,15 @@ impl Inits<'_> {
         let (p, layout) = (writer.p, writer.layout);
         let chunk = lowered::CHUNK as u64;
         // Two items store each initial byte while there is room, and the
-        // entry's items before them save RSP and the depth and move RSP to
-        // the program's own stack (`Prog::saves_rsp`, four), open the frame (`Prog::frames_main`,
+        // entry's items before them save the command line's address and the
+        // depth (`Prog::saves_rsp`, four), open the frame (`Prog::frames_main`,
         // one) and zero each live word of it (two a word).
         const SAVED: usize = 4;
         let stores: usize = self.shapes.iter().map(|&(capacity, len)| 2 * (len as u64).min(capacity) as usize).sum();
         let framed = entered.checked_sub(stores).filter(|&framed| framed > SAVED && (framed - SAVED) % 2 == 1)
             .ok_or_else(|| format!("the entry's initial bytes are {stores} items, and the entry read {entered}"))?;
         let mut at = framed;
-        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {src}().depth, {src}().stack_room()).frames_main({layout}, {live}) = {} {{ refl }}\n", writer.program(at), src = self.src);
+        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {src}().depth).frames_main({layout}, {live}) = {} {{ refl }}\n", writer.program(at), src = self.src);
         let mut starts = Vec::with_capacity(self.shapes.len());
         for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
             starts.push(at);

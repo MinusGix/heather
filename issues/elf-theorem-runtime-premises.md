@@ -29,11 +29,10 @@ premise.
   (`issues/linux-syscall-flags-not-promised.md`).
 - `docs/native/compiler-theorem.md` lists the premises.
 
-- 2026-11-17: the stack fields left `LinuxStart`, which is now
-  `LinuxStart(size, file, args, s)` with `loaded`, `entry` and `argv`: the
-  program's stack is in its own segment
-  (`issues/native-target-minimal-system-assumptions.md`), so the stack limit
-  is no longer relied on at all.
+- 2026-11-17: the stack is provided by entry code in front of the program.
+  `LinuxStart` is the system-stack provider's premise, as above;
+  `SegmentStart` (`loaded`, `entry`, `argv`) is the premise of a program
+  that carries its own stack (`write-elf --stack segment`).
 
 ## Left
 

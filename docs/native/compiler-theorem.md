@@ -229,8 +229,9 @@ Beyond the kernel, the theorem rests on these:
   word of it reads as some word, and code below the canonical boundary reads
   as data where it was fetched from. They are proved of the byte memory
   model: any data region of it is a `Stack` (`DataRegion::stack`,
-  `x86_64_byte_memory.hthr`), and the Linux image model gives a program one
-  inside its own data segment (`DataRegion::own_stack`,
+  `x86_64_byte_memory.hthr`), and the Linux image model has two: where the
+  loader puts the process stack (`DataRegion::process_stack`) and inside
+  the program's own data segment (`DataRegion::own_stack`,
   `linux_x86_64_image.hthr`). What is assumed is that those models are
   faithful to the processor's memory and to Linux's loader.
 - **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
@@ -252,40 +253,49 @@ Beyond the kernel, the theorem rests on these:
 ### A whole program: what its theorem asks of the system
 
 A program `write-elf` writes has no caller: its file is loaded and run by
-Linux. Its theorem (`Source::elf_file_runs`, and each certificate's
-`<source>_elf_runs`) takes everything it asks of that system as one premise,
-`LinuxStart` (`lib/native/native_compile_elf.hthr`), whose fields are:
+Linux. The file's code is entry code and then the compiled program. The
+compiled program asks, where it starts, for RSP at the top of a stack with
+the source's room (`Source::stack_room`, a figure computed for the program)
+and RDI where the command line is; the entry code is what provides them
+(`Source::runs_after`, `lib/native/native_compile_elf.hthr`). Which entry
+code is a choice made when the file is written (`write-elf --stack`), and
+each choice has one record of everything its theorem asks of the system
+(`docs/native/system-contract-design.md`).
+
+**The system's stack** (`--stack system`, the default; `stack_from_system`).
+The theorem is `Source::elf_file_runs`, each certificate's
+`<source>_elf_runs`, and its premise is `LinuxStart`:
 
 - **`loaded`**: the file's two `PT_LOAD` headers were honoured (its bytes at
   0x400000 readable and executable, the data segment zero-filled, readable
   and writable). The ELF loading rule, not proved of Linux.
 - **`entry`**: the process starts at the header's entry address.
-- **`argv`**: the command line is at and above RSP, past the segment, as the
-  psABI lays it out.
+- **`placed`, `rsp`, `stack`**: the program's stack room below the entry RSP
+  is usable. On Linux the stack limit grants it (`RLIMIT_STACK`,
+  `ulimit -s`): the kernel maps the stack as it is touched, down to the
+  limit. A process started under a smaller limit is outside the theorem,
+  and in practice starts and then dies mid-run.
+- **`argv`**: the command line is at and above RSP as the psABI lays it out.
 
-That is the whole list. The stack is not on it, because the program does not
-run on the stack the system made. Its data segment is sized for its layout
-and, after it, the stack its calls need (`Source::stack_room`, a figure the
-compiler computes for the program), and the entry code saves the entry RSP
-for the command line and then points RSP at the end of that room
-(`Prog::saves_rsp`, `DataRegion::own_stack`). So the stack is data by the
-same `PT_LOAD` header the buffers are, and the theorem holds whatever the
-stack limit is, whether or not the system grows a stack on a fault, and
-however little of it the system mapped at exec
-(`issues/io-stack-below-rsp-not-mapped.md`). There is no guard page under
-this stack: the proved bound on its depth is what keeps it off the data.
+**The program's own stack** (`--stack segment`; `stack_from_segment`). The
+data segment is sized for the layout and the stack room after it, and the
+entry code points RSP at the end of that room. The theorem is
+`Source::elf_segment_file_runs` and its premise is `SegmentStart`, which is
+`loaded`, `entry` and `argv` only: nothing is asked of the stack limit, of
+growth, or of how much stack exec maps. What it costs: the stack's size is
+fixed when the file is written, a limit on the data segment or the address
+space kills the process at exec with a signal (before its first
+instruction), and there is no guard page under the stack, so the proved
+bound on its depth is all that keeps it off the data.
 
-No register but RIP and RSP is assumed, and no flag. After the start, each
-system call is answered as the model allows (`LinuxCmd::Answers`: short
-reads and writes, any errno, a failed read leaving anything in its buffer),
-and resumes with RCX, R11 and every arithmetic flag unspecified, since the
-call convention promises none of them. A descriptor is the low 32 bits of
-its word, as Linux reads it. Signals are not modelled: a process killed by
-one (SIGPIPE on a closed pipe) ends its run without an exit.
-
-What is left to shrink (the command line asked only of a program that reads
-it, the calls a program makes named in its theorem, signals) is
-`issues/native-target-minimal-system-assumptions.md`.
+Under either, no register but RIP and RSP is assumed, and no flag. After the
+start, each system call is answered as the model allows
+(`LinuxCmd::Answers`: short reads and writes, any errno, a failed read
+leaving anything in its buffer), and resumes with RCX, R11 and every
+arithmetic flag unspecified, since the call convention promises none of
+them. A descriptor is the low 32 bits of its word, as Linux reads it.
+Signals are not modelled: a process killed by one (SIGPIPE on a closed pipe,
+the kernel's out-of-memory kill) ends its run without an exit.
 
 ## What is not covered
 

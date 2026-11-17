@@ -369,9 +369,9 @@ the stack limit's to grant, a premise stated in `LinuxStart`).
 `DataRegion::process_stack` is its `Stack` from the entry, top at RSP, a
 CALL's push in its top word, and stores into it keep the segment. No
 compiled code pushes yet; the compiled callee that spills is the client.
-Since 2026-11-17 the stack is the program's own instead, inside its data
-segment (`DataRegion::own_stack`), and `X86Profile::process` and
-`StackPlaced` are gone (`issues/native-target-minimal-system-assumptions.md`).
+Since 2026-11-17 a program can instead carry its stack inside its data
+segment (`DataRegion::own_stack`, `write-elf --stack segment`,
+`issues/native-target-minimal-system-assumptions.md`).
 
 **Status.** open/close done, 2026-10-28
 (`issues/native-compile-other-calls.md`): `Prog::call` compiles `Opens` and

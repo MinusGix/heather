@@ -55,7 +55,7 @@ it does. It does not (§1).
 
 A `Source`'s buffers are already disjoint: `Env.buffers` is a list of byte
 lists, a byte node names its buffer, and the compiler gives each buffer its
-own range of the data segment (`Layout`, `DataRegion::own_data`), with
+own range of the data segment (`Layout`, `DataRegion::process_data`), with
 `native_compile_correct` relating each to its list. A store into one buffer
 cannot reach another, and that is proved once, for every source.
 

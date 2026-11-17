@@ -43,8 +43,8 @@ proved once, and the order the pieces land in.
   body at `d - 1`, so the denotation is total by structural recursion on
   the depth and then on the statement. Fuel still bounds loops, as now.
 - **Compiled, each procedure is emitted once**, after `main`, at a label of
-  its own. A call is a CALL on the program's stack (since 2026-11-17 its own,
-  in its data segment: `DataRegion::own_stack`). **The caller saves** the words it needs after
+  its own. A call is a CALL on the process stack (`X86Profile::process`,
+  `StackPlaced`, PR #309; or the program's own, `DataRegion::own_stack`). **The caller saves** the words it needs after
   the call (`out` less the results) by pushing them before the CALL, and
   pops them back into their homes after it. Words keep their one home each,
   as `docs/native/native-register-allocation-design.md` §2 fixed; the stack is
@@ -254,12 +254,12 @@ covers the CALLs as it covers the jumps.
   linking theorem (Abate et al., `docs/surveys/wp-preserving-compilation-survey.md`
   §4, Theorem 3), by induction on the depth instead of Löb.
 - **`native_compile_correct`** gains the stack: a `Stack` of the profile
-  above the region, its top the address the entry code gives RSP
-  (`Layout::stack_top`), the command line above it at the entry RSP, and
-  at least `Source::stack_room` bytes deep. The ELF theorem gives it from
-  the program's own segment (`DataRegion::own_stack`, native_compile_elf):
-  the segment is sized for the layout and the stack, and nothing is asked
-  of the stack the system made.
+  above the region, its top at RSP, the command line above it at RDI, and
+  at least `Source::stack_room` bytes deep. Entry code in front of the
+  program provides it (`Source::runs_after`, native_compile_elf): the
+  system's stack, whose room below the entry RSP is then a premise of the
+  ELF theorem (`LinuxStart`), or the program's own in its data segment
+  (`SegmentStart`). Neither is a cap of the compiler's.
 
 ## 6. Why the stack holds the caller's words, not the callee's words
 

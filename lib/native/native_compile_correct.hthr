@@ -1304,18 +1304,18 @@ theorem Prog::inits_of(layout: Layout, b: Buffer, rest: List<Buffer>, buf: Nat, 
 }
 
 theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, l: List<Nat>, p, q: Prog, checked: src.main.checked(homes, []) = Some(l),
-    saved: Start.saves_rsp(src.layout(low, homes), src.depth, src.stack_room()).frames_main(src.layout(low, homes), l) = p,
+    saved: Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), l) = p,
     filled: p.inits(src.layout(low, homes), src.buffers, 0) = q): src.entry(low, homes) = q {
     j(src.main.checked_sound(homes)([], l, checked).left,
-        λ x _ => Start.saves_rsp(src.layout(low, homes), src.depth, src.stack_room()).frames_main(src.layout(low, homes), x).inits(src.layout(low, homes), src.buffers, 0) = q,
+        λ x _ => Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), x).inits(src.layout(low, homes), src.buffers, 0) = q,
         j(sym(saved), λ x _ => x.inits(src.layout(low, homes), src.buffers, 0) = q, filled))
 }
 
 // The same in one step, for an entry spelled whole.
 theorem Source::entry_at(self src: Source, low: BitVec(64), homes: Homes, l: List<Nat>, q: Prog, checked: src.main.checked(homes, []) = Some(l),
-    spelled: Start.saves_rsp(src.layout(low, homes), src.depth, src.stack_room()).frames_main(src.layout(low, homes), l).inits(src.layout(low, homes), src.buffers, 0) = q):
+    spelled: Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), l).inits(src.layout(low, homes), src.buffers, 0) = q):
     src.entry(low, homes) = q {
-    src.entry_of(low, homes, l, Start.saves_rsp(src.layout(low, homes), src.depth, src.stack_room()).frames_main(src.layout(low, homes), l), q, checked, refl, spelled)
+    src.entry_of(low, homes, l, Start.saves_rsp(src.layout(low, homes), src.depth).frames_main(src.layout(low, homes), l), q, checked, refl, spelled)
 }
 
 // A source without procedures: `main` from label 0, no call fitting.
@@ -1326,8 +1326,8 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = src.layout(r.low, homes).stack_top(src.stack_room()), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes);
@@ -1359,7 +1359,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                 let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());
                                 let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
                                 let live = src.main.live_in(homes, []);
-                                let saved = Start.saves_rsp(layout, src.depth, src.stack_room()).frames_main(layout, live);
+                                let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
                                     t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
                                 let w_entry = calc { entry <= c.prog := src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), <= whole := Exists(2, refl), };
@@ -1374,10 +1374,10 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                     λ u => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-                                λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, src.stack_room(), trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), Start, w_saved, tree(n),
+                                λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
                                         runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-                                    s, here, at_whole, ⟨zero, argv⟩)
+                                    s, here, at_whole, ⟨zero, ⟨argv, trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i))⟩⟩)
                             }))(resident),
                     })
                 },
@@ -1913,8 +1913,8 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = src.layout(r.low, homes).stack_top(src.stack_room()), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes);
@@ -1940,7 +1940,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let once: (src.depth * 1 <= src.depth * (8 * (src.words + 7))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 7), omega());
     let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
     let live = src.main.live_in(homes, []);
-    let saved = Start.saves_rsp(layout, src.depth, src.stack_room()).frames_main(layout, live);
+    let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
     let w_c: c.prog.Within(program) = calc { c.prog <= then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall) := Exists(2, refl), <= program := w_whole, };
     let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, answers, refl), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
@@ -1956,16 +1956,16 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
         λ u => t.Held([], end, u.gprs, u.memory),
         λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
     let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-    λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, src.stack_room(), trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), Start, w_saved, tree(n),
+    λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
         t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
             runs(n, n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-        s, here, resident, ⟨zero, argv⟩)
+        s, here, resident, ⟨zero, ⟨argv, trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i))⟩⟩)
 }
 
 // The compiled program, from its first byte with its code resident, its
-// region zero, a stack above the region whose top is the address its entry
-// gives RSP (`Layout::stack_top`) and deep enough for the source's calls,
-// and the command line `args` at the entry RSP above the stack, simulates the source run with `args` at every fuel, whatever homes
+// region zero, a stack above the region whose top is RSP and deep enough
+// for the source's calls, and the command line `args` at RDI above the
+// stack, simulates the source run with `args` at every fuel, whatever homes
 // the compile was given: it checked them (`Source::allocation_ok`).
 theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
     compiled: src.compile(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
@@ -1973,8 +1973,8 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = src.layout(r.low, homes).stack_top(src.stack_room()), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
-    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: (src.depth * (8 * (src.words + 7)) + program_calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
     SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes), src.layout(r.low, homes), [], 0) { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {

@@ -39,10 +39,11 @@ cap, which rested on the mapping exec was thought to make
 inside its own segment, and so asks nothing of the limit, is
 `issues/native-target-minimal-system-assumptions.md`.
 
-## Superseded (2026-11-17): the program owns its stack
+## 2026-11-17: providers
 
-Minus asked to improve on the stated premise, so the premise is gone: a
-written program's stack is in its own data segment
-(`DataRegion::own_stack`), `X86Profile::process` and `StackPlaced` are
-deleted, and nothing is asked of the kernel's stack but the command line
-(`issues/native-target-minimal-system-assumptions.md`).
+The compiled program now takes its stack from entry code in front of it
+(`Source::runs_after`, native_compile_elf). The system's stack stays the
+default with the premise above; `write-elf --stack segment` gives a program
+its own stack in its data segment and drops the premise
+(`issues/native-target-minimal-system-assumptions.md`). A startup check of
+the stack limit is designed in `docs/native/system-contract-design.md`.

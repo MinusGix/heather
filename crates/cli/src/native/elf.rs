@@ -84,6 +84,19 @@ const PAGE: u64 = 4096;
 /// it uses. In the lib so the library gate can hold them to the world.
 use heather_cli::world::WRITE_ELF_IMPORTS as IMPORTS;
 
+/// Where a written program's stack comes from: the entry code in front of
+/// the compiled program provides it (native_compile_elf,
+/// docs/native/system-contract-design.md §4.2).
+#[derive(Clone, Copy, PartialEq)]
+enum StackFrom {
+    /// The stack Linux made: it grows to the stack limit and has a guard
+    /// page, and the theorem asks the system for the program's room on it.
+    System,
+    /// Room in the program's own data segment: nothing is asked of the
+    /// system's stack but the command line, and the size is fixed here.
+    Segment,
+}
+
 pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
@@ -92,6 +105,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut timings = None;
     let mut kernel_workers = None;
     let mut world = None;
+    let mut stack = StackFrom::System;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -109,6 +123,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
                     _ => cache = Some(value),
                 }
             }
+            "--stack" => {
+                stack = match args.next().map(String::as_str) {
+                    Some("system") => StackFrom::System,
+                    Some("segment") => StackFrom::Segment,
+                    _ => return Err("--stack needs `system` (the stack Linux made, the default) or `segment` (the program's own, in its data segment)".into()),
+                };
+            }
             "--kernel-workers" => {
                 let n = args.next().and_then(|value| value.parse::<usize>().ok()).filter(|&n| n > 0)
                     .ok_or("--kernel-workers needs a positive integer")?;
@@ -119,7 +140,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     if !(1..=2).contains(&positional.len()) || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> [<source>] -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+        return Err("usage: heather write-elf <file.hthr> [<source>] -o <output> [--stack system|segment] [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
     // The source: a function of no arguments that builds a `Source` or a
     // `Tool` (`tr`), or the `Source` a `runtime fn` program publishes, by
@@ -228,7 +249,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let layout = format!("{p}_layout()");
     let entry = format!("{src}().entry({LOW}, {homes})");
     let probes = format!("import {root};\n{imports}{lowered}
-fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacities(), Homes([], [])).size() + {src}().stack_room(), io_data_limit()] }}
+fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacities(), Homes([], [])).size(), io_data_limit(), {src}().stack_room()] }}
 fn {p}_sizes() → List<Nat> {{ Cons({src}().words, {src}().capacities()) }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
@@ -244,21 +265,20 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
         let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, module, name);
         function_ir_source::evaluate_numbers(fork, &format!("{module}::{name}")).map_err(|e| format!("`{symbol}` ({name}): {e}"))
     };
-    // The segment: the layout's size and, past it, the program's own stack
-    // (`Source::stack_room`: the entry points RSP at its end, so the stack
-    // is the file's and nothing is asked of the one the system made), in
-    // whole pages, which the theorem takes only up to the profile's limit.
-    let [needed, limit] = numbers(&fork, &probe, &format!("{p}_room"))?[..] else {
+    // The segment: the layout's size and, with `--stack segment`, the
+    // program's own stack past it (`Source::stack_room`), in whole pages,
+    // which the theorem takes only up to the profile's limit.
+    let [laid, limit, room] = numbers(&fork, &probe, &format!("{p}_room"))?[..] else {
         return Err(format!("`{symbol}`'s layout did not read back"));
     };
+    let needed = if stack == StackFrom::Segment { laid + room } else { laid };
     let size = needed.div_ceil(PAGE) * PAGE;
     if size > limit {
-        return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range, saved RSP and stack, \
-            past the I/O profile's limit of {limit} (`io_data_limit`)"));
+        return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range and saved RSP{}, \
+            past the I/O profile's limit of {limit} (`io_data_limit`)", if stack == StackFrom::Segment { " and its stack" } else { "" }));
     }
     let sizes = numbers(&fork, &probe, &format!("{p}_sizes"))?;
-    // Its end included: the stack's top is an address of the program's.
-    let region = DATA..DATA + size + 1;
+    let region = DATA..DATA + size;
     let address = |width: u32, n: u64| {
         if width == 64 && region.contains(&n) { format!("{LOW}.add_nat({})", n - DATA) }
         else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
@@ -370,8 +390,15 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, &plain, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
         emission::Checks { src: &src, homes: &homes, sets: &live_sets })?;
     let length = lens.iter().sum::<u64>() as usize;
-    if HEADER + length > MAX_FILE {
-        return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
+    // The entry code in front of the program: what provides its stack.
+    let enter_code = match stack {
+        StackFrom::System => "stack_from_system()".to_string(),
+        StackFrom::Segment => format!("{src}().segment_entry({homes})"),
+    };
+    let enter_len = match stack { StackFrom::System => 3, StackFrom::Segment => 13 };
+    let total = enter_len + length;
+    if HEADER + total > MAX_FILE {
+        return Err(format!("`{symbol}` compiles to {total} bytes, past the profile's {MAX_FILE} with its header"));
     }
     if let Some(why) = layout_refusal(&items, &lens) {
         // The compile's own reason first, where it has one: functions that
@@ -388,14 +415,15 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     let code = emission::code(p, &items, &cuts);
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
-    let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)), {size})");
+    let header = format!("io_elf_header(BitVec::ofNat(232 + {total}), BitVec::ofNat((232 + {total}).shr(8)), {size})");
     // The bytes: a part's as its read gave them, the items' around parts
     // read on the same fork, and every jump's displacement written here,
     // now that the labels are laid out (`labels::link`). So only the
     // certificate elaborates the literal, and its table.
     let (byte_text, byte_reads) = emission::byte_reads(p, &spans);
     let reads = format!("import {root};\nimport {parts};\n{imports}\n{byte_text}\
-        fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n");
+        fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_enter_numbers() → List<Nat> {{ canonical_block_bytes({enter_code}).map(λ (b: BitVec(8)) => b.toNat()) }}\n");
     let read = format!("{p}_read");
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
@@ -416,19 +444,32 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
     }
     labels::link(&items, &offsets, &mut bytes).map_err(|why| format!("`{symbol}`'s bytes did not read back: {why}"))?;
     let head = numbers(&fork, &read, &format!("{p}_header_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
+    let enter = numbers(&fork, &read, &format!("{p}_enter_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     drop(fork);
+    if enter.len() != enter_len {
+        return Err("the entry code did not read back".into());
+    }
+    let enter_literal: Vec<String> = enter.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
     if head.len() != HEADER {
         return Err("the header did not read back".into());
     }
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
-        s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
+    let loaded = format!("j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), {})",
+        if stack == StackFrom::System { "loaded" } else { "start.loaded" });
+    let (profile, simulated) = match stack {
+        StackFrom::System => (format!("X86Profile::process({p}_size(), top, depth)"),
+            format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
+        top, depth, placed, s, entry, rsp,
+        {loaded}, deep, args, argv)")),
+        StackFrom::Segment => (format!("X86Profile::io({p}_size())"),
+            format!("{src}().elf_segment_file_runs({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), args, s,
+        SegmentStart(loaded := {loaded}, entry := start.entry, argv := start.argv))")),
+    };
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io({p}_size()).linux(), src.denote(args), s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram({profile}.linux(), src.denote(args), s),\n        {simulated})"))
     };
     // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
     // or with procedures `main` past their labels, then exit 0, the
@@ -451,6 +492,46 @@ fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_n
             format!("{src}().compile_functions_of({LOW}, {homes}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
         {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         }),
+    };
+    // The program's theorem, by the provider of its stack.
+    let theorems = match stack {
+        StackFrom::System => format!("// The process Linux makes of the file written, at its entry with `depth`
+// bytes of stack below RSP, enough for the source's room
+// (`Source::stack_room`: `main`'s frame and its calls of procedures and of
+// functions), and the command line `args` on the stack above, simulates
+// `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`, from
+// `native_compile_correct`).
+theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
+    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().stack_room() <= depth, args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
+    {simulates}
+}}
+
+// The same from what it asks of the system that runs the file, under one
+// name (`LinuxStart`, native_compile_elf): the file loaded as its headers
+// say, the process at its entry, the program's stack room usable below RSP
+// (on Linux, a stack limit that leaves it) and the command line above.
+theorem {p}_runs(top: Nat, args: List<List<BitVec(8)>>,
+    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, {src}().stack_room()))>,
+    start: LinuxStart({p}_size(), {p}_file(), top, {src}().stack_room(), args, s)):
+    SimProgram(X86Profile::process({p}_size(), top, {src}().stack_room()).linux(), {source}.denote(args), s) {{
+    {p}_simulates(top, {src}().stack_room(), start.placed, s, start.entry, start.rsp, start.loaded, Nat::le_refl({src}().stack_room()), args, start.argv)
+}}
+"),
+        StackFrom::Segment => format!("// The process Linux makes of the file written simulates `{symbol}`'s tree
+// run with `args`, from what it asks of the system that runs the file
+// (`SegmentStart`, native_compile_elf): the file loaded as its headers say,
+// the process at its entry, and the command line at RSP. Its stack is in
+// its own data segment (`Source::elf_segment_file_runs`), so nothing is
+// asked of the stack the system made but the command line.
+theorem {p}_runs(args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io({p}_size()))>,
+    start: SegmentStart({p}_size(), {p}_file(), args, s)):
+    SimProgram(X86Profile::io({p}_size()).linux(), {source}.denote(args), s) {{
+    {simulates}
+}}
+"),
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -484,65 +565,62 @@ theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
 }}
 
 // Its data segment, in whole pages, within the profile's limit; its words,
-// buffers and scratch range fit it, and its stack after them.
+// buffers and scratch range fit it{fits_note}.
 fn {p}_size() → Nat {{ {size} }}
 theorem {p}_within(): {p}_size() <= io_data_limit() {{ Nat::leb_sound({p}_size(), io_data_limit(), trivial) }}
 
-theorem {p}_fits(): Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size() + {src}().stack_room() <= {p}_size() {{
-    Nat::leb_sound(Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size() + {src}().stack_room(), {p}_size(), trivial)
+theorem {p}_fits(): {fits_of} <= {p}_size() {{
+    Nat::leb_sound({fits_of}, {p}_size(), trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
-", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles);
+", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles,
+        fits_note = if stack == StackFrom::Segment { ", and its stack after them" } else { "" },
+        fits_of = match stack {
+            StackFrom::System => format!("Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size()"),
+            StackFrom::Segment => format!("Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size() + {src}().stack_room()"),
+        });
     text.push_str(&labels::byte_pieces(p, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 fn {p}_header() → List<BitVec(8)> {{ [{}] }}
 theorem {p}_header_is(): {header} = {p}_header() {{ refl }}
 {lengths}theorem {p}_length(): {p}_upto_0().len() = {length} {{ {p}_upto_0_len() }}
 
-// The file written: its header, then the code.
-fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ {p}_upto_0() }}
+// The entry code in front of the program, which provides its stack
+// (native_compile_elf): its instructions and their bytes.
+fn {p}_stack() → List<Instruction> {{ {enter_code} }}
+fn {p}_enter() → List<BitVec(8)> {{ [{enter_bytes}] }}
+theorem {p}_enter_is(): canonical_block_bytes({p}_stack()) = {p}_enter() {{ refl }}
+theorem {p}_total(): ({p}_enter() ++ {p}_upto_0()).len() = {total} {{
+    trans({p}_enter().len_append({p}_upto_0()), cong_fn<Nat, Nat>(λ n => {p}_enter().len() + n, {p}_length()))
+}}
 
-theorem {p}_file_is(): io_elf_file({p}_upto_0(), {p}_size()) = {p}_file() {{
-    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8)), {p}_size()), {p}_upto_0()), {p}_length()),
-        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, {p}_upto_0()), {p}_header_is()))
+// The file written: its header, the entry code, then the program.
+fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ ({p}_enter() ++ {p}_upto_0()) }}
+
+theorem {p}_file_is(): io_elf_file({p}_enter() ++ {p}_upto_0(), {p}_size()) = {p}_file() {{
+    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8)), {p}_size()), {p}_enter() ++ {p}_upto_0()), {p}_total()),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, {p}_enter() ++ {p}_upto_0()), {p}_header_is()))
 }}
 
 // Whatever names the compile's program, its file is the one written.
 theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = Some(program)):
-    io_elf_file(assemble(no_fills(), program, []), {p}_size()) = {p}_file() {{
+    io_elf_file(entered({p}_stack(), program), {p}_size()) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
-    j(same, λ q _ => io_elf_file(assemble(no_fills(), q, []), {p}_size()) = {p}_file(),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
+    j(same, λ q _ => io_elf_file(entered({p}_stack(), q), {p}_size()) = {p}_file(),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(canonical_block_bytes({p}_stack()) ++ x, {p}_size()), {p}_bytes()),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => io_elf_file(e ++ {p}_upto_0(), {p}_size()), {p}_enter_is()), {p}_file_is())))
 }}
 
-theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {{
-    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65535,
-        j(sym({p}_length()), λ n _ => 232 + n <= 65535, Nat::leb_sound(232 + {length}, 65535, trivial)))
+theorem {p}_short(): 232 + entered({p}_stack(), {p}_code()).len() <= 65535 {{
+    j(sym(entered_len({p}_stack(), {p}_code())), λ n _ => 232 + n <= 65535,
+        j(sym({p}_bytes()), λ b _ => 232 + (block_length({p}_stack()) + b.len()) <= 65535,
+            j(sym({p}_length()), λ n _ => 232 + (block_length({p}_stack()) + n) <= 65535, Nat::leb_sound(232 + (block_length({p}_stack()) + {length}), 65535, trivial))))
 }}
 
-// The process Linux makes of the file written, at its entry with the
-// command line `args` at and above RSP, simulates `{symbol}`'s tree run with
-// `args` (`Source::elf_file_simulates`, from `native_compile_correct`). Its
-// stack is in its own data segment, so nothing is asked of the stack the
-// system made but the command line.
-theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io({p}_size()))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::io({p}_size()).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io({p}_size()).linux(), {source}.denote(args), s) {{
-    {simulates}
-}}
-
-// The same from what it asks of the system that runs the file, under one
-// name (`LinuxStart`, native_compile_elf): the file loaded as its headers
-// say, the process at its entry, and the command line at RSP.
-theorem {p}_runs(args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io({p}_size()))>,
-    start: LinuxStart({p}_size(), {p}_file(), args, s)):
-    SimProgram(X86Profile::io({p}_size()).linux(), {source}.denote(args), s) {{
-    {p}_simulates(s, start.entry, start.loaded, args, start.argv)
-}}
-", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
+{theorems}", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length), enter_bytes = enter_literal.join(", "), theorems = theorems));
     let mut file = head;
+    file.extend_from_slice(&enter);
     file.extend_from_slice(&bytes);
 
     let unchecked = certificate.with_extension("unchecked.hthr");
@@ -574,6 +652,10 @@ theorem {p}_runs(args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profi
     write_executable(&output, &file)?;
     println!("{}: {} bytes and a {size}-byte data segment, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it",
         output.display(), file.len());
+    println!("stack: {}", match stack {
+        StackFrom::System => format!("the system's, {room} bytes of it below the entry stack pointer"),
+        StackFrom::Segment => format!("the program's own, {room} bytes of its data segment"),
+    });
     println!("certificate: {}", certificate.display());
     Ok(())
 }

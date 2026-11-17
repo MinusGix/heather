@@ -2,33 +2,36 @@
 // (issues/native-elf-every-program.md): a source whose compile at the I/O
 // profile's data segment, with the homes it was given, is `program`, and
 // whose layout fits a segment of `size` bytes, simulates its tree once
-// Linux has loaded the program's bytes past a 232-byte header and started it
-// at the entry with its command line on the stack (`native_compile_correct`).
-// The segment's size is the program's to choose, up to `io_data_limit()`
-// (issues/native-data-capacity.md): `write-elf` gives it the layout's size
-// rounded up to a page. Nothing here is about one program: the certificate
-// `write-elf` checks supplies the compile, the fit and the bytes' length,
-// each evaluated once, and `Source::elf_file_simulates` then reads its
-// theorem off the file it wrote.
+// Linux has loaded the file and started it at the entry
+// (`native_compile_correct`). The segment's size is the program's to
+// choose, up to `io_data_limit()` (issues/native-data-capacity.md). Nothing
+// here is about one program: the certificate `write-elf` checks supplies the
+// compile, the fit and the bytes' length, each evaluated once.
 //
-// The process is one of `X86Profile::io(size)`: it relies on the segment
-// alone. The program's stack is the segment's bytes past its layout
-// (`DataRegion::own_stack`, `Source::stack_room` of them), and its entry
-// code points RSP there (`Prog::saves_rsp`), so `fits` asks the segment to
-// hold both. Compiled calls push their return addresses and their callers'
-// saved words into it (docs/native/native-procedures-design.md §5): `main`'s
+// The file's code is entry code and then the compiled program
+// (`entered`). The compiled program asks, where it starts, for RSP at the
+// top of a stack with the source's room (`Source::stack_room`) and RDI where
+// the command line is, and says nothing of where that stack came from; the
+// entry code is what provides it (docs/native/system-contract-design.md
+// §4.2). `Source::runs_after` is the compiler's theorem behind any entry
+// code that is a block of instructions. There are two providers:
+//
+// - **The system's stack** (`stack_from_system`, the default): RDI is a copy
+//   of RSP and the stack is the one Linux made. The process is one of
+//   `X86Profile::process(size, top, depth)`, which relies on the segment and
+//   on `depth` bytes below the entry RSP (issues/io-image-process-stack.md).
+//   `LinuxStart` is what is asked of the system.
+// - **The program's own** (`stack_from_segment`): RSP is moved to the end of
+//   `room` bytes of the data segment past the layout. The process is one of
+//   `X86Profile::io(size)`. `SegmentStart` is what is asked of the system:
+//   less, at the price of a size fixed when the file is written.
+//
+// Compiled calls push their return addresses and their callers' saved words
+// into the stack (docs/native/native-procedures-design.md §5): `main`'s
 // frame; per call of `src.depth` a frame, a return address and the registers
 // a callee keeps (seven words more); the room the functions' table asks; and
 // a word for the return address of a call past the depth, which its callee
 // refuses.
-//
-// Outside the proof is the system the file runs on. Everything asked of it
-// is a premise, and `LinuxStart` (below) is those premises under one name:
-// that Linux maps the file as `X86Memory::io_load` says below the segment's
-// end, starts the process at `io_entry()`, and puts the command line at and
-// above RSP as the psABI lays it out. Nothing is asked of the stack the
-// system made beyond that (issues/native-target-minimal-system-assumptions.md).
-// `Source::elf_file_runs` is the theorem from them.
 import native_source;
 import native_compile;
 import native_compile_region;
@@ -49,7 +52,9 @@ import itree_deep;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
+import x86_64_block;
 import x86_64_byte_memory;
+import x86_64_stack;
 import x86_64_fetch;
 import x86_64_fetched_code;
 import bitvec;
@@ -59,52 +64,115 @@ import nat;
 import option;
 import omega;
 
-// The process Linux makes of a 232-byte header and the program's bytes,
-// with a data segment of `size`, at its entry with the command line `args`
-// on its stack, simulates the source run with `args`, paying for its
-// silent steps (`SimPaid`).
-theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
-    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
-    header: List<BitVec(8)>, long: header.len() = 232,
-    s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimPaidProgram(X86Profile::io(size).linux(), src.denote(args), s) {
-    let x = X86Profile::io(size);
-    let used = Layout::of(io_data_low(), src.words, src.capacities(), homes).size();
-    let room = src.stack_room();
-    let r = DataRegion::own_data(size, within, used, omega(fits));
-    let region = DataRegion::own_stack(size, within, used, room, fits);
-    let stack = region.stack();
-    let data = x.data();
+// ---------------------------------------------------------------------------
+// Entry code, then the program
+
+// The file's code: the entry code's bytes, then the program's.
+fn entered(entry: List<Instruction>, program: Prog) → List<BitVec(8)> {
+    canonical_block_bytes(entry) ++ assemble(no_fills(), program, Nil)
+}
+
+// Its length is the two lengths.
+theorem entered_len(entry: List<Instruction>, program: Prog):
+    entered(entry, program).len() = block_length(entry) + assemble(no_fills(), program, Nil).len() {
+    trans(canonical_block_bytes(entry).len_append(assemble(no_fills(), program, Nil)),
+        cong_fn<Nat, Nat>(λ n => n + assemble(no_fills(), program, Nil).len(), block_length_is(entry)))
+}
+
+// The compiler's theorem behind entry code: a state at the entry code, the
+// code and the program resident after it, whose registers after the entry
+// code have RSP at the top of a stack with the source's room and RDI at the
+// command line, simulates the source. The entry code is any block that
+// reads no flag it has not set; it touches no memory (`block_steps`).
+theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size,
+    program: Prog, compiled: src.compile(r.low, homes) = Some(program), entry: List<Instruction>, at: BitVec(64),
+    s: MachineState<X86Memory(r.profile)>, here: s.rip = at,
+    resident: CodeResident(r.profile.fetch(), s.memory, entered(entry, program), at),
+    reads: block_reads(entry, s.flags.defined) = True,
+    zero: r.Holds(λ _ => zero_byte(), s.memory),
+    stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
+    stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
+    top: stack.at(stack.size) = read_gpr(Rsp, execute_block_normal<X86Memory(r.profile)>(entry, s).gprs),
+    deep: src.stack_room() <= stack.size,
+    args: List<List<BitVec(8)>>,
+    argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, execute_block_normal<X86Memory(r.profile)>(entry, s).gprs), args)):
+    SimPaidProgram(r.profile.linux(), src.denote(args), s) {
+    let x = r.profile;
+    let io = x.linux();
     let bytes = assemble(no_fills(), program, Nil);
-    let start: (io_entry() = next_rip(io_entry(), 0)) = BitVec::eq_of_eq_bit(64, io_entry(), next_rip(io_entry(), 0), refl);
-    let resident = j(start, λ y _ => CodeResident(x.fetch(), s.memory, bytes, y),
-        s.memory.loaded_entry(size, within, header, bytes, long, short, loaded));
-    let zero = s.memory.loaded_own_data(size, within, used, omega(fits), header ++ bytes, loaded);
-    let ends = DataRegion::own_stack_end(size, within, used, room, fits);
-    let above: ReadsKept(data.above(io_data_end(size)), s.memory, data.above(stack.low.toNat() + stack.size), s.memory) = λ a byte got => {
-        let found = data.above_read(io_data_end(size), s.memory, a, byte, got);
-        let high: ((stack.low.toNat() + stack.size).leb(a.toNat()) = True) = Nat::leb_true(stack.low.toNat() + stack.size, a.toNat(), Nat::le_trans(stack.low.toNat() + stack.size, io_data_end(size), a.toNat(), ends, found.left));
+    let u = execute_block_normal<X86Memory(x)>(entry, s);
+    let parts = resident_split(x.fetch(), s.memory, canonical_block_bytes(entry), bytes, at, resident);
+    let ran = block_steps(x.fetch(), x.data(), entry, s, j(sym(here), λ a _ => CodeResident(x.fetch(), s.memory, canonical_block_bytes(entry), a), parts.left), reads);
+    let origin = next_rip(at, block_length(entry));
+    let count = block_length(entry);
+    let plus: (count + 0 = count) = omega();
+    let past: (next_rip(at, canonical_block_bytes(entry).len()) = next_rip(origin, 0)) =
+        trans(rip_count(at, block_length_is(entry)), sym(trans(rip_compose(at, block_length(entry), 0), rip_count(at, plus))));
+    let there: (u.rip = next_rip(origin, 0)) =
+        trans(ran.right.left, trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, block_length(entry)), here),
+            sym(trans(rip_compose(at, block_length(entry), 0), rip_count(at, plus)))));
+    let same = ran.right.right;
+    let resident_u = j(sym(same), λ m _ => CodeResident(x.fetch(), m, bytes, next_rip(origin, 0)),
+        j(past, λ a _ => CodeResident(x.fetch(), s.memory, bytes, a), parts.right));
+    let zero_u = j(sym(same), λ m _ => r.Holds(λ _ => zero_byte(), m), zero);
+    let argv_u = j(sym(same), λ m _ => ArgvAt(x.data().above(stack.low.toNat() + stack.size), m, read_gpr(Rdi, u.gprs), args), argv);
+    let correct = native_compile_correct(src, r, homes, fits, program, compiled, origin, u, there, resident_u, zero_u,
+        stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv_u);
+    λ n => paid_back(io, src.denote(args).at(n), s, u, linux_steps_of_fetched(io, s, u, ran.left), correct(n))
+}
+
+// ---------------------------------------------------------------------------
+// The system's stack
+
+// RDI a copy of RSP: the stack is the one the process was started on, and
+// the command line is where its RSP was.
+fn stack_from_system() → List<Instruction> { [MovRR(Rdi, Rsp)] }
+
+// The process Linux makes of a 232-byte header and the file's code, with a
+// data segment of `size`, at its entry with the command line `args` on its
+// stack, simulates the source run with `args`, paying for its silent steps
+// (`SimPaid`).
+theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + entered(stack_from_system(), program).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, header ++ entered(stack_from_system(), program)),
+    deep: src.stack_room() <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimPaidProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    let x = X86Profile::process(size, top, depth);
+    let stack = DataRegion::process_stack(size, top, depth, placed).stack();
+    let low = io_stack_low_toNat(size, top, depth, placed);
+    let r = DataRegion::process_data(size, within, top, depth);
+    let data = x.data();
+    let code = entered(stack_from_system(), program);
+    let resident = s.memory.loaded_entry(size, within, header, code, long, short, loaded);
+    let zero = s.memory.loaded_data(size, within, top, depth, header ++ code, loaded);
+    let floor: (r.low.toNat() + r.size = io_data_end(size)) = refl;
+    let ceiling: (stack.low.toNat() + stack.size = top) = omega(low, placed.above);
+    let above: ReadsKept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory) = λ a byte got => {
+        let found = data.above_read(top, s.memory, a, byte, got);
+        let high: ((stack.low.toNat() + stack.size).leb(a.toNat()) = True) = Nat::leb_true(stack.low.toNat() + stack.size, a.toNat(), omega(found.left, ceiling));
         j(sym(high), λ b _ => (match b { True => data.read(s.memory, a), False => None<BitVec(8)> }) = Some(byte), found.right)
     };
-    native_compile_correct(src, r, homes, Nat::le_refl(used), program, compiled, io_entry(), s, trans(entry, start), resident, zero,
-        stack, refl, DataRegion::own_stack_above(size, within, used, room, fits), region.canonical,
-        DataRegion::own_stack_top(size, within, used, room, fits), Nat::le_refl(room), args,
-        argv_at_kept(data.above(io_data_end(size)), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
+    src.runs_after(r, homes, fits, program, compiled, stack_from_system(), io_entry(), s, entry, resident, refl, zero,
+        stack, refl, omega(floor, low, placed.above), omega(low, placed.above, placed.canonical),
+        DataRegion::process_stack_entry(size, top, depth, placed, s.gprs, rsp), deep, args,
+        argv_at_kept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
 }
 
 // …so it simulates it.
 theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
-    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
-    header: List<BitVec(8)>, long: header.len() = 232,
-    s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(size).linux(), src.denote(args), s) {
-    Program::sim_of_paid(X86Profile::io(size).linux(), src.denote(args), s, src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, s, entry, loaded, args, argv))
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + entered(stack_from_system(), program).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, header ++ entered(stack_from_system(), program)),
+    deep: src.stack_room() <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    Program::sim_of_paid(X86Profile::process(size, top, depth).linux(), src.denote(args), s, src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv))
 }
 
 // …and every run of it, with answers Linux may give, is exactly a run of
@@ -113,36 +181,39 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
 // deep (`Source::deepens`), so no run reaches one
 // (`Program::paid_run_produces`).
 theorem Source::elf_runs_exact(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
-    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
-    header: List<BitVec(8)>, long: header.len() = 232,
-    s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args),
-    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io(size).linux(), run, s),
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + entered(stack_from_system(), program).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, header ++ entered(stack_from_system(), program)),
+    deep: src.stack_room() <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
+    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(size, top, depth).linux(), run, s),
     valid: LinuxEventsValid(run)):
     Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), src.denote(args), tr) ∧
         (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) {
-    Program::paid_run_produces(X86Profile::io(size).linux(), src.denote(args), s,
-        src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, s, entry, loaded, args, argv), src.deepens(args), run, ran, valid)
+    Program::paid_run_produces(X86Profile::process(size, top, depth).linux(), src.denote(args), s,
+        src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv), src.deepens(args), run, ran, valid)
 }
 
 // The same, of the file `write-elf` writes: the I/O profile's ELF of the
-// program's bytes with a segment of `size`, whose header is 232 bytes
-// whatever their length. The header holds the file's length in sixteen bits
+// code with a segment of `size`, whose header is 232 bytes whatever their
+// length. The header holds the file's length in sixteen bits
 // (`io_elf_file`), so the file is at most 65535 bytes: at 65536 the header
 // would say an empty segment, and Linux would map none of the code the
 // `loaded` premise speaks of (issues/io-elf-file-length-sixteen-bits.md).
 theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
-    short: 232 + assemble(no_fills(), program, Nil).len() <= 65535,
-    s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom(size, io_elf_file(assemble(no_fills(), program, Nil), size)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(size).linux(), src.denote(args), s) {
-    let length = 232 + assemble(no_fills(), program, Nil).len();
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + entered(stack_from_system(), program).len() <= 65535,
+    top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, io_elf_file(entered(stack_from_system(), program), size)),
+    deep: src.stack_room() <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    let length = 232 + entered(stack_from_system(), program).len();
     src.elf_simulates(size, within, program, homes, compiled, fits, omega(short), io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
-        io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), s, entry, loaded, args, argv)
+        io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,33 +229,123 @@ theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= 
 // - `loaded`: the file's two PT_LOAD headers were honoured: its bytes at
 //   0x400000, readable and executable, and `size` zero bytes at 0x410000,
 //   readable and writable (the ELF gABI's loading rule; a fixed-address
-//   executable, so nothing else may hold those addresses). The program's
-//   stack is part of those `size` bytes (`Source::stack_room` of them,
-//   `DataRegion::own_stack`), so this is also all that is asked for the stack.
+//   executable, so nothing else may hold those addresses).
 // - `entry`: RIP is the header's `e_entry`.
+// - `placed`, `rsp`, `stack`: RSP is `top`, above the segment and canonical,
+//   and the `room` bytes below it are data. On Linux that is the stack
+//   limit's to grant (RLIMIT_STACK, `ulimit -s`): the kernel maps the stack
+//   as it is touched, down to the limit, so it holds when the limit leaves
+//   `room` bytes below the entry RSP and fails under a smaller one. The
+//   memory's type says the same (`X86Profile::process` relies on it); the
+//   field is here so that the statement shows it.
 // - `argv`: argc, the argument pointers, a null word and the strings are at
-//   and above RSP, past the segment, as the x86-64 psABI's process start
-//   lays them out. This is the one use of the stack the system made.
+//   and above RSP as the x86-64 psABI's process start lays them out.
+//
+// Not asked: any register but RIP and RSP, any flag, what lies below the
+// stack room or between the regions, envp and auxv. Not modelled: a signal
+// (a process killed by one, the kernel's out-of-memory kill among them, ends
+// its run without an exit).
+record LinuxStart(size: Nat, file: List<BitVec(8)>, top, room: Nat, args: List<List<BitVec(8)>>,
+    s: MachineState<X86Memory(X86Profile::process(size, top, room))>) {
+    loaded: s.memory.LoadedFrom(size, file),
+    entry: s.rip = io_entry(),
+    placed: StackPlaced(size, top, room),
+    rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    stack: DataAt(s.memory.perms, io_stack_low(top, room), room),
+    argv: ArgvAt(X86Profile::process(size, top, room).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
+}
+
+// The stack field is what the memory's profile relies on, so a memory of
+// the profile has it: nothing is asked twice.
+theorem process_stack_data(size, top, room: Nat, m: X86Memory(X86Profile::process(size, top, room))):
+    DataAt(m.perms, io_stack_low(top, room), room) { m.relied.right }
+
+// The theorem of the file `write-elf` writes, from what it asks of the
+// system: a process the system started as `LinuxStart` says, with the
+// source's stack room, simulates the source run with its command line.
+theorem Source::elf_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + entered(stack_from_system(), program).len() <= 65535,
+    top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::process(size, top, src.stack_room()))>,
+    start: LinuxStart(size, io_elf_file(entered(stack_from_system(), program), size), top, src.stack_room(), args, s)):
+    SimProgram(X86Profile::process(size, top, src.stack_room()).linux(), src.denote(args), s) {
+    src.elf_file_simulates(size, within, program, homes, compiled, fits, short, top, src.stack_room(), start.placed, s, start.entry, start.rsp,
+        start.loaded, Nat::le_refl(src.stack_room()), args, start.argv)
+}
+
+// ---------------------------------------------------------------------------
+// The program's own stack (issues/native-target-minimal-system-assumptions.md)
+
+// RDI a copy of RSP, then RSP the end of the `room` bytes of the segment
+// past the `used` bytes of the layout (`DataRegion::own_stack`).
+fn stack_from_segment(used, room: Nat) → List<Instruction> {
+    [MovRR(Rdi, Rsp), MovRI(Rsp, io_data_low().add_nat(used + room))]
+}
+
+// The entry code a source's file has with this provider.
+fn Source::segment_entry(self src: Source, homes: Homes) → List<Instruction> {
+    stack_from_segment(Layout::of(io_data_low(), src.words, src.capacities(), homes).size(), src.stack_room())
+}
+
+// What a file with its own stack asks of the system: `LinuxStart` less
+// everything about the stack. `loaded` now covers the stack too, since it is
+// part of the segment's `size` bytes; `argv` is the one use of the stack the
+// system made.
 //
 // Not asked: that the system's stack has any room below RSP, is mapped any
-// deeper, grows, or has any limit (RLIMIT_STACK may be anything); any
-// register but RIP and RSP; any flag; envp and auxv. Not modelled: a signal
-// (a process killed by SIGPIPE ends its run without an exit).
-record LinuxStart(size: Nat, file: List<BitVec(8)>, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>) {
+// deeper, grows, or has any limit. What this provider costs instead: the
+// stack's size is fixed when the file is written, a limit on the data
+// segment or the address space kills the process at exec (before its first
+// instruction, with a signal), and there is no guard page under the stack.
+record SegmentStart(size: Nat, file: List<BitVec(8)>, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>) {
     loaded: s.memory.LoadedFrom(size, file),
     entry: s.rip = io_entry(),
     argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args),
 }
 
-// The theorem of the file `write-elf` writes, from what it asks of the
-// system: a process the system started as `LinuxStart` says simulates the
-// source run with its command line.
-theorem Source::elf_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+theorem Source::elf_segment_simulates_paid(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
     compiled: src.compile(io_data_low(), homes) = Some(program),
     fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
-    short: 232 + assemble(no_fills(), program, Nil).len() <= 65535,
+    short: 232 + entered(src.segment_entry(homes), program).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232,
+    s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
+    loaded: s.memory.LoadedFrom(size, header ++ entered(src.segment_entry(homes), program)),
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimPaidProgram(X86Profile::io(size).linux(), src.denote(args), s) {
+    let x = X86Profile::io(size);
+    let used = Layout::of(io_data_low(), src.words, src.capacities(), homes).size();
+    let room = src.stack_room();
+    let r = DataRegion::own_data(size, within, used, omega(fits));
+    let region = DataRegion::own_stack(size, within, used, room, fits);
+    let stack = region.stack();
+    let data = x.data();
+    let code = entered(src.segment_entry(homes), program);
+    let resident = s.memory.loaded_entry(size, within, header, code, long, short, loaded);
+    let zero = s.memory.loaded_own_data(size, within, used, omega(fits), header ++ code, loaded);
+    let ends = DataRegion::own_stack_end(size, within, used, room, fits);
+    let above: ReadsKept(data.above(io_data_end(size)), s.memory, data.above(stack.low.toNat() + stack.size), s.memory) = λ a byte got => {
+        let found = data.above_read(io_data_end(size), s.memory, a, byte, got);
+        let high: ((stack.low.toNat() + stack.size).leb(a.toNat()) = True) = Nat::leb_true(stack.low.toNat() + stack.size, a.toNat(), Nat::le_trans(stack.low.toNat() + stack.size, io_data_end(size), a.toNat(), ends, found.left));
+        j(sym(high), λ b _ => (match b { True => data.read(s.memory, a), False => None<BitVec(8)> }) = Some(byte), found.right)
+    };
+    src.runs_after(r, homes, Nat::le_refl(used), program, compiled, src.segment_entry(homes), io_entry(), s, entry, resident, refl, zero,
+        stack, refl, DataRegion::own_stack_above(size, within, used, room, fits), region.canonical,
+        DataRegion::own_stack_top(size, within, used, room, fits), Nat::le_refl(room), args,
+        argv_at_kept(data.above(io_data_end(size)), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
+}
+
+// The theorem of the file `write-elf --stack segment` writes, from what it
+// asks of the system.
+theorem Source::elf_segment_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program),
+    fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.stack_room() <= size,
+    short: 232 + entered(src.segment_entry(homes), program).len() <= 65535,
     args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
-    start: LinuxStart(size, io_elf_file(assemble(no_fills(), program, Nil), size), args, s)):
+    start: SegmentStart(size, io_elf_file(entered(src.segment_entry(homes), program), size), args, s)):
     SimProgram(X86Profile::io(size).linux(), src.denote(args), s) {
-    src.elf_file_simulates(size, within, program, homes, compiled, fits, short, s, start.entry, start.loaded, args, start.argv)
+    let length = 232 + entered(src.segment_entry(homes), program).len();
+    Program::sim_of_paid(X86Profile::io(size).linux(), src.denote(args), s,
+        src.elf_segment_simulates_paid(size, within, program, homes, compiled, fits, omega(short),
+            io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
+            io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), s, start.entry, start.loaded, args, start.argv))
 }

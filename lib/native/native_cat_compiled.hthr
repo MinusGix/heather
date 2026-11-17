@@ -30,6 +30,7 @@ import itree_trace;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
+import x86_64_block;
 import x86_64_byte_memory;
 import x86_64_fetch;
 import x86_64_fetched_code;
@@ -40,8 +41,8 @@ import logic;
 import nat;
 import option;
 
-// cat's buffer, its environment, the scratch range and its stack all fit
-// one page, the data segment it is given.
+// cat's buffer, its environment and the scratch range all fit one page,
+// the data segment it is given.
 fn cat_capacity() → Nat { 1024 }
 fn cat_size() → Nat { 4096 }
 
@@ -68,43 +69,47 @@ theorem cat_compiles(): cat(cat_capacity()).compile(io_data_low(), cat_homes()) 
     cat(cat_capacity()).compile(io_data_low(), cat_homes()).some_get(cat_present())
 }
 
-theorem cat_fits(): Layout::of(io_data_low(), cat(cat_capacity()).words, cat(cat_capacity()).capacities(), cat_homes()).size() + cat(cat_capacity()).stack_room() <= cat_size() {
-    Nat::leb_sound(Layout::of(io_data_low(), cat(cat_capacity()).words, cat(cat_capacity()).capacities(), cat_homes()).size() + cat(cat_capacity()).stack_room(), cat_size(), trivial)
+theorem cat_fits(): Layout::of(io_data_low(), cat(cat_capacity()).words, cat(cat_capacity()).capacities(), cat_homes()).size() <= cat_size() {
+    Nat::leb_sound(Layout::of(io_data_low(), cat(cat_capacity()).words, cat(cat_capacity()).capacities(), cat_homes()).size(), cat_size(), trivial)
 }
 
-// The bytes the program assembles to.
-fn cat_bytes() → List<BitVec(8)> { assemble(no_fills(), cat_code(), Nil) }
+// The file's code: the entry code that takes the system's stack
+// (`stack_from_system`, native_compile_elf), then the bytes the program
+// assembles to.
+fn cat_bytes() → List<BitVec(8)> { entered(stack_from_system(), cat_code()) }
 
-theorem cat_short(): (232 + prog_len(cat_code())).leb(65536) = True { refl }
+theorem cat_short(): (232 + (block_length(stack_from_system()) + prog_len(cat_code()))).leb(65536) = True { refl }
 
 theorem cat_bytes_fit(): 232 + cat_bytes().len() <= 65536 {
     let long = asm_len_is(no_fills(), asm_labels(cat_code()), cat_code(), cat_code().laid_out_fits(cat(cat_capacity()).compile_laid(io_data_low(), cat_homes(), cat_code(), cat_compiles())),
         Nil, 0, refl);
-    j(sym(long), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + prog_len(cat_code()), 65536, j(sym(cat_short()), λ b _ => b.IsTrue(), trivial)))
+    j(sym(entered_len(stack_from_system(), cat_code())), λ n _ => 232 + n <= 65536,
+        j(sym(long), λ n _ => 232 + (block_length(stack_from_system()) + n) <= 65536,
+            Nat::leb_sound(232 + (block_length(stack_from_system()) + prog_len(cat_code())), 65536, j(sym(cat_short()), λ b _ => b.IsTrue(), trivial))))
 }
 
 // The process Linux makes of a 232-byte header and cat's bytes, at its
-// entry with any command line, simulates cat. Its stack is in its own
-// segment (`DataRegion::own_stack`).
-theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io(cat_size()))>,
-    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(cat_size()).data().above(io_data_end(cat_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(cat_size()).linux(), cat(cat_capacity()).denote(args), s) {
-    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, s, entry, loaded, args, argv)
+// entry with any command line and a stack with room for cat's words (its
+// frame) and a word more, simulates cat.
+theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
+    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(cat_size(), top, depth).linux(), cat(cat_capacity()).denote(args), s) {
+    cat(cat_capacity()).elf_simulates(cat_size(), cat_within(), cat_code(), cat_homes(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
 }
 
 // So every run of that process that Linux can give cat's answers, along a
 // trace cat produces that exits 0, sends to stdout what it read from stdin.
-theorem cat_native_sends(header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io(cat_size()))>,
-    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(cat_size()).data().above(io_data_end(cat_size())), s.memory, read_gpr(Rsp, s.gprs), args),
+theorem cat_native_sends(header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(cat_size(), top, depth), s: MachineState<X86Memory(X86Profile::process(cat_size(), top, depth))>,
+    entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top, loaded: s.memory.LoadedFrom(cat_size(), header ++ cat_bytes()), deep: 8 * (cat(cat_capacity()).words + 1) <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(cat_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
     tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
-    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io(cat_size()).linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
+    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(cat_size(), top, depth).linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
     sent_to(BitVec::ofNat(1), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr) {
-    let io = X86Profile::io(cat_size()).linux();
+    let io = X86Profile::process(cat_size(), top, depth).linux();
     let program = cat(cat_capacity()).denote(args);
-    trans(sim_run_sends(io, program.at(produces.n), s, cat_native_simulates(header, long, s, entry, loaded, args, argv, produces.n), tr, produces.h, valid,
+    trans(sim_run_sends(io, program.at(produces.n), s, cat_native_simulates(header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv, produces.n), tr, produces.h, valid,
             Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns), run, ran, responses, BitVec::ofNat(1)),
         cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(Succ(cat_capacity()), Nat::pow(2, 63), trivial),
             tr, produces, valid, returns))

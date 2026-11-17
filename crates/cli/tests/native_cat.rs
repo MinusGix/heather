@@ -25,11 +25,16 @@ fn write_cat(output: &Path) {
 }
 
 fn write_elf(file: &str, source: &str, output: &Path) -> std::process::Output {
+    write_elf_with(file, source, output, &[])
+}
+
+fn write_elf_with(file: &str, source: &str, output: &Path, options: &[&str]) -> std::process::Output {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
     cmd.current_dir(&root)
         .args(["write-elf", file, source, "-o"])
         .arg(output)
+        .args(options)
         .arg("--cache-dir").arg(showcase::cli_check_images());
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
@@ -296,6 +301,26 @@ fn structured_regions_run() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The same program on a stack of its own (`--stack segment`): its theorem
+/// asks the system for the file loaded, the entry and the command line
+/// (`SegmentStart`) and nothing of the stack Linux made, and it runs.
+#[test]
+fn a_program_can_carry_its_own_stack() {
+    let dir = scratch("head10_segment");
+    let binary = dir.join("head10");
+    let result = write_elf_with(PROBES, "head10", &binary, &["--stack", "segment"]);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("head10.certificate.hthr")).unwrap();
+    for statement in ["theorem head10_elf_runs(", "start: SegmentStart(head10_elf_size(), head10_elf_file(), args, s)", "fn head10_elf_stack() → List<Instruction> {"] {
+        assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
+    assert!(!certificate.contains("StackPlaced"), "and asks nothing of where Linux put a stack");
+    let (code, out) = run(&binary, b"hello, head\n", Stdio::piped());
+    assert_eq!(code, Some(0), "head -c 10 exits 0");
+    assert_eq!(out, b"hello, hea", "and has sent the first ten bytes");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A program the theorem would not cover is not written, and the refusal
 /// says why: past the profile's data limit, a call not compiled, a leaf past the registers
 /// with a node too narrow to go a node at a time, a narrow node beside a
@@ -304,7 +329,7 @@ fn structured_regions_run() {
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
     for (source, reason) in [
-        ("huge_cat", "`huge_cat` needs a data segment of 2147487744 bytes for its words, buffers, scratch range, saved RSP and stack, past the I/O profile's limit of 1073741824 (`io_data_limit`)"),
+        ("huge_cat", "`huge_cat` needs a data segment of 2147487744 bytes for its words, buffers, scratch range and saved RSP, past the I/O profile's limit of 1073741824 (`io_data_limit`)"),
         ("stats", "`stats` is refused at statement 1, a call: `stat` is not compiled yet"),
         ("narrow_long_leaf", "`narrow_long_leaf` is refused at statement 1, a computation: the leaf needs 41 registers, one per input and per node, and the pool holds 12; it does not compile a node at a time because a node is not at width 64"),
         ("narrow_mixed_leaf", "`narrow_mixed_leaf` is refused at statement 1, a computation: node 2 of the leaf is not at width 64"),
