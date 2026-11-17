@@ -76,6 +76,7 @@ expr ::= name | qualified::name | numeral | character | string
        | binders ⊢ expr | binders |- expr
        | apply callee; give expr; ... expr
        | · | ·₀ | ·₁ ...
+       | (operator)
        | [expr, ...]
        | Constructor { field: expr, ... }
        | ⟨expr, ...⟩ | ⟨expr |⟩ | ⟨| expr⟩

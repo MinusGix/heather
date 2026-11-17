@@ -1107,3 +1107,58 @@ fn f(g: (x: Nat) -> Nat) -> Nat { g((1: Nat)) }
           (ascription_expression
             (number)
             (identifier)))))))
+
+==================
+Operator section
+==================
+
+fn s(xs: List<u8>) -> List<u8> { xs.insertion_sort((<=)) }
+fn t(xs: List<Nat>) -> Nat { xs.foldl((+), 0) }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (identifier))))))
+    (declaration_type_application
+      (identifier)
+      (type_arguments
+        (identifier)))
+    (block
+      (call_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (argument_list
+          (operator_section
+            (operator))))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (identifier))))))
+    (identifier)
+    (block
+      (call_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (argument_list
+          (operator_section
+            (operator))
+          (number))))))
