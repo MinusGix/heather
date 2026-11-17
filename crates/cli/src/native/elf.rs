@@ -239,8 +239,9 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len(), {src}().functions.len()] }}
 fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
 fn {p}_place_number(place: Place) → Nat {{ match place {{ Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask, Short(name) => 289 + name }} }}
-fn {p}_places() → List<Nat> {{ plan_program({src}().functions).map({p}_place_number) }}
-fn {p}_rooms() → List<Nat> {{ program_rooms_planned({src}().functions) }}
+fn {p}_plan_row(plan: List<Place>) → List<Nat> {{ Cons(plan.len(), plan.map({p}_place_number)) }}
+fn {p}_plans(functions: List<Function>) → List<Nat> {{ match functions {{ Nil => [], Cons(last, earlier) => {p}_plans(earlier) ++ {p}_plan_row(last.plan()) }} }}
+fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -292,24 +293,46 @@ fn {p}_rooms() → List<Nat> {{ program_rooms_planned({src}().functions) }}
     // function compiler's heuristic (`plan_program`,
     // function_ir_lower_calls), spelled: a proposal the functions' lowering
     // checks (`Prog::links`), so the heuristic runs once, here.
-    let places = if functions == 0 { None } else {
-        let places = numbers(&fork, &probe, &format!("{p}_places"))?.into_iter().map(|n| match n {
-            16 => Ok("Folded".to_string()),
-            n if n >= 289 => Ok(format!("Short({})", n - 289)),
-            n if n >= 33 => Ok(format!("Spilling({})", n - 33)),
-            n if n >= 24 => Ok(format!("CallSlots({})", n - 24)),
-            n if n >= 17 => Ok(format!("Saving({})", n - 17)),
-            n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| format!("`{symbol}`'s functions' placement did not read back")),
-        }).collect::<Result<Vec<_>, String>>()?;
-        Some(format!("[{}]", places.join(", ")))
-    };
-    // The room table those places ask for, each function saving what its
-    // plan says (`program_rooms_planned`), spelled: the table the
-    // functions are emitted under and the stack bound reads
-    // (`Homes::room_table`), least where the default is every function
-    // saving all six registers.
-    let rooms = if functions == 0 { None } else {
-        Some(format!("[{}]", numbers(&fork, &probe, &format!("{p}_rooms"))?.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
+    // Each function's plan arrives after its length, the first function's
+    // first, as `plan_program` orders them: the places are the plans one
+    // after another, and a function's saves and call slots are what its
+    // plan begins by saying (`placement_saves`, `placement_slots`).
+    let (places, rooms) = if functions == 0 { (None, None) } else {
+        let rows = numbers(&fork, &probe, &format!("{p}_places"))?;
+        let malformed = || format!("`{symbol}`'s functions' placement did not read back");
+        let (mut places, mut slots, mut saves) = (Vec::new(), Vec::new(), Vec::new());
+        let mut at = &rows[..];
+        while let Some((&len, more)) = at.split_first() {
+            let len = usize::try_from(len).ok().filter(|&l| l <= more.len()).ok_or_else(malformed)?;
+            let plan = &more[..len];
+            let saving = plan.first().filter(|&&n| (17..24).contains(&n)).map(|n| n - 17);
+            let after = &plan[usize::from(saving.is_some())..];
+            saves.push(saving.unwrap_or(0));
+            slots.push(after.first().filter(|&&n| (24..33).contains(&n)).map_or(8, |n| n - 24));
+            for &n in plan {
+                places.push(match n {
+                    16 => "Folded".to_string(),
+                    n if n >= 289 => format!("Short({})", n - 289),
+                    n if n >= 33 => format!("Spilling({})", n - 33),
+                    n if n >= 24 => format!("CallSlots({})", n - 24),
+                    n if n >= 17 => format!("Saving({})", n - 17),
+                    n => verified::GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(malformed)?,
+                });
+            }
+            at = &more[len..];
+        }
+        // The room table those plans ask for: each function's frame as its
+        // plan sizes it and its callees' rooms below (`program_rooms_by`),
+        // read once and spelled. It is the table the functions are emitted
+        // under and the stack bound reads (`Homes::room_table`); the
+        // default is every function saving all six registers.
+        let list = |values: &[u64]| values.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+        let reading = format!("{p}_rooms_probe");
+        let text = format!("import {root};\n{imports}import {probe};\nfn {p}_rooms() → List<Nat> {{ program_rooms_by({src}().functions, λ (f: Nat) => rooms_at([{}], f), λ (f: Nat) => rooms_at([{}], f)) }}\n",
+            list(&slots), list(&saves));
+        fork.elab_module_source(&reading, &text).map_err(|e| e.render(&text))?;
+        let table = numbers(&fork, &reading, &format!("{p}_rooms"))?;
+        (Some(format!("[{}]", places.join(", "))), Some(format!("[{}]", list(&table))))
     };
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
