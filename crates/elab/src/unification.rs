@@ -212,6 +212,14 @@ pub(super) struct U<'a> {
     /// committed one, so its body needs no rescoping. `None` when it does
     /// not unfold (an axiom, a withheld definition).
     pub(super) unfold_constant: &'a dyn Fn(&Term) -> Option<Term>,
+    /// A pattern `a + k`, `k` a positive numeral, one successor down:
+    /// `a + (k - 1)`, or `a` itself at `k = 1`. `Nat::add` recurses on its
+    /// second argument, so `a + k` *is* `Succ(a + (k - 1))` after one δι
+    /// step, and `?n + 1` against `Succ(m)` learns `?n := m` — the converse
+    /// of [`Self::canonical_head`]'s `Succ(?n)` against `m + 1`, where the
+    /// pattern is the side that has to step (issues/unify-plus-one-pattern.md).
+    /// `None` for anything else.
+    pub(super) succ_pred: &'a dyn Fn(&Term) -> Option<Term>,
     /// Whether the approximate rules may write now ([`Guesses`]).
     pub(super) guesses: Guesses<'a>,
     /// Told when the two sides are **decidedly different** ([`Clash`]).
@@ -485,6 +493,7 @@ impl<'a> U<'a> {
             disagree: None,
             next_head: &|_| None,
             unfold_constant: &|_| None,
+            succ_pred: &|_| None,
             guesses: Guesses::Take,
             clash: None,
         }
@@ -958,6 +967,46 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         (Term::NatLit(k), Term::Succ(b)) if !k.is_zero() => {
             unify_tm(u, &heather_kernel::term::nat_lit_pred(k), b, n, d, sols)
+        }
+        // `?n + 1` against `Succ(m)` or a positive numeral: the pattern
+        // steps once, as `Nat::add` does on its second argument, and its
+        // predecessor meets the subject's. Learn-only; the kernel judges.
+        (p, Term::Succ(b)) if spelling::is_app(p) && let Some(q) = (u.succ_pred)(p) => {
+            unify_tm(u, &q, b, n, d, sols)
+        }
+        (p, Term::NatLit(k)) if !k.is_zero() && spelling::is_app(p) && let Some(q) = (u.succ_pred)(p) => {
+            unify_tm(u, &q, &heather_kernel::term::nat_lit_pred(k), n, d, sols)
+        }
+        // Both sides `_ + k`: `?m + 1` against `m + Succ(j)` is
+        // `Succ(?m)` against `Succ(m + j)`, so the predecessors meet.
+        (p, s) if spelling::is_app(p)
+            && spelling::is_app(s)
+            && let Some(q) = (u.succ_pred)(p)
+            && let Some(r) = (u.succ_pred)(s) =>
+        {
+            unify_tm(u, &q, &r, n, d, sols)
+        }
+        // `?n + 1` against a call that computes to a successor: the subject
+        // takes its weak head, as for a canonical pattern below.
+        (p, s) if spelling::is_app(p)
+            && !canonical(s)
+            && global_head(s)
+            && let Some(q) = (u.succ_pred)(p)
+            && let Some(s0) = u.subject_tm(s, d)
+            && let Some(w) = (u.canonical_head)(&s0, 0)
+            && matches!(w, Term::Succ(_) | Term::NatLit(_)) =>
+        {
+            let w = match u.subject_metas {
+                Some((m, _)) => w.shift_global(m),
+                None => w,
+            };
+            let w = w.apply_local(&embed(u.gamma, d));
+            let below = match &w {
+                Term::Succ(b) => (**b).clone(),
+                Term::NatLit(k) => heather_kernel::term::nat_lit_pred(k),
+                _ => unreachable!("matched a successor or numeral"),
+            };
+            unify_tm(u, &q, &below, n, d, sols)
         }
         // Either spelling on either side: `app` and `app@` are one former
         // (`docs/elaborator/app-by-head-type-design.md` §6.2), and this congruence
