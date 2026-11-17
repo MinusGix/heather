@@ -203,6 +203,7 @@ mod iwf_w;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
+mod hypothesis_cases;
 mod goals;
 pub mod host;
 mod indexed;

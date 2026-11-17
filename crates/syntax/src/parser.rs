@@ -1030,6 +1030,19 @@ impl Parser {
         self.at_kw("induct") && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
     }
 
+    /// `cases h;` or `cases h as …;`: the word followed by a name and then
+    /// `;` or `as`, so `cases` stays an ordinary identifier elsewhere
+    /// (`cases(e, g)` in the tactic library).
+    fn at_cases(&self) -> bool {
+        self.at_kw("cases")
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
+            && matches!(self.toks.get(self.pos + 2).map(|t| &t.kind), Some(TokKind::Semi) | Some(TokKind::Ident(_)))
+            && match self.toks.get(self.pos + 2).map(|t| &t.kind) {
+                Some(TokKind::Ident(word)) => word == "as",
+                _ => true,
+            }
+    }
+
     /// `op as ∙` — the **body spelling** a declaring binder installs
     /// (issues/binder-symbol-as-notation.md). Read directly after the binder's
     /// name, before its `:`.
@@ -3704,6 +3717,65 @@ impl Parser {
                 span: open.join(close),
             });
         }
+        // `cases h;` / `cases h as e1, e2(x, y);`: take the hypothesis `h`
+        // apart along the tests the call it states is stuck on, the rest of
+        // the block being every case that survives
+        // (issues/cases-on-hypothesis-tactic.md). Packaged like `split_all`,
+        // since the tests are only known from `h`'s elaborated type.
+        if self.at_cases() {
+            let start = self.bump().span;
+            let (hypothesis, _) = self.ident("the hypothesis `cases` takes apart")?;
+            let mut names = Vec::new();
+            if self.eat_kw("as") {
+                loop {
+                    let (name, _) = self.ident("a name for the split's equation")?;
+                    let mut fields = Vec::new();
+                    if matches!(self.peek(), TokKind::LParen) {
+                        self.bump();
+                        loop {
+                            fields.push(self.ident("a field name")?.0);
+                            if !matches!(self.peek(), TokKind::Comma) {
+                                break;
+                            }
+                            self.bump();
+                        }
+                        self.expect(&TokKind::RParen, "`)` after the case's field names")?;
+                    }
+                    names.push(CasesName { equation: name, fields });
+                    if !matches!(self.peek(), TokKind::Comma) {
+                        break;
+                    }
+                    self.bump();
+                }
+            }
+            let semi = self.expect(&TokKind::Semi, "`;` after `cases h`")?;
+            let mut body_stmts = Vec::new();
+            let parsed = self.block_statements(&mut body_stmts)?;
+            let (body_result, ons) = match parsed {
+                Some(result) => (result, self.block_ons(Vec::new())?),
+                None => self.block_result_and_ons()?,
+            };
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            let body = if body_stmts.is_empty() {
+                body_result
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Box::new(Block { stmts: body_stmts, result: Box::new(body_result), ons: Vec::new(), span: semi.join(close) })),
+                    span: semi.join(close),
+                }
+            };
+            let result = Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var(cases_head(&names, !names.is_empty(), None)), span: start }),
+                    args: vec![Expr { kind: ExprKind::Var(hypothesis), span: start }, body],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: start.join(close),
+            };
+            return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
+        }
         // `x ⊢ ...` at a block's result scopes over the REST of that block,
         // including its `let`s. This is the long-proof face of the sequent
         // expression: `{ x ⊢ let y = e; body }` lowers to
@@ -4115,6 +4187,7 @@ impl Parser {
                 || self.at_kw("split")
                 || self.at_kw("split_all")
                 || self.at_induct()
+                || self.at_cases()
                 || self.at_kw("on")
                 || self.at_sequent_binders()
             {
