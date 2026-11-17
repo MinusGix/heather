@@ -1264,6 +1264,11 @@ paper too).
     and like the well-formedness of Ψ it is a precondition of every
     judgement, not something a judgement re-derives; `commit` checks it in
     debug builds.
+  - *Σ grows only at an empty L* (`check_signature_extension` refuses
+    otherwise, `SignatureUnderUniverses`). So a constant is closed in
+    universe variables too, and going under universe binders (`ΛU`, a code
+    recursor's branch) weakens only Ψ′: `shift_univ_psi` shares Σ as it
+    stands, and a push costs the variables, not the signature.
 
   What this buys is that the three operations on the global namespace are
   the identity on constants, by construction and not by a cache:

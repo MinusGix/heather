@@ -164,18 +164,18 @@ record HeldCodec { reader: Nat, writer: GlobalRef, writer_name: String, wide: Ex
     read_at: Expr, reader_at: Nat, writer_at: GlobalRef, writer_at_name: String }
 
 fn rt_held_codec(what: String, ty: Handle, part: Expr, span, length: Expr, at: Expr) → Tac<Option<HeldCodec>> {
-    let stores <- lookup("Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
+    let stores <- lookup("part::Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
     let codec = rt_ap(Global(stores), [Blank, Hd(ty), Blank, part]);
-    let class <- lookup("Accessor").bind(λ c => rt_accepted("the class of a codec's accessor (import `stored_accessor`)", c));
+    let class <- lookup("stored_accessor::Accessor").bind(λ c => rt_accepted("the class of a codec's accessor (import `stored_accessor`)", c));
     let goal <- as_type(rt_ap(Global(class), [Hd(ty), codec])).bind(λ c => rt_accepted("the accessor of " ++ what ++ "'s codec", c));
     let found <- synth(goal);
     match found {
         Refused(_) => pure(None),
         Accepted(inst) => {
-            let read <- lookup("Stored::word_read").bind(λ c => rt_accepted("an accessor's read", c));
-            let write <- lookup("Stored::word_write").bind(λ c => rt_accepted("an accessor's store", c));
-            let wide <- lookup("Stored::word_of").bind(λ c => rt_accepted("an accessor's word of a value", c));
-            let narrow <- lookup("Stored::of_word").bind(λ c => rt_accepted("an accessor's value of a word", c));
+            let read <- lookup("stored_accessor::Stored::word_read").bind(λ c => rt_accepted("an accessor's read", c));
+            let write <- lookup("stored_accessor::Stored::word_write").bind(λ c => rt_accepted("an accessor's store", c));
+            let wide <- lookup("stored_accessor::Stored::word_of").bind(λ c => rt_accepted("an accessor's word of a value", c));
+            let narrow <- lookup("stored_accessor::Stored::of_word").bind(λ c => rt_accepted("an accessor's value of a word", c));
             let of: List<Expr> = [Hd(ty), codec, Hd(inst)];
             let reads = rt_ap(Global(read), of ++ [span, length]);
             let narrows = rt_ap(Global(narrow), of);
@@ -185,8 +185,8 @@ fn rt_held_codec(what: String, ty: Handle, part: Expr, span, length: Expr, at: E
             let rv <- view(rd);
             let wv <- view(wr);
             // The checked reader and writer of an element at a word.
-            let read_at <- lookup("Stored::word_read_at").bind(λ c => rt_accepted("an accessor's read of an element", c));
-            let write_at <- lookup("Stored::word_write_at").bind(λ c => rt_accepted("an accessor's store of an element", c));
+            let read_at <- lookup("stored_accessor::Stored::word_read_at").bind(λ c => rt_accepted("an accessor's read of an element", c));
+            let write_at <- lookup("stored_accessor::Stored::word_write_at").bind(λ c => rt_accepted("an accessor's store of an element", c));
             let reads_at = rt_ap(Global(read_at), of ++ [span, length]);
             let rda <- next_spelling(rt_ap(reads_at, [at, at, at])).bind(λ c => rt_accepted("an accessor's read of an element", c));
             let wra <- next_spelling(rt_ap(Global(write_at), of ++ [span, length, at, at, at, length])).bind(λ c => rt_accepted("an accessor's store of an element", c));
@@ -254,7 +254,7 @@ fn rt_held_element_codec(fuel: Nat, fname: String, e: Expr) → Tac<Handle> {
 fn rt_held_bytes(fname: String, writer_at_name: String, span, len, base, bytes: Expr) → Tac<Option<HeldBytes>> {
     match Known::str_same(rt_base_name(writer_at_name), "put_u32_be_at_within") {
         False => pure(None),
-        True => lookup("List::byte_write_at").bind(λ found => match found {
+        True => lookup("stored_words::List::byte_write_at").bind(λ found => match found {
             Refused(_) => pure(None),
             Accepted(g) => {
                 let spelled <- next_spelling(rt_ap(Global(g), [span, len, base, bytes, len, len])).bind(λ c => rt_accepted("the checked store of a byte of `" ++ fname ++ "`", c));
@@ -274,14 +274,14 @@ fn rt_held_bytes(fname: String, writer_at_name: String, span, len, base, bytes: 
 // element's in the array.
 fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalRef, part: Expr, element: Handle, length: Handle, span, len: Expr, under: LocalRef) → Tac<Option<HeldEach>> {
     let count <- rt_literal(length);
-    let then_g <- lookup("Part::then").bind(λ c => rt_accepted("a part of a part (import `part`)", c));
-    let element_g <- lookup("Part::element").bind(λ c => rt_accepted("an array's element as a part (import `part`)", c));
-    let place_g <- lookup("Part::place").bind(λ c => rt_accepted("where a part lies (import `part`)", c));
-    let index_g <- lookup("vector_index").bind(λ c => rt_accepted("an entry of a vector (import `vector`)", c));
+    let then_g <- lookup("part::Part::then").bind(λ c => rt_accepted("a part of a part (import `part`)", c));
+    let element_g <- lookup("part::Part::element").bind(λ c => rt_accepted("an array's element as a part (import `part`)", c));
+    let place_g <- lookup("part::Part::place").bind(λ c => rt_accepted("where a part lies (import `part`)", c));
+    let index_g <- lookup("vector::vector_index").bind(λ c => rt_accepted("an entry of a vector (import `vector`)", c));
     let projected <- fields(Local(record.ref)).bind(λ c => rt_accepted("the fields of `" ++ tname ++ "`", c));
     let own <- rt_held_projection(fname, projected.fields);
     let inside <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c));
-    let stores <- lookup("Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
+    let stores <- lookup("part::Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
     let codec <- rt_held_element_codec(8, fname, rt_ap(Global(stores), [Blank, Blank, Blank, part]));
     let then_of = rt_ap(Global(then_g), [Hd(record.ty), Blank, Hd(element), Global(stored), part]);
     let element_of = rt_ap(Global(element_g), [Hd(element), Hd(codec), Hd(length)]);
@@ -293,7 +293,7 @@ fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: GlobalR
             let base <- numeral(place_of(0)).bind(λ c => rt_accepted("where the array field `" ++ fname ++ "` begins", c));
             let next: Tac<Nat> = match more { Zero => pure(base), Succ(_) => numeral(place_of(1)).bind(λ c => rt_accepted("where the second element of `" ++ fname ++ "` lies", c)) };
             let second <- next;
-            let of_nat <- lookup("BitVec::ofNat").bind(λ c => rt_accepted("`BitVec::ofNat`", c));
+            let of_nat <- lookup(name_of(BitVec::ofNat)).bind(λ c => rt_accepted("`BitVec::ofNat`", c));
             let word: Nat → Expr = λ n => rt_ap(Global(of_nat), [NatLit(64), NatLit(n)]);
             let found <- rt_held_codec("an element of field `" ++ fname ++ "`", element, part_of(0), span, len, word(base));
             match found {
@@ -588,7 +588,7 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                             None => pure(None),
                             Some(o) => {
                                 let ri <- rt_go(f, k, o.fst, i, True);
-                                let widen <- lookup("List::byte_word").bind(λ c => rt_accepted("a byte as a word (import `stored_words`)", c));
+                                let widen <- lookup("stored_words::List::byte_word").bind(λ c => rt_accepted("a byte as a word (import `stored_words`)", c));
                                 let as_word <- next_spelling(App(Global(widen), Hd(u.snd.snd))).bind(λ c => rt_accepted("a byte's new value as a word", c));
                                 let rr <- rt_go(f, k, ri.fst, as_word, True);
                                 pure(Some(Pair(rr.fst, o.snd ++ [HeldSet(e.access(0), e.at.base, RSt::level(rr.snd),

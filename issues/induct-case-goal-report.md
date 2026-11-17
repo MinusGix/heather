@@ -1,6 +1,6 @@
 ---
 title: induct: a hole under all_goals is an internal error, and a case's report repeats locals and prints a kernel case
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [tactics,diagnostics,bug]
 area: tactics
@@ -19,3 +19,23 @@ Also seen: `split_all` lists the hypothesis it leaves (`__split_all_x7`) twice.
 ## Done when
 
 The three are probes in `lib/_tests/std/tactic/induct_tests.hthr` (an `// expect-error:` hole under `all_goals` that names each case), and the goal report for the model's `Seq` case shows each local once, with `eq`'s right side as the source's match.
+
+## Log
+
+- 2026-11-16: Item 2 and the `split_all` note done: the goal listing
+  (`Goals::reports`, `crates/elab/src/goals.rs`) leaves out a binder or
+  alias that a later one of the same name shadows, so a re-bound local shows
+  once, at its re-bound type (`goal_holes.rs`
+  `a_shadowed_local_is_listed_once`). Items 1 and 3 stay open.
+- 2026-11-16: Items 1 and 3 done. A written hole in a block copied to
+  several cases (`induct …; all_goals`, a `split_all` leaf) is keyed by the
+  case as well as its span (`GoalArena::in_leaf`), so it is one goal per
+  case at that case's context; a case past the pre-count restarts the
+  declaration for a slot, and a named hole is `?name`, `?name.1`, … A block
+  with a hole proves no induction-hypothesis premise (the hole would have
+  been a goal at the premise). A case analysis over a type whose
+  constructors carry fields prints as `match e { None => …, Some(v) => … }`
+  for a reader (`Speller::enum_match`, fields named after the declaration's
+  and read back through `Speller::fields`), so the `Seq` case's `eq` reads
+  as the source's match. Probes `twice_holes` and `split_holes` in
+  `lib/_tests/std/tactic/constructor_equation_tests.hthr`.

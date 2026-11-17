@@ -6069,6 +6069,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
+        | ExprKind::ByteStr(_)
         | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
@@ -6947,6 +6948,21 @@ impl Inductives<'_> {
         let Ok(written) = self.equation_as_written(cx, equation, "absurd") else { return false };
         let Some(ind) = self.tag_of(&written.1) else { return false };
         matches!(self.ctor_indices(cx, &ind, &written, equation.span), Ok(Some((i, j))) if i != j)
+    }
+
+    /// The constructors both sides of an equation `proof_ty` at a declared
+    /// inductive (not an `IWf`-route family) compute to, read off their
+    /// values as `absurd` reads them, and the first one's field count; `None`
+    /// when a side is stuck. What `subst` and `known` read before they
+    /// inject or refute (issues/constructor-equations-in-context.md).
+    pub(crate) fn equation_ctors(&self, cx: &Cx, proof_ty: &Type, span: Span) -> Option<(usize, usize, usize)> {
+        let written = self.equation_of(cx, Term::Zero, proof_ty, "inj", span).ok()?;
+        if IwfFamily(self).iwf_of_at(cx, &written.1).is_some() {
+            return None;
+        }
+        let ind = self.tag_of(&written.1)?;
+        let (i, j) = self.ctor_indices(cx, &ind, &written, span).ok()??;
+        Some((i, j, ind.ctors[i].fields.len()))
     }
 
     fn ctor_indices(&self, cx: &Cx, ind: &Inductive, equation: &Equation, span: Span) -> R<Option<(usize, usize)>> {

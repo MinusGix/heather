@@ -29,7 +29,7 @@ use heather_kernel::subst::{global_var_bound_tm, global_var_bound_ty, GlobalEntr
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalCtx, GlobalRef, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
 };
-use heather_kernel::typing::{check_global_ctx, check_signature_extension, check_term, infer_term, TypeError};
+use heather_kernel::typing::{check_global_ctx, check_global_ctx_extension, check_signature_extension, check_term, infer_term, TypeError};
 
 const CASES: u64 = 300;
 const BUDGET: u32 = 12;
@@ -384,6 +384,20 @@ fn a_signature_is_well_formed_binding_by_binding() {
         check_signature_extension(&psi, &ahead, 0, FUEL),
         Err(TypeError::UnboundGlobalVar(GlobalVar::constant(3)))
     );
+}
+
+#[test]
+fn the_signature_grows_only_at_an_empty_universe_context() {
+    // A constant is closed in universe variables, so it is checked with
+    // none in scope: under one, an extension of the signature is refused…
+    let psi = signature();
+    let more = [def(Type::Nat, Some(konst(1)))];
+    assert_eq!(check_signature_extension(&psi, &more, 1, FUEL), Err(TypeError::SignatureUnderUniverses));
+    assert_eq!(check_global_ctx(&psi, 1, FUEL), Err(TypeError::SignatureUnderUniverses));
+    // …while variables may still be checked there, and an empty extension
+    // commits nothing.
+    assert_eq!(check_global_ctx_extension(&psi, &more, 1, FUEL), Ok(()));
+    assert_eq!(check_signature_extension(&psi, &[], 1, FUEL), Ok(()));
 }
 
 #[test]

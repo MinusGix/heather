@@ -710,6 +710,9 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     // A goal reached through an introduced binder may still be spelled as
     // its code (`El(⌜Id …⌝)`); the search reads the decoded former.
     let goal = simplify_goal(elab, cx, &crate::inductive::decoded(expected));
+    if let Some(injected) = injected_hypothesis(elab, cx, leaf, span) {
+        return Step::Intro(injected);
+    }
     if let Some(positions) = splittable_hypotheses(elab, cx, &goal, leaf, span) {
         return Step::Revert(positions);
     }
@@ -720,6 +723,39 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
             None => Step::Leaf(goal),
         },
     }
+}
+
+/// `subst(h, …)` for the innermost hypothesis `h` a split introduced that
+/// equates two applications of one constructor with a local in a field
+/// (`Some(Out(Cons(w, p), names)) = Some(c)`), or whose fields clash: the
+/// injection is done and the local replaced before the leaf reads the goal,
+/// so the leaf is written at `c`'s value rather than handed an equation it
+/// would have to take apart (issues/constructor-equations-in-context.md).
+/// The hypothesis is read again in the case and has nothing left to give,
+/// so this does not recur on it.
+fn injected_hypothesis(elab: &Elaborator, cx: &Cx, leaf: &Expr, span: Span) -> Option<Expr> {
+    if elab.shadowed(cx, "subst") || cx.names.iter_inner().any(|name| name == "subst") {
+        return None;
+    }
+    let found = cx.names.iter().enumerate().rev().find(|(at, name)| {
+        name.starts_with("__split_all_x")
+            && !cx.names.iter().skip(at + 1).any(|later| later == *name)
+            && elab.resolve_reading(cx, name, span).is_ok_and(|(term, ty, _)| {
+                matches!(ty, Type::Id { .. })
+                    && crate::subst_local::LocalSubsts(elab).injected(cx, term, &ty, span, true, 0).is_some()
+            })
+    })?;
+    let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+    Some(Expr {
+        kind: ExprKind::App {
+            head: Box::new(var("subst")),
+            args: vec![var(found.1), continuation(leaf, span)],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    })
 }
 
 /// The hypotheses a split can take apart (`h: is_digit(c) = True`), at the

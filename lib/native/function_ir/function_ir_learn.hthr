@@ -314,11 +314,17 @@ fn Seen::ordering(self seen: Seen, order: Ordered) → Seen {
     Seen(seen.made, seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, order, seen.joins, seen.tables)
 }
 
-// A node passed, for what is known of order: a constant is kept for the
-// sums that add it.
+// A node that computes a word is kept as what made it, whatever its kind:
+// a rule's statement may read any node, a program's rule included. A node
+// that reads or writes a span is not, since the replayer's facts have it
+// only where it stands.
+fn Seen::computing(self seen: Seen, node: Node) → Seen {
+    match node.pure() { True => seen.making(node_output(node).id, node), False => seen }
+}
+
+// A node passed, for a later node's rule and for what is known of order.
 fn Seen::noted(self seen: Seen, node: Node) → Seen {
-    shared(match node { Const(w, o, _) => match w.same(64) { True => seen.making(o, node), False => seen }, _ => seen }, λ kept =>
-        kept.ordering(kept.order.noting(kept.made, node)))
+    shared(seen.computing(node), λ kept => kept.ordering(kept.order.noting(kept.made, node)))
 }
 
 record Explained { steps: List<Step>, proved: NatMap<Bool> }
@@ -576,48 +582,43 @@ fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
     }
 }
 
-// A comparison: decided where its operands' ranges lie apart. Where a load
+// What the walk has, as a rule's statement is read against it
+// (function_ir_match).
+fn Seen::walked(self seen: Seen) → Walked { Walked(seen.made, seen.range, seen.bits) }
+
+// A bit a rule decides at the node that writes it: the rule's step after
+// what it reads is derived, and `emit` where the bit is set.
+fn Seen::settled_bit(self seen: Seen, node: Node, emit: List<Step>) → Option<Passed> {
+    decided_among(seen.tables.rewriting, node, seen.walked()).and_then(λ found => found.bit().and_then(λ bit =>
+        Some(seen.decided(node_output(node).id, bit, found.needs, Derive(found.place, found.numbers), match bit { True => emit, False => [] }))))
+}
+
+// A comparison: decided where a rule decides it, as where its operands'
+// ranges lie apart (rules 7 and 8), or an order known does. Where a load
 // or a store indexes by its left, the bit is written after it, which is
 // what the lowering reads (docs/native/optimizer-design.md §5.1).
 fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
     shared(Seen(nat_map_set(seen.made, c, node), seen.range, seen.how, seen.proved, seen.bits, seen.pending, seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables), λ noted =>
-        shared(seen.of(l), λ a => shared(seen.of(r), λ b => match Succ(a.high).leb(b.low) {
-            True => noted.decided(c, True, [l, r], Derive(7, [l, r, a.high, b.low, c]), seen.bound_written(c, l)),
-            False => match b.high.leb(a.low) {
-                True => noted.decided(c, False, [l, r], Derive(8, [l, r, a.low, b.high, c]), []),
-                False => match noted.ordered(c, l, r) {
-                    Some(passed) => passed,
-                    None => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) }),
-                },
+        match noted.settled_bit(node, seen.bound_written(c, l)) {
+            Some(passed) => passed,
+            None => match noted.ordered(c, l, r) {
+                Some(passed) => passed,
+                None => shared(seen.of(l), λ a => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) })),
             },
-        })))
+        })
 }
 
-// An or of bits: decided where both are clear (rule 36) or either is set
-// (rules 37 and 38), as the guard of several bounds is where each bound is.
-fn Seen::or_decided(self seen: Seen, o, l, r: Nat) → Passed {
-    match nat_map_get(seen.bits, l) {
-        Some(left) => match left {
-            True => seen.decided(o, True, [], Derive(37, [l, r, o]), []),
-            False => match nat_map_get(seen.bits, r) {
-                Some(right) => match right {
-                    True => seen.decided(o, True, [], Derive(38, [l, r, o]), []),
-                    False => seen.decided(o, False, [], Derive(36, [l, r, o]), []),
-                },
-                None => Passed([], seen),
-            },
-        },
-        None => match nat_map_get(seen.bits, r) {
-            Some(right) => match right { True => seen.decided(o, True, [], Derive(38, [l, r, o]), []), False => Passed([], seen) },
-            None => Passed([], seen),
-        },
-    }
+// An or of bits: decided where a rule decides it, as where both are clear
+// (rule 36) or either is set (rules 37 and 38), as the guard of several
+// bounds is where each bound is.
+fn Seen::or_decided(self seen: Seen, node: Node) → Passed {
+    match seen.settled_bit(node, []) { Some(passed) => passed, None => Passed([], seen) }
 }
 
 // The range of the word a node writes, where a rule that gives ranges has
 // one from the node and the ranges of what it reads.
 fn Seen::bounding(self seen: Seen, node: Node) → Seen {
-    match ranged_among(seen.tables.ranging, node, seen.made, seen.range, None) {
+    match ranged_among(seen.tables.ranging, node, seen.walked(), None) {
         None => seen,
         Some(found) => seen.learn(node_output(node).id, found.range, found.needs, Derive(found.place, found.numbers)),
     }
@@ -634,7 +635,7 @@ fn Seen::tracked(self seen: Seen, node: Node) → Passed {
         BufferLoad(o, _, _) => Passed([], seen.known(o, Range(0, 255))),
         BufferStore(o, _, _, _) => Passed([], seen.known(o, Range(0, 255))),
         UnsignedLessThan(w, c, l, r) => match w.same(64) { True => seen.compared(c, l, r, node), False => Passed([], seen) },
-        BitOr(w, o, l, r) => match w.same(1) { True => seen.making(o, node).or_decided(o, l, r), False => Passed([], seen) },
+        BitOr(w, o, _, _) => match w.same(1) { True => seen.making(o, node).or_decided(node), False => Passed([], seen) },
         ByteSwap(w, o, _) => match w.same(32) { True => Passed([], seen.making(o, node)), False => Passed([], seen) },
         _ => Passed([], seen),
     }
@@ -642,6 +643,153 @@ fn Seen::tracked(self seen: Seen, node: Node) → Passed {
 
 // A node passed: its range by the rules, then the rest.
 fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).tracked(node) }
+
+// A rule's instance at a node that writes another node for it: one a
+// rule's statement gives, else one a registered learner proposes.
+fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
+    match matched_among(seen.tables.rewriting, node, seen.walked()) {
+        Some(found) => Some(found),
+        None => proposed_among(seen.tables.learners, seen.tables.placed, node, seen.walked()),
+    }
+}
+
+// A bit's move, which the lowering has no code for (`Node::lower`): a rule
+// that would write one for a node (`x | 0 = x` over bits) is not applied.
+fn Node::moves_bit(self node: Node) → Bool { match node { Move(w, _, _) => w.same(1), _ => False } }
+
+fn Seen::has_settled(self seen: Seen, node: Node) → Bool { match seen.settled_bit(node, []) { Some(_) => True, None => False } }
+
+// Whether a rule decides the bit a node writes. The walk then keeps the
+// node and the bit: a rule that writes another node for it (`x | 0 = x`
+// where both are clear) would leave a move the walk knows less of, and the
+// tests that read the bit undecided.
+fn Seen::settles(self seen: Seen, node: Node) → Bool {
+    match node {
+        UnsignedLessThan(w, _, _, _) => w.same(64) && seen.has_settled(node),
+        BitOr(w, _, _, _) => w.same(1) && seen.has_settled(node),
+        _ => False,
+    }
+}
+
+// The steps that write the node an instance gives for the node it is of.
+fn Seen::rewritten(self seen: Seen, found: Matched) → Option<Passed> {
+    match found.needs {
+        Nil => shared(seen.pass(found.node), λ written =>
+            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen.computing(found.node)))),
+        Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
+            shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)
+                .pass(found.node), λ written =>
+                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))),
+                    written.seen.computing(found.node))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A search through a word's other spellings
+//
+// The walk above takes the first rule whose statement fits a node as it is
+// written, so `(a + b) - b = a` does not fit `(b + a) - b`, and a rule
+// that only pays after another has fired is not found. Here every node the
+// rules give for the word, and for each word it reads, is followed until
+// nothing new appears or the budget ends, and the cheapest is written with
+// the steps that derive it (docs/native/optimizer-rules-design.md §9.4). A
+// rule's node is over words the function has, so a word is a class and its
+// spellings the class's members; no word is made.
+
+// Another node that computes a word, and the steps that derive that it does
+// from what the replayer has at the node.
+record Spelling { node: Node, why: List<Step> }
+
+fn spellings_have(found: List<Spelling>, node: Node) → Bool {
+    match found { Nil => False, Cons(first, rest) => first.node.same(node) || spellings_have(rest, node) }
+}
+
+// The instances at a spelling as spellings, those `known` has left out.
+fn spellings_new(found: List<Matched>, from: Spelling, known: List<Spelling>) → List<Spelling> {
+    match found {
+        Nil => [],
+        Cons(first, rest) => match spellings_have(known, first.node) {
+            True => spellings_new(rest, from, known),
+            False => shared(Spelling(first.node, from.why ++ [Derive(first.place, first.numbers)]), λ made =>
+                Cons(made, spellings_new(rest, from, Cons(made, known)))),
+        },
+    }
+}
+
+// The spellings the rules reach from `todo`, `fuel` of them followed.
+fn spellings_closed(fuel: Nat, table: List<Matchable>, had: Walked, todo: List<Spelling>, done: List<Spelling>) → List<Spelling> {
+    match fuel {
+        Zero => done ++ todo,
+        Succ(less) => match todo {
+            Nil => done,
+            Cons(first, rest) => shared(spellings_new(instances_among(table, first.node, had), first, done ++ todo), λ more =>
+                spellings_closed(less, table, had, rest ++ more, done ++ [first])),
+        },
+    }
+}
+
+// What a node costs the code, as far as choosing among spellings goes: a
+// move is read through and swept, a constant is one instruction with no
+// operand to keep, and the rest are alike.
+fn Node::weight(self node: Node) → Nat { match node { Move(_, _, _) => 0, Const(_, _, _) => 1, _ => 2 } }
+
+// The lightest of the spellings lighter than `most` that the lowering has
+// code for, the first of them where several are.
+fn spellings_lightest(found: List<Spelling>, most: Nat, best: Option<Spelling>) → Option<Spelling> {
+    match found {
+        Nil => best,
+        Cons(first, rest) => match Succ(first.node.weight()).leb(most) && !first.node.moves_bit() {
+            True => spellings_lightest(rest, first.node.weight(), Some(first)),
+            False => spellings_lightest(rest, most, best),
+        },
+    }
+}
+
+// The spellings of a node where the word `w` it reads is spelled each
+// other way the rules give: the steps that derive that spelling come first.
+fn Seen::spellings_through(self seen: Seen, node: Node, w: Nat, inner: List<Spelling>) → List<Spelling> {
+    match inner {
+        Nil => [],
+        Cons(first, rest) => spellings_closed(seen.tables.spellings, seen.tables.rewriting,
+            Walked(nat_map_set(seen.made, w, first.node), seen.range, seen.bits), [Spelling(node, first.why)], [])
+            ++ seen.spellings_through(node, w, rest),
+    }
+}
+
+fn Seen::spellings_reading(self seen: Seen, node: Node, reads: List<Nat>) → List<Spelling> {
+    match reads {
+        Nil => [],
+        Cons(w, rest) => match nat_map_get(seen.made, w) {
+            None => seen.spellings_reading(node, rest),
+            Some(inner) => match spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), [Spelling(inner, [])], []) {
+                Nil => seen.spellings_reading(node, rest),
+                Cons(_, others) => seen.spellings_through(node, w, others) ++ seen.spellings_reading(node, rest),
+            },
+        },
+    }
+}
+
+// Every spelling of the word a node writes: from the node as the walk has
+// its operands, then with each operand spelled another way.
+fn Seen::spellings(self seen: Seen, node: Node) → List<Spelling> {
+    spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), [Spelling(node, [])], [])
+        ++ seen.spellings_reading(node, node.reads())
+}
+
+// A node at which the walk searches: the lightest spelling where one is
+// lighter than what the first rule to fit gives, else that rule's node as
+// in the plain walk (a rule that reads a range, a learner's proposal).
+fn Seen::searched(self seen: Seen, node: Node) → Option<Passed> {
+    match seen.settles(node) {
+        True => None,
+        False => shared(seen.instance(node), λ direct =>
+            match spellings_lightest(seen.spellings(node), match direct { Some(found) => found.node.weight(), None => node.weight() }, None) {
+                Some(best) => shared(seen.pass(best.node), λ written =>
+                    Some(Passed(Cons(Drop, best.why ++ Cons(Emit(best.node), written.after)), written.seen.computing(best.node)))),
+                None => direct.and_then(λ found => match found.node.moves_bit() { True => None, False => seen.rewritten(found) }),
+            }),
+    }
+}
 
 // A node a rule's statement fits (function_ir_match), written as the node
 // the rule's conclusion gives: the old one is dropped once the facts have
@@ -651,14 +799,13 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).trac
 // move of the word it was (rule 15), and a word swapped, widened, narrowed
 // and swapped again a move of the word (rule 44).
 fn Seen::matched(self seen: Seen, node: Node) → Option<Passed> {
-    matched_among(seen.tables.rewriting, node, seen.made, seen.range).and_then(λ found => match found.needs {
-        Nil => shared(seen.pass(found.node), λ written =>
-            Some(Passed([Drop, Derive(found.place, found.numbers), Emit(found.node)] ++ written.after, written.seen))),
-        Cons(_, _) => shared(explain(100, seen.how, seen.proved, found.needs), λ why =>
-            shared(Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)
-                .pass(found.node), λ written =>
-                Some(Passed(Cons(Drop, seen.pending ++ (why.steps ++ ([Derive(found.place, found.numbers), Emit(found.node)] ++ written.after))), written.seen)))),
-    })
+    match seen.tables.spellings {
+        Zero => seen.instance(node).and_then(λ found => match seen.settles(node) || found.node.moves_bit() {
+            True => None,
+            False => seen.rewritten(found),
+        }),
+        Succ(_) => seen.searched(node),
+    }
 }
 
 // A node the walk writes another for, with the steps that do.
@@ -830,36 +977,34 @@ fn learn_nodes(seen: Seen, nodes: List<Node>) → Swept {
     }
 }
 
-// A range a rule's step derives.
-record Narrower { range: Range, step: Step }
+// The ranges and the steps as the rules a test gives narrow them.
+record Narrowed { range: NatMap<Range>, steps: List<Step> }
 
-// What a comparison's bit says of its operands in the arm taken where it
-// is `bit`: each one's range, where that is narrower than what is known.
-record Narrowed { left: Option<Narrower>, right: Option<Narrower> }
-
-fn narrowing(c, l, r: Nat, bit: Bool, a, b: Range) → Narrowed {
-    match bit {
-        True => Narrowed(
-            match 1.leb(b.high) && b.high.leb(a.high) { True => Some(Narrower(Range(a.low, b.high - 1), Derive(9, [l, r, b.high - 1, c]))), False => None },
-            match b.low.leb(a.low) { True => Some(Narrower(Range(a.low + 1, b.high), Derive(10, [l, r, a.low, c]))), False => None }),
-        False => Narrowed(
-            match Succ(a.low).leb(b.low) { True => Some(Narrower(Range(b.low, a.high), Derive(11, [l, r, b.low, c]))), False => None },
-            match Succ(a.high).leb(b.high) { True => Some(Narrower(Range(b.low, a.high), Derive(12, [l, r, a.high, c]))), False => None }),
+// What the rules say of other words where the bit the node `at` writes
+// is known, each read against what the walk had on entering the arm: a
+// word's range is narrowed where a rule says more than is known, by the
+// rule's step.
+fn narrowed_among(table: List<Matchable>, at: Node, had: Walked, so: Narrowed) → Narrowed {
+    match table {
+        Nil => so,
+        Cons(m, rest) => match m.told_at(at, had) {
+            None => narrowed_among(rest, at, had, so),
+            Some(told) => shared(range_known(so.range, told.id), λ known => match known.inside(told.range) {
+                True => narrowed_among(rest, at, had, so),
+                False => narrowed_among(rest, at, had,
+                    Narrowed(nat_map_set(so.range, told.id, known.meet(told.range)), so.steps ++ [Derive(told.place, told.numbers)])),
+            }),
+        },
     }
 }
 
-fn narrower_set(ranges: NatMap<Range>, id: Nat, found: Option<Narrower>) → NatMap<Range> {
-    match found { None => ranges, Some(narrower) => nat_map_set(ranges, id, narrower.range) }
-}
-
-fn narrower_step(found: Option<Narrower>) → List<Step> { match found { None => [], Some(narrower) => [narrower.step] } }
-
-// The same, owed with the derivations the steps read.
-fn Seen::narrowed(self seen: Seen, c, l, r: Nat, bit: Bool) → Seen {
-    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowing(c, l, r, bit, seen.of(l), seen.of(r)), λ found =>
-        Seen(seen.made, narrower_set(narrower_set(seen.range, l, found.left), r, found.right), seen.how,
-            nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
-            seen.pending ++ (why.steps ++ (narrower_step(found.left) ++ narrower_step(found.right))), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
+// In the arm taken where the bit the comparison `node` writes is known:
+// what the rules say of its operands (rules 9 to 12), owed with the
+// derivations the steps read.
+fn Seen::narrowed(self seen: Seen, node: Node, l, r: Nat) → Seen {
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing, node, seen.walked(), Narrowed(seen.range, [])), λ found =>
+        Seen(seen.made, found.range, seen.how, nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
+            seen.pending ++ (why.steps ++ found.steps), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
 }
 
 // Where the bit `c` is `bit`: what a comparison's bit says of its operands,
@@ -870,7 +1015,7 @@ fn Seen::taking_in(self seen: Seen, depth, c: Nat, bit: Bool) → Seen {
         match nat_map_get(seen.made, c) {
             None => known,
             Some(node) => match node {
-                UnsignedLessThan(_, _, l, r) => known.narrowed(c, l, r, bit).ordered_by(c, l, r, bit),
+                UnsignedLessThan(_, _, l, r) => known.narrowed(node, l, r).ordered_by(c, l, r, bit),
                 BitOr(_, _, a, b) => match bit {
                     True => known,
                     False => match depth {
@@ -1023,9 +1168,13 @@ fn Function::seen(self function: Function, tables: Tables) → Seen {
 }
 
 // The rules the search matches are the library's and those registered
-// where the search is asked for: `entries` is read where the call is.
-fn Function::learn_plan(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Plan {
-    shared(function.body.learn(function.seen(Tables::of(entries))), λ learned => learned.plan)
+// where the search is asked for, and the learners it asks those
+// registered there: `entries` and `learners` are read where the call is.
+// With `spellings` the walk searches at each node through that many of a
+// word's other spellings (`Seen::searched`).
+fn Function::learn_plan(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Plan {
+    shared(function.body.learn(function.seen(Tables::of(entries, learners).searching(spellings))), λ learned => learned.plan)
 }
 
 // The conditionals a plan replaces by an arm.
@@ -1157,8 +1306,8 @@ fn tests_of(parameters: List<Nat>, wants: NatMap<Nat>, so_far: Tests) → Tests 
 
 // The test of every bound the function's undecided comparisons wait on, if
 // there is one, at ids from `top`.
-fn Function::guard_over(self function: Function, top: Nat, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Guard> {
-    shared(function.body.learn(function.seen(Tables::of(entries))), λ learned =>
+fn Function::guard_over(self function: Function, top: Nat, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Guard> {
+    shared(function.body.learn(function.seen(Tables::of(entries, learners))), λ learned =>
         shared(span_tests(learned.seen.wants.spans, tests_of(function.parameters, learned.seen.wants.least, Tests([], None, top))), λ tests =>
             match tests.bit { None => None, Some(bit) => Some(Guard(top, tests.nodes, bit)) }))
 }

@@ -30,6 +30,7 @@ import function_ir_rules;
 import function_ir_tidy;
 import function_ir_guard;
 import function_ir_learn;
+import function_ir_match;
 import function_ir_prune;
 import function_ir_spelled;
 import x86_64_asm;
@@ -263,11 +264,11 @@ fn Function::copied(self function: Function, entries: List<RuleEntry> := registe
 // decides without one, by at least the comparisons the test makes. Not in
 // a function small enough to be inlined: whoever it is inlined into tests
 // for it.
-fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
+fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
     match tidied.body.size().leb(wanted.small) {
         True => None,
-        False => tidied.guard_over(plain.top().max(tidied.top()), entries := entries).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
-            match (tidied.learn_plan(entries := entries).decided() + nodes_compare(guard.nodes)).leb(tested.copied(entries := entries).learn_plan(entries := entries).past_test().decided()) {
+        False => tidied.guard_over(plain.top().max(tidied.top()), entries := entries, learners := learners).and_then(λ guard => guard_function(tidied, guard).and_then(λ tested =>
+            match (tidied.learn_plan(entries := entries, learners := learners).decided() + nodes_compare(guard.nodes)).leb(tested.copied(entries := entries).learn_plan(entries := entries, learners := learners).past_test().decided()) {
                 True => guard_function(plain, guard).map(λ made => Found(guard.spelled(), made)),
                 False => None,
             })),
@@ -277,14 +278,16 @@ fn Function::find_guarded(self tidied: Function, plain: Function, wanted: Wanted
 // The function with the conditionals its own tests decide replaced by
 // their arms and the narrowings its ranges make moves written as moves,
 // where there is one of either.
-fn Function::find_learned(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
-    shared(function.learn_plan(entries := entries), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
+fn Function::find_learned(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings), λ plan => match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
-fn Function::find_learned_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
-    shared(function.learn_plan(entries := entries).plain_kept(), λ plan =>
+fn Function::find_learned_past(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner),
+    spellings: Nat := 0) → Option<Found> {
+    shared(function.learn_plan(entries := entries, learners := learners, spellings := spellings).plain_kept(), λ plan =>
         match plan.decided() + plan.written() { Zero => None, Succ(_) => function.find_replayed(plan, entries := entries) })
 }
 
@@ -352,10 +355,10 @@ fn StructuredRegion::byte_loads(self region: StructuredRegion) → Nat {
 
 // The loads a function's joins of bytes wait on (`Seen::meeting`): none
 // without four byte loads to join, which is known without a walk.
-fn Function::asked(self function: Function, entries: List<RuleEntry> := registered(RuleEntry)) → List<Asked> {
+fn Function::asked(self function: Function, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → List<Asked> {
     match function.body.byte_loads().leb(3) {
         True => [],
-        False => shared(function.body.learn(function.seen(Tables::of(entries))), λ learned => learned.seen.wants.words),
+        False => shared(function.body.learn(function.seen(Tables::of(entries, learners))), λ learned => learned.seen.wants.words),
     }
 }
 
@@ -363,14 +366,14 @@ fn Function::asked(self function: Function, entries: List<RuleEntry> := register
 // joined into a word, for the walk to find the join a move of
 // (`find_learned`). Nothing reads the load until then, and the sweep takes
 // it back where no walk does.
-fn Function::find_worded(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
-    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries), function.top()).sites))
+fn Function::find_worded(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries, learners := learners), function.top()).sites))
 }
 
 // The same of a function under a test at its entry, in the arm past the
 // test alone.
-fn Function::find_worded_past(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry)) → Option<Found> {
-    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries), function.top()).sites.past_test()))
+fn Function::find_worded_past(self function: Function, callees: List<Function>, entries: List<RuleEntry> := registered(RuleEntry), learners: List<Learner> := registered(Learner)) → Option<Found> {
+    function.find_inlines(callees, Inlines(function.top(), function.body.worded(function.asked(entries := entries, learners := learners), function.top()).sites.past_test()))
 }
 
 // ---------------------------------------------------------------------------

@@ -54,6 +54,10 @@ inductive Asm {
     // A near JCC or JMP to the label named `target`.
     Jcc(cc: ConditionCode, target: Nat),
     Jmp(target: Nat),
+    // The same in their two-byte forms (`7x rel8`, `EB rel8`): whether the
+    // target is in a byte's reach is the landing check's.
+    JccShort(cc: ConditionCode, target: Nat),
+    JmpShort(target: Nat),
     // A SYSCALL: the call it makes is read off the registers there
     // (linux_x86_64_wp).
     Syscall,
@@ -116,6 +120,8 @@ fn asm_len(item: Asm) → Nat {
         StoreByte(_) => 3,
         Jcc(_, _) => 6,
         Jmp(_) => 5,
+        JccShort(_, _) => 2,
+        JmpShort(_) => 2,
         Syscall => 2,
         Proved(_, _, len, _) => len,
         CallTo(_) => 5,
@@ -148,6 +154,8 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
         StoreByte(store) => byte_store_bytes(store),
         Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
+        JccShort(cc, target) => short_control_bytes(JumpIf(cc, short_rel(here + 2, labels(target)))),
+        JmpShort(target) => short_control_bytes(Jump(short_rel(here + 2, labels(target)))),
         Syscall => syscall_bytes(),
         Proved(_, bytes, _, _) => bytes,
         CallTo(target) => CallNear(near_rel(here + 5, labels(target))).bytes(),
@@ -180,6 +188,21 @@ fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
         CallTo(target) => near_rel(here + 5, labels(target)),
         _ => BitVec::ofNat(0),
     }
+}
+// A short jump's displacement, as `asm_jump_of` a near one's.
+fn asm_short_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(8) {
+    match item {
+        JccShort(_, target) => short_rel(here + 2, labels(target)),
+        JmpShort(target) => short_rel(here + 2, labels(target)),
+        _ => BitVec::ofNat(0),
+    }
+}
+// A short jump item's landing, ahead or behind, as `asm_item_lands`.
+fn asm_short_lands(labels: Nat → Nat, here: Nat, item: Asm, to: Nat) → Bool {
+    asm_same(here + 2 + asm_short_of(labels, here, item).sign_extend(56).toNat(), to)
+}
+fn asm_short_lands_back(labels: Nat → Nat, here: Nat, item: Asm, to: Nat) → Bool {
+    asm_same(here + 2 + asm_short_of(labels, here, item).sign_extend(56).toNat(), to + Nat::pow(2, 64))
 }
 fn asm_jump(labels: Nat → Nat, l: Prog) → BitVec(32) { match l { Start => BitVec::ofNat(0), At(before, _, item) => asm_jump_of(labels, prog_len(before), item) } }
 
@@ -240,6 +263,8 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
         StoreByte(_) => fits,
         Jcc(_, _) => fits,
         Jmp(_) => fits,
+        JccShort(_, _) => fits,
+        JmpShort(_) => fits,
         Syscall => fits,
         Proved(_, _, _, _) => fits,
         CallTo(_) => fits,
@@ -262,6 +287,8 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         StoreByte(_) => refl,
         Jcc(_, _) => refl,
         Jmp(_) => refl,
+        JccShort(cc, target) => short_control_bytes_length(JumpIf(cc, short_rel(here + 2, labels(target)))),
+        JmpShort(target) => short_control_bytes_length(Jump(short_rel(here + 2, labels(target)))),
         Syscall => refl,
         Proved(_, _, _, measured) => measured,
         CallTo(_) => refl,
@@ -452,6 +479,8 @@ fn Asm::numbers(self item: Asm) → List<Nat> {
         Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
         Jcc(cc, target) => [1, cc.number(), target],
         Jmp(target) => [2, target],
+        JccShort(cc, target) => [14, cc.number(), target],
+        JmpShort(target) => [15, target],
         CallTo(target) => [3, target],
         Ret => [4],
         Spill(store) => [5, store.source.index(), store.offset.toNat()],
