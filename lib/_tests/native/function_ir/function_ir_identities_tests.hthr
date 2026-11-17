@@ -21,3 +21,16 @@ fn untangled() → Option<Function> { replay_function(rules_with(registered(Rule
 
 theorem tangled_untangled(): untangled() =
     Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Move(64, 4, 1), Const(64, 5, 0), Move(64, 6, 4)], Ports([]))), 6, 1)) { refl }
+
+// Bits. `t7 = t6 | t5` where `t5` is clear fits `or_zero`, but a bit's
+// move has no code in the lowering, so the or stays; and `t8 = t5 | t5`
+// fits it too, but a rule decides that bit, which the walk keeps over a
+// move it would know less of.
+fn bits() → Function {
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 5), Const(64, 4, 9), UnsignedLessThan(64, 5, 4, 3), UnsignedLessThan(64, 6, 1, 2),
+        BitOr(1, 7, 6, 5), BitOr(1, 8, 5, 5)], Ports([]))), 1, 1)
+}
+
+fn bits_learned() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), bits(), bits().learn_plan()) }
+
+theorem bits_kept(): bits_learned() = Some(bits()) { refl }

@@ -703,6 +703,20 @@ the matcher, for the rules whose conclusion is a node.
   added to the module is in every compilation with nothing else written.
   The library's own tests do not import it, so their plans and what their
   proofs cost do not move with the list.
+- **A rewrite gives way to a decision, and never writes a bit's move.**
+  With the set on, `x | 0 = x` fitted an or of two clear bits before the
+  rule that decides it (`or_of_clear`) was asked, and left a move of a bit:
+  the walk knew nothing of that bit, the tests that read it stayed
+  undecided, and the lowering has no code for a bit's move, so it refused
+  the function and the compile kept the one before the walk (the linked
+  SHA-256 grew). `Seen::matched` now asks first whether a rule decides the
+  node's bit (`Seen::settles`) and does not apply a rule whose node is a
+  bit's move (`Node::moves_bit`); `bits_kept` in
+  `function_ir_identities_tests.hthr` holds both. A copy of a bit in the
+  lowering would retire the second. `HEATHER_OPTIMIZE_TRACE=1` makes
+  `compile-x86` say what each search found and each test of a function
+  made answered, and prints a function the lowering refused, which is how
+  a stage the compile declined is seen.
 - **The walk keeps every node that computes a word** as what made it
   (`Seen::computing`), and the node a rule wrote for another. Before, it
   kept the kinds the hand-written recognisers read, so a rule whose
