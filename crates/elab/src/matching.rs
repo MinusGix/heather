@@ -741,6 +741,66 @@ fn abstract_below(
     below.abstract_local_any(&with_scrutinee(hits, scrutinee))
 }
 
+/// A hypothesis that says what a call returned, with the scrutinee written
+/// where the call is stuck on it, read as §4.3 reads the goal
+/// (`docs/elaborator/goal-motive-synthesis-design.md` §4.7,
+/// `issues/case-split-refines-hypotheses-under-calls.md`): `same:
+/// Leaf(w).emits(p, n) = Some(c)` is, reduced, an equation whose left side
+/// is a case on `fits(w)`, and a `match fits(w)` refines it only once that
+/// case is spelled with the scrutinee. The result converts to `ty`, and its
+/// abstraction at the scrutinee was checked well-formed (§4.6), so the
+/// syntactic rung abstracts it whole.
+///
+/// Only an equation one side of which is stuck and the other a value: what
+/// a case split takes apart. A proposition about a call (`p.word_to(…)
+/// .Within(…)`, a `Held`) is what the lemmas about that call take, with the
+/// call as written; unfolding it out from under them is never wanted, and
+/// an equation between two computations is not about one call's value.
+/// `None` when the type is not of that shape or not stuck on the scrutinee.
+/// `ty` is scoped in `cx`.
+pub(crate) fn hypothesis_through_calls(
+    elab: &impl MotiveSynthesisElab,
+    cx: &Cx,
+    ty: &Type,
+    scrutinee: &Term,
+    scrutinee_type: &Type,
+    scrutinee_level: &Level,
+    span: Span,
+) -> Option<Type> {
+    let Type::Id { level, ty: carrier, lhs, rhs } = elab.read_motive_type(cx, ty, span)? else {
+        return None;
+    };
+    let lhs = elab.read_motive_term(cx, &lhs, span).unwrap_or(lhs);
+    let rhs = elab.read_motive_term(cx, &rhs, span).unwrap_or(rhs);
+    let mut budget = STUCK_CANDIDATES;
+    let mut on_left = Vec::new();
+    stuck_scrutinees(&lhs, &mut on_left, &mut budget);
+    let mut on_right = Vec::new();
+    stuck_scrutinees(&rhs, &mut on_right, &mut budget);
+    let mut candidates = match (on_left.is_empty(), on_right.is_empty()) {
+        (false, true) => on_left,
+        (true, false) => on_right,
+        _ => return None,
+    };
+    candidates.dedup();
+    let hits: Vec<Term> = candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate == scrutinee
+                || elab.motive_candidate_converts(cx, candidate, scrutinee, scrutinee_type, scrutinee_level)
+        })
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+    let read = Type::Id { level, ty: carrier, lhs, rhs };
+    let motive = read.abstract_local_any(&with_scrutinee(hits, scrutinee))?;
+    if !elab.motive_well_formed(cx, &motive, scrutinee_type, scrutinee_level) {
+        return None;
+    }
+    Some(motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrutinee.clone()))))
+}
+
 /// `ty` with its term positions reduced, below `Π` codomains and `Σ`
 /// components to `depth` formers; `under` counts the binders passed, and a
 /// stuck position found below them is recorded as it reads in the outer
