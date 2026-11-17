@@ -2455,3 +2455,74 @@ theorem BitVec::sub_zero_extend_mask(n, extra: Nat, a, b: BitVec(n)):
     ((a.zero_extend(extra)).sub(b.zero_extend(extra))).band(BitVec::all_ones(n := n).zero_extend(extra)) = (a.sub(b)).zero_extend(extra) {
     BitVec::sub_bits_zero_extend_mask(n, extra, a, b, False)
 }
+
+// ---------------------------------------------------------------------------
+// Bit by bit, and the cells of the ripple chains: what the bit-blaster
+// (lib/std/tactic/bitblast.hthr) builds circuits against.
+
+// Bit by bit.
+fn BitVec::zip_with({n: Nat}, f: Bool → Bool → Bool, self x, y: BitVec(n)) → BitVec(n) {
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits(), y.tail_bits()).cons_bit(f(x.head_bit(), y.head_bit())),
+    }
+}
+
+theorem BitVec::zip_with_cong({n: Nat}, f: Bool → Bool → Bool, {x1, x2, y1, y2: BitVec(n)}, ex: x1 = x2, ey: y1 = y2): BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x2, y2) {
+    j(ex, λ x _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x, y2), j(ey, λ y _ => BitVec::zip_with(f, x1, y1) = BitVec::zip_with(f, x1, y), refl))
+}
+
+theorem BitVec::zip_with_and(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a && b, x, y) = x.band(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_and(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+theorem BitVec::zip_with_or(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a || b, x, y) = x.bor(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_or(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+theorem BitVec::zip_with_xor(n: Nat, x, y: BitVec(n)): BitVec::zip_with(λ a b => a.xor(b), x, y) = x.bxor(y) {
+    match n {
+        Zero => refl,
+        Succ(k) => BitVec::cons_bit_cong(k, refl, BitVec::zip_with_xor(k, x.tail_bits(), y.tail_bits())),
+    }
+}
+
+theorem BitVec::bool_eq_by_xor(a, b: Bool): !(a.xor(b)) = BitVec::bool_eq(a, b) {
+    match a {
+        False => refl,
+        True => b.not_not(),
+    }
+}
+
+// The carry out of a full adder, through the propagate bit `a ⊕ b`.
+theorem BitVec::carry_by_propagate(a, b, c: Bool): (a && b) || (c && a.xor(b)) = BitVec::carry_majority(a, b, c) {
+    match a {
+        False => match b { False => match c { False => refl, True => refl }, True => match c { False => refl, True => refl } },
+        True => match b { False => match c { False => refl, True => refl }, True => match c { False => refl, True => refl } },
+    }
+}
+
+theorem BitVec::add_bits_next_eq({n: Nat}, a, b: BitVec(n), carry: Bool, rest: BitVec(n) → BitVec(n) → Bool → BitVec(n)): BitVec::add_bits_next(a, b, carry, rest) = rest(a, b, carry) {
+    match carry { False => refl, True => refl }
+}
+
+theorem BitVec::borrow_bits_next_eq({n: Nat}, a, b: BitVec(n), borrow: Bool, rest: BitVec(n) → BitVec(n) → Bool → Bool): BitVec::borrow_bits_next(a, b, borrow, rest) = rest(a, b, borrow) {
+    match borrow { False => refl, True => refl }
+}
+
+// Bit `k` of `x`, false past its width.
+fn BitVec::bit_at({n: Nat}, self x: BitVec(n), k: Nat) → Bool {
+    (match n as λ m => BitVec(m) → Nat → Bool {
+        Zero => λ x k => False,
+        Succ(_, ih) => λ x k => match k {
+            Zero => x.head_bit(),
+            Succ(i) => ih(x.tail_bits(), i),
+        },
+    })(x, k)
+}

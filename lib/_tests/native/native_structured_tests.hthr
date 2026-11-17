@@ -15,7 +15,7 @@ import option;
 
 fn low() → BitVec(64) { io_data_low() }
 
-fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src)) }
+fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src), SpillAll().frames(src)) }
 
 fn leaf(nodes: List<Node>) → Region { Region(Ports([]), nodes, Ports([])) }
 

@@ -48,6 +48,13 @@ pub(super) struct DeclAttempt {
     /// member whose receiver type the value missed — `BitVec::is_nl` at a
     /// `BitVec(16)` (issues/width-specific-method-on-other-width.md).
     pub(super) member_receivers: RefCell<Vec<(Span, String)>>,
+    /// Uses of a name an enclosing match gave two readings, by span. Read
+    /// only by the probe of a [`CheckNote`] at that span, to say what the
+    /// name's other reading is (docs/language/matching/arm-readings-design.md
+    /// §3.5). A fact of the source, so a probe's entries stand. The third
+    /// part is the reason the name has only its type as written there, when
+    /// a match around the use tried to refine it and could not.
+    pub(super) reading_uses: RefCell<Vec<(Span, String, Option<String>)>>,
     /// Written `refl`s whose two sides are not syntactically equal, in the
     /// order they were met — [`Self::check_notes`]' counterpart, deferred for
     /// its reason and probed the same way. Unlike a checking mismatch this
@@ -124,6 +131,11 @@ pub(super) struct DeclAttempt {
     pub(super) slot_probe_target: Cell<Option<Span>>,
     /// Prevents nested motive-less match speculation.
     pub(super) motive_speculation: Cell<bool>,
+    /// Inside a case split's fold of the goal's records to their arguments
+    /// (`MotiveSynthesisElab::fold_declarations`): the instance matcher then
+    /// reads through constructor values too. Set and restored around the
+    /// fold itself, so no mark carries it.
+    pub(super) folding_for_motive: Cell<bool>,
     /// Inside the redundant-motive probe (`elab_check_skel_slots`): a written
     /// motive nested under a probed one is not probed again there. Each
     /// probe re-elaborates and kernel-checks its whole match, so probing at
@@ -161,6 +173,9 @@ pub(super) struct InstanceMatchKey {
     pub(super) d: u32,
     pub(super) g: u32,
     pub(super) scope: u32,
+    /// [`DeclAttempt::folding_for_motive`] at the time: the two modes read
+    /// different shapes and must not share an answer.
+    pub(super) for_motive: bool,
 }
 
 impl DeclAttempt {
@@ -171,6 +186,7 @@ impl DeclAttempt {
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
         self.member_receivers.get_mut().clear();
+        self.reading_uses.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.trivial_uses.get_mut().clear();
@@ -205,6 +221,7 @@ impl DeclAttempt {
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
         self.member_receivers.get_mut().clear();
+        self.reading_uses.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.trivial_uses.get_mut().clear();
@@ -225,6 +242,7 @@ impl DeclAttempt {
             check_notes,
             unmarked_receivers,
             member_receivers,
+            reading_uses: _,
             refl_notes,
             decide_uses,
             trivial_uses,
@@ -241,6 +259,7 @@ impl DeclAttempt {
             char_literals,
             slot_probe_target,
             motive_speculation,
+            folding_for_motive: _,
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,
@@ -271,6 +290,11 @@ impl DeclAttempt {
         }
     }
 
+    /// Close `mark` keeping everything recorded since it.
+    pub(super) fn keep(&self, mark: AttemptMark) {
+        self.goal_arena.keep(mark.goal_arena);
+    }
+
     /// Take the attempt back to `mark`: every log cut to its length, every
     /// cell given its value back, the goal arena restored
     /// ([`GoalArena::restore`]).
@@ -290,6 +314,7 @@ impl DeclAttempt {
             check_notes,
             unmarked_receivers,
             member_receivers,
+            reading_uses: _,
             refl_notes,
             decide_uses,
             trivial_uses,
@@ -305,6 +330,7 @@ impl DeclAttempt {
             char_literals,
             slot_probe_target,
             motive_speculation,
+            folding_for_motive: _,
             motive_redundancy_probe,
             match_eq_next,
             match_eq_wanted,

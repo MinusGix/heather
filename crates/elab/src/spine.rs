@@ -313,6 +313,20 @@ impl Binders {
         Binders(self.0.iter().map(|b| Binder { name: f(&b.name).into(), skel: b.skel.clone() }).collect())
     }
 
+    /// The same binders, those at `positions` passed through `f`.
+    pub(crate) fn renamed_at(&self, positions: &[usize], mut f: impl FnMut(&str) -> String) -> Binders {
+        Binders(
+            self.0
+                .iter()
+                .enumerate()
+                .map(|(i, b)| Binder {
+                    name: if positions.contains(&i) { f(&b.name).into() } else { b.name.clone() },
+                    skel: b.skel.clone(),
+                })
+                .collect(),
+        )
+    }
+
     /// The same binders, every one under the one name `name`: [`Self::renamed`]
     /// with a constant, sharing the name where that would allocate it twice
     /// per binder.

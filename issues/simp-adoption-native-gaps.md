@@ -4,7 +4,7 @@ status: open
 labels: [tactics,simp,native]
 area: tactics
 created: 2026-11-12
-updated: 2026-11-14
+updated: 2026-11-17
 ---
 
 The simp adoption round (2026-11-12, Minus chose it over more features)
@@ -147,6 +147,50 @@ None of these was built: the discharger is an elaborator behaviour change
 that wants its own measured round, and the other two are surface or
 inference changes.
 
+## The compile converses (2026-11-17)
+
+The converse lemmas of `lib/native/native_compile_correct.hthr` say that a
+function returns what its stages returned: `Source::compile_calls_ran`,
+`Procedure::code_of` and `Source::compile_bare` became one call each
+(`simp_only(Procedure::code, fits, entered, emitted, left)` where four nested
+transports with written motives stood). Ten more of the same shape stay by
+hand, and why (each line of the call that was tried is in the theorem named):
+
+17. ~~**A structural function at a constructor is not computed.**~~ (fixed
+    2026-11-17: the selected arm is taken when it is a match whose scrutinee
+    spells; `procedures_code_of`, `emits_then_of`, `emits_repeat_of`,
+    `emits_branch_of` and the three `checked_*_of` are one call each, which
+    also retires item 19.) As found: In the
+    `Then(f, r)` arm of `Stmt::checked_then_of`, `simp_only(Stmt::checked,
+    rest, first)` reports `checked(Then(f, r), homes, out)` and "no law
+    fired"; the same for `Stmt::emits` at `Then`/`Branch`/`Repeat`
+    (`emits_then_of`, `emits_branch_of`, `emits_repeat_of`). A non-recursive
+    accessor does no better: `Stmt::left(Then(first, rest))` is blocked with
+    "`Stmt::left::Repeat`: its side condition `Then(first, rest) =
+    Repeat(s, names)` is not a hypothesis here", the branch equations being
+    tried as conditional laws where the call just computes. So a hypothesis
+    stated at `s.left()` never meets the arm.
+18. **A match on a rewritten scrutinee with `Cons(_, _)` arms is left
+    standing.** `Source::compile_calls_of`: `allocation_ok ⟶ True` and
+    `src.procedures ⟶ Cons(first, rest)` fire (the second twice), and the
+    goal stays `match … { … }` with `Source::compile`'s equations blocked on
+    `allocation_ok(src, homes) = True` "at the call, which was then
+    unfolded". `Source::compile_functions_of` the same.
+19. **A recursive definition named among the laws is unfolded again where
+    a hypothesis should fire.** `List::procedures_code_of`: after `procs ⟶
+    Cons(first, rest)` and `first.code(…) ⟶ Some(c)` the goal is
+    `rest.procedures_code(c.prog, …) = Some(d)`, which `later` states, and
+    the result is an unspellable stuck match on `rest`, whatever the order
+    of the laws.
+20. **A hypothesis about `&&`'s left operand does not fire.**
+    `Source::allocation_of`: `fits: homes.fits() = True` is absent from the
+    route of `simp_only(Source::allocation_ok, fits, checked, slotted)`,
+    which then stops at a match.
+
+`Stmt::live_head_plain`'s `Then` arm (`plain: Then(first, rest).reads_known()
+= False`, the goal a match on `first.takes_known()`) needs the hypothesis
+read through `reads_known`'s own unfolding, which is 17 again.
+
 ## Log
 
 - 2026-11-12: Three theorems of `lib/native/runtime/rt_loop.hthr` that #577 converted to `simp_only` went back to their written chains when PR #551 merged master: their statements there are over a file (`Fun::GuardedBy`), and the converted proofs are of the statements without one. Converting them again over the new statements is the small piece left here from that merge; the chains are the same shape, with the file as one more fixed argument.
@@ -156,3 +200,5 @@ inference changes.
 
 A conditional law blocked at its first instance hides the rest
 (span read-over-write laws, 2026-11-16): [[simp-blocked-instance-hides-later-ones]].
+- 2026-11-17: The compile converses (section above): three converses of native_compile_correct.hthr are one simp_only each; items 17 to 20 keep ten more by hand.
+- 2026-11-17: Item 17 fixed (recursion_at_constructor takes an arm that is a match on a spelled scrutinee); seven more converses converted; 18 and 20 and live_head_plain remain.

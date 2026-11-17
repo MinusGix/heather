@@ -716,7 +716,8 @@ struct ProbeGuard<'a> {
 
 impl Drop for ProbeGuard<'_> {
     fn drop(&mut self) {
-        let ProbeMark { pass, attempt, scope } = self.mark.take().expect("restored once");
+        // No mark: the speculation was kept ([`Elaborator::probe_unless`]).
+        let Some(ProbeMark { pass, attempt, scope }) = self.mark.take() else { return };
         // Innermost first is all a nested probe needs, and a guard's scope
         // gives it.
         self.elab.scope.put_cells(scope);
@@ -746,6 +747,25 @@ impl Elaborator {
             }),
         };
         body()
+    }
+
+    /// [`Self::probe`], whose `body` says whether what it did is kept
+    /// (`true`) or taken back: an elaboration that learns only at its end
+    /// that it must be done again another way.
+    pub(crate) fn probe_unless<Out>(&self, body: impl FnOnce() -> (Out, bool)) -> Out {
+        let mut guard = ProbeGuard {
+            elab: self,
+            mark: Some(ProbeMark {
+                pass: self.pass.probe_mark(),
+                attempt: self.attempt.mark(),
+                scope: self.scope.cells(),
+            }),
+        };
+        let (out, keep) = body();
+        if keep && let Some(ProbeMark { attempt, .. }) = guard.mark.take() {
+            self.attempt.keep(attempt);
+        }
+        out
     }
 
     /// Run `body` with one [`DynamicScope`] field set to `value`, then put

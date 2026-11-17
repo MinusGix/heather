@@ -391,6 +391,20 @@ theorem Sha256::digest_spec(s: Sha256, message: List<u8>, mn: u64, sized: messag
     Sha256::finish_digest(Sha256::update(Sha256::init(s).after, message, mn).after, message, took)
 }
 
+// Hashing a message in one part, as a caller writes it.
+fn Sha256::digest_of(self s: Sha256, message: List<u8>, mn: u64) → List<u8> {
+    let mut s = s;
+    s.init();
+    s.update(message, mn);
+    s.finish();
+    s.digest()
+}
+
+theorem Sha256::digest_of_spec(self s: Sha256, message: List<u8>, mn: u64, sized: message.len() = mn.toNat()):
+    s.digest_of(message, mn) = Sha2::sha256().digest(message) {
+    Sha256::digest_spec(s, message, mn, sized)
+}
+
 // A span that holds a context has the context's digest where the hash
 // value lies.
 theorem Sha256::digest_bytes(span: List<u8>, length: u64, s: Sha256, holds: Sha256::stored().Holds(span, length, s)):

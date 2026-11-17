@@ -972,53 +972,6 @@ impl Parser {
         })
     }
 
-    /// A byte-string literal `b"valid\n"`: the identifier `b` with a string
-    /// literal right after it, no space between (docs/native/io-programs-design.md
-    /// §5 D3). Adjacency decides, as it does for `?name` and `a::b` in the
-    /// lexer; here it is read off the two tokens' spans, so the lexer (and
-    /// the scanner held to it, `lib/lang/lexer`) needs no token kind of its
-    /// own. `b "x"` and `b` followed by a string on another line were parse
-    /// errors before, so nothing that parsed reads differently.
-    ///
-    /// The string's characters are its bytes, so each one must be ASCII: a
-    /// byte above `0x7F` has no spelling yet (`\xHH` is the escape it wants,
-    /// issues/byte-string-hex-escape.md), and a non-ASCII character is
-    /// refused rather than read as its UTF-8 encoding, so that a byte string
-    /// never means more bytes than it shows characters.
-    fn byte_string(&mut self) -> R<Option<Expr>> {
-        // Not `at_kw`: `b` is no keyword (a local named `b` reads as
-        // itself everywhere), only the prefix of a token-shaped literal,
-        // which the editor grammar spells as one token (`byte_string`).
-        if !matches!(self.peek(), TokKind::Ident(name) if name == "b") {
-            return Ok(None);
-        }
-        let Some(next) = self.toks.get(self.pos + 1) else {
-            return Ok(None);
-        };
-        let TokKind::Str(text) = &next.kind else {
-            return Ok(None);
-        };
-        let start = self.peek_span();
-        if next.span.start != start.end {
-            return Ok(None);
-        }
-        let span = start.join(next.span);
-        if let Some(c) = text.chars().find(|c| !c.is_ascii()) {
-            return Err(ParseError {
-                msg: format!(
-                    "a byte string holds ASCII characters, one byte each, and `{c}` (U+{:04X}) is not one; \
-                     write a byte above 0x7F as a numeral in a vector literal (`[0xC3, 0xA9]`)",
-                    u32::from(c)
-                ),
-                span: next.span,
-            });
-        }
-        let bytes = text.bytes().collect();
-        self.bump();
-        self.bump();
-        Ok(Some(Expr { kind: ExprKind::ByteStr(bytes), span }))
-    }
-
     /// Is the next token the identifier `kw`?
     fn at_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
@@ -1028,6 +981,19 @@ impl Parser {
     /// ordinary identifier everywhere else (`induct(x)`, `let induct = …`).
     fn at_induct(&self) -> bool {
         self.at_kw("induct") && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
+    }
+
+    /// `cases h;` or `cases h as …;`: the word followed by a name and then
+    /// `;` or `as`, so `cases` stays an ordinary identifier elsewhere
+    /// (`cases(e, g)` in the tactic library).
+    fn at_cases(&self) -> bool {
+        self.at_kw("cases")
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
+            && matches!(self.toks.get(self.pos + 2).map(|t| &t.kind), Some(TokKind::Semi) | Some(TokKind::Ident(_)))
+            && match self.toks.get(self.pos + 2).map(|t| &t.kind) {
+                Some(TokKind::Ident(word)) => word == "as",
+                _ => true,
+            }
     }
 
     /// `op as ∙` — the **body spelling** a declaring binder installs
@@ -3704,6 +3670,65 @@ impl Parser {
                 span: open.join(close),
             });
         }
+        // `cases h;` / `cases h as e1, e2(x, y);`: take the hypothesis `h`
+        // apart along the tests the call it states is stuck on, the rest of
+        // the block being every case that survives
+        // (issues/cases-on-hypothesis-tactic.md). Packaged like `split_all`,
+        // since the tests are only known from `h`'s elaborated type.
+        if self.at_cases() {
+            let start = self.bump().span;
+            let (hypothesis, _) = self.ident("the hypothesis `cases` takes apart")?;
+            let mut names = Vec::new();
+            if self.eat_kw("as") {
+                loop {
+                    let (name, _) = self.ident("a name for the split's equation")?;
+                    let mut fields = Vec::new();
+                    if matches!(self.peek(), TokKind::LParen) {
+                        self.bump();
+                        loop {
+                            fields.push(self.ident("a field name")?.0);
+                            if !matches!(self.peek(), TokKind::Comma) {
+                                break;
+                            }
+                            self.bump();
+                        }
+                        self.expect(&TokKind::RParen, "`)` after the case's field names")?;
+                    }
+                    names.push(CasesName { equation: name, fields });
+                    if !matches!(self.peek(), TokKind::Comma) {
+                        break;
+                    }
+                    self.bump();
+                }
+            }
+            let semi = self.expect(&TokKind::Semi, "`;` after `cases h`")?;
+            let mut body_stmts = Vec::new();
+            let parsed = self.block_statements(&mut body_stmts)?;
+            let (body_result, ons) = match parsed {
+                Some(result) => (result, self.block_ons(Vec::new())?),
+                None => self.block_result_and_ons()?,
+            };
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            let body = if body_stmts.is_empty() {
+                body_result
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Box::new(Block { stmts: body_stmts, result: Box::new(body_result), ons: Vec::new(), span: semi.join(close) })),
+                    span: semi.join(close),
+                }
+            };
+            let result = Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var(cases_head(&names, !names.is_empty(), None)), span: start }),
+                    args: vec![Expr { kind: ExprKind::Var(hypothesis), span: start }, body],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: start.join(close),
+            };
+            return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
+        }
         // `x ⊢ ...` at a block's result scopes over the REST of that block,
         // including its `let`s. This is the long-proof face of the sequent
         // expression: `{ x ⊢ let y = e; body }` lowers to
@@ -4115,6 +4140,7 @@ impl Parser {
                 || self.at_kw("split")
                 || self.at_kw("split_all")
                 || self.at_induct()
+                || self.at_cases()
                 || self.at_kw("on")
                 || self.at_sequent_binders()
             {
@@ -6044,9 +6070,6 @@ impl Parser {
             self.bump();
             return Ok(Expr { kind: ExprKind::Refl, span: start });
         }
-        if let Some(bytes) = self.byte_string()? {
-            return Ok(bytes);
-        }
         // `by t` runs the tactic `t` against the expected type. Rule 1: only
         // when a name follows, so a local called `by` (`by(a)`, `by + 1`)
         // still reads as itself.
@@ -6264,8 +6287,30 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Str(s), span: sp })
             }
+            // `b"…"`, one token whose bytes the lexer has read
+            // (docs/native/io-programs-design.md §5 D3).
+            TokKind::ByteStr(bytes) => {
+                let bytes = bytes.clone();
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::ByteStr(bytes), span: sp })
+            }
             TokKind::LParen => {
                 let open = self.bump().span;
+                // `(<=)`: an operator section, the bare symbol as a value
+                // anywhere an expression stands (issues/parenthesized-operator-symbols.md).
+                // It is the node `f(<=, x)` already gives a lone symbol between
+                // delimiters, so it resolves by the same designation ladder:
+                // `s.SortedPerm((<=), out)` at `BitVec(64)` is
+                // `BitVec::unsigned_le`. An infix token cannot begin an
+                // expression, so `(` symbol `)` has no other reading.
+                if let Some(sym) = Self::op_symbol(self.peek())
+                    && matches!(self.nth(1), TokKind::RParen)
+                {
+                    self.bump();
+                    let close = self.bump().span;
+                    let span = open.join(close);
+                    return Ok(Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity: OpFixity::Infix }, span });
+                }
                 // Parenthesising is the escape hatch for a record literal in
                 // scrutinee position **and for the comparison rung**, so both
                 // restrictions must lift here. The `no_eq` half is what makes
@@ -7453,15 +7498,15 @@ mod tests {
         parse_file(&src).unwrap().items.remove(0).into_decl().body.result.kind
     }
 
-    // A byte string is `b` with a string right after it, its bytes the
-    // string's ASCII characters; `b` with a space before the string, or `b`
-    // alone, is the name it always was, and a character that is not ASCII is
-    // refused at the string (docs/native/io-programs-design.md §5 D3).
+    // A byte string is the token `b"…"`, its bytes ASCII characters and
+    // escapes; `b` with a space before a string, or `b` alone, is the name it
+    // always was, and a character that is not ASCII is refused where it
+    // stands (docs/native/io-programs-design.md §5 D3).
     #[test]
     fn byte_strings_are_b_against_a_string() {
         assert!(matches!(body(r#"b"hi\n""#), ExprKind::ByteStr(b) if b == b"hi\n"), "{:?}", body(r#"b"hi\n""#));
         assert!(matches!(body(r#"b"""#), ExprKind::ByteStr(b) if b.is_empty()));
-        assert!(matches!(body(r#"b"\u{7f}\0""#), ExprKind::ByteStr(b) if b == [0x7f, 0]));
+        assert!(matches!(body(r#"b"\x7f\0\xFF""#), ExprKind::ByteStr(b) if b == [0x7f, 0, 0xff]));
         assert!(matches!(body("b"), ExprKind::Var(name) if name == "b"));
         let call = body(r#"g(b"x", b)"#);
         let (head, args, _) = as_call(&call);
@@ -7470,9 +7515,10 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(name) if name == "b"));
         assert!(parse_file(r#"fn f() -> X { b "x" }"#).is_err());
         assert!(parse_file(r#"fn f() -> X { bb"x" }"#).is_err());
-        let refused = parse_file(r#"fn f() -> X { b"\u{e9}" }"#).unwrap_err();
+        let refused = parse_file(r#"fn f() -> X { b"aé" }"#).unwrap_err();
         assert!(refused.msg.contains("a byte string holds ASCII characters"), "{}", refused.msg);
-        assert_eq!(refused.span.start, r#"fn f() -> X { b"#.len());
+        assert!(refused.msg.contains(r"`\xC3\xA9`"), "{}", refused.msg);
+        assert_eq!(refused.span.start, r#"fn f() -> X { b"a"#.len());
     }
 
     /// The head of an application, as a string — a name or an operator
@@ -8412,6 +8458,29 @@ mod tests {
             &args[0].kind,
             ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "||"
         ));
+    }
+
+    #[test]
+    fn a_parenthesised_symbol_is_the_bare_symbol_anywhere() {
+        // `(<=)` is the node `f(<=, x)` gives the lone symbol, in any
+        // expression position: a call's argument, a receiver call's.
+        let k = body("f(x, (<=))");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        let k = body("xs.SortedPerm((<=), ys)");
+        let ExprKind::Dot { args: Some(args), .. } = &k else { panic!("expected a receiver call, got {k:?}") };
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == "<="));
+        // Every infix symbol reads this way, `-` as subtraction.
+        for sym in ["+", "-", "*", "<", "&&", "||", "++", "^", "≈"] {
+            let k = body(&format!("({sym})"));
+            assert!(
+                matches!(&k, ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix } if symbol == sym),
+                "({sym}) gave {k:?}"
+            );
+        }
+        // A symbol with an operand is no section: `(-x)` is still negation.
+        let k = body("(-x)");
+        assert!(matches!(&k, ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. })));
     }
 
     #[test]
