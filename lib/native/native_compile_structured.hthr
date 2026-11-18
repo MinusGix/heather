@@ -103,8 +103,8 @@ theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m
     let words = held.words;
     let placed = j(eq2(λ (bufs: Buffers()) (args: List<List<BitVec(8)>>) => Env(words, bufs, args), like.right.left, like.right.right),
         λ e _ => t.Placed(e, m), held.placed);
-    Hold(words := words, placed := placed,
-        agreeing := Agreement(homes := λ i mi => trans(held.agreeing.homes(i, mi), like.left(i, mi)), frame := held.agreeing.frame, pins := held.agreeing.pins))
+    Target::Held(words := words, placed := placed,
+        agreeing := Target::Agreeing(homes := λ i mi => trans(held.agreeing.homes(i, mi), like.left(i, mi)), frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),

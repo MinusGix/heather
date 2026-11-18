@@ -269,7 +269,7 @@ theorem Target::placed_byte(self t: Target, env: Env, m: X86Memory(t.r.profile),
     let fits: (o + i + 1 <= t.r.size) = omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits(), below);
     let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + (t.caps.largest() + 1)) = refl;
     let under: (o + i + 1 <= t.layout().stack_offset()) = omega(t.layout().buffer_end(buf, cap, found), stack, below);
-    Placement(cells := t.r.stored_cells(v, o + i, [c]),
+    Target::Placed(cells := t.r.stored_cells(v, o + i, [c]),
         holds := t.r.store_holds(v, m, placed.holds, o + i, [c], fits),
         keeps := t.layout().keeps_byte(t.r, env, v, placed.keeps, buf, cap, found, i, below, c),
         stacked := t.stacked_store(env, v, m, o + i, [c], under, placed.stacked))
@@ -286,7 +286,7 @@ theorem Target::placed_past(self t: Target, env: Env, m: X86Memory(t.r.profile),
     let len = layout.keeps_buffer_len(env, v, keeps, buf, cap, found);
     let same: (after.buffer(buf) = env.buffer(buf)) = trans(env.buffer_stored_here(buf, i, c),
         env.buffer(buf).update_past(i, λ _ => c, j(sym(len), λ n _ => n <= i, past)));
-    Placement(cells := v, holds := placed.holds, keeps := ⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
+    Target::Placed(cells := v, holds := placed.holds, keeps := ⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
         Inl(here) => (j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cb) → after.buffer(x) = cells_at(v, layout.buffer_offset(x), cb),
             λ found_here => trans(same, keeps.right(buf, cb, found_here))))(found_b),
         Inr(other) => trans(env.buffer_stored_other(buf, i, c, b, other), keeps.right(b, cb, found_b)),
@@ -297,15 +297,15 @@ theorem Target::placed_past(self t: Target, env: Env, m: X86Memory(t.r.profile),
 theorem Target::held_byte(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
     t.Held(live, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), g, t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
-    Hold(words := held.words, placed := t.placed_byte(env.with_words(held.words), m, held.placed, buf, cap, found, i, below, c),
-        agreeing := Agreement(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
+    Target::Held(words := held.words, placed := t.placed_byte(env.with_words(held.words), m, held.placed, buf, cap, found, i, below, c),
+        agreeing := Target::Agreeing(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 theorem Target::held_past(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, past: cap <= i, c: BitVec(8)):
     t.Held(live, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), g, m) {
-    Hold(words := held.words, placed := t.placed_past(env.with_words(held.words), m, held.placed, buf, cap, found, i, past, c),
-        agreeing := Agreement(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
+    Target::Held(words := held.words, placed := t.placed_past(env.with_words(held.words), m, held.placed, buf, cap, found, i, past, c),
+        agreeing := Target::Agreeing(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // ---------------------------------------------------------------------------

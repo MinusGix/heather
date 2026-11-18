@@ -212,7 +212,7 @@ record Put(t: Target, env: Env, name: List<BitVec(8)>, i: Nat, b: BitVec(8), m: 
 
 theorem Target::pathed_placed(self t: Target, env: Env, name: List<BitVec(8)>, i: Nat, m: X86Memory(t.r.profile),
     pathed: Pathed(t, env, name, i, m)): t.Placed(env, m) {
-    Placement(cells := pathed.cells, holds := pathed.holds, keeps := pathed.keeps, stacked := pathed.stacked)
+    Target::Placed(cells := pathed.cells, holds := pathed.holds, keeps := pathed.keeps, stacked := pathed.stacked)
 }
 
 // A byte stored at `i` in the scratch range: the environment kept, the
@@ -444,7 +444,7 @@ theorem Target::path_ended(self t: Target, env: Env, name: List<BitVec(8)>, m: X
             t.cell_address(so + k, Nat::le_of_lt(so + k, t.r.size, inside)));
         trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => t.r.profile.read(after, a), address), t.read_cell(w, after, holds, so + k, inside).right)
     };
-    ⟨Placement(cells := w, holds := holds, keeps := put.pathed.keeps, stacked := put.pathed.stacked),
+    ⟨Target::Placed(cells := w, holds := holds, keeps := put.pathed.keeps, stacked := put.pathed.stacked),
      cstring_of(name, λ k => t.io().data.read(after, word_of_nat(64, t.layout().scratch_at().toNat() + k)),
         λ k c got => {
             let below: (k < name.len()) = name.nth_some_below(k, c, got);
@@ -549,7 +549,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                 let m = u.memory;
                 let s1 = execute_block_normal([MovRI(Rdx, BitVec::ofNat(0))], u);
                 let ends = t.path_ended(placed_env, name, m, held.pathed, room, nonzero, nul, refl);
-                let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Hold(words := words, placed := ends.left,
+                let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Target::Held(words := words, placed := ends.left,
                     agreeing := j(sym(held.homes), λ x _ => t.Agreeing(live, env, words, x), agrees));
                 let landing = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧ (t.site().Resident(t.r.profile.store(m, a, one)) ∧
                     call_pre(execute_block_normal(asking, MachineState(s1.gprs, s1.flags, next_rip(s1.rip, 3), t.r.profile.store(m, a, one)))));

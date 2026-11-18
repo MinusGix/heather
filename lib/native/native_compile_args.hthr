@@ -251,7 +251,7 @@ theorem Target::arg_cells_filled(self t: Target, env: Env, v: Nat → BitVec(8),
     let filled: (fill(env.buffer(buf), arg) = fill(env.buffer(buf), bytes)) = trans(fill_take(env.buffer(buf), arg),
         cong_fn<Nat, List<BitVec(8)>>(λ n => fill(env.buffer(buf), arg.take(n)), len));
     j(sym(filled), λ bs _ => t.Placed(env.set_buffer(buf, bs), m),
-        Placement(cells := w, holds := cells.holds, keeps := kept, stacked := ActivationOf(same := same, stacking := cells.stacking)))
+        Target::Placed(cells := w, holds := cells.holds, keeps := kept, stacked := Target::Stacked(same := same, stacking := cells.stacking)))
 }
 
 // ---------------------------------------------------------------------------
@@ -500,8 +500,8 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
         let got: (env.args.nth(k) = Some(a)) = j(sym(same), λ xs _ => xs.nth(k) = Some(a), left.present);
         let again: r.State() → Type = λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ ArgLeft(t, v, buf, cap, k, vals, fewer, x.gprs, x.memory));
         r.arg_round(λ _ => ArgLeft(t, v, buf, cap, k, vals), v, buf, cap, found, a, left.pointer, left.room, vals, names + 3, done, again, w, resident, left.done, left.at,
-            λ g f rip all to => Exists(filled, ⟨Hold(words := words, placed := t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
-                    agreeing := j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), Agreement(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins))),
+            λ g f rip all to => Exists(filled, ⟨Target::Held(words := words, placed := t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
+                    agreeing := j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), Target::Agreeing(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins))),
                 trans(cong_fn<BitVec(64), Env>(λ y => filled.set_word(len, y), trans(all.regs.count, word_of_nat_eq_ofNat(64, a.len()))),
                     sym(env.arg_present(k, buf, len, a, got)))⟩),
             λ below x next => {

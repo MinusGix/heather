@@ -458,10 +458,10 @@ theorem Target::copy_filled(self t: Target, env: Env, v: Nat → BitVec(8), keep
     t.Placed(env.set_buffer(buf, fill_at(env.buffer(buf), a, bytes)), m) {
     let copying = at.copying;
     let w = copying.cells;
-    Placement(cells := w, holds := copying.holds, keeps := t.layout().keeps_fill_at(env, v, w, keeps, buf, cap, found, a, bytes, short,
+    Target::Placed(cells := w, holds := copying.holds, keeps := t.layout().keeps_fill_at(env, v, w, keeps, buf, cap, found, a, bytes, short,
         λ q away => copying.outside(q, match away { Inl(under) => Inl(under), Inr(over) => Inr(j(sym(all), λ x _ => (t.layout().buffer_offset(buf) + a) + x <= q, over)) }),
         λ k c got => copying.inside(k, c, j(sym(all), λ x _ => k < x, bytes.nth_some_below(k, c, got)), got)),
-        stacked := ActivationOf(same := same, stacking := copying.stacking))
+        stacked := Target::Stacked(same := same, stacking := copying.stacking))
 }
 
 // With every byte copied, R8 equals RAX, so the JE is taken.
@@ -499,9 +499,9 @@ theorem Target::copy_held(self t: Target, live: List<Nat>, env: Env, words: List
     found: t.caps.nth(buf) = Some(cap), a: Nat, bytes: List<BitVec(8)>, short: a + bytes.len() <= cap, i: Nat, all: i = bytes.len(),
     g: Gprs, m: X86Memory(t.r.profile), at: CopyAt(t, v, buf, a, bytes, i, vals, g, m)):
     t.Held(live, env.set_buffer(buf, fill_at(env.buffer(buf), a, bytes)), g, m) {
-    Hold(words := words, placed := t.copy_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, bytes, short, i, all, vals, g, m, at),
+    Target::Held(words := words, placed := t.copy_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, bytes, short, i, all, vals, g, m, at),
         agreeing := j(sym(at.homes), λ vs _ => t.Agreeing(live, env.set_buffer(buf, fill_at(env.buffer(buf), a, bytes)), words, vs),
-            Agreement(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins)))
+            Target::Agreeing(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins)))
 }
 
 // What follows a read's SYSCALL, after the TEST of its result: out where it
@@ -570,7 +570,7 @@ theorem Run::copy_round(self r: Run, words: List<Nat>, v: Nat → BitVec(8), kee
 // A read
 
 // The environment placed, and a read's bytes landed in the scratch range.
-record Landing(t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.profile)) {
+record Target::Landed(self t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.profile)) {
     cells: Nat → BitVec(8),
     holds: t.r.Holds(cells, m),
     keeps: t.layout().Keeps(env, cells),
@@ -578,11 +578,9 @@ record Landing(t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.pro
     lands: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → cells(t.layout().scratch_offset() + k) = c,
 }
 
-fn Target::Landed(self t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.profile)) → Type { Landing(t, env, bytes, m) }
-
 theorem Target::landed_placed(self t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.profile), landed: t.Landed(env, bytes, m)):
     t.Placed(env, m) {
-    Placement(cells := landed.cells, holds := landed.holds, keeps := landed.keeps, stacked := landed.stacked)
+    Target::Placed(cells := landed.cells, holds := landed.holds, keeps := landed.keeps, stacked := landed.stacked)
 }
 
 // Bytes stored to the scratch range land there and keep the environment.
@@ -596,7 +594,7 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
     let below: (so + bytes.len() <= t.layout().stack_offset()) = Nat::le_trans(so + bytes.len(), so + t.caps.largest(), t.layout().stack_offset(),
         so.add_le_mono_l(bytes.len(), t.caps.largest(), short), t.layout().scratch_below_stack());
     j(sym(t.scratch_rip()), λ x _ => t.Landed(env, bytes, t.r.profile.store(m, x, bytes)),
-        Landing(cells := t.r.buffer(v).set_span(so, bytes.to_vector()).cells, holds := t.r.store_holds(v, m, placed.holds, so, bytes, fits),
+        Target::Landed(cells := t.r.buffer(v).set_span(so, bytes.to_vector()).cells, holds := t.r.store_holds(v, m, placed.holds, so, bytes, fits),
             keeps := t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.keeps,
                 λ q away => t.r.cells_outside(v, so, bytes, q, match away {
                     Inl(under) => Inl(under),
@@ -607,13 +605,11 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
 }
 
 // The live words held, and a read's bytes landed in the scratch range.
-record HoldLanded(t: Target, live: List<Nat>, env: Env, bytes: List<BitVec(8)>, g: Gprs, m: X86Memory(t.r.profile)) {
+record Target::HeldLanded(self t: Target, live: List<Nat>, env: Env, bytes: List<BitVec(8)>, g: Gprs, m: X86Memory(t.r.profile)) {
     words: List<Nat>,
     landed: t.Landed(env.with_words(words), bytes, m),
     agreeing: t.Agreeing(live, env, words, home_values(g)),
 }
-
-fn Target::HeldLanded(self t: Target, live: List<Nat>, env: Env, bytes: List<BitVec(8)>, g: Gprs, m: X86Memory(t.r.profile)) → Type { HoldLanded(t, live, env, bytes, g, m) }
 
 // After a read that succeeded: TEST finds the count nonnegative, the bytes
 // are copied in from the offset in R9, and the count is put in the
@@ -819,12 +815,12 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                     ReadBytes(bytes) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, bytes.len(), most, answers, most_cap);
                         ⟨resides(bytes, t.scratch_inside(bytes.len(), short), resident),
-                            ⟨answers, ⟨HoldLanded(words := words, landed := t.landed_store(env.with_words(words), m, placed, bytes, short), agreeing := kept.agreeing), ⟨refl, at_offset⟩⟩⟩⟩
+                            ⟨answers, ⟨Target::HeldLanded(words := words, landed := t.landed_store(env.with_words(words), m, placed, bytes, short), agreeing := kept.agreeing), ⟨refl, at_offset⟩⟩⟩⟩
                     },
                     ReadFailed(_) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, junk.len(), most, leaves, most_cap);
                         ⟨resides(junk, t.scratch_inside(junk.len(), short), resident),
-                            ⟨answers, ⟨Hold(words := words, placed := t.landed_placed(env.with_words(words), junk, t.r.profile.store(m, layout.scratch_at(), junk),
+                            ⟨answers, ⟨Target::Held(words := words, placed := t.landed_placed(env.with_words(words), junk, t.r.profile.store(m, layout.scratch_at(), junk),
                                 t.landed_store(env.with_words(words), m, placed, junk, short)), agreeing := kept.agreeing), refl⟩⟩⟩
                     },
                 }⟩)
