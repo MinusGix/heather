@@ -1119,7 +1119,7 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
                 },
                 // A span that is only read: its bytes and then its length
                 // word, before any word.
-                Bytes(_) => match spans && !length {
+                ByteList(_) => match spans && !length {
                     False => rt_held_takes(),
                     True => {
                         let o <- open(h, "span").bind(λ c => rt_accepted("a span parameter", c));

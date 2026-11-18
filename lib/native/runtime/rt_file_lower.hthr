@@ -229,7 +229,7 @@ theorem Ty::moves_quiet(self t: Ty, tys: Nat → RecInfo, out, src: Nat): nodes_
     match t {
         Word(_) => trivial,
         Bit => trivial,
-        Bytes(_) => trivial,
+        ByteList(_) => trivial,
         Lines => trivial,
         Named(i) => Ty::field_moves_quiet(tys(i).fields, out, src),
         Count => trivial,

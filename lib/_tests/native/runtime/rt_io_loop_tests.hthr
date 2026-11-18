@@ -70,7 +70,7 @@ fn echo_all_prog() → ELoop {
         ELoop::While(going(), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0)))))
 }
 
-fn echo_g() → List<Ty> { [Bytes(0)] }
+fn echo_g() → List<Ty> { [ByteList(0)] }
 fn echo_locs() → List<Loc> { [InBuffer(0)] }
 
 fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }

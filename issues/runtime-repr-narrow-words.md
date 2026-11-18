@@ -5,7 +5,7 @@ labels: [native, runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-18
 ---
 
 `sint.hthr` gives `SInt(8)`…`SInt(64)` a `datarepr` each (`I8`…`I64`), but
@@ -25,3 +25,4 @@ generalised from `Word(64)` to any width.
 ## Log
 
 - 2026-11-08: 2026-11-08: the signed twin of Resize exists now (FunctionIR SignResize, rt Sext), so the boundary widening this issue wants has both nodes. datarepr-value-parameter-telescope moves with this issue: one repr over SInt's width only pays once a narrow SInt can be held. SInt::extend takes an SInt(32), so it is refused until then.
+- 2026-11-18: The insertion sort over `Bytes(n)` needs it: its inner loop takes `key: u8`. A probe gave the written-out function narrow parameter types (`runtime_own_params` at each parameter's `Ty::sem`), and that part goes through. The loop then stops at two places. First, a loop's spent answer (`FFun::spent`) is the first moved state word as a 64-bit word, which a `u8` read back cannot be (zext∘trunc). Second, the verified loop lowering requires `Ty::OneWords` (`Word(64)` only, rt_lower.hthr). So the widening has to land in `Ty::OneWord` and the lowering's proofs first.

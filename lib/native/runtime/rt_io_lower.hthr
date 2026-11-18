@@ -82,7 +82,7 @@ inductive Loc {
 }
 
 // The port the pure lowering reads a variable at: its word. A buffer has no
-// port; the valuation asks nothing of it (`Ty::Holds` at `Bytes`).
+// port; the valuation asks nothing of it (`Ty::Holds` at `ByteList`).
 fn Loc::port(self l: Loc) → Nat { match l { InWord(id) => id, InBuffer(_) => 0, Gone => 0 } }
 
 fn Loc::ports(locs: List<Loc>) → List<Nat> {
@@ -122,7 +122,7 @@ fn Ty::Kept(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc) → t.sem(tys) �
     match t {
         Word(_) => λ v => match l { InWord(id) => env.number(id) = v.toNat(), InBuffer(_) => False, Gone => False },
         Bit => λ v => match l { InWord(id) => env.number(id) = BitVec::ofBool(v).toNat(), InBuffer(_) => False, Gone => False },
-        Bytes(_) => λ v => match l { InWord(_) => False, InBuffer(id) => env.buffers.nth(id) = Some(v), Gone => True },
+        ByteList(_) => λ v => match l { InWord(_) => False, InBuffer(id) => env.buffers.nth(id) = Some(v), Gone => True },
         Lines => λ _ => False,
         Named(_) => λ _ => False,
         Count => λ _ => False,
@@ -170,7 +170,7 @@ theorem Ty::kept_holds(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc): (v: 
             InBuffer(_) => λ never => false_elim(never),
             Gone => λ never => false_elim(never),
         },
-        Bytes(_) => λ v _ => trivial,
+        ByteList(_) => λ v _ => trivial,
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
@@ -194,8 +194,8 @@ theorem Ty::kept_below(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, next:
             InBuffer(_) => λ never => false_elim(never),
             Gone => λ never => false_elim(never),
         },
-        Bytes(c) => λ v => match l as λ k => Bytes(c).Kept(tys, env, k, v) →
-                k.Under(next) → Bytes(c).Below(tys, k.port(), next) {
+        ByteList(c) => λ v => match l as λ k => ByteList(c).Kept(tys, env, k, v) →
+                k.Under(next) → ByteList(c).Below(tys, k.port(), next) {
             InWord(_) => λ never => false_elim(never),
             InBuffer(_) => λ _ _ => pos,
             Gone => λ _ _ => pos,
@@ -325,7 +325,7 @@ theorem Ty::kept_same(self t: Ty, tys: Nat → RecInfo, env, env2: Env, l: Loc, 
             InBuffer(_) => λ s v never => false_elim(never),
             Gone => λ s v never => false_elim(never),
         }(same),
-        Bytes(c) => match l as λ k => k.Same(env, env2) → (v: List<BitVec(8)>) → Bytes(c).Kept(tys, env, k, v) → Bytes(c).Kept(tys, env2, k, v) {
+        ByteList(c) => match l as λ k => k.Same(env, env2) → (v: List<BitVec(8)>) → ByteList(c).Kept(tys, env, k, v) → ByteList(c).Kept(tys, env2, k, v) {
             InWord(_) => λ s v never => false_elim(never),
             InBuffer(_) => λ s v h => s(v, h),
             Gone => λ s v h => h,
@@ -426,10 +426,10 @@ theorem Ty::kept_forget(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, b: N
             InBuffer(_) => λ never => false_elim(never),
             Gone => λ never => false_elim(never),
         },
-        Bytes(c) => λ v => match l as λ k => Bytes(c).Kept(tys, env, k, v) → Bytes(c).Kept(tys, env, k.forget(b), v) {
+        ByteList(c) => λ v => match l as λ k => ByteList(c).Kept(tys, env, k, v) → ByteList(c).Kept(tys, env, k.forget(b), v) {
             InWord(_) => λ never => false_elim(never),
             InBuffer(x) => λ h => match x.eq_dec(b) as λ d =>
-                    Bytes(c).Kept(tys, env, match d as λ _ => Loc { Inl(_) => Gone, Inr(_) => InBuffer(x) }, v) {
+                    ByteList(c).Kept(tys, env, match d as λ _ => Loc { Inl(_) => Gone, Inr(_) => InBuffer(x) }, v) {
                 Inl(_) => trivial,
                 Inr(_) => h,
             },
@@ -508,12 +508,12 @@ theorem Loc::clear_join(locs: List<Loc>, ws: List<Nat>, out: Nat): Loc::clear(lo
 // The place a parameter of code `p` is read from: a buffer for bytes, a word
 // for the rest.
 fn Loc::of(p: Ty, id: Nat) → Loc {
-    match p { Word(_) => InWord(id), Bit => InWord(id), Bytes(_) => InBuffer(id), Lines => InWord(id), Named(_) => InWord(id), Count => InWord(id) }
+    match p { Word(_) => InWord(id), Bit => InWord(id), ByteList(_) => InBuffer(id), Lines => InWord(id), Named(_) => InWord(id), Count => InWord(id) }
 }
 
 fn Loc::place(self l: Loc, p: Ty) → Option<Nat> {
     match p {
-        Bytes(_) => match l { InWord(_) => None, InBuffer(b) => Some(b), Gone => None },
+        ByteList(_) => match l { InWord(_) => None, InBuffer(b) => Some(b), Gone => None },
         Word(_) => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
         Bit => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
         Lines => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
@@ -524,7 +524,7 @@ fn Loc::place(self l: Loc, p: Ty) → Option<Nat> {
 
 theorem Loc::place_of(self l: Loc, p: Ty, id: Nat): l.place(p) = Some(id) → l = Loc::of(p, id) {
     match p {
-        Bytes(c) => match l as λ k => k.place(Bytes(c)) = Some(id) → k = Loc::of(Bytes(c), id) {
+        ByteList(c) => match l as λ k => k.place(ByteList(c)) = Some(id) → k = Loc::of(ByteList(c), id) {
             InWord(_) => λ e => Option::none_ne_some(id, e, InWord(_) = InBuffer(id)),
             InBuffer(b) => λ e => cong_fn(λ (n: Nat) => InBuffer(n), Option::some_inj(b, id, e)),
             Gone => λ e => Option::none_ne_some(id, e, Gone = InBuffer(id)),
@@ -767,12 +767,12 @@ theorem ETm::close_lands(env: Env, io: Io, locs: List<Loc>, fd, next: Nat, fdv: 
 // A code held in one port at its own width: a word or a bit (`Ty::OneWord`,
 // `rt_lower.hthr`, is the boundary's: one 64-bit word, records included).
 fn Ty::Scalar(self t: Ty) → Type {
-    match t { Word(_) => True, Bit => True, Bytes(_) => False, Lines => False, Named(_) => False, Count => False }
+    match t { Word(_) => True, Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False }
 }
 
 fn Ty::check_scalar(self t: Ty) → Option<t.Scalar()> {
     match t as λ x => Option<x.Scalar()> {
-        Word(_) => Some(trivial), Bit => Some(trivial), Bytes(_) => None, Lines => None, Named(_) => None, Count => None,
+        Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(_) => None, Count => None,
     }
 }
 
@@ -783,7 +783,7 @@ theorem Ty::kept_moved(self t: Ty, tys: Nat → RecInfo, env: Env, out: Nat, val
             x.Kept(tys, env, InWord(out), v) {
         Word(wd) => λ _ v h e => trans(e, cong_fn(λ (x: BitVec(wd)) => x.toNat(), h)),
         Bit => λ _ v h e => trans(e, cong_fn(λ (x: BitVec(1)) => x.toNat(), h)),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(_) => λ never => false_elim(never),
         Count => λ never => false_elim(never),
@@ -883,7 +883,7 @@ fn ETm::placed(t: Ty, next: Nat, l: Lowered) → Lowered {
     match t {
         Bit => ETm::placed_bit(ETm::bit_stays(next, l), l),
         Word(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
-        Bytes(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        ByteList(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
         Lines => Lowered(ETm::moved(t, l), l.next, l.next + 1),
         Named(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
         Count => Lowered(ETm::moved(t, l), l.next, l.next + 1),
@@ -987,7 +987,7 @@ theorem ETm::placed_sound(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, nex
             False => λ _ => ETm::moved_sound(Bit, w, g, locs, next, m, l, one, ok, clear, ran),
         }(λ stays => ETm::bit_kept_sound(w, g, locs, next, m, l, ok, clear, ran, stays)),
         Word(wd) => λ m one ran => ETm::moved_sound(Word(wd), w, g, locs, next, m, l, one, ok, clear, ran),
-        Bytes(c) => λ m one ran => ETm::moved_sound(Bytes(c), w, g, locs, next, m, l, one, ok, clear, ran),
+        ByteList(c) => λ m one ran => ETm::moved_sound(ByteList(c), w, g, locs, next, m, l, one, ok, clear, ran),
         Lines => λ m one ran => ETm::moved_sound(Lines, w, g, locs, next, m, l, one, ok, clear, ran),
         Named(i) => λ m one ran => ETm::moved_sound(Named(i), w, g, locs, next, m, l, one, ok, clear, ran),
         Count => λ m one ran => ETm::moved_sound(Count, w, g, locs, next, m, l, one, ok, clear, ran),
@@ -1128,7 +1128,7 @@ theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>,
                                             Nil => λ never => false_elim(never.right.right.right),
                                             Cons(u, _) => λ kept => {
                                                 let fdv = Ty::cast(w.tys, Ty::at(g, x), Word(64), Env::get(w.tys, g, vals, x));
-                                                let bufv = Ty::cast(w.tys, Ty::at(g, y), Bytes(c), Env::get(w.tys, g, vals, y));
+                                                let bufv = Ty::cast(w.tys, Ty::at(g, y), ByteList(c), Env::get(w.tys, g, vals, y));
                                                 let atv = Ty::cast(w.tys, Ty::at(g, z), Word(64), Env::get(w.tys, g, vals, z));
                                                 let maxv = Ty::cast(w.tys, Ty::at(g, u), Word(64), Env::get(w.tys, g, vals, u));
                                                 let landed = ETm::read_lands(env, io, locs, fd, b, at, m, next, fdv, bufv, atv, maxv,
@@ -1173,7 +1173,7 @@ theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>,
                                             Nil => λ never => false_elim(never.right.right.right),
                                             Cons(u, _) => λ kept => {
                                                 let fdv = Ty::cast(w.tys, Ty::at(g, x), Word(64), Env::get(w.tys, g, vals, x));
-                                                let bufv = Ty::cast(w.tys, Ty::at(g, y), Bytes(c), Env::get(w.tys, g, vals, y));
+                                                let bufv = Ty::cast(w.tys, Ty::at(g, y), ByteList(c), Env::get(w.tys, g, vals, y));
                                                 let fromv = Ty::cast(w.tys, Ty::at(g, z), Word(64), Env::get(w.tys, g, vals, z));
                                                 let lenv = Ty::cast(w.tys, Ty::at(g, u), Word(64), Env::get(w.tys, g, vals, u));
                                                 let landed = ETm::write_lands(env, io, locs, fd, b, from, len, next, fdv, bufv, fromv, lenv,
@@ -1204,7 +1204,7 @@ theorem ETm::called_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>,
                                 ETm::Answered(Effect::Opens(c), w, g, vals, io, Cons(x, a), next, k, env) {
                             Nil => λ never => false_elim(never.right),
                             Cons(y, _) => λ kept => {
-                                let pathv = Ty::cast(w.tys, Ty::at(g, x), Bytes(c), Env::get(w.tys, g, vals, x));
+                                let pathv = Ty::cast(w.tys, Ty::at(g, x), ByteList(c), Env::get(w.tys, g, vals, x));
                                 let lenv = Ty::cast(w.tys, Ty::at(g, y), Word(64), Env::get(w.tys, g, vals, y));
                                 let landed = ETm::open_lands(env, io, locs, path, len, next, pathv, lenv, kept.left, kept.right.left, below);
                                 let env2 = CallShape::Opens(path, len, next).answer(env, Io::call(io, CallShape::Opens(path, len, next).cmd(env)).value);
@@ -1316,7 +1316,7 @@ fn ETm::lend_call(entry, next: Nat, ids: List<Nat>, locs: List<Loc>) → LentCal
 // variable in buffer 0; each word variable in a word.
 fn ETm::lower_lend(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Loc>, next, f, cap, buf: Nat, args: List<Nat>) → Option<LentCall> {
     Tm::check_true((f + 1).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())).and_then(λ _ =>
-        ETm::operand(g, locs, Bytes(cap), buf).and_then(λ b => Tm::check_true(b.matches(0)).and_then(λ _ =>
+        ETm::operand(g, locs, ByteList(cap), buf).and_then(λ b => Tm::check_true(b.matches(0)).and_then(λ _ =>
             ETm::word_ids(g, locs, args).and_then(λ ids => Some(ETm::lend_call(Lent::at(ls, f).entry, next, ids, locs))))))
 }
 
@@ -1342,19 +1342,19 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
     let after_zero = λ (_: True) => ETm::word_ids(g, locs, args).and_then(tail_ids);
     let after_b = λ (b: Nat) => Tm::check_true(b.matches(0)).and_then(λ z => ETm::word_ids(g, locs, args).and_then(tail_ids));
     Option::and_then_elim(P, trivial, Tm::check_true((f + 1).leb(ls.len()) && Lent::at(ls, f).arity.matches(args.len())),
-        λ _ => ETm::operand(g, locs, Bytes(cap), buf).and_then(after_b), λ ok _ =>
-    Option::and_then_elim(P, trivial, ETm::operand(g, locs, Bytes(cap), buf), after_b, λ b e_b =>
+        λ _ => ETm::operand(g, locs, ByteList(cap), buf).and_then(after_b), λ ok _ =>
+    Option::and_then_elim(P, trivial, ETm::operand(g, locs, ByteList(cap), buf), after_b, λ b e_b =>
     Option::and_then_elim(P, trivial, Tm::check_true(b.matches(0)), λ z => ETm::word_ids(g, locs, args).and_then(tail_ids), λ zero _ =>
     Option::and_then_elim(P, trivial, ETm::word_ids(g, locs, args), tail_ids, λ ids e_ids =>
         λ call lents env vals held below => {
             let tys = w.tys;
             let parts = Bool::is_true_and((f + 1).leb(ls.len()), Lent::at(ls, f).arity.matches(args.len()), ok);
-            let bytes = Ty::cast(tys, Ty::at(g, buf), Bytes(cap), Env::get(tys, g, vals, buf));
+            let bytes = Ty::cast(tys, Ty::at(g, buf), ByteList(cap), Env::get(tys, g, vals, buf));
             let words = Lent::words(tys, g, vals, args);
             let m = Lent::at(ls, f).run(bytes, words);
             // The buffer variable is the file's first buffer.
             let kb: (env.buffers.nth(0) = Some(bytes)) = j(b.matches_eq(0, zero), λ x _ => env.buffers.nth(x) = Some(bytes),
-                ETm::operand_kept(tys, env, g, locs, vals, held, Bytes(cap), buf, b, e_b));
+                ETm::operand_kept(tys, env, g, locs, vals, held, ByteList(cap), buf, b, e_b));
             let rest = env.buffers.tail();
             let file: (env.buffers = Cons(bytes, rest)) = env.first_buffer(bytes, kb);
             let ws: (words_of(env.valuation(), ids) = words) = ETm::word_ids_sound(tys, env, g, locs, vals, held, args, ids, e_ids);
@@ -1458,7 +1458,7 @@ fn Loc::move_one(t: Ty, d: Loc, s: Loc, more: Stmt) → Option<Stmt> {
     match t {
         Word(_) => match d { InWord(dw) => match s { InWord(sw) => Some(Then(Compute(Loc::move_region(t.width(), dw, sw)), more)), InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
         Bit => match d { InWord(dw) => match s { InWord(sw) => Some(Then(Compute(Loc::move_region(t.width(), dw, sw)), more)), InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
-        Bytes(_) => match d {
+        ByteList(_) => match d {
             InWord(_) => None,
             InBuffer(b) => match s { InWord(_) => None, InBuffer(b2) => match b.eq_dec(b2) { Inl(_) => Some(more), Inr(_) => None }, Gone => None },
             Gone => Some(more),
@@ -1587,19 +1587,19 @@ theorem Loc::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc>,
             InBuffer(_) => λ s _ _ => trivial,
             Gone => λ s _ _ => trivial,
         },
-        Bytes(c) => λ d => match d {
+        ByteList(c) => λ d => match d {
             InWord(_) => λ s _ _ => trivial,
             InBuffer(b) => λ s => match s {
                 InWord(_) => λ _ _ => trivial,
-                InBuffer(b2) => λ c1 c2 => match b.eq_dec(b2) as λ q => Loc::MovesHold(tys, Cons(Bytes(c), rest), Cons(InBuffer(b), ds), Cons(InBuffer(b2), ss),
+                InBuffer(b2) => λ c1 c2 => match b.eq_dec(b2) as λ q => Loc::MovesHold(tys, Cons(ByteList(c), rest), Cons(InBuffer(b), ds), Cons(InBuffer(b2), ss),
                         match q as λ _ => Option<Stmt> { Inl(_) => Some(more), Inr(_) => None }) {
-                    Inl(e) => Loc::move_stay_sound(tys, Bytes(c), rest, InBuffer(b), ds, InBuffer(b2), ss, more, ih,
+                    Inl(e) => Loc::move_stay_sound(tys, ByteList(c), rest, InBuffer(b), ds, InBuffer(b2), ss, more, ih,
                         λ env v (k: env.buffers.nth(b2) = Some(v)) => j(sym(e), λ x _ => env.buffers.nth(x) = Some(v), k), c2, refl),
                     Inr(_) => trivial,
                 },
                 Gone => λ _ _ => trivial,
             },
-            Gone => λ s c1 c2 => Loc::move_stay_sound(tys, Bytes(c), rest, Gone, ds, s, ss, more, ih, λ env v _ => trivial, c2, refl),
+            Gone => λ s c1 c2 => Loc::move_stay_sound(tys, ByteList(c), rest, Gone, ds, s, ss, more, ih, λ env v _ => trivial, c2, refl),
         },
         Lines => λ d s _ _ => trivial,
         Named(_) => λ d s _ _ => trivial,
@@ -1998,7 +1998,7 @@ fn Loc::meet(t: Ty, a: Loc, b: Loc) → Option<Loc> {
     match t {
         Word(_) => match a { InWord(x) => match b { InWord(y) => match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }, InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
         Bit => match a { InWord(x) => match b { InWord(y) => match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }, InBuffer(_) => None, Gone => None }, InBuffer(_) => None, Gone => None },
-        Bytes(_) => match a { InWord(_) => None, Gone => Some(Gone), InBuffer(x) => match b { InWord(_) => None, Gone => Some(Gone),
+        ByteList(_) => match a { InWord(_) => None, Gone => Some(Gone), InBuffer(x) => match b { InWord(_) => None, Gone => Some(Gone),
             InBuffer(y) => match x.eq_dec(y) { Inl(_) => Some(InBuffer(x)), Inr(_) => Some(Gone) } } },
         Lines => None,
         Named(_) => None,
@@ -2033,15 +2033,15 @@ theorem Loc::meet_sound(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc): Loc::MeetH
             InBuffer(_) => trivial,
             Gone => trivial,
         },
-        Bytes(c) => match a {
+        ByteList(c) => match a {
             InWord(_) => trivial,
             Gone => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
             InBuffer(x) => match b {
                 InWord(_) => trivial,
                 Gone => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
-                InBuffer(y) => match x.eq_dec(y) as λ d => Loc::MeetHolds(tys, Bytes(c), InBuffer(x), InBuffer(y),
+                InBuffer(y) => match x.eq_dec(y) as λ d => Loc::MeetHolds(tys, ByteList(c), InBuffer(x), InBuffer(y),
                         match d { Inl(_) => Some(InBuffer(x)), Inr(_) => Some(Gone) }) {
-                    Inl(e) => λ env v => ⟨λ k => k, λ k => j(sym(e), λ z _ => Bytes(c).Kept(tys, env, InBuffer(z), v), k)⟩,
+                    Inl(e) => λ env v => ⟨λ k => k, λ k => j(sym(e), λ z _ => ByteList(c).Kept(tys, env, InBuffer(z), v), k)⟩,
                     Inr(_) => λ env v => ⟨λ _ => trivial, λ _ => trivial⟩,
                 },
             },
@@ -2112,7 +2112,7 @@ fn Part::dests(codes: List<Ty>, sy: List<Loc>, sn: List<Loc>, next: Nat) → Opt
             Cons(a, ys) => match sn {
                 Nil => None,
                 Cons(b, ns) => match t {
-                    Bytes(_) => Loc::meet(t, a, b).and_then(λ m => Part::dests(rest, ys, ns, next).and_then(λ d => Some(Dests(Cons(m, d.locs), d.next)))),
+                    ByteList(_) => Loc::meet(t, a, b).and_then(λ m => Part::dests(rest, ys, ns, next).and_then(λ d => Some(Dests(Cons(m, d.locs), d.next)))),
                     _ => Part::dests(rest, ys, ns, next + 1).and_then(λ d => Some(Dests(Cons(InWord(next), d.locs), d.next))),
                 },
             },
@@ -2625,7 +2625,7 @@ fn Ty::read_back(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat) → t.sem(
     match t as λ x => x.sem(tys) {
         Word(w) => ETm::word_at(w, env.number(id)),
         Bit => ETm::word_at(1, env.number(id)).head_bit(),
-        Bytes(c) => Bytes(c).default(tys),
+        ByteList(c) => ByteList(c).default(tys),
         Lines => Lines.default(tys),
         Named(i) => Named(i).default(tys),
         Count => Count.default(tys),
@@ -2645,7 +2645,7 @@ theorem Ty::read_back_kept(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat):
         Word(w) => λ v (k: env.number(id) = v.toNat()) => ETm::word_at_kept(w, env, id, v, k),
         Bit => λ v (k: env.number(id) = BitVec::ofBool(v).toNat()) =>
             trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), ETm::word_at_kept(1, env, id, BitVec::ofBool(v), k)), BitVec::head_bit_ofBool(v)),
-        Bytes(_) => λ v never => false_elim(never),
+        ByteList(_) => λ v never => false_elim(never),
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),

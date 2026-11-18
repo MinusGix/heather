@@ -715,7 +715,7 @@ impl Inference<'_> {
             // is the receiver's own `at` method, `v.at(i)`, whose proof that
             // `i` is inside is found where it is written
             // (docs/language/sequencing-surface-design.md §21).
-            ExprKind::Index { recv, idx } => match index_by_method(self.0, cx, idx) {
+            ExprKind::Index { recv, idx } => match index_by_method(self.0, cx, recv, idx) {
                 true => {
                     let call = Expr {
                         kind: ExprKind::Dot { recv: recv.clone(), name: "at".into(), tyargs: vec![], args: Some(vec![(**idx).clone()]), named: vec![] },
@@ -2231,9 +2231,14 @@ impl Inference<'_> {
 /// Is `xs[i]` the method call `xs.at(i)`? Where the index infers at a type
 /// that is not `Fin`. A numeral, and an index whose type is not inferred
 /// (`FZ`, `FS(i)`, which only check), keep the kernel's `nth` at `Fin(n)`.
-fn index_by_method(elab: &Elaborator, cx: &Cx, idx: &Expr) -> bool {
+fn index_by_method(elab: &Elaborator, cx: &Cx, recv: &Expr, idx: &Expr) -> bool {
+    // A numeral indexes a vector as a `Fin`, and anything else (a
+    // `Bytes(n)`, lib/native/runtime/bytes.hthr) by its `at`.
     if matches!(idx.kind, ExprKind::Num(_)) {
-        return false;
+        return elab.probe(|| match elab.elab_infer(cx, recv) {
+            Ok((_, ty, _)) => !matches!(&*crate::inductive::decoded(&ty), Type::Vec { .. }),
+            Err(_) => false,
+        });
     }
     elab.probe(|| match elab.elab_infer(cx, idx) {
         Ok((_, ty, _)) => !matches!(&*crate::inductive::decoded(&ty), Type::Fin { .. }),

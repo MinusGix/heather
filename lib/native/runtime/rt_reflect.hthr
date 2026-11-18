@@ -53,7 +53,7 @@ import rt;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat) }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -539,7 +539,7 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                     // setup's to choose; a list of those is a list of lines.
                     True => match args {
                         Cons(a, _) => k.is_byte(a).bind(λ byte => match byte {
-                            True => pure(Bytes(0)),
+                            True => pure(ByteList(0)),
                             False => k.is_bytes(a).bind(λ bytes => match bytes {
                                 True => pure(Lines),
                                 False => rt_refuse("a list of these has no runtime layout under the reflected fragment"),
@@ -1106,7 +1106,7 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
     match args {
         Nil => rt_refuse("`" ++ name ++ "` without its buffer"),
         Cons(xs, _) => k.ty_of(xs).bind(λ t => match t {
-            Bytes(c) => RSt::operands(step, st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
+            ByteList(c) => RSt::operands(step, st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
             _ => rt_refuse("`" ++ name ++ "` of something other than a byte buffer"),
         }),
     }
@@ -1126,6 +1126,39 @@ fn rt_designed(cs: List<Char>) → List<Char> {
     }
 }
 
+// `owner::shown` (or its designed spelling) when it is `g`.
+fn rt_name_owned(g: GlobalRef, owner, shown, designed: String) → Tac<Option<String>> {
+    let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
+    lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
+        True => pure(Some(owner ++ "::" ++ shown)),
+        False => lookup(owner ++ "::" ++ designed).bind(λ c3 => match is_g(c3) {
+            True => pure(Some(owner ++ "::" ++ designed)),
+            False => pure(None),
+        }),
+    })
+}
+
+// A method's name by the type of one of its first `fuel` parameters: its
+// receiver's, which a lifted loop over a `Bytes(n)` takes after `n`.
+fn rt_name_by_owner(g: GlobalRef, shown, designed: String, t: Handle, fuel: Nat) → Tac<Option<String>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(dom) => view(dom).bind(λ dv => match dv {
+                HGlobal(_, owner, _) => rt_name_owned(g, owner, shown, designed),
+                _ => pure(None),
+            }).bind(λ found => match found {
+                Some(nm) => pure(Some(nm)),
+                None => open(t, "x").bind(λ oc => match oc {
+                    Refused(_) => pure(None),
+                    Accepted(o) => rt_name_by_owner(g, shown, designed, o.body, f),
+                }),
+            }),
+            _ => pure(None),
+        }),
+    }
+}
+
 fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
     let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
     let designed = String(rt_designed(shown.chars));
@@ -1133,19 +1166,7 @@ fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
         True => pure(shown),
         False => lookup(designed).bind(λ cd => match is_g(cd) { True => pure(designed), False => infer(Global(g)).bind(λ ct => match ct {
             Refused(_) => pure(shown),
-            Accepted(t) => view(t).bind(λ v => match v {
-                HPi(dom) => view(dom).bind(λ dv => match dv {
-                    HGlobal(_, owner, _) => lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
-                        True => pure(owner ++ "::" ++ shown),
-                        False => lookup(owner ++ "::" ++ designed).bind(λ c3 => match is_g(c3) {
-                            True => pure(owner ++ "::" ++ designed),
-                            False => pure(shown),
-                        }),
-                    }),
-                    _ => pure(shown),
-                }),
-                _ => pure(shown),
-            }),
+            Accepted(t) => rt_name_by_owner(g, shown, designed, t, 2).bind(λ o => pure(o.unwrap_or(shown))),
         }) }),
     })
 }
@@ -1713,6 +1734,17 @@ fn rt_old_byte(f: Nat, k: Known, fk: FileKnown, st: RSt, h: Handle, operand: Boo
     }
 }
 
+// The length word of a record indexed by it, `n` of a `Bytes(n)`: read
+// off the record's type.
+fn rt_record_length(h: Handle) → Tac<Handle> {
+    let t <- infer(Hd(h)).bind(λ c => rt_accepted("a record's type", c));
+    let v <- view(t);
+    match v {
+        HGlobal(_, _, args) => match args { Cons(n, _) => pure(n), Nil => rt_refuse("a record with no length word in its type") },
+        _ => rt_refuse("a record with no length word in its type"),
+    }
+}
+
 fn rt_old_span<A>() → Tac<A> {
     rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
 }
@@ -1819,6 +1851,21 @@ fn rt_call_lent(fuel: Nat, k: Known, args: List<Handle>) → Tac<Nat> {
     }
 }
 
+// `bytes.byte_within(length, i)`: a byte of a lent span, under the
+// span's own length word; of the written span as it was before a store,
+// the byte bound before that store.
+fn rt_within(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, bytes, length, i: Handle,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>> {
+    rt_was_of(k, bytes).bind(λ was => match was {
+        Some(fs) => rt_old_byte(f, k, fs.fst, st, h, operand, fs.snd, length, i, step),
+        None => rt_span(k, st, bytes).bind(λ j =>
+            step(st, length).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
+                False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
+                True => step(rl.fst, i).bind(λ ri => pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
+            })),
+    })
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -1912,18 +1959,19 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         // `span.byte_within(length, i)`: a byte of a lent span,
                         // under the span's own length word.
                         PWithin => match args {
-                            // Of the written span as it was before a store, the
-                            // byte bound before that store.
-                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_was_of(k, bytes).bind(λ was => match was {
-                              Some(fs) => rt_old_byte(f, k, fs.fst, st, h, operand, fs.snd, length, i, λ s a => rt_go(f, k, s, a, True)),
-                              None => rt_span(k, st, bytes).bind(λ j =>
-                                rt_go(f, k, st, length, True).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
-                                    False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
-                                    True => rt_go(f, k, rl.fst, i, True).bind(λ ri =>
-                                        pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
-                                })),
-                            }),
+                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_within(f, k, st, h, operand, bytes, length, i, λ s a => rt_go(f, k, s, a, True)),
                             _ => rt_refuse("`byte_within` without its span, length word and index"),
+                        },
+                        // `s.at(i)` of a `Bytes(n)`: its bytes' `byte_within`
+                        // under `n`, the word its type is indexed by.
+                        PAt => match args {
+                            Cons(bytes, Cons(i, _)) => rt_record_length(bytes).bind(λ length => rt_within(f, k, st, h, operand, bytes, length, i, λ s a => rt_go(f, k, s, a, True))),
+                            _ => rt_refuse("`at` without its record and index"),
+                        },
+                        // `s.len()` of a `Bytes(n)`: the word `n`.
+                        PLen => match args {
+                            Cons(bytes, _) => rt_record_length(bytes).bind(λ length => rt_go(f, k, st, length, operand)),
+                            Nil => rt_refuse("`len` without its record"),
                         },
                         // `~x`: all ones, then `all_ones ⊕ x` (the literal on
                         // the left, where `Bool::xor` reads it).
@@ -2018,7 +2066,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Lines => match fields.rev() {
                                     Cons(tl, more) => match more {
                                         Cons(hd, _) => k.ty_of(hd).bind(λ ht => match ht {
-                                            Bytes(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
+                                            ByteList(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
                                                 pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
                                             _ => rt_refuse("a line that is not a byte buffer"),
                                         }),
@@ -2113,7 +2161,7 @@ fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
         Cons(bytes, more) => match more {
             Nil => Pair(0, tys),
             Cons(length, rest) => match bytes {
-                Bytes(_) => match (match length { Word(w) => w.same(64), _ => False }) {
+                ByteList(_) => match (match length { Word(w) => w.same(64), _ => False }) {
                     True => { let r = rt_lent(rest); Pair(r.fst + 1, Cons(Word(64), Cons(Word(64), r.snd))) },
                     False => Pair(0, tys),
                 },
@@ -2124,7 +2172,7 @@ fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
 }
 
 fn rt_has_bytes(tys: List<Ty>) → Bool {
-    match tys { Nil => False, Cons(t, rest) => match t { Bytes(_) => True, _ => rt_has_bytes(rest) } }
+    match tys { Nil => False, Cons(t, rest) => match t { ByteList(_) => True, _ => rt_has_bytes(rest) } }
 }
 
 // In the generator's mode a function may be lent spans; any other byte
@@ -2221,7 +2269,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 // known where its operation is in scope: a module that does not import
 // `bitvec_rotate` has no `rotr` to call.
 fn rt_derived_names() → List<Pair<String, Prim>> {
-    [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1))]
+    [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
+     Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen)]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -2331,7 +2380,7 @@ fn rt_nats(ns: List<Nat>) → String {
 }
 
 fn Ty::show(self t: Ty) → String {
-    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", ByteList(c) => "ByteList(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
 }
 
 fn Ty::shows(ts: List<Ty>) → String {

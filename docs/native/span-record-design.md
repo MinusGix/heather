@@ -58,14 +58,34 @@ fn Bytes::put({n}, self s: Bytes(n), i: u64, v: u8, inside: ∥i < s.len()∥ :=
 
 The span reflector (`rt_file_reflect.hthr`) gives a reflected program `FTm`
 a meaning `FTm::sem` over a `List<u8>` and a length word. A function over
-`Bytes(n)` gets a second meaning `FTm::over` that threads `Bytes(n)`
-instead, and one agreement theorem says that the two agree when the record's
-`bytes` and `n` are the list and word `sem` reads. Because `Bytes::put`
-unfolds to the same store `sem` performs (`with_byte_within`), and
-`Bytes::at` to the same read, each generated pin still closes by
-conversion: the generator emits no per-function proof beyond what laid
-records already get. A counted loop's agreement is the analogue of
-`counted_held` for laid records, proved once over `FFun::rounds`.
+`Bytes(n)` gets a second meaning `FTm::over` (`rt_bytes.hthr`) that threads
+`Bytes(n)` instead, and one agreement theorem (`FTm::over_runs`) says that
+the two agree when the record's `bytes` and `n` are the list and word `sem`
+reads. Because `Bytes::put` unfolds to the store `sem` performs
+(`Bytes::stored_under`, `with_byte_within`) and `Bytes::at` to the same
+read, a function of a `Bytes(n)` *is* its reflection's meaning over the
+record, by conversion: the generator emits no per-function proof.
+
+`runtime fn f` of a `Bytes(n)` (`runtime_bytes`, runtime.hthr) compiles
+the reflection written out as a function of the record's bytes and `n`,
+`f::bytes`, and publishes `f::runs_bytes`: at every record `s`, `f(s, …)`
+and `f::bytes(s.bytes, n, …)` agree (`Over`: the record's bytes after are
+the code's span after, and the values are one).
+
+- **A loop** (`rt_bytes_loop.hthr`) is the analogue of `counted_held` for
+  laid records: the pass over the record agrees with the pass over its
+  bytes (`FTm::tail_over_runs`), and `FFun::counted_over` turns the
+  function's own equation into agreement with the counted iteration. The
+  equation is read off the lifted loop's `f::ext` and `f::irrel`; the
+  function and its measure are taken at every length (`FFun::OverRun`),
+  because the recursion `f::rec` is: `n` is a capture the loop passes on.
+- **A call** of another runtime fn of a `Bytes(n)` reads it, in the
+  program's tables, as its code `g::bytes`, and over the record as `g`
+  itself. The caller's world keeps its promise (`BWorld::agrees_each`)
+  from each callee's own `g::runs_bytes`, read with the callee's code a
+  parameter (`HWorld::at`) so the kernel never unfolds a callee's passes;
+  the caller's theorem is proved the same way, at its callees as
+  parameters.
 
 ## Facts reach the loops
 
@@ -112,8 +132,10 @@ In a scratch module, before any of it is in the library:
 
 ## Not built
 
-- `Bytes` in the library, `FTm::over` and its agreement, the generator
-  reading a `Bytes(n)` parameter.
+- A loop whose parameters include facts (an `invariant`, or a test it runs
+  under, such as the sort's inner loop's `∥j <= i∥` and `∥i < s.len()∥`):
+  the function of the record at a state needs the facts there, which the
+  code does not carry.
 - `let key = s[i]` unannotated before a loop (the sort writes `: u8`).
 - `u8` parameters across the native boundary (span writers take and return
   64-bit words for now; `issues/runtime-repr-narrow-words.md`).
