@@ -63,6 +63,30 @@ theorem ITree::deep_map<A, B>(E: Events, t: ITree<A>(E), f: A → B, d: Nat, dee
     ITree::deep_bind<A, B>(E, t, λ r => Ret(f(r)), d, deep, λ r => trivial)
 }
 
+// A loop with at least `d` fuel, whose body's cuts lie `d` deep: its own
+// lie `d` deep, the silent step before each round paying for the round.
+theorem ITree::deep_iter_le<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), d: Nat, le: d <= n,
+    each: (x: A) → ITree::Deep(E, body(x), d)): (a: A) → ITree::Deep(E, ITree::iter(E, n, body, a), d) {
+    match n {
+        Zero => match d {
+            Zero => λ a => refl,
+            Succ(_) => false_elim(le),
+        },
+        Succ(m) => λ a => ITree::deep_bind<Step<A, B>, B>(E, body(a), λ x => match x {
+                Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
+                Break(b) => Ret(b),
+            }, d, each(a),
+            λ x => match x as λ y => ITree::Deep(E, match y as λ _ => ITree<B>(E) {
+                    Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
+                    Break(b) => Ret(b),
+                }, d) {
+                Continue(a2) => ITree::deep_iter_le(E, m, body, d.pred(), d.pred_mono(Succ(m), le),
+                    λ y => ITree::deep_mono(E, body(y), d, d.pred(), d.pred_le(), each(y)), a2),
+                Break(_) => trivial,
+            }),
+    }
+}
+
 // A loop at fuel `n`: a silent step before each round, so its cuts lie `n`
 // deep where its body's do.
 theorem ITree::deep_iter<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E)): (a: A) →
