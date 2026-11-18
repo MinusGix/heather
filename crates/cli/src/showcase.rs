@@ -71,10 +71,26 @@ pub fn cli_check_images() -> PathBuf {
     heather_cache::shared_store(&repo_root(), heather_cache::CLI_CHECK_IMAGES)
 }
 
-/// The store the native tests and their `compile-x86` children share:
-/// `target/native-test-images`, or beneath `$HEATHER_CACHE_DIR`.
+/// The store the native tests and their `compile-x86` children replay: the
+/// library gate's ([`cli_check_images`]). `compile-x86` checks its bundled
+/// library as the loader checks the same files, so its images have the
+/// gate's keys and the gate's parallel build is the native tests' warm-up
+/// (`issues/native-tests-share-the-gate-store.md`); they wait for it
+/// through the test runner's `PREREQUISITES`.
 pub fn native_test_images() -> PathBuf {
-    heather_cache::shared_store(&repo_root(), heather_cache::NATIVE_TEST_IMAGES)
+    cli_check_images()
+}
+
+/// `compile-x86`'s image arguments in a test: the shared store, and the
+/// lane's image policy (`--accept-stale-images` under
+/// `HEATHER_SEMANTIC_IMAGES=accept-stale`, as the gate runs), so a child
+/// replays what the gate replayed rather than elaborating it again.
+pub fn native_image_args() -> Vec<std::ffi::OsString> {
+    let mut args = vec!["--cache-dir".into(), native_test_images().into_os_string()];
+    if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
+        args.push("--accept-stale-images".into());
+    }
+    args
 }
 
 pub fn manifest_path() -> PathBuf {

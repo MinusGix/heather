@@ -46,7 +46,7 @@ fn binary_search_agrees_with_partition_point() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/binary-search/search.hthr", "lower_bound", "-o"])
-        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .arg(&assembly).args(heather_cli::showcase::native_image_args())
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let binary = output.join("lowerbound");

@@ -208,6 +208,13 @@ the lanes are cut this way is `docs/infrastructure/testing-architecture-design.m
   the process's peak memory during it. A read keeps everything it evaluates
   until it ends, so the read with the steps is the one holding the memory
   (`issues/compile-x86-address-space-margin.md`).
+- **A read runs on the untrusted evaluator** (`crates/run`,
+  `docs/infrastructure/untrusted-evaluator-design.md`) and falls back to the
+  kernel's where that is stuck; `HEATHER_READ_TRACE=1` says which ran and why.
+  `HEATHER_READS=kernel` asks for the kernel's only, and `HEATHER_READS=check`
+  runs both and refuses a read they differ on: use it after changing either.
+  With `HEATHER_READ_PROFILE=1` a kernel-evaluated read also lists the
+  definitions it referenced most.
 - **`compile-x86` carries the library it reads inside the binary** (the
   `// lib-closure:` lists): after editing a `lib/native/function_ir` module,
   rebuild `heather` before compiling with it, or the compile runs the

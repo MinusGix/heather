@@ -426,7 +426,23 @@ Four decisions in that shape:
 Each section's checksum covers its entry lines and is checked when that
 section is read, so another kernel's damaged section is that kernel's miss and
 is dropped by the next save, never this reader's. Writing is whole-file, at
-the end of a successful run.
+the end of a successful run, while the file is small.
+
+**The journal** (`issues/verdict-store-append-only-saves.md`). A shared test
+store outgrew "small": a month of kernels' sections is over a hundred
+megabytes, and the library gate's build workers save after every module, so
+rewriting it each time more than doubled the gate's CPU. Once the base file
+is at least `store::JOURNAL_ABOVE_BYTES`, a save writes only the entries it
+added since its last save, as a whole one-section cache file of the same
+format in `entries-v1.d/` beside the base (written beside and renamed, like
+the base). A reader takes its kernel's section of the base and of every
+journal file, each under its own checksum; a damaged journal file is its own
+entries missed. Once the journal holds `store::COMPACT_AT_FILES` files, the
+save that finds them folds them into the base and removes the files it read,
+one compaction at a time under a lock in the journal directory. A save whose
+section is due a fresh stamp rewrites the base the same way. Trust does not
+move: a journal entry is believed exactly when the same line in the base
+would be.
 
 ## 9. One invariant the implementation added
 

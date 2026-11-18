@@ -59,6 +59,21 @@ theorem nibble_twice(x: u8): low_nibble(low_nibble(x)) = low_nibble(x) { by bv_d
 theorem demorgan32(x, y: u32): (x | y).complement() = x.complement() & y.complement() { by bv_decide() }
 theorem mask64(x: u64): (x & 0xFF) | (x & 0xFF00) = x & 0xFFFF { by bv_decide() }
 
+// Comparisons as propositions: `<`, `<=` and `≠` between words.
+theorem lt_succ(x: u8): x & 0x7F < 0x80 { by bv_decide() }
+theorem le_or(x, y: u8): x <= x | y { by bv_decide() }
+theorem ne_succ(x: u16): x + 1 ≠ x { by bv_decide() }
+
+// Hypotheses: each local it can read is assumed, in any of the shapes a
+// goal takes; one it cannot read is passed over.
+theorem lt_hyp(x: u8, h: x.unsigned_lt_bit(10) = True): (x + 1).unsigned_lt_bit(11) = True { by bv_decide() }
+theorem lt_trans(x, y, z: u8, a: x < y, b: y < z): x < z { by bv_decide() }
+theorem le_antisymm(x, y: u16, a: x <= y, b: y <= x): x = y { by bv_decide() }
+theorem eq_hyp(x, y: u8, h: x = y + 1): x - y = 1 { by bv_decide() }
+theorem ne_hyp(x: u8, h: x ≠ 0): (x - 1) < x { by bv_decide() }
+theorem bool_hyp(b, c: Bool, h: b = True): (b || c) = True { by bv_decide() }
+theorem skips(x: u8, n: Nat, h: n = 3): x <= 0xFF { by bv_decide() }
+
 // Refusals: a false claim names values that falsify it; a claim with a
 // shift by a variable count is not one the reader takes.
 // expect-error: bv_decide: the claim is false at x =
@@ -69,3 +84,8 @@ theorem not_self(b: Bool): b = !b { by bv_decide() }
 
 // expect-error: bv_decide: a shift count is not a numeral
 theorem shift_by(x: u8, n: Nat): x << n = x << n { by bv_decide() }
+
+// A claim false under its hypotheses is answered with values that meet
+// them.
+// expect-error: bv_decide: the claim is false at x =
+theorem lt_not_enough(x: u8, h: x < 200): x < x + 100 { by bv_decide() }

@@ -28,6 +28,7 @@ value-metrics = ["heather-kernel-lib/value-metrics"]
 
 [dependencies]
 heather-kernel-lib = { path = "../kernel-lib" }
+heather-run = { path = "../run" }
 heather-numeral = { path = "../numeral" }
 # CaDiCaL, which the `Sat` host request asks (`src/host/sat.rs`).
 heather-sat = { path = "../sat" }

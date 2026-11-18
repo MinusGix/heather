@@ -17,7 +17,10 @@ is the closure of the roots, minus the closure of the roots after `minus`
 (the prefix a layered list stands on), in the loader's order: dependencies
 first, each module's imports in the order it writes them, the common
 prelude's ahead of them where the loader adds it. The entries between
-`&[` and `];` are this script's to write.
+`&[` and `];` are this script's to write. With the word `as-loaded` in the
+marker the list holds the common prelude itself too, and each entry is
+`("name", "lib/…/name.hthr", include_str!("…"))`: a list checked as the
+loader checks the files, so its images are the library gate's.
 
     scripts/lib-closures            # list the stale lists and orphans; exit 1 if any
     scripts/lib-closures --fix      # rewrite the stale lists in place
@@ -55,6 +58,8 @@ PRELUDE = "prelude"
 # outside its own closure, so its imports come first in every closure. It is
 # never listed (a list's modules are checked with their explicit imports).
 COMMON = "common"
+# A marker word: the list as the loader loads it (`parse_spec`).
+AS_LOADED = "as-loaded"
 
 
 def library_files():
@@ -96,9 +101,10 @@ class Library:
             im = [COMMON] + im
         return im
 
-    def closure(self, roots, minus=()):
-        """The loader's order, less the closure of `minus` and the common prelude."""
-        skip = set(self.walk(minus, self.imports)) | {COMMON}
+    def closure(self, roots, minus=(), common=False):
+        """The loader's order, less the closure of `minus` and (unless
+        `common`) the common prelude."""
+        skip = set(self.walk(minus, self.imports)) | (set() if common else {COMMON})
         return [n for n in self.walk(roots, self.imports) if n not in skip]
 
     def walk(self, roots, imports):
@@ -200,6 +206,10 @@ def orphans(lib):
 
 
 def parse_spec(words):
+    """Roots and `minus` roots. The word `as-loaded` (taken out first) is
+    whether the list is the closure as the loader loads it, the common
+    prelude included, each entry with its path from the repo root."""
+    words = [w for w in words if w != AS_LOADED]
     if "minus" in words:
         i = words.index("minus")
         return words[:i], words[i + 1:]
@@ -233,10 +243,15 @@ def lists_in(text):
 
 def entries(lib, file, spec, indent):
     roots, minus = parse_spec(spec)
+    loaded = AS_LOADED in spec
     out = []
-    for name in lib.closure(roots, minus):
+    for name in lib.closure(roots, minus, common=loaded):
         rel = os.path.relpath(lib.path(name), file.parent)
-        out.append(f'{indent}("{name}", include_str!("{rel}")),')
+        if loaded:
+            at = lib.path(name).relative_to(ROOT)
+            out.append(f'{indent}("{name}", "{at}", include_str!("{rel}")),')
+        else:
+            out.append(f'{indent}("{name}", include_str!("{rel}")),')
     return out
 
 

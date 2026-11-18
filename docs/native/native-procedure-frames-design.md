@@ -40,7 +40,7 @@ After this round, an activation is described by what it is:
    frame of the procedure entered there: its slots, its saved registers
    and its return address. Below it is the largest need of what it calls,
    one level shallower. `deep` is that number for `main` at the source's
-   depth, plus the functions' room under the deepest frame.
+   depth, or the room of a function it calls where that is more (§6.7).
 
 Calls already move words from the caller's homes to the callee's, through
 the argument and result registers (`Prog::calls`, `words_to`,
@@ -386,10 +386,8 @@ below `2^64` for the counter. The new bound does not grow with the depth
 where nothing recurses, so the theorems take `small: src.depth <
 Nat::pow(2, 64)`; a certificate gives it by evaluation.
 
-**What it is not yet.** The floor is still added, not maxed: the
-functions' room and a word sit below the deepest call even where the
-deepest procedure calls no function. That is at most one function's room
-too much. A premise free of
+**What it is not yet.** (The floor that was added and not maxed is
+§6.7's.) A premise free of
 the placement (`need` is at most the old bound) is not proved; nothing
 uses one. `need` over frames that are not literals is costly to
 evaluate (`src.bodies()` runs the allocator's scan at every use), so a
@@ -399,9 +397,9 @@ test states it over `SpillAll().frames(src)` or a literal.
 
 `Homes.rooms` is the room table the functions are emitted under, function
 `f`'s room at entry `f`. `Prog::links(functions, places, rooms, names)`
-takes it, and `Homes::calls_room(functions)`, the largest room and the
-CALL's word, is the functions' term of `Target.roomy` and of
-`Source::need`. The table is a choice, as `places` is: the function
+takes it, and each body's functions' term of `Target.roomy` and of
+`Source::need` reads its rooms (§6.7; it was `Homes::calls_room`, the
+largest room of all and the CALL's word). The table is a choice, as `places` is: the function
 compiler checks each function against it (`Function::roomy`), so the
 proofs are stated over any table and nothing new is proved about one.
 
@@ -467,3 +465,69 @@ slot, and the slot lemmas of `native_compile_homes` and the code of
 `List::frames_spelled` writes a frame's homes with their slots
 (`List::homes_numbered`: `2k` slot `k`, `2k + 1` register `k`), and
 `write-elf` reads them back.
+
+### 6.7 Functions bounded per path
+
+A body's stack below its frame is the larger of two things that never
+stand on the stack together, since a function calls no procedure: the
+deepest of its calls of procedures, or the room of a function it calls.
+Each counts only what that body calls.
+
+- `StructuredRegion::called()` and `Stmt::called()` list the functions a
+  region or statement calls (a `Call` or `Lend`), `List::called_by(i)`
+  those of procedure `i`'s body. `Layout.called` (and `Target.called`)
+  is the running body's list: `main.called()` in `Source::layout`, the
+  procedure's own in `Layout::body`. `Layout::function_fits` refuses a call
+  of a function not listed, so a call arrives with `called.holds(f)`, as a
+  call of a procedure arrives with `callees.holds(index)`.
+- `List::functions_room(table)` is the most a call of one of `called`
+  takes: the function's room in the homes' table and the CALL's word.
+  `List::below(callees, called, …, table, d)` is
+  `max(callees.reach(…, d), called.functions_room(table))`, and a row of
+  `deep_row` holds each procedure's `below` at one level less
+  (`List::deep_row_at`).
+- `Target.roomy` is `callees.below(called, …, room) + 8 <= index`, and
+  `Source::need` is `main`'s `below` at the source's depth and
+  `8 * (words + 1)`. A procedure that calls nothing needs nothing below its
+  frame but the word the depth check's exit may push; a leaf procedure
+  under a function-calling `main` no longer carries the function's room.
+
+The function call's proof reads its room from the list
+(`List::functions_room_mem`) and `Nat::le_max_r`; the procedure call's
+from `List::reach_call` and `Nat::le_max_l`.
+
+## 7. Recursion: the target
+
+Today a recursive program's theorem is about a source whose meaning has a
+`depth`: past `depth` nested calls, the source itself exits 139
+(`Source::performs(call, n, depth)`). That puts the machine's limit in the
+program's meaning. Minus's direction (2026-11-17): a call that does not fit
+is a refusal *of the compiled program*, not an event of the source, and
+the guarantee about recursion is to be neat. What the compiled theorem is
+to say, once built:
+
+1. **Refusal only where it must.** A run is refused only at a call where
+   the frames of the source's current chain of calls, and the callee's,
+   exceed the stack's room. Any room at least the run's own deepest chain
+   gives exactly the source's run.
+2. **Refusal at entry, with a clean prefix.** The check is at the call,
+   before the callee runs; what the program did before it is the source's
+   events, unchanged.
+3. **Tail calls in constant stack.** A call in tail position reuses its
+   caller's frame and is never checked.
+4. **Proved-bounded recursion checked once.** Where the source proves a
+   bound on its recursion's depth (in the input's sizes), one check before
+   the recursion (at startup when the bound is in the input's sizes), none
+   per call.
+5. **Acyclic call graphs: no check.** A program whose procedures never
+   reach themselves keeps the exact theorem, with `need` from the call
+   graph and nothing at run time.
+
+The order to build them: per-path bounds (§6.7, done); the source meaning
+without `depth` (calls nest by fuel, the coinductive `performs_co` too) and
+the refusal outcome, which gives 1, 2 and 5, with the byte check on cycles
+only; tail calls (3); bounded recursion (4), with the function compiler's
+work. The refusal outcome is the same shape as the contract's limit-read
+refusal (`docs/native/system-contract-design.md` §4.2), and §4.1 there
+lists where a check goes.
+

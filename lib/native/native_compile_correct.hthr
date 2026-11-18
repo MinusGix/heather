@@ -1042,12 +1042,12 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                             λ at_whole => {
                                 // `main`'s frame: the stack's top words.
                                 let index = stack.size - 8 * src.words;
-                                let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
+                                let needed: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 * (src.words + 1) <= stack.size) = deep;
                                 let top_i: (stack.size = index + 8 * src.words) = omega(needed);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-                                let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
+                                let roomy: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 <= index) = omega(top_i, needed);
                                 let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
-                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), index, [], home_values(s.gprs), src.depth, framed, roomy);
+                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(), index, [], home_values(s.gprs), src.depth, framed, roomy);
                                 let live = src.main.live_in(homes, []);
                                 let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
@@ -1472,23 +1472,26 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         let more = λ (d2: Nat) (eq: t.room = Succ(d2)) => {
             let d_eq: (d2 = d) = omega(eq, room);
             let places = t.homes.places;
-            let was: ((t.callees.reach(t.procedures, t.bodies, places, Succ(d2)) + t.homes.calls_room(t.functions)) + 8 <= t.index) =
-                j(eq, λ r _ => (t.callees.reach(t.procedures, t.bodies, places, r) + t.homes.calls_room(t.functions)) + 8 <= t.index, t.roomy);
-            // The call's level and what the callee's own calls take are
-            // within what this body's calls take.
-            let below = t.procedures.performed_by(index).reach(t.procedures, t.bodies, places, d2);
-            let level: (((8 * frame.words + 8 * kept.len()) + 8) + below <= t.callees.reach(t.procedures, t.bodies, places, Succ(d2))) =
-                t.callees.reach_call(t.procedures, t.bodies, places, d2, index, allowed);
+            let table = t.homes.room_table(t.functions);
+            let was: (t.callees.below(t.called, t.procedures, t.bodies, places, table, Succ(d2)) + 8 <= t.index) =
+                j(eq, λ r _ => t.callees.below(t.called, t.procedures, t.bodies, places, table, r) + 8 <= t.index, t.roomy);
+            let reach_le: (t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2)) <= t.callees.below(t.called, t.procedures, t.bodies, places, table, Succ(d2))) =
+                Nat::le_max_l(t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2)), t.called.functions_room(table));
+            // The call's level and what the callee's body takes below its
+            // frame are within what this body's calls take.
+            let below = t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, d2);
+            let level: (((8 * frame.words + 8 * kept.len()) + 8) + below <= t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2))) =
+                t.callees.reach_call(t.procedures, t.bodies, places, table, d2, index, allowed);
             // Where the callee's frame is: below the return address and
             // the registers it pushes. `i2` is where the return address is.
             let ic = ((t.index - 8) - 8 * kept.len()) - 8 * frame.words;
             let i2 = (ic + 8 * frame.words) + 8 * kept.len();
-            let at_i: (i2 = t.index - 8) = omega(was, level);
-            let back_i: (i2 + 8 = t.index) = omega(was, level);
-            let roomy_c: ((below + t.homes.calls_room(t.functions)) + 8 <= ic) = omega(was, level);
+            let at_i: (i2 = t.index - 8) = omega(was, reach_le, level);
+            let back_i: (i2 + 8 = t.index) = omega(was, reach_le, level);
+            let roomy_c: (below + 8 <= ic) = omega(was, reach_le, level);
             let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
             let framed_c: (ic + 8 * (frame.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
-            let c = t.called(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), d2, framed_c, roomy_c);
+            let c = t.callee(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), d2, framed_c, roomy_c);
             let at_entry = λ (r: Nat) (inside: r < 6) (_: homes.pinned(home_register(r)) = True) => sym(home_value(g0, r, inside));
             let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, k(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
                 at_entry, j(sym(d_eq), λ x _ => Succ(x) < Nat::pow(2, 64), small),
@@ -1599,12 +1602,12 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let w_whole = built.exit_within;
     // `main`'s frame: the stack's top words.
     let index = stack.size - 8 * src.words;
-    let needed: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1) <= stack.size) = deep;
+    let needed: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 * (src.words + 1) <= stack.size) = deep;
     let top_i: (stack.size = index + 8 * src.words) = omega(needed);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-    let roomy: ((src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 <= index) = omega(top_i, needed);
+    let roomy: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 <= index) = omega(top_i, needed);
     let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
-        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), index, [], home_values(s.gprs), src.depth, framed, roomy);
+        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(), index, [], home_values(s.gprs), src.depth, framed, roomy);
     let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
     let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, homes.room_table(src.functions), built.names, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, built.linked);
