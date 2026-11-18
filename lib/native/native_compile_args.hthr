@@ -108,51 +108,59 @@ theorem byte_tests_nonzero(byte: BitVec(8), nonzero: Not(byte = BitVec::ofNat(0)
 // buffer's first `i`, each of those below the capacity the argument's
 // byte; the command line kept, and the argument's string still at its
 // pointer.
-fn Target::ArgCells(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
-    m: X86Memory(t.r.profile)) → Type {
-    Exists<Nat → BitVec(8)>(λ w => t.r.Holds(w, m) ∧
-        (((q: Nat) → ((q < t.layout().buffer_offset(buf)) ∨ (t.layout().buffer_offset(buf) + i <= q)) → w(q) = v(q)) ∧
-        (((q: Nat) → t.layout().buffer_offset(buf) + cap <= q → w(q) = v(q)) ∧
-        (((k: Nat) → (c: BitVec(8)) → k < i → k < cap → arg.nth(k) = Some(c) → w(t.layout().buffer_offset(buf) + k) = c) ∧
-        (t.Stacking(w, m) ∧ CStringAt(t.argv(), m, pointer, arg))))))
+record ArgCells(t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat, m: X86Memory(t.r.profile)) {
+    bytes: Nat → BitVec(8),
+    holds: t.r.Holds(bytes, m),
+    outside: (q: Nat) → ((q < t.layout().buffer_offset(buf)) ∨ (t.layout().buffer_offset(buf) + i <= q)) → bytes(q) = v(q),
+    past: (q: Nat) → t.layout().buffer_offset(buf) + cap <= q → bytes(q) = v(q),
+    copied: (k: Nat) → (c: BitVec(8)) → k < i → k < cap → arg.nth(k) = Some(c) → bytes(t.layout().buffer_offset(buf) + k) = c,
+    stacking: t.Stacking(bytes, m),
+    string: CStringAt(t.argv(), m, pointer, arg),
 }
 
 // The registers at the loop's head: R8 the count, R9 the capacity, RSI and
 // RDI past the count in the string and the buffer; the home registers as
 // they were (`vals`), the loop writing none.
-fn Target::ArgRegs(self t: Target, buf, cap: Nat, pointer: BitVec(64), i: Nat, vals: List<BitVec(64)>, g: Gprs) → Type {
-    (read_gpr(R8, g) = word_of_nat(64, i)) ∧ ((read_gpr(R9, g) = BitVec::ofNat(cap)) ∧
-    ((read_gpr(Rsi, g) = word_of_nat(64, pointer.toNat() + i)) ∧ ((read_gpr(Rdi, g) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i)) ∧
-    (home_values(g) = vals))))
+record ArgRegs(t: Target, buf, cap: Nat, pointer: BitVec(64), i: Nat, vals: List<BitVec(64)>, g: Gprs) {
+    count: read_gpr(R8, g) = word_of_nat(64, i),
+    capacity: read_gpr(R9, g) = BitVec::ofNat(cap),
+    source: read_gpr(Rsi, g) = word_of_nat(64, pointer.toNat() + i),
+    dest: read_gpr(Rdi, g) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i),
+    homes: home_values(g) = vals,
 }
 
-fn Target::ArgAt(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
-    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    (i <= arg.len()) ∧ (t.ArgRegs(buf, cap, pointer, i, vals, g) ∧ t.ArgCells(v, buf, cap, arg, pointer, i, m))
+record ArgAt(t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
+    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) {
+    within: i <= arg.len(),
+    regs: ArgRegs(t, buf, cap, pointer, i, vals, g),
+    cells: ArgCells(t, v, buf, cap, arg, pointer, i, m),
 }
 
 // Past the byte's store (or its skip): the cells one further, the
 // registers not yet stepped.
-fn Target::ArgNext(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
-    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    (i < arg.len()) ∧ (t.ArgRegs(buf, cap, pointer, i, vals, g) ∧ t.ArgCells(v, buf, cap, arg, pointer, Succ(i), m))
+record ArgNext(t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
+    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) {
+    below: i < arg.len(),
+    regs: ArgRegs(t, buf, cap, pointer, i, vals, g),
+    cells: ArgCells(t, v, buf, cap, arg, pointer, Succ(i), m),
 }
 
 // The start: nothing copied.
 theorem Target::arg_cells_start(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64),
     m: X86Memory(t.r.profile), holds: t.r.Holds(v, m), stacking: t.Stacking(v, m), string: CStringAt(t.argv(), m, pointer, arg)):
-    t.ArgCells(v, buf, cap, arg, pointer, 0, m) {
-    Exists(v, ⟨holds, ⟨λ q _ => refl, ⟨λ q _ => refl, ⟨λ k c early => false_elim(omega(early)), ⟨stacking, string⟩⟩⟩⟩⟩)
+    ArgCells(t, v, buf, cap, arg, pointer, 0, m) {
+    ArgCells(bytes := v, holds := holds, outside := λ q _ => refl, past := λ q _ => refl, copied := λ k c early => false_elim(omega(early)),
+        stacking := stacking, string := string)
 }
 
 // A byte stored below the capacity: one further.
 theorem Target::arg_cells_store(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), arg: List<BitVec(8)>,
-    pointer: BitVec(64), i: Nat, short: i < cap, m: X86Memory(t.r.profile), cells: t.ArgCells(v, buf, cap, arg, pointer, i, m),
+    pointer: BitVec(64), i: Nat, short: i < cap, m: X86Memory(t.r.profile), cells: ArgCells(t, v, buf, cap, arg, pointer, i, m),
     byte: BitVec(8), got: arg.nth(i) = Some(byte)):
-    t.ArgCells(v, buf, cap, arg, pointer, Succ(i),
+    ArgCells(t, v, buf, cap, arg, pointer, Succ(i),
         t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [imm_byte0(byte.zero_extend(56))])) {
     let bo = t.layout().buffer_offset(buf);
-    let w = cells.witness;
+    let w = cells.bytes;
     let one: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
     let ends = t.layout().buffer_end(buf, cap, found);
     let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + (t.caps.largest() + 1)) = refl;
@@ -162,28 +170,28 @@ theorem Target::arg_cells_store(self t: Target, v: Nat → BitVec(8), buf, cap: 
     let away = λ (q: Nat) (h: (q < bo + i) ∨ ((bo + i) + 1 <= q)) => t.r.cells_outside(w, bo + i, one, q, h);
     let back: (imm_byte0(byte.zero_extend(56)) = byte) = BitVec::truncate_zero_extend(8, 56, byte);
     let after = t.r.profile.store(m, next_rip(t.r.low, bo + i), one);
-    Exists(w2, ⟨t.r.store_holds(w, m, cells.proof.left, bo + i, one, fits),
-        ⟨λ q out => trans(away(q, match out {
+    ArgCells(bytes := w2, holds := t.r.store_holds(w, m, cells.holds, bo + i, one, fits),
+        outside := λ q out => trans(away(q, match out {
                 Inl(under) => Inl(omega(under)),
                 Inr(over) => {
                     let past: ((bo + i) + 1 <= q) = omega(over);
                     Inr(past)
                 },
-            }), cells.proof.right.left(q, match out {
+            }), cells.outside(q, match out {
                 Inl(under) => Inl(under),
                 Inr(over) => {
                     let past: (bo + i <= q) = omega(over);
                     Inr(past)
                 },
             })),
-        ⟨λ q past => {
+        past := λ q past => {
             let late: ((bo + i) + 1 <= q) = omega(past, short);
-            trans(away(q, Inr(late)), cells.proof.right.right.left(q, past))
+            trans(away(q, Inr(late)), cells.past(q, past))
          },
-        ⟨λ k c early capped got_k => match k.lt_or_ge(i) {
+        copied := λ k c early capped got_k => match k.lt_or_ge(i) {
             Inl(before) => {
                 let under: (bo + k < bo + i) = omega(before);
-                trans(away(bo + k, Inl(under)), cells.proof.right.right.right.left(k, c, before, capped, got_k))
+                trans(away(bo + k, Inl(under)), cells.copied(k, c, before, capped, got_k))
             },
             Inr(late) => {
                 let here: (i = k) = omega(late, early);
@@ -191,36 +199,36 @@ theorem Target::arg_cells_store(self t: Target, v: Nat → BitVec(8), buf, cap: 
                 j(here, λ x _ => w2(bo + x) = c, trans(t.r.cells_inside(w, bo + i, one, 0, imm_byte0(byte.zero_extend(56)), refl), trans(back, same)))
             },
          },
-        ⟨t.stacking_store(w, m, bo + i, one, below, cells.proof.right.right.right.right.left),
-         cstring_at_kept(t.argv(), m, t.argv(), after, t.kept_store(m, bo + i, one, fits), pointer, arg,
-            cells.proof.right.right.right.right.right)⟩⟩⟩⟩⟩)
+        stacking := t.stacking_store(w, m, bo + i, one, below, cells.stacking),
+        string := cstring_at_kept(t.argv(), m, t.argv(), after, t.kept_store(m, bo + i, one, fits), pointer, arg,
+            cells.string))
 }
 
 // A byte past the capacity is not stored: one further all the same.
 theorem Target::arg_cells_skip(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
-    over: cap <= i, m: X86Memory(t.r.profile), cells: t.ArgCells(v, buf, cap, arg, pointer, i, m)):
-    t.ArgCells(v, buf, cap, arg, pointer, Succ(i), m) {
+    over: cap <= i, m: X86Memory(t.r.profile), cells: ArgCells(t, v, buf, cap, arg, pointer, i, m)):
+    ArgCells(t, v, buf, cap, arg, pointer, Succ(i), m) {
     let bo = t.layout().buffer_offset(buf);
-    Exists(cells.witness, ⟨cells.proof.left,
-        ⟨λ q out => cells.proof.right.left(q, match out {
+    ArgCells(bytes := cells.bytes, holds := cells.holds,
+        outside := λ q out => cells.outside(q, match out {
                 Inl(under) => Inl(under),
                 Inr(late) => {
                     let past: (bo + i <= q) = omega(late);
                     Inr(past)
                 },
             }),
-        ⟨cells.proof.right.right.left,
-        ⟨λ k c early capped got => cells.proof.right.right.right.left(k, c, omega(capped, over), capped, got),
-         cells.proof.right.right.right.right⟩⟩⟩⟩)
+        past := cells.past,
+        copied := λ k c early capped got => cells.copied(k, c, omega(capped, over), capped, got),
+        stacking := cells.stacking, string := cells.string)
 }
 
 // Every byte copied: the environment placed with the argument filled in.
 theorem Target::arg_cells_filled(self t: Target, env: Env, v: Nat → BitVec(8), keeps: t.layout().Keeps(env, v), same: env.args = t.args,
     buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat, all: i = arg.len(),
-    m: X86Memory(t.r.profile), cells: t.ArgCells(v, buf, cap, arg, pointer, i, m)):
+    m: X86Memory(t.r.profile), cells: ArgCells(t, v, buf, cap, arg, pointer, i, m)):
     t.Placed(env.set_buffer(buf, fill(env.buffer(buf), arg)), m) {
     let bo = t.layout().buffer_offset(buf);
-    let w = cells.witness;
+    let w = cells.bytes;
     let bytes = arg.take(cap);
     let short: (bytes.len() <= cap) = arg.len_take_le(cap);
     let ends: ((bytes.len() = arg.len()) ∨ (bytes.len() = cap)) = match arg.len().lt_or_ge(cap) {
@@ -229,21 +237,21 @@ theorem Target::arg_cells_filled(self t: Target, env: Env, v: Nat → BitVec(8),
     };
     let kept = t.layout().keeps_fill(env, v, w, keeps, buf, cap, found, bytes, short,
         λ q out => match out {
-            Inl(under) => cells.proof.right.left(q, Inl(under)),
+            Inl(under) => cells.outside(q, Inl(under)),
             Inr(over) => match ends {
-                Inl(whole) => cells.proof.right.left(q, Inr(omega(over, whole, all))),
-                Inr(cut) => cells.proof.right.right.left(q, omega(over, cut)),
+                Inl(whole) => cells.outside(q, Inr(omega(over, whole, all))),
+                Inr(cut) => cells.past(q, omega(over, cut)),
             },
         },
         λ k c got => {
             let cut = arg.take_nth(cap, k, c, got);
-            cells.proof.right.right.right.left(k, c, j(sym(all), λ x _ => k < x, arg.nth_some_below(k, c, cut.right)), cut.left, cut.right)
+            cells.copied(k, c, j(sym(all), λ x _ => k < x, arg.nth_some_below(k, c, cut.right)), cut.left, cut.right)
         });
     let len: (env.buffer(buf).len() = cap) = t.layout().keeps_buffer_len(env, v, keeps, buf, cap, found);
     let filled: (fill(env.buffer(buf), arg) = fill(env.buffer(buf), bytes)) = trans(fill_take(env.buffer(buf), arg),
         cong_fn<Nat, List<BitVec(8)>>(λ n => fill(env.buffer(buf), arg.take(n)), len));
     j(sym(filled), λ bs _ => t.Placed(env.set_buffer(buf, bs), m),
-        Exists(w, ⟨cells.proof.left, ⟨kept, ⟨same, cells.proof.right.right.right.right.left⟩⟩⟩))
+        Exists(w, ⟨cells.holds, ⟨kept, ⟨same, cells.stacking⟩⟩⟩))
 }
 
 // ---------------------------------------------------------------------------
@@ -258,14 +266,14 @@ fn ArgByte(arg: List<BitVec(8)>, i: Nat, byte: BitVec(8)) → Type {
 // The byte RSI points at, read below the canonical boundary.
 theorem Target::arg_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64),
     room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47), i: Nat, vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile),
-    at: t.ArgAt(v, buf, cap, arg, pointer, i, vals, g, m)):
+    at: ArgAt(t, v, buf, cap, arg, pointer, i, vals, g, m)):
     Exists<BitVec(8)>(λ byte => (read_gpr(Rsi, g).toNat() < Nat::pow(2, 47)) ∧
         ((t.site().data.read(m, read_gpr(Rsi, g)) = Some(byte)) ∧ ArgByte(arg, i, byte))) {
     let a = word_of_nat(64, pointer.toNat() + i);
-    let rsi: (read_gpr(Rsi, g) = a) = at.right.left.right.right.left;
-    let string = at.right.right.proof.right.right.right.right.right;
+    let rsi: (read_gpr(Rsi, g) = a) = at.regs.source;
+    let string = at.cells.string;
     let source = λ (k: Nat) => t.argv().read(m, word_of_nat(64, pointer.toNat() + k));
-    let short: (pointer.toNat() + i < Nat::pow(2, 47)) = omega(room, at.left);
+    let short: (pointer.toNat() + i < Nat::pow(2, 47)) = omega(room, at.within);
     let value: (a.toNat() = pointer.toNat() + i) = toNat_word_of_nat(64, pointer.toNat() + i,
         canonical_lt_word(pointer.toNat() + i, Nat::le_of_lt(pointer.toNat() + i, Nat::pow(2, 47), short)));
     let low: (a.toNat() < Nat::pow(2, 47)) = j(sym(value), λ n _ => n < Nat::pow(2, 47), short);
@@ -282,7 +290,7 @@ theorem Target::arg_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, ar
             found(present.witness, s.left, Inr(⟨present.proof, s.right⟩))
         },
         Inr(over) => {
-            let all: (i = arg.len()) = Nat::le_antisym(i, arg.len(), at.left, over);
+            let all: (i = arg.len()) = Nat::le_antisym(i, arg.len(), at.within, over);
             found(BitVec::ofNat(0), j(sym(all), λ k _ => source(k) = Some(BitVec::ofNat(0)), cstring_end(arg, source, string)), Inl(⟨all, refl⟩))
         },
     }
@@ -301,18 +309,19 @@ theorem count_borrow(a, b: BitVec(64), i, cap: Nat, value: a.toNat() = i, bound:
 
 // The adds: the count, RSI and RDI one further.
 theorem Target::arg_step(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
-    vals: List<BitVec(64)>, s: MachineState<X86Memory(t.r.profile)>, next: t.ArgNext(v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory)):
-    t.ArgAt(v, buf, cap, arg, pointer, Succ(i), vals,
+    vals: List<BitVec(64)>, s: MachineState<X86Memory(t.r.profile)>, next: ArgNext(t, v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory)):
+    ArgAt(t, v, buf, cap, arg, pointer, Succ(i), vals,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).gprs,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).memory) {
-    let regs = next.right.left;
+    let regs = next.regs;
     let one = λ (x: BitVec(64)) (y: BitVec(64)) (same: x = y) => cong_fn<BitVec(64), BitVec(64)>(λ z => z.add(BitVec::ofNat(1)), same);
-    ⟨next.left, ⟨⟨trans(one(read_gpr(R8, s.gprs), word_of_nat(64, i), regs.left), sym(word_of_nat_succ(i))),
-        ⟨regs.right.left,
-        ⟨trans(one(read_gpr(Rsi, s.gprs), word_of_nat(64, pointer.toNat() + i), regs.right.right.left), sym(word_of_nat_succ(pointer.toNat() + i))),
-        ⟨trans(one(read_gpr(Rdi, s.gprs), next_rip(t.r.low, t.layout().buffer_offset(buf) + i), regs.right.right.right.left),
-            sym(next_rip_succ(t.r.low, t.layout().buffer_offset(buf) + i))), regs.right.right.right.right⟩⟩⟩⟩,
-     next.right.right⟩⟩
+    ArgAt(within := next.below, cells := next.cells, regs := ArgRegs(
+        count := trans(one(read_gpr(R8, s.gprs), word_of_nat(64, i), regs.count), sym(word_of_nat_succ(i))),
+        capacity := regs.capacity,
+        source := trans(one(read_gpr(Rsi, s.gprs), word_of_nat(64, pointer.toNat() + i), regs.source), sym(word_of_nat_succ(pointer.toNat() + i))),
+        dest := trans(one(read_gpr(Rdi, s.gprs), next_rip(t.r.low, t.layout().buffer_offset(buf) + i), regs.dest),
+            sym(next_rip_succ(t.r.low, t.layout().buffer_offset(buf) + i))),
+        homes := regs.homes))
 }
 
 // A round of the copy from `i` bytes copied: at the NUL every byte is
@@ -321,58 +330,60 @@ theorem Target::arg_step(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, ar
 theorem Run::arg_round(self r: Run, loops: Nat → Nat → Gprs → X86Memory(r.t.r.profile) → Type, v: Nat → BitVec(8), buf, cap: Nat,
     found: r.t.caps.nth(buf) = Some(cap), arg: List<BitVec(8)>, pointer: BitVec(64), room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
     vals: List<BitVec(64)>, o: Nat, leave, again: r.State() → Type, s: r.State(), resident: r.t.site().Resident(s.memory), i: Nat,
-    at: r.t.ArgAt(v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory),
-    fin: (g: Gprs) → (f: Flags) → (rip: BitVec(64)) → r.t.ArgAt(v, buf, cap, arg, pointer, arg.len(), vals, g, s.memory) → leave(MachineState(g, f, rip, s.memory)),
-    step: i < arg.len() → (u: r.State()) → r.t.ArgAt(v, buf, cap, arg, pointer, Succ(i), vals, u.gprs, u.memory) → again(u)):
+    at: ArgAt(r.t, v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory),
+    fin: (g: Gprs) → (f: Flags) → (rip: BitVec(64)) → ArgAt(r.t, v, buf, cap, arg, pointer, arg.len(), vals, g, s.memory) → leave(MachineState(g, f, rip, s.memory)),
+    step: i < arg.len() → (u: r.State()) → ArgAt(r.t, v, buf, cap, arg, pointer, Succ(i), vals, u.gprs, u.memory) → again(u)):
     r.cx().from(Succ(o)).arg_byte(Label(Succ(o))).cut().code.inside(r, loops, Some(o), leave, again)(s) {
     let t = r.t;
     let g = s.gprs;
     let m = s.memory;
     let bo = t.layout().buffer_offset(buf);
-    let regs = at.right.left;
+    let regs = at.regs;
     let b = t.arg_byte(v, buf, cap, arg, pointer, room, i, vals, g, m, at);
     let byte = b.witness;
     let adds: List<Instruction> = [AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))];
     let tested = execute_block_normal([TestRR(Rdx, Rdx)], byte_load_after(ByteLoad(Rdx, Rsi), byte, s));
-    Exists(byte, ⟨b.proof.left, ⟨b.proof.right.left, ⟨refl, ⟨⟨
+    LoadsByte(byte := byte, low := b.proof.left, read := b.proof.right.left, after := Leaves(out := refl,
         // At the NUL every byte is copied.
-        λ nul rip => match b.proof.right.right {
-            Inl(end) => fin(tested.gprs, tested.flags, rip, j(end.left, λ n _ => t.ArgAt(v, buf, cap, arg, pointer, n, vals, g, m), at)),
+        taken := λ nul rip => match b.proof.right.right {
+            Inl(end) => fin(tested.gprs, tested.flags, rip, j(end.left, λ n _ => ArgAt(t, v, buf, cap, arg, pointer, n, vals, g, m), at)),
             Inr(more) => absurd(trans(sym(nul), byte_tests_nonzero(byte, more.right))),
         },
-        λ not_nul rip => match b.proof.right.right {
+        straight := λ not_nul rip => match b.proof.right.right {
             Inl(end) => absurd(trans(sym(not_nul), byte_tests_zero(byte, end.right))),
             Inr(more) => {
                 let below: (i < arg.len()) = arg.nth_some_below(i, byte, more.left);
                 let small: (i < Nat::pow(2, 64)) = canonical_lt_word(i, omega(room, below));
                 let bit = read_gpr(R8, g).borrow_sub_bit(read_gpr(R9, g));
                 let order = count_borrow(read_gpr(R8, g), read_gpr(R9, g), i, cap,
-                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), regs.left), toNat_word_of_nat(64, i, small)),
-                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), regs.right.left), BitVec::toNat_ofNat(64, cap, t.cap_small(buf, cap, found))));
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), regs.count), toNat_word_of_nat(64, i, small)),
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), regs.capacity), BitVec::toNat_ofNat(64, cap, t.cap_small(buf, cap, found))));
                 let compared = execute_block_normal([CmpRR(R8, R9)], MachineState(tested.gprs, tested.flags, rip, m));
-                ⟨⟨
+                Branches(
                     // At or past the capacity the byte is not stored.
-                    λ over rip2 => {
+                    taken := λ over rip2 => {
                         let skipped = MachineState(compared.gprs, compared.flags, rip2, m);
                         step(below, execute_block_normal(adds, skipped), t.arg_step(v, buf, cap, arg, pointer, i, vals, skipped,
-                            ⟨below, ⟨regs, t.arg_cells_skip(v, buf, cap, arg, pointer, i, order.right(Bool::clear_of_not(bit, !bit, refl, over)), m, at.right.right)⟩⟩))
+                            ArgNext(below := below, regs := regs,
+                                cells := t.arg_cells_skip(v, buf, cap, arg, pointer, i, order.right(Bool::clear_of_not(bit, !bit, refl, over)), m, at.cells))))
                     },
                     // Below it the byte is stored at RDI.
-                    λ under rip2 => {
+                    straight := λ under rip2 => {
                         let short: (i < cap) = order.left(Bool::set_of_not(bit, !bit, refl, under));
                         let fits: ((bo + i) + 1 <= t.r.size) = omega(t.layout().buffer_end(buf, cap, found), short, t.scratch_fits());
                         let one: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
                         let stored = byte_store_after(t.writes(), ByteStore(Rdi, Rdx), MachineState(compared.gprs, compared.flags, rip2, m));
                         let goal = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧
-                            (t.site().Resident(t.r.profile.store(m, a, one)) ∧ t.ArgNext(v, buf, cap, arg, pointer, i, vals, g, t.r.profile.store(m, a, one)));
+                            (t.site().Resident(t.r.profile.store(m, a, one)) ∧ ArgNext(t, v, buf, cap, arg, pointer, i, vals, g, t.r.profile.store(m, a, one)));
                         let here: goal(next_rip(t.r.low, bo + i)) = ⟨t.writable(m, bo + i, 1, fits), ⟨t.store_resident(m, bo + i, one, fits, resident),
-                            ⟨below, ⟨regs, t.arg_cells_store(v, buf, cap, found, arg, pointer, i, short, m, at.right.right, byte, more.left)⟩⟩⟩⟩;
-                        let there = j(sym(regs.right.right.right.left), λ a _ => goal(a), here);
-                        ⟨refl, ⟨there.left, ⟨there.right.left,
-                            step(below, execute_block_normal(adds, stored), t.arg_step(v, buf, cap, arg, pointer, i, vals, stored, there.right.right))⟩⟩⟩
-                    }⟩, refl⟩
+                            ArgNext(below := below, regs := regs, cells := t.arg_cells_store(v, buf, cap, found, arg, pointer, i, short, m, at.cells, byte, more.left))⟩⟩;
+                        let there = j(sym(regs.dest), λ a _ => goal(a), here);
+                        StoresByte(plain := refl, writable := there.left, resident := there.right.left,
+                            after := step(below, execute_block_normal(adds, stored), t.arg_step(v, buf, cap, arg, pointer, i, vals, stored, there.right.right)))
+                    },
+                    defined := refl)
             },
-        }⟩, refl⟩⟩⟩⟩)
+        }, defined := refl))
 }
 
 // ---------------------------------------------------------------------------
@@ -420,11 +431,15 @@ theorem argv_slot_sum(a, r: BitVec(64), k: Nat, value: a.toNat() = k):
 }
 
 // The copy with `n` bytes to go: argument `k`'s, its string at a pointer
-// whose bytes end below the canonical boundary.
-fn Target::ArgLeft(self t: Target, v: Nat → BitVec(8), buf, cap, k: Nat, vals: List<BitVec(64)>, n: Nat, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    Exists<List<BitVec(8)>>(λ arg => Exists<BitVec(64)>(λ pointer => Exists<Nat>(λ i =>
-        ((t.args.nth(k) = Some(arg)) ∧ (pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47))) ∧
-        ((i + n = arg.len()) ∧ t.ArgAt(v, buf, cap, arg, pointer, i, vals, g, m)))))
+// whose bytes end below the canonical boundary, `done` of them copied.
+record ArgLeft(t: Target, v: Nat → BitVec(8), buf, cap, k: Nat, vals: List<BitVec(64)>, n: Nat, g: Gprs, m: X86Memory(t.r.profile)) {
+    arg: List<BitVec(8)>,
+    pointer: BitVec(64),
+    done: Nat,
+    present: t.args.nth(k) = Some(arg),
+    room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
+    left: done + n = arg.len(),
+    at: ArgAt(t, v, buf, cap, arg, pointer, done, vals, g, m),
 }
 
 // Where the two ways meet: RAX is what `len` is to hold, in an environment
@@ -458,7 +473,7 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
     rdx: read_gpr(Rdx, u.gprs) = word_in(v, t.layout().stack_offset()), rcx: read_gpr(Rcx, u.gprs).toNat() = env.number(index),
     under: env.number(index) < t.args.len(), homes: home_values(u.gprs) = vals):
     Emission(t.layout(), [], out).from(names + 2).arg_string(buf, cap).cut().code.inside(Run(t, [], out, live, env),
-        λ _ => t.ArgLeft(v, buf, cap, env.number(index), vals), None, λ _ => False,
+        λ _ => ArgLeft(t, v, buf, cap, env.number(index), vals), None, λ _ => False,
         λ x => (to: BitVec(64)) → t.ArgKept(live, env, index, buf, len, MachineState(x.gprs, x.flags, to, x.memory)))(u) {
     let layout = t.layout();
     let r = Run(t, [], out, live, env);
@@ -477,33 +492,33 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
     let done: r.State() → Type = λ x => (to: BitVec(64)) → t.ArgKept(live, env, index, buf, len,
         MachineState(execute_block_normal([MovRR(Rax, R8)], x).gprs, execute_block_normal([MovRR(Rax, R8)], x).flags, to, execute_block_normal([MovRR(Rax, R8)], x).memory));
     // A round: at the NUL the buffer is filled and RAX gets the length.
-    let round: (n: Nat) → (w: r.State()) → t.site().Resident(w.memory) → t.ArgLeft(v, buf, cap, k, vals, n, w.gprs, w.memory) →
-        r.cx().from(names + 4).arg_byte(Label(names + 4)).cut().code.inside(r, λ _ => t.ArgLeft(v, buf, cap, k, vals), Some(names + 3), done,
-            λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ t.ArgLeft(v, buf, cap, k, vals, fewer, x.gprs, x.memory)))(w) = λ n w resident left => {
-        let a = left.witness;
-        let string = left.proof.witness;
-        let i = left.proof.proof.witness;
-        let facts = left.proof.proof.proof;
+    let round: (n: Nat) → (w: r.State()) → t.site().Resident(w.memory) → ArgLeft(t, v, buf, cap, k, vals, n, w.gprs, w.memory) →
+        r.cx().from(names + 4).arg_byte(Label(names + 4)).cut().code.inside(r, λ _ => ArgLeft(t, v, buf, cap, k, vals), Some(names + 3), done,
+            λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ ArgLeft(t, v, buf, cap, k, vals, fewer, x.gprs, x.memory)))(w) = λ n w resident left => {
+        let a = left.arg;
         let filled = env.set_buffer(buf, fill(env.buffer(buf), a));
-        let got: (env.args.nth(k) = Some(a)) = j(sym(same), λ xs _ => xs.nth(k) = Some(a), facts.left.left);
-        let again: r.State() → Type = λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ t.ArgLeft(v, buf, cap, k, vals, fewer, x.gprs, x.memory));
-        r.arg_round(λ _ => t.ArgLeft(v, buf, cap, k, vals), v, buf, cap, found, a, string, facts.left.right, vals, names + 3, done, again, w, resident, i, facts.right.right,
-            λ g f rip all to => Exists(filled, ⟨Exists(words, ⟨t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, string, a.len(), refl, w.memory, all.right.right),
-                    j(sym(all.right.left.right.right.right.right), λ vs _ => t.Agreeing(live, filled, words, vs), agrees)⟩),
-                trans(cong_fn<BitVec(64), Env>(λ y => filled.set_word(len, y), trans(all.right.left.left, word_of_nat_eq_ofNat(64, a.len()))),
+        let got: (env.args.nth(k) = Some(a)) = j(sym(same), λ xs _ => xs.nth(k) = Some(a), left.present);
+        let again: r.State() → Type = λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ ArgLeft(t, v, buf, cap, k, vals, fewer, x.gprs, x.memory));
+        r.arg_round(λ _ => ArgLeft(t, v, buf, cap, k, vals), v, buf, cap, found, a, left.pointer, left.room, vals, names + 3, done, again, w, resident, left.done, left.at,
+            λ g f rip all to => Exists(filled, ⟨Exists(words, ⟨t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
+                    j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), agrees)⟩),
+                trans(cong_fn<BitVec(64), Env>(λ y => filled.set_word(len, y), trans(all.regs.count, word_of_nat_eq_ofNat(64, a.len()))),
                     sym(env.arg_present(k, buf, len, a, got)))⟩),
             λ below x next => {
-                let fewer = Nat::one_fewer(i, n, a.len(), facts.right.left, below);
-                Exists(fewer.witness, ⟨fewer.proof.left, Exists(a, Exists(string, Exists(Succ(i), ⟨facts.left, ⟨fewer.proof.right, next⟩⟩)))⟩)
+                let fewer = Nat::one_fewer(left.done, n, a.len(), left.left, below);
+                Exists(fewer.witness, ⟨fewer.proof.left,
+                    ArgLeft(arg := a, pointer := left.pointer, done := Succ(left.done), present := left.present, room := left.room, left := fewer.proof.right, at := next)⟩)
             })
     };
     // The start: the pointer loaded, nothing copied.
     let start: (0 + arg.len() = arg.len()) = omega();
     let cells = t.arg_cells_start(v, buf, cap, arg, pointer, m, holds, stacking, entry.proof.right.right);
-    Exists(pointer, ⟨j(sym(address), λ y _ => y.toNat() + 8 <= Nat::pow(2, 47), slot_word.left),
-        ⟨j(sym(address), λ y _ => read_word(t.site().data, m, y) = Some(pointer), slot_word.right),
-        ⟨round, Exists(arg.len(), Exists(arg, Exists(pointer, Exists(0, ⟨⟨present.proof, entry.proof.right.left⟩, ⟨start,
-            ⟨Nat::le_of_lt(0, Succ(arg.len()), omega()), ⟨⟨refl, ⟨refl, ⟨sym(word_of_nat_toNat(64, pointer)), ⟨t.buffer_rip(buf), homes⟩⟩⟩⟩, cells⟩⟩⟩⟩))))⟩⟩⟩)
+    LoadsWord(word := pointer, low := j(sym(address), λ y _ => y.toNat() + 8 <= Nat::pow(2, 47), slot_word.left),
+        read := j(sym(address), λ y _ => read_word(t.site().data, m, y) = Some(pointer), slot_word.right),
+        after := Loops(round := round, entered := Exists(arg.len(),
+            ArgLeft(arg := arg, pointer := pointer, done := 0, present := present.proof, room := entry.proof.right.left, left := start,
+                at := ArgAt(within := Nat::le_of_lt(0, Succ(arg.len()), omega()), cells := cells,
+                    regs := ArgRegs(count := refl, capacity := refl, source := sym(word_of_nat_toNat(64, pointer)), dest := t.buffer_rip(buf), homes := homes))))))
 }
 
 // From the statement's start: the saved RSP and argc loaded, the index
@@ -543,22 +558,24 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
             toNat_word_of_nat(64, argc, omega(stacked.left.left, canonical_below_top())));
         let loaded = word_load_after(WordLoad(R9, Rdx), word_of_nat(64, argc),
             word_load_after(WordLoad(Rdx, Rbx), rsp, execute_block_normal([MovRI(Rbx, layout.stack_at())], s)));
-        code.goes_with(r, λ _ => t.ArgLeft(v, buf, cap, k, home_values(s.gprs)), p, w_copied, tree, kept, stored)(s, here, resident,
-            Exists(rsp, ⟨stack.left, ⟨stack.right, Exists(word_of_nat(64, argc), ⟨argc_word.left, ⟨argc_word.right,
-                ⟨⟨in_index, holds⟩, ⟨held, λ f rip => {
+        code.goes_with(r, λ _ => ArgLeft(t, v, buf, cap, k, home_values(s.gprs)), p, w_copied, tree, kept, stored)(s, here, resident,
+            LoadsWord(word := rsp, low := stack.left, read := stack.right, after :=
+            LoadsWord(word := word_of_nat(64, argc), low := argc_word.left, read := argc_word.right, after :=
+            Fetches(fits := in_index, reads := holds, held := held, after := λ f rip => {
                     let compared = execute_block_normal([CmpRR(Rcx, R9)],
                         MachineState(write_gpr(Rcx, env.word(index), write_gpr(Rbx, t.rbx_known([], env, index), loaded.gprs)), f, rip, m));
-                    ⟨⟨
+                    Branches(
                         // At or past argc: minus one, the environment as it was.
-                        λ past rip2 => {
+                        taken := λ past rip2 => {
                             let none: (env.args.nth(k) = None) = j(sym(same), λ xs _ => xs.nth(k) = None,
                                 t.args.nth_past_end(k, order.right(Bool::clear_of_not(bit, !bit, refl, past))));
                             Exists(env, ⟨held, sym(env.arg_missing(k, buf, len, none))⟩)
                         },
                         // Below it: the argument copied.
-                        λ below rip2 => t.arg_found(live, out, env, index, buf, len, cap, names, found, words, home_values(s.gprs), held.proof.right,
+                        straight := λ below rip2 => t.arg_found(live, out, env, index, buf, len, cap, names, found, words, home_values(s.gprs), held.proof.right,
                             v, placed.right.left, same, MachineState(compared.gprs, compared.flags, rip2, m), placed.left, stacked, refl, k_value,
-                            order.left(Bool::set_of_not(bit, !bit, refl, below)), refl)⟩, refl⟩
-                }⟩⟩⟩⟩)⟩⟩))
+                            order.left(Bool::set_of_not(bit, !bit, refl, below)), refl),
+                        defined := refl)
+                }))))
     }
 }
