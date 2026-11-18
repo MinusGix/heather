@@ -1,6 +1,6 @@
 id = "heather"
 name = "Heather"
-version = "0.2.0"
+version = "0.3.0"
 schema_version = 1
 authors = ["Heather contributors"]
 description = "Heather language support powered by Tree-sitter and heather-lsp"
@@ -17,5 +17,5 @@ args = []
 
 [grammars.heather]
 repository = "https://github.com/MinusGix/heather"
-rev = "1756e3c1f27d1248febd22782c1a22e9fd24f187"
+rev = "94d51ba1a24aec51ad7395a489d535b8ea8a15df"
 path = "tree-sitter-heather"
