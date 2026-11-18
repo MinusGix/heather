@@ -410,7 +410,7 @@ theorem loop_then_eval(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, cou
 // `later` of it.
 fn loop_pass(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopEnd → BitVec(64),
     later: List<BitVec(64)> → BitVec(64), r: Nat, v: Valuation()) → BitVec(64) {
-    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+    let after = step(pass_valuation(parameters, count, r + 1, words_of(v, parameters)));
     match after(1, exit).head_bit() {
         False => later(words_of(after, next)),
         True => finish(LoopEnd(words_of(after, next), False)),

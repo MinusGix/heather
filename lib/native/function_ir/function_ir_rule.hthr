@@ -457,7 +457,7 @@ fn rule_term(fuel: Nat, cx: RuleCx, read: RuleRead, t: Handle) → Tac<RuleTerm>
                 },
                 False => rule_width(t).bind(λ width => rule_seen(cx, read.seen, t, width).bind(λ before => match before {
                     Some(s) => pure(RuleTerm(read, s.id, s.width)),
-                    None => rule_root(cx, λ r h => rule_term(n, cx, r, h), RuleRead(Succ(read.next), read.premises, read.seen), t, cx.number(read.next)).bind(λ root =>
+                    None => rule_root(cx, λ r h => rule_term(n, cx, r, h), RuleRead(read.next + 1, read.premises, read.seen), t, cx.number(read.next)).bind(λ root =>
                         cx.fact("Is", [root.node]).bind(λ is =>
                             pure(RuleTerm(root.read.with(is).saw(t, cx.number(read.next), width), cx.number(read.next), root.width)))),
                 })),
@@ -709,7 +709,7 @@ fn rule_hypotheses(kinds: List<RuleBinder>) → Tac<Nat> {
     match kinds {
         Nil => pure(0),
         Cons(k, rest) => match k {
-            Hypothesis => rule_hypotheses(rest).bind(λ n => pure(Succ(n))),
+            Hypothesis => rule_hypotheses(rest).bind(λ n => pure(n + 1)),
             _ => fail("rule: a literal or a word is bound after a hypothesis: write the statement's numbers and words first", []),
         },
     }
@@ -727,13 +727,13 @@ fn rule_applied(cx: RuleCx, f: Expr, kinds: List<RuleBinder>, args: List<RuleArg
         Nil => pure(RuleApplied(f, args, used, 0)),
         Cons(k, rest) => match k {
             Hypothesis => rule_hypotheses(kinds).bind(λ n => pure(RuleApplied(f, args, used, n))),
-            Literal => rule_applied(cx, App(f, cx.number(used)), rest, args ++ [Number(cx.number(used))], Succ(used)),
-            BufferOf => rule_applied(cx, App(f, App(Global(cx.ops.buffer), cx.number(used))), rest, args ++ [BufferAt(cx.number(used))], Succ(used)),
+            Literal => rule_applied(cx, App(f, cx.number(used)), rest, args ++ [Number(cx.number(used))], used + 1),
+            BufferOf => rule_applied(cx, App(f, App(Global(cx.ops.buffer), cx.number(used))), rest, args ++ [BufferAt(cx.number(used))], used + 1),
             Word => infer(f).or_fail("rule: ").bind(λ ty => view(ty).bind(λ v => match v {
                 HPi(dom) => whnf_or(dom).bind(view).bind(λ dv => match dv {
                     HGlobal(_, _, targs) => match targs {
                         Cons(w, _) => rule_applied(cx, App(f, rule_apps(Global(cx.ops.marker), [Hd(w), cx.number(used)])), rest,
-                            args ++ [WordOf(Hd(w), cx.number(used))], Succ(used)),
+                            args ++ [WordOf(Hd(w), cx.number(used))], used + 1),
                         Nil => fail("rule: a word's type has no width", []),
                     },
                     _ => fail("rule: a word's type is no `BitVec`", []),
@@ -973,8 +973,8 @@ fn rule_ctor_built(cs: List<CtorInfo>, h: Handle, place: Nat, args: List<Expr>) 
     match cs {
         Nil => None,
         Cons(c, rest) => match c.ctor {
-            None => rule_ctor_built(rest, h, Succ(place), args),
-            Some(k) => match k.id.same(h.id) { True => Some(RuleBuilt(place, c, args)), False => rule_ctor_built(rest, h, Succ(place), args) },
+            None => rule_ctor_built(rest, h, place + 1, args),
+            Some(k) => match k.id.same(h.id) { True => Some(RuleBuilt(place, c, args)), False => rule_ctor_built(rest, h, place + 1, args) },
         },
     }
 }
@@ -990,7 +990,7 @@ fn rule_built(cs: List<CtorInfo>, e: Expr, args: List<Expr>) → Option<RuleBuil
 fn rule_output_place(fields: List<FieldInfo>, place: Nat) → Option<Nat> {
     match fields {
         Nil => None,
-        Cons(field, rest) => match rule_same_name(field.name, "output") { True => Some(place), False => rule_output_place(rest, Succ(place)) },
+        Cons(field, rest) => match rule_same_name(field.name, "output") { True => Some(place), False => rule_output_place(rest, place + 1) },
     }
 }
 

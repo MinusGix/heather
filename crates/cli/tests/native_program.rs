@@ -214,7 +214,7 @@ fn execute(group: &str, cases: &[Case], claims: &[&str]) {
         let assembly = dir.join(format!("{file}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .args(["compile-x86", &format!("examples/x86-native/{file}.hthr"), symbol, "-o"]).arg(&assembly)
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
             .output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(String::from_utf8_lossy(&result.stdout).contains("certified program bytes"), "{file} took the verified lowering");
@@ -268,7 +268,7 @@ fn eight_words_are_called_from_rust() {
     let assembly = dir.join("eight.s");
     let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
         .args(["compile-x86", "examples/x86-native/stack_words.hthr", "eight", "-o"]).arg(&assembly)
-        .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let text = std::fs::read_to_string(&assembly).unwrap();
@@ -325,7 +325,7 @@ fn unmarked_loops_are_refused() {
     std::fs::write(dir.join("unmarked.hthr"), source).unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
         .arg("compile-x86").arg(dir.join("unmarked.hthr")).args(["unmarked", "-o"]).arg(dir.join("unmarked.s"))
-        .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
         .output().unwrap();
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(!result.status.success() && stderr.contains("mark it `runtime fn count`"), "{stderr}");
@@ -362,7 +362,7 @@ fn narrow_signed_operations_are_refused() {
         let output = dir.join(format!("{function}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(dir.join("signed.hthr")).args([function, "-o"]).arg(&output)
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
             .output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains("the verified lowering refused this program"),

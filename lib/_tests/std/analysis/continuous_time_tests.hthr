@@ -71,7 +71,7 @@ theorem fall_clock_spec(dt, t: Rat, n: Nat): fall_clock(dt, t, n) ≈ t + Rat::o
 }
 
 // The program at resolution `k`: `k + 1` steps of `T/(k + 1)`.
-fn fall_at(T: Rat, k: Nat) → Rat { fall_run(T * Rat::inv_succ(k), 0, 0, Succ(k)) }
+fn fall_at(T: Rat, k: Nat) → Rat { fall_run(T * Rat::inv_succ(k), 0, 0, k + 1) }
 
 // Its exact value: the continuous answer `T²` less an error linear in `dt`.
 theorem fall_at_spec(T: Rat, k: Nat): fall_at(T, k) ≈ T * T + -((T * T) * Rat::inv_succ(k)) {
@@ -218,7 +218,7 @@ theorem walk_fourth(h, x: Rat, n: Nat):
 
 // Time 1 at resolution `j`: steps of `h = 1/(j + 1)`, so `dt = h²` and
 // `(j + 1)²` of them.
-fn walk_unit(g: Rat → Rat, j: Nat) → Rat { walk_expect(g, Rat::inv_succ(j), 0, Succ(j) * Succ(j)) }
+fn walk_unit(g: Rat → Rat, j: Nat) → Rat { walk_expect(g, Rat::inv_succ(j), 0, (j + 1) * (j + 1)) }
 
 // It runs: sixteen paths at `dt = 1/4`.
 theorem walk_unit_fourth_runs(): walk_unit(λ (y: Rat) => (y * y) * (y * y), 1) ≈ Rat(5, 2) {

@@ -75,7 +75,7 @@ theorem sorted_round_trip(xs: List<Nat>, s: xs.Sorted(Nat::Le)): xs.Sorted(Nat::
 // The index form reads past neighbours, so it needs the order's
 // transitivity: along "one more", [0, 1, 2] is sorted, yet 0 is not one
 // below 2. The negative control for `sorted_nth`'s preorder.
-fn Next(a, b: Nat) → Type { Succ(a) = b }
+fn Next(a, b: Nat) → Type { a + 1 = b }
 
 theorem steps_sorted(): [0, 1, 2].Sorted(Next) { And(refl, And(refl, And(trivial, trivial))) }
 

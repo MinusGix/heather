@@ -845,13 +845,13 @@ theorem Site::returns_by<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site
 fn List::spills(self registers: List<Gpr>, prog: Prog, k: Nat) → Prog {
     match registers {
         Nil => prog,
-        Cons(register, rest) => rest.spills(At(prog, 0, Spill(StackStore(register, slot_offset(k)))), Succ(k)),
+        Cons(register, rest) => rest.spills(At(prog, 0, Spill(StackStore(register, slot_offset(k)))), k + 1),
     }
 }
 fn List::reloads(self registers: List<Gpr>, prog: Prog, k: Nat) → Prog {
     match registers {
         Nil => prog,
-        Cons(register, rest) => rest.reloads(At(prog, 0, Reload(StackLoad(register, slot_offset(k)))), Succ(k)),
+        Cons(register, rest) => rest.reloads(At(prog, 0, Reload(StackLoad(register, slot_offset(k)))), k + 1),
     }
 }
 
@@ -882,7 +882,7 @@ fn Stack::Saved<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stac
     match registers {
         Nil => λ _ _ _ => True,
         Cons(register, rest) => λ k gprs memory => (read_word(data, memory, stack.at(d + 8 * k)) = Some(read_gpr(register, gprs))) ∧
-            stack.Saved(d, rest, Succ(k), gprs, memory),
+            stack.Saved(d, rest, k + 1, gprs, memory),
     }
 }
 

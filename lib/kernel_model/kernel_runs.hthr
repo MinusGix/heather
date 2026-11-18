@@ -636,7 +636,7 @@ fn Aff::leaf_of(r: Option<Path>) → Option<Aff> {
 fn Aff::bump(r: Option<Aff>) → Option<Aff> {
     match r {
         None => None,
-        Some(x) => match x { Leaf(q, l) => Some(Leaf(Succ(q), l)), Lit(q) => Some(Lit(Succ(q))), Branch(_, _) => None },
+        Some(x) => match x { Leaf(q, l) => Some(Leaf(q + 1, l)), Lit(q) => Some(Lit(q + 1)), Branch(_, _) => None },
     }
 }
 
@@ -870,7 +870,7 @@ fn Tm::sync_tail(head_ih: Bool, arg: Option<Tm>) → Option<Nat> {
 }
 
 fn Tm::succ_of(r: Option<Nat>) → Option<Nat> {
-    match r { None => None, Some(q) => Some(Succ(q)) }
+    match r { None => None, Some(q) => Some(q + 1) }
 }
 
 fn Tm::strip_value(st: Tm → Option<Nat>, g: Nat, v: Tm) → Option<Nat> {

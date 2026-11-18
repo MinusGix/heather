@@ -347,65 +347,65 @@ fn Placed::over(self a: Placed, b: Placed, node: Node, at: Nat) → Placed { Pla
 // the word 0 or 1 (`Calc`'s regions).
 fn Val::placed(self v: Val, wide: Bool, next: Nat) → Placed {
     match v {
-        Number(value) => Placed([Const(64, next, value)], next, Succ(next)),
+        Number(value) => Placed([Const(64, next, value)], next, next + 1),
         Held(var) => Placed([], var.id, next),
         Sum(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, Add(64, next, a.id, b.id), next)
         },
         Difference(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, Sub(64, next, a.id, b.id), next)
         },
         BitsAnd(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, BitAnd(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         BitsOr(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, BitOr(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         BitsXor(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, BitXor(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         ShiftedLeft(value, amount) => {
-            let a = value.placed(wide, Succ(next));
+            let a = value.placed(wide, next + 1);
             a.over(Placed([], 0, a.next), ShiftLeft(64, next, a.id, amount), next)
         },
         ShiftedRight(value, amount) => {
-            let a = value.placed(wide, Succ(next));
+            let a = value.placed(wide, next + 1);
             a.over(Placed([], 0, a.next), LogicalShiftRight(64, next, a.id, amount), next)
         },
         Lower(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, UnsignedLessThan(64, next, a.id, b.id), next)
         },
         LowerSigned(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, SignedLessThan(64, next, a.id, b.id), next)
         },
         Equals(left, right) => {
-            let a = left.placed(wide, Succ(next));
+            let a = left.placed(wide, next + 1);
             let b = right.placed(wide, a.next);
             a.over(b, Equal(64, next, a.id, b.id), next)
         },
         Not(value) => {
-            let a = value.placed(wide, Succ(next));
+            let a = value.placed(wide, next + 1);
             match value.is_bit() && !wide {
-                True => a.over(Placed([Const(1, a.next, 1)], a.next, Succ(a.next)), BitXor(1, next, a.id, a.next), next),
-                False => a.over(Placed([Const(64, a.next, 0)], a.next, Succ(a.next)), Equal(64, next, a.id, a.next), next),
+                True => a.over(Placed([Const(1, a.next, 1)], a.next, a.next + 1), BitXor(1, next, a.id, a.next), next),
+                False => a.over(Placed([Const(64, a.next, 0)], a.next, a.next + 1), Equal(64, next, a.id, a.next), next),
             }
         },
         ByteAt(buf, index) => {
-            let a = index.placed(wide, Succ(next));
+            let a = index.placed(wide, next + 1);
             a.over(Placed([], 0, a.next), BufferLoad(next, buf.id, a.id), next)
         },
     }
@@ -569,7 +569,7 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
     match c {
         Nothing => [],
         Both(parts) => parts(True).pieces(next) ++ parts(False).pieces(next),
-        Fresh(init, body) => Cons(Nodes(init.assigned_wide(next, Succ(next))), body(Var(next)).pieces(Succ(next))),
+        Fresh(init, body) => Cons(Nodes(init.assigned_wide(next, next + 1)), body(Var(next)).pieces(next + 1)),
         Assign(var, value) => [Nodes(value.assigned_wide(var.id, next))],
         Store(buf, index, value) => {
             let i = index.placed(True, next);
@@ -587,8 +587,8 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
         Passes(bound, state, body, stop, ran_out) => {
             let b = bound.placed(True, next);
             let count = b.next;
-            let exit = Succ(count);
-            let pass = body(Var(count)).pieces(Succ(exit)) ++ [Nodes(stop.test().placed(True, exit).nodes)];
+            let exit = count + 1;
+            let pass = body(Var(count)).pieces(exit + 1) ++ [Nodes(stop.test().placed(True, exit).nodes)];
             let r = Loop(state.ids(), b.id, state.ids(), count, pass.merged().joined(), exit, state.ids(), state.ids(), ran_out.id);
             [Nodes(b.nodes), Part(r), Nodes(r.counts().cleared())]
         },
@@ -701,7 +701,7 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
     match a {
         Skip => [],
         Seq(parts) => parts(True).items(next) ++ parts(False).items(next),
-        Let(init, body) => init.assigned(next, Succ(next)).ops() ++ body(Var(next)).items(Succ(next)),
+        Let(init, body) => init.assigned(next, next + 1).ops() ++ body(Var(next)).items(next + 1),
         Set(var, value) => value.assigned(var.id, next).ops(),
         Poke(buf, index, value) => {
             let i = index.place(next);
@@ -714,12 +714,12 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
         },
         While(condition, body) => {
             let t = condition.truth().place(next);
-            let pass = (body.items(Succ(next)) ++ t.nodes.ops()).lowered();
+            let pass = (body.items(next + 1) ++ t.nodes.ops()).lowered();
             t.nodes.ops() ++ [Do(Branch(t.id, Repeat(pass, t.id), Stmt::leaf([])))]
         },
         DoWhile(body, condition) => {
             let t = condition.truth().place(next);
-            [Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id))]
+            [Do(Repeat((body.items(next + 1) ++ t.nodes.ops()).lowered(), t.id))]
         },
         ReadTo(fd, buf, at, len, result) => {
             let f = fd.place(next);
@@ -765,7 +765,7 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
 record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act, procedures: List<Procedure>, depth: Nat }
 
 // `count` words from `first`.
-fn Nat::vars_from(self first: Nat, count: Nat) → List<Var> { match count { Zero => [], Succ(k) => Cons(Var(first), Succ(first).vars_from(k)) } }
+fn Nat::vars_from(self first: Nat, count: Nat) → List<Var> { match count { Zero => [], Succ(k) => Cons(Var(first), (first + 1).vars_from(k)) } }
 
 // Procedure `index`: its parameters the words from 0, its results the
 // next, each set to zero first (so the body reads no word but its
@@ -782,7 +782,7 @@ fn Tool::opened_at(self t: Tool, buf: Nat, procs: Nat) → Opened {
     match t {
         Run(main) => Opened([], [], main, [], 0),
         WithBuffer(capacity, initial, body) => {
-            let rest = body(Buf(buf, capacity)).opened_at(Succ(buf), procs);
+            let rest = body(Buf(buf, capacity)).opened_at(buf + 1, procs);
             Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main, rest.procedures, rest.depth)
         },
         WithProgram(functions, body) => {
@@ -790,7 +790,7 @@ fn Tool::opened_at(self t: Tool, buf: Nat, procs: Nat) → Opened {
             Opened(rest.buffers, functions ++ rest.functions, rest.main, rest.procedures, rest.depth)
         },
         WithProc(params, results, body, after) => {
-            let rest = after(procs).opened_at(buf, Succ(procs));
+            let rest = after(procs).opened_at(buf, procs + 1);
             Opened(rest.buffers, rest.functions, rest.main, Cons(Proc::lowered(procs, params, results, body), rest.procedures), rest.depth)
         },
         WithDepth(depth, body) => {

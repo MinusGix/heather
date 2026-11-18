@@ -49,7 +49,7 @@ import round;
 // half-units: `2^b` (half an ulp) for the nearest modes, `2^(b+1)` (one ulp)
 // for the directed ones.
 fn Mode::err_exp(self m: Mode, b: Nat) → Nat {
-    match m { NearestEven => b, NearestAway => b, TowardPos => Succ(b), TowardNeg => Succ(b), TowardZero => Succ(b) }
+    match m { NearestEven => b, NearestAway => b, TowardPos => b + 1, TowardNeg => b + 1, TowardZero => b + 1 }
 }
 
 theorem Mode::err_exp_conj(self m: Mode, b: Nat): m.conj().err_exp(b) = m.err_exp(b) {
@@ -513,7 +513,7 @@ theorem Format::error_bound(self F: Format, mode: Mode, x: Rat, r: Finite(F), ra
 // `n / (u_den - n)`. It means that while `n < u_den` (`n·u < 1`); past it the
 // definition is a value no lemma mentions.
 
-fn Format::gamma(self F: Format, mode: Mode, n: Nat) → Rat { Rat(n.int(), Succ(F.u_den(mode) - Succ(n))) }
+fn Format::gamma(self F: Format, mode: Mode, n: Nat) → Rat { Rat(n.int(), F.u_den(mode) - (n + 1) + 1) }
 
 // With the room `D = u_den - n` named, `γ(n)` is `n / D`.
 theorem Format::gamma_at(self F: Format, mode: Mode, n: Nat, D: Pos<Nat>, e: F.u_den(mode) = D + n): F.gamma(mode, n) ≈ Rat(n.int(), D) {

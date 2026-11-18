@@ -634,7 +634,7 @@ fn no_function(f: Nat) → Bool { False }
 
 // The functions numbered below `base`: a program's functions that only
 // read, where the ones that write are numbered after them.
-fn functions_below(base: Nat) → Nat → Bool { λ f => Succ(f).leb(base) }
+fn functions_below(base: Nat) → Nat → Bool { λ f => (f + 1).leb(base) }
 
 // Callees that leave every file as it was, asked only of the functions
 // `among` accepts: what a region that stores nothing needs of the functions
@@ -777,7 +777,7 @@ theorem program_run_quiet(functions: List<Function>): program_quiet(functions).I
 // the file carried).
 fn loop_pass_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopState → Ending,
     later: List<BitVec(64)> → Buffers() → Ending, r: Nat, v: Valuation(), file: Buffers()) → Ending {
-    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)), file);
+    let after = step(pass_valuation(parameters, count, r + 1, words_of(v, parameters)), file);
     match after.values(1, exit).head_bit() {
         False => later(words_of(after.values, next), after.buffers),
         True => finish(LoopState(LoopEnd(words_of(after.values, next), False), after.buffers)),
@@ -789,7 +789,7 @@ fn loop_pass_run(step: Valuation() → Buffers() → State, parameters: List<Nat
 fn LoopAgrees<S>(Good: Ending → Type, measure: List<BitVec(64)> → S → Nat,
     run: (r: Nat) → (state: List<BitVec(64)>) → (s: S) → Nat::Lt(measure(state, s), r + 1) → Ending, r: Nat, state: List<BitVec(64)>, s: S,
     end: Ending) → Type {
-    Good(end) ∧ ((h: Nat::Lt(measure(state, s), Succ(r))) → end = run(r, state, s, h))
+    Good(end) ∧ ((h: Nat::Lt(measure(state, s), r + 1)) → end = run(r, state, s, h))
 }
 
 // A loop whose passes write agrees with `run`, a recursion bounded by a

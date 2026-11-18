@@ -268,7 +268,7 @@ theorem ArenaRef::nil_abs(bytes: List<BitVec(8)>): ArenaRef::nil(bytes).inv() âˆ
 // have no room for it; that is the allocation's failure arm (an exit), and
 // the laws below are its success arm.
 fn ArenaRef::cons(self r: ArenaRef, line: List<BitVec(8)>) â†’ ArenaRef {
-    ArenaRef(r.bytes ++ cell_bytes(r.at, line), Succ(r.bytes.len()))
+    ArenaRef(r.bytes ++ cell_bytes(r.at, line), r.bytes.len() + 1)
 }
 
 // Growing the arena keeps every list in it: the same name reads the same

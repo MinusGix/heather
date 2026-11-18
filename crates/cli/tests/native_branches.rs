@@ -11,7 +11,7 @@ fn source_nested_conditionals_execute() {
     for name in ["nested_true", "nested_false", "unsigned_threshold", "take_threshold", "keep_twice", "nudged", "composed", "either", "calls_either"] {
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .args(["compile-x86", "examples/x86-native/branches.hthr", name, "-o"])
-            .arg(dir.join(format!("{name}.s"))).arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .arg(dir.join(format!("{name}.s"))).args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
             .output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         let certificate = std::fs::read_to_string(dir.join(format!("{name}.certificate.hthr"))).unwrap();

@@ -43,7 +43,7 @@ theorem leaf_not_below_cut(E: Events): ¬(ITree::Below<Nat>(E, Ret(1), Cut)) {
 fn Counter() → Events { Events::sum(Events::state<Nat>(), Events::none()) }
 fn tick() → ITree<Nat>(Counter()) {
     ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Get)), λ n =>
-        ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Put(Succ(n)))), λ u => Ret(n)))
+        ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Put(n + 1))), λ u => Ret(n)))
 }
 fn lticks(k: Nat) → ITree<Nat>(Counter()) {
     match k { Zero => Ret(0), Succ(j) => ITree::bind(Counter(), lticks(j), λ n => tick()) }

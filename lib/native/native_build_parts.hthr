@@ -118,7 +118,7 @@ fn Act::tested(self a: Act, next: Nat) → Placed {
 // The items before a `Let`'s body: its word set.
 fn Act::init_items(self a: Act, next: Nat) → List<Item> {
     match a {
-        Let(init, _) => init.assigned(next, Succ(next)).ops(),
+        Let(init, _) => init.assigned(next, next + 1).ops(),
         Skip => [], Seq(_) => [], Set(_, _) => [], Poke(_, _, _) => [], When(_, _) => [], While(_, _) => [], DoWhile(_, _) => [],
         ReadTo(_, _, _, _, _) => [], WriteFrom(_, _, _, _, _) => [], OpenOf(_, _, _) => [], CloseOf(_, _) => [], ArgTo(_, _, _) => [],
         Quit(_) => [], Calculate(_) => [], CallProc(_, _, _) => [],
@@ -330,18 +330,18 @@ fn Val::size(self v: Val) → Nat {
     match v {
         Number(_) => 1,
         Held(_) => 1,
-        Sum(left, right) => Succ(left.size() + right.size()),
-        Difference(left, right) => Succ(left.size() + right.size()),
-        BitsAnd(left, right) => Succ(left.size() + right.size()),
-        BitsOr(left, right) => Succ(left.size() + right.size()),
-        BitsXor(left, right) => Succ(left.size() + right.size()),
-        ShiftedLeft(value, _) => Succ(value.size()),
-        ShiftedRight(value, _) => Succ(value.size()),
-        Lower(left, right) => Succ(left.size() + right.size()),
-        LowerSigned(left, right) => Succ(left.size() + right.size()),
-        Equals(left, right) => Succ(left.size() + right.size()),
-        Not(value) => Succ(Succ(value.size())),
-        ByteAt(_, index) => Succ(index.size()),
+        Sum(left, right) => left.size() + right.size() + 1,
+        Difference(left, right) => left.size() + right.size() + 1,
+        BitsAnd(left, right) => left.size() + right.size() + 1,
+        BitsOr(left, right) => left.size() + right.size() + 1,
+        BitsXor(left, right) => left.size() + right.size() + 1,
+        ShiftedLeft(value, _) => value.size() + 1,
+        ShiftedRight(value, _) => value.size() + 1,
+        Lower(left, right) => left.size() + right.size() + 1,
+        LowerSigned(left, right) => left.size() + right.size() + 1,
+        Equals(left, right) => left.size() + right.size() + 1,
+        Not(value) => value.size() + 2,
+        ByteAt(_, index) => index.size() + 1,
     }
 }
 
@@ -352,13 +352,13 @@ fn List::sizes(self values: List<Val>) → Nat { match values { Nil => 0, Cons(v
 fn Calc::size(self c: Calc, next: Nat) → Nat {
     match c {
         Nothing => 1,
-        Both(parts) => Succ(parts(True).size(next) + parts(False).size(next)),
-        Fresh(init, body) => Succ(init.size() + body(Var(next)).size(Succ(next))),
-        Assign(_, value) => Succ(value.size()),
-        Store(_, index, value) => Succ(index.size() + value.size()),
-        Choose(condition, arms) => Succ(condition.size() + (arms(True).size(next) + arms(False).size(next))),
-        Passes(bound, state, body, stop, _) => Succ(bound.size() + (state.len() + (body(Var(next)).size(next) + stop.size()))),
-        Apply(_, arguments, _) => Succ(arguments.sizes()),
+        Both(parts) => parts(True).size(next) + parts(False).size(next) + 1,
+        Fresh(init, body) => init.size() + body(Var(next)).size(next + 1) + 1,
+        Assign(_, value) => value.size() + 1,
+        Store(_, index, value) => index.size() + value.size() + 1,
+        Choose(condition, arms) => condition.size() + (arms(True).size(next) + arms(False).size(next)) + 1,
+        Passes(bound, state, body, stop, _) => bound.size() + (state.len() + (body(Var(next)).size(next) + stop.size())) + 1,
+        Apply(_, arguments, _) => arguments.sizes() + 1,
     }
 }
 
@@ -369,12 +369,12 @@ fn Act::shape(self a: Act, next: Nat) → List<Nat> {
     match a {
         Skip => [0, next, 0],
         Seq(parts) => List::append([1, next, 0], List::append(parts(True).shape(next), parts(False).shape(next))),
-        Let(init, body) => List::append([2, next, init.size()], body(Var(next)).shape(Succ(next))),
+        Let(init, body) => List::append([2, next, init.size()], body(Var(next)).shape(next + 1)),
         Set(_, value) => [3, next, value.size()],
         Poke(_, index, value) => [4, next, index.size() + value.size()],
         When(condition, arms) => List::append([5, next, condition.size()], List::append(arms(True).shape(next), arms(False).shape(next))),
-        While(condition, body) => List::append([6, next, condition.size()], body.shape(Succ(next))),
-        DoWhile(body, condition) => List::append([7, next, condition.size()], body.shape(Succ(next))),
+        While(condition, body) => List::append([6, next, condition.size()], body.shape(next + 1)),
+        DoWhile(body, condition) => List::append([7, next, condition.size()], body.shape(next + 1)),
         ReadTo(fd, _, at, len, _) => [8, next, fd.size() + at.size() + len.size()],
         WriteFrom(fd, _, from, len, _) => [9, next, fd.size() + from.size() + len.size()],
         OpenOf(_, len, _) => [10, next, len.size()],
@@ -438,8 +438,8 @@ fn Act::traced(self a: Act, next: Nat, k: Packing, plan: List<Nat>) → Traced {
         },
         Let(init, body) => match plan.joins() {
             False => Let(init, body).traced_whole(next, k, plan.after_flag()),
-            True => match init.assigned(next, Succ(next)).ops().pack(Packing([], k.group)) {
-                Packing(done, group) => match body(Var(next)).traced(Succ(next), Packing(done, group).after(k), plan.after_flag()) {
+            True => match init.assigned(next, next + 1).ops().pack(Packing([], k.group)) {
+                Packing(done, group) => match body(Var(next)).traced(next + 1, Packing(done, group).after(k), plan.after_flag()) {
                     Traced(k1, plan1, out1) => Traced(k1, plan1, Packing(done, group).spelled() ++ out1),
                 },
             },
@@ -460,7 +460,7 @@ fn Act::traced(self a: Act, next: Nat, k: Packing, plan: List<Nat>) → Traced {
         While(condition, body) => match plan.joins() {
             False => While(condition, body).traced_whole(next, k, plan.after_flag()),
             True => match condition.truth().place(next) {
-                Placed(nodes, id, _) => match body.traced(Succ(next), Packing::start(), plan.after_flag()) {
+                Placed(nodes, id, _) => match body.traced(next + 1, Packing::start(), plan.after_flag()) {
                     Traced(kb, plan1, out1) => match nodes.ops().pack(Packing([], kb.group)) {
                         Packing(closing, last) => match nodes.ops().pack(Packing([], k.group)) {
                             Packing(done, group) => Traced(
@@ -474,7 +474,7 @@ fn Act::traced(self a: Act, next: Nat, k: Packing, plan: List<Nat>) → Traced {
         DoWhile(body, condition) => match plan.joins() {
             False => DoWhile(body, condition).traced_whole(next, k, plan.after_flag()),
             True => match condition.truth().place(next) {
-                Placed(nodes, id, _) => match body.traced(Succ(next), Packing::start(), plan.after_flag()) {
+                Placed(nodes, id, _) => match body.traced(next + 1, Packing::start(), plan.after_flag()) {
                     Traced(kb, plan1, out1) => match nodes.ops().pack(Packing([], kb.group)) {
                         Packing(closing, last) => Traced(k.step(Do(Repeat(Packing(closing, last).after(kb).stmt(), id))), plan1,
                             out1 ++ Cons(id, Packing(closing, last).spelled())),

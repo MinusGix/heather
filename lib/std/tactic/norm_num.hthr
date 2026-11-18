@@ -54,7 +54,7 @@ theorem norm_num_false(): norm_num_no() = False { refl }
 
 // `Lt` at `Nat` and `Int` as one verdict over its two sides, so its
 // closers take the sides as written.
-fn norm_num_nat_ltb(n, m: Nat) → Bool { Succ(n).leb(m) }
+fn norm_num_nat_ltb(n, m: Nat) → Bool { (n + 1).leb(m) }
 theorem norm_num_nat_lt(n, m: Nat, h: norm_num_nat_ltb(n, m) = True): n < m { (n + 1).le_of_leb(m, h) }
 theorem norm_num_nat_not_lt(n, m: Nat, h: norm_num_nat_ltb(n, m) = False): ¬(n < m) { (n + 1).not_le_of_leb(m, h) }
 fn norm_num_int_ltb(a, b: Int) → Bool { a.isucc().leb(b) }
@@ -326,7 +326,7 @@ fn norm_num_terms(H: NormNumRealHeads, read: Handle → Tac<NormNumRead>, node: 
             Refused(why) => fail("norm_num: " ++ why, []),
             Accepted(t) => defeq(Hd(t), App(Hd(f), NatLit(i))).bind(λ same => match same {
                 False => fail("norm_num: a sum's term is not found", [At(Hd(f), Tried("the terms", "applied to a numeral"))]),
-                True => read(t).bind(λ rt => norm_num_terms(H, read, node, ty, f, Succ(i), more, norm_num_two(H, node, acc, rt))),
+                True => read(t).bind(λ rt => norm_num_terms(H, read, node, ty, f, i + 1, more, norm_num_two(H, node, acc, rt))),
             }),
         }),
     }

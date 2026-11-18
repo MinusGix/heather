@@ -78,7 +78,7 @@ theorem search_short(): CoTree::after(Events::none(), 3, search(0)) = ORet(8) { 
 // parameter, and the pass is that helper at `big(n)` by conversion
 // (docs/proof-patterns.md §4).
 fn search_at(n: Nat, b: Bool) → CoTree<Step<Nat, Nat>>(Events::none()) {
-    match b { True => CRet(Break(n)), False => CRet(Continue(Succ(n))) }
+    match b { True => CRet(Break(n)), False => CRet(Continue(n + 1)) }
 }
 theorem search_pass_at(n: Nat, b: Bool): big(n) = b → (x: Step<Nat, Nat>) → Returns(Events::none(), search_at(n, b), x) →
     Step::Within(λ _ => True, λ r => big(r) = True, x)

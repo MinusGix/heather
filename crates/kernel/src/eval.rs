@@ -2008,6 +2008,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
         // An occurrence whose δ does not fit the definition's context is
         // ill-typed and stays an unglued neutral (`Defs::fits`).
+        crate::stats::profile_global(|| self.defs.position(var));
         let body = self.defs.body_unshifted(var).filter(|_| self.defs.fits(var, subst.terms.len())).map(Rc::clone);
         let unfold = body.map(|body| self.glue(var, &subst, body));
         neutral(self.arena, Head::Global { var, subst }, ElimSpine::empty(), unfold)

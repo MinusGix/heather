@@ -70,7 +70,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "target" / "sentinel"
 BRANCH = "claude/sentinel-images"
-STORES = ["semantic-test-images", "native-test-images", "cli-check-images"]
+STORES = ["semantic-test-images", "cli-check-images"]
 # Where the suite keeps those stores: target/, or $HEATHER_CACHE_DIR when it is
 # set (heather_cache::store_root; a relative value is taken from the root).
 STORE_ROOT = ROOT / (os.environ.get("HEATHER_CACHE_DIR") or "target")

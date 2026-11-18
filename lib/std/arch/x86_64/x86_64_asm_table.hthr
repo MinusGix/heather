@@ -33,7 +33,7 @@ fn LabelTable::labels(self t: LabelTable) → Nat → Nat { λ n => t.offset_of(
 
 // `n` names an item: its index is in range and that item is so named.
 fn LabelTable::has(self t: LabelTable, n: Nat) → Bool {
-    Succ(t.index_of(n)).leb(t.depth) && asm_same(t.name_at(t.index_of(n)), n)
+    (t.index_of(n) + 1).leb(t.depth) && asm_same(t.name_at(t.index_of(n)), n)
 }
 
 // A jump's target is a nonzero label the table has.

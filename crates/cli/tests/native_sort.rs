@@ -46,7 +46,7 @@ fn sort_agrees_with_slice_sort() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/sort/sort.hthr", "sort_in_place", "-o"])
-        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .arg(&assembly).args(heather_cli::showcase::native_image_args())
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let binary = output.join("bytesort");

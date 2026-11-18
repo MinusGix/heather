@@ -95,7 +95,7 @@ theorem buffer_bytes_span_other(buffers: Buffers(), buffer, index: Nat, bytes: L
 fn store_bytes(k: Nat, buffers: Buffers(), buffer, index: Nat, bytes: [BitVec(8); k]) → Buffers() {
     (match k as λ m => Buffers() → Nat → [BitVec(8); m] → Buffers() {
         Zero => λ file at bytes => file,
-        Succ(_, ih) => λ file at bytes => ih(store_byte(file, buffer, at, head(bytes)), Succ(at), tail(bytes)),
+        Succ(_, ih) => λ file at bytes => ih(store_byte(file, buffer, at, head(bytes)), at + 1, tail(bytes)),
     })(buffers, index, bytes)
 }
 
@@ -306,7 +306,7 @@ fn loop_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, co
     match remaining {
         Zero => λ state buffers => LoopState(LoopEnd(state, True), buffers),
         Succ(rest) => λ state buffers => {
-            let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
+            let after = step(pass_valuation(parameters, count, rest + 1, state), buffers);
             match after.values(1, exit).head_bit() {
                 False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
                 True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),

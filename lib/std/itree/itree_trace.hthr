@@ -126,7 +126,7 @@ theorem IsTrace::of_cut<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)): IsCutTra
 // A trace's length: how many answers it records. A program logic measures
 // a loop by it (linux_x86_64_wp's `loop_at`).
 fn Trace::len<R>(E: Events, tr: Trace<R>(E)) → Nat {
-    match tr { TEnd => 0, TRet(_) => 0, TCall(_) => 0, TAns(_, _, rest) => Succ(Trace::len(E, rest)) }
+    match tr { TEnd => 0, TRet(_) => 0, TCall(_) => 0, TAns(_, _, rest) => Trace::len(E, rest) + 1 }
 }
 
 // A tree's traces, read off its next move: what a logic that evaluates
@@ -495,7 +495,7 @@ theorem IsTrace::of_refuses<R>(E: Events, stop: R → Type, t: ITree<R>(E), u: I
 
 // A family that only grows with fuel: what `iter` and `mrec` produce.
 fn ITree::Grows<R>(E: Events, p: Nat → ITree<R>(E)) → Type {
-    (n: Nat) → ITree::Below(E, p(n), p(Succ(n)))
+    (n: Nat) → ITree::Below(E, p(n), p(n + 1))
 }
 
 theorem ITree::iter_family_grows<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
@@ -848,7 +848,7 @@ fn Program::rec(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Even
 // Sequencing, one fuel shared by both sides.
 fn Program::bind<A, B>(E: Events, p: Program<A>(E), q: A → Program<B>(E)) → Program<B>(E) {
     Program(λ n => ITree::bind(E, p.at(n), λ r => q(r).at(n)),
-        λ n => ITree::below_bind(E, p.at(n), p.at(Succ(n)), λ r => q(r).at(n), λ r => q(r).at(Succ(n)),
+        λ n => ITree::below_bind(E, p.at(n), p.at(n + 1), λ r => q(r).at(n), λ r => q(r).at(n + 1),
             p.grows(n), λ r => q(r).grows(n)))
 }
 

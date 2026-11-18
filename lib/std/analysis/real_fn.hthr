@@ -558,7 +558,7 @@ theorem BoundedOn::pow(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R), n: N
 // The derivative of `xⁿ`, by cases so that no exponent truncates: `0` at
 // `n = 0`, and `(m + 1)·xᵐ` at `n = m + 1`.
 fn OrderedField::npow_deriv(x: K, n: Nat) → K {
-    match n { Zero => K.unit, Succ(m) => K.of_nat(Succ(m)) * OrderedField::npow(x, m) }
+    match n { Zero => K.unit, Succ(m) => K.of_nat(m + 1) * OrderedField::npow(x, m) }
 }
 
 theorem BoundedOn::npow_deriv(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R), n: Nat):

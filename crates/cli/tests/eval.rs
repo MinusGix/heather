@@ -17,6 +17,11 @@ const SOURCE: &str = "import bool; import nat; import list; import option; impor
 /// `heather eval` over [`SOURCE`] with `args` after the file: the exit
 /// code, stdout and stderr.
 fn eval(tag: &str, args: &[&str]) -> (Option<i32>, String, String) {
+    eval_reading(tag, args, None)
+}
+
+/// [`eval`] with `HEATHER_READS` set to `reads`: which evaluator reads.
+fn eval_reading(tag: &str, args: &[&str], reads: Option<&str>) -> (Option<i32>, String, String) {
     let dir = std::env::temp_dir().join(format!("heather-eval-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("eval_probe.hthr");
@@ -26,6 +31,7 @@ fn eval(tag: &str, args: &[&str]) -> (Option<i32>, String, String) {
         .arg("eval")
         .arg(&path)
         .args(args)
+        .envs(reads.map(|how| ("HEATHER_READS", how)))
         .output()
         .expect("run heather");
     std::fs::remove_dir_all(dir).unwrap();
@@ -88,4 +94,29 @@ fn a_term_eval_cannot_elaborate_is_refused_with_its_reason() {
     let (code, _, err) = eval("unbound", &["cubes(3)"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("unbound name `cubes`") && err.contains("<term>:1:1"), "{err}");
+}
+
+#[test]
+fn the_untrusted_evaluator_and_the_kernels_agree() {
+    // `HEATHER_READS=check` reads by both and refuses a read they differ
+    // on (`docs/infrastructure/untrusted-evaluator-design.md` §3). The terms
+    // go through what the untrusted machine has of its own: numbers past a
+    // word's half, each named operation at its edges (a difference cut at
+    // zero, a zero divisor), recursion through a list and through `Nat`,
+    // values nobody reads, and data read by its constructors' encoders.
+    let cases = [
+        ("big", "[123456789 * 987654321, 4000000000 + 4000000000, 5 - 9, 9 - 5, (1000001).half()]", "List<Nat>", "[121932631112635269, 8000000000, 0, 4, 500000]"),
+        ("divide", "[(17).div(5), (17).mod(5), (17).div(0), (17).mod(0), (0).div(3)]", "List<Nat>", "[3, 2, 0, 17, 0]"),
+        ("compare", "[(7).same(7), (7).same(8), (3).leb(3), (4).leb(3), (0).leb(0)]", "List<Bool>", "[True, False, True, False, True]"),
+        ("recursion", "Some(squares(12))", "Option<List<Nat>>", "Some([1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144])"),
+        ("unread", "first_positive([0, 0, 6, 100000000 * 100000000 * 100000000])", "Option<Nat>", "Some(6)"),
+        ("text", "[greeting(\"wörld\")]", "List<String>", "[\"hello, wörld!\"]"),
+    ];
+    for (tag, term, ty, value) in cases {
+        let (code, out, err) = eval_reading(&format!("check-{tag}"), &[term, "--type", ty], Some("check"));
+        assert_eq!(code, Some(0), "`{term}`: {err}");
+        assert_eq!(out.trim_end(), value, "`{term}`");
+        let (code, kernel, err) = eval_reading(&format!("kernel-{tag}"), &[term, "--type", ty], Some("kernel"));
+        assert_eq!((code, kernel.as_str()), (Some(0), out.as_str()), "`{term}` by the kernel's evaluator: {err}");
+    }
 }

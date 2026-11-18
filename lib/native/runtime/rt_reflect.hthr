@@ -275,7 +275,7 @@ fn Known::naming(self k: Known, named: List<FieldTerm>) → Known {
 
 // The span a parameter level is the bytes of, if it is one.
 fn Known::span_of(self k: Known, l: Nat) → Option<Nat> {
-    match Succ(l).leb(k.lent + k.lent).and(l.mod(2).same(0)) { True => Some(l.div(2)), False => None }
+    match (l + 1).leb(k.lent + k.lent).and(l.mod(2).same(0)) { True => Some(l.div(2)), False => None }
 }
 
 // Whether the walk reads types held by their repr: the generator's mode
@@ -283,7 +283,7 @@ fn Known::span_of(self k: Known, l: Nat) → Option<Nat> {
 fn Known::reprs_on(self k: Known) → Bool { match k.reprs { Nil => k.discover, Cons(_, _) => True } }
 
 fn Known::repr_at(rs: List<ReprEntry>, g: Nat, i: Nat) → Option<Nat> {
-    match rs { Nil => None, Cons(r, rest) => match r.repr.same(g) { True => Some(i), False => Known::repr_at(rest, g, Succ(i)) } }
+    match rs { Nil => None, Cons(r, rest) => match r.repr.same(g) { True => Some(i), False => Known::repr_at(rest, g, i + 1) } }
 }
 
 // Whether a local is the recursion's.
@@ -296,7 +296,7 @@ fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
 }
 
 fn Known::index(gs: List<Nat>, g: Nat, i: Nat) → Option<Nat> {
-    match gs { Nil => None, Cons(x, rest) => match x.same(g) { True => Some(i), False => Known::index(rest, g, Succ(i)) } }
+    match gs { Nil => None, Cons(x, rest) => match x.same(g) { True => Some(i), False => Known::index(rest, g, i + 1) } }
 }
 
 // A call of the recursion: its first `varied` arguments' levels in place of
@@ -306,7 +306,7 @@ fn SelfCall::call_args(self sc: SelfCall, ls: List<Nat>) → List<Nat> {
 }
 
 fn Known::rec(rs: List<RecEntry>, g: Nat, i: Nat) → Option<Nat> {
-    match rs { Nil => None, Cons(r, rest) => match r.g.same(g) { True => Some(i), False => Known::rec(rest, g, Succ(i)) } }
+    match rs { Nil => None, Cons(r, rest) => match r.g.same(g) { True => Some(i), False => Known::rec(rest, g, i + 1) } }
 }
 
 fn Known::str_same(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
@@ -314,7 +314,7 @@ fn Known::str_same(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) =
 fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
     match names {
         Nil => None,
-        Cons(n, rest) => match Known::str_same(n, name) { True => Some(k), False => Known::field(rest, name, Succ(k)) },
+        Cons(n, rest) => match Known::str_same(n, name) { True => Some(k), False => Known::field(rest, name, k + 1) },
     }
 }
 
@@ -417,7 +417,7 @@ fn rt_number(fuel, succ: Nat, h: Handle) → Tac<Nat> {
         Succ(f) => whnf_or(h).bind(λ w => view(w).bind(λ u => match u {
             HLit(n) => pure(n),
             HGlobal(g, _, args) => match g.id.same(succ) {
-                True => match args { Cons(p, Nil) => rt_number(f, succ, p).bind(λ n => pure(Succ(n))), _ => rt_refuse("expected a numeral") },
+                True => match args { Cons(p, Nil) => rt_number(f, succ, p).bind(λ n => pure(n + 1)), _ => rt_refuse("expected a numeral") },
                 False => rt_refuse("expected a numeral"),
             },
             _ => rt_refuse("expected a numeral"),
@@ -601,7 +601,7 @@ fn RSt::forgetting(self st: RSt, ids: List<Nat>) → RSt {
 }
 
 // A level as a de Bruijn index at the current depth.
-fn RSt::index(self st: RSt, l: Nat) → Nat { st.depth - Succ(l) }
+fn RSt::index(self st: RSt, l: Nat) → Nat { st.depth - (l + 1) }
 
 fn RSt::indices(self st: RSt, ls: List<Nat>) → List<Nat> { ls.map(λ l => st.index(l)) }
 
@@ -622,7 +622,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
 }
 
 fn RSt::bind(self st: RSt, t: Tm) → RSt {
-    RSt(Succ(st.depth), Cons(t, st.lets), st.memo, st.handles, st.locals, st.funs)
+    RSt(st.depth + 1, Cons(t, st.lets), st.memo, st.handles, st.locals, st.funs)
 }
 
 fn RSt::level(t: Tm) → Nat { match t { Var(l) => l, _ => 0 } }
@@ -640,7 +640,7 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
             Var(l) => Pair(st, Var(l)),
             _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
-                None => Pair(RSt(Succ(st.depth), Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
+                None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
             },
         },
@@ -653,7 +653,7 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
 fn RSt::node(self st: RSt, node: Tm) → Pair<RSt, Nat> {
     match (match node { Lit(_, _) => None, _ => rt_memo(st.memo, node) }) {
         Some(l) => Pair(st, l),
-        None => Pair(RSt(Succ(st.depth), Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
+        None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
             st.handles, st.locals, st.funs), st.depth),
     }
 }
@@ -998,8 +998,8 @@ fn rt_element(k: Known, name: String, args: List<Handle>) → Tac<Option<Element
                         None => pure(None),
                         Some(p) => match Known::elements_at(k.named, p.fst, p.snd) {
                             None => pure(None),
-                            Some(e) => rt_literal(i).bind(λ n => match Succ(n).leb(e.count) {
-                                False => rt_refuse("element " ++ decimal_name(Succ(n), n) ++ " of the array field `" ++ p.snd ++ "`, which has fewer"),
+                            Some(e) => rt_literal(i).bind(λ n => match (n + 1).leb(e.count) {
+                                False => rt_refuse("element " ++ decimal_name(n + 1, n) ++ " of the array field `" ++ p.snd ++ "`, which has fewer"),
                                 True => e.reads(n).bind(λ r => pure(Some(ElementRead(r.snd, None)))),
                             }),
                         },
@@ -1215,10 +1215,10 @@ fn IoKnown::is_lent(self io: IoKnown, g: GlobalRef) → Bool {
 // that stops inside the record.
 fn rt_stage_part(n: Nat, i: Nat, path: List<Nat>) → Option<Nat> {
     match path {
-        Nil => match Succ(i).same(n) { True => Some(i), False => None },
+        Nil => match (i + 1).same(n) { True => Some(i), False => None },
         Cons(j, rest) => match j {
-            Zero => match rest { Nil => match Succ(Succ(i)).leb(n) { True => Some(i), False => None }, Cons(_, _) => None },
-            Succ(_) => rt_stage_part(n, Succ(i), rest),
+            Zero => match rest { Nil => match (i + 2).leb(n) { True => Some(i), False => None }, Cons(_, _) => None },
+            Succ(_) => rt_stage_part(n, i + 1, rest),
         },
     }
 }
@@ -1558,7 +1558,7 @@ fn rt_fuel_match(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, m: MatchIn
                 go(k, zb.fst, zb.snd, False).bind(λ rz =>
                 rt_arm_handle(m, 1).bind(λ sh => open(sh, "k").bind(λ c1 => rt_accepted("the `Succ` arm", c1)).bind(λ ok =>
                 open(ok.body, "ih").bind(λ c2 => rt_accepted("the recursion", c2)).bind(λ oih => {
-                    let at_k = RSt(Succ(st0.depth), [], st0.memo, st0.handles, Cons(Pair(ok.local.ref.id, st0.depth), st0.locals), rz.fst.funs);
+                    let at_k = RSt(st0.depth + 1, [], st0.memo, st0.handles, Cons(Pair(ok.local.ref.id, st0.depth), st0.locals), rz.fst.funs);
                     let sc = SelfCall(oih.local.ref.id, [st0.depth], List::range(st0.depth).drop(1), ra.snd);
                     rt_bind_words(f, at_k, oih.body, ra.snd).bind(λ sb =>
                     go(k.within(sc), sb.fst, sb.snd, False).bind(λ rs =>
@@ -1756,7 +1756,7 @@ fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
                     HLocal(x, args) => match args { Nil => rt_assoc(st.locals, x.id).and_then(λ l => k.span_of(l)), Cons(_, _) => None },
                     _ => None,
                 };
-                match found.unwrap_or(0) { Zero => rt_old_span(), Succ(j) => pure(Succ(j)) }
+                match found.unwrap_or(0) { Zero => rt_old_span(), Succ(j) => pure(j + 1) }
             }),
         }),
         None => rt_param_span(k, st, h),
@@ -1788,11 +1788,11 @@ fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, 
                     Some(fk) => match j { Zero => rt_same_span(fk, bytes).bind(λ same => match same { True => pure(0), False => rt_old_span() }), Succ(_) => param },
                 };
                 let l <- passed;
-                match l.same(j + j).and(Succ(j).leb(k.lent)) {
+                match l.same(j + j).and((j + 1).leb(k.lent)) {
                     False => rt_refuse("a lent span is passed on as it is, in its own place: the loop keeps its home, and a callee reads the caller's file"),
                     True => step(st, length).bind(λ r => match RSt::level(r.snd).same(j + j + 1) {
                         False => rt_refuse("a lent span's length word is passed on as it is: the loop keeps its home, and a callee reads the caller's file"),
-                        True => rt_lent_args(step, k, r.fst, Succ(j), n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
+                        True => rt_lent_args(step, k, r.fst, j + 1, n, rest).bind(λ s => pure(Pair(s.fst, Cons(j + j, Cons(j + j + 1, s.snd))))),
                     }),
                 }
             },
@@ -1809,7 +1809,7 @@ fn rt_call_lent(fuel: Nat, k: Known, args: List<Handle>) → Tac<Nat> {
         Succ(f) => match args {
             Cons(bytes, Cons(_, rest)) => infer(Hd(bytes)).bind(λ c => match c {
                 Accepted(t) => k.is_bytes(t).bind(λ yes => match yes {
-                    True => rt_call_lent(f, k, rest).bind(λ n => pure(Succ(n))),
+                    True => rt_call_lent(f, k, rest).bind(λ n => pure(n + 1)),
                     False => pure(0),
                 }),
                 Refused(_) => pure(0),
@@ -2096,7 +2096,7 @@ fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pai
         Zero => rt_refuse("more parameters than the reflector's fuel"),
         Succ(f) => view(b).bind(λ v => match v {
             HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
-                rt_params(f, k, RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                rt_params(f, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
                     tys ++ [t], o.body))),
             _ => pure(Pair(Pair(st, tys), b)),
         }),
@@ -2114,7 +2114,7 @@ fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
             Nil => Pair(0, tys),
             Cons(length, rest) => match bytes {
                 Bytes(_) => match (match length { Word(w) => w.same(64), _ => False }) {
-                    True => { let r = rt_lent(rest); Pair(Succ(r.fst), Cons(Word(64), Cons(Word(64), r.snd))) },
+                    True => { let r = rt_lent(rest); Pair(r.fst + 1, Cons(Word(64), Cons(Word(64), r.snd))) },
                     False => Pair(0, tys),
                 },
                 _ => Pair(0, tys),
@@ -2158,7 +2158,7 @@ fn rt_arity(fuel: Nat, t: Handle) → Tac<Nat> {
     match fuel {
         Zero => rt_refuse("more parameters than the reflector's fuel"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_arity(f, o.body).bind(λ n => pure(Succ(n)))),
+            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_arity(f, o.body).bind(λ n => pure(n + 1))),
             _ => pure(0),
         }),
     }
@@ -2170,7 +2170,7 @@ fn rt_params_n(n: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair
         Zero => pure(Pair(Pair(st, tys), b)),
         Succ(m) => view(b).bind(λ v => match v {
             HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
-                rt_params_n(m, k, RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                rt_params_n(m, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
                     tys ++ [t], o.body))),
             _ => rt_refuse("a step with fewer parameters than its function"),
         }),

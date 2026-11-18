@@ -12,7 +12,7 @@ inductive Args { ANil, ACons(binds: Nat, head: Tm, tail: Args) }
 
 // The issue's probe: two member declarations, each calling the other by a
 // method call on an arm's child.
-fn Tm::size(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => Succ(ts.size()) } }
+fn Tm::size(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => ts.size() + 1 } }
 fn Args::size(self ts: Args) → Nat {
     match ts { ANil => 0, ACons(_, t, rest) => t.size() + rest.size() }
 }
@@ -73,7 +73,7 @@ theorem count_leaves_use(t: Tm): t.count() = t.leaves() { t.count_leaves() }
 inductive PTm<O> { PBv(index: Nat), PNode(op: O, args: PArgs<O>) }
 inductive PArgs<O> { PNil, PCons(head: PTm<O>, tail: PArgs<O>) }
 
-fn PTm::size<O>(self t: PTm<O>) → Nat { match t { PBv(_) => 1, PNode(_, ts) => Succ(ts.size()) } }
+fn PTm::size<O>(self t: PTm<O>) → Nat { match t { PBv(_) => 1, PNode(_, ts) => ts.size() + 1 } }
 fn PArgs::size<O>(self ts: PArgs<O>) → Nat {
     match ts { PNil => 0, PCons(t, rest) => t.size() + rest.size() }
 }
@@ -85,7 +85,7 @@ inductive Even: (n: Nat) → Type { EZ: Even(0), ES(n: Nat, o: Odd(n)): Even(Suc
 inductive Odd: (n: Nat) → Type { OS(n: Nat, e: Even(n)): Odd(Succ(n)) }
 
 fn Even::half(n: Nat, self e: Even(n)) → Nat { match e { EZ => 0, ES(k, o) => o.half(k) } }
-fn Odd::half(n: Nat, self o: Odd(n)) → Nat { match o { OS(k, e) => Succ(e.half(k)) } }
+fn Odd::half(n: Nat, self o: Odd(n)) → Nat { match o { OS(k, e) => e.half(k) + 1 } }
 theorem half_two(): ES(1, OS(0, EZ)).half(2) = 1 { refl }
 
 // A member names a declaration the group does not hold: still refused by

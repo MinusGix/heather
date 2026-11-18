@@ -45,8 +45,8 @@ record Counted<A>(count: Nat) { values: List<A>, length: values.len() = count }
 fn repeat_at<T, A>(count: Nat, p: Parser<T, A>, source: List<T>, begin: Cursor<T>(source)) → Reply<T, Counted<A>(count)>(source, begin) {
     match count {
         Zero => pure_at<T, Counted<A>(0)>(source, begin, Counted([], refl)),
-        Succ(n) => bind_at<T, A, Counted<A>(Succ(n))>(source, begin, p.run(source, begin), λ value middle forward =>
-            map_at<T, Counted<A>(n), Counted<A>(Succ(n))>(source, middle, repeat_at(n, p, source, middle), λ (tail: Counted<A>(n)) =>
+        Succ(n) => bind_at<T, A, Counted<A>(n + 1)>(source, begin, p.run(source, begin), λ value middle forward =>
+            map_at<T, Counted<A>(n), Counted<A>(n + 1)>(source, middle, repeat_at(n, p, source, middle), λ (tail: Counted<A>(n)) =>
                 Counted(Cons(value, tail.values), Nat::cong_succ(tail.length)))),
     }
 }

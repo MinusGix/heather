@@ -41,7 +41,7 @@ fn BitVec::division_step({n, m: Nat}, d: BitVec(n + 1), b: Bool,
 // for a least-significant-first vector.
 fn BitVec::long_division({n: Nat}, d: BitVec(n + 1), m: Nat, a: BitVec(m))
         → Pair<BitVec(m), BitVec(n + 1)> {
-    (match m as λ k => BitVec(k) → Pair<BitVec(k), BitVec(Succ(n))> {
+    (match m as λ k => BitVec(k) → Pair<BitVec(k), BitVec(n + 1)> {
         Zero => λ a => Pair(BitVec::nil(), BitVec::zero()),
         Succ(_, ih) => λ a => BitVec::division_step(d, a.head_bit(), ih(a.tail_bits())),
     })(a)

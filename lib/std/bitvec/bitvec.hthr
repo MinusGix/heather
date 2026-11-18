@@ -253,7 +253,7 @@ fn BitVec::sign_bit({n: Nat}, self x: BitVec(n)) → Bool {
 fn BitVec::widen_bits(w, n: Nat, x: BitVec(n), s: Bool) → BitVec(w) {
     (match w as λ v => (m: Nat) → BitVec(m) → BitVec(v) {
         Zero => λ m y => BitVec::nil(),
-        Succ(k, ih) => λ m => match m as λ l => BitVec(l) → BitVec(Succ(k)) {
+        Succ(k, ih) => λ m => match m as λ l => BitVec(l) → BitVec(k + 1) {
             Zero => λ _ => ih(0, BitVec::nil()).cons_bit(s),
             Succ(l) => λ z => ih(l, z.tail_bits()).cons_bit(z.head_bit()),
         },
@@ -432,7 +432,7 @@ fn BitVec::pow({n: Nat}, self a: BitVec(n), k: Nat) → BitVec(n) {
 fn BitVec::ofInt({n: Nat}, z: Int) → BitVec(n) {
     match z {
         OfNat(k) => BitVec::ofNat(k),
-        NegSucc(k) => BitVec::ofNat(Succ(k)).neg(),
+        NegSucc(k) => BitVec::ofNat(k + 1).neg(),
     }
 }
 
@@ -652,7 +652,7 @@ fn BitVec::borrow_sub_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
 // Structural borrow agrees with the unsigned arithmetic characterization.
 
 fn BitVec::bit_with_tail(bit: Bool, tail: Nat) → Nat {
-    match bit { False => tail.twice(), True => Succ(tail.twice()) }
+    match bit { False => tail.twice(), True => tail.twice() + 1 }
 }
 
 theorem BitVec::bit_with_tail_normalize(bit: Bool, tail: Nat):
@@ -669,11 +669,11 @@ fn BitVec::borrow_right_value(bit, borrow: Bool, tail: Nat) → Nat {
     match bit {
         False => match borrow {
             False => Nat::twice(tail),
-            True => Succ(Nat::twice(tail)),
+            True => Nat::twice(tail) + 1,
         },
         True => match borrow {
-            False => Succ(Nat::twice(tail)),
-            True => Nat::twice(Succ(tail)),
+            False => Nat::twice(tail) + 1,
+            True => Nat::twice(tail + 1),
         },
     }
 }
@@ -870,7 +870,7 @@ fn BitVec::unsigned_le_dec({n: Nat}, self a, b: BitVec(n)) → a.unsigned_le(b) 
     match b.unsigned_lt_bit(a) as λ c =>
         (b.unsigned_lt_bit(a) = c) → (a.unsigned_le(b) ∨ ¬a.unsigned_le(b)) {
         True => λ h => Inr(λ p => Nat::lt_irrefl(b.toNat(), Nat::le_trans(
-            Succ(b.toNat()), a.toNat(), b.toNat(),
+            b.toNat() + 1, a.toNat(), b.toNat(),
             BitVec::borrow_sub_bit_true_iff(n, b, a).mp(h), p))),
         False => λ h => Inl(match Nat::lt_trichotomy(a.toNat(), b.toNat()) {
             Inl(lt) => Nat::le_of_lt(a.toNat())(b.toNat())(lt),
@@ -949,7 +949,7 @@ fn BitVec::init({n: Nat}, self x: BitVec(n + 1)) → BitVec(n) {
 }
 
 fn BitVec::snoc({n: Nat}, self x: BitVec(n), b: Bool) → BitVec(n + 1) {
-    (match n as λ k => BitVec(k) → Bool → BitVec(Succ(k)) {
+    (match n as λ k => BitVec(k) → Bool → BitVec(k + 1) {
         Zero => λ x b => BitVec::from_bits([b]),
         Succ(_, ih) => λ x b => ih(x.tail_bits(), b).cons_bit(x.head_bit()),
     })(x, b)
@@ -2629,7 +2629,7 @@ theorem BitVec::not_bool_eq(a, b: Bool): !BitVec::bool_eq(a, b) = a.xor(b) {
 }
 
 // The sign is the top bit.
-theorem BitVec::get_last(k: Nat, x: BitVec(Succ(k))): x.get(BitVec::last_index(k)) = x.bit_at(k) {
+theorem BitVec::get_last(k: Nat, x: BitVec(k + 1)): x.get(BitVec::last_index(k)) = x.bit_at(k) {
     match k {
         Zero => refl,
         Succ(j) => BitVec::get_last(j, x.tail_bits()),
@@ -2652,14 +2652,14 @@ theorem BitVec::sign_bit_at(n: Nat, x: BitVec(n)): x.sign_bit() = x.bit_at(n.pre
 fn BitVec::tabulate({n: Nat}, f: Nat → Bool) → BitVec(n) {
     (match n as λ k => (Nat → Bool) → BitVec(k) {
         Zero => λ f => BitVec::nil(),
-        Succ(_, ih) => λ f => ih(λ i => f(Succ(i))).cons_bit(f(0)),
+        Succ(_, ih) => λ f => ih(λ i => f(i + 1)).cons_bit(f(0)),
     })(f)
 }
 
 theorem BitVec::tabulate_cong(n: Nat, f, g: Nat → Bool, same: (k: Nat) → f(k) = g(k)): BitVec::tabulate(f, n := n) = BitVec::tabulate(g, n := n) {
     match n {
         Zero => refl,
-        Succ(k) => BitVec::cons_bit_cong(k, same(0), BitVec::tabulate_cong(k, λ i => f(Succ(i)), λ i => g(Succ(i)), λ i => same(Succ(i)))),
+        Succ(k) => BitVec::cons_bit_cong(k, same(0), BitVec::tabulate_cong(k, λ i => f(i + 1), λ i => g(i + 1), λ i => same(i + 1))),
     }
 }
 
@@ -2671,10 +2671,10 @@ fn BitVec::bits_from({m, n: Nat}, self x: BitVec(m), skip: Nat) → BitVec(n) { 
 
 // `x` read in two's complement at width `n`: its bits, then its sign.
 fn BitVec::sign_bits({m, n: Nat}, self x: BitVec(m)) → BitVec(n) {
-    BitVec::tabulate(λ k => BitVec::choose_bit(Succ(k).leb(m), x.bit_at(k), x.bit_at(m.pred())))
+    BitVec::tabulate(λ k => BitVec::choose_bit((k + 1).leb(m), x.bit_at(k), x.bit_at(m.pred())))
 }
 
 // `lo`'s bits, then `hi`'s.
 fn BitVec::join_bits({m1, m2, n: Nat}, self lo: BitVec(m1), hi: BitVec(m2)) → BitVec(n) {
-    BitVec::tabulate(λ k => BitVec::choose_bit(Succ(k).leb(m1), lo.bit_at(k), hi.bit_at(k - m1)))
+    BitVec::tabulate(λ k => BitVec::choose_bit((k + 1).leb(m1), lo.bit_at(k), hi.bit_at(k - m1)))
 }

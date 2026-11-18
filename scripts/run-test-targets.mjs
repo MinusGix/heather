@@ -100,8 +100,13 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // then again here as a test (issues/library-gate-warmup-runs-alone.md).
 // `built` is mirrored by the library gate's `--build-first` (crates/cli/tests/library.rs).
 export const PREREQUISITES = new Map([["library", {
-  readers: ["native_cat", "native_tools", "native_utf8"],
-  built: ["lib/native", "lib/_tests/native"],
+  // write-elf's tests, and since `compile-x86` keys its bundled library as
+  // the loader does, the compile-x86 tests and the `heather` binary's
+  // native tests, which share the gate's store
+  // (issues/native-tests-share-the-gate-store.md).
+  readers: ["native_cat", "native_tools", "native_utf8", "heather", "native", "native_binary_search",
+    "native_branches", "native_linked", "native_own_rule", "native_program", "native_sort"],
+  built: ["lib/native", "lib/_tests/native", "lib/lang/lexer"],
   store: "cli-check-images",
 }]]);
 const PROBE_SECONDS = 10;

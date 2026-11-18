@@ -135,11 +135,11 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.find(Held(condition, Bit)) {
             None => None,
-            Some(found) => match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) {
+            Some(found) => match when_true.emit(prog.branch_label(found.register, names + 1), file, placement, names + 2) {
                 None => None,
-                Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
+                Some(yes) => match when_false.emit(yes.prog.else_label(names + 1, names + 2), file, yes.placement, yes.names) {
                     None => None,
-                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
+                    Some(no) => Some(Emitted(no.prog.join_label(names + 2), yes.file.meet(no.file, file.known), no.placement, no.names)),
                 },
             },
         },
@@ -1147,7 +1147,7 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
             shared(file.loop_places(inputs, live, pool, sure && body.calls()), λ (chosen: List<Gpr>) =>
             shared(chosen.take(inputs.len()), λ (state: List<Gpr>) =>
                 shared(chosen.drop(inputs.len()).head_or(Rax), λ (counter: Gpr) =>
-                    shared(chosen.drop(Succ(inputs.len())).head_or(Rax), λ (flag: Gpr) => {
+                    shared(chosen.drop(inputs.len() + 1).head_or(Rax), λ (flag: Gpr) => {
                         let head = match input_file(word_ports(Cons(count, parameters)), Cons(counter, state)) {
                             None => File::empty(),
                             Some(h) => h,

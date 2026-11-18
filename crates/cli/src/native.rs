@@ -61,10 +61,12 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
     let mut list = false;
     let mut unbuilt = false;
     let mut kernel_workers = None;
+    let mut freshness = heather_cache::module_image::ImageFreshness::Exact;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--accept-stale-images" => freshness = heather_cache::module_image::ImageFreshness::AcceptStale,
             "-L" => {
                 let value = PathBuf::from(args.next().ok_or("-L needs a path")?);
                 if !search.contains(&value) { search.push(value); }
@@ -83,14 +85,14 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
         }
     }
     if files.is_empty() || (!list && cache.is_none()) {
-        return Err("usage: heather warm-native <file.hthr>... --cache-dir <dir> [--through <module> | --unbuilt] [-L <dir>]... [--kernel-workers <n>]\n\
+        return Err("usage: heather warm-native <file.hthr>... --cache-dir <dir> [--through <module> | --unbuilt] [--accept-stale-images] [-L <dir>]... [--kernel-workers <n>]\n\
                     \x20      heather warm-native <file.hthr>... --list [-L <dir>]...".into());
     }
     // Every file's imports in load order, each module at its first
     // appearance (which follows its own imports), the bundled modules left to
     // the prefix below; then the files themselves. Imports before every root,
     // so `--through` an import never checks a root.
-    let bundled: Vec<&str> = SUPPORT.iter().map(|(name, _)| *name).collect();
+    let bundled: Vec<&str> = SUPPORT.iter().map(|(name, _, _)| *name).collect();
     let mut closure: Vec<loader::Module> = Vec::new();
     let mut roots: Vec<loader::Module> = Vec::new();
     for file in &files {
@@ -116,11 +118,9 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
     if unbuilt {
         // The bundled prefix as `compile-x86` checks it, then the rest: a
         // key chains through its imports' interface hashes.
-        let mut modules: Vec<loader::Module> = SUPPORT.iter().map(|&(name, src)| loader::Module {
-            name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
-        }).collect();
+        let mut modules: Vec<loader::Module> = bundled_modules();
         modules.extend(closure.iter().cloned());
-        let plan = heather_cli::semantic::BuildPlan::new(cache.unwrap(), heather_cache::module_image::ImageFreshness::Exact, modules);
+        let plan = heather_cli::semantic::BuildPlan::new(cache.unwrap(), freshness, modules);
         for (i, m) in plan.modules().iter().enumerate() {
             if plan.state(i) != heather_cli::semantic::BuildState::Built && !bundled.contains(&m.name.as_str()) {
                 println!("{}", m.name);
@@ -141,11 +141,9 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
     }
     let store = Arc::new(store);
     elab.set_gate(Arc::clone(&store) as Arc<dyn heather_elab::gate::KernelGate>);
-    let mut session = SemanticSession::new(Some(dir));
-    for &(name, src) in SUPPORT {
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
-        })?;
+    let mut session = SemanticSession::new(Some(dir)).with_freshness(freshness);
+    for module in bundled_modules() {
+        check_module(&mut elab, &mut session, &module)?;
     }
     for module in &closure {
         check_file(&mut elab, &mut session, module)?;
@@ -261,10 +259,16 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // words (`--explain-optimizer`), and the rules not applied where their
     // nodes fit (`--explain-optimizer=all`).
     let mut explain = verified::Explain::No;
+    // `--accept-stale-images`: replay images another build of the compiler
+    // wrote, as `heather check` and `write-elf` do under the flag (the
+    // stale test lanes pass it, so the native tests replay what the library
+    // gate replayed into the same store).
+    let mut freshness = heather_cache::module_image::ImageFreshness::Exact;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--accept-stale-images" => freshness = heather_cache::module_image::ImageFreshness::AcceptStale,
             "--entry" => {
                 let value = args.next().ok_or("--entry needs a function, as `<module>::<function>`")?;
                 match value.split_once("::") {
@@ -304,9 +308,9 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         return Err(if program_only {
-            "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]"
+            "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--kernel-workers <n>]"
         } else {
-            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--explain-optimizer[=all]] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]"
+            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--explain-optimizer[=all]] [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--timings <file.tsv>] [--kernel-workers <n>]"
         }.into());
     }
     if program_only && (!entries.is_empty() || symbol.is_some()) {
@@ -349,7 +353,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     }
     // A program may import the bundled proof library by its bundled names,
     // which need not be files on the search path.
-    let bundled: Vec<&str> = SUPPORT.iter().map(|(name, _)| *name).collect();
+    let bundled: Vec<&str> = SUPPORT.iter().map(|(name, _, _)| *name).collect();
     let sources = loader::load_providing(source, &search, &bundled).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
@@ -433,15 +437,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // beside its images (`answers.rs`): keyed by this build, the sources
     // below and the text of every module a read stands on.
     let answers = answers::Answers::new(cache.as_deref(),
-        SUPPORT.iter().copied().chain(sources.iter().map(|module| (module.name.as_str(), module.src.as_str()))));
-    let mut session = SemanticSession::new(cache);
-    for &(name, src) in SUPPORT {
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
-        })?;
+        SUPPORT.iter().map(|&(name, _, src)| (name, src)).chain(sources.iter().map(|module| (module.name.as_str(), module.src.as_str()))));
+    let mut session = SemanticSession::new(cache).with_freshness(freshness);
+    for module in bundled_modules() {
+        check_module(&mut elab, &mut session, &module)?;
     }
     for module in &sources {
-        if let Some((_, bundled)) = SUPPORT.iter().find(|(name, _)| *name == module.name) {
+        if let Some((_, _, bundled)) = SUPPORT.iter().find(|(name, _, _)| *name == module.name) {
             if module.src != *bundled {
                 return Err(format!("source module `{}` differs from the compiler's bundled proof library", module.name));
             }
@@ -628,8 +630,25 @@ pub(crate) fn refuse_assumptions(elab: &Elaborator, certificate_module: &str, un
     ))
 }
 
+/// The bundled proof library as the loader hands the same files over: each
+/// module at its path in the repo, the common prelude among them (so every
+/// module after it imports it implicitly, as `module_imports` does for a
+/// loaded one). Checked so, its images have the keys the library gate's
+/// have, and one store serves both.
+fn bundled_modules() -> Vec<loader::Module> {
+    SUPPORT.iter().map(|&(name, path, src)| loader::Module { name: name.into(), path: PathBuf::from(path), src: src.into() }).collect()
+}
+
+/// A bundled module's lints: the standard library's for a file under
+/// `lib/std`, as [`loader::Module::lint_profile`] reads it from the working
+/// directory, but from the bundled path, so a compiler run outside the repo
+/// keys its library the same way.
+fn bundled_profile(module: &loader::Module) -> LintProfile {
+    if module.path.starts_with("lib/std") { LintProfile::Stdlib } else { LintProfile::Default }
+}
+
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
-    let outcome = session.check(elab, module, LintProfile::Default);
+    let outcome = session.check(elab, module, bundled_profile(module));
     for notice in outcome.notices { eprintln!("{notice}"); }
     if outcome.errors.is_empty() { Ok(()) } else {
         Err(outcome.errors.iter().map(|e| e.render(&module.src)).collect::<Vec<_>>().join("\n"))
@@ -685,10 +704,10 @@ fn program_assembly(exported: &[(String, heather_cli::linked::Signature, usize)]
     out
 }
 
-// The bundled proof library, checked through the cache directory the native
-// tests share (`target/native-test-images`): `scripts/test`'s native warm-up
-// runs this alone, so the `compile-x86` children replay the library instead
-// of each elaborating it. Every replayed declaration is still kernel-checked.
+// The bundled proof library, checked through the store the native tests
+// share with the library gate (`target/cli-check-images`): checked as the
+// loader checks the same files, it replays the gate's images. Every
+// replayed declaration is still kernel-checked.
 //
 // The gate is a verdict store with no file behind it: every declaration
 // still faces the kernel once in this process, and a module's image moved
@@ -756,10 +775,8 @@ mod tests {
         let verdicts = heather_cache::Cache::in_process();
         elab.set_gate(Arc::new(verdicts) as Arc<dyn heather_elab::gate::KernelGate>);
         let mut session = SemanticSession::new(Some(heather_cli::showcase::native_test_images()));
-        for &(name, src) in SUPPORT {
-            check_module(&mut elab, &mut session, &loader::Module {
-                name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
-            }).unwrap_or_else(|error| panic!("{name}: {error}"));
+        for module in bundled_modules() {
+            check_module(&mut elab, &mut session, &module).unwrap_or_else(|error| panic!("{}: {error}", module.name));
         }
     }
 }

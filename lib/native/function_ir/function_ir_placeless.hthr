@@ -1067,7 +1067,7 @@ fn lent_buffers(count: Nat, held: Buffers()) → Buffers() {
 fn stated_homes(from, count: Nat, held: Buffers()) → List<BitVec(64)> {
     match count {
         Zero => [],
-        Succ(k) => Cons(BitVec::zero(), Cons(BitVec::ofNat(buffer_bytes(held, from).len()), stated_homes(Succ(from), k, held))),
+        Succ(k) => Cons(BitVec::zero(), Cons(BitVec::ofNat(buffer_bytes(held, from).len()), stated_homes(from + 1, k, held))),
     }
 }
 

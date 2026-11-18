@@ -393,7 +393,7 @@ theorem List::perm_len<A>(self xs: List<A>): (ys: List<A>) → Perm(xs, ys) → 
 fn List::occurrences<A: DecEq>(self xs: List<A>, a: A) → Nat {
     match xs {
         Nil => 0,
-        Cons(h, t) => or_pick(A.eq_dec(a, h), t.occurrences(a), Succ(t.occurrences(a))),
+        Cons(h, t) => or_pick(A.eq_dec(a, h), t.occurrences(a), t.occurrences(a) + 1),
     }
 }
 

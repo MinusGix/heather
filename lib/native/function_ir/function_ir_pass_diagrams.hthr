@@ -129,7 +129,7 @@ theorem fold_lockstep(): LockstepDiagram(Leaf::Step, Leaf::Step, FoldMatch) {
 // Removal: a dropped node stutters
 
 // One node fewer left.
-fn Fewer(j, i: Nat) → Type { Succ(j) = i }
+fn Fewer(j, i: Nat) → Type { j + 1 = i }
 
 // The target runs the source's schedule pruned, from the same buffers and
 // from words that agree with the source's wherever the target needs them;

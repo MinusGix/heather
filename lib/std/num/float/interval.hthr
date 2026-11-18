@@ -414,7 +414,7 @@ fn Interval::of_int(n: Int) → Interval { Interval::point(Dyadic(n, 0)) }
 
 // The reciprocal of a positive point, one quotient for both bounds:
 // `recip(point(d))` divides twice and tests both signs first.
-fn Interval::recip_quot_at(e: Int, K, q: Nat) → Interval { Bnd(Dyadic(q.int(), -e - K.int()), Dyadic(Succ(q).int(), -e - K.int())) }
+fn Interval::recip_quot_at(e: Int, K, q: Nat) → Interval { Bnd(Dyadic(q.int(), -e - K.int()), Dyadic((q + 1).int(), -e - K.int())) }
 
 fn Interval::recip_cut_at(e: Int, K, m: Nat) → Interval { Interval::recip_quot_at(e, K, Nat::pow2_div(K, m).quot()) }
 
@@ -459,13 +459,13 @@ theorem Interval::npow_has(I: Interval, n, p: Nat, {x: Rat}, h: I.Has(x)): I.npo
 // costs about `2·log₂ n` products. The fuel only bounds the recursion; at
 // zero it falls back to the product chain, which is sound at every `n`.
 fn Interval::pow_step(I: Interval, n: Nat, H: Interval, p: Nat) → Interval {
-    match Succ(n.half() + n.half()).le_dec(n) { Inl(_) => H.mul(H, p).mul(I, p), Inr(_) => H.mul(H, p) }
+    match (n.half() + n.half() + 1).le_dec(n) { Inl(_) => H.mul(H, p).mul(I, p), Inr(_) => H.mul(H, p) }
 }
 
 fn Interval::pow_sq(self I: Interval, n, fuel, p: Nat) → Interval {
     match fuel {
         Zero => I.npow(n, p),
-        Succ(f) => match n { Zero => Interval::of_int(1), Succ(k) => Interval::pow_step(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p) },
+        Succ(f) => match n { Zero => Interval::of_int(1), Succ(k) => Interval::pow_step(I, k + 1, I.pow_sq((k + 1).half(), f, p), p) },
     }
 }
 

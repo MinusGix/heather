@@ -68,7 +68,7 @@ fn Place::unsaved(self place: Place, saves: Nat) → String {
     match place {
         Into(register) => match register.save_rank() {
             Zero => "",
-            Succ(below) => match Succ(below).leb(saves) {
+            Succ(below) => match (below + 1).leb(saves) {
                 True => "",
                 False => " (callee-saved, and the function saves " ++ refusal_number(saves) ++ ")",
             },
@@ -192,7 +192,7 @@ fn File::call_refusal(self file: File, slots: Nat, placement: List<Place>, calle
     match saves_ok(slots, call_saves(placement)) {
         False => call ++ "it saves " ++ refusal_number(call_saves(placement).len()) ++ " registers around it, and the frame has "
             ++ refusal_number(slots) ++ " slots for them",
-        True => match Succ(callee).leb(bound) {
+        True => match (callee + 1).leb(bound) {
             False => call ++ "the callee is not below this function",
             True => match args_lend(homes, lent_count(counts, callee), 0, arguments) {
                 False => call ++ "its leading arguments are not the homes of the buffers the callee is lent",
@@ -255,7 +255,7 @@ fn File::lend_refusal(self file: File, saves: Nat, slots: Nat, prog: Prog, views
                 False => call ++ views_refusal(views, first.file, homes),
                 True => match views_alone(views) {
                     False => call ++ "a view to write shares its buffer with another view",
-                    True => match Succ(callee).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
+                    True => match (callee + 1).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
                         True => call ++ "the callee is lent more buffers than the call has views",
                         False => call ++ first.file.call_refusal(slots, first.placement, callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
                     },
@@ -295,14 +295,14 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
         },
         Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => "the branch on " ++ refusal_number(condition) ++ ": its bit is in no register, where " ++ file.shown(),
-            Some(tested) => match when_true.emit_calls(saves, slots, short, prog.branched_by(tested.test, Succ(names), shorts(short, Succ(names))), file.know(Truth(condition)), placement,
-                Succ(Succ(names)), bound, counts, homes) {
-                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(saves, slots, short, prog.branched_by(tested.test, Succ(names), shorts(short, Succ(names))),
-                    file.know(Truth(condition)), placement, Succ(Succ(names)), bound, counts, homes),
-                Some(yes) => match when_false.emit_calls(saves, slots, short, yes.prog.else_label_by(Succ(names), Succ(Succ(names)), shorts(short, Succ(Succ(names)))), file.know(Falsity(condition)), yes.placement, yes.names,
+            Some(tested) => match when_true.emit_calls(saves, slots, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)), file.know(Truth(condition)), placement,
+                names + 2, bound, counts, homes) {
+                None => "where " ++ refusal_number(condition) ++ " is true, " ++ when_true.refusal(saves, slots, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                    file.know(Truth(condition)), placement, names + 2, bound, counts, homes),
+                Some(yes) => match when_false.emit_calls(saves, slots, short, yes.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), yes.placement, yes.names,
                     bound, counts, homes) {
                     None => "where " ++ refusal_number(condition) ++ " is false, " ++ when_false.refusal(saves, slots, short,
-                        yes.prog.else_label_by(Succ(names), Succ(Succ(names)), shorts(short, Succ(Succ(names)))), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes),
+                        yes.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), yes.placement, yes.names, bound, counts, homes),
                     Some(no) => "where the arms of the branch on " ++ refusal_number(condition) ++ " meet: after the true arm "
                         ++ yes.file.shown() ++ "and after the false arm " ++ no.file.shown(),
                 },
@@ -315,9 +315,9 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
                 None => "the entry of a loop: its bound " ++ refusal_number(limit) ++ " or an input (" ++ refusal_numbers(inputs)
                     ++ ") is in no register, or its registers are not apart, where " ++ file.shown(),
                 Some(entry) => match body.emit_calls(saves, slots, short, loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
-                    Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    names + 4, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                     None => "in a loop's pass, " ++ body.refusal(saves, slots, short, loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
-                        Succ(Succ(Succ(Succ(names)))), bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
+                        names + 4, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
                     Some(pass) => match pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names, short) {
                         None => pass.close_refusal(entry.registers, count, exit, next),
                         Some(_) => "nothing in the loop",

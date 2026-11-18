@@ -130,7 +130,7 @@ theorem List::entries_vector_of<A>(k: Nat, pad: A): (xs: List<A>) → xs.len() =
 fn List::vector_at<A>(self xs: List<A>, at, k: Nat, pad: A) → [A; k] {
     (match k as λ j => Nat → [A; j] {
         Zero => λ at => [],
-        Succ(_, ih) => λ at => cons(xs.nth(at).unwrap_or(pad), ih(Succ(at))),
+        Succ(_, ih) => λ at => cons(xs.nth(at).unwrap_or(pad), ih(at + 1)),
     })(at)
 }
 
