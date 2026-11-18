@@ -915,7 +915,7 @@ fn layout_literal(src: &str, homes: &str, frames: &str, sizes: &[u64], spelled: 
     let (&count, rest) = spelled.split_first()?;
     let of = rest.get(..usize::try_from(count).ok()?)?;
     let (pool, taken) = pools(&used_registers(of, &[]));
-    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames}, {src}().main.performed())",
+    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames}, {src}().main.performed(), {src}().main.called())",
         capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
 }
 
@@ -930,7 +930,7 @@ fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, siz
         let (pool, taken) = pools(&used_registers(&homes_as_spelled(f.of), f.pins));
         let name = emission::body_layout(p, i);
         text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}], {homes}.rooms), [{pool}], [{taken}], \
-            {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i})) }}\n\
+            {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i}), {src}().procedures.called_by({i})) }}\n\
             theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), pins_list(f.pins)));
     }
     Some(text)

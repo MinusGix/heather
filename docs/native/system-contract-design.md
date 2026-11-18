@@ -240,9 +240,13 @@ thread that built frames by use, not yet decided):
 - No check where a recursion is proved bounded (the measure's bound gives
   the room, as above).
 - Otherwise one check, in bytes: a call compares what is left of the room
-  with what it needs, and the short side is the source's own modelled
-  outcome. A count of calls is the wrong unit once frames differ in size,
-  which they do since frames are sized by use.
+  with what it needs. A count of calls is the wrong unit once frames differ
+  in size, which they do since frames are sized by use. The short side is
+  a refusal of the compiled program, not an outcome of the source: how
+  many bytes a frame takes depends on the placement, so it cannot be in the
+  source's meaning (Minus, 2026-11-17). The guarantees the theorem is to
+  give, refusal only where the current chain does not fit and at the
+  call's entry, are `docs/native/native-procedure-frames-design.md` §7.
 
 The explicit-stack combinator is the same check made against memory the
 program acquired, with the acquisition's failure as the outcome.
