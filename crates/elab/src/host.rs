@@ -1231,7 +1231,7 @@ enum ToMachine {
 /// held by its position in `held` for the run, as the kernel's arena holds
 /// what a run forces.
 struct MachineValues<'m> {
-    machine: &'m heather_run::Machine<'m>,
+    machine: &'m heather_run::Machine,
     held: RefCell<Vec<heather_run::Thunk>>,
     globals: RefCell<std::collections::HashMap<&'static str, usize>>,
     to_host: std::sync::mpsc::Sender<ToHost>,
@@ -1285,7 +1285,7 @@ impl Values for MachineValues<'_> {
 
 /// The machine's thread: read the tree's steps and resume it with the
 /// host's answers until the host hangs up or a step fails.
-fn machine_run(machine: &heather_run::Machine<'_>, tree: Term, to_host: std::sync::mpsc::Sender<ToHost>, from_host: std::sync::mpsc::Receiver<ToMachine>) {
+fn machine_run(machine: &heather_run::Machine, tree: Term, to_host: std::sync::mpsc::Sender<ToHost>, from_host: std::sync::mpsc::Receiver<ToMachine>) {
     let values = MachineValues { machine, held: RefCell::default(), globals: RefCell::default(), to_host, from_host };
     let tree = values.hold(machine.term(tree));
     let mut speaker = Interpreted { values, tree };
