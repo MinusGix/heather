@@ -268,22 +268,36 @@ fn sum_body() → Stmt {
                 Then(Perform(0, [5], [6]), ops([Add(64, 2, 6, 1)])))))
 }
 fn sum() → Procedure { Procedure(params := [1], results := [2], body := sum_body()) }
+
+// The sum of 0..n by one call from `main`, with `room` bytes of stack
+// below `main`'s frame: the sum of 0..20 nests 21 calls of `sum`, each
+// taking its level (`Frame::level`, under the homes `write-elf` compiles
+// with), and `sum` reaches itself, so each checks at its entry that its own
+// level and a return address are left. A level short, the innermost call
+// is refused and the program exits 139 (`call_depth_status`). `summing`'s
+// deeper sum nests four calls.
+fn summing_to(n, room: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [sum()], room := room)
+}
+fn Source::cost(self src: Source, p: Nat) → Nat { src.charges(src.homes(), src.bodies()).cost(p) }
+fn sum_level() → Nat { summing_to(20, 0).cost(0) }
 fn summing() → Source {
     Source(functions := [], buffers := [], words := 10,
         main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]),
             Then(ops([Const(64, 0, 3)]), Then(Perform(0, [0], [8]), Then(ops([Add(64, 9, 7, 8)]), Exit(9)))))),
-        procedures := [sum()], depth := 5)
+        procedures := [sum()], room := 4 * sum_level() + 8)
 }
-
-// The sum of 0..n by one call from `main`, at most `depth` calls deep:
-// the sum of 0..20 nests 21 calls, so at depth 20 the innermost is one too
-// deep and the program exits 139 (`call_depth_status`).
-fn summing_to(n, depth: Nat) → Source {
-    Source(functions := [], buffers := [], words := 10,
-        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [sum()], depth := depth)
+fn summing_twenty() → Source { summing_to(20, 21 * sum_level() + 8) }
+fn summing_shallow() → Source { summing_to(20, 20 * sum_level() + 8) }
+// The compiled program's meaning at fuel `n` (`Source::bounded`, charged
+// as `Source::charges` says), under the homes `write-elf` compiles with.
+fn compiled_next(src: Source, n: Nat) → Next<BitVec(64)>(Events::linux()) {
+    ITree::next(Events::linux(), src.bounded_tree([], src.charges(src.homes(), src.bodies()), src.left(src.homes(), src.bodies()), n))
 }
-fn summing_twenty() → Source { summing_to(20, 21) }
-fn summing_shallow() → Source { summing_to(20, 20) }
+theorem summing_exits(): compiled_next(summing(), 8) = Exits(BitVec::ofNat(9)) { refl }
+theorem summing_twenty_exits(): compiled_next(summing_twenty(), 24) = Exits(BitVec::ofNat(210)) { refl }
+theorem summing_shallow_exits(): compiled_next(summing_shallow(), 24) = Exits(call_depth_status()) { refl }
 
 // How many items of the program are named `name`, and how many call label
 // `label`.
@@ -321,7 +335,7 @@ fn spreading() → Source {
     Source(functions := [], buffers := [], words := 14,
         main := Then(ops([Const(64, 0, 20), Const(64, 1, 8), Const(64, 2, 5)]), Then(Perform(0, [0, 1, 2], [10, 11, 12]),
             Then(ops([Sub(64, 13, 10, 11), Add(64, 13, 13, 12), Add(64, 13, 13, 12)]), Exit(13)))),
-        procedures := [spread()], depth := 1)
+        procedures := [spread()])
 }
 theorem spreading_compiles(): refused(spreading()) = [] { refl }
 theorem spreading_allocated(): spreading().allocation_ok(spreading().homes()) = True { refl }
@@ -349,40 +363,44 @@ fn alternate_body(other: Nat, twice: Bool) → Stmt {
                     False => ops([Add(64, 2, 6, 1)]),
                 }))))
 }
-fn alternating_to(n, depth: Nat) → Source {
+fn alternating_to(n, room: Nat) → Source {
     Source(functions := [], buffers := [], words := 10,
         main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))),
         procedures := [
             Procedure(params := [1], results := [2], body := alternate_body(1, False)),
             Procedure(params := [1], results := [2], body := alternate_body(0, True)),
-        ], depth := depth)
+        ], room := room)
 }
-fn alternating() → Source { alternating_to(5, 6) }
-fn alternating_shallow() → Source { alternating_to(5, 5) }
+// a(5) calls a, b, a, b, a and b: three levels of each, and the last
+// call's check.
+fn alternating() → Source { alternating_to(5, 3 * alternating_to(5, 0).cost(0) + 3 * alternating_to(5, 0).cost(1) + 8) }
+fn alternating_shallow() → Source { alternating_to(5, 3 * alternating_to(5, 0).cost(0) + 2 * alternating_to(5, 0).cost(1) + 8) }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
 theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
 theorem alternating_two_bodies(): compiled_or_start(alternating()).named(1) + compiled_or_start(alternating()).named(2) = 2 { refl }
 theorem alternating_calls(): compiled_or_start(alternating()).calls_of(1) + compiled_or_start(alternating()).calls_of(2) = 3 { refl }
 theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
-theorem alternating_compiled_exits(): ITree::next(Events::linux(), alternating().bounded_tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
-// The source with any depth exits 23; the compiled program one level short
+theorem alternating_compiled_exits(): compiled_next(alternating(), 8) = Exits(BitVec::ofNat(23)) { refl }
+// Both procedures reach themselves through the other, so both check.
+theorem alternating_checks(): alternating().procedures.checks() = [True, True] { refl }
+// The source with any room exits 23; the compiled program a level short
 // refuses the sixth call.
 theorem alternating_shallow_source_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
-theorem alternating_shallow_exits(): ITree::next(Events::linux(), alternating_shallow().bounded_tree([], 4)) = Exits(call_depth_status()) { refl }
+theorem alternating_shallow_exits(): compiled_next(alternating_shallow(), 8) = Exits(call_depth_status()) { refl }
 
 // A call of no procedure, and one with an argument too many, are refused
 // at the call; a procedure whose body reads a word not its parameter, at
 // the program.
 fn calls_missing() → Source {
-    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(3, [0], [7])), procedures := [sum()], depth := 5)
+    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(3, [0], [7])), procedures := [sum()])
 }
 fn calls_wide() → Source {
-    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(0, [0, 0], [7])), procedures := [sum()], depth := 5)
+    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(0, [0, 0], [7])), procedures := [sum()])
 }
 fn reads_outside() → Procedure { Procedure(params := [1], results := [2], body := ops([Add(64, 2, 1, 3)])) }
 fn calls_outside() → Source {
-    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(0, [0], [7])), procedures := [reads_outside()], depth := 5)
+    Source(functions := [], buffers := [], words := 10, main := Then(ops([Const(64, 0, 2)]), Perform(0, [0], [7])), procedures := [reads_outside()])
 }
 theorem calls_missing_refused(): refused(calls_missing()) = [2, 7, 14, 3, 0] { refl }
 theorem calls_wide_refused(): refused(calls_wide()) = [2, 7, 14, 0, 0] { refl }
@@ -445,31 +463,41 @@ fn view_program_read() → Source { view_source(False) }
 // The stack a program needs (`Source::need`)
 
 fn need_slotted(src: Source) → Nat { src.need(Homes::slots(src), SpillAll().frames(src)) }
-// `main`'s frame and saved RSP's word, then a level a call: `sum`'s seven
-// words, the six registers it saves and its return address, five deep.
-theorem summing_need(): need_slotted(summing()) = 88 + 5 * 112 { refl }
-// With no room a call leaves in the callee's entry: nothing below `main`.
+// `main`'s frame, then the room the source asks for: five levels of `sum`,
+// and the word the last check leaves.
+theorem summing_need(): need_slotted(summing_to(20, 5 * 112 + 8)) = 80 + 5 * 112 + 8 { refl }
+// With no room, the return address of `main`'s call: a recursive callee
+// checks at its entry, so nothing more is asked below `main`.
 theorem summing_need_no_room(): need_slotted(summing_to(20, 0)) = 88 { refl }
 
-// The bound follows the calls a body makes, not the depth alone: `main`
-// performs only `double`, which performs nothing, so whatever the depth
-// the program needs one level of `double` and never a level of `sum`,
-// which nothing reaches.
+// The bound follows the calls a body makes: `main` performs only
+// `double`, which performs nothing and so does not check, so the program
+// needs one level of `double` whatever room is asked below it, and never a
+// level of `sum`, which nothing reaches.
 fn double() → Procedure { Procedure(params := [1], results := [2], body := ops([Add(64, 2, 1, 1)])) }
-fn doubling(depth: Nat) → Source {
+fn doubling(room: Nat) → Source {
     Source(functions := [], buffers := [], words := 10,
-        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], depth := depth)
+        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], room := room)
 }
-theorem doubling_compiles(): refused(doubling(5)) = [] { refl }
-theorem doubling_performs(): doubling(5).main.performed() = [0] { refl }
-theorem doubling_need(): need_slotted(doubling(5)) = 88 + SpillAll().frames(doubling(5)).frame(0).level([]) { refl }
-theorem doubling_need_any_depth(): need_slotted(doubling(5)) = need_slotted(doubling(1)) { refl }
+theorem doubling_compiles(): refused(doubling(0)) = [] { refl }
+theorem doubling_performs(): doubling(0).main.performed() = [0] { refl }
+// Here `sum`'s call of procedure 0 is `double`: nothing reaches itself.
+theorem doubling_checks(): doubling(0).procedures.checks() = [False, False] { refl }
+theorem doubling_need(): need_slotted(doubling(0)) = 88 + SpillAll().frames(doubling(0)).frame(0).level([]) { refl }
+theorem doubling_need_small_room(): need_slotted(doubling(0)) = need_slotted(doubling(16)) { refl }
 
-// A call of a procedure the running body's layout does not list is refused.
+// A call of a procedure the running body's layout does not list is
+// refused; a listed one fits where its callee checks, or ranks below the
+// caller, and not where it does neither: an unchecked call is how a chain
+// with no check could grow without end.
 theorem unlisted_call_refused():
-    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [], []).call_fits([], 0, [0], [7]) = False { refl }
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [], [], [True], [1], 1).call_fits([], 0, [0], [7]) = False { refl }
 theorem listed_call_fits():
-    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0], []).call_fits([], 0, [0], [7]) = True { refl }
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0], [], [True], [1], 1).call_fits([], 0, [0], [7]) = True { refl }
+theorem unchecked_call_ranked():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0], [], [False], [0], 1).call_fits([], 0, [0], [7]) = True { refl }
+theorem unchecked_call_unranked():
+    Layout::tabled(low(), 10, 10, [], Homes::slots(summing()), [sum()], [], [], [0], [], [False], [1], 1).call_fits([], 0, [0], [7]) = False { refl }
 
 // ---------------------------------------------------------------------------
 // The functions' room table (`Homes.rooms`)
@@ -489,9 +517,9 @@ theorem view_planned_compiles(): view_source(True).refusal(low(), view_planned(T
 theorem view_main_calls(): view_source(True).main.called() = [1] { refl }
 // A call of a function the running body's layout does not list is refused.
 theorem view_unlisted_function_refused():
-    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], []).function_fits(1, [0, 1], 2) = False { refl }
+    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], [], [], [], 0).function_fits(1, [0, 1], 2) = False { refl }
 theorem view_listed_function_fits():
-    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], [1]).function_fits(1, [0, 1], 2) = True { refl }
+    Layout::tabled(low(), 10, 10, [3, 4], Homes::slots(view_source(True)), [], view_functions(True), [], [], [1], [], [], 0).function_fits(1, [0, 1], 2) = True { refl }
 theorem view_calls_room_planned(): view_source(True).main.called().functions_room(view_planned(True).room_table(view_functions(True))) = 32 { refl }
 theorem view_calls_room_default():
     view_source(True).main.called().functions_room(Homes::slots(view_source(True)).room_table(view_functions(True))) = 192 { refl }

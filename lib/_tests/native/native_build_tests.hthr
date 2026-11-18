@@ -227,11 +227,11 @@ theorem raised_status_spelled(): raised_status_source().spelled().head_or(0) = 3
 // A procedure and a function in one program: the procedure's body calls
 // the function, and `main` calls both. 'a' and 'b' raised, summed: 131.
 fn raised_twice() → Tool {
-    program(raise_letter_native_program(), depth(4, proc(1, 1, λ p => compute(call(0, [p.param(0).get()], p.result(0))),
+    program(raise_letter_native_program(), proc(1, 1, λ p => compute(call(0, [p.param(0).get()], p.result(0))),
         λ raise => run(local(num(0), λ a => local(num(0), λ b =>
-            perform(raise, [num(97)], [a]) ++ compute(call(0, [num(98)], b)) ++ exit(a.get() + b.get())))))))
+            perform(raise, [num(97)], [a]) ++ compute(call(0, [num(98)], b)) ++ exit(a.get() + b.get()))))))
 }
-theorem raised_twice_runs(): raised_twice().source().tree([], 2) = Ret(BitVec::ofNat(131)) { refl }
+theorem raised_twice_runs(): ITree::next(Events::linux(), raised_twice().source().tree([], 2)) = Exits(BitVec::ofNat(131)) { refl }
 theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
     Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions)), SpillAll().frames(raised_twice().source())) = [] { refl }
 
@@ -462,23 +462,29 @@ fn sum_of(rest: Nat → Tool) → Tool {
 }
 
 // The sum of 0..10, from two sites: 55 and then 55 + 21.
-fn summed_twice() → Tool {
-    depth(12, sum_of(λ sum => run(local(num(0), λ a => local(num(0), λ b =>
+fn summed_twice_at(bytes: Nat) → Tool {
+    room(bytes, sum_of(λ sum => run(local(num(0), λ a => local(num(0), λ b =>
         perform(sum, [num(10)], [a]) ++ perform(sum, [num(6)], [b]) ++ exit(a.get() + b.get()))))))
 }
+
+// What one call of the sum takes of the stack, under the homes `write-elf`
+// compiles with; room for eleven, and the last check's word.
+fn summed_level(t: Tool) → Nat { t.source().charges(t.source().homes(), t.source().bodies()).cost(0) }
+fn summed_twice() → Tool { summed_twice_at(11 * summed_level(summed_twice_at(0)) + 8) }
 
 // Lowered: one procedure whose body calls itself, its result set to zero
 // first; `main` calls it twice.
 theorem summed_twice_procedures(): summed_twice().source().procedures.len() = 1 { refl }
-theorem summed_twice_depth(): summed_twice().source().depth = 12 { refl }
-theorem summed_twice_runs(): summed_twice().source().tree([], 12) = Ret(BitVec::ofNat(76)) { refl }
+theorem summed_twice_room(): summed_twice().source().room = 11 * summed_level(summed_twice_at(0)) + 8 { refl }
+theorem summed_twice_runs(): ITree::next(Events::linux(), summed_twice().source().tree([], 12)) = Exits(BitVec::ofNat(76)) { refl }
 theorem summed_twice_compiles(): refused_slots(summed_twice().source()) = [] { refl }
 
 // The sum of 0..n for n the bytes read from standard input, as an exit
-// status, at most 64 calls deep: the sum of 0..n nests n + 1 calls, so 64
+// status, with room for 64 calls: the sum of 0..n nests n + 1 calls, so 64
 // bytes or more nest one too deep, and it exits 139.
-fn summed_input() → Tool {
-    depth(64, sum_of(λ sum => buffer(80, λ b => run(local(num(0), λ got =>
+fn summed_input_at(bytes: Nat) → Tool {
+    room(bytes, sum_of(λ sum => buffer(80, λ b => run(local(num(0), λ got =>
         read(stdin(), b, num(80), got) ++ local(num(0), λ r => perform(sum, [got.get()], [r]) ++ exit(r.get())))))))
 }
+fn summed_input() → Tool { summed_input_at(64 * summed_level(summed_input_at(0)) + 8) }
 theorem summed_input_compiles(): refused_slots(summed_input().source()) = [] { refl }

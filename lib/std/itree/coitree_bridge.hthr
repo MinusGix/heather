@@ -522,6 +522,24 @@ theorem CoTree::onto_ret<R>(E: Events, r: R): CoTree::Onto<R>(E, CRet(r), λ n =
     }
 }
 
+theorem CoTree::onto_tau<R>(E: Events, c: CoTree<R>(E), p: Nat → ITree<R>(E), h: CoTree::Onto(E, c, p)):
+    CoTree::Onto<R>(E, CTau(c), λ n => Tau(p(n)))
+{
+    λ k => match k {
+        Zero => λ tr (it: CutTrace<R>(E, tr)) => j(sym(CutTrace::ended(E, tr, it)), λ y q => Converges<R>(E, λ n => Tau(p(n)), y),
+            Converges(Zero, IsTrace::nil(E, Tau(p(Zero))))),
+        Succ(m) => λ tr it => {
+            let d: Converges<R>(E, p, tr) = h(m, tr, it);
+            Converges(d.n, d.h)
+        },
+    }
+}
+
+// `spin` claims nothing more than a `Cut` does.
+theorem CoTree::onto_spin<R>(E: Events): CoTree::Onto<R>(E, CoTree::spin(E), λ n => Cut) {
+    λ k tr it => Converges(Zero, CoTree::spin_cut(E, k, tr, it))
+}
+
 theorem CoTree::onto_vis<R>(E: Events, c: E.Cmd, kc: E.Resp(c) → CoTree<R>(E), p: E.Resp(c) → Nat → ITree<R>(E),
     h: (a: E.Resp(c)) → CoTree::Onto(E, kc(a), p(a))): CoTree::Onto<R>(E, CVis(c, kc), λ n => Vis(c, λ a => p(a, n)))
 {

@@ -532,11 +532,11 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
 
     // Of the literal, then of the source by its equation.
     let simulated = format!("{src}().elf_runs({p}_from(), {p}_size(), {p}_within(), {p}_code(), {homes}, {frames}, {p}_compiles(),
-        Nat::leb_sound(Succ({src}().depth), Nat::pow(2, 64), trivial), top, args, {p}_fits(), {p}_short(), s,
+        top, args, {p}_fits(), {p}_short(), s,
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => {p}_contract().Start(f, top, args)(s), start))");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => {p}_contract().Runs(top, src.bounded(args))(s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => {p}_contract().Runs(top, src.compiled_meaning({homes}, {frames}, args))(s),\n        {simulated})"))
     };
     // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
     // or with procedures `main` past their labels, then exit 0, the
@@ -569,7 +569,7 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
 // what the model of the run itself takes for granted.
 theorem {p}_runs(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io({p}_size()))>,
     start: {p}_contract().Start({p}_file(), top, args)(s)):
-    {p}_contract().Runs(top, {source}.bounded(args))(s) {{
+    {p}_contract().Runs(top, {source}.compiled_meaning({homes}, {frames}, args))(s) {{
     {simulates}
 }}
 ", start_note = match stack {

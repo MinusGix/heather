@@ -503,6 +503,10 @@ fn Flow::status(self flow: Flow) → BitVec(64) {
 // check can refuse). The compiler works both out from its placement.
 record Charges { cost: Nat → Nat, check: Nat → Option<Nat> }
 
+// Charges that take nothing and check nothing: what reading a source that
+// performs nothing asks.
+fn Charges::free() → Charges { Charges(λ _ => 0, λ _ => None) }
+
 // Whether a call of `procedure` with `left` bytes left is refused.
 fn Charges::refuses(self ch: Charges, procedure: Nat, left: Nat) → Bool {
     match ch.check(procedure) { None => False, Some(need) => Succ(left).leb(need) }
@@ -844,6 +848,79 @@ theorem Stmt::refuses(self s: Stmt, call: Writers(), perform, perform2: Performs
         Exit(_) => λ env => Inr(refl),
         Arg(_, _, _) => λ env => Inr(refl),
         Perform(procedure, args, results) => λ env => hp(procedure, Inl(refl), args, results, env),
+    }
+}
+
+// A statement grows with its fuel where its calls grow: a refusal at stops
+// that never hold.
+theorem Stmt::below_le(self s: Stmt, call: Writers(), perform, perform2: Performs(), below: performs_below(perform, perform2), n, m: Nat, le: n <= m,
+    env: Env): ITree::Below(Events::linux(), s.denote(call, perform, n, env), s.denote(call, perform2, m, env)) {
+    ITree::below_of_refuses_never<Flow>(Events::linux(), Flow::stops(λ _ => False),
+        λ flow => match flow as λ f => Flow::stops(λ _ => False, f) → False { Onward(_) => λ never => never, Exited(_) => λ never => never },
+        s.denote(call, perform, n, env), s.denote(call, perform2, m, env),
+        s.refuses(call, perform, perform2, λ _ => False, n, m, le,
+            λ procedure _ args results env2 => ITree::refuses_of_below(Events::linux(), Flow::stops(λ _ => False),
+                perform(procedure, args, results, env2), perform2(procedure, args, results, env2), below(procedure, args, results, env2)), env))
+}
+
+// A compiled call grows with its fuel and its levels.
+theorem Source::performs_below_le(self src: Source, call: Writers(), n, m: Nat, le: n <= m, d, e: Nat, deeper: d <= e, ch: Charges, left: Nat):
+    performs_below(src.performs(call, n, d, ch, left), src.performs(call, m, e, ch, left)) {
+    match d {
+        Zero => λ procedure args results env => trivial,
+        Succ(k) => match e {
+            Zero => false_elim(deeper),
+            Succ(k2) => λ procedure args results env => SameTau(
+                match src.procedures.nth(procedure) {
+                    None => Ret(Onward(env)),
+                    Some(proc) => match ch.refuses(procedure, left) {
+                        True => Ret(Exited(call_depth_status())),
+                        False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, m, k2, ch, left - ch.cost(procedure)), m, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    },
+                }, refl,
+                match src.procedures.nth(procedure) as λ o =>
+                    ITree::Below(Events::linux(),
+                        match o as λ _ => ITree<Flow>(Events::linux()) {
+                            None => Ret(Onward(env)),
+                            Some(proc) => match ch.refuses(procedure, left) {
+                                True => Ret(Exited(call_depth_status())),
+                                False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                        },
+                        match o {
+                            None => Ret(Onward(env)),
+                            Some(proc) => match ch.refuses(procedure, left) {
+                                True => Ret(Exited(call_depth_status())),
+                                False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, m, k2, ch, left - ch.cost(procedure)), m, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                        }) {
+                    None => refl,
+                    Some(proc) => match ch.refuses(procedure, left) as λ b =>
+                            ITree::Below(Events::linux(),
+                                match b as λ _ => ITree<Flow>(Events::linux()) {
+                                    True => Ret(Exited(call_depth_status())),
+                                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                },
+                                match b as λ _ => ITree<Flow>(Events::linux()) {
+                                    True => Ret(Exited(call_depth_status())),
+                                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, m, k2, ch, left - ch.cost(procedure)), m, proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                }) {
+                        True => refl,
+                        False => ITree::below_bind(Events::linux(),
+                            proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                            proc.body.denote(call, src.performs(call, m, k2, ch, left - ch.cost(procedure)), m, proc.enter(env, args)),
+                            λ flow => Ret(proc.leave(env, results, flow)), λ flow => Ret(proc.leave(env, results, flow)),
+                            proc.body.below_le(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), src.performs(call, m, k2, ch, left - ch.cost(procedure)),
+                                src.performs_below_le(call, n, m, le, k, k2, deeper, ch, left - ch.cost(procedure)), n, m, le, proc.enter(env, args)),
+                            λ flow => refl),
+                    },
+                }),
+        },
     }
 }
 

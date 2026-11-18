@@ -110,9 +110,9 @@ theorem cat_bytes_fit(): 288 + (cat_bytes().len() + cat_note().len()) <= 65535 {
 // native_compile_elf): nothing is asked of the stack below RSP.
 theorem cat_native_runs(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(cat_size()))>,
     start: SystemStart(cat_size(), io_elf_file(cat_bytes(), cat_note(), cat_size()), top, cat_room(), args, s)):
-    TouchedRuns(cat_size(), top, cat_room(), cat(cat_capacity()).bounded(args))(s) {
+    TouchedRuns(cat_size(), top, cat_room(), cat(cat_capacity()).compiled_meaning(cat_homes(), [], args))(s) {
     cat(cat_capacity()).elf_touched_runs(cat_size(), cat_within(), cat_code(), cat_homes(), [], cat_compiles(), cat_fits(), cat_note(), cat_bytes_fit(),
-        Nat::leb_sound(cat(cat_capacity()).depth + 1, Nat::pow(2, 64), trivial), top, args, s, start)
+        top, args, s, start)
 }
 
 // What cat's process does once its stack is its own: every run Linux can
@@ -137,14 +137,14 @@ theorem cat_native_sends(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<
     let x = X86Profile::io(cat_size());
     let y = X86Profile::process(cat_size(), top, cat_room());
     let io = y.linux();
-    let program = cat(cat_capacity()).bounded(args);
+    let program = cat(cat_capacity()).compiled_meaning(cat_homes(), [], args);
     let then: (MachineState<X86Memory(x)> → Type) = λ at => Exists<MachineState<X86Memory(y)>>(λ u => Alike(x, y, at, u) ∧ SimProgram(io, program, u));
     let wider: (MachineState<X86Memory(x)> → Type) = λ at => Exists<MachineState<X86Memory(y)>>(λ u => Alike(x, y, at, u) ∧ CatSends(top, args)(u));
     stack_touched_mono(x, top, StoreByte(stack_touch_store()), then, wider, λ at reached =>
             Exists(reached.witness, ⟨reached.proof.left, λ tr produces valid returns run ran responses => {
                 // cat performs nothing, so its compiled meaning makes every
                 // run its source does.
-                let compiled = cat(cat_capacity()).of_none_bounded(args, refl)(tr, produces);
+                let compiled = cat(cat_capacity()).of_none_bounded(args, cat(cat_capacity()).charges(cat_homes(), []), cat(cat_capacity()).left(cat_homes(), []), refl)(tr, produces);
                 trans(sim_run_sends(io, program.at(compiled.n), reached.witness, reached.proof.right(compiled.n), tr, compiled.h, valid,
                         Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns), run, ran, responses, BitVec::ofNat(1)),
                     cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(cat_capacity() + 1, Nat::pow(2, 63), trivial),

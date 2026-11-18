@@ -626,7 +626,7 @@ theorem cat_simulates_at(args: List<List<BitVec(8)>>, capacity: Nat, pos: 0 < ca
         cat(capacity).denote(args).at(n), tr_spec(λ (b: BitVec(8)) => b).at(cat_budget(n, n)))
 {
     let call = program_writers(cat(capacity).functions);
-    let perform = cat(capacity).performs(call, n, cat(capacity).depth);
+    let perform = cat(capacity).calls(call, n, n);
     let c = BitVec::ofNat(capacity, n := 64).toNat();
     let hc: (c = capacity) = cat_word_back(capacity, small);
     let buf = List::replicate(zero_byte(), capacity);

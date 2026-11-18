@@ -185,7 +185,7 @@ fn every_written_program_gets_its_theorem() {
     // leave at those stores (`Contract::Runs`). Where the stack is, a page
     // and the room above the segment, is what stays taken on trust.
     for statement in ["theorem head10_elf_fits()", "theorem head10_elf_runs(", "start: head10_elf_contract().Start(head10_elf_file(), top, args)(s)",
-        "head10_elf_contract().Runs(top, head10().bounded(args))(s)", "fn head10_elf_from() → StackFrom { FromSystem }",
+        "head10_elf_contract().Runs(top, head10().compiled_meaning(head10_elf_homes(), head10_elf_frames(), args))(s)", "fn head10_elf_from() → StackFrom { FromSystem }",
         "fn head10_elf_stack() → List<BitVec(8)> {",
         "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(4280), StackRoom(184), StackGrowth, CallsAnswered, NoFatalSignal]"] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
@@ -249,25 +249,25 @@ fn wider_leaves_run() {
 
 /// Procedures compile and run (docs/native/native-procedures-design.md): a
 /// non-tail recursive sum called from two sites, its body emitted once;
-/// the sum of 0..20 at depth 20, whose innermost call is one too deep and
-/// exits 139 (`call_depth_status`); a procedure of three parameters and
-/// three results, whose status tells any two out of place; two procedures
-/// calling each other, each keeping its parameter across its call, and the
-/// same a level short of the depth they nest; and a builder tool (`proc`,
-/// native_build) summing 0..n for the n bytes it reads, at most 64 calls
-/// deep.
+/// the sum of 0..20 with room for 20 calls, whose innermost call finds too
+/// few bytes at its entry check and exits 139 (`call_depth_status`); a
+/// procedure of three parameters and three results, whose status tells any
+/// two out of place; two procedures calling each other, each keeping its
+/// parameter across its call, and the same a level short of the room they
+/// nest in; and a builder tool (`proc`, native_build) summing 0..n for the n
+/// bytes it reads, with room for 64 calls.
 #[test]
 fn procedures_run() {
     let dir = scratch("procedures");
     let many = [b'a'; 64];
     for (module, source, input, status, why) in [
         (PROBES, "summing", &b""[..], 9, "the sums of 0..2 and 0..3 add to 9"),
-        (PROBES, "summing_shallow", &b""[..], 139, "a call past the depth exits 139"),
+        (PROBES, "summing_shallow", &b""[..], 139, "a call past the room exits 139"),
         (PROBES, "spreading", &b""[..], 59, "three results come back each to its own word"),
         (PROBES, "alternating", &b""[..], 23, "two procedures calling each other, a(5) with a(n) = b(n - 1) + n and b(n) = 2 a(n - 1) + n"),
-        (PROBES, "alternating_shallow", &b""[..], 139, "the same six calls at depth five"),
+        (PROBES, "alternating_shallow", &b""[..], 139, "the same six calls with room for five"),
         (BUILT, "summed_input", &b"hello"[..], 15, "five bytes read sum 0..5"),
-        (BUILT, "summed_input", &many[..], 139, "sixty-four bytes read nest sixty-five calls, one past the depth"),
+        (BUILT, "summed_input", &many[..], 139, "sixty-four bytes read nest sixty-five calls, one past the room"),
     ] {
         let binary = dir.join(source);
         if !binary.exists() {
