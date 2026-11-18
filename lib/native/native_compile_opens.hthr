@@ -212,7 +212,7 @@ record Put(t: Target, env: Env, name: List<BitVec(8)>, i: Nat, b: BitVec(8), m: 
 
 theorem Target::pathed_placed(self t: Target, env: Env, name: List<BitVec(8)>, i: Nat, m: X86Memory(t.r.profile),
     pathed: Pathed(t, env, name, i, m)): t.Placed(env, m) {
-    Exists(pathed.cells, ⟨pathed.holds, ⟨pathed.keeps, pathed.stacked⟩⟩)
+    Placement(cells := pathed.cells, holds := pathed.holds, keeps := pathed.keeps, stacked := pathed.stacked)
 }
 
 // A byte stored at `i` in the scratch range: the environment kept, the
@@ -293,7 +293,7 @@ theorem Target::path_byte(self t: Target, env: Env, buf, cap: Nat, found: t.caps
 theorem Target::path_room(self t: Target, env: Env, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, of: PathOf(env, buf, path),
     i: Nat, below: i < path.len(), m: X86Memory(t.r.profile), placed: t.Placed(env, m)): i < t.caps.largest() {
     let present = path.nth_present(i, below);
-    let buffer_len: (env.buffer(buf).len() = cap) = t.layout().keeps_buffer_len(env, placed.witness, placed.proof.right.left, buf, cap, found);
+    let buffer_len: (env.buffer(buf).len() = cap) = t.layout().keeps_buffer_len(env, placed.cells, placed.keeps, buf, cap, found);
     let i_cap: (i < cap) = j(buffer_len, λ x _ => i < x, env.buffer(buf).nth_some_below(i, present.witness, of(i, present.witness, present.proof)));
     Nat::le_trans(Succ(i), cap, t.caps.largest(), i_cap, t.caps.largest_nth(buf, cap, found))
 }
@@ -444,7 +444,7 @@ theorem Target::path_ended(self t: Target, env: Env, name: List<BitVec(8)>, m: X
             t.cell_address(so + k, Nat::le_of_lt(so + k, t.r.size, inside)));
         trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => t.r.profile.read(after, a), address), t.read_cell(w, after, holds, so + k, inside).right)
     };
-    ⟨Exists(w, ⟨holds, ⟨put.pathed.keeps, put.pathed.stacked⟩⟩),
+    ⟨Placement(cells := w, holds := holds, keeps := put.pathed.keeps, stacked := put.pathed.stacked),
      cstring_of(name, λ k => t.io().data.read(after, word_of_nat(64, t.layout().scratch_at().toNat() + k)),
         λ k c got => {
             let below: (k < name.len()) = name.nth_some_below(k, c, got);
@@ -523,13 +523,13 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
     // the home registers (`vals`), so the live words stay held.
     let q_cl = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g).toNat() = env.number(len).min(cap));
     let at_clamped: t.GoesR(prog_len(clamped), Vis(c, tree), q_cl) = λ u0 here0 resident0 held0 => {
-        let words = held0.left.witness;
+        let words = held0.left.words;
         let placed_env = env.with_words(words);
-        let placed: t.Placed(placed_env, u0.memory) = held0.left.proof.left;
-        let agrees = held0.left.proof.right;
+        let placed: t.Placed(placed_env, u0.memory) = held0.left.placed;
+        let agrees = held0.left.agreeing;
         let vals = home_values(u0.gprs);
-        let v = placed.witness;
-        let buffer_len: (env.buffer(path).len() = cap) = layout.keeps_buffer_len(placed_env, v, placed.proof.right.left, path, cap, found);
+        let v = placed.cells;
+        let buffer_len: (env.buffer(path).len() = cap) = layout.keeps_buffer_len(placed_env, v, placed.keeps, path, cap, found);
         let bytes_len: (bytes.len() = env.number(len).min(cap)) = trans(env.buffer(path).len_take_min(env.number(len)),
             cong_fn<Nat, Nat>(λ n => env.number(len).min(n), buffer_len));
         let short: (bytes.len() <= cap) = j(sym(bytes_len), λ n _ => n <= cap, env.number(len).min_le_r(cap));
@@ -549,8 +549,8 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                 let m = u.memory;
                 let s1 = execute_block_normal([MovRI(Rdx, BitVec::ofNat(0))], u);
                 let ends = t.path_ended(placed_env, name, m, held.pathed, room, nonzero, nul, refl);
-                let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Exists(words, ⟨ends.left,
-                    j(sym(held.homes), λ x _ => t.Agreeing(live, env, words, x), agrees)⟩);
+                let kept: t.Held(live, env, u.gprs, t.r.profile.store(m, next_rip(t.r.low, so + name.len()), [nul])) = Hold(words := words, placed := ends.left,
+                    agreeing := j(sym(held.homes), λ x _ => t.Agreeing(live, env, words, x), agrees));
                 let landing = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧ (t.site().Resident(t.r.profile.store(m, a, one)) ∧
                     call_pre(execute_block_normal(asking, MachineState(s1.gprs, s1.flags, next_rip(s1.rip, 3), t.r.profile.store(m, a, one)))));
                 let landed: landing(next_rip(t.r.low, so + name.len())) = ⟨t.writable(m, so + name.len(), 1, fits),
@@ -572,7 +572,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
             cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(held0.right, sym(bytes_len))));
         setting(u0, here0, resident0, Exists(name.len(), Exists(0, ⟨name.len().add_left_zero(), PathAt(within := Nat::nonneg(name.len()), count := refl, length := rcx,
             source := t.buffer_rip(path), dest := t.scratch_rip(),
-            pathed := Pathed(cells := v, holds := placed.proof.left, keeps := placed.proof.right.left, stacked := placed.proof.right.right,
+            pathed := Pathed(cells := v, holds := placed.holds, keeps := placed.keeps, stacked := placed.stacked,
                 copied := λ k b early => false_elim(Nat::not_succ_le_zero(k, early))),
             homes := refl)⟩)))
     };

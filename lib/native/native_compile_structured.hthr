@@ -100,10 +100,11 @@ theorem Env::like_sym(self a: Env, b: Env, live: List<Nat>, like: a.Like(b, live
 // live.
 theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, a, g, m),
     like: a.Like(b, live)): t.Held(live, b, g, m) {
-    let words = held.witness;
+    let words = held.words;
     let placed = j(eq2(λ (bufs: Buffers()) (args: List<List<BitVec(8)>>) => Env(words, bufs, args), like.right.left, like.right.right),
-        λ e _ => t.Placed(e, m), held.proof.left);
-    Exists(words, ⟨placed, ⟨λ i mi => trans(held.proof.right.left(i, mi), like.left(i, mi)), held.proof.right.right⟩⟩)
+        λ e _ => t.Placed(e, m), held.placed);
+    Hold(words := words, placed := placed,
+        agreeing := Agreement(homes := λ i mi => trans(held.agreeing.homes(i, mi), like.left(i, mi)), frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),

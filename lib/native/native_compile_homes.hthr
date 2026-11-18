@@ -543,34 +543,43 @@ fn Env::with_words(self env: Env, words: List<Nat>) → Env { Env(words, env.buf
 fn Target::Pins(self t: Target, values: List<BitVec(64)>) → Type {
     (k: Nat) → k < 6 → t.homes.pinned(home_register(k)) = True → values.get_or(k, BitVec::zero()) = t.pinned.get_or(k, BitVec::zero())
 }
-fn Target::Agreeing(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) → Type {
-    t.homes.Agrees(live, env, words, values) ∧ ((values.get_or(6, BitVec::zero()) = t.frame()) ∧ t.Pins(values))
+record Agreement(t: Target, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) {
+    homes: t.homes.Agrees(live, env, words, values),
+    frame: values.get_or(6, BitVec::zero()) = t.frame(),
+    pins: t.Pins(values),
 }
+
+fn Target::Agreeing(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) → Type { Agreement(t, live, env, words, values) }
 
 // The region placed with the environment's buffers and command line and some
 // file of words, every live word as the environment's in its home, and RSP
 // the running frame.
-fn Target::Held(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile)) → Type {
-    Exists<List<Nat>>(λ words => t.Placed(env.with_words(words), m) ∧ t.Agreeing(live, env, words, home_values(g)))
+record Hold(t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile)) {
+    words: List<Nat>,
+    placed: t.Placed(env.with_words(words), m),
+    agreeing: t.Agreeing(live, env, words, home_values(g)),
 }
+
+fn Target::Held(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile)) → Type { Hold(t, live, env, g, m) }
 
 // RSP, read off the claim.
 theorem Target::held_rsp(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
     read_gpr(Rsp, g) = t.frame() {
-    held.proof.right.right.left
+    held.agreeing.frame
 }
 
 // A pinned register, read off the claim: what it held at the entry.
 theorem Target::held_pin(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     k: Nat, inside: k < 6, pinned: t.homes.pinned(home_register(k)) = True):
     read_gpr(home_register(k), g) = t.pinned.get_or(k, BitVec::zero()) {
-    trans(sym(home_value(g, k, inside)), held.proof.right.right.right(k, inside, pinned))
+    trans(sym(home_value(g, k, inside)), held.agreeing.pins(k, inside, pinned))
 }
 
 // Fewer words live.
 theorem Target::held_sub(self t: Target, {live, wider: List<Nat>}, {env: Env}, {g: Gprs}, {m: X86Memory(t.r.profile)}, held: t.Held(wider, env, g, m),
     sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.Held(live, env, g, m) {
-    Exists(held.witness, ⟨held.proof.left, ⟨λ i m2 => held.proof.right.left(i, sub(i, m2)), held.proof.right.right⟩⟩)
+    Hold(words := held.words, placed := held.placed,
+        agreeing := Agreement(homes := λ i m2 => held.agreeing.homes(i, sub(i, m2)), frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // The environment is the same.
@@ -602,10 +611,12 @@ theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs
     same: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g),
     rsp: read_gpr(Rsp, g2) = read_gpr(Rsp, g)):
     t.Held(live, env, g2, m) {
-    Exists(held.witness, ⟨held.proof.left, ⟨t.agrees_regs(live, env, held.witness, g, g2, held.proof.right.left, same),
-        ⟨trans(rsp, held.proof.right.right.left), λ k inside pinned => trans(home_value(g2, k, inside),
+    Hold(words := held.words, placed := held.placed, agreeing := Agreement(
+        homes := t.agrees_regs(live, env, held.words, g, g2, held.agreeing.homes, same),
+        frame := trans(rsp, held.agreeing.frame),
+        pins := λ k inside pinned => trans(home_value(g2, k, inside),
             trans(same(k, inside, t.homes.pinned_used(home_register(k), pinned)),
-                trans(sym(home_value(g, k, inside)), held.proof.right.right.right(k, inside, pinned))))⟩⟩⟩)
+                trans(sym(home_value(g, k, inside)), held.agreeing.pins(k, inside, pinned))))))
 }
 
 // The pinned registers read as they did: they hold the entry's values still.
@@ -661,24 +672,24 @@ theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(id
 
 // Its slot's word…
 theorem Target::held_slot_word(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    id: Nat, holds: Mem(id, live), k: Nat, slot: t.homes.home(id) = InSlot(k)): env.with_words(held.witness).word(k) = env.word(id) {
-    let words = held.witness;
+    id: Nat, holds: Mem(id, live), k: Nat, slot: t.homes.home(id) = InSlot(k)): env.with_words(held.words).word(k) = env.word(id) {
+    let words = held.words;
     cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), j(slot, λ h _ => (match h {
         InSlot(slot) => words.get_or(slot, 0),
         InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
-    }) = env.number(id), held.proof.right.left(id, holds)))
+    }) = env.number(id), held.agreeing.homes(id, holds)))
 }
 
 // …or its register's.
 theorem Target::held_reg_word(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     id: Nat, holds: Mem(id, live), k: Nat, at: t.homes.home(id) = InReg(k)): read_gpr(home_register(k), g) = env.word(id) {
-    let words = held.witness;
+    let words = held.words;
     let read = read_gpr(home_register(k), g);
     let number: (read.toNat() = env.number(id)) = trans(sym(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
         home_value(g, k, t.homes.in_pool(t.homed, id, k, at)))), j(at, λ h _ => (match h {
             InSlot(slot) => words.get_or(slot, 0),
             InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat(),
-        }) = env.number(id), held.proof.right.left(id, holds)));
+        }) = env.number(id), held.agreeing.homes(id, holds)));
     trans(sym(BitVec::ofNat_toNat(64, read)), cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), number))
 }
 
@@ -690,13 +701,13 @@ theorem Layout::home_inside(self layout: Layout, id, k: Nat, fits: layout.word_f
 // A live word's number fits it.
 theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     id: Nat, holds: Mem(id, live), inside: t.layout().word_fits(id).IsTrue()): env.word(id).toNat() = env.number(id) {
-    let words = held.witness;
-    let agrees = held.proof.right.left(id, holds);
+    let words = held.words;
+    let agrees = held.agreeing.homes(id, holds);
     let fits: (env.number(id) < Nat::pow(2, 64)) = (match t.homes.home(id) as λ h => t.homes.home(id) = h →
             (match h { InSlot(slot) => words.get_or(slot, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(id) →
             env.number(id) < Nat::pow(2, 64) {
         InSlot(k) => λ at number => j(number, λ n _ => n < Nat::pow(2, 64),
-            t.layout().keeps_number_fits(env.with_words(words), held.proof.left.witness, held.proof.left.proof.right.left, k, t.layout().home_inside(id, k, inside, at))),
+            t.layout().keeps_number_fits(env.with_words(words), held.placed.cells, held.placed.keeps, k, t.layout().home_inside(id, k, inside, at))),
         InReg(k) => λ _ number => j(number, λ n _ => n < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, home_values(g).get_or(k, BitVec::zero()))),
     })(refl, agrees);
     BitVec::toNat_ofNat(64, env.number(id), fits)
@@ -709,10 +720,10 @@ theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, 
 theorem Target::held_dead(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), dead: out.holds(id) = False):
     t.Held(out, env.set_word(id, w), g, m) {
-    Exists(held.witness, ⟨held.proof.left, ⟨λ i m2 => {
+    Hold(words := held.words, placed := held.placed, agreeing := Agreement(homes := λ i m2 => {
         let ne: (i ≠ id) = λ e => absurd(trans(sym(dead), out.mem_holds(id, j(e, λ x _ => Mem(x, out), m2))));
-        trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))
-    }, held.proof.right.right⟩⟩)
+        trans(held.agreeing.homes(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))
+    }, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // Another word's number where the written slot is put: the two have two
@@ -730,17 +741,17 @@ theorem Homes::number_put_other(self homes: Homes, fits: homes.fits().IsTrue(), 
 theorem Target::held_slot_set(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, slot: t.homes.home(id) = InSlot(k), inside: k < t.words):
     t.Held(out, env.set_word(id, w), g, t.r.profile.store(m, t.slot(k), word_bytes(w))) {
-    let words = held.witness;
+    let words = held.words;
     let words2 = words.put(k, w.toNat(), 0);
     let values = home_values(g);
-    Exists(words2, ⟨t.placed_word(env.with_words(words), m, held.proof.left, k, inside, w), ⟨λ i m2 => match i.eq_dec(id) {
+    Hold(words := words2, placed := t.placed_word(env.with_words(words), m, held.placed, k, inside, w), agreeing := Agreement(homes := λ i m2 => match i.eq_dec(id) {
         Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words2, values) = env.set_word(id, w).number(x),
             j(sym(slot), λ h _ => (match h { InSlot(slot) => words2.get_or(slot, 0), InReg(k) => values.get_or(k, BitVec::zero()).toNat() }) =
                 env.set_word(id, w).number(id),
                 trans(words2.get_or_some(k, 0, w.toNat(), List::put_here(k, words, w.toNat(), 0)), sym(env.number_set_here(id, w))))),
         Inr(ne) => trans(t.homes.number_put_other(t.homed, i, id, k, words, w.toNat(), values, slot, ne),
-            trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
-    }, held.proof.right.right⟩⟩)
+            trans(held.agreeing.homes(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+    }, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // Its slot stored with the number the environment has for it already: the
@@ -748,16 +759,16 @@ theorem Target::held_slot_set(self t: Target, live, out: List<Nat>, env: Env, id
 theorem Target::held_slot_same(self t: Target, live: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), k: Nat, slot: t.homes.home(id) = InSlot(k), inside: k < t.words, same: w.toNat() = env.number(id)):
     t.Held(Cons(id, live), env, g, t.r.profile.store(m, t.slot(k), word_bytes(w))) {
-    let words = held.witness;
+    let words = held.words;
     let words2 = words.put(k, w.toNat(), 0);
     let values = home_values(g);
-    Exists(words2, ⟨t.placed_word(env.with_words(words), m, held.proof.left, k, inside, w), ⟨λ i m2 => match i.eq_dec(id) {
+    Hold(words := words2, placed := t.placed_word(env.with_words(words), m, held.placed, k, inside, w), agreeing := Agreement(homes := λ i m2 => match i.eq_dec(id) {
         Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words2, values) = env.number(x),
             j(sym(slot), λ h _ => (match h { InSlot(slot) => words2.get_or(slot, 0), InReg(k) => values.get_or(k, BitVec::zero()).toNat() }) = env.number(id),
                 trans(words2.get_or_some(k, 0, w.toNat(), List::put_here(k, words, w.toNat(), 0)), same))),
         Inr(ne) => trans(t.homes.number_put_other(t.homed, i, id, k, words, w.toNat(), values, slot, ne),
-            held.proof.right.left(i, match m2 { Inl(e) => false_elim(ne(e)), Inr(later) => later })),
-    }, held.proof.right.right⟩⟩)
+            held.agreeing.homes(i, match m2 { Inl(e) => false_elim(ne(e)), Inr(later) => later })),
+    }, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // A word written into register `k` misses every other live word's.
@@ -808,7 +819,7 @@ theorem Homes::apart_within(self homes: Homes, id: Nat, set, smaller: List<Nat>,
 theorem Target::held_reg_set(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
     held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
     apart: t.homes.Apart(id, out)): t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
-    let words = held.witness;
+    let words = held.words;
     let inside = t.homes.in_pool(t.homed, id, k, at);
     let values = home_values(g).put(k, w, BitVec::zero());
     let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
@@ -825,15 +836,15 @@ theorem Target::held_reg_set(self t: Target, live, out: List<Nat>, env: Env, id:
             InSlot(_) => λ _ => refl,
             InReg(r) => λ at_i => cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
                 List::put_other(k, home_values(g), w, BitVec::zero(), r, miss(i, m2, ne, r, at_i))),
-        })(refl), trans(held.proof.right.left(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+        })(refl), trans(held.agreeing.homes(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
     };
     let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
-        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.proof.right.right.left);
+        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.agreeing.frame);
     let pins: t.Pins(values) = λ r within pinned => trans(List::put_other(k, home_values(g), w, BitVec::zero(), r,
         λ e => absurd(trans(sym(t.homes.pinned_unlived(home_register(k), j(e, λ x _ => t.homes.pinned(home_register(x)) = True, pinned))),
-            t.homes.lived(id, k, at)))), held.proof.right.right.right(r, within, pinned));
-    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.Agreeing(out, env.set_word(id, w), ws, vs)),
-        Exists(words, ⟨held.proof.left, ⟨agrees, ⟨rsp, pins⟩⟩⟩))
+            t.homes.lived(id, k, at)))), held.agreeing.pins(r, within, pinned));
+    Hold(words := words, placed := held.placed,
+        agreeing := j(sym(written), λ vs _ => t.Agreeing(out, env.set_word(id, w), words, vs), Agreement(homes := agrees, frame := rsp, pins := pins)))
 }
 
 // What a write to a word's home leaves the rest of the registers: every one

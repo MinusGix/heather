@@ -251,7 +251,7 @@ theorem Target::arg_cells_filled(self t: Target, env: Env, v: Nat → BitVec(8),
     let filled: (fill(env.buffer(buf), arg) = fill(env.buffer(buf), bytes)) = trans(fill_take(env.buffer(buf), arg),
         cong_fn<Nat, List<BitVec(8)>>(λ n => fill(env.buffer(buf), arg.take(n)), len));
     j(sym(filled), λ bs _ => t.Placed(env.set_buffer(buf, bs), m),
-        Exists(w, ⟨cells.holds, ⟨kept, ⟨same, cells.stacking⟩⟩⟩))
+        Placement(cells := w, holds := cells.holds, keeps := kept, stacked := ActivationOf(same := same, stacking := cells.stacking)))
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +482,7 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
     let rsp = word_in(v, layout.stack_offset());
     let present = t.args.nth_present(k, under);
     let arg = present.witness;
-    let entry = argv_from_nth(t.argv(), m, rsp, t.args, 1, k, arg, present.proof, stacking.left.right.right);
+    let entry = argv_from_nth(t.argv(), m, rsp, t.args, 1, k, arg, present.proof, stacking.argv.right.right);
     let pointer = entry.witness;
     let slot_word = word_bytes_at_read(t.r.profile.data(), m, argv_slot(rsp, 1 + k), pointer,
         word_bytes_at_kept(t.argv(), m, t.r.profile.data(), m, t.argv_reads(m), argv_slot(rsp, 1 + k), pointer, entry.proof.left));
@@ -500,8 +500,8 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
         let got: (env.args.nth(k) = Some(a)) = j(sym(same), λ xs _ => xs.nth(k) = Some(a), left.present);
         let again: r.State() → Type = λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ ArgLeft(t, v, buf, cap, k, vals, fewer, x.gprs, x.memory));
         r.arg_round(λ _ => ArgLeft(t, v, buf, cap, k, vals), v, buf, cap, found, a, left.pointer, left.room, vals, names + 3, done, again, w, resident, left.done, left.at,
-            λ g f rip all to => Exists(filled, ⟨Exists(words, ⟨t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
-                    j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), agrees)⟩),
+            λ g f rip all to => Exists(filled, ⟨Hold(words := words, placed := t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
+                    agreeing := j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), Agreement(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins))),
                 trans(cong_fn<BitVec(64), Env>(λ y => filled.set_word(len, y), trans(all.regs.count, word_of_nat_eq_ofNat(64, a.len()))),
                     sym(env.arg_present(k, buf, len, a, got)))⟩),
             λ below x next => {
@@ -542,20 +542,20 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
     let stored: t.Goes(prog_len(copied), tree, kept) = λ x here resident held =>
         t.goes_result(live, out, held.witness, env.arg(k, buf, len), copied, len, in_len, sub, apart, within, tree, next)(x, here, resident, held.proof);
     λ s here resident held => {
-        let words = held.witness;
-        let v = held.proof.left.witness;
+        let words = held.words;
+        let v = held.placed.cells;
         let m = s.memory;
-        let placed = held.proof.left.proof;
-        let same: (env.args = t.args) = placed.right.right.left;
-        let stacked = placed.right.right.right;
+        let placed = held.placed;
+        let same: (env.args = t.args) = placed.stacked.same;
+        let stacking = placed.stacked.stacking;
         let rsp = word_in(v, layout.stack_offset());
-        let stack = t.read_stack(v, m, placed.left);
+        let stack = t.read_stack(v, m, placed.holds);
         let argc_word = word_bytes_at_read(t.r.profile.data(), m, rsp, word_of_nat(64, argc),
-            word_bytes_at_kept(t.argv(), m, t.r.profile.data(), m, t.argv_reads(m), rsp, word_of_nat(64, argc), stacked.left.right.left));
+            word_bytes_at_kept(t.argv(), m, t.r.profile.data(), m, t.argv_reads(m), rsp, word_of_nat(64, argc), stacking.argv.right.left));
         let k_value: (env.word(index).toNat() = k) = t.held_number(live, env, s.gprs, m, held, index, holds, in_index);
         let bit = env.word(index).borrow_sub_bit(word_of_nat(64, argc));
         let order = count_borrow(env.word(index), word_of_nat(64, argc), k, argc, k_value,
-            toNat_word_of_nat(64, argc, omega(stacked.left.left, canonical_below_top())));
+            toNat_word_of_nat(64, argc, omega(stacking.argv.left, canonical_below_top())));
         let loaded = word_load_after(WordLoad(R9, Rdx), word_of_nat(64, argc),
             word_load_after(WordLoad(Rdx, Rbx), rsp, execute_block_normal([MovRI(Rbx, layout.stack_at())], s)));
         code.goes_with(r, λ _ => ArgLeft(t, v, buf, cap, k, home_values(s.gprs)), p, w_copied, tree, kept, stored)(s, here, resident,
@@ -572,8 +572,8 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
                             Exists(env, ⟨held, sym(env.arg_missing(k, buf, len, none))⟩)
                         },
                         // Below it: the argument copied.
-                        straight := λ below rip2 => t.arg_found(live, out, env, index, buf, len, cap, names, found, words, home_values(s.gprs), held.proof.right,
-                            v, placed.right.left, same, MachineState(compared.gprs, compared.flags, rip2, m), placed.left, stacked, refl, k_value,
+                        straight := λ below rip2 => t.arg_found(live, out, env, index, buf, len, cap, names, found, words, home_values(s.gprs), held.agreeing,
+                            v, placed.keeps, same, MachineState(compared.gprs, compared.flags, rip2, m), placed.holds, stacking, refl, k_value,
                             order.left(Bool::set_of_not(bit, !bit, refl, below)), refl),
                         defined := refl)
                 }))))
