@@ -578,6 +578,10 @@ pub(crate) struct Policy {
     /// lowered structurally — the miscompiles the meaning check exists to
     /// catch ([`Elaborator::skip_recursion_plan`]).
     pub(crate) recursion_plan_skipped: bool,
+    /// Test-time only: `by` and `generate` trees run on the kernel's
+    /// evaluator, as `HEATHER_READS=kernel` asks for, so a test can state a
+    /// property of that evaluator's runs ([`Elaborator::run_tactics_on_kernel`]).
+    pub(crate) tactics_on_kernel: bool,
 }
 
 impl Policy {
@@ -593,6 +597,7 @@ impl Policy {
             emission_findings: None,
             owed_checks_forgotten: false,
             recursion_plan_skipped: false,
+            tactics_on_kernel: false,
         }
     }
 }

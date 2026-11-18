@@ -1322,7 +1322,7 @@ impl Host<'_> {
         let reader = Reader::new(world, &arena);
         let root = reader.root(tree.clone());
         let mut kernel = Interpreted { values: KernelValues { elab: self, world, reader, arena: &arena, globals: Default::default() }, tree: root };
-        let how = Evaluation::chosen();
+        let how = if self.policy.tactics_on_kernel { Evaluation::Kernel } else { Evaluation::chosen() };
         if how == Evaluation::Kernel {
             return with(&mut kernel);
         }

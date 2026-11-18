@@ -2359,6 +2359,15 @@ impl Elaborator {
         self.policy.recursion_plan_skipped = true;
     }
 
+    /// Run `by` and `generate` trees on the kernel's evaluator only, the
+    /// fallback behind the untrusted machine (`host.rs`, `Host::speak`).
+    /// Test-time only, for a property of that evaluator's runs; a process
+    /// asks with `HEATHER_READS=kernel`.
+    #[doc(hidden)]
+    pub fn run_tactics_on_kernel(&mut self) {
+        self.policy.tactics_on_kernel = true;
+    }
+
     /// Drain emission-slot findings without disabling the walk.
     pub fn take_emission_findings(&self) -> Vec<EmissionFinding> {
         self.policy.emission_findings
