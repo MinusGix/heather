@@ -30,7 +30,7 @@ fn rest<T>(source: List<T>, c: Cursor<T>(source)) → List<T> {
 
 // Step one token forwards using evidence that this cursor is not at the end.
 fn Cursor::advance<T>(source: List<T>, self c: Cursor<T>(source), room: c.offset < source.len()) → Cursor<T>(source) {
-    Cursor(refl, Succ(c.offset), room)
+    Cursor(refl, c.offset + 1, room)
 }
 
 // A parsed value and ending cursor, with evidence that parsing moved forwards or stayed put.

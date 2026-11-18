@@ -384,7 +384,7 @@ fn known_find(known: List<Known>, wanted: Order) → Option<Known> {
 fn known_room(known: List<Known>, base, length, value: Nat) → Option<Known> {
     match known {
         Nil => None,
-        Cons(first, rest) => match first.order.low.same(base) && (first.order.high.same(length) && Succ(value + first.order.more).leb(first.order.add)) {
+        Cons(first, rest) => match first.order.low.same(base) && (first.order.high.same(length) && (value + first.order.more + 1).leb(first.order.add)) {
             True => Some(first),
             False => known_room(rest, base, length, value),
         },
@@ -584,7 +584,7 @@ fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
         None => seen,
         Some(parameter) => match parameter.same(r) {
             False => seen,
-            True => match nat_map_get(seen.order.sums, l) { Some(sum) => seen.span(sum.of, Succ(sum.value), r), None => seen.span(l, 1, r) },
+            True => match nat_map_get(seen.order.sums, l) { Some(sum) => seen.span(sum.of, sum.value + 1, r), None => seen.span(l, 1, r) },
         },
     }
 }
@@ -596,7 +596,7 @@ fn Seen::walked(self seen: Seen) → Walked { Walked(seen.made, seen.range, seen
 // A bit a rule decides at the node that writes it: the rule's step after
 // what it reads is derived, and `emit` where the bit is set.
 fn Seen::settled_bit(self seen: Seen, node: Node, emit: List<Step>) → Option<Passed> {
-    decided_among(seen.tables.rewriting, node, seen.walked()).and_then(λ found => found.bit().and_then(λ bit =>
+    decided_among(seen.tables.rewriting_at(node), node, seen.walked()).and_then(λ found => found.bit().and_then(λ bit =>
         Some(seen.decided(node_output(node).id, bit, found.needs, Derive(found.place, found.numbers), match bit { True => emit, False => [] }))))
 }
 
@@ -610,7 +610,7 @@ fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
             Some(passed) => passed,
             None => match noted.ordered(c, l, r) {
                 Some(passed) => passed,
-                None => shared(seen.of(l), λ a => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) })),
+                None => shared(seen.of(l), λ a => Passed([], match (a.high + 1).leb(want_most()) { True => noted.want(r, a.high + 1), False => noted.spanning(l, r) })),
             },
         })
 }
@@ -625,7 +625,7 @@ fn Seen::or_decided(self seen: Seen, node: Node) → Passed {
 // The range of the word a node writes, where a rule that gives ranges has
 // one from the node and the ranges of what it reads.
 fn Seen::bounding(self seen: Seen, node: Node) → Seen {
-    match ranged_among(seen.tables.ranging, node, seen.walked(), None) {
+    match ranged_among(seen.tables.ranging_at(node), node, seen.walked(), None) {
         None => seen,
         Some(found) => seen.learn(node_output(node).id, found.range, found.needs, Derive(found.place, found.numbers)),
     }
@@ -654,7 +654,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).trac
 // A rule's instance at a node that writes another node for it: one a
 // rule's statement gives, else one a registered learner proposes.
 fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
-    match matched_among(seen.tables.rewriting, node, seen.walked()) {
+    match matched_among(seen.tables.rewriting_at(node), node, seen.walked()) {
         Some(found) => Some(found),
         None => proposed_among(seen.tables.learners, seen.tables.placed, node, seen.walked()),
     }
@@ -751,13 +751,13 @@ fn spellings_new(found: List<Matched>, from: Spelling, known: List<Spelling>) �
 }
 
 // The spellings the rules reach from `todo`, `fuel` of them followed.
-fn spellings_closed(fuel: Nat, table: List<Matchable>, had: Walked, lend: Bool, todo: List<Spelling>, done: List<Spelling>) → List<Spelling> {
+fn spellings_closed(fuel: Nat, tables: Tables, had: Walked, lend: Bool, todo: List<Spelling>, done: List<Spelling>) → List<Spelling> {
     match fuel {
         Zero => done ++ todo,
         Succ(less) => match todo {
             Nil => done,
-            Cons(first, rest) => shared(spellings_new(instances_among(table, first.node, had, lend), first, done ++ todo), λ more =>
-                spellings_closed(less, table, had, lend, rest ++ more, done ++ [first])),
+            Cons(first, rest) => shared(spellings_new(instances_among(tables.rewriting_at(first.node), first.node, had, lend), first, done ++ todo), λ more =>
+                spellings_closed(less, tables, had, lend, rest ++ more, done ++ [first])),
         },
     }
 }
@@ -778,7 +778,7 @@ fn made_deepest(fuel: Nat, made: NatMap<Node>, ids: List<Nat>) → Nat {
             Nil => 0,
             Cons(id, rest) => depth_larger(match nat_map_get(made, id) {
                 None => 0,
-                Some(node) => match node { Const(_, _, _) => 0, _ => Succ(made_deepest(less, made, node.reads())) },
+                Some(node) => match node { Const(_, _, _) => 0, _ => made_deepest(less, made, node.reads()) + 1 },
             }, made_deepest(less, made, rest)),
         },
     }
@@ -820,11 +820,11 @@ fn ids_within(ids, among: List<Nat>) → Bool { match ids { Nil => True, Cons(id
 fn Seen::cost(self seen: Seen, node: Node, other: Node) → Nat {
     other.weight() * 64 + match !seen.lends() || ids_within(other.reads(), node.reads()) && ids_within(node.reads(), other.reads()) {
         True => 62,
-        False => match Succ(other.weight()).leb(node.weight()) {
+        False => match (other.weight() + 1).leb(node.weight()) {
             True => 0,
             False => match seen.frees(node, other) {
                 False => 63,
-                True => shared(made_depths(seen.made, other.reads()), λ depth => match Succ(depth).leb(made_depths(seen.made, node.reads())) && depth.leb(61) {
+                True => shared(made_depths(seen.made, other.reads()), λ depth => match (depth + 1).leb(made_depths(seen.made, node.reads())) && depth.leb(61) {
                     True => depth,
                     False => 63,
                 }),
@@ -838,7 +838,7 @@ fn Seen::cost(self seen: Seen, node: Node, other: Node) → Nat {
 fn Seen::lightest(self seen: Seen, node: Node, found: List<Spelling>, most: Nat, best: Option<Spelling>) → Option<Spelling> {
     match found {
         Nil => best,
-        Cons(first, rest) => shared(seen.cost(node, first.node), λ cost => match Succ(cost).leb(most) && !first.node.moves_bit() {
+        Cons(first, rest) => shared(seen.cost(node, first.node), λ cost => match (cost + 1).leb(most) && !first.node.moves_bit() {
             True => seen.lightest(node, rest, cost, Some(first)),
             False => seen.lightest(node, rest, most, best),
         }),
@@ -850,7 +850,7 @@ fn Seen::lightest(self seen: Seen, node: Node, found: List<Spelling>, most: Nat,
 fn Seen::spellings_through(self seen: Seen, node: Node, w: Nat, inner: List<Spelling>) → List<Spelling> {
     match inner {
         Nil => [],
-        Cons(first, rest) => spellings_closed(seen.tables.spellings, seen.tables.rewriting,
+        Cons(first, rest) => spellings_closed(seen.tables.spellings, seen.tables,
             Walked(nat_map_set(seen.made, w, first.node), seen.range, seen.bits), seen.lends(), [Spelling(node, first.why)], [])
             ++ seen.spellings_through(node, w, rest),
     }
@@ -861,18 +861,24 @@ fn Seen::spellings_reading(self seen: Seen, node: Node, reads: List<Nat>) → Li
         Nil => [],
         Cons(w, rest) => match nat_map_get(seen.made, w) {
             None => seen.spellings_reading(node, rest),
-            Some(inner) => match spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(inner, [])], []) {
-                Nil => seen.spellings_reading(node, rest),
-                Cons(_, others) => seen.spellings_through(node, w, others) ++ seen.spellings_reading(node, rest),
+            Some(inner) => match seen.tables.reads_through(node, inner) {
+                False => seen.spellings_reading(node, rest),
+                True => match spellings_closed(seen.tables.spellings, seen.tables, seen.walked(), seen.lends(), [Spelling(inner, [])], []) {
+                    Nil => seen.spellings_reading(node, rest),
+                    Cons(_, others) => seen.spellings_through(node, w, others) ++ seen.spellings_reading(node, rest),
+                },
             },
         },
     }
 }
 
 // Every spelling of the word a node writes: from the node as the walk has
-// its operands, then with each operand spelled another way.
+// its operands, then with each operand spelled another way, where a rule
+// read at the node reads a node of the operand's kind
+// (`Tables::reads_through`): most nodes have no such rule, and following
+// their operands' spellings was most of what a searching walk did.
 fn Seen::spellings(self seen: Seen, node: Node) → List<Spelling> {
-    spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(node, [])], [])
+    spellings_closed(seen.tables.spellings, seen.tables, seen.walked(), seen.lends(), [Spelling(node, [])], [])
         ++ seen.spellings_reading(node, node.reads())
 }
 
@@ -897,7 +903,7 @@ fn Seen::searched(self seen: Seen, node: Node) → Option<Passed> {
 // Whether a node not yet put would be worth its place: the rules give its
 // word a cheaper spelling, as a sum of two constants is a constant.
 fn Seen::folds(self seen: Seen, node: Node) → Bool {
-    match seen.lightest(node, spellings_closed(seen.tables.asking, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(node, [])], []), seen.cost(node, node), None) {
+    match seen.lightest(node, spellings_closed(seen.tables.asking, seen.tables, seen.walked(), seen.lends(), [Spelling(node, [])], []), seen.cost(node, node), None) {
         Some(_) => True,
         None => False,
     }
@@ -1153,7 +1159,7 @@ fn narrowed_among(table: List<Matchable>, at: Node, had: Walked, so: Narrowed) �
 // what the rules say of its operands (rules 9 to 12), owed with the
 // derivations the steps read.
 fn Seen::narrowed(self seen: Seen, node: Node, l, r: Nat) → Seen {
-    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing, node, seen.walked(), Narrowed(seen.range, [])), λ found =>
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing_at(node), node, seen.walked(), Narrowed(seen.range, [])), λ found =>
         Seen(seen.made, found.range, seen.how, nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
             seen.pending ++ (why.steps ++ found.steps), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
 }
@@ -1317,7 +1323,7 @@ fn StructuredRegion::ends(self region: StructuredRegion, found: NatMap<Nat>) →
 fn reads_counted(ids: List<Nat>, counts: NatMap<Nat>) → NatMap<Nat> {
     match ids {
         Nil => counts,
-        Cons(id, rest) => reads_counted(rest, nat_map_set(counts, id, match nat_map_get(counts, id) { None => 1, Some(n) => Succ(n) })),
+        Cons(id, rest) => reads_counted(rest, nat_map_set(counts, id, match nat_map_get(counts, id) { None => 1, Some(n) => n + 1 })),
     }
 }
 
@@ -1373,7 +1379,7 @@ fn Plan::decided(self plan: Plan) → Nat {
         Then(_, rest) => rest.decided(),
         Both(first, second) => first.decided() + second.decided(),
         Arms(when_true, when_false) => when_true.decided() + when_false.decided(),
-        Arm(_, arm) => Succ(arm.decided()),
+        Arm(_, arm) => arm.decided() + 1,
         Body(body) => body.decided(),
         Derived(_, body) => body.decided(),
         Args(_) => 0,
@@ -1386,7 +1392,7 @@ fn Plan::decided(self plan: Plan) → Nat {
 fn steps_written(steps: List<Step>) → Nat {
     match steps {
         Nil => 0,
-        Cons(step, rest) => match step { Drop => Succ(steps_written(rest)), Emit(_) => Succ(steps_written(rest)), _ => steps_written(rest) },
+        Cons(step, rest) => match step { Drop => steps_written(rest) + 1, Emit(_) => steps_written(rest) + 1, _ => steps_written(rest) },
     }
 }
 
@@ -1451,7 +1457,7 @@ fn cone_renamed(cone: List<Node>, so_far: Renamed) → Renamed {
     match cone {
         Nil => so_far,
         Cons(node, rest) => cone_renamed(rest, Renamed(so_far.nodes ++ [node.renamed(so_far.names, so_far.next)],
-            nat_map_set(so_far.names, node_output(node).id, so_far.next), Succ(so_far.next))),
+            nat_map_set(so_far.names, node_output(node).id, so_far.next), so_far.next + 1)),
     }
 }
 

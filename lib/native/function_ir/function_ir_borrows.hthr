@@ -111,7 +111,7 @@ fn Machine::Lends<M>(self machine: Machine<M>, top: Nat, borrows: List<Borrow>) 
 //   - the code still where it was.
 fn Prog::ReturnsOn<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat, f, room: Nat,
     borrows: List<Borrow>, words: List<BitVec(64)>, answer: BitVec(64), leaves: Buffers()) → Type {
-    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
+    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
             ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
         machine.stack.AnsweredOver(Borrow::lending(borrows), answer, leaves))

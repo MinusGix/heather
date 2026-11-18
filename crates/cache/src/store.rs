@@ -80,6 +80,27 @@ pub const MAX_KERNELS: usize = 16;
 /// is in use, and must not age out for being fully warm.
 pub const REFRESH_SECS: u64 = 24 * 60 * 60;
 
+/// A save whose base file is at least this large appends a journal file
+/// ([`JOURNAL`]) holding only the entries it added, instead of rewriting the
+/// base. The base of a shared test store holds every kernel's section of the
+/// last month (over a hundred megabytes, most of it other kernels'), and the
+/// library gate's build workers save after every module: rewriting it each
+/// time more than doubled the gate's CPU
+/// (`issues/verdict-store-append-only-saves.md`). A small store is still
+/// rewritten whole, which keeps it one file to `cat`.
+pub const JOURNAL_ABOVE_BYTES: u64 = 1 << 20;
+
+/// Once a store's journal holds this many files, the save that finds them
+/// folds them into the base (one rewrite per this many saves).
+pub const COMPACT_AT_FILES: usize = 64;
+
+/// The directory beside [`FILE`] holding journal files: each one a whole cache
+/// file of [`FORMAT`] with one section, the entries one save added. A reader
+/// believes a journal section exactly as it would the base's (its kernel,
+/// its checksum); a damaged journal file is that file's entries missed and
+/// is dropped by the next compaction.
+pub const JOURNAL: &str = "entries-v1.d";
+
 /// The file within the cache directory.
 ///
 /// **Deliberately not renamed with the format bump.** A new filename would
@@ -110,6 +131,10 @@ pub struct Store {
     /// one: what [`Store::wants_save`] reads to keep a warm kernel from
     /// ageing out.
     pub used: Option<u64>,
+    /// The keys inserted since the last save: what a journal save writes.
+    /// Behind a lock because a save takes `&self` (the build worker saves
+    /// after every module and keeps the store).
+    fresh: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 /// Why a cache file was not usable. Every variant ends the same way — this
@@ -154,7 +179,11 @@ pub fn now_secs() -> u64 {
 
 impl Store {
     pub fn empty(dir: PathBuf) -> Store {
-        Store { dir, entries: BTreeMap::new(), dirty: false, used: None }
+        Store { dir, entries: BTreeMap::new(), dirty: false, used: None, fresh: Default::default() }
+    }
+
+    pub fn journal(dir: &Path) -> PathBuf {
+        dir.join(JOURNAL)
     }
 
     pub fn path(dir: &Path) -> PathBuf {
@@ -162,8 +191,55 @@ impl Store {
     }
 
     /// Load `kernel_semantics`'s section of `dir`'s cache, or say why there
-    /// is none to trust.
+    /// is none to trust: the base file's section, then every journal file's
+    /// section for the same kernel ([`JOURNAL`]).
     pub fn load(dir: PathBuf, kernel_semantics: &str) -> Result<Store, (Store, Rejected)> {
+        let base = Store::load_base(&dir, kernel_semantics);
+        let journal = read_journal(&dir);
+        let mut extra: BTreeMap<String, Entry> = BTreeMap::new();
+        let mut extra_used: Option<u64> = None;
+        let mut other_kernels = std::collections::BTreeSet::new();
+        let mut other_entries = 0;
+        for (_, text) in &journal {
+            let Ok(sections) = parse(text) else { continue };
+            for s in sections {
+                if s.kernel != kernel_semantics {
+                    other_kernels.insert(s.kernel.to_string());
+                    other_entries += s.lines.len();
+                    continue;
+                }
+                if let Ok(entries) = s.entries() {
+                    extra.extend(entries);
+                    extra_used = extra_used.max(s.used);
+                }
+            }
+        }
+        match base {
+            Ok(mut store) => {
+                store.entries.extend(extra);
+                store.used = store.used.max(extra_used);
+                Ok(store)
+            }
+            // The base has nothing of this kernel's, but its journal does:
+            // a kernel whose saves have all been journal files so far.
+            Err((mut store, Rejected::Absent | Rejected::KernelChanged { .. })) if extra_used.is_some() => {
+                store.entries = extra;
+                store.used = extra_used;
+                Ok(store)
+            }
+            Err((store, Rejected::KernelChanged { entries, kernels })) => {
+                Err((store, Rejected::KernelChanged { entries: entries + other_entries, kernels: kernels.max(other_kernels.len()) }))
+            }
+            Err((store, Rejected::Absent)) if !other_kernels.is_empty() => {
+                Err((store, Rejected::KernelChanged { entries: other_entries, kernels: other_kernels.len() }))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The base file's section for `kernel_semantics`.
+    fn load_base(dir: &Path, kernel_semantics: &str) -> Result<Store, (Store, Rejected)> {
+        let dir = dir.to_path_buf();
         let path = Store::path(&dir);
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
@@ -182,7 +258,7 @@ impl Store {
         // kernel's damage is that kernel's miss (and is dropped by the next
         // save), never this reader's.
         match mine.entries() {
-            Ok(entries) => Ok(Store { dir, entries, dirty: false, used: mine.used }),
+            Ok(entries) => Ok(Store { dir, entries, dirty: false, used: mine.used, fresh: Default::default() }),
             Err(r) => Err((Store::empty(dir), r)),
         }
     }
@@ -192,7 +268,8 @@ impl Store {
         if self.entries.contains_key(&k) {
             return;
         }
-        self.entries.insert(k, Entry { iface, name: name.to_string() });
+        self.entries.insert(k.clone(), Entry { iface, name: name.to_string() });
+        self.fresh.get_mut().unwrap_or_else(|e| e.into_inner()).insert(k);
         self.dirty = true;
     }
 
@@ -212,14 +289,74 @@ impl Store {
         self.save_at(kernel_semantics, now_secs())
     }
 
-    /// Write the whole file, this kernel's section stamped `now`. Whole-file
-    /// rather than append-only: the checksums cover the bodies, and a cache is
-    /// small enough (one line per declaration) that incremental writing would
-    /// buy nothing but a way to be half-written.
+    /// Record this run's verdicts. When the base file is large
+    /// ([`JOURNAL_ABOVE_BYTES`]) and this kernel's stamp is not due a
+    /// refresh, only the entries added since the last save are written, as a
+    /// journal file; otherwise the base is rewritten whole
+    /// ([`Store::rewrite_at`]), folding the journal in.
     pub fn save_at(&self, kernel_semantics: &str, now: u64) -> std::io::Result<()> {
+        self.save_with(kernel_semantics, now, JOURNAL_ABOVE_BYTES)
+    }
+
+    /// [`Store::save_at`] with the journal threshold given: tests use a small
+    /// one so a handful of entries exercises the journal.
+    pub fn save_with(&self, kernel_semantics: &str, now: u64, journal_above: u64) -> std::io::Result<()> {
+        let stamp_due = self.used.is_some_and(|used| now.saturating_sub(used) >= REFRESH_SECS);
+        let base_len = std::fs::metadata(Store::path(&self.dir)).map_or(0, |m| m.len());
+        if stamp_due || base_len < journal_above {
+            return self.rewrite_at(kernel_semantics, now);
+        }
+        self.append(kernel_semantics, now)?;
+        let files = std::fs::read_dir(Store::journal(&self.dir))
+            .map_or(0, |d| d.filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|x| x == "tsv")).count());
+        if files >= COMPACT_AT_FILES {
+            self.rewrite_at(kernel_semantics, now)?;
+        }
+        Ok(())
+    }
+
+    /// Write the entries added since the last save as one journal file.
+    fn append(&self, kernel_semantics: &str, now: u64) -> std::io::Result<()> {
+        let fresh: Vec<String> = std::mem::take(&mut *self.fresh.lock().unwrap_or_else(|e| e.into_inner())).into_iter().collect();
+        if fresh.is_empty() {
+            return Ok(());
+        }
+        let entries: BTreeMap<String, Entry> =
+            fresh.iter().filter_map(|k| self.entries.get(k).map(|e| (k.clone(), e.clone()))).collect();
+        let body = body(&entries);
+        let sum = hex(&crate::sha256::sha256(body.as_bytes()));
+        let text = format!("heather-cache\t{FORMAT}\nkernel\t{kernel_semantics}\t{now}\t{sum}\n{body}");
+        let journal = Store::journal(&self.dir);
+        std::fs::create_dir_all(&journal)?;
+        let name = unique_name();
+        let tmp = journal.join(format!("{name}.tmp"));
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, journal.join(format!("{name}.tsv")))
+    }
+
+    /// Write the whole base file, this kernel's section stamped `now`, with
+    /// every journal file folded in and then removed. One compaction at a
+    /// time (a lock file in the journal directory); a save that finds one
+    /// running leaves its entries in the journal for the next.
+    pub fn rewrite_at(&self, kernel_semantics: &str, now: u64) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
+        let journal_dir = Store::journal(&self.dir);
+        let _lock = if journal_dir.is_dir() {
+            let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(journal_dir.join(".compact.lock"))?;
+            match lock.try_lock() {
+                Ok(()) => Some(lock),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    // Another process is compacting; this save's entries go
+                    // to the journal instead.
+                    return self.append(kernel_semantics, now);
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(e),
+            }
+        } else {
+            None
+        };
         // Several processes may share one cache directory (the native test
-        // binaries run side by side against `target/native-test-images`, and
+        // binaries run side by side against `target/cli-check-images`, and
         // several checkouts may share one through `HEATHER_CACHE_DIR`), so
         // the file on disk can have gained entries — and other kernels'
         // sections — since this run loaded it. Union this kernel's in rather
@@ -228,27 +365,40 @@ impl Store {
         // parse is simply not merged, exactly as `load` would not have
         // trusted it; a damaged section is dropped.
         let on_disk = std::fs::read_to_string(Store::path(&self.dir)).ok();
+        let journal = read_journal(&self.dir);
         let sections = on_disk.as_deref().and_then(|text| parse(text).ok()).unwrap_or_default();
+        let journal_sections: Vec<Section> =
+            journal.iter().filter_map(|(_, text)| parse(text).ok()).flatten().collect();
         let mut mine = self.entries.clone();
-        let mut others: Vec<(u64, &Section)> = Vec::new();
-        for s in &sections {
+        // Every other kernel: its base section's lines and its journal
+        // sections', each line as written (a newer writer's extra columns
+        // ride along), one line per key.
+        let mut others: BTreeMap<&str, (u64, BTreeMap<&str, &str>)> = BTreeMap::new();
+        for s in sections.iter().chain(journal_sections.iter()) {
+            let Ok(theirs) = s.entries() else { continue };
             if s.kernel == kernel_semantics {
-                if let Ok(theirs) = s.entries() {
-                    for (k, e) in theirs {
-                        mine.entry(k).or_insert(e);
-                    }
+                for (k, e) in theirs {
+                    mine.entry(k).or_insert(e);
                 }
-            } else if s.verified() {
+            } else {
                 // A legacy section has no stamp: it is aged from now.
                 let used = s.used.unwrap_or(now);
-                if now.saturating_sub(used) < MAX_AGE_SECS {
-                    others.push((used, s));
+                let slot = others.entry(s.kernel).or_insert((used, BTreeMap::new()));
+                slot.0 = slot.0.max(used);
+                for line in &s.lines {
+                    let key = line.split('\t').nth(1).unwrap_or("");
+                    slot.1.entry(key).or_insert(line);
                 }
             }
         }
+        let mut others: Vec<(u64, &str, BTreeMap<&str, &str>)> = others
+            .into_iter()
+            .filter(|(_, (used, _))| now.saturating_sub(*used) < MAX_AGE_SECS)
+            .map(|(k, (used, lines))| (used, k, lines))
+            .collect();
         // Most recently used first, ties by fingerprint, so the file is a
         // deterministic function of what it holds.
-        others.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.kernel.cmp(b.1.kernel)));
+        others.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
         others.truncate(MAX_KERNELS - 1);
 
         let mut out = String::new();
@@ -257,9 +407,14 @@ impl Store {
         let sum = hex(&crate::sha256::sha256(body.as_bytes()));
         out.push_str(&format!("kernel\t{kernel_semantics}\t{now}\t{sum}\n"));
         out.push_str(&body);
-        for (used, s) in others {
-            out.push_str(&format!("kernel\t{}\t{used}\t{}\n", s.kernel, s.sum));
-            for l in &s.lines {
+        for (used, kernel, lines) in &others {
+            let mut h = crate::sha256::Sha256::new();
+            for l in lines.values() {
+                h.update(l.as_bytes());
+                h.update(b"\n");
+            }
+            out.push_str(&format!("kernel\t{kernel}\t{used}\t{}\n", hex(&h.finish())));
+            for l in lines.values() {
                 out.push_str(l);
                 out.push('\n');
             }
@@ -269,13 +424,38 @@ impl Store {
         // would (correctly, but pointlessly) reject on every later run.
         // The temporary name is per writer, so two concurrent saves never
         // interleave into one torn file; each rename is atomic.
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let tmp = self.dir.join(format!("{FILE}.{}-{nonce}.tmp", std::process::id()));
+        let tmp = self.dir.join(format!("{FILE}.{}.tmp", unique_name()));
         std::fs::write(&tmp, out)?;
-        std::fs::rename(&tmp, Store::path(&self.dir))
+        std::fs::rename(&tmp, Store::path(&self.dir))?;
+        // Only the journal files read above: one written meanwhile stays for
+        // the next compaction.
+        for (path, _) in &journal {
+            let _ = std::fs::remove_file(path);
+        }
+        self.fresh.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        Ok(())
     }
+}
+
+/// A file name no other writer uses: process id and the clock's nanoseconds.
+fn unique_name() -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{}-{nonce}", std::process::id())
+}
+
+/// Every journal file of `dir`, path and text, in name order. A file removed
+/// between the listing and the read (a compaction) is skipped.
+fn read_journal(dir: &Path) -> Vec<(PathBuf, String)> {
+    let Ok(listing) = std::fs::read_dir(Store::journal(dir)) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> = listing
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "tsv"))
+        .collect();
+    paths.sort();
+    paths.into_iter().filter_map(|p| std::fs::read_to_string(&p).ok().map(|t| (p, t))).collect()
 }
 
 fn body(entries: &BTreeMap<String, Entry>) -> String {
@@ -304,10 +484,6 @@ impl<'a> Section<'a> {
             h.update(b"\n");
         }
         hex(&h.finish()) == self.sum
-    }
-
-    fn verified(&self) -> bool {
-        self.entries().is_ok()
     }
 
     /// The section's entries, or why it cannot be trusted.

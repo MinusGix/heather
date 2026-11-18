@@ -72,7 +72,7 @@ fn rt_io_capacity(k: Known, i: Nat, ops: List<Handle>) → Tac<Nat> {
 // result, any other call's result word.
 fn rt_io_answer(pos: Nat, g: Nat, c: Handle, i: Nat, d: Nat) → CallRes {
     match i {
-        Zero => CallRes(pos, g, c, None, [Pair("buf", d), Pair("result", Succ(d))]),
+        Zero => CallRes(pos, g, c, None, [Pair("buf", d), Pair("result", d + 1)]),
         Succ(_) => CallRes(pos, g, c, Some(d), []),
     }
 }
@@ -196,9 +196,9 @@ fn rt_lend_call(fuel: Nat, k: Known, w: IoWalk, c: Handle) → Tac<IoWalk> {
                         let rw <- RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), rb.fst, words);
                         let st = rw.fst;
                         let d = st.depth;
-                        pure(IoWalk(RSt(Succ(Succ(d)), [], st.memo, st.handles, st.locals, st.funs),
+                        pure(IoWalk(RSt(d + 2, [], st.memo, st.handles, st.locals, st.funs),
                             Cons(SLend(fi, cap, st.index(RSt::level(rb.snd)), st.indices(rw.snd)), ESeg::lets(st.lets) ++ w.segs),
-                            w.io.with_lent(w.io.lent ++ [CallRes(w.io.lent.len(), g.id, c, None, [Pair("after", d), Pair("value", Succ(d))])])))
+                            w.io.with_lent(w.io.lent ++ [CallRes(w.io.lent.len(), g.id, c, None, [Pair("after", d), Pair("value", d + 1)])])))
                     },
                     Nil => rt_refuse("`" ++ name ++ "` without its span's length"),
                 },
@@ -222,7 +222,7 @@ fn rt_state_count(fuel: Nat, mutated: Nat, ty: Handle) → Tac<Nat> {
         Succ(f) => view(ty).bind(λ v => match v {
             HGlobal(g, _, args) => match g.id.same(mutated) {
                 True => match args.nth(1) {
-                    Some(rest) => rt_state_count(f, mutated, rest).bind(λ n => pure(Succ(n))),
+                    Some(rest) => rt_state_count(f, mutated, rest).bind(λ n => pure(n + 1)),
                     None => rt_refuse("a state record without its parts"),
                 },
                 False => pure(1),
@@ -311,7 +311,7 @@ fn rt_if_arm(fuel: Nat, k: Known, w: IoWalk, arm: Handle, n: Nat, worlds: List<B
     let w2 <- go(w1, JNeed(vals));
     let r <- RSt::operands(λ s a => rt_go(fuel, k.at_world(w2.io), s, a, True), w2.st, vals);
     let e = r.fst.depth;
-    pure(ArmRead(ESeg::close(ESeg::lets(r.fst.lets) ++ w2.segs, ETm::Pure(Lit(Word(64), 0))), r.snd.map(λ l => e - Succ(l)), r.fst.funs))
+    pure(ArmRead(ESeg::close(ESeg::lets(r.fst.lets) ++ w2.segs, ETm::Pure(Lit(Word(64), 0))), r.snd.map(λ l => e - (l + 1)), r.fst.funs))
 }
 
 // Each local an `if` leaves: the world, or a variable at its code and its
@@ -341,7 +341,7 @@ fn rt_if_parts(k: Known, tys: List<Handle>, worlds: List<Bool>, ys: List<Nat>, n
 fn rt_if_levels(worlds: List<Bool>, d: Nat) → List<Option<Nat>> {
     match worlds {
         Nil => [],
-        Cons(isw, rest) => match isw { True => Cons(None, rt_if_levels(rest, d)), False => Cons(Some(d), rt_if_levels(rest, Succ(d))) },
+        Cons(isw, rest) => match isw { True => Cons(None, rt_if_levels(rest, d)), False => Cons(Some(d), rt_if_levels(rest, d + 1)) },
     }
 }
 

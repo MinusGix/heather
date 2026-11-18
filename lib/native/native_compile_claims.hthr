@@ -104,6 +104,62 @@ record Run { t: Target, known: List<Fact>, out: List<Nat>, live: List<Nat>, env:
 fn Run::cx(self r: Run) → Emission { Emission(r.t.layout(), r.known, r.out) }
 fn Run::State(self r: Run) → Type { MachineState<X86Memory(r.t.r.profile)> }
 
+// What each form needs before it, by name.
+
+// A word fetched: it fits and is readable here, the words are held, and
+// `post` holds with the word in its register (RBX is the scratch).
+record Fetches(r: Run, id: Nat, register: Gpr, post: r.State() → Type, s: r.State()) {
+    fits: r.t.layout().word_fits(id).IsTrue(),
+    reads: r.env.Reads(r.known, r.live, id),
+    held: r.t.Held(r.live, r.env, s.gprs, s.memory),
+    after: (f: Flags) → (rip: BitVec(64)) →
+        post(MachineState(write_gpr(register, r.env.word(id), write_gpr(Rbx, r.t.rbx_known(r.known, r.env, id), s.gprs)), f, rip, s.memory)),
+}
+
+// A load: the word (or byte) read at the base, below the canonical
+// boundary, and `post` with it loaded.
+record LoadsWord(r: Run, load: WordLoad, post: r.State() → Type, s: r.State()) {
+    word: BitVec(64),
+    low: read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47),
+    read: read_word(r.t.site().data, s.memory, read_gpr(load.base, s.gprs)) = Some(word),
+    after: post(word_load_after(load, word, s)),
+}
+
+record LoadsByte(r: Run, load: ByteLoad, post: r.State() → Type, s: r.State()) {
+    byte: BitVec(8),
+    low: read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47),
+    read: r.t.site().data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte),
+    after: post(byte_load_after(load, byte, s)),
+}
+
+// A byte stored: its place is writable, the code is still resident after,
+// and `post` with it stored.
+record StoresByte(r: Run, store: ByteStore, post: r.State() → Type, s: r.State()) {
+    plain: store_base_plain(store.base) = True,
+    writable: r.t.writes().writable(s.memory, read_gpr(store.base, s.gprs), 1),
+    resident: r.t.site().Resident(byte_store_after(r.t.writes(), store, s).memory),
+    after: post(byte_store_after(r.t.writes(), store, s)),
+}
+
+// A conditional jump: `hit` where the flags meet `cc`, `miss` where they do
+// not, wherever the code is; and the flags `cc` reads are defined.
+record Branches(cc: ConditionCode, flags: Flags, hit, miss: BitVec(64) → Type) {
+    taken: condition_holds(cc, flags) = True → (rip: BitVec(64)) → hit(rip),
+    straight: condition_holds(cc, flags) = False → (rip: BitVec(64)) → miss(rip),
+    defined: condition_defined(cc, flags.defined) = True,
+}
+
+// A jump out of the loop whose way out is the label after `o`.
+record Leaves(to, o: Nat, cc: ConditionCode, flags: Flags, hit, miss: BitVec(64) → Type) {
+    out: to = Succ(o),
+    taken: condition_holds(cc, flags) = True → (rip: BitVec(64)) → hit(rip),
+    straight: condition_holds(cc, flags) = False → (rip: BitVec(64)) → miss(rip),
+    defined: condition_defined(cc, flags.defined) = True,
+}
+
+// A loop: every round of its body, and what entering it needs.
+record Loops(each, first: Type) { round: each, entered: first }
+
 // What must hold before a fragment for `post` to hold after it. Inside a
 // loop whose way out is the label after `out`, a `Leave` needs `leave`
 // where it is taken; outside one (`None`) nothing leaves. A loop needs its
@@ -116,42 +172,30 @@ fn Fragment::inside(self code: Fragment, r: Run, loops: Nat → Nat → Gprs →
         Skip => post,
         Place(_, item) => match item {
             Block(instructions) => λ s => post(execute_block_normal(instructions, s)),
-            Load(load) => λ s => Exists<BitVec(64)>(λ word =>
-                (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
-                ((read_word(r.t.site().data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s)))),
-            LoadByte(load) => λ s => Exists<BitVec(8)>(λ byte =>
-                (read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47)) ∧
-                ((r.t.site().data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte)) ∧ post(byte_load_after(load, byte, s)))),
-            StoreByte(store) => λ s => (store_base_plain(store.base) = True) ∧
-                (r.t.writes().writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
-                (r.t.site().Resident(byte_store_after(r.t.writes(), store, s).memory) ∧ post(byte_store_after(r.t.writes(), store, s)))),
+            Load(load) => λ s => LoadsWord(r, load, post, s),
+            LoadByte(load) => λ s => LoadsByte(r, load, post, s),
+            StoreByte(store) => λ s => StoresByte(r, store, post, s),
             _ => λ _ => False,
         },
-        Fetch(id, register) => λ s => (r.t.layout().word_fits(id).IsTrue() ∧ r.env.Reads(r.known, r.live, id)) ∧
-            (r.t.Held(r.live, r.env, s.gprs, s.memory) ∧ ((f: Flags) → (rip: BitVec(64)) →
-                post(MachineState(write_gpr(register, r.env.word(id), write_gpr(Rbx, r.t.rbx_known(r.known, r.env, id), s.gprs)), f, rip, s.memory)))),
+        Fetch(id, register) => λ s => Fetches(r, id, register, post, s),
         Keep(_, _) => λ _ => False,
         Both(first, rest) => first.inside(r, loops, out, leave, rest.inside(r, loops, out, leave, post)),
-        Unless(cc, _, body) => λ s =>
-            (((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
-             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → body.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
-            (condition_defined(cc, s.flags.defined) = True),
-        Either(cc, _, straight, taken) => λ s =>
-            (((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → taken.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
-             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) →
-                straight.inside(r, loops, out, leave, λ u => (to: BitVec(64)) → post(MachineState(u.gprs, u.flags, to, u.memory)))(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
-            (condition_defined(cc, s.flags.defined) = True),
+        Unless(cc, _, body) => λ s => Branches(cc, s.flags,
+            λ rip => post(MachineState(s.gprs, s.flags, rip, s.memory)),
+            λ rip => body.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory))),
+        Either(cc, _, straight, taken) => λ s => Branches(cc, s.flags,
+            λ rip => taken.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory)),
+            λ rip => straight.inside(r, loops, out, leave, λ u => (to: BitVec(64)) → post(MachineState(u.gprs, u.flags, to, u.memory)))(MachineState(s.gprs, s.flags, rip, s.memory))),
         Leave(cc, to) => match out {
             None => λ _ => False,
-            Some(o) => λ s => (to = Succ(o)) ∧
-                ((((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → leave(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
-                  ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
-                 (condition_defined(cc, s.flags.defined) = True)),
+            Some(o) => λ s => Leaves(to, o, cc, s.flags,
+                λ rip => leave(MachineState(s.gprs, s.flags, rip, s.memory)),
+                λ rip => post(MachineState(s.gprs, s.flags, rip, s.memory))),
         },
-        Cycle(names, enter, body) => λ s =>
-            ((n: Nat) → (u: r.State()) → r.t.site().Resident(u.memory) → loops(names, n, u.gprs, u.memory) →
-                body.inside(r, loops, Some(names + 1), post, λ w => Exists<Nat>(λ m => (m < n) ∧ loops(names, m, w.gprs, w.memory)))(u)) ∧
-            enter.inside(r, loops, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(s),
+        Cycle(names, enter, body) => λ s => Loops(
+            (n: Nat) → (u: r.State()) → r.t.site().Resident(u.memory) → loops(names, n, u.gprs, u.memory) →
+                body.inside(r, loops, Some(names + 1), post, λ w => Exists<Nat>(λ m => (m < n) ∧ loops(names, m, w.gprs, w.memory)))(u),
+            enter.inside(r, loops, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(s)),
     }
 }
 
@@ -177,16 +221,19 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
         Skip => λ _ _ next => next,
         Place(name, item) => match item {
             Block(instructions) => λ _ within next => t.goes_block(p, name, instructions, within, tree, post, next),
-            Load(load) => λ _ within next => t.goes_load(p, name, load, within, tree, post, next),
-            LoadByte(load) => λ _ within next => t.goes_load_byte(p, name, load, within, tree, post, next),
-            StoreByte(store) => λ _ within next => t.goes_store_byte(p, name, store, within, tree, post, next),
+            Load(load) => λ _ within next s here resident holds => t.goes_load(p, name, load, within, tree, post, next)(s, here, resident,
+                Exists(holds.word, ⟨holds.low, ⟨holds.read, holds.after⟩⟩)),
+            LoadByte(load) => λ _ within next s here resident holds => t.goes_load_byte(p, name, load, within, tree, post, next)(s, here, resident,
+                Exists(holds.byte, ⟨holds.low, ⟨holds.read, holds.after⟩⟩)),
+            StoreByte(store) => λ _ within next s here resident holds => t.goes_store_byte(p, name, store, within, tree, post, next)(s, here, resident,
+                ⟨holds.plain, ⟨holds.writable, ⟨holds.resident, holds.after⟩⟩⟩),
             _ => λ _ _ _ s here resident holds => false_elim(holds),
         },
         Fetch(id, register) => λ _ within next => {
             let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m));
             let after: t.GoesR(prog_len(p.known_to(t.layout(), r.known, id, register)), tree, q) = t.goes_weaken(next, λ s held => held(s.flags, s.rip));
-            λ s here resident holds => t.goes_known_to(r.live, r.env, p, r.known, id, register, holds.left.left, holds.left.right, within, tree, q, after)(s, here, resident,
-                ⟨holds.right.left, holds.right.right⟩)
+            λ s here resident holds => t.goes_known_to(r.live, r.env, p, r.known, id, register, holds.fits, holds.reads, within, tree, q, after)(s, here, resident,
+                ⟨holds.held, holds.after⟩)
         },
         Keep(_, _) => λ _ _ _ s here resident holds => false_elim(holds),
         Both(first, rest) => λ exits within next => {
@@ -194,7 +241,7 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
             first.goes_inside(r, loops, p, tree, out, leave, rest.inside(r, loops, out, leave, post))(exits, Prog::within_trans(rest.extends(r.cx(), mid), within),
                 rest.goes_inside(r, loops, mid, tree, out, leave, post)(exits, within, next))
         },
-        Unless(cc, names, body) => λ exits within next => {
+        Unless(cc, names, body) => λ exits within next s here0 resident0 holds => {
             let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
             let bodied = body.onto(r.cx(), jcc);
             let w_bodied = bodied.within_before(names + 1, Block([]), t.program, within);
@@ -207,9 +254,9 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
             let lands = t.program.lands_jcc(t.laid, w_jcc.witness, p, 0, cc, names, w_jcc.proof, within.witness, bodied, Block([]), within.proof);
             t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, p, 0, cc, names + 1, w_jcc.proof, prog_len(bodied), lands, tree, pre,
                 λ u here resident held => landed(u, here, resident, held.left.left(held.right, u.rip)),
-                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))
+                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))(s, here0, resident0, ⟨⟨holds.taken, holds.straight⟩, holds.defined⟩)
         },
-        Either(cc, names, straight, taken) => λ exits within next => {
+        Either(cc, names, straight, taken) => λ exits within next s here0 resident0 holds => {
             let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
             let ran = straight.onto(r.cx(), jcc);
             let jumped = Prog::At(ran, 0, Jmp(names + 2));
@@ -235,7 +282,7 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
             let lands = t.program.lands_jcc(t.laid, w_jcc.witness, p, 0, cc, names, w_jcc.proof, w_other.witness, jumped, Block([]), w_other.proof);
             t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, p, 0, cc, names + 1, w_jcc.proof, prog_len(jumped), lands, tree, pre,
                 λ u here resident held => at_other(u, here, resident, held.left.left(held.right, u.rip)),
-                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))
+                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))(s, here0, resident0, ⟨⟨holds.taken, holds.straight⟩, holds.defined⟩)
         },
         Leave(cc, to) => match out {
             None => λ _ _ _ s here resident holds => false_elim(holds),
@@ -243,14 +290,14 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
                 let label = exits.witness;
                 let item = exits.proof.witness;
                 let placed = exits.proof.proof.left;
-                let w = j(holds.left, λ x _ => Prog::At(p, 0, Jcc(cc, x)).Within(t.program), within);
+                let w = j(holds.out, λ x _ => Prog::At(p, 0, Jcc(cc, x)).Within(t.program), within);
                 let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
                     ((condition_holds(cc, f) = True) → (rip: BitVec(64)) → leave(MachineState(g, f, rip, m))) ∧
                     ((condition_holds(cc, f) = False) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m)));
                 let lands = t.program.lands_jcc(t.laid, w.witness, p, 0, cc, o, w.proof, placed.witness, label, item, placed.proof);
                 t.io().goes_jcc(t.program, t.origin, t.code_fits(), w.witness, p, 0, cc, Succ(o), w.proof, prog_len(label), lands, tree, pre,
                     λ u here resident held => exits.proof.proof.right(u, here, resident, held.left.left(held.right, u.rip)),
-                    λ u here resident held => next(u, here, resident, held.left.right(held.right, u.rip)))(s, here, resident, holds.right)
+                    λ u here resident held => next(u, here, resident, held.left.right(held.right, u.rip)))(s, here, resident, ⟨⟨holds.taken, holds.straight⟩, holds.defined⟩)
             },
         },
         Cycle(names, enter, body) => λ _ within next s0 here0 resident0 holds => {
@@ -272,7 +319,7 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
                     λ u here resident held => smaller(held.witness, held.proof.left)(u, here, resident, held.proof.right));
                 let through = body.goes_inside(r, loops, head, tree, Some(names + 1), post, again)(exits, w_bodied, jump);
                 let at_head = t.goes_block(entered, names + 1, [], w_head, tree, body.inside(r, loops, Some(names + 1), post, again), through);
-                λ s here resident at => at_head(s, here, resident, holds.left(n, s, resident, at))
+                λ s here resident at => at_head(s, here, resident, holds.round(n, s, resident, at))
             };
             let up_to: (n: Nat) → (k: Nat) → k <= n → At(k) = λ n => match n {
                 Zero => λ k small => around(k, λ m below => false_elim(Nat::not_succ_le_zero(m, Nat::le_trans(Succ(m), k, 0, below, small)))),
@@ -280,7 +327,7 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
             };
             let reached: t.Goes(prog_len(entered), tree, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory))) =
                 λ u here resident held => up_to(held.witness, held.witness, Nat::le_refl(held.witness))(u, here, resident, held.proof);
-            enter.goes_inside(r, loops, p, tree, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(exits, w_entered, reached)(s0, here0, resident0, holds.right)
+            enter.goes_inside(r, loops, p, tree, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(exits, w_entered, reached)(s0, here0, resident0, holds.entered)
         },
     }
 }
@@ -310,7 +357,7 @@ theorem Fragment::goes_loop(r: Run, p: Prog, names: Nat, enter, body: Fragment, 
     round: (n: Nat) → (s: r.State()) → r.t.site().Resident(s.memory) → invariant(n, s.gprs, s.memory) →
         body.inside(r, λ _ => invariant, Some(names + 1), post, λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory)))(s)):
     r.t.Goes(prog_len(p), tree, enter.inside(r, λ _ => invariant, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))) {
-    λ s here resident holds => Cycle(names, enter, body).goes_inside(r, λ _ => invariant, p, tree, None, λ _ => False, post)(trivial, within, next)(s, here, resident, ⟨round, holds⟩)
+    λ s here resident holds => Cycle(names, enter, body).goes_inside(r, λ _ => invariant, p, tree, None, λ _ => False, post)(trivial, within, next)(s, here, resident, Loops(round := round, entered := holds))
 }
 
 // ---------------------------------------------------------------------------
@@ -340,12 +387,14 @@ theorem Fragment::clamp_before(r: Run, value, bound: Gpr, names: Nat, post: r.St
     let v = read_gpr(value, s.gprs);
     let b = read_gpr(bound, s.gprs);
     let s1 = execute_block_normal([CmpRR(value, bound)], s);
-    ⟨⟨λ below rip => j(write_gpr_held(value, s.gprs), λ file _ => post(MachineState(file, s1.flags, rip, s.memory)),
-        next(v, BitVec::min_kept(v, b, below), s1.flags, rip)),
-      λ over rip => {
-        let u = execute_block_normal([MovRR(value, bound)], MachineState(s1.gprs, s1.flags, rip, s1.memory));
-        next(b, BitVec::min_bound(v, b, over), u.flags, u.rip)
-      }⟩, refl⟩
+    Branches(
+        taken := λ below rip => j(write_gpr_held(value, s.gprs), λ file _ => post(MachineState(file, s1.flags, rip, s.memory)),
+            next(v, BitVec::min_kept(v, b, below), s1.flags, rip)),
+        straight := λ over rip => {
+            let u = execute_block_normal([MovRR(value, bound)], MachineState(s1.gprs, s1.flags, rip, s1.memory));
+            next(b, BitVec::min_bound(v, b, over), u.flags, u.rip)
+        },
+        defined := refl)
 }
 
 // ---------------------------------------------------------------------------

@@ -372,7 +372,7 @@ theorem Format::rounds_real_unique(self F: Format, mode: Mode, x: CReal, r, s: F
 // conjugate mode.
 
 fn Format::round_dyadic_win(self F: Format, mode: Mode, d: Dyadic) → Float(F) {
-    match d.mant { OfNat(m) => F.round_hex(mode, m, d.exp), NegSucc(m) => -F.round_hex(mode.conj(), Succ(m), d.exp) }
+    match d.mant { OfNat(m) => F.round_hex(mode, m, d.exp), NegSucc(m) => -F.round_hex(mode.conj(), m + 1, d.exp) }
 }
 
 theorem Format::round_dyadic_win_correct(self F: Format, mode: Mode, d: Dyadic): RoundsTo(F, mode, d.rat(), F.round_dyadic_win(mode, d)) {
@@ -621,7 +621,7 @@ theorem Format::round_enclosed_some(self F: Format, mode: Mode, e: Enclosed, ste
 
 // Enough tries, computed from the gap and the narrowing.
 fn Format::round_apart_tries(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step), off: F.OffGrid(e.x)) → Nat {
-    Succ(narrow(off.proof.witness).witness)
+    narrow(off.proof.witness).witness + 1
 }
 
 theorem Format::round_enclosed_ends(self F: Format, mode: Mode, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step), off: F.OffGrid(e.x)):
@@ -1098,7 +1098,7 @@ theorem Format::faithful_enclosed_some(self F: Format, e: Enclosed, step, t: Nat
 }
 
 // Enough tries, from the narrowing at the least gap.
-fn Format::faithful_tries(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step)) → Nat { Succ(narrow(F.gap_bits()).witness) }
+fn Format::faithful_tries(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step)) → Nat { narrow(F.gap_bits()).witness + 1 }
 
 theorem Format::faithful_enclosed_ends(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step)):
     ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, F.faithful_tries(e, n, p, step, narrow)) = Some(r)

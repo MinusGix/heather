@@ -441,7 +441,7 @@ fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, 
         IfEq(c, yes, no) => FTm::lower_tail(yes, w, fsigs, base, res, flag, kept, nexts, g, ports, next).and_then(λ ly =>
             FTm::lower_tail(no, w, fsigs, base, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))),
         Put(i, length, v, body) => FTm::put_ports(g, ports, i, length, v).and_then(λ at =>
-            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, g, ports, Succ(Succ(Succ(next)))).and_then(λ lb => FTm::put_then(at, next, lb))),
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, g, ports, next + 3).and_then(λ lb => FTm::put_then(at, next, lb))),
         Call(f, args, body) => FTm::lower_call(w, fsigs, base, g, ports, next, f, args).and_then(λ lc =>
             FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
                 .and_then(λ lb => Tm::compose(lc, lb))),
@@ -670,14 +670,14 @@ theorem FTm::leave_first(end: State, flag: Nat, kept, ns: List<Nat>):
 
 fn FFun::meas_tail2(all, ks, ws: List<Ty>, res: Ty, body: FTm, w: World, fsigs: List<Sig>, base, o, x: Nat) → Option<Lowered> {
     FTm::lower_tail(body, w, fsigs, base, res, Fun::meas_flag2(ws, x), Fun::param_ids(ks, o), Fun::meas_ns2(ws, x), Ty::bind_onto(all, Nil),
-        Fun::ports_onto(all, o, Nil), Succ(Fun::meas_flag2(ws, x)))
+        Fun::ports_onto(all, o, Nil), Fun::meas_flag2(ws, x) + 1)
 }
 
 fn FFun::lower_measured_at(all, ks, ws: List<Ty>, body: FTm, res: Ty, w: World, fsigs: List<Sig>, base, lent: Nat) → Option<Function> {
     Ty::check_one_words(w.tys, all).and_then(λ _ => res.check_one_word(w.tys).and_then(λ _ =>
         FTm::lower_tail(body, w, fsigs, base, res, Fun::meas_flag(all, ws), Fun::meas_kept(all, ks), Fun::meas_ns(all, ws), Ty::bind_onto(all, Nil),
-            Fun::ports_onto(all, Succ(Fun::meas_bnd(all)), Nil), Succ(Fun::meas_flag(all, ws))).and_then(λ t =>
-        FFun::meas_tail2(all, ks, ws, res, body, w, fsigs, base, Succ(Succ(t.next)), Fun::past(all, Succ(Succ(t.next)))).and_then(λ t2 =>
+            Fun::ports_onto(all, Fun::meas_bnd(all) + 1, Nil), Fun::meas_flag(all, ws) + 1).and_then(λ t =>
+        FFun::meas_tail2(all, ks, ws, res, body, w, fsigs, base, t.next + 2, Fun::past(all, t.next + 2)).and_then(λ t2 =>
             Some(Fun::meas_code(all, ks, ws, lent, t, t2))))))
 }
 

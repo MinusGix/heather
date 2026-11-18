@@ -383,7 +383,7 @@ fn Op::params(self o: Op) → List<Ty> {
         ToNat => [Word(64)],
         Trunc(n, extra) => [Word(extra + n)],
         Shl(w, _) => [Word(w)], Lshr(w, _) => [Word(w)], Ashr(w, _) => [Word(w)],
-        Sext(n, _) => [Word(Succ(n))],
+        Sext(n, _) => [Word(n + 1)],
     }
 }
 
@@ -398,7 +398,7 @@ fn Op::result(self o: Op) → Ty {
         ToNat => Count,
         Trunc(n, _) => Word(n),
         Shl(w, _) => Word(w), Lshr(w, _) => Word(w), Ashr(w, _) => Word(w),
-        Sext(n, extra) => Word(extra + Succ(n)),
+        Sext(n, extra) => Word(extra + (n + 1)),
     }
 }
 
@@ -424,7 +424,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Shl(w, k) => λ (x: BitVec(w)) => x.shift_left(k),
         Lshr(w, k) => λ (x: BitVec(w)) => x.shift_right(k),
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
-        Sext(n, extra) => λ (x: BitVec(Succ(n))) => x.sign_extend(extra),
+        Sext(n, extra) => λ (x: BitVec(n + 1)) => x.sign_extend(extra),
     }
 }
 

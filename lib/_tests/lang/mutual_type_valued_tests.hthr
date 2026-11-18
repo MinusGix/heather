@@ -43,7 +43,7 @@ fn OccursBound<O>(t: Tm<O>, a: Nat) → Type {
 fn OccursBoundArgs<O>(ts: Args<O>, a: Nat) → Type {
     match ts {
         ANil => False,
-        ACons(b, t, rest) => (∃ k: Nat, b = Succ(k) ∧ Occurs(t, a)) ∨ OccursBound(t, a) ∨ OccursBoundArgs(rest, a),
+        ACons(b, t, rest) => (∃ k: Nat, b = k + 1 ∧ Occurs(t, a)) ∨ OccursBound(t, a) ∨ OccursBoundArgs(rest, a),
     }
 }
 

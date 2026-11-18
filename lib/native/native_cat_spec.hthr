@@ -237,7 +237,7 @@ fn cat_spec(fuel: Nat, at: FilterAt<Stateless>) → ITree<BitVec(64)>(Events::li
 // `n`: a read, at most `n` writes, and the pass back to reading, each pass.
 // (`+` recurses on its second argument, so the inner count is on the right.)
 fn cat_budget(n, k: Nat) → Nat {
-    match k { Zero => 0, Succ(j) => Succ(Succ(cat_budget(n, j) + n)) }
+    match k { Zero => 0, Succ(j) => cat_budget(n, j) + n + 2 }
 }
 
 // The program's end: the spec exits with cat's status.

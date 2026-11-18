@@ -31,7 +31,7 @@ import option;
 // Ids below a bound
 
 fn ids_under(ids: List<Nat>, b: Nat) → Bool {
-    match ids { Nil => True, Cons(id, rest) => Succ(id).leb(b) && ids_under(rest, b) }
+    match ids { Nil => True, Cons(id, rest) => (id + 1).leb(b) && ids_under(rest, b) }
 }
 
 theorem ids_under_mem(b: Nat, ids: List<Nat>): ids_under(ids, b) = True → (id: Nat) → Mem(id, ids) → (id + 1).leb(b) = True {
@@ -94,7 +94,7 @@ fn StructuredRegion::under(self region: StructuredRegion, b: Nat) → Bool {
         Dataflow(body) => nodes_under(body.nodes, b),
         Sequence(prefix, continuation) => nodes_under(prefix.nodes, b) && continuation.under(b),
         Compose(prefix, continuation) => prefix.under(b) && continuation.under(b),
-        Conditional(_, condition, _, _, when_true, when_false) => Succ(condition).leb(b) && (when_true.under(b) && when_false.under(b)),
+        Conditional(_, condition, _, _, when_true, when_false) => (condition + 1).leb(b) && (when_true.under(b) && when_false.under(b)),
         Call(_, arguments, result) => ids_under(Cons(result, arguments), b),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             ids_under(Cons(bound, Cons(exhausted, inputs)), b) && (ids_under(outputs, b) &&
@@ -156,7 +156,7 @@ theorem StructuredRegion::under_mono(self region: StructuredRegion, b, c: Nat, l
 // Valuations that agree below a bound
 
 fn Valuation::AgreeBelow(values, other: Valuation(), b: Nat) → Type {
-    (id: Nat) → Succ(id).leb(b) = True → (w: Nat) → other(w, id) = values(w, id)
+    (id: Nat) → (id + 1).leb(b) = True → (w: Nat) → other(w, id) = values(w, id)
 }
 
 // A node holds of any valuation that agrees on what it mentions.
@@ -380,7 +380,7 @@ theorem Valuation::agree_below_trans(values, mid, new: Valuation(), b, c: Nat, f
 
 // The least bound above `top` and every one of `ids`. A searcher proposes
 // it and `under` checks it, so nothing is proved of it.
-fn ids_top(ids: List<Nat>, top: Nat) → Nat { match ids { Nil => top, Cons(id, rest) => ids_top(rest, top.max(Succ(id))) } }
+fn ids_top(ids: List<Nat>, top: Nat) → Nat { match ids { Nil => top, Cons(id, rest) => ids_top(rest, top.max(id + 1)) } }
 
 fn nodes_top(nodes: List<Node>, top: Nat) → Nat { match nodes { Nil => top, Cons(node, rest) => nodes_top(rest, ids_top(node.mentions(), top)) } }
 
@@ -390,7 +390,7 @@ fn StructuredRegion::top(self region: StructuredRegion, top: Nat) → Nat {
         Dataflow(body) => nodes_top(body.nodes, top),
         Sequence(prefix, continuation) => continuation.top(nodes_top(prefix.nodes, top)),
         Compose(prefix, continuation) => continuation.top(prefix.top(top)),
-        Conditional(_, condition, _, _, when_true, when_false) => when_false.top(when_true.top(top.max(Succ(condition)))),
+        Conditional(_, condition, _, _, when_true, when_false) => when_false.top(when_true.top(top.max(condition + 1))),
         Call(_, arguments, result) => ids_top(Cons(result, arguments), top),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             body.top(ids_top(next, ids_top(Cons(count, Cons(exit, parameters)), ids_top(outputs, ids_top(Cons(bound, Cons(exhausted, inputs)), top))))),

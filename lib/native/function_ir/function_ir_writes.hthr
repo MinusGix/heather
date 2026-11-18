@@ -181,7 +181,7 @@ fn LoopRunsOver(pass: Valuation() → Buffers() → Buffers() → Type, paramete
     match remaining {
         Zero => λ state final exhausted before after => (final = state) ∧ ((exhausted = True) ∧ (after = before)),
         Succ(rest) => λ state final exhausted before after => Exists<Valuation()>(λ values => Exists<Buffers()>(λ mid =>
-            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(Succ(rest))) ∧ (pass(values, before, mid) ∧
+            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(rest + 1)) ∧ (pass(values, before, mid) ∧
                 match values(1, exit).head_bit() {
                     False => LoopRunsOver(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted, mid, after),
                     True => (final = words_of(values, next)) ∧ ((exhausted = False) ∧ (after = mid)),
@@ -710,7 +710,7 @@ theorem program_stores_within_drop(functions: List<Function>, marks: List<Bool>)
 fn program_marks(functions: List<Function>, at, count: Nat) → List<Nat> {
     match count {
         Zero => [],
-        Succ(k) => Cons(match program_stores(functions, at) { True => 1, False => 0 }, program_marks(functions, Succ(at), k)),
+        Succ(k) => Cons(match program_stores(functions, at) { True => 1, False => 0 }, program_marks(functions, at + 1, k)),
     }
 }
 

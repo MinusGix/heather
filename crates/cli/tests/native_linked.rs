@@ -44,7 +44,7 @@ fn linked_exports_are_what_the_compiler_emits() {
                     .current_dir(&root)
                     .args(["compile-x86", module, function, "--symbol", symbol, "-o"]).arg(&assembly)
                     .args(entries.iter().flat_map(|entry| ["--entry", entry.as_str()]))
-                    .arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+                    .args(heather_cli::showcase::native_image_args())
                     .output().unwrap();
                 if !result.status.success() {
                     failures.lock().expect("failures").push(format!("compile-x86 {module} {function}:\n{}", String::from_utf8_lossy(&result.stderr)));
@@ -108,7 +108,7 @@ fn what_the_contract_does_not_take_is_refused() {
         let output = dir.join(format!("{function}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(module).args([function, "-o"]).arg(&output)
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
             .output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{function}: {stderr}");
@@ -129,7 +129,7 @@ fn what_the_contract_does_not_take_is_refused() {
         let output = dir.join(format!("{function}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(&spans).args([function, "--entry", entry, "-o"]).arg(&output)
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
             .output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{function} --entry {entry}: {stderr}");

@@ -191,12 +191,12 @@ theorem FTm::tail_held_pass<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mut
 fn FTm::tail_kept<A>(self t: FTm, hw: HWorld<A>, words: Nat) → Nat → List<Option<Pair<Ty, Nat>>> → Bool {
     match t {
         Pure(_) => λ len known => True,
-        Let(e, body) => λ len known => e.kept(hw, len) && body.tail_kept(hw, words, Succ(len), Cons(e.literal(), known)),
+        Let(e, body) => λ len known => e.kept(hw, len) && body.tail_kept(hw, words, len + 1, Cons(e.literal(), known)),
         If(_, yes, no) => λ len known => yes.tail_kept(hw, words, len, known) && no.tail_kept(hw, words, len, known),
         IfEq(_, yes, no) => λ len known => yes.tail_kept(hw, words, len, known) && no.tail_kept(hw, words, len, known),
         Put(_, _, _, _) => λ len known => False,
         Call(f, args, body) => λ len known =>
-            Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known) && body.tail_kept(hw, words, Succ(len), Cons(None, known)),
+            Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known) && body.tail_kept(hw, words, len + 1, Cons(None, known)),
         Again(args) => λ len known => FTm::run_args(args, len, words),
         Lend(_, _, _, _) => λ len known => False,
     }
@@ -213,7 +213,7 @@ fn Pass::Agrees<A, R>(whole: Stored<A>, n: BitVec(64), words: Nat, h: Pass<A, R>
         Ends(mh) => match b { Ends(mb) => Pass::Ended(whole, n, mh, mb), Goes(_, _) => False },
         Goes(ys, a) => match b {
             Ends(_) => False,
-            Goes(zs, o) => (ys = zs) ∧ ((zs.len() = Succ(Succ(words))) ∧ ((FTm::operand(zs, 1) = n) ∧ whole.Holds(o, n, a))),
+            Goes(zs, o) => (ys = zs) ∧ ((zs.len() = words + 2) ∧ ((FTm::operand(zs, 1) = n) ∧ whole.Holds(o, n, a))),
         },
     }
 }

@@ -93,21 +93,8 @@ theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out
 
 theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, capacity, names: Nat):
     p.Within(p.args(layout, out, index, buf, len, capacity, names).prog) {
-    let whole = p.args(layout, out, index, buf, len, capacity, names).prog;
-    let loaded = then(then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Load(WordLoad(Rdx, Rbx))), Load(WordLoad(R9, Rdx)));
-    let counted = loaded.word_to(layout, index, Rcx);
-    let head = Succ(names);
-    let past = Succ(Succ(Succ(head)));
-    let after = Succ(past);
-    let copied = then(then(counted, Block([CmpRR(Rcx, R9)])), Jcc(AE, past)).arg_pointer(layout, buf, capacity, head).arg_copy(head, Succ(Succ(head)), Succ(head));
-    let found = then(then(copied.label(Succ(Succ(head))), Block([MovRR(Rax, R8)])), Jmp(after));
-    let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(after);
-    calc {
-        p <= loaded := Exists(3, refl),
-        <= counted := loaded.within_word_to(layout, index, Rcx),
-        <= missing := Exists(21, refl),
-        <= whole := missing.within_word_from(layout, out, len, Rax),
-    }
+    let cx = Emission(layout, [], out);
+    cx.from(names).arg(index, buf, len, capacity).cut().code.extends(cx, p)
 }
 
 theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result, capacity, names: Nat):

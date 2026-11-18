@@ -42,7 +42,7 @@ fn prog_read(p: Prog, i: Nat) → Ix { p.reads.nth(i).unwrap_or(Const(0)) }
 fn read_count_from(count: Expr, i: Nat, fuel: Nat) → Tac<Nat> {
     match fuel {
         Zero => fail_reads("more reads than the walk allows"),
-        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => pure(i), False => read_count_from(count, Succ(i), f) }),
+        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => pure(i), False => read_count_from(count, i + 1, f) }),
     }
 }
 
@@ -111,7 +111,7 @@ fn sites_for(gs: ReadGlobals, read: Expr, p, len, bounds: Expr, i: Nat, n: Nat, 
     match n {
         Zero => pure(apps_of(gs.nil, [len, bounds])),
         Succ(m) => site_for(gs, len, bounds, apps_of(read, [p, NatLit(i)]), budget).bind(λ s =>
-            sites_for(gs, read, p, len, bounds, Succ(i), m, budget).bind(λ ss => pure(apps_of(gs.cons, [len, bounds, s, ss])))),
+            sites_for(gs, read, p, len, bounds, i + 1, m, budget).bind(λ ss => pure(apps_of(gs.cons, [len, bounds, s, ss])))),
     }
 }
 

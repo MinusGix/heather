@@ -223,7 +223,7 @@ fn rt_file_store(fuel: Nat, k: Known, w: FWalk, link: Handle, ops: List<Handle>)
                     let st = rv.fst;
                     pure(FWalk(st.written(st.depth),
                         Cons(FPut(st.index(RSt::level(ri.snd)), st.index(1), st.index(RSt::level(rv.snd))), FSeg::lets(st.lets) ++ w.segs),
-                        w.fk.past(link, w.fk.calls), Succ(w.done), w.cfuns))
+                        w.fk.past(link, w.fk.calls), w.done + 1, w.cfuns))
                 },
             }
         },
@@ -306,10 +306,10 @@ fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: Globa
                     let reads <- rt_call_lent(64, kk, rest);
                     let r <- rt_lent_args(λ s a => rt_go(fuel, kk, s, a, True), kk, rl.fst, 1, reads, rest);
                     let st = r.fst;
-                    pure(FWalk(st.written(Succ(st.depth)),
+                    pure(FWalk(st.written(st.depth + 1),
                         Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(r.snd)))), FSeg::lets(st.lets) ++ w.segs),
                         w.fk.past(link, w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
-                        Succ(w.done), found.fst))
+                        w.done + 1, found.fst))
                 },
             }
         },
@@ -402,7 +402,7 @@ fn rt_file_viewed(k: Known, fk: FileKnown, st: RSt, j: Nat, xs: Handle) → Tac<
         }),
         Succ(_) => rt_span(k, st, xs).bind(λ n => match n {
             Zero => rt_refuse("a window to read of the span the call writes: a view to write is the only view of its span (issues/views-of-one-buffer-apart.md)"),
-            Succ(m) => pure(Succ(m)),
+            Succ(m) => pure(m + 1),
         }),
     }
 }
@@ -427,7 +427,7 @@ fn rt_file_views(fuel: Nat, k: Known, names: FileNames, fk: FileKnown, st: RSt, 
                             let rs <- rt_file_start(fuel, k, st, start);
                             let re <- rt_file_bound(fuel, k, rs.fst, end);
                             let sized <- rt_file_sized(fuel, k, re.fst, length, rs.snd, re.snd);
-                            let more <- rt_file_views(fuel, k, names, fk, sized, Succ(j), m, rest);
+                            let more <- rt_file_views(fuel, k, names, fk, sized, j + 1, m, rest);
                             pure(Pair(Pair(more.fst.fst, Cons(LentView(span, rs.snd, re.snd), more.fst.snd)), more.snd))
                         },
                         _ => rt_file_windows(),
@@ -473,10 +473,10 @@ fn rt_file_lend(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, a
                                     True => {
                                         let r <- RSt::operands(λ s a => rt_go(fuel, kk, s, a, True), ra.fst, vs.snd);
                                         let st = r.fst;
-                                        pure(FWalk(st.written(Succ(st.depth)),
+                                        pure(FWalk(st.written(st.depth + 1),
                                             Cons(FLend(found.snd, LentView::views(st, vs.fst.snd), st.indices(r.snd)), FSeg::lets(st.lets) ++ w.segs),
                                             w.fk.past(link, w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(st.depth), [])]),
-                                            Succ(w.done), found.fst))
+                                            w.done + 1, found.fst))
                                     },
                                 }
                             },
@@ -607,7 +607,7 @@ fn rt_file_scan(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Han
                             PWithin => match args {
                                 Cons(bytes, operands) => rt_file_state_in(w.fk.span, (w.fk.was ++ links).take(now), bytes).bind(λ at => {
                                     let more: List<Planned> = match at {
-                                        Some(s) => match w.done.leb(s).and(Succ(s).leb(now)).and(!Planned::has(found, h)) {
+                                        Some(s) => match w.done.leb(s).and((s + 1).leb(now)).and(!Planned::has(found, h)) {
                                             True => found ++ [Planned(s, h)],
                                             False => found,
                                         },
@@ -672,7 +672,7 @@ fn rt_file_plan_links(k: Known, names: FileNames, w: FWalk, links: List<Handle>,
         Nil => pure(found),
         Cons(link, rest) => rt_file_operands(names, link).bind(λ ops =>
             rt_file_scan(rt_file_scan_fuel(), k, names, w, links, now, ops, found)).bind(λ more =>
-            rt_file_plan_links(k, names, w, links, Succ(now), rest, more)),
+            rt_file_plan_links(k, names, w, links, now + 1, rest, more)),
     }
 }
 

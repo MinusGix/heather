@@ -65,7 +65,6 @@ pub const CACHE_DIR_ENV: &str = "HEATHER_CACHE_DIR";
 
 /// The stores the suites and gates share, by name beneath [`store_root`].
 pub const SEMANTIC_TEST_IMAGES: &str = "semantic-test-images";
-pub const NATIVE_TEST_IMAGES: &str = "native-test-images";
 pub const CLI_CHECK_IMAGES: &str = "cli-check-images";
 pub const DECL_CACHE: &str = "decl-cache";
 

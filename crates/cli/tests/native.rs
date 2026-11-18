@@ -13,7 +13,7 @@ fn source_to_native_binary() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/x86-native/word_mix.hthr", "mix", "-o"])
-        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .arg(&assembly).args(heather_cli::showcase::native_image_args())
         .arg("--item-timings").arg(&tsv)
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
@@ -101,7 +101,7 @@ fn a_program_that_rests_on_an_axiom_is_not_certified() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "crates/cli/tests/fixtures/assumed_mix.hthr", "mix", "-o"])
-        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+        .arg(&assembly).args(heather_cli::showcase::native_image_args())
         .output().unwrap();
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(!result.status.success(), "certified over an axiom: {stderr}");

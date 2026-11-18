@@ -329,9 +329,9 @@ fn Rat::recip_parts(a: Int, d: Pos<Nat>) → Rat {
     match a {
         OfNat(n) => match n {
             Zero => 0,
-            Succ(k) => Rat(d.int(), Succ(k)),
+            Succ(k) => Rat(d.int(), k + 1),
         },
-        NegSucc(k) => Rat(-d.int(), Succ(k)),
+        NegSucc(k) => Rat(-d.int(), k + 1),
     }
 }
 
@@ -908,7 +908,7 @@ theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
 // Cauchy-sequence probes measure distances in; its denominator is a `Succ`,
 // so its positivity computes and no side condition rides along.
 
-fn Rat::inv_succ(n: Nat) → Rat { Rat(1, Succ(n)) }
+fn Rat::inv_succ(n: Nat) → Rat { Rat(1, n + 1) }
 
 // What `ring` clears `inv_succ(n)` with: it is the reciprocal of `n + 1`
 // (docs/tactics/ring-normalization-design.md §9).
@@ -1099,7 +1099,7 @@ theorem Rat::abs_le_natAbs(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.num.natAb
 
 // The least whole number above a rational's size, `⌊|num| / den⌋ + 1`: a
 // bound on `|x|` that stays small when the numerator is large.
-fn Rat::abs_ceil(self x: Rat) → Nat { Succ(x.num.natAbs().ldiv(x.den).quot()) }
+fn Rat::abs_ceil(self x: Rat) → Nat { x.num.natAbs().ldiv(x.den).quot() + 1 }
 
 theorem Rat::abs_le_abs_ceil(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.abs_ceil())) {
     let n = x.num.natAbs();
@@ -1795,7 +1795,7 @@ fn Rat::PowOk(x: Rat, n: Int) → Type {
 fn Rat::pow_parts(x: Rat, n: Int) → (x.PowOk(n) → Rat) {
     match n {
         OfNat(m) => λ _ => x.npow(m),
-        NegSucc(k) => λ h => x.inv(h := h).npow(Succ(k)),
+        NegSucc(k) => λ h => x.inv(h := h).npow(k + 1),
     }
 }
 

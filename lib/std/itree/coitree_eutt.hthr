@@ -170,10 +170,10 @@ fn Eutt::peel_l<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E),
     h: CoTree::after(E, k, t) = OTau(s), e: Eutt<R>(E, s, u)) → Eutt<R>(E, t, u)
 {
     match e {
-        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
-        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
+        ERet(nl, nr, r, hs, hu) => ERet(nl + k + 1, nr, r, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
+        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(nl + k + 1, nr, s2, u2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
         EVis(nl, nr, c, k1, k2, hs, hu, n) =>
-            EVis(Succ(nl + k), nr, c, k1, k2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
+            EVis(nl + k + 1, nr, c, k1, k2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
     }
 }
 
@@ -306,11 +306,11 @@ fn Eutt::trans<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), v: CoTree<R>(E), 
         ETau(nl, nr, t2, u2, ht, hu, n) => match Eutt::drop_l(E, u, u2, v, b, nr, hu) {
             ERet(nl3, nr3, r, hu2, hv) => {
                 let w: EuttRetAt<R>(E, t2, r) = Eutt::to(E, u2, t2, Eutt::sym(E, t2, u2, n), ORet(r), trivial, nl3, hu2);
-                ERet(Succ(w.m + nl), nr3, r, CoTree::after_via(E, nl, w.m, t, t2, ORet(r), ht, w.at), hv)
+                ERet(w.m + nl + 1, nr3, r, CoTree::after_via(E, nl, w.m, t, t2, ORet(r), ht, w.at), hv)
             },
             EVis(nl3, nr3, c, k1, k2, hu2, hv, nx) => {
                 let w: EuttVisAt<R>(E, t2, c, k1) = Eutt::to(E, u2, t2, Eutt::sym(E, t2, u2, n), OVis(c, k1), trivial, nl3, hu2);
-                EVis(Succ(w.m + nl), nr3, c, w.k2, k2, CoTree::after_via(E, nl, w.m, t, t2, OVis(c, w.k2), ht, w.at), hv,
+                EVis(w.m + nl + 1, nr3, c, w.k2, k2, CoTree::after_via(E, nl, w.m, t, t2, OVis(c, w.k2), ht, w.at), hv,
                     λ x => Eutt::trans(E, w.k2(x), k1(x), k2(x), Eutt::sym(E, k1(x), w.k2(x), w.next(x)), nx(x)))
             },
             ETau(nl3, nr3, u3, v3, hu3, hv3, nx) =>

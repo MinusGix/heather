@@ -248,7 +248,7 @@ fn Plan::past_test(self plan: Plan) → Plan {
 
 // The comparisons a test makes: what it costs where it passes.
 fn nodes_compare(nodes: List<Node>) → Nat {
-    match nodes { Nil => 0, Cons(node, rest) => match node { UnsignedLessThan(_, _, _, _) => Succ(nodes_compare(rest)), _ => nodes_compare(rest) } }
+    match nodes { Nil => 0, Cons(node, rest) => match node { UnsignedLessThan(_, _, _, _) => nodes_compare(rest) + 1, _ => nodes_compare(rest) } }
 }
 
 // The function reading through its copies and repeats, where that plan is
@@ -298,7 +298,7 @@ fn asked_leaves(asked: List<Asked>, after, by: Nat) → List<List<Node>> {
     match asked {
         Nil => [],
         Cons(want, rest) => match want.after.same(after) {
-            True => Cons([WideLoad(4, by, want.buffer, want.at), ByteSwap(32, Succ(by), by), Resize(32, 64, Succ(Succ(by)), Succ(by))],
+            True => Cons([WideLoad(4, by, want.buffer, want.at), ByteSwap(32, by + 1, by), Resize(32, 64, by + 2, by + 1)],
                 asked_leaves(rest, after, by + 3)),
             False => asked_leaves(rest, after, by),
         },
@@ -323,7 +323,7 @@ fn StructuredRegion::worded(self region: StructuredRegion, asked: List<Asked>, b
     match region {
         Dataflow(body) => match nodes_asked(body.nodes, asked, by) {
             Nil => Worded(Stay, by),
-            Cons(leaf, leaves) => Worded(Put(3 * Succ(leaves.len()), Cons(leaf, leaves)), by + 3 * Succ(leaves.len())),
+            Cons(leaf, leaves) => Worded(Put(3 * (leaves.len() + 1), Cons(leaf, leaves)), by + 3 * (leaves.len() + 1)),
         },
         Sequence(_, continuation) => shared(continuation.worded(asked, by), λ c => Worded(Then(c.sites), c.bound)),
         Compose(prefix, continuation) => shared(prefix.worded(asked, by), λ a =>
@@ -337,7 +337,7 @@ fn StructuredRegion::worded(self region: StructuredRegion, asked: List<Asked>, b
 }
 
 fn nodes_byte_loads(nodes: List<Node>) → Nat {
-    match nodes { Nil => 0, Cons(node, rest) => match node { BufferLoad(_, _, _) => Succ(nodes_byte_loads(rest)), _ => nodes_byte_loads(rest) } }
+    match nodes { Nil => 0, Cons(node, rest) => match node { BufferLoad(_, _, _) => nodes_byte_loads(rest) + 1, _ => nodes_byte_loads(rest) } }
 }
 
 // The byte loads of a region.
@@ -398,7 +398,7 @@ fn helpers_leaves(asked: List<Helper>, by: Nat) → List<List<Node>> {
     match asked {
         Nil => [],
         Cons(helper, rest) => match helper.waits {
-            Nil => Cons([helper.node.writing_to(by)], helpers_leaves(rest, Succ(by))),
+            Nil => Cons([helper.node.writing_to(by)], helpers_leaves(rest, by + 1)),
             Cons(_, _) => helpers_leaves(rest, by),
         },
     }
@@ -421,7 +421,7 @@ fn StructuredRegion::helped(self region: StructuredRegion, asked: List<Helper>, 
     match region {
         Dataflow(body) => shared(helpers_passing(asked, body.nodes), λ passed => match helpers_leaves(passed, by) {
             Nil => Helping(Stay, by, passed),
-            Cons(leaf, leaves) => Helping(Put(Succ(leaves.len()), Cons(leaf, leaves)), by + Succ(leaves.len()), helpers_waiting(passed)),
+            Cons(leaf, leaves) => Helping(Put(leaves.len() + 1, Cons(leaf, leaves)), by + (leaves.len() + 1), helpers_waiting(passed)),
         }),
         Sequence(prefix, continuation) => shared(continuation.helped(helpers_passing(asked, prefix.nodes), by), λ c => Helping(Then(c.sites), c.bound, c.asked)),
         Compose(prefix, continuation) => shared(prefix.helped(asked, by), λ a =>
@@ -515,8 +515,8 @@ fn stores_at(nodes: List<Node>, at: Nat) → List<StoreAt> {
     match nodes {
         Nil => [],
         Cons(node, rest) => match node {
-            BufferStore(o, f, i, v) => Cons(StoreAt(at, f, Stored(o, i, v)), stores_at(rest, Succ(at))),
-            _ => stores_at(rest, Succ(at)),
+            BufferStore(o, f, i, v) => Cons(StoreAt(at, f, Stored(o, i, v)), stores_at(rest, at + 1)),
+            _ => stores_at(rest, at + 1),
         },
     }
 }
@@ -640,7 +640,7 @@ record LeafCut { before: List<Nat>, start: Nat, end: Nat, after: List<Nat> }
 fn cut_at(sizes: List<Nat>, at, start: Nat) → LeafCut {
     match sizes {
         Nil => LeafCut([], start, start, []),
-        Cons(size, rest) => match Succ(at).leb(start + size) {
+        Cons(size, rest) => match (at + 1).leb(start + size) {
             True => LeafCut([], start, start + size, rest),
             False => shared(cut_at(rest, at, start + size), λ later => LeafCut(Cons(size, later.before), later.start, later.end, later.after)),
         },
@@ -652,8 +652,8 @@ fn cut_at(sizes: List<Nat>, at, start: Nat) → LeafCut {
 // four bytes at the first store's index. Ids from `by`.
 fn StoreGroup::put(self group: StoreGroup, by: Nat) → List<Node> {
     match group.swapped {
-        True => [Resize(64, 32, by, group.word), ByteSwap(32, Succ(by), by), WideLoad(4, Succ(Succ(by)), group.buffer, group.first.index)],
-        False => [Resize(64, 32, by, group.word), WideLoad(4, Succ(by), group.buffer, group.first.index)],
+        True => [Resize(64, 32, by, group.word), ByteSwap(32, by + 1, by), WideLoad(4, by + 2, group.buffer, group.first.index)],
+        False => [Resize(64, 32, by, group.word), WideLoad(4, by + 1, group.buffer, group.first.index)],
     }
 }
 
@@ -730,15 +730,15 @@ fn swap_of(nodes: List<Node>, half: Nat) → Option<Nat> {
 }
 
 fn first_unpure(nodes: List<Node>, at: Nat) → Option<Nat> {
-    match nodes { Nil => None, Cons(node, rest) => match node.pure() { True => first_unpure(rest, Succ(at)), False => Some(at) } }
+    match nodes { Nil => None, Cons(node, rest) => match node.pure() { True => first_unpure(rest, at + 1), False => Some(at) } }
 }
 
 fn StoreGroup::paying(self group: StoreGroup, nodes: List<Node>) → Option<Paying> {
-    shared(nodes.drop(Succ(group.last)), λ after => first_unpure(after, Succ(group.last)).and_then(λ load => match nodes.drop(load) {
+    shared(nodes.drop(group.last + 1), λ after => first_unpure(after, group.last + 1).and_then(λ load => match nodes.drop(load) {
         Nil => None,
         Cons(node, _) => match node {
             WideLoad(bytes, q, f, i) => ((bytes.same(4) && f.same(group.buffer)) && i.same(group.first.index)).then(
-                shared(nodes.take(load).drop(Succ(group.last)), λ between => half_of(between, group.word).and_then(λ half => match group.swapped {
+                shared(nodes.take(load).drop(group.last + 1), λ between => half_of(between, group.word).and_then(λ half => match group.swapped {
                     True => swap_of(between, half).map(λ value => Paying(load, q, half, value)),
                     False => Some(Paying(load, q, half, half)),
                 }))),
@@ -766,7 +766,7 @@ fn flat_paid(region: StructuredRegion, nodes: List<Node>) → Option<Plan> {
         shared(region.leaf_sizes(), λ sizes => shared(cut_at(sizes, group.at, 0), λ first => shared(cut_at(sizes, paying.load, 0), λ last =>
             Some(Flat(List::replicate(Keep, group.at) ++ [Holding(lates_of(nodes.take(paying.load).drop(group.at)) ++ (group.why ++ [group.split(paying)]),
                 Together(Four(group.buffer, paying.loaded, paying.value, group.first, group.second, group.third, group.fourth)))],
-                first.before ++ (Cons((paying.load + 1) - (first.start + 4), Cons(last.end - Succ(paying.load), last.after))))))))))
+                first.before ++ (Cons((paying.load + 1) - (first.start + 4), Cons(last.end - (paying.load + 1), last.after))))))))))
 }
 
 // A plan that keeps and learns every node, with a flat run that holds four

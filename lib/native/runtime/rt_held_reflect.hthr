@@ -446,8 +446,8 @@ fn rt_held_elements(fuel: Nat, k: Known, st: RSt, fname: String, e: HeldEach, va
             match same {
                 True => rt_held_elements(fuel, k, st, fname, e, value, rest),
                 False => {
-                    let what = "element " ++ decimal_name(Succ(i), i) ++ " of field `" ++ fname ++ "`";
-                    let entry <- rt_held_entry(Succ(Succ(i)), what, new);
+                    let what = "element " ++ decimal_name(i + 1, i) ++ " of field `" ++ fname ++ "`";
+                    let entry <- rt_held_entry(i + 2, what, new);
                     let word <- next_spelling(App(e.wide, Hd(entry))).bind(λ c => rt_accepted("the new value of " ++ what ++ " as a word", c));
                     let r <- rt_go(fuel, k, st, word, True);
                     let reads <- e.term.reads(i);
@@ -481,7 +481,7 @@ fn rt_held_stores(fuel: Nat, k: Known, w: HeldStored, sets: List<HeldSet>) → T
                 let ra <- rt_go(fuel, k, w.st, s.at, True);
                 let st = ra.fst;
                 rt_held_stores(fuel, k,
-                    HeldStored(st.written(Succ(st.depth)),
+                    HeldStored(st.written(st.depth + 1),
                         Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(ra.snd)), st.index(s.level)]), FSeg::lets(st.lets) ++ w.segs), found.fst),
                     rest)
             },
@@ -491,7 +491,7 @@ fn rt_held_stores(fuel: Nat, k: Known, w: HeldStored, sets: List<HeldSet>) → T
                 let rc <- rt_go(fuel, k, rb.fst, x.count, True);
                 let st = rc.fst;
                 rt_held_stores(fuel, k,
-                    HeldStored(st.written(Succ(st.depth)),
+                    HeldStored(st.written(st.depth + 1),
                         Cons(FCall(found.snd, [st.index(0), st.index(1), st.index(RSt::level(rb.snd)), st.index(RSt::level(rc.snd)), st.index(x.level), st.index(s.level)]),
                             FSeg::lets(st.lets) ++ w.segs), found.fst),
                     rest)
@@ -524,7 +524,7 @@ fn rt_held_own(fuel: Nat, k: Known, record: Nat, settled: Bool, h: Handle, base:
 // where that element lies, with no test, as an element of an array
 // written out is stored.
 fn rt_held_at_numeral(fuel: Nat, k: Known, under: LocalRef, fname: String, e: HeldEach, o: Pair<RSt, List<HeldSet>>, i: Nat, x: Handle) → Tac<Option<Pair<RSt, List<HeldSet>>>> {
-    let what = "element " ++ decimal_name(Succ(i), i) ++ " of field `" ++ fname ++ "`";
+    let what = "element " ++ decimal_name(i + 1, i) ++ " of field `" ++ fname ++ "`";
     let rv <- rt_go(fuel, k, o.fst, x, True);
     let v <- assume(e.ty, "value", Some(under)).bind(λ c => rt_accepted("an element's new value's local", c));
     let as_word <- next_spelling(rt_ap(e.wide, [Local(v.ref)])).bind(λ c => rt_accepted("an element's new value as a word", c));
@@ -617,7 +617,7 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
                         // A numeral index inside the count is the element's
                         // own store.
                         None => view(u.snd.fst).bind(λ iv => match iv {
-                            HLit(n) => match Succ(n).leb(e.term.count) {
+                            HLit(n) => match (n + 1).leb(e.term.count) {
                                 False => pure(None),
                                 True => rt_held_indexed(f, k, st, record, settled, under, base, fname, e, u.fst).bind(λ inner => match inner {
                                     None => pure(None),
@@ -910,7 +910,7 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                                     None => Pair(stored.cfuns ++ [callee.bytes], stored.cfuns.len()),
                                 };
                                 let st = stored.st;
-                                pure(HeldOut(HeldWalk(st.written(Succ(st.depth)).forgetting(cx.terms()),
+                                pure(HeldOut(HeldWalk(st.written(st.depth + 1).forgetting(cx.terms()),
                                     Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(ops.snd)))), FSeg::lets(st.lets) ++ stored.segs),
                                     found.fst, ready.w.calls ++ [CallRes(ready.w.calls.len(), g.id, x, Some(st.depth), [])], Some(x), HeldCall::add(ready.w.held, callee)), []))
                             },
@@ -938,7 +938,7 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                         True => view(p.fst).bind(λ cv => match cv {
                             HGlobal(g, _, _) => rt_held_made(w.calls, g.id, p.fst).bind(λ made => match made {
                                 None => rt_held_do(f, cx, w, Make(p.fst)),
-                                Some(c) => match Succ(c.pos).same(w.calls.len()) { True => pure(HeldOut(w, [])), False => rt_held_earlier() },
+                                Some(c) => match (c.pos + 1).same(w.calls.len()) { True => pure(HeldOut(w, [])), False => rt_held_earlier() },
                             }),
                             _ => rt_held_built(),
                         }),
@@ -1058,7 +1058,7 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
                 let call <- rt_held_made(made.w.calls, g.id, h);
                 match call {
                     None => rt_held_uncompiled(name),
-                    Some(c) => match Succ(c.pos).same(made.w.calls.len()) {
+                    Some(c) => match (c.pos + 1).same(made.w.calls.len()) {
                         False => rt_held_earlier(),
                         True => pure(rt_held_answer(made.w, made.w.st, made.w.segs, made.w.cfuns, c.value.unwrap_or(0))),
                     },
@@ -1113,7 +1113,7 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
                     False => rt_held_takes(),
                     True => {
                         let o <- open(h, "x").bind(λ c => rt_accepted("a parameter", c));
-                        let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref, spans && length, False);
+                        let more <- rt_held_words(f, k, o.body, level + 1, o.local.ref, spans && length, False);
                         pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans))
                     },
                 },
@@ -1123,8 +1123,8 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
                     False => rt_held_takes(),
                     True => {
                         let o <- open(h, "span").bind(λ c => rt_accepted("a span parameter", c));
-                        let more <- rt_held_words(f, k, o.body, Succ(level), o.local.ref, True, True);
-                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, Succ(more.spans)))
+                        let more <- rt_held_words(f, k, o.body, level + 1, o.local.ref, True, True);
+                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans + 1))
                     },
                 },
                 _ => rt_held_takes(),
@@ -1207,7 +1207,7 @@ fn rt_held_reached(fs: List<HeldField>, offsets: List<Nat>) → List<HeldField> 
         Cons(f, rest) => match f.each {
             None => rt_held_reached(rest, offsets),
             Some(e) => List::range(e.term.count).filter(λ i => rt_held_has(offsets, e.term.base + i * e.term.stride))
-                .map(λ i => HeldField(f.name ++ "[" ++ decimal_name(Succ(i), i) ++ "]", f.at, Some(e.access(i)), None)) ++ rt_held_reached(rest, offsets),
+                .map(λ i => HeldField(f.name ++ "[" ++ decimal_name(i + 1, i) ++ "]", f.at, Some(e.access(i)), None)) ++ rt_held_reached(rest, offsets),
         },
     }
 }
@@ -1260,7 +1260,7 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
     let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
     let hf <- rt_held_fields(tname, o.local, stored, ctor.fields, Local(span.ref), Local(length.ref), length.ref);
-    let cx = HeldCx(k.lending(Succ(ws.spans)), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
+    let cx = HeldCx(k.lending(ws.spans + 1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
     let st = RSt(2 + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), ws.bound)), k.funs);
     let w = HeldWalk(st, [], [], [], None, []);
     // A function that only reads the record is one value, its branches
@@ -1296,6 +1296,6 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
         },
     };
     let fs <- fields;
-    pure(HeldReflected(FFun(params, result.snd, r.term, Succ(ws.spans)), r.funs, r.cfuns, record_t, tname, stored,
+    pure(HeldReflected(FFun(params, result.snd, r.term, ws.spans + 1), r.funs, r.cfuns, record_t, tname, stored,
         fs ++ rt_held_reached(fs, rt_held_offsets(r.term, [], called)), ws.locals.len(), result.fst, r.held, match en.snd { None => False, Some(_) => True }, ws.spans))
 }

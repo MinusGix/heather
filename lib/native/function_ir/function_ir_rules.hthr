@@ -584,6 +584,69 @@ fn testing() → List<Matchable> {
 // ---------------------------------------------------------------------------
 // The tables of one compilation
 
+// The rules of a table that could fit a node of each kind, in the table's
+// order: the rules whose statement has that kind at its head, and those
+// with no head. A walk asks at every node, and a searching walk several
+// times over, so what it asks is the few rules of the node's kind and not
+// the whole table with each rule answering that it does not fit.
+fn matchables_fitting(table: List<Matchable>, kind: Nat) → List<Matchable> {
+    match table {
+        Nil => [],
+        Cons(m, rest) => match (match m.head { None => True, Some(k) => k.same(kind) }) {
+            True => Cons(m, matchables_fitting(rest, kind)),
+            False => matchables_fitting(rest, kind),
+        },
+    }
+}
+
+fn matchables_by(table: List<Matchable>, kinds: Nat, by: NatMap<List<Matchable>>) → NatMap<List<Matchable>> {
+    match kinds { Zero => by, Succ(kind) => matchables_by(table, kind, nat_map_set(by, kind, matchables_fitting(table, kind))) }
+}
+
+// The kinds of the nodes a rule reads past the one it is read at: `(a + b)
+// - b = a`, read at a difference, reads a sum.
+fn premises_kinds(premises: List<PatternFact>, anchor: Option<Nat>) → List<Nat> {
+    match premises {
+        Nil => [],
+        Cons(premise, rest) => match premise {
+            Makes(kind, _, _) => match (match premise.about() { None => False, Some(k) => match anchor { None => False, Some(a) => k.same(a) } }) {
+                True => premises_kinds(rest, anchor),
+                False => Cons(kind, premises_kinds(rest, anchor)),
+            },
+            _ => premises_kinds(rest, anchor),
+        },
+    }
+}
+
+fn matchables_reading(table: List<Matchable>) → List<Nat> {
+    match table { Nil => [], Cons(m, rest) => premises_kinds(m.pattern.premises, m.anchor) ++ matchables_reading(rest) }
+}
+
+fn kinds_read(fitting: NatMap<List<Matchable>>, kinds: Nat, by: NatMap<List<Nat>>) → NatMap<List<Nat>> {
+    match kinds {
+        Zero => by,
+        Succ(kind) => kinds_read(fitting, kind, nat_map_set(by, kind, match nat_map_get(fitting, kind) { None => [], Some(table) => matchables_reading(table) })),
+    }
+}
+
+fn kinds_have(kinds: List<Nat>, kind: Nat) → Bool { match kinds { Nil => False, Cons(first, rest) => first.same(kind) || kinds_have(rest, kind) } }
+
+// How many kinds of node there are (`Node::kind`, function_ir_match).
+fn node_kinds() → Nat { 22 }
+
+record ByKind { rewriting: NatMap<List<Matchable>>, ranging: NatMap<List<Matchable>>, testing: NatMap<List<Matchable>>,
+    // For a kind of node, the kinds of the nodes the rewriting rules that
+    // fit it read past it.
+    reads: NatMap<List<Nat>> }
+
+fn ByKind::none() → ByKind { ByKind(NatMap::empty(), NatMap::empty(), NatMap::empty(), NatMap::empty()) }
+
+fn ByKind::of(rewriting, ranging, testing: List<Matchable>) → ByKind {
+    shared(matchables_by(rewriting, node_kinds(), NatMap::empty()), λ fitting =>
+        ByKind(fitting, matchables_by(ranging, node_kinds(), NatMap::empty()), matchables_by(testing, node_kinds(), NatMap::empty()),
+            kinds_read(fitting, node_kinds(), NatMap::empty())))
+}
+
 // The library's rules in their places, then the rules registered from
 // anywhere else (`RuleEntry`, function_ir_rule), in the order they are
 // listed; and of those, the ones the search applies by matching: a rule
@@ -602,7 +665,28 @@ record Tables { rules: List<Rule>, rewriting: List<Matchable>, ranging: List<Mat
     // work. `lending` are then the rules that could want one
     // (`RulePattern::lends`, function_ir_match): few, so a node is tried
     // against those alone.
-    asking: Nat, lending: List<Matchable> }
+    asking: Nat, lending: List<Matchable>,
+    // The three tables by the kind of node a rule fits (`ByKind`).
+    by: ByKind }
+
+fn Tables::rewriting_at(self tables: Tables, node: Node) → List<Matchable> {
+    match nat_map_get(tables.by.rewriting, node.kind()) { Some(fitting) => fitting, None => tables.rewriting }
+}
+
+// Whether some rule read at `node` reads a node of the kind of `inner`:
+// where none does, no other spelling of the word `inner` writes gives
+// `node` an instance it does not have. With no table by kind, it may.
+fn Tables::reads_through(self tables: Tables, node: Node, inner: Node) → Bool {
+    match nat_map_get(tables.by.reads, node.kind()) { None => True, Some(kinds) => kinds_have(kinds, inner.kind()) }
+}
+
+fn Tables::ranging_at(self tables: Tables, node: Node) → List<Matchable> {
+    match nat_map_get(tables.by.ranging, node.kind()) { Some(fitting) => fitting, None => tables.ranging }
+}
+
+fn Tables::testing_at(self tables: Tables, node: Node) → List<Matchable> {
+    match nat_map_get(tables.by.testing, node.kind()) { Some(fitting) => fitting, None => tables.testing }
+}
 
 fn entries_added(entries: List<RuleEntry>) → List<RuleEntry> {
     match entries {
@@ -615,8 +699,8 @@ fn entries_rewriting(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
     match entries {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
-            Makes(_, _, _) => Cons(entry.at(place), entries_rewriting(rest, Succ(place))),
-            _ => entries_rewriting(rest, Succ(place)),
+            Makes(_, _, _) => Cons(entry.at(place), entries_rewriting(rest, place + 1)),
+            _ => entries_rewriting(rest, place + 1),
         },
     }
 }
@@ -629,10 +713,10 @@ fn entries_ranging(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
             Ranges(_, _, _) => match entry.pattern.head() {
-                Some(_) => Cons(entry.at(place), entries_ranging(rest, Succ(place))),
-                None => entries_ranging(rest, Succ(place)),
+                Some(_) => Cons(entry.at(place), entries_ranging(rest, place + 1)),
+                None => entries_ranging(rest, place + 1),
             },
-            _ => entries_ranging(rest, Succ(place)),
+            _ => entries_ranging(rest, place + 1),
         },
     }
 }
@@ -642,13 +726,13 @@ fn entries_testing(entries: List<RuleEntry>, place: Nat) → List<Matchable> {
         Nil => [],
         Cons(entry, rest) => match entry.pattern.conclusion {
             Ranges(_, _, _) => match entry.pattern.head() {
-                Some(_) => entries_testing(rest, Succ(place)),
+                Some(_) => entries_testing(rest, place + 1),
                 None => match entry.pattern.tested() {
-                    Some(_) => Cons(entry.at_test(place), entries_testing(rest, Succ(place))),
-                    None => entries_testing(rest, Succ(place)),
+                    Some(_) => Cons(entry.at_test(place), entries_testing(rest, place + 1)),
+                    None => entries_testing(rest, place + 1),
                 },
             },
-            _ => entries_testing(rest, Succ(place)),
+            _ => entries_testing(rest, place + 1),
         },
     }
 }
@@ -661,12 +745,14 @@ fn rules_with(entries: List<RuleEntry>) → List<Rule> { rules() ++ entries_rule
 
 fn Tables::of(entries: List<RuleEntry>, learners: List<Learner>) → Tables {
     shared(entries_added(entries), λ added => shared(rules(), λ library => shared(library.len(), λ first =>
-        Tables(library ++ entries_rules(added), matchable() ++ entries_rewriting(added, first), ranging() ++ entries_ranging(added, first),
-            testing() ++ entries_testing(added, first), entries_placed(entries), learners, 0, NatMap::empty(), 0, []))))
+        shared(matchable() ++ entries_rewriting(added, first), λ rewriting => shared(ranging() ++ entries_ranging(added, first), λ ranges =>
+            shared(testing() ++ entries_testing(added, first), λ tests =>
+                Tables(library ++ entries_rules(added), rewriting, ranges, tests, entries_placed(entries), learners, 0, NatMap::empty(), 0, [],
+                    ByKind::of(rewriting, ranges, tests))))))))
 }
 
 fn Tables::searching(self tables: Tables, spellings: Nat) → Tables {
-    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings, tables.reads, tables.asking, tables.lending)
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, spellings, tables.reads, tables.asking, tables.lending, tables.by)
 }
 
 fn matchables_lending(table: List<Matchable>) → List<Matchable> {
@@ -678,9 +764,9 @@ fn matchables_lending(table: List<Matchable>) → List<Matchable> {
 
 fn Tables::asking_for(self tables: Tables, asking: Nat) → Tables {
     Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, tables.reads, asking,
-        match asking { Zero => [], Succ(_) => matchables_lending(tables.rewriting) })
+        match asking { Zero => [], Succ(_) => matchables_lending(tables.rewriting) }, tables.by)
 }
 
 fn Tables::reading(self tables: Tables, reads: NatMap<Nat>) → Tables {
-    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, reads, tables.asking, tables.lending)
+    Tables(tables.rules, tables.rewriting, tables.ranging, tables.testing, tables.placed, tables.learners, tables.spellings, reads, tables.asking, tables.lending, tables.by)
 }

@@ -121,7 +121,7 @@ theorem Regex::rep_side(bs: List<Nat>, c: Nat): Regex::SameSide(bs, Regex::rep(b
 // Every range of `r` starts on a breakpoint and ends just before one.
 fn Regex::cut_by(self r: Regex, bs: List<Nat>) → Bool {
     match r {
-        Range(lo, hi) => bs.any_bit(λ b => b.same(lo)) && bs.any_bit(λ b => b.same(Succ(hi))),
+        Range(lo, hi) => bs.any_bit(λ b => b.same(lo)) && bs.any_bit(λ b => b.same(hi + 1)),
         Seq(a, b) => a.cut_by(bs) && b.cut_by(bs),
         Alt(a, b) => a.cut_by(bs) && b.cut_by(bs),
         Star(s) => s.cut_by(bs),
@@ -334,7 +334,7 @@ fn Regex::add_cut(bs: List<Nat>, b: Nat) → List<Nat> {
 // Where the ranges of `r` start, and one past where they end.
 fn Regex::cuts(self r: Regex, acc: List<Nat>) → List<Nat> {
     match r {
-        Range(lo, hi) => Regex::add_cut(Regex::add_cut(acc, lo), Succ(hi)),
+        Range(lo, hi) => Regex::add_cut(Regex::add_cut(acc, lo), hi + 1),
         Seq(a, b) => b.cuts(a.cuts(acc)),
         Alt(a, b) => b.cuts(a.cuts(acc)),
         Star(s) => s.cuts(acc),
@@ -347,7 +347,7 @@ fn Regex::index_in(states: List<Regex>, r: Regex) → Option<Nat> {
         Nil => None,
         Cons(q, t) => match q.eqb(r) {
             True => Some(0),
-            False => match Regex::index_in(t, r) { None => None, Some(i) => Some(Succ(i)) },
+            False => match Regex::index_in(t, r) { None => None, Some(i) => Some(i + 1) },
         },
     }
 }
@@ -363,7 +363,7 @@ fn Regex::explore(fuel: Nat, reps: List<Nat>, states: List<Regex>, i: Nat) → L
         Zero => states,
         Succ(k) => match states.nth(i) {
             None => states,
-            Some(q) => Regex::explore(k, reps, reps.foldl(λ acc p => Regex::add_state(acc, q.deriv_simp(p)), states), Succ(i)),
+            Some(q) => Regex::explore(k, reps, reps.foldl(λ acc p => Regex::add_state(acc, q.deriv_simp(p)), states), i + 1),
         },
     }
 }
@@ -376,7 +376,7 @@ fn Regex::class_rep(bs: List<Nat>, k: Nat) → Nat {
 // A derivative the search did not reach gets a row number past the table,
 // which the check refuses.
 fn Regex::row_of(bs: List<Nat>, states: List<Regex>, q: Regex) → Row {
-    Row(q, q.nullable(), List::range(Succ(bs.len())).map(λ k =>
+    Row(q, q.nullable(), List::range(bs.len() + 1).map(λ k =>
         Regex::index_in(states, q.deriv_simp(Regex::class_rep(bs, k))).unwrap_or(states.len())))
 }
 

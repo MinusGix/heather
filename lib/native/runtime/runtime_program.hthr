@@ -238,7 +238,7 @@ fn program_arity(fuel: Nat, t: Handle) → Tac<Nat> {
         Zero => pure(0),
         Succ(fl) => view(t).bind(λ v => match v {
             HPi(_) => open(t, "x").bind(λ c => match c {
-                Accepted(o) => program_arity(fl, o.body).bind(λ n => pure(Succ(n))),
+                Accepted(o) => program_arity(fl, o.body).bind(λ n => pure(n + 1)),
                 Refused(_) => pure(0),
             }),
             _ => pure(0),

@@ -537,7 +537,7 @@ theorem view_home(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buf
 
 // The views' homes as the callee numbers them: view `k` is its buffer `k`.
 fn views_lents_from(views: List<View>, k: Nat) → List<Lent> {
-    match views { Nil => [], Cons(view, rest) => Cons(Lent(k, view.base, view.length), views_lents_from(rest, Succ(k))) }
+    match views { Nil => [], Cons(view, rest) => Cons(Lent(k, view.base, view.length), views_lents_from(rest, k + 1)) }
 }
 
 fn views_lents(views: List<View>) → List<Lent> { views_lents_from(views, 0) }

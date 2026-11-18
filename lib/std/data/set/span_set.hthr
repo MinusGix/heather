@@ -41,7 +41,7 @@ fn Span::end(self s: Span) → Nat { s.base + s.len }
 // others (a meet, a cut, a piece) state their Boolean identity over
 // `covers` at the spelled endpoints, which `omega` reads, and convert to
 // `has` of the built span, whose fields `omega` would leave as atoms.
-fn Span::covers(base, len, x: Nat) → Bool { base.leb(x) && Succ(x).leb(base + len) }
+fn Span::covers(base, len, x: Nat) → Bool { base.leb(x) && (x + 1).leb(base + len) }
 
 fn Span::has(self s: Span, x: Nat) → Bool { Span::covers(s.base, s.len, x) }
 

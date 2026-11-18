@@ -11,7 +11,7 @@ inductive Acc<P>: (a: P) → Type {
 }
 
 fn Acc::depth<P>(a: P, x: Acc<P>(a)) → Nat {
-    match x { Stop(_) => 0, Step(_, b, c) => Succ(Acc::depth(b, c)) }
+    match x { Stop(_) => 0, Step(_, b, c) => Acc::depth(b, c) + 1 }
 }
 
 fn two_steps(n: Nat) → Acc<Nat>(n) { Step(n, 0, Step(0, 7, Stop(7))) }

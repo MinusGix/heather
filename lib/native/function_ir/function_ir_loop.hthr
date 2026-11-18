@@ -42,12 +42,12 @@ fn loop_run<C>(budget: Nat) → ReadonlyLoop<C> → ReadonlyBytes → BitVec(8) 
             },
         Succ(rest) => λ region buffer needle cursor carry =>
             match buffer.length.leb(cursor) {
-                True => End(cursor, Succ(rest), carry),
+                True => End(cursor, rest + 1, carry),
                 False => match buffer.read(buffer.base + cursor) {
-                    None => Denied(cursor, Succ(rest), carry),
+                    None => Denied(cursor, rest + 1, carry),
                     Some(byte) => match region.body(needle, cursor, byte, carry) {
-                        Continue(next) => loop_run(rest, region, buffer, needle, Succ(cursor), next),
-                        Break(result) => Early(Succ(cursor), rest, result),
+                        Continue(next) => loop_run(rest, region, buffer, needle, cursor + 1, next),
+                        Break(result) => Early(cursor + 1, rest, result),
                     },
                 },
             },
@@ -68,7 +68,7 @@ fn loop_step_breaks<C>(step: LoopStep<C>) → Bool {
 // client proves it about its own step; native lowering relies on it.
 fn LoopAdvancesByAtMostOne(region: ReadonlyLoop<Nat>) → Type {
     (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (count: Nat) →
-        loop_step_payload(region.body(needle, cursor, byte, count)) <= Succ(count)
+        loop_step_payload(region.body(needle, cursor, byte, count)) <= count + 1
 }
 
 // Source entry point: one resolved combinator, with an ordinary checked pure
@@ -151,21 +151,21 @@ theorem loop_successor<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBy
 fn loop_after_step<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, step: LoopStep<C>) → LoopOutcome<C> {
     match step {
-        Continue(next) => loop_run(rest, region, buffer, needle, Succ(cursor), next),
-        Break(result) => Early(Succ(cursor), rest, result),
+        Continue(next) => loop_run(rest, region, buffer, needle, cursor + 1, next),
+        Break(result) => Early(cursor + 1, rest, result),
     }
 }
 fn loop_after_read<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, read: Option<BitVec(8)>) → LoopOutcome<C> {
     match read {
-        None => Denied(cursor, Succ(rest), carry),
+        None => Denied(cursor, rest + 1, carry),
         Some(byte) => loop_after_step(rest, region, buffer, needle, cursor, region.body(needle, cursor, byte, carry)),
     }
 }
 fn loop_after_guard<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8),
     cursor: Nat, carry: C, ended: Bool) → LoopOutcome<C> {
     match ended {
-        True => End(cursor, Succ(rest), carry),
+        True => End(cursor, rest + 1, carry),
         False => loop_after_read(rest, region, buffer, needle, cursor, carry, buffer.read(buffer.base + cursor)),
     }
 }
@@ -359,8 +359,8 @@ fn counts_advance<C>(counts: List<C → Nat>) → C → C → Type {
     match counts {
         Nil => λ next carry => True,
         Cons(count, rest) => match rest {
-            Nil => λ next carry => count(next) <= Succ(count(carry)),
-            Cons(_, _) => λ next carry => (count(next) <= Succ(count(carry))) ∧ counts_advance(rest)(next, carry),
+            Nil => λ next carry => count(next) <= count(carry) + 1,
+            Cons(_, _) => λ next carry => (count(next) <= count(carry) + 1) ∧ counts_advance(rest)(next, carry),
         },
     }
 }

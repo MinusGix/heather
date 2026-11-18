@@ -8,7 +8,7 @@ import logic; import bool; import nat; import list;
 // The issue's shape: `d` descends, `n` is passed unchanged under a split on it.
 fn walk(d: Nat, n: Nat) → Nat {
     match d { Zero => 0, Succ(k) => match n {
-        Zero => walk(k, n), Succ(_) => Succ(walk(k, n)) } }
+        Zero => walk(k, n), Succ(_) => walk(k, n) + 1 } }
 }
 theorem walk_lit(): walk(24, 3) = 24 { refl }
 theorem walk_at_zero(): walk(5, 0) = 0 { refl }
@@ -18,7 +18,7 @@ theorem walk_at_zero(): walk(5, 0) = 0 { refl }
 // descending through the split.
 fn go(fuel: Nat, acc: Nat) → Nat {
     match fuel { Zero => acc, Succ(k) => match acc {
-        Zero => go(k, 1), Succ(_) => go(k, Succ(acc)) } }
+        Zero => go(k, 1), Succ(_) => go(k, acc + 1) } }
 }
 theorem go_lit(): go(3, 0) = 3 { refl }
 theorem go_from(): go(2, 7) = 9 { refl }
@@ -37,7 +37,7 @@ theorem twin_kept(): twin(3, 5) = 5 { refl }
 fn pick<A>(xs: List<A>, b: Bool, n: Nat) → Nat {
     match xs { Nil => n, Cons(_, t) => match b {
         True => pick(t, b, n), False => match n {
-            Zero => pick(t, b, n), Succ(_) => Succ(pick(t, b, n)) } } }
+            Zero => pick(t, b, n), Succ(_) => pick(t, b, n) + 1 } } }
 }
 theorem pick_true(): pick<Nat>([1, 2, 3], True, 4) = 4 { refl }
 theorem pick_false(): pick<Nat>([1, 2, 3], False, 4) = 7 { refl }
@@ -56,7 +56,7 @@ theorem walk_shape(d: Nat, n: Nat): walk(d, n) = (match n { Zero => 0, Succ(_) =
 // parameter.
 fn under(d: Nat, n: Nat) → Nat {
     match n { Zero => d, Succ(m) => match d {
-        Zero => under(d, m), Succ(_) => Succ(under(d, m)) } }
+        Zero => under(d, m), Succ(_) => under(d, m) + 1 } }
 }
 theorem under_lit(): under(1, 3) = 4 { refl }
 
