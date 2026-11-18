@@ -372,20 +372,6 @@ fn Layout::placed(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, 
 // The layout of a program's first activation: the region keeps its words' room.
 fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout::placed(low, words, words, capacities, homes) }
 
-// The procedures a statement performs, one entry a call.
-fn Stmt::performed(self s: Stmt) → List<Nat> {
-    match s {
-        Then(first, rest) => first.performed() ++ rest.performed(),
-        Branch(_, yes, no) => yes.performed() ++ no.performed(),
-        Repeat(body, _) => body.performed(),
-        Perform(index, _, _) => [index],
-        Compute(_) => [],
-        Invoke(_) => [],
-        Exit(_) => [],
-        Arg(_, _, _) => [],
-    }
-}
-
 // The procedures procedure `index`'s body performs.
 fn List::performed_by(self procedures: List<Procedure>, index: Nat) → List<Nat> {
     match procedures.nth(index) { None => [], Some(proc) => proc.body.performed() }
