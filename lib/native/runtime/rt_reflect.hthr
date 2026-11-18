@@ -53,7 +53,7 @@ import rt;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat) }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -1713,6 +1713,17 @@ fn rt_old_byte(f: Nat, k: Known, fk: FileKnown, st: RSt, h: Handle, operand: Boo
     }
 }
 
+// The length word of a record indexed by it, `n` of a `Bytes(n)`: read
+// off the record's type.
+fn rt_record_length(h: Handle) → Tac<Handle> {
+    let t <- infer(Hd(h)).bind(λ c => rt_accepted("a record's type", c));
+    let v <- view(t);
+    match v {
+        HGlobal(_, _, args) => match args { Cons(n, _) => pure(n), Nil => rt_refuse("a record with no length word in its type") },
+        _ => rt_refuse("a record with no length word in its type"),
+    }
+}
+
 fn rt_old_span<A>() → Tac<A> {
     rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
 }
@@ -1819,6 +1830,21 @@ fn rt_call_lent(fuel: Nat, k: Known, args: List<Handle>) → Tac<Nat> {
     }
 }
 
+// `bytes.byte_within(length, i)`: a byte of a lent span, under the
+// span's own length word; of the written span as it was before a store,
+// the byte bound before that store.
+fn rt_within(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, bytes, length, i: Handle,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>> {
+    rt_was_of(k, bytes).bind(λ was => match was {
+        Some(fs) => rt_old_byte(f, k, fs.fst, st, h, operand, fs.snd, length, i, step),
+        None => rt_span(k, st, bytes).bind(λ j =>
+            step(st, length).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
+                False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
+                True => step(rl.fst, i).bind(λ ri => pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
+            })),
+    })
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -1912,18 +1938,19 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         // `span.byte_within(length, i)`: a byte of a lent span,
                         // under the span's own length word.
                         PWithin => match args {
-                            // Of the written span as it was before a store, the
-                            // byte bound before that store.
-                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_was_of(k, bytes).bind(λ was => match was {
-                              Some(fs) => rt_old_byte(f, k, fs.fst, st, h, operand, fs.snd, length, i, λ s a => rt_go(f, k, s, a, True)),
-                              None => rt_span(k, st, bytes).bind(λ j =>
-                                rt_go(f, k, st, length, True).bind(λ rl => match RSt::level(rl.snd).same(j + j + 1) {
-                                    False => rt_refuse("`byte_within` under a word that is not the span's own length parameter"),
-                                    True => rt_go(f, k, rl.fst, i, True).bind(λ ri =>
-                                        pure(ri.fst.finish(h, operand, Byte(j, RSt::level(ri.snd), j + j + 1)))),
-                                })),
-                            }),
+                            Cons(bytes, Cons(length, Cons(i, Nil))) => rt_within(f, k, st, h, operand, bytes, length, i, λ s a => rt_go(f, k, s, a, True)),
                             _ => rt_refuse("`byte_within` without its span, length word and index"),
+                        },
+                        // `s.at(i)` of a `Bytes(n)`: its bytes' `byte_within`
+                        // under `n`, the word its type is indexed by.
+                        PAt => match args {
+                            Cons(bytes, Cons(i, _)) => rt_record_length(bytes).bind(λ length => rt_within(f, k, st, h, operand, bytes, length, i, λ s a => rt_go(f, k, s, a, True))),
+                            _ => rt_refuse("`at` without its record and index"),
+                        },
+                        // `s.len()` of a `Bytes(n)`: the word `n`.
+                        PLen => match args {
+                            Cons(bytes, _) => rt_record_length(bytes).bind(λ length => rt_go(f, k, st, length, operand)),
+                            Nil => rt_refuse("`len` without its record"),
                         },
                         // `~x`: all ones, then `all_ones ⊕ x` (the literal on
                         // the left, where `Bool::xor` reads it).
@@ -2221,7 +2248,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 // known where its operation is in scope: a module that does not import
 // `bitvec_rotate` has no `rotr` to call.
 fn rt_derived_names() → List<Pair<String, Prim>> {
-    [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1))]
+    [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
+     Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen)]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
