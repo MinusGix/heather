@@ -367,7 +367,10 @@ impl Rewrites<'_> {
         // lemma about the decoder at a lead byte the loop's tests classed
         // (`ascii(b, r, t: word(b) < 0x80)`) is written `ascii` and its test
         // is the arm's.
-        let hypothesis = |cx: &Cx, ty: &Type, level: &Level, _dependent: bool| self.hypothesis_of(cx, ty, level);
+        // A value the rest of the law mentions (`w`'s `y` in `x + 0 = x + y * 0`)
+        // is no side condition: any local of its type would do, and it stays
+        // asked for.
+        let hypothesis = |cx: &Cx, ty: &Type, level: &Level, dependent: bool| if dependent { None } else { self.hypothesis_of(cx, ty, level) };
         self.rewrite_instance_or(cx, h, proof, proof_ty, goal, Some(&hypothesis)).map_err(|miss| miss.into_error(self, cx, goal, what, "equation", h.span))
     }
 
