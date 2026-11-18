@@ -241,6 +241,22 @@ theorem exit_names_counted(): names_emitted(Exit(0), 5) = Exit(0).leaf_names(5) 
 theorem wide_names_counted(): names_emitted(ops([Const(64, 0, 3), BufferLoad(1, 0, 0), Add(64, 2, 1, 0), BufferStore(3, 0, 0, 2)]), 5)
     = ops([Const(64, 0, 3), BufferLoad(1, 0, 0), Add(64, 2, 1, 0), BufferStore(3, 0, 0, 2)]).leaf_names(5) { refl }
 
+// A byte node's code as it is laid out, after any program and at any
+// layout: the index fetched and compared with the capacity, the jump over
+// the access to the label placed after it, and the result kept. A store
+// reads the byte back, under the next label.
+theorem load_laid_out(p: Prog, layout: Layout, out: List<Nat>):
+    p.byte(Emission(layout, [], out), BufferLoad(1, 0, 2), 4, 5).prog =
+        At(At(At(At(At(p.word_to(layout, 2, Rcx), 0, Block([MovRI(Rdx, BitVec::ofNat(4)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])), 0, Jcc(AE, 6)),
+            0, Block([MovRI(Rbx, layout.buffer_at(0)), AddRR(Rbx, Rcx)])), 0, LoadByte(ByteLoad(Rax, Rbx))), 6, Block([])).word_from(layout, out, 1, Rax) { refl }
+
+theorem store_laid_out(p: Prog, layout: Layout, out: List<Nat>):
+    p.byte(Emission(layout, [], out), BufferStore(1, 0, 2, 3), 4, 5).prog =
+        At(At(At(At(At(At(At(At(At(At(p.word_to(layout, 2, Rcx), 0, Block([MovRI(Rdx, BitVec::ofNat(4)), CmpRR(Rcx, Rdx)])), 0, Jcc(AE, 6)).word_to(layout, 3, Rax),
+            0, Block([MovRI(Rbx, layout.buffer_at(0)), AddRR(Rbx, Rcx)])), 0, StoreByte(ByteStore(Rbx, Rax))), 6, Block([])).word_to(layout, 2, Rcx),
+            0, Block([MovRI(Rdx, BitVec::ofNat(4)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])), 0, Jcc(AE, 7)),
+            0, Block([MovRI(Rbx, layout.buffer_at(0)), AddRR(Rbx, Rcx)])), 0, LoadByte(ByteLoad(Rax, Rbx))), 7, Block([])).word_from(layout, out, 1, Rax) { refl }
+
 // cat with its pass inlined k times in its loop: code grows with k while
 // the tree keeps cat's shape. `cat_x8`, about twice cat's code eight times
 // over, is the size the CLI's test builds and runs

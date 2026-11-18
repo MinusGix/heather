@@ -841,26 +841,29 @@ fn Prog::arg(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, name
 // RAX the byte at the word `index` of buffer `buf`, zero-extended, or zero
 // where the index is not below the capacity `cap`: RCX the index, RDX the
 // capacity, RBX the byte's address.
-fn Prog::byte_to(self p: Prog, layout: Layout, buf, index, cap, skip: Nat) → Prog {
-    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])),
-        Jcc(AE, skip));
-    then(then(tested, Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), LoadByte(ByteLoad(Rax, Rbx))).label(skip)
+fn Build::byte(self b: Build, buf, index, cap: Nat) → Build {
+    b.word(index, Rcx).set(Rdx, cap).set(Rax, 0).cmp(Rcx, Rdx)
+        .unless(AE, λ b => b.point(Rbx, b.cx.layout.buffer_at(buf)).plus(Rbx, Rcx).load_byte(Rax, Rbx))
 }
 
 // The word `value`'s low byte stored at the word `index` of buffer `buf`,
 // where the index is below the capacity `cap`.
-fn Prog::byte_from(self p: Prog, layout: Layout, buf, index, value, cap, skip: Nat) → Prog {
-    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), CmpRR(Rcx, Rdx)])), Jcc(AE, skip));
-    then(then(tested.word_to(layout, value, Rax), Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), StoreByte(ByteStore(Rbx, Rax))).label(skip)
+fn Build::put_byte(self b: Build, buf, index, value, cap: Nat) → Build {
+    b.word(index, Rcx).set(Rdx, cap).cmp(Rcx, Rdx)
+        .unless(AE, λ b => b.word(value, Rax).point(Rbx, b.cx.layout.buffer_at(buf)).plus(Rbx, Rcx).store_byte(Rbx, Rax))
 }
 
-fn Prog::loads(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat) → Prog {
-    p.byte_to(layout, buf, index, cap, Succ(names)).word_from(layout, out, output, Rax)
+// A byte node's code: the byte loaded to its word, or stored and then read
+// back to it.
+fn Build::node(self b: Build, node: Node, cap: Nat) → Build {
+    match node {
+        BufferLoad(output, buf, index) => b.byte(buf, index, cap).keep(output, Rax),
+        BufferStore(output, buf, index, value) => b.put_byte(buf, index, value, cap).byte(buf, index, cap).keep(output, Rax),
+        _ => b,
+    }
 }
 
-fn Prog::stores(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat) → Prog {
-    p.byte_from(layout, buf, index, value, cap, Succ(names)).loads(layout, out, output, buf, index, cap, Succ(names))
-}
+fn Prog::byte(self p: Prog, cx: Emission, node: Node, cap, names: Nat) → Compiled { cx.from(names).node(node, cap).onto(p) }
 
 fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat) → Option<Compiled> {
     match node {
@@ -868,14 +871,14 @@ fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, nam
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))),
+                Some(cap) => Some(p.byte(Emission(layout, [], out), BufferLoad(output, buf, index), cap, names)),
             },
         },
         BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))),
+                Some(cap) => Some(p.byte(Emission(layout, [], out), BufferStore(output, buf, index, value), cap, names)),
             },
         },
         _ => None,
