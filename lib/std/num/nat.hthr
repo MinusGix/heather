@@ -2145,9 +2145,30 @@ fn Nat::ldiv_pick(d, q, r: Nat, c: d <= r ∨ ¬(d <= r)) → DivMod {
 // The bit halving drops: `n = 2·h + bit` when `h = ⌊n/2⌋`.
 fn Nat::ldiv_bit(n, h: Nat) → Nat { match (h + h + 1).le_dec(n) { Inl(_) => 1, Inr(_) => 0 } }
 
-// The low bit, `n - 2·⌊n/2⌋`: a subtraction and a multiplication by a
-// literal, which evaluate on numerals directly.
-fn Nat::low_bit(self n: Nat) → Nat { n - n.half() * 2 }
+// The low bit, by recursion two at a time as `half` is: the kernel runs a
+// numeral through it in a few steps, where `n - 2·⌊n/2⌋` (`low_bit_sub`)
+// paid for a halving, a product and a difference.
+fn Nat::low_bit(self n: Nat) → Nat {
+    match n {
+        Zero => 0,
+        Succ(k) => match k { Zero => 1, Succ(l) => l.low_bit() },
+    }
+}
+
+// The low bit is what halving leaves: `n - 2·⌊n/2⌋`.
+theorem Nat::low_bit_sub(self n: Nat): n.low_bit() = n - n.half() * 2 {
+    match n {
+        Zero => refl,
+        Succ(k) => match k {
+            Zero => refl,
+            Succ(l) => {
+                let h = l.half();
+                let two: ((h + 1) * 2 = h * 2 + 2) = trans((h + 1).mul_two(), trans(h.add_succ_left(h + 1), Nat::cong(λ (w: Nat) => w + 2, sym(h.mul_two()))));
+                trans(l.low_bit_sub(), Nat::cong(λ (w: Nat) => (l + 2) - w, sym(two)))
+            },
+        },
+    }
+}
 
 // The remainder is doubled as `r * 2`, never `r + r`: a sum of a value with
 // itself stays a composed run whose later comparison walks every fragment,
@@ -2208,7 +2229,8 @@ theorem Nat::low_bit_eq(self n: Nat): n.low_bit() = Nat::ldiv_bit(n, n.half()) {
     let b = Nat::ldiv_bit(n, n.half());
     let h2 = n.half() * 2;
     calc {
-        n - h2
+        n.low_bit()
+            = n - h2 := n.low_bit_sub(),
             = ((n.half() + n.half()) + b) - h2 := Nat::cong(λ (x: Nat) => x - h2, sym(parts.left)),
             = (h2 + b) - h2 := Nat::cong(λ (x: Nat) => (x + b) - h2, sym(n.half().mul_two())),
             = (b + h2) - h2 := Nat::cong(λ (x: Nat) => x - h2, h2.add_comm(b)),

@@ -1,10 +1,10 @@
 ---
 title: The process stack below the entry RSP is not all mapped at exec
-status: open
+status: closed
 labels: [native,machine-model]
 area: heather-in-heather
 created: 2026-11-16
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 `StackPlaced` lets a process rely on up to 128 KiB (`io_stack_limit`) of data
@@ -29,10 +29,34 @@ and environment would fault where the theorem says it runs.
 
 The comment in `lib/std/os/linux/linux_x86_64_image.hthr` now says this.
 
-## Open: what the assumption should be
+## Decided (Minus, 2026-11-16): state the premise directly
 
-- State it as it is: the `depth` bytes below RSP are usable, by mapping or
-  by growth, given RLIMIT_STACK leaves that much. Nothing changes but the
-  documents (`issues/io-image-process-stack.md`, the design note).
-- Or make it true without growth: bound `depth` by what exec leaves mapped
-  for a bounded command line and environment, which needs envp in the model.
+The assumption stays the kernel's stack, and the theorem says so:
+`LinuxStart` (native_compile_elf) carries the stack room as a field, with
+the stack limit named as what grants it, and `StackPlaced` lost its 128 KiB
+cap, which rested on the mapping exec was thought to make
+(`issues/elf-theorem-runtime-premises.md`). A target that owns its stack
+inside its own segment, and so asks nothing of the limit, is
+`issues/native-target-minimal-system-assumptions.md`.
+
+## 2026-11-17: providers
+
+The compiled program now takes its stack from entry code in front of it
+(`Source::runs_after`, native_compile_elf). The system's stack stays the
+default with the premise above; `write-elf --stack segment` gives a program
+its own stack in its data segment and drops the premise
+(`issues/native-target-minimal-system-assumptions.md`). A startup check of
+the stack limit is designed in `docs/native/system-contract-design.md`.
+
+## 2026-11-17: the room is checked, not presumed
+
+A file on the system's stack now stores into each page of its stack room
+before anything else runs (`stack_touched_entry`,
+`lib/std/os/linux/linux_x86_64_stack_growth.hthr`), and its theorem asks
+nothing of what lies below RSP (`SystemStart` replaces `LinuxStart`, whose
+`stack` field is gone). Growth is a stated rule of the model (`StackTouch`:
+a store within a page below the stack extends it or ends the process), so
+the theorem uses what this issue found the old one used unsaid. Under a
+stack limit below the room the process now dies in its entry code, before
+any system call, where before it produced output and then faulted
+(`docs/native/system-contract-design.md` §3, §4.3).

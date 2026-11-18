@@ -154,7 +154,7 @@ fn eval(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("the encoder for `{spelled}` was refused (a defect of `heather eval`):\n{}", e.render(&read_text)))?;
 
     label(&spelled);
-    let (numbers, cut) = function_ir_source::with_reads(&elab, |reads| reads.numbers_up_to(&format!("{READ_MODULE}::eval_read"), limit))
+    let (numbers, cut) = function_ir_source::traced(&elab, "eval", || function_ir_source::with_reads(&elab, |reads| reads.numbers_up_to(&format!("{READ_MODULE}::eval_read"), limit)))
         .map_err(|e| format!("evaluation: {e}"))?;
     let mut numbers = numbers.into_iter();
     let shown = shape.show(&mut numbers, true).ok_or("the encoding did not read back (a defect of `heather eval`)")?;

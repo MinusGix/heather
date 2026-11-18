@@ -27,6 +27,7 @@ value-metrics = ["heather-elab-lib/value-metrics"]
 [dependencies]
 heather-elab-lib = { path = "../elab-lib" }
 heather-kernel-lib = { path = "../kernel-lib" }
+heather-run = { path = "../run" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 

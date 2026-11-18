@@ -326,15 +326,6 @@ theorem Target::path_step(self t: Target, env: Env, buf: Nat, path: List<BitVec(
          ⟨pathed, homes_at⟩⟩⟩⟩⟩⟩
 }
 
-// One step fewer to go: from `i + n` bytes in all and `i` short of them, a
-// number below `n` with one more byte counted.
-theorem Nat::one_fewer(i, n, all: Nat, left: i + n = all, below: i < all): Exists<Nat>(λ k => (k < n) ∧ (Succ(i) + k = all)) {
-    (match n as λ x => (i + x = all) → Exists<Nat>(λ k => (k < x) ∧ (Succ(i) + k = all)) {
-        Zero => λ ends => false_elim(Nat::lt_irrefl(all, j(ends, λ k _ => k < all, below))),
-        Succ(n1) => λ more => Exists(n1, ⟨Nat::le_refl(Succ(n1)), trans(i.add_succ_left(n1), more)⟩),
-    })(left)
-}
-
 // A round of the copy: out at the count or at a NUL, otherwise the byte
 // stored and the count, RSI and RDI one further.
 fn Fragment::path_copy(out: Nat) → Fragment {
@@ -349,7 +340,7 @@ fn Fragment::path_copy(out: Nat) → Fragment {
 theorem Run::path_round(self r: Run, env: Env, buf, cap: Nat, found: r.t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
     of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), o, n: Nat, s: r.State(), resident: r.t.site().Resident(s.memory),
     i: Nat, left: i + n = path.before_nul().len(), at: r.t.PathAt(env, buf, path, vals, i, s.gprs, s.memory)):
-    Fragment::path_copy(Succ(o)).inside(r, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
+    Fragment::path_copy(Succ(o)).inside(r, λ _ _ _ _ => False, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
         λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = path.before_nul().len()) ∧ r.t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory))))(s) {
     let t = r.t;
     let g = s.gprs;

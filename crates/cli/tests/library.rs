@@ -264,7 +264,7 @@ fn every_library_module_checks() {
     // `scripts/run-test-targets.mjs`, whose `built` this mirrors), and the
     // step is CPU-bound, so building them first moves that release forward
     // without lengthening the step (`docs/infrastructure/module-dag-design.md` §12).
-    build.args(["--build-first", "lib/native", "--build-first", "lib/_tests/native"]);
+    build.args(["--build-first", "lib/native", "--build-first", "lib/_tests/native", "--build-first", "lib/lang/lexer"]);
     let out = build.args(["--build-jobs", "4", "--build-only", "lib"]).output().expect("run heather check");
     let built = String::from_utf8_lossy(&out.stderr).into_owned();
     // Printed with `--nocapture`: what the first step built, and what it

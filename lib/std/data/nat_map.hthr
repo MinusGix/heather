@@ -50,16 +50,17 @@ fn shared<A, B>(a: A, k: A → B) → B { k(a) }
 
 // The value at key `k`, by recursion on the map. (Lookup is the hot
 // operation, and a structural recursion evaluates as the map's own
-// eliminator; a level halves the key once, its low bit being `j - h * 2`,
-// `low_bit` unfolded. `nat_map_set`, which may have to build its path
-// below an empty map, recurses on the key by `decreases`, which re-binds
-// every parameter and so takes no `self`.)
+// eliminator; a level halves the key once and reads its low bit, each a
+// recursion two at a time that runs on a numeral in a few steps.
+// `nat_map_set`, which may have to build its path below an empty map,
+// recurses on the key by `decreases`, which re-binds every parameter and so
+// takes no `self`.)
 fn nat_map_get<A>(m: NatMap<A>, k: Nat) → Option<A> {
     match m {
         MEmpty => None,
         MNode(here, even, odd) => match k {
             Zero => here,
-            Succ(j) => shared(j.half(), λ h => NatMap::pick(j - h * 2, nat_map_get(even, h), nat_map_get(odd, h))),
+            Succ(j) => shared(j.half(), λ h => NatMap::pick(j.low_bit(), nat_map_get(even, h), nat_map_get(odd, h))),
         },
     }
 }

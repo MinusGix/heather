@@ -37,7 +37,8 @@ heather write-elf demo.hthr -o validate      # `main` by default; `f::source` na
 gives a standalone x86-64 Linux executable, no C `main`, whose certificate
 states, with no proof written for this program:
 
-- `main::source_elf_simulates`: the process Linux makes of the file
+- `main::source_elf_runs`: the process Linux makes of the file, started as
+  the file's contract says (`docs/native/system-contract-design.md`),
   simulates the `Source` (the compiler's theorem, as for every `write-elf`
   program today, `native_compile_elf`);
 - `main::reads`: that `Source`'s tree, read against **any** world, is
@@ -70,7 +71,7 @@ Built (with the file to read):
 | `ELoop` (`Seq`, `While`), `ELoop::lower_reads` | `rt_io_loop.hthr` | built |
 | `Lend`: a computation calls a span `runtime fn` that may write | `rt_io.hthr`, PR #581 | built as a term; not reflected |
 | `tr` as one `ELoop` term, through `write-elf`, held to GNU tr | `rt_io_lend_tests.hthr`, `native_tools.rs` | built; since round 2 the `runtime fn tr_upper` (`runtime_program_tests.hthr`), compiled as `tr_upper::source` |
-| `write-elf` of any nullary `Source`, `<s>_elf_simulates` | `crates/cli/src/native/elf.rs`, `native_compile_elf` | built |
+| `write-elf` of any nullary `Source`, `<s>_elf_runs` | `crates/cli/src/native/elf.rs`, `native_compile_elf` | built |
 | Data segment sized to the program (1 MiB buffers) | issue `native-data-capacity` | built |
 
 So `tr` already runs as a compiled computation over `Io` with its theorem,
@@ -248,9 +249,9 @@ is written for `f`.
 
 **`write-elf` takes it by its path.** Today `write-elf <file> <source>`
 takes a plain identifier (`symbol_ok`); it learns `f::source`, and the
-certificate names its members after it (`f::source_elf_simulates`, …).
-The certificate then has every link: the file simulates the `Source`
-(`elf_simulates`), the `Source`'s fuelled program and its fuel-free tree
+certificate names its members after it (`f::source_elf_runs`, …).
+The certificate then has every link: the file runs as the `Source`
+(`<source>_elf_runs`), the `Source`'s fuelled program and its fuel-free tree
 refine each other (`Source::tree_co_refines`), and the tree reads as `f`
 (`f::reads`). A last theorem, `Source::elf_reads` in `native_compile_elf`,
 states the composition once, so a program's certificate can cite it

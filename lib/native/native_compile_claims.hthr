@@ -66,6 +66,19 @@ theorem Fragment::extends(self code: Fragment, cx: Emission, p: Prog): p.Within(
                 <= At(body.onto(cx, jcc), names + 1, Block([])) := body.onto(cx, jcc).within_then(names + 1, Block([])),
             }
         },
+        Either(cc, names, straight, taken) => {
+            let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
+            let jumped = Prog::At(straight.onto(cx, jcc), 0, Jmp(names + 2));
+            let other = Prog::At(jumped, names + 1, Block([]));
+            calc {
+                p <= jcc := p.within_then(0, Jcc(cc, names + 1)),
+                <= straight.onto(cx, jcc) := straight.extends(cx, jcc),
+                <= jumped := straight.onto(cx, jcc).within_then(0, Jmp(names + 2)),
+                <= other := jumped.within_then(names + 1, Block([])),
+                <= taken.onto(cx, other) := taken.extends(cx, other),
+                <= At(taken.onto(cx, other), names + 2, Block([])) := taken.onto(cx, other).within_then(names + 2, Block([])),
+            }
+        },
         Leave(cc, to) => p.within_then(0, Jcc(cc, to)),
         Cycle(names, enter, body) => {
             let head = Prog::At(enter.onto(cx, p), names + 1, Block([]));
@@ -93,13 +106,19 @@ fn Run::State(self r: Run) → Type { MachineState<X86Memory(r.t.r.profile)> }
 
 // What must hold before a fragment for `post` to hold after it. Inside a
 // loop whose way out is the label after `out`, a `Leave` needs `leave`
-// where it is taken; outside one (`None`) nothing leaves. A loop itself is
-// not computed: it needs an invariant, which `Fragment::goes_loop` takes.
-fn Fragment::inside(self code: Fragment, r: Run, out: Option<Nat>, leave: r.State() → Type, post: r.State() → Type) → r.State() → Type {
+// where it is taken; outside one (`None`) nothing leaves. A loop needs its
+// invariant, `loops` at the loop's `names`, a number that each round makes
+// smaller: what `enter` needs to reach it at some number, and that from it
+// (in memory the code is resident in) a round of `body` leaves to what
+// follows the loop or comes back round to it at a smaller one.
+fn Fragment::inside(self code: Fragment, r: Run, loops: Nat → Nat → Gprs → X86Memory(r.t.r.profile) → Type, out: Option<Nat>, leave: r.State() → Type, post: r.State() → Type) → r.State() → Type {
     match code {
         Skip => post,
         Place(_, item) => match item {
             Block(instructions) => λ s => post(execute_block_normal(instructions, s)),
+            Load(load) => λ s => Exists<BitVec(64)>(λ word =>
+                (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+                ((read_word(r.t.site().data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s)))),
             LoadByte(load) => λ s => Exists<BitVec(8)>(λ byte =>
                 (read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47)) ∧
                 ((r.t.site().data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte)) ∧ post(byte_load_after(load, byte, s)))),
@@ -112,10 +131,15 @@ fn Fragment::inside(self code: Fragment, r: Run, out: Option<Nat>, leave: r.Stat
             (r.t.Held(r.live, r.env, s.gprs, s.memory) ∧ ((f: Flags) → (rip: BitVec(64)) →
                 post(MachineState(write_gpr(register, r.env.word(id), write_gpr(Rbx, r.t.rbx_known(r.known, r.env, id), s.gprs)), f, rip, s.memory)))),
         Keep(_, _) => λ _ => False,
-        Both(first, rest) => first.inside(r, out, leave, rest.inside(r, out, leave, post)),
+        Both(first, rest) => first.inside(r, loops, out, leave, rest.inside(r, loops, out, leave, post)),
         Unless(cc, _, body) => λ s =>
             (((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
-             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → body.inside(r, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
+             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → body.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
+            (condition_defined(cc, s.flags.defined) = True),
+        Either(cc, _, straight, taken) => λ s =>
+            (((condition_holds(cc, s.flags) = True) → (rip: BitVec(64)) → taken.inside(r, loops, out, leave, post)(MachineState(s.gprs, s.flags, rip, s.memory))) ∧
+             ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) →
+                straight.inside(r, loops, out, leave, λ u => (to: BitVec(64)) → post(MachineState(u.gprs, u.flags, to, u.memory)))(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
             (condition_defined(cc, s.flags.defined) = True),
         Leave(cc, to) => match out {
             None => λ _ => False,
@@ -124,11 +148,15 @@ fn Fragment::inside(self code: Fragment, r: Run, out: Option<Nat>, leave: r.Stat
                   ((condition_holds(cc, s.flags) = False) → (rip: BitVec(64)) → post(MachineState(s.gprs, s.flags, rip, s.memory)))) ∧
                  (condition_defined(cc, s.flags.defined) = True)),
         },
-        Cycle(_, _, _) => λ _ => False,
+        Cycle(names, enter, body) => λ s =>
+            ((n: Nat) → (u: r.State()) → r.t.site().Resident(u.memory) → loops(names, n, u.gprs, u.memory) →
+                body.inside(r, loops, Some(names + 1), post, λ w => Exists<Nat>(λ m => (m < n) ∧ loops(names, m, w.gprs, w.memory)))(u)) ∧
+            enter.inside(r, loops, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(s),
     }
 }
 
-fn Fragment::before(self code: Fragment, r: Run, post: r.State() → Type) → r.State() → Type { code.inside(r, None, λ _ => False, post) }
+// Code with no loop in it.
+fn Fragment::before(self code: Fragment, r: Run, post: r.State() → Type) → r.State() → Type { code.inside(r, λ _ _ _ _ => False, None, λ _ => False, post) }
 
 // The way out of a loop: its label is in the program, and from there the
 // code goes on with `leave`.
@@ -141,14 +169,15 @@ fn Run::Exits(self r: Run, out: Option<Nat>, tree: ITree<BitVec(64)>(Events::lin
 
 // From a state meeting what the fragment needs, the code runs to its end,
 // or out of the loop it is in.
-theorem Fragment::goes_inside(self code: Fragment, r: Run, p: Prog, tree: ITree<BitVec(64)>(Events::linux()), out: Option<Nat>, leave, post: r.State() → Type):
+theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat → Gprs → X86Memory(r.t.r.profile) → Type, p: Prog, tree: ITree<BitVec(64)>(Events::linux()), out: Option<Nat>, leave, post: r.State() → Type):
     r.Exits(out, tree, leave) → code.onto(r.cx(), p).Within(r.t.program) → r.t.Goes(prog_len(code.onto(r.cx(), p)), tree, post) →
-    r.t.Goes(prog_len(p), tree, code.inside(r, out, leave, post)) {
+    r.t.Goes(prog_len(p), tree, code.inside(r, loops, out, leave, post)) {
     let t = r.t;
     match code {
         Skip => λ _ _ next => next,
         Place(name, item) => match item {
             Block(instructions) => λ _ within next => t.goes_block(p, name, instructions, within, tree, post, next),
+            Load(load) => λ _ within next => t.goes_load(p, name, load, within, tree, post, next),
             LoadByte(load) => λ _ within next => t.goes_load_byte(p, name, load, within, tree, post, next),
             StoreByte(store) => λ _ within next => t.goes_store_byte(p, name, store, within, tree, post, next),
             _ => λ _ _ _ s here resident holds => false_elim(holds),
@@ -162,8 +191,8 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, p: Prog, tree: ITree<
         Keep(_, _) => λ _ _ _ s here resident holds => false_elim(holds),
         Both(first, rest) => λ exits within next => {
             let mid = first.onto(r.cx(), p);
-            first.goes_inside(r, p, tree, out, leave, rest.inside(r, out, leave, post))(exits, Prog::within_trans(rest.extends(r.cx(), mid), within),
-                rest.goes_inside(r, mid, tree, out, leave, post)(exits, within, next))
+            first.goes_inside(r, loops, p, tree, out, leave, rest.inside(r, loops, out, leave, post))(exits, Prog::within_trans(rest.extends(r.cx(), mid), within),
+                rest.goes_inside(r, loops, mid, tree, out, leave, post)(exits, within, next))
         },
         Unless(cc, names, body) => λ exits within next => {
             let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
@@ -171,13 +200,41 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, p: Prog, tree: ITree<
             let w_bodied = bodied.within_before(names + 1, Block([]), t.program, within);
             let w_jcc: jcc.Within(t.program) = Prog::within_trans(body.extends(r.cx(), jcc), w_bodied);
             let landed: t.Goes(prog_len(bodied), tree, post) = t.goes_block(bodied, names + 1, [], within, tree, post, next);
-            let fall = body.goes_inside(r, jcc, tree, out, leave, post)(exits, w_bodied, landed);
+            let fall = body.goes_inside(r, loops, jcc, tree, out, leave, post)(exits, w_bodied, landed);
             let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
                 ((condition_holds(cc, f) = True) → (rip: BitVec(64)) → post(MachineState(g, f, rip, m))) ∧
-                ((condition_holds(cc, f) = False) → (rip: BitVec(64)) → body.inside(r, out, leave, post)(MachineState(g, f, rip, m)));
+                ((condition_holds(cc, f) = False) → (rip: BitVec(64)) → body.inside(r, loops, out, leave, post)(MachineState(g, f, rip, m)));
             let lands = t.program.lands_jcc(t.laid, w_jcc.witness, p, 0, cc, names, w_jcc.proof, within.witness, bodied, Block([]), within.proof);
             t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, p, 0, cc, names + 1, w_jcc.proof, prog_len(bodied), lands, tree, pre,
                 λ u here resident held => landed(u, here, resident, held.left.left(held.right, u.rip)),
+                λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))
+        },
+        Either(cc, names, straight, taken) => λ exits within next => {
+            let jcc = Prog::At(p, 0, Jcc(cc, names + 1));
+            let ran = straight.onto(r.cx(), jcc);
+            let jumped = Prog::At(ran, 0, Jmp(names + 2));
+            let other = Prog::At(jumped, names + 1, Block([]));
+            let done = taken.onto(r.cx(), other);
+            let w_done = done.within_before(names + 2, Block([]), t.program, within);
+            let w_other: other.Within(t.program) = Prog::within_trans(taken.extends(r.cx(), other), w_done);
+            let w_jumped = jumped.within_before(names + 1, Block([]), t.program, w_other);
+            let w_ran = ran.within_before(0, Jmp(names + 2), t.program, w_jumped);
+            let w_jcc: jcc.Within(t.program) = Prog::within_trans(straight.extends(r.cx(), jcc), w_ran);
+            let landed: t.Goes(prog_len(done), tree, post) = t.goes_block(done, names + 2, [], within, tree, post, next);
+            let took = taken.goes_inside(r, loops, other, tree, out, leave, post)(exits, w_done, landed);
+            let at_other = t.goes_block(jumped, names + 1, [], w_other, tree, taken.inside(r, loops, out, leave, post), took);
+            let joined: r.State() → Type = λ u => (to: BitVec(64)) → post(MachineState(u.gprs, u.flags, to, u.memory));
+            let ahead = t.program.lands_jmp(t.laid, w_jumped.witness, ran, 0, names + 1, w_jumped.proof, within.witness, done, Block([]), within.proof);
+            let jump: t.Goes(prog_len(ran), tree, joined) = t.io().goes_jmp(t.program, t.origin, t.code_fits(), w_jumped.witness, ran, 0, names + 2, w_jumped.proof, prog_len(done), ahead, tree,
+                λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => (to: BitVec(64)) → post(MachineState(g, f, to, m)),
+                λ u here resident held => landed(u, here, resident, held(u.rip)));
+            let fall = straight.goes_inside(r, loops, jcc, tree, out, leave, joined)(exits, w_ran, jump);
+            let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
+                ((condition_holds(cc, f) = True) → (rip: BitVec(64)) → taken.inside(r, loops, out, leave, post)(MachineState(g, f, rip, m))) ∧
+                ((condition_holds(cc, f) = False) → (rip: BitVec(64)) → straight.inside(r, loops, out, leave, joined)(MachineState(g, f, rip, m)));
+            let lands = t.program.lands_jcc(t.laid, w_jcc.witness, p, 0, cc, names, w_jcc.proof, w_other.witness, jumped, Block([]), w_other.proof);
+            t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, p, 0, cc, names + 1, w_jcc.proof, prog_len(jumped), lands, tree, pre,
+                λ u here resident held => at_other(u, here, resident, held.left.left(held.right, u.rip)),
                 λ u here resident held => fall(u, here, resident, held.left.right(held.right, u.rip)))
         },
         Leave(cc, to) => match out {
@@ -196,56 +253,64 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, p: Prog, tree: ITree<
                     λ u here resident held => next(u, here, resident, held.left.right(held.right, u.rip)))(s, here, resident, holds.right)
             },
         },
-        Cycle(_, _, _) => λ _ _ _ s here resident holds => false_elim(holds),
+        Cycle(names, enter, body) => λ _ within next s0 here0 resident0 holds => {
+            let entered = enter.onto(r.cx(), p);
+            let head = Prog::At(entered, names + 1, Block([]));
+            let bodied = body.onto(r.cx(), head);
+            let jumped = Prog::At(bodied, 0, Jmp(names + 1));
+            let w_jumped = jumped.within_before(names + 2, Block([]), t.program, within);
+            let w_bodied = bodied.within_before(0, Jmp(names + 1), t.program, w_jumped);
+            let w_head: head.Within(t.program) = Prog::within_trans(body.extends(r.cx(), head), w_bodied);
+            let w_entered = entered.within_before(names + 1, Block([]), t.program, w_head);
+            let exits: r.Exits(Some(names + 1), tree, post) = Exists(jumped, Exists(Block([]), ⟨within, t.goes_block(jumped, names + 2, [], within, tree, post, next)⟩));
+            let back = t.program.lands_jmp(t.laid, w_jumped.witness, bodied, 0, names, w_jumped.proof, w_head.witness, entered, Block([]), w_head.proof);
+            let At = λ (n: Nat) => t.Goes(prog_len(entered), tree, λ s => loops(names, n, s.gprs, s.memory));
+            let around: (n: Nat) → ((m: Nat) → m < n → At(m)) → At(n) = λ n smaller => {
+                let again: r.State() → Type = λ u => Exists<Nat>(λ m => (m < n) ∧ loops(names, m, u.gprs, u.memory));
+                let jump = t.io().goes_jmp(t.program, t.origin, t.code_fits(), w_jumped.witness, bodied, 0, names + 1, w_jumped.proof, prog_len(entered), back, tree,
+                    λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => Exists<Nat>(λ k => (k < n) ∧ loops(names, k, g, m)),
+                    λ u here resident held => smaller(held.witness, held.proof.left)(u, here, resident, held.proof.right));
+                let through = body.goes_inside(r, loops, head, tree, Some(names + 1), post, again)(exits, w_bodied, jump);
+                let at_head = t.goes_block(entered, names + 1, [], w_head, tree, body.inside(r, loops, Some(names + 1), post, again), through);
+                λ s here resident at => at_head(s, here, resident, holds.left(n, s, resident, at))
+            };
+            let up_to: (n: Nat) → (k: Nat) → k <= n → At(k) = λ n => match n {
+                Zero => λ k small => around(k, λ m below => false_elim(Nat::not_succ_le_zero(m, Nat::le_trans(Succ(m), k, 0, below, small)))),
+                Succ(n1, ih) => λ k small => around(k, λ m below => ih(m, m.lt_succ_iff_le(n1).mp(Nat::le_trans(Succ(m), k, Succ(n1), below, small)))),
+            };
+            let reached: t.Goes(prog_len(entered), tree, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory))) =
+                λ u here resident held => up_to(held.witness, held.witness, Nat::le_refl(held.witness))(u, here, resident, held.proof);
+            enter.goes_inside(r, loops, p, tree, Some(names + 1), post, λ u => Exists<Nat>(λ n => loops(names, n, u.gprs, u.memory)))(exits, w_entered, reached)(s0, here0, resident0, holds.right)
+        },
     }
 }
 
 theorem Fragment::goes(self code: Fragment, r: Run, p: Prog, within: code.onto(r.cx(), p).Within(r.t.program),
     tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type, next: r.t.Goes(prog_len(code.onto(r.cx(), p)), tree, post)):
     r.t.Goes(prog_len(p), tree, code.before(r, post)) {
-    code.goes_inside(r, p, tree, None, λ _ => False, post)(trivial, within, next)
+    code.goes_inside(r, λ _ _ _ _ => False, p, tree, None, λ _ => False, post)(trivial, within, next)
 }
 
-// A loop: where `invariant(n)` holds at its head (in memory the code is
-// resident in), a round of `body` either
-// leaves to what follows the loop or comes back round with the invariant
-// at a smaller number. Then the loop runs from what `enter` needs to reach
-// the invariant at some number, or to leave.
+// Code with loops in it, each loop's invariant `loops` at its `names`.
+theorem Fragment::goes_with(self code: Fragment, r: Run, loops: Nat → Nat → Gprs → X86Memory(r.t.r.profile) → Type, p: Prog, within: code.onto(r.cx(), p).Within(r.t.program),
+    tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type, next: r.t.Goes(prog_len(code.onto(r.cx(), p)), tree, post)):
+    r.t.Goes(prog_len(p), tree, code.inside(r, loops, None, λ _ => False, post)) {
+    code.goes_inside(r, loops, p, tree, None, λ _ => False, post)(trivial, within, next)
+}
+
+// A loop alone: where `invariant(n)` holds at its head (in memory the code
+// is resident in), a round of `body` either leaves to what follows the
+// loop or comes back round with the invariant at a smaller number. Then
+// the loop runs from what `enter` needs to reach the invariant at some
+// number, or to leave.
 theorem Fragment::goes_loop(r: Run, p: Prog, names: Nat, enter, body: Fragment, tree: ITree<BitVec(64)>(Events::linux()), post: r.State() → Type,
     invariant: Nat → Gprs → X86Memory(r.t.r.profile) → Type,
     within: Cycle(names, enter, body).onto(r.cx(), p).Within(r.t.program),
     next: r.t.Goes(prog_len(Cycle(names, enter, body).onto(r.cx(), p)), tree, post),
     round: (n: Nat) → (s: r.State()) → r.t.site().Resident(s.memory) → invariant(n, s.gprs, s.memory) →
-        body.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory)))(s)):
-    r.t.Goes(prog_len(p), tree, enter.inside(r, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))) {
-    let t = r.t;
-    let entered = enter.onto(r.cx(), p);
-    let head = Prog::At(entered, names + 1, Block([]));
-    let bodied = body.onto(r.cx(), head);
-    let jumped = Prog::At(bodied, 0, Jmp(names + 1));
-    let w_jumped = jumped.within_before(names + 2, Block([]), t.program, within);
-    let w_bodied = bodied.within_before(0, Jmp(names + 1), t.program, w_jumped);
-    let w_head: head.Within(t.program) = Prog::within_trans(body.extends(r.cx(), head), w_bodied);
-    let w_entered = entered.within_before(names + 1, Block([]), t.program, w_head);
-    let exits: r.Exits(Some(names + 1), tree, post) = Exists(jumped, Exists(Block([]), ⟨within, t.goes_block(jumped, names + 2, [], within, tree, post, next)⟩));
-    let back = t.program.lands_jmp(t.laid, w_jumped.witness, bodied, 0, names, w_jumped.proof, w_head.witness, entered, Block([]), w_head.proof);
-    let At = λ (n: Nat) => t.Goes(prog_len(entered), tree, λ s => invariant(n, s.gprs, s.memory));
-    let around: (n: Nat) → ((m: Nat) → m < n → At(m)) → At(n) = λ n smaller => {
-        let again: r.State() → Type = λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory));
-        let jump = t.io().goes_jmp(t.program, t.origin, t.code_fits(), w_jumped.witness, bodied, 0, names + 1, w_jumped.proof, prog_len(entered), back, tree,
-            λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => Exists<Nat>(λ k => (k < n) ∧ invariant(k, g, m)),
-            λ u here resident held => smaller(held.witness, held.proof.left)(u, here, resident, held.proof.right));
-        let through = body.goes_inside(r, head, tree, Some(names + 1), post, again)(exits, w_bodied, jump);
-        let at_head = t.goes_block(entered, names + 1, [], w_head, tree, body.inside(r, Some(names + 1), post, again), through);
-        λ s here resident holds => at_head(s, here, resident, round(n, s, resident, holds))
-    };
-    let up_to: (n: Nat) → (k: Nat) → k <= n → At(k) = λ n => match n {
-        Zero => λ k small => around(k, λ m below => false_elim(Nat::not_succ_le_zero(m, Nat::le_trans(Succ(m), k, 0, below, small)))),
-        Succ(n1, ih) => λ k small => around(k, λ m below => ih(m, m.lt_succ_iff_le(n1).mp(Nat::le_trans(Succ(m), k, Succ(n1), below, small)))),
-    };
-    let reached: t.Goes(prog_len(entered), tree, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory))) =
-        λ u here resident held => up_to(held.witness, held.witness, Nat::le_refl(held.witness))(u, here, resident, held.proof);
-    enter.goes_inside(r, p, tree, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))(exits, w_entered, reached)
+        body.inside(r, λ _ => invariant, Some(names + 1), post, λ u => Exists<Nat>(λ m => (m < n) ∧ invariant(m, u.gprs, u.memory)))(s)):
+    r.t.Goes(prog_len(p), tree, enter.inside(r, λ _ => invariant, Some(names + 1), post, λ u => Exists<Nat>(λ n => invariant(n, u.gprs, u.memory)))) {
+    λ s here resident holds => Cycle(names, enter, body).goes_inside(r, λ _ => invariant, p, tree, None, λ _ => False, post)(trivial, within, next)(s, here, resident, ⟨round, holds⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -339,4 +404,13 @@ theorem Run::goes_asked(self r: Run, code: Fragment, p: Prog, shape: CallShape, 
         λ a u here resident held => t.goes_result(r.live, r.out, r.env, shape.answer(r.env, a), asked, result, inside, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(shape.cmd(r.env), tree), r.Asks(shape, result), called)
+}
+
+// One step fewer to go: from `i + n` bytes in all and `i` short of them, a
+// number below `n` with one more byte counted.
+theorem Nat::one_fewer(i, n, all: Nat, left: i + n = all, below: i < all): Exists<Nat>(λ k => (k < n) ∧ (Succ(i) + k = all)) {
+    (match n as λ x => (i + x = all) → Exists<Nat>(λ k => (k < x) ∧ (Succ(i) + k = all)) {
+        Zero => λ ends => false_elim(Nat::lt_irrefl(all, j(ends, λ k _ => k < all, below))),
+        Succ(n1) => λ more => Exists(n1, ⟨Nat::le_refl(Succ(n1)), trans(i.add_succ_left(n1), more)⟩),
+    })(left)
 }

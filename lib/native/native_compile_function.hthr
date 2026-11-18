@@ -20,10 +20,10 @@
 // lent buffers as the function left them (`Target::based_left`). RAX then
 // goes to the result's home.
 //
-// Room: each activation keeps `Homes::calls_room` below its frame
-// (`Target::roomy`): the largest room of the table the functions are
-// emitted under (`program_room`, every function saving the six registers
-// it may) and the CALL's word.
+// Room: each activation keeps the room of each function its body calls
+// below its frame (`Target::roomy`, `List::functions_room`): the function's
+// room in the table the functions are emitted under (`program_room`, every
+// function saving the six registers it may) and the CALL's word.
 //
 // A function lent buffers (§2.3) is passed their homes: where the layout
 // puts each buffer and its capacity. The program states the call with no
@@ -988,7 +988,8 @@ fn function_answer(call: Writers(), f: Nat) → List<BitVec(64)> → Env → Tru
 // the stack's words from the return address up (`Target::based_left`); it
 // keeps every register a procedure keeps; and its word is in RAX, the
 // first result register.
-theorem Target::function_performs(self t: Target, call: Writers(), answers: t.Answered(call), f: Nat, below: Succ(f) <= t.functions.len()):
+theorem Target::function_performs(self t: Target, call: Writers(), answers: t.Answered(call), f: Nat, below: Succ(f) <= t.functions.len(),
+    listed: Mem(f, t.called)):
     t.Callable<True>(Succ(f), program_lent(t.functions, f), t.Lends(f), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, f)) {
     let layout = t.layout();
     let k = program_lent(t.functions, f);
@@ -996,9 +997,11 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let a = call(env.buffers, f, words);
         let i0 = t.index - 8;
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
-        let callee_room: (table_room(t.homes.room_table(t.functions))(f) + 8 <= t.homes.calls_room(t.functions)) =
-            table_calls_room_above(t.functions, t.homes.room_table(t.functions), f, below);
-        let room_f: (table_room(t.homes.room_table(t.functions))(f) <= i0) = omega(t.roomy, callee_room);
+        let table = t.homes.room_table(t.functions);
+        let callee_room: (rooms_at(table, f) + 8 <= t.called.functions_room(table)) = t.called.functions_room_mem(table, f, listed);
+        let under: (t.called.functions_room(table) <= t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, table, t.room)) =
+            Nat::le_max_r(t.callees.reach(t.procedures, t.bodies, t.homes.places, table, t.room), t.called.functions_room(table));
+        let room_f: (rooms_at(table, f) <= i0) = omega(t.roomy, callee_room, under);
         let bare = pre.left;
         let v = bare.left.witness;
         let based = bare.left.proof;
@@ -1046,6 +1049,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         let few: (arguments.len() + 2 * k <= 6) = Nat::leb_sound(arguments.len() + 2 * k, 6, known);
         let small: (k <= 3) = omega(few);
         let has: (k <= t.caps.len()) = Nat::leb_sound(k, t.caps.len(), known);
+        let listed: Mem(callee, t.called) = t.called.holds_mem(callee, known);
         let inside = λ (i: Nat) (m: Mem(i, Cons(result, arguments))) => layout.words_fit_mem(Cons(result, arguments), i, known, m);
         let words = env.words_at(arguments);
         let answer = call(env.buffers, callee, words);
@@ -1062,7 +1066,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         t.goes_calls<True>(live, env, p, Succ(callee), k, small, arguments,
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
-            t.function_performs(call, answers, callee, below), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
+            t.function_performs(call, answers, callee, below, listed), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
             λ _ => t.goes_weaken(taken, λ s h => ⟨h.left, trans(cong_fn<BitVec(64), Env>(λ x => left.set_word(result, x), h.right.left), sym(mean_eq))⟩))
     }
 }

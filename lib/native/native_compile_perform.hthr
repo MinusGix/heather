@@ -74,26 +74,26 @@ import set_tactic;
 
 // The same target running another activation.
 fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.words + frames.len()) <= t.stack.size,
-    roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index) → Target {
+    roomy: t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), room) + 8 <= index) → Target {
     Target(t.r, t.reserved, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.functions, t.stack, t.stack_writes,
-        t.stack_above, t.stack_canonical, t.bodies, t.callees, index, frames, pinned, room, framed, roomy)
+        t.stack_above, t.stack_canonical, t.bodies, t.callees, t.called, index, frames, pinned, room, framed, roomy)
 }
 
 // The target running an activation of procedure `p`: the same region,
 // program and tables, with the procedure's frame and homes
 // (`Layout::body`).
-fn Target::called(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
+fn Target::callee(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
     pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index) → Target {
+    roomy: t.procedures.performed_by(p).below(t.procedures.called_by(p), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), room) + 8 <= index) → Target {
     Target(t.r, t.reserved, t.bodies.frame(p).words, t.caps, t.bodies.frame(p).homes(t.homes.places, t.homes.rooms), homed, t.fits, t.program, t.origin, t.laid, t.args,
-        t.procedures, t.functions, t.stack, t.stack_writes, t.stack_above, t.stack_canonical, t.bodies, t.procedures.performed_by(p), index, frames, pinned, room, framed, roomy)
+        t.procedures, t.functions, t.stack, t.stack_writes, t.stack_above, t.stack_canonical, t.bodies, t.procedures.performed_by(p), t.procedures.called_by(p), index, frames, pinned, room, framed, roomy)
 }
 
 // Its layout is the procedure's.
-theorem Target::called_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
+theorem Target::callee_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
     pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: (t.procedures.performed_by(p).reach(t.procedures, t.bodies, t.homes.places, room) + t.homes.calls_room(t.functions)) + 8 <= index):
-    t.called(p, homed, index, frames, pinned, room, framed, roomy).layout() = t.layout().body(p) {
+    roomy: t.procedures.performed_by(p).below(t.procedures.called_by(p), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), room) + 8 <= index):
+    t.callee(p, homed, index, frames, pinned, room, framed, roomy).layout() = t.layout().body(p) {
     refl
 }
 
@@ -110,7 +110,7 @@ theorem Target::held_slots(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
 
 // The claim reads no proof of the activation's.
 theorem Target::held_proofs(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: (t.callees.reach(t.procedures, t.bodies, t.homes.places, t.room) + t.homes.calls_room(t.functions)) + 8 <= t.index):
+    framed: t.index + 8 * (t.words + t.frames.len()) <= t.stack.size, roomy: t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), t.room) + 8 <= t.index):
     t.activation(t.index, t.frames, t.pinned, t.room, framed, roomy).Held(live, env, g, m) {
     held
 }
@@ -1743,8 +1743,8 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
         sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩
 }
 
-// RSP saved to its slot and the depth to the room slot, `main`'s frame
-// opened below RSP, and zero stored in each word live at the start: a
+// RDI (where the command line is) saved to its slot and the depth to the
+// room slot, `main`'s frame opened below RSP, and zero stored in each word live at the start: a
 // region of zeros, with the command line above the stack, holds the start,
 // and `main` is the activation running, its frame at the stack's top with
 // no frames above it and `depth` calls of room
@@ -1755,7 +1755,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     p: Prog, within: p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.saves_rsp(t.layout(), depth).frames_main(t.layout(), live)), live, tree, t.start_env())):
     t.Goes(prog_len(p), tree, λ s => t.r.Holds(λ _ => zero_byte(), s.memory) ∧
-        (ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args) ∧ ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8 * t.words)) ∧
+        (ArgvAt(t.argv(), s.memory, read_gpr(Rdi, s.gprs), t.args) ∧ ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8 * t.words)) ∧
             t.Pins(home_values(s.gprs))))) {
     let layout = t.layout();
     let free_rsp = t.homes.unused_unpinned(Rsp, t.homes.unused(Rsp, trivial));
@@ -1764,7 +1764,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let so = layout.stack_offset();
     let env = t.start_env();
     let top = t.index + 8 * t.words;
-    let store = WordStore(Rbx, Rsp);
+    let store = WordStore(Rbx, Rdi);
     let store3 = WordStore(Rbx, Rax);
     let d: BitVec(64) = BitVec::ofNat(depth);
     let set3: List<Instruction> = [MovRI(Rbx, layout.room_at()), MovRI(Rax, d)];
@@ -1821,7 +1821,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
     let moved1 = t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], w_mov, tree, λ u => pre_store(store, mid, u), stored1);
     λ s here resident held => {
         let m = s.memory;
-        let rsp = read_gpr(Rsp, s.gprs);
+        let rsp = read_gpr(Rdi, s.gprs);
         let bytes = word_bytes(rsp);
         let bytes3 = word_bytes(d);
         let eight: (bytes.len() = 8) = refl;

@@ -83,7 +83,8 @@ record GoalInfo { target: Handle, locals: List<LocalInfo> }
 // diagnostics would print, with its children as handles again. Nothing is
 // reduced (`Whnf` does that) except a β-redex, which is shown as its
 // contractum as the diagnostics spell it, and a form the view does not
-// present is `HOther`.
+// present is `HOther`. A type held as a term (`Not(P)`'s `P`) is shown as
+// the type: an equation as `HEq`, a function type as `HPi`.
 inductive Head {
     // A function type, by its domain; `Open` reaches its body.
     HPi(dom: Handle),

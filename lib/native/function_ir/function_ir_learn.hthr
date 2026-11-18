@@ -596,7 +596,7 @@ fn Seen::walked(self seen: Seen) → Walked { Walked(seen.made, seen.range, seen
 // A bit a rule decides at the node that writes it: the rule's step after
 // what it reads is derived, and `emit` where the bit is set.
 fn Seen::settled_bit(self seen: Seen, node: Node, emit: List<Step>) → Option<Passed> {
-    decided_among(seen.tables.rewriting, node, seen.walked()).and_then(λ found => found.bit().and_then(λ bit =>
+    decided_among(seen.tables.rewriting_at(node), node, seen.walked()).and_then(λ found => found.bit().and_then(λ bit =>
         Some(seen.decided(node_output(node).id, bit, found.needs, Derive(found.place, found.numbers), match bit { True => emit, False => [] }))))
 }
 
@@ -625,7 +625,7 @@ fn Seen::or_decided(self seen: Seen, node: Node) → Passed {
 // The range of the word a node writes, where a rule that gives ranges has
 // one from the node and the ranges of what it reads.
 fn Seen::bounding(self seen: Seen, node: Node) → Seen {
-    match ranged_among(seen.tables.ranging, node, seen.walked(), None) {
+    match ranged_among(seen.tables.ranging_at(node), node, seen.walked(), None) {
         None => seen,
         Some(found) => seen.learn(node_output(node).id, found.range, found.needs, Derive(found.place, found.numbers)),
     }
@@ -654,7 +654,7 @@ fn Seen::pass(self seen: Seen, node: Node) → Passed { seen.bounding(node).trac
 // A rule's instance at a node that writes another node for it: one a
 // rule's statement gives, else one a registered learner proposes.
 fn Seen::instance(self seen: Seen, node: Node) → Option<Matched> {
-    match matched_among(seen.tables.rewriting, node, seen.walked()) {
+    match matched_among(seen.tables.rewriting_at(node), node, seen.walked()) {
         Some(found) => Some(found),
         None => proposed_among(seen.tables.learners, seen.tables.placed, node, seen.walked()),
     }
@@ -751,13 +751,13 @@ fn spellings_new(found: List<Matched>, from: Spelling, known: List<Spelling>) �
 }
 
 // The spellings the rules reach from `todo`, `fuel` of them followed.
-fn spellings_closed(fuel: Nat, table: List<Matchable>, had: Walked, lend: Bool, todo: List<Spelling>, done: List<Spelling>) → List<Spelling> {
+fn spellings_closed(fuel: Nat, tables: Tables, had: Walked, lend: Bool, todo: List<Spelling>, done: List<Spelling>) → List<Spelling> {
     match fuel {
         Zero => done ++ todo,
         Succ(less) => match todo {
             Nil => done,
-            Cons(first, rest) => shared(spellings_new(instances_among(table, first.node, had, lend), first, done ++ todo), λ more =>
-                spellings_closed(less, table, had, lend, rest ++ more, done ++ [first])),
+            Cons(first, rest) => shared(spellings_new(instances_among(tables.rewriting_at(first.node), first.node, had, lend), first, done ++ todo), λ more =>
+                spellings_closed(less, tables, had, lend, rest ++ more, done ++ [first])),
         },
     }
 }
@@ -850,7 +850,7 @@ fn Seen::lightest(self seen: Seen, node: Node, found: List<Spelling>, most: Nat,
 fn Seen::spellings_through(self seen: Seen, node: Node, w: Nat, inner: List<Spelling>) → List<Spelling> {
     match inner {
         Nil => [],
-        Cons(first, rest) => spellings_closed(seen.tables.spellings, seen.tables.rewriting,
+        Cons(first, rest) => spellings_closed(seen.tables.spellings, seen.tables,
             Walked(nat_map_set(seen.made, w, first.node), seen.range, seen.bits), seen.lends(), [Spelling(node, first.why)], [])
             ++ seen.spellings_through(node, w, rest),
     }
@@ -861,18 +861,24 @@ fn Seen::spellings_reading(self seen: Seen, node: Node, reads: List<Nat>) → Li
         Nil => [],
         Cons(w, rest) => match nat_map_get(seen.made, w) {
             None => seen.spellings_reading(node, rest),
-            Some(inner) => match spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(inner, [])], []) {
-                Nil => seen.spellings_reading(node, rest),
-                Cons(_, others) => seen.spellings_through(node, w, others) ++ seen.spellings_reading(node, rest),
+            Some(inner) => match seen.tables.reads_through(node, inner) {
+                False => seen.spellings_reading(node, rest),
+                True => match spellings_closed(seen.tables.spellings, seen.tables, seen.walked(), seen.lends(), [Spelling(inner, [])], []) {
+                    Nil => seen.spellings_reading(node, rest),
+                    Cons(_, others) => seen.spellings_through(node, w, others) ++ seen.spellings_reading(node, rest),
+                },
             },
         },
     }
 }
 
 // Every spelling of the word a node writes: from the node as the walk has
-// its operands, then with each operand spelled another way.
+// its operands, then with each operand spelled another way, where a rule
+// read at the node reads a node of the operand's kind
+// (`Tables::reads_through`): most nodes have no such rule, and following
+// their operands' spellings was most of what a searching walk did.
 fn Seen::spellings(self seen: Seen, node: Node) → List<Spelling> {
-    spellings_closed(seen.tables.spellings, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(node, [])], [])
+    spellings_closed(seen.tables.spellings, seen.tables, seen.walked(), seen.lends(), [Spelling(node, [])], [])
         ++ seen.spellings_reading(node, node.reads())
 }
 
@@ -897,7 +903,7 @@ fn Seen::searched(self seen: Seen, node: Node) → Option<Passed> {
 // Whether a node not yet put would be worth its place: the rules give its
 // word a cheaper spelling, as a sum of two constants is a constant.
 fn Seen::folds(self seen: Seen, node: Node) → Bool {
-    match seen.lightest(node, spellings_closed(seen.tables.asking, seen.tables.rewriting, seen.walked(), seen.lends(), [Spelling(node, [])], []), seen.cost(node, node), None) {
+    match seen.lightest(node, spellings_closed(seen.tables.asking, seen.tables, seen.walked(), seen.lends(), [Spelling(node, [])], []), seen.cost(node, node), None) {
         Some(_) => True,
         None => False,
     }
@@ -1153,7 +1159,7 @@ fn narrowed_among(table: List<Matchable>, at: Node, had: Walked, so: Narrowed) �
 // what the rules say of its operands (rules 9 to 12), owed with the
 // derivations the steps read.
 fn Seen::narrowed(self seen: Seen, node: Node, l, r: Nat) → Seen {
-    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing, node, seen.walked(), Narrowed(seen.range, [])), λ found =>
+    shared(explain(100, seen.how, seen.proved, [l, r]), λ why => shared(narrowed_among(seen.tables.testing_at(node), node, seen.walked(), Narrowed(seen.range, [])), λ found =>
         Seen(seen.made, found.range, seen.how, nat_map_set(nat_map_set(why.proved, l, True), r, True), seen.bits,
             seen.pending ++ (why.steps ++ found.steps), seen.indexes, seen.origin, seen.wants, seen.order, seen.joins, seen.tables)))
 }

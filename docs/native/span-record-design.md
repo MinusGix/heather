@@ -75,15 +75,15 @@ own; what the body proves must come from its parameters. Three pieces:
 1. **`invariant P`.** A `while` may state an invariant, checked at the entry
    and at each recursion (found proofs at the call), assumed in the body as
    a squashed parameter, and available after the loop together with the
-   negated test. The insertion sort's inner loop needs `j <= i ∧ i < s.len()`.
-   A fact about captures only (the enclosing `for`'s `i < s.len()`) is
-   stated the same way.
+   negated test. The insertion sort's inner loop states `j <= i`.
+   A fact the loop cannot change (the enclosing `for`'s `i < s.len()`) is
+   given to it without being stated (sequencing note §23.5).
 2. **Short-circuit tests.** `0 < j && key < s[j - 1]` lowers to nested
    tests, so `s[j - 1]` is elaborated under `0 < j`, and `j - 1` does not
    wrap. `&&` and `||` bind looser than the relations (Minus,
    2026-11-17), so this reads as in Rust.
 
-As built: `docs/language/sequencing-surface-design.md` §23.4.
+As built: `docs/language/sequencing-surface-design.md` §23.4 and §23.5.
 
 ## Probed so far
 

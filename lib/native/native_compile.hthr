@@ -124,18 +124,23 @@ record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat
     // The procedures the running body may call: a call of another is
     // refused (`Layout::call_fits`), so the stack an activation needs
     // below it is the deepest of these (`List::reach`).
-    callees: List<Nat> := [] }
+    callees: List<Nat> := [],
+    // The functions it may call, by their regions' `Call`s: a call of
+    // another is refused (`Layout::function_fits`), so the room a call of
+    // a function takes below it is the largest of these
+    // (`List::functions_room`).
+    called: List<Nat> := [] }
 
 fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees, layout.called)
 }
 
 fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees, layout.called)
 }
 
 fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees)
+    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees, layout.called)
 }
 
 // Word `id`'s slot is in the frame; a word in a register needs none.
@@ -386,18 +391,51 @@ fn List::performed_by(self procedures: List<Procedure>, index: Nat) → List<Nat
     match procedures.nth(index) { None => [], Some(proc) => proc.body.performed() }
 }
 
+// The functions a region calls, one entry a `Call`.
+fn StructuredRegion::called(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(_) => [],
+        Sequence(_, continuation) => continuation.called(),
+        Compose(prefix, continuation) => prefix.called() ++ continuation.called(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.called() ++ when_false.called(),
+        Call(callee, _, _) => [callee],
+        Loop(_, _, _, _, body, _, _, _, _) => body.called(),
+        Lend(_, callee, _, _) => [callee],
+    }
+}
+
+// The functions a statement's regions call.
+fn Stmt::called(self s: Stmt) → List<Nat> {
+    match s {
+        Then(first, rest) => first.called() ++ rest.called(),
+        Branch(_, yes, no) => yes.called() ++ no.called(),
+        Repeat(body, _) => body.called(),
+        Compute(region) => region.called(),
+        Perform(_, _, _) => [],
+        Invoke(_) => [],
+        Exit(_) => [],
+        Arg(_, _, _) => [],
+    }
+}
+
+// The functions procedure `index`'s body calls.
+fn List::called_by(self procedures: List<Procedure>, index: Nat) → List<Nat> {
+    match procedures.nth(index) { None => [], Some(proc) => proc.body.called() }
+}
+
 // A layout with its tables: the procedures, the functions, the
-// procedures' placements and the running body's callees.
+// procedures' placements and the running body's callees, procedures and
+// functions.
 fn Layout::tabled(low: BitVec(64), reserved, words: Nat, capacities: List<Nat>, homes: Homes, procedures: List<Procedure>, functions: List<Function>,
-    bodies: List<Frame>, callees: List<Nat>) → Layout {
-    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies, callees)
+    bodies: List<Frame>, callees, called: List<Nat>) → Layout {
+    Layout(low, reserved, words, capacities, homes, homes.leaf_pool(), homes.registers(), procedures, functions, bodies, callees, called)
 }
 
 // The layout procedure `index`'s code is compiled with: the same region,
 // tables and placements, and the procedure's own frame and homes.
 fn Layout::body(self layout: Layout, index: Nat) → Layout {
     Layout::tabled(layout.low, layout.reserved, layout.bodies.frame(index).words, layout.capacities, layout.bodies.frame(index).homes(layout.homes.places, layout.homes.rooms),
-        layout.procedures, layout.functions, layout.bodies, layout.procedures.performed_by(index))
+        layout.procedures, layout.functions, layout.bodies, layout.procedures.performed_by(index), layout.procedures.called_by(index))
 }
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
 theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
@@ -496,29 +534,6 @@ fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
     then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
 }
 
-// The copy's counter and its two walks set, RDI past the offset in R9,
-// and its loop's label.
-fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf)), AddRR(Rdi, R9)])).label(head)
-}
-
-// The `count` bytes in RAX copied from the scratch range to the buffer's
-// past the offset in R9: R8 counts up to RAX, RSI and RDI walk the two
-// ranges, RDX carries each byte.
-fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
-    let set = p.copy_head(layout, buf, head);
-    let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
-    let moved = then(then(tested, LoadByte(ByteLoad(Rdx, Rsi))), StoreByte(ByteStore(Rdi, Rdx)));
-    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
-}
-
-// After the read: the bytes copied in unless it failed (RAX negative), then
-// the result put in its word's home.
-fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
-    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(Succ(names))))));
-    tested.copy_in(layout, buf, Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).label(Succ(Succ(Succ(Succ(names))))).word_from(layout, out, result, Rax)
-}
-
 // AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
 fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
 
@@ -532,7 +547,9 @@ record Emission { layout: Layout, known: List<Fact>, out: List<Nat> }
 // Code to add after a program: items, a word fetched to a register (from
 // its home, or as its number where known), a register kept in a word's home
 // (where the word is live after), `body` skipped where the flags meet `cc`
-// (its label the name after `names`), and a loop: `enter` once, then `body`
+// (its label the name after `names`), one of two ways (`taken` where the
+// flags meet `cc`, at the name after `names`; `straight` otherwise, with a
+// jump over `taken` to the name after that), and a loop: `enter` once, then `body`
 // again and again, until either leaves it (`Leave`, a jump where the flags
 // meet `cc` to the label `to`; the loop's head is the name after `names`
 // and its way out the one after that). What a fragment needs before it is
@@ -544,6 +561,7 @@ inductive Fragment {
     Keep(id: Nat, register: Gpr),
     Both(first: Fragment, rest: Fragment),
     Unless(cc: ConditionCode, names: Nat, body: Fragment),
+    Either(cc: ConditionCode, names: Nat, straight: Fragment, taken: Fragment),
     Leave(cc: ConditionCode, to: Nat),
     Cycle(names: Nat, enter: Fragment, body: Fragment),
 }
@@ -556,6 +574,8 @@ fn Fragment::onto(self code: Fragment, cx: Emission, p: Prog) → Prog {
         Keep(id, register) => p.word_from(cx.layout, cx.out, id, register),
         Both(first, rest) => rest.onto(cx, first.onto(cx, p)),
         Unless(cc, names, body) => At(body.onto(cx, At(p, 0, Jcc(cc, names + 1))), names + 1, Block([])),
+        Either(cc, names, straight, taken) =>
+            At(taken.onto(cx, At(At(straight.onto(cx, At(p, 0, Jcc(cc, names + 1))), 0, Jmp(names + 2)), names + 1, Block([]))), names + 2, Block([])),
         Leave(cc, to) => At(p, 0, Jcc(cc, to)),
         Cycle(names, enter, body) => At(At(body.onto(cx, At(enter.onto(cx, p), names + 1, Block([]))), 0, Jmp(names + 1)), names + 2, Block([])),
     }
@@ -589,7 +609,9 @@ fn Build::plus(self b: Build, to, by: Gpr) → Build { b.ins(AddRR(to, by)) }
 fn Build::minus(self b: Build, to, by: Gpr) → Build { b.ins(SubRR(to, by)) }
 fn Build::cmp(self b: Build, left, right: Gpr) → Build { b.ins(CmpRR(left, right)) }
 fn Build::test(self b: Build, register: Gpr) → Build { b.ins(TestRR(register, register)) }
-fn Build::next(self b: Build, register: Gpr) → Build { b.ins(AddRI8(register, BitVec::ofNat(1))) }
+fn Build::step(self b: Build, register: Gpr, by: Nat) → Build { b.ins(AddRI8(register, BitVec::ofNat(by))) }
+fn Build::next(self b: Build, register: Gpr) → Build { b.step(register, 1) }
+fn Build::load(self b: Build, to, at: Gpr) → Build { b.item(Load(WordLoad(to, at))) }
 fn Build::load_byte(self b: Build, to, at: Gpr) → Build { b.item(LoadByte(ByteLoad(to, at))) }
 fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
 
@@ -602,6 +624,13 @@ fn Build::keep(self b: Build, id: Nat, register: Gpr) → Build { b.add(Keep(id,
 fn Build::unless(self b: Build, cc: ConditionCode, body: Build → Build) → Build {
     let inside = body(b.cx.from(b.names + 1)).cut();
     Build(b.cx, Both(b.cut().code, Unless(cc, b.names, inside.code)), [], inside.names)
+}
+
+// `taken` where the flags meet `cc`, `straight` otherwise.
+fn Build::either(self b: Build, cc: ConditionCode, taken, straight: Build → Build) → Build {
+    let ahead = straight(b.cx.from(b.names + 2)).cut();
+    let other = taken(b.cx.from(ahead.names)).cut();
+    Build(b.cx, Both(b.cut().code, Either(cc, b.names, ahead.code, other.code)), [], other.names)
 }
 
 // A loop's way out: only `Build::loop` makes one, and places it.
@@ -723,22 +752,6 @@ fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>,
     Emission(layout, known, out).from(0).close(fd, result).onto(p).prog
 }
 
-// The path copy's counter and its two walks set, and its loop's label.
-fn Prog::path_head(self p: Prog, layout: Layout, buf, head: Nat) → Prog {
-    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())])).label(head)
-}
-
-// The path's bytes copied from its buffer to the scratch range, up to the
-// count in RCX or its first NUL, out to `done` at either: R8 counts, RSI
-// and RDI walk the two ranges, RDX carries each byte.
-fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog {
-    let set = p.path_head(layout, buf, head);
-    let counted = then(then(set, Block([CmpRR(R8, Rcx)])), Jcc(E, done));
-    let tested = then(then(then(counted, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
-    let moved = then(tested, StoreByte(ByteStore(Rdi, Rdx)));
-    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
-}
-
 // openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
 // capacity) bytes up to its NUL copied to the scratch range and a NUL put
 // after them (RDI is past them); the result put in its word's home.
@@ -781,12 +794,16 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 // ---------------------------------------------------------------------------
 // The command line
 
-// RSP as the process starts, saved to the slot past the scratch range: the
-// command line is above it (`ArgvAt`). `main`'s frame is opened below it
+// How the compiled program is entered: RSP is the top of its stack, and RDI
+// is where the command line is (`ArgvAt`: the process's RSP as it started).
+// The two are separate so that the stack can be any the entry code in front
+// of the program provides (docs/native/system-contract-design.md §4.2: the
+// system's, with RDI a copy of RSP, or the program's own). RDI is saved to
+// the slot past the scratch range; `main`'s frame is opened below RSP
 // (`Prog::frames_main`); `depth` calls are room left
 // (docs/native/native-procedures-design.md §4.1).
 fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
-    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
+    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rdi)));
     then(then(saved, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
 }
 
@@ -1165,8 +1182,9 @@ fn Layout::fits_lent(self layout: Layout, callee: Nat, arguments: List<Nat>, res
         ((arguments.len() + 2 * lent).leb(6) && (layout.words_fit(Cons(result, arguments)) && lent.leb(layout.capacities.len()))))
 }
 
+// …and one the running body may call (`Layout.called`).
 fn Layout::function_fits(self layout: Layout, callee: Nat, arguments: List<Nat>, result: Nat) → Bool {
-    layout.fits_lent(callee, arguments, result, program_lent(layout.functions, callee))
+    layout.fits_lent(callee, arguments, result, program_lent(layout.functions, callee)) && layout.called.holds(callee)
 }
 
 // Each word apart from what is live after it in `words_from`.
@@ -1358,7 +1376,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
 fn Source::layout(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Layout {
-    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies, src.main.performed())
+    Layout::tabled(low, src.words, src.words, src.capacities(), homes, src.procedures, src.functions, bodies, src.main.performed(), src.main.called())
 }
 
 // A word of the frame set to RAX, where the file has the word: a word past
@@ -1430,8 +1448,15 @@ fn Frame::level(self frame: Frame, places: List<Place>) → Nat { (8 * frame.wor
 // A row's entry for a procedure: nothing where the row has none.
 fn List::deep_at(self row: List<Nat>, index: Nat) → Nat { match row.nth(index) { None => 0, Some(deep) => deep } }
 
+// The room a call of one of `called` takes below the caller: the
+// function's room in the table and the CALL's return address; none where
+// the body calls no function.
+fn List::functions_room(self called: List<Nat>, table: List<Nat>) → Nat {
+    match called { Nil => 0, Cons(f, rest) => Nat::max(rooms_at(table, f) + 8, rest.functions_room(table)) }
+}
+
 // The most a call of one of `callees` takes: the callee's level, and below
-// it what `row` says the callee's own calls take.
+// it what `row` says the callee's body takes.
 fn List::deepest(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, row: List<Nat>) → Nat {
     match callees {
         Nil => 0,
@@ -1439,25 +1464,34 @@ fn List::deepest(self callees: List<Nat>, bodies: List<Frame>, places: List<Plac
     }
 }
 
-// For each procedure, the most its calls take with `d` levels of room
-// left: a row from the row before it, so the table costs the depth times
-// the call sites and not a walk of every chain of calls.
-fn List::deep_row(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → List<Nat> {
+// For each procedure, the most its body takes below its frame with `d`
+// levels of room left: the deepest of its calls of procedures, or the room
+// of a function it calls. A row from the row before it, so the table costs
+// the depth times the call sites and not a walk of every chain of calls.
+fn List::deep_row(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, d: Nat) → List<Nat> {
     match d {
-        Zero => [],
+        Zero => procedures.map(λ (proc: Procedure) => Nat::max(0, proc.body.called().functions_room(table))),
         Succ(k) => {
-            let row = procedures.deep_row(bodies, places, k);
-            procedures.map(λ (proc: Procedure) => proc.body.performed().deepest(bodies, places, row))
+            let row = procedures.deep_row(bodies, places, table, k);
+            procedures.map(λ (proc: Procedure) => Nat::max(proc.body.performed().deepest(bodies, places, row), proc.body.called().functions_room(table)))
         },
     }
 }
 
-// The stack the calls of a body take below its frame, the body calling
-// `callees` with `d` levels of room: none with no room (a call then leaves
-// in the callee's entry), else the deepest of its callees with one level
-// less.
-fn List::reach(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, d: Nat) → Nat {
-    match d { Zero => 0, Succ(k) => callees.deepest(bodies, places, procedures.deep_row(bodies, places, k)) }
+// The stack the calls of procedures of a body take below its frame, the
+// body calling `callees` with `d` levels of room: none with no room (a call
+// then leaves in the callee's entry), else the deepest of its callees with
+// one level less.
+fn List::reach(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, d: Nat) → Nat {
+    match d { Zero => 0, Succ(k) => callees.deepest(bodies, places, procedures.deep_row(bodies, places, table, k)) }
+}
+
+// The stack a body takes below its frame: the deepest of its calls of
+// procedures (`callees`, with `d` levels of room), or the room of a call of
+// one of the functions it calls (`called`). The two never stand on the
+// stack together, since a function calls no procedure.
+fn List::below(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, d: Nat) → Nat {
+    Nat::max(callees.reach(procedures, bodies, places, table, d), called.functions_room(table))
 }
 
 // Its way in: the label, the depth counted, the registers it keeps pushed
@@ -1508,41 +1542,23 @@ fn program_linkable(functions: List<Function>) → Bool {
     (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
 }
 
-// The stack a program's calls of its functions ask below the caller,
-// under the room table `rooms` the functions are emitted with: the table's
-// largest room and the CALL's return address; none where there is no
-// function. The table is a choice the function compiler checks a function
-// at a time (`Function::roomy`), so any the functions link under bounds
-// their calls.
+// The room table `rooms` the functions are emitted with, read by entry.
+// The table is a choice the function compiler checks a function at a time
+// (`Function::roomy`), so any the functions link under bounds their calls.
 fn table_room(rooms: List<Nat>) → Nat → Nat { λ (f: Nat) => rooms_at(rooms, f) }
-fn table_calls_room(functions: List<Function>, rooms: List<Nat>) → Nat {
-    match functions { Nil => 0, Cons(_, _) => rooms_top(rooms) + 8 }
-}
 
 // The table the homes choose (`Homes.rooms`), or with none chosen the one
-// no placement exceeds; and what a call of a function takes under it.
+// no placement exceeds.
 fn Homes::room_table(self homes: Homes, functions: List<Function>) → List<Nat> {
     match homes.rooms { Nil => program_rooms(functions), Cons(_, _) => homes.rooms }
 }
-fn Homes::calls_room(self homes: Homes, functions: List<Function>) → Nat { table_calls_room(functions, homes.room_table(functions)) }
 
 // What a program needs of its stack: `main`'s frame and its saved RSP's
-// word, the deepest its calls go, the room of a function a region calls,
-// and one return address more.
+// word, what `main`'s body takes below it (the deepest its calls of
+// procedures go, each body on the way with the room of the functions it
+// calls), and one return address more.
 fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    (src.main.performed().reach(src.procedures, bodies, homes.places, src.depth) + homes.calls_room(src.functions)) + 8 * (src.words + 1)
-}
-
-theorem table_calls_room_above(functions: List<Function>, rooms: List<Nat>, f: Nat, called: Succ(f) <= functions.len()):
-    table_room(rooms)(f) + 8 <= table_calls_room(functions, rooms) {
-    let below: (table_room(rooms)(f) <= rooms_top(rooms)) = rooms_at_top(rooms, f);
-    (match functions as λ fs => Succ(f) <= fs.len() → table_room(rooms)(f) + 8 <= table_calls_room(fs, rooms) {
-        Nil => λ none => false_elim(nothing_below_zero(f, none)),
-        Cons(last, earlier) => λ _ => {
-            let unfold: (table_calls_room(Cons(last, earlier), rooms) = rooms_top(rooms) + 8) = refl;
-            omega(below, unfold)
-        },
-    })(called)
+    src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 * (src.words + 1)
 }
 
 // The functions the regions call, after the program's own code `p`, their
@@ -1902,7 +1918,7 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 // Whether every leaf of the procedure's body has the registers it needs
 // under the frame: the scan's verdict, over the frame's own layout.
 fn Frame::scans(self frame: Frame, src: Source, proc: Procedure) → Bool {
-    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([], []), src.procedures, src.functions, [], proc.body.performed()),
+    match proc.body.scan(Layout::tabled(BitVec::ofNat(0), src.words, frame.words, src.capacities(), frame.homes([], []), src.procedures, src.functions, [], proc.body.performed(), proc.body.called()),
             proc.results, 1) {
         Passed(_) => True,
         Refused(_) => False,

@@ -13,8 +13,12 @@
 //! nothing in the file. From those, the layout's fit to the segment
 //! (`<source>_elf_fits`, by evaluation) and the code's length, every
 //! certificate states the once-proved compiler's theorem of the file
-//! (`<source>_elf_simulates`, by `Source::elf_file_simulates`,
-//! native_compile_elf): the process Linux makes of it simulates the source.
+//! (`<source>_elf_runs`, by `Source::elf_runs`, native_compile_elf): the
+//! process Linux makes of it, started as the file's contract says
+//! (`<source>_elf_contract`: where its stack is from and what it presumes of
+//! the system, printed as the file is written), simulates the source, once it
+//! has stored into each page of its stack's room when the stack is the
+//! system's (`Contract::Runs`; linux_x86_64_stack_growth).
 //! So a theorem about the source's tree (cat's `cat_implements`) is about
 //! the file written. That Linux loads the file as the theorem's loader says
 //! is outside the proof. Nothing is written unless the kernel accepts every
@@ -65,7 +69,7 @@ use super::{allocator, check_file, emission, labels, lowered, parts, refuse_assu
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
 const MAX_FILE: usize = 65535;
-const HEADER: usize = 232;
+const HEADER: usize = 288;
 /// Bytes a piece of the code is cut at, at least. A piece's statement costs
 /// about its bytes' assembly, linear in them (its addresses are `add_nat`
 /// from the page, which compare by their arguments), so the pieces together
@@ -84,6 +88,19 @@ const PAGE: u64 = 4096;
 /// it uses. In the lib so the library gate can hold them to the world.
 use heather_cli::world::WRITE_ELF_IMPORTS as IMPORTS;
 
+/// Where a written program's stack comes from: the entry code in front of
+/// the compiled program provides it (native_compile_elf,
+/// docs/native/system-contract-design.md §4.2).
+#[derive(Clone, Copy, PartialEq)]
+enum StackFrom {
+    /// The stack Linux made: it grows to the stack limit and has a guard
+    /// page, and the theorem asks the system for the program's room on it.
+    System,
+    /// Room in the program's own data segment: nothing is asked of the
+    /// system's stack but the command line, and the size is fixed here.
+    Segment,
+}
+
 pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
@@ -92,6 +109,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut timings = None;
     let mut kernel_workers = None;
     let mut world = None;
+    let mut stack = StackFrom::System;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -109,6 +127,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
                     _ => cache = Some(value),
                 }
             }
+            "--stack" => {
+                stack = match args.next().map(String::as_str) {
+                    Some("system") => StackFrom::System,
+                    Some("segment") => StackFrom::Segment,
+                    _ => return Err("--stack needs `system` (the stack Linux made, the default) or `segment` (the program's own, in its data segment)".into()),
+                };
+            }
             "--kernel-workers" => {
                 let n = args.next().and_then(|value| value.parse::<usize>().ok()).filter(|&n| n > 0)
                     .ok_or("--kernel-workers needs a positive integer")?;
@@ -119,7 +144,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     if !(1..=2).contains(&positional.len()) || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> [<source>] -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+        return Err("usage: heather write-elf <file.hthr> [<source>] -o <output> [--stack system|segment] [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
     // The source: a function of no arguments that builds a `Source` or a
     // `Tool` (`tr`), or the `Source` a `runtime fn` program publishes, by
@@ -249,22 +274,10 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
         let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, module, name);
         function_ir_source::evaluate_numbers(fork, &format!("{module}::{name}")).map_err(|e| format!("`{symbol}` ({name}): {e}"))
     };
-    // The segment: the layout's size in whole pages, which the theorem
-    // takes only up to the profile's limit.
-    let [needed, limit] = numbers(&fork, &probe, &format!("{p}_room"))?[..] else {
+    let [laid, limit] = numbers(&fork, &probe, &format!("{p}_room"))?[..] else {
         return Err(format!("`{symbol}`'s layout did not read back"));
     };
-    let size = needed.div_ceil(PAGE) * PAGE;
-    if size > limit {
-        return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range and saved RSP, \
-            past the I/O profile's limit of {limit} (`io_data_limit`)"));
-    }
     let sizes = numbers(&fork, &probe, &format!("{p}_sizes"))?;
-    let region = DATA..DATA + size;
-    let address = |width: u32, n: u64| {
-        if width == 64 && region.contains(&n) { format!("{LOW}.add_nat({})", n - DATA) }
-        else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
-    };
     // The words' homes, from the greedy allocator (`Source::homes`,
     // native_alloc), spelled: the compile checks them, so the allocator is
     // run once, here, and never by the kernel. Over a literal source it runs
@@ -344,7 +357,8 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
             body_layouts(p, &src, &homes, &frames, &layout, &sizes, &frames_spelled).ok_or_else(|| format!("`{symbol}`'s procedures' layouts did not read back"))?);
         let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}, {frames}) }}\n\
             fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
-            fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
+            fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n\
+            fn {p}_need() → List<Nat> {{ [{src}().need({homes}, {frames})] }}\n", plan.text);
         fork.elab_module_source(parts, &text).map_err(|e| e.render(&text))?;
         Ok((homes_def, numbers(fork, parts, &format!("{p}_allocation"))?))
     };
@@ -365,6 +379,24 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
         return Err(refused(symbol, &allocation));
     }
     let live_sets = numbers(&fork, &parts, &format!("{p}_live_sets"))?;
+    // The stack the program needs under this placement (`Source::need`),
+    // and the segment: the layout's size and, with `--stack segment`, the
+    // program's own stack past it, in whole pages, which the theorem takes
+    // only up to the profile's limit.
+    let [room] = numbers(&fork, &parts, &format!("{p}_need"))?[..] else {
+        return Err(format!("`{symbol}`'s stack room did not read back"));
+    };
+    let needed = if stack == StackFrom::Segment { laid + room } else { laid };
+    let size = needed.div_ceil(PAGE) * PAGE;
+    if size > limit {
+        return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range and saved RSP{}, \
+            past the I/O profile's limit of {limit} (`io_data_limit`)", if stack == StackFrom::Segment { " and its stack" } else { "" }));
+    }
+    let region = DATA..DATA + size;
+    let address = |width: u32, n: u64| {
+        if width == 64 && region.contains(&n) { format!("{LOW}.add_nat({})", n - DATA) }
+        else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
+    };
     let plain = numbers(&fork, &parts, &format!("{p}_plain"))?;
     // The reads of the parts in sessions that share what they force
     // (`function_ir_source::read_sharing`): a part's statement, its
@@ -408,8 +440,17 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, &plain, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, frames: &frames, shapes }),
         emission::Checks { src: &src, homes: &homes, frames: &frames, sets: &live_sets })?;
     let length = lens.iter().sum::<u64>() as usize;
-    if HEADER + length > MAX_FILE {
-        return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
+    // The entry code in front of the program: what provides its stack.
+    let from = match stack { StackFrom::System => "FromSystem", StackFrom::Segment => "FromSegment" };
+    let enter_code = format!("{src}().entry_bytes({from}, {homes}, {frames})");
+    // The system's stack is touched a page of the room at a time: nineteen
+    // bytes to enter, sixteen a touch, three to leave (`stack_touched_entry`,
+    // linux_x86_64_stack_growth). The length is checked against the bytes
+    // read back.
+    let enter_len = match stack { StackFrom::System => 22 + 16 * room.div_ceil(PAGE) as usize, StackFrom::Segment => 13 };
+    let total = enter_len + length;
+    if HEADER + total > MAX_FILE {
+        return Err(format!("`{symbol}` compiles to {total} bytes, past the profile's {MAX_FILE} with its header"));
     }
     if let Some(why) = layout_refusal(&items, &lens) {
         // The compile's own reason first, where it has one: functions that
@@ -426,14 +467,22 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     let code = emission::code(p, &items, &cuts);
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
-    let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)), {size})");
+    // The header names the file's length and where its note is: the note's
+    // length is read with the header, and stated in the certificate as the
+    // number read (`header_of`).
+    let contract = format!("{src}().contract({from}, {size}, {homes}, {frames})");
+    let header_of = |note_len: &str| format!("io_elf_header(BitVec::ofNat(288 + ({total} + {note_len})), BitVec::ofNat((288 + ({total} + {note_len})).shr(8)), {size}, 288 + {total}, {note_len})");
     // The bytes: a part's as its read gave them, the items' around parts
     // read on the same fork, and every jump's displacement written here,
     // now that the labels are laid out (`labels::link`). So only the
     // certificate elaborates the literal, and its table.
     let (byte_text, byte_reads) = emission::byte_reads(p, &spans);
     let reads = format!("import {root};\nimport {parts};\n{imports}\n{byte_text}\
-        fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n");
+        fn {p}_header_numbers() → List<Nat> {{ {}.map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_note_numbers() → List<Nat> {{ {contract}.note().map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_lines_numbers() → List<Nat> {{ {contract}.lines_text().map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_enter_numbers() → List<Nat> {{ {enter_code}.map(λ (b: BitVec(8)) => b.toNat()) }}\n\
+        fn {p}_contract_numbers() → List<Nat> {{ {contract}.spelled() }}\n", header_of(&format!("{contract}.note().len()")));
     let read = format!("{p}_read");
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
@@ -454,20 +503,40 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     }
     labels::link(&items, &offsets, &mut bytes).map_err(|why| format!("`{symbol}`'s bytes did not read back: {why}"))?;
     let head = numbers(&fork, &read, &format!("{p}_header_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
+    let enter = numbers(&fork, &read, &format!("{p}_enter_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
+    // What the file presumes of the system, as the library lists and words
+    // it (`Contract::lines`, `Contract::lines_text`, native_contract): the
+    // lines by name for the certificate, their text to print below, and the
+    // note the file carries, which the certificate states is the contract's
+    // (`<p>_note_is`). So what is printed and what is embedded are what the
+    // kernel checked.
+    let presumed = presumes(&numbers(&fork, &read, &format!("{p}_contract_numbers"))?).ok_or_else(|| format!("`{symbol}`'s contract did not read back"))?;
+    let printed = String::from_utf8(numbers(&fork, &read, &format!("{p}_lines_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?)
+        .map_err(|_| format!("`{symbol}`'s contract did not read back as text"))?;
+    let note = numbers(&fork, &read, &format!("{p}_note_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     drop(fork);
+    if enter.len() != enter_len {
+        return Err("the entry code did not read back".into());
+    }
+    let enter_literal: Vec<String> = enter.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
     if head.len() != HEADER {
         return Err("the header did not read back".into());
     }
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+    let note_len = note.len();
+    if HEADER + total + note_len > MAX_FILE {
+        return Err(format!("`{symbol}` compiles to {total} bytes, past the profile's {MAX_FILE} with its header and its contract's note of {note_len}"));
+    }
+    let note_literal: Vec<String> = note.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+    let header = header_of(&note_len.to_string());
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {frames}, {p}_compiles(), {p}_fits(), {p}_short(),
-        top, depth, placed, s, entry, rsp,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep,
-        Nat::leb_sound(Succ({src}().depth), Nat::pow(2, 64), trivial), args, argv)");
+    let simulated = format!("{src}().elf_runs({p}_from(), {p}_size(), {p}_within(), {p}_code(), {homes}, {frames}, {p}_compiles(),
+        Nat::leb_sound(Succ({src}().depth), Nat::pow(2, 64), trivial), top, args, {p}_fits(), {p}_short(), s,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => {p}_contract().Start(f, top, args)(s), start))");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => {p}_contract().Runs(top, src.denote(args))(s),\n        {simulated})"))
     };
     // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
     // or with procedures `main` past their labels, then exit 0, the
@@ -491,6 +560,25 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
         {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         }),
     };
+    // The program's theorem, over its contract.
+    let theorems = format!("// The theorem of the file written. Of a process the system started as the
+// file's contract says (`Contract::Start`, native_compile_elf: {start_note}),
+// what the contract's `Runs` says: {runs_note}
+// (`Source::elf_runs`, from `native_compile_correct`). `start` is all the
+// theorem asks of the system at the start; `{p}_presumes` lists it, with
+// what the model of the run itself takes for granted.
+theorem {p}_runs(top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io({p}_size()))>,
+    start: {p}_contract().Start({p}_file(), top, args)(s)):
+    {p}_contract().Runs(top, {source}.denote(args))(s) {{
+    {simulates}
+}}
+", start_note = match stack {
+        StackFrom::System => "here `SystemStart`: the file loaded as its\n// headers say, the process at its entry, RSP at `top` and the command line\n// there; nothing is asked of the stack below RSP",
+        StackFrom::Segment => "here `SegmentStart`: the file loaded as its\n// headers say, the process at its entry and the command line at RSP; the\n// stack is in the file's own data segment, and `top` is not used",
+    }, runs_note = match stack {
+        StackFrom::System => format!("it stores into each page of its stack's room, where Linux\n// extends the stack or ends it (`StackTouched`), and the state it then reaches\n// simulates `{symbol}`'s tree run with its command line `args`"),
+        StackFrom::Segment => format!("it simulates `{symbol}`'s tree run with its command line `args`"),
+    });
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
 import {root};
@@ -523,61 +611,87 @@ theorem {p}_compiles(): {src}().compile({LOW}, {homes}, {frames}) = Some({p}_cod
 }}
 
 // Its data segment, in whole pages, within the profile's limit; its words,
-// buffers and scratch range fit it.
+// buffers and scratch range fit it{fits_note}.
 fn {p}_size() → Nat {{ {size} }}
 theorem {p}_within(): {p}_size() <= io_data_limit() {{ Nat::leb_sound({p}_size(), io_data_limit(), trivial) }}
 
-theorem {p}_fits(): Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size() <= {p}_size() {{
-    Nat::leb_sound(Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size(), {p}_size(), trivial)
+// What the file presumes of the system that runs it
+// (docs/native/system-contract-design.md): where its stack is from, its
+// segment and the stack room the program needs under this placement
+// (`Source::need`), and every line of it by name (`Presumes`, each with its
+// basis: a written standard, a test at startup, or trust).
+fn {p}_from() → StackFrom {{ {from} }}
+fn {p}_contract() → Contract {{ {src}().contract({p}_from(), {p}_size(), {homes}, {frames}) }}
+theorem {p}_contract_is(): {p}_contract() = Contract({from}, {size}, {room}) {{ refl }}
+theorem {p}_presumes(): {p}_contract().lines() = [{lines}] {{ refl }}
+
+theorem {p}_fits(): {fits_of} <= {p}_size() {{
+    Nat::leb_sound({fits_of}, {p}_size(), trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
-", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles);
+", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles,
+        fits_note = if stack == StackFrom::Segment { ", and its stack after them" } else { "" },
+        fits_of = format!("{src}().segment_use({p}_from(), {homes}, {frames})"), lines = presumed.names.join(", "));
     text.push_str(&labels::byte_pieces(p, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 fn {p}_header() → List<BitVec(8)> {{ [{}] }}
 theorem {p}_header_is(): {header} = {p}_header() {{ refl }}
 {lengths}theorem {p}_length(): {p}_upto_0().len() = {length} {{ {p}_upto_0_len() }}
 
-// The file written: its header, then the code.
-fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ {p}_upto_0() }}
-
-theorem {p}_file_is(): io_elf_file({p}_upto_0(), {p}_size()) = {p}_file() {{
-    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8)), {p}_size()), {p}_upto_0()), {p}_length()),
-        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, {p}_upto_0()), {p}_header_is()))
+// The entry code in front of the program, which provides its stack
+// (`Source::entry_bytes`, native_compile_elf), and its bytes.
+fn {p}_stack() → List<BitVec(8)> {{ {src}().entry_bytes({p}_from(), {homes}, {frames}) }}
+fn {p}_enter() → List<BitVec(8)> {{ [{enter_bytes}] }}
+theorem {p}_enter_is(): {p}_stack() = {p}_enter() {{ refl }}
+theorem {p}_total(): ({p}_enter() ++ {p}_upto_0()).len() = {total} {{
+    trans({p}_enter().len_append({p}_upto_0()), cong_fn<Nat, Nat>(λ n => {p}_enter().len() + n, {p}_length()))
 }}
 
-// Whatever names the compile's program, its file is the one written.
+// The file's note: its contract as text in an ELF note (`Contract::note`,
+// native_contract), which the fourth program header names. A reader of the
+// file alone cannot tell it from a false one; this certificate is what
+// shows it is the contract of this file.
+fn {p}_note() → List<BitVec(8)> {{ [{note_bytes}] }}
+theorem {p}_note_is(): {p}_contract().note() = {p}_note() {{ refl }}
+theorem {p}_note_length(): {p}_note().len() = {note_len} {{ refl }}
+
+// The file written: its header, the entry code, the program, then the note.
+fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ (({p}_enter() ++ {p}_upto_0()) ++ {p}_note()) }}
+
+theorem {p}_file_is(): io_elf_file({p}_enter() ++ {p}_upto_0(), {p}_note(), {p}_size()) = {p}_file() {{
+    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(288 + (n + {p}_note().len())), BitVec::ofNat((288 + (n + {p}_note().len())).shr(8)), {p}_size(), 288 + n, {p}_note().len()),
+            ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_total()),
+        trans(cong_fn<Nat, List<BitVec(8)>>(λ k => List::append(io_elf_header(BitVec::ofNat(288 + ({total} + k)), BitVec::ofNat((288 + ({total} + k)).shr(8)), {p}_size(), 288 + {total}, k),
+                ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_note_length()),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, ({p}_enter() ++ {p}_upto_0()) ++ {p}_note()), {p}_header_is())))
+}}
+
+// Whatever names the compile's program, its file with its contract's note
+// is the one written.
 theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}, {frames}) = Some(program)):
-    io_elf_file(assemble(no_fills(), program, []), {p}_size()) = {p}_file() {{
+    io_elf_file({src}().code({p}_from(), {homes}, {frames}, program), {p}_contract().note(), {p}_size()) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
-    j(same, λ q _ => io_elf_file(assemble(no_fills(), q, []), {p}_size()) = {p}_file(),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
+    j(same, λ q _ => io_elf_file({src}().code({p}_from(), {homes}, {frames}, q), {p}_contract().note(), {p}_size()) = {p}_file(),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file({p}_stack() ++ x, {p}_contract().note(), {p}_size()), {p}_bytes()),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => io_elf_file(e ++ {p}_upto_0(), {p}_contract().note(), {p}_size()), {p}_enter_is()),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ n => io_elf_file({p}_enter() ++ {p}_upto_0(), n, {p}_size()), {p}_note_is()), {p}_file_is()))))
 }}
 
-theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65535 {{
-    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65535,
-        j(sym({p}_length()), λ n _ => 232 + n <= 65535, Nat::leb_sound(232 + {length}, 65535, trivial)))
+theorem {p}_short(): 288 + ({src}().code({p}_from(), {homes}, {frames}, {p}_code()).len() + {p}_contract().note().len()) <= 65535 {{
+    j(sym({p}_note_is()), λ n _ => 288 + ({src}().code({p}_from(), {homes}, {frames}, {p}_code()).len() + n.len()) <= 65535,
+        j(sym({p}_note_length()), λ k _ => 288 + ({src}().code({p}_from(), {homes}, {frames}, {p}_code()).len() + k) <= 65535,
+            j(sym({p}_enter_is()), λ e _ => 288 + ((e ++ assemble(no_fills(), {p}_code(), Nil)).len() + {note_len}) <= 65535,
+                j(sym({p}_bytes()), λ b _ => 288 + (({p}_enter() ++ b).len() + {note_len}) <= 65535,
+                    j(sym({p}_total()), λ n _ => 288 + (n + {note_len}) <= 65535,
+                        Nat::leb_sound(288 + ({total} + {note_len}), 65535, trivial))))))
 }}
 
-// The process Linux makes of the file written, at its entry with `depth`
-// bytes of stack below RSP, enough for what the source needs under this
-// placement (`Source::need`: `main`'s frame, the deepest its calls of
-// procedures go, each level the callee's own frame and saved registers,
-// and its calls of functions), and the command line `args` on the stack
-// above,
-// simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
-// from `native_compile_correct`).
-theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
-    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().need({homes}, {frames}) <= depth, args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
-    {simulates}
-}}
-", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
+{theorems}", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length), enter_bytes = enter_literal.join(", "), note_bytes = note_literal.join(", "), theorems = theorems));
     let mut file = head;
+    file.extend_from_slice(&enter);
     file.extend_from_slice(&bytes);
+    file.extend_from_slice(&note);
 
     let unchecked = certificate.with_extension("unchecked.hthr");
     if unchecked.symlink_metadata().is_ok() {
@@ -608,8 +722,43 @@ theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, dept
     write_executable(&output, &file)?;
     println!("{}: {} bytes and a {size}-byte data segment, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it",
         output.display(), file.len());
+    println!("stack: {}", match stack {
+        StackFrom::System => format!("the system's, {room} bytes of it below the entry stack pointer, touched a page at a time as the program starts"),
+        StackFrom::Segment => format!("the program's own, {room} bytes of its data segment"),
+    });
+    println!("`{symbol}` presumes of the system that runs it:");
+    for line in printed.lines() {
+        println!("  {line}");
+    }
+    println!("the file carries these lines as an ELF note (`readelf -n`, `strings`): the compiler's claim, which the certificate is what verifies");
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+/// A contract's lines as `Contract::spelled` gives them, three numbers a
+/// line (which, its basis, its figure): each by its constructor's name, for
+/// the certificate to state. Their words are the library's
+/// (`Contract::lines_text`), read back and printed as they are.
+struct Presumed { names: Vec<String> }
+fn presumes(numbers: &[u64]) -> Option<Presumed> {
+    if numbers.len() % 3 != 0 { return None; }
+    let mut names = Vec::new();
+    for line in numbers.chunks(3) {
+        let &[which, _, figure] = line else { return None };
+        names.push(match which {
+            0 => "Processor".to_string(),
+            1 => format!("FileLoaded({figure})"),
+            2 => "EntryAddress".to_string(),
+            3 => "CommandLine".to_string(),
+            4 => format!("StackRoom({figure})"),
+            5 => "CallsAnswered".to_string(),
+            6 => "NoFatalSignal".to_string(),
+            7 => format!("StackAbove({figure})"),
+            8 => "StackGrowth".to_string(),
+            _ => return None,
+        });
+    }
+    Some(Presumed { names })
 }
 
 /// A tool's lowering, read and stated a part at a time (`parts`): the
@@ -766,7 +915,7 @@ fn layout_literal(src: &str, homes: &str, frames: &str, sizes: &[u64], spelled: 
     let (&count, rest) = spelled.split_first()?;
     let of = rest.get(..usize::try_from(count).ok()?)?;
     let (pool, taken) = pools(&used_registers(of, &[]));
-    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames}, {src}().main.performed())",
+    Some(format!("Layout({LOW}, {words}, {words}, [{}], {homes}, [{pool}], [{taken}], {src}().procedures, {src}().functions, {frames}, {src}().main.performed(), {src}().main.called())",
         capacities.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")))
 }
 
@@ -781,7 +930,7 @@ fn body_layouts(p: &str, src: &str, homes: &str, frames: &str, layout: &str, siz
         let (pool, taken) = pools(&used_registers(&homes_as_spelled(f.of), f.pins));
         let name = emission::body_layout(p, i);
         text.push_str(&format!("fn {name} → Layout {{ Layout({LOW}, {reserved}, {}, [{capacities}], Homes([{}], {homes}.loops, {homes}.places, [{}], {homes}.rooms), [{pool}], [{taken}], \
-            {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i})) }}\n\
+            {src}().procedures, {src}().functions, {frames}, {src}().procedures.performed_by({i}), {src}().procedures.called_by({i})) }}\n\
             theorem {p}_layout_b{i}_is(): {name} = {layout}.body({i}) {{ refl }}\n", f.words, homes_list(f.of), pins_list(f.pins)));
     }
     Some(text)
