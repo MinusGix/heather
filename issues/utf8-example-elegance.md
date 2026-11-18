@@ -84,3 +84,11 @@ classify a lead byte separately).
   not the bit-blast: a bv_decide that reads a program's ifs as
   `ite` without splitting them would retire `four_bits` (item 2), and the
   range-table program (item 4) has no nested arithmetic tests to split.
+- 2026-11-18: item 2, first half: `split_all` splits a decision
+  (`b.is_true_dec()`) as itself and rewrites `b` by the case equation
+  (`Bool::decided`), so `emit_is_some` is `split_all; all_goals { refl }`
+  ([[split-all-decided-proof-scrutinee]], closed). The `↔` half moves into
+  item 4: its statements are the ones that change (a lead's class, byte
+  ranges, `Result<(), Utf8Error>`), and reading `∧ ∨ ↔ ¬` in `bv_decide`
+  is built for the shapes those statements take rather than for today's
+  `is_some()` equations, which item 4 replaces.
