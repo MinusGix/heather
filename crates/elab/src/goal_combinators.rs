@@ -122,6 +122,9 @@ struct Blocked {
     /// The word comparison the scrutinee is or unfolds to: each arm gets its
     /// Nat reading.
     comparison: Option<Rc<Term>>,
+    /// The Boolean `b` when the scrutinee is its decision `b.is_true_dec()`;
+    /// each arm's proof then decides `b` ([`decided_boolean`]).
+    decision: Option<Rc<Term>>,
 }
 
 fn term_type(term: Rc<Term>) -> Type {
@@ -418,6 +421,11 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32, de
         return None;
     }
     *budget -= 1;
+    // A decision is split where a match takes it apart (below), never at
+    // the Boolean's own tests inside it.
+    if crate::omega_cert::named_args(elab, term, "bool::Bool::is_true_dec").is_some() {
+        return None;
+    }
     let (_, args) = crate::spelling::app_spine(term);
     // `split_all` looks in a call's arguments first; `cases h` looks in its
     // unfolding first, where the callee's own tests are, and spends no
@@ -496,6 +504,28 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
         // `cases h` splits on that call with the child computed (`first`).
         let readable = if deep { None } else { readable_call(elab, cx, scrut) };
         let test = readable.as_ref().unwrap_or(scrut);
+        // A decision computed from a Boolean (`is_scalar(code).is_true_dec()`,
+        // which `emit_dec` matches on to get the proof `char::ofNat` takes)
+        // is split as the decision, not at the Boolean's own tests: the
+        // proof in each arm is typed by the Boolean, so abstracting a test
+        // inside it would leave the match's arms at the wrong type. Each arm
+        // then has the Boolean decided by its proof ([`decided_boolean`],
+        // issues/split-all-decided-proof-scrutinee.md).
+        if let Some(inductive) = &domain
+            && let Some(args) = crate::omega_cert::named_args(elab, scrut, "bool::Bool::is_true_dec")
+            && let [boolean] = args[..]
+            && elab.spell_term_source(cx, boolean).is_some()
+            && elab.spell_term_source(cx, scrut).is_some()
+        {
+            return Some(Blocked {
+                original: term.clone(),
+                replacement: payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), scrut, &[])?),
+                scrutinee: Rc::clone(scrut),
+                constructors: constructors(inductive),
+                comparison: None,
+                decision: Some(Rc::clone(boolean)),
+            });
+        }
         if (deep || elab.spell_term_source(cx, test).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
             return Some(Blocked { original: term.clone(), replacement: lifted(&reduct, &found)?, ..found });
         }
@@ -508,6 +538,7 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
                 scrutinee: comparison.clone(),
                 constructors: constructors(inductive),
                 comparison: Some(comparison),
+                decision: None,
             });
         }
         // A scrutinee that computes to a constructor reduces the match at a
@@ -530,6 +561,7 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
             scrutinee: Rc::new(settled(elab, cx, test)),
             constructors: constructors(&inductive),
             comparison: None,
+            decision: None,
         });
     }
     None
@@ -634,6 +666,9 @@ pub(crate) enum Step {
     /// Hypotheses (positions in Γ) to revert into the goal, so the split
     /// that follows takes them apart with it.
     Revert(Vec<usize>),
+    /// A rewrite by a decision's case equation, checked at the simplified
+    /// goal it rewrites ([`decided_boolean`]).
+    Decided(Expr, Type),
     Leaf(Type),
 }
 
@@ -790,6 +825,9 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     if let Some(injected) = injected_hypothesis(elab, cx, leaf, span) {
         return Step::Intro(injected);
     }
+    if let Some(rewrite) = decided_boolean(elab, cx, &goal, leaf, span) {
+        return Step::Decided(rewrite, goal);
+    }
     if let Some(positions) = splittable_hypotheses(elab, cx, &goal, leaf, span) {
         return Step::Revert(positions);
     }
@@ -800,6 +838,44 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
             None => Step::Leaf(goal),
         },
     }
+}
+
+/// `rewrite(b.decided(h), …)` for a case equation `h:
+/// b.is_true_dec() = Inl(p)` a split on a decision introduced, whose Boolean
+/// `b` the goal still mentions: `b` becomes `verdict(Inl(p))`, `True`. Rewritten in the
+/// arm itself, the goal still held the match on the decision, whose arms
+/// are typed by `b`, and no motive abstracts `b` there; once the case's goal
+/// is simplified the proof is gone from it (`is_some(Some(…))` is `True`)
+/// and `b` is an ordinary subterm (issues/split-all-decided-proof-scrutinee.md).
+fn decided_boolean(elab: &Elaborator, cx: &Cx, goal: &Type, leaf: &Expr, span: Span) -> Option<Expr> {
+    if elab.shadowed(cx, "rewrite") || cx.names.iter_inner().any(|name| name == "rewrite") {
+        return None;
+    }
+    let depth = cx.gamma.entries.len();
+    cx.names.iter().zip(cx.gamma.entries.iter()).enumerate().rev().find_map(|(at, (name, entry))| {
+        if !case_equation(name) {
+            return None;
+        }
+        let Type::Id { lhs, rhs, .. } = entry.ty.shift_local((depth - at) as u32) else { return None };
+        let args = crate::omega_cert::named_args(elab, &lhs, "bool::Bool::is_true_dec")?;
+        let [boolean] = args[..] else { return None };
+        crate::spelling::inj_of(&rhs)?;
+        if picked(goal, &|term| *term == **boolean).is_empty() {
+            return None;
+        }
+        let spelled = elab.spell_term_source(cx, boolean)?;
+        let fact = crate::omega_cert::parse_generated_expr(&format!("bool::Bool::decided({spelled}, {name})")).ok()?;
+        Some(Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var("rewrite".into()), span }),
+                args: vec![fact, continuation(leaf, span)],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        })
+    })
 }
 
 /// `subst(h, …)` for the innermost hypothesis `h` a split introduced that

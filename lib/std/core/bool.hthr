@@ -354,6 +354,15 @@ theorem eq_false_of_not_is_true(b: Bool, no: ¬b.IsTrue()): b = False {
     match b { False => refl, True => false_elim(no(trivial)) }
 }
 
+// What a decision's case says of its Boolean: the case equation a split on
+// `b.is_true_dec()` binds (split_all's arms, `match d: b.is_true_dec()`)
+// rewrites `b` to the verdict of the case's constructor, which computes.
+fn Bool::verdict({b: Bool}, d: b.IsTrue() ∨ ¬b.IsTrue()) → Bool { match d { Inl(_) => True, Inr(_) => False } }
+theorem Bool::verdict_dec(self b: Bool): Bool::verdict(b.is_true_dec()) = b { match b { False => refl, True => refl } }
+theorem Bool::decided(self b: Bool, {d: b.IsTrue() ∨ ¬b.IsTrue()}, h: b.is_true_dec() = d): b = Bool::verdict(d) {
+    rewrite(sym(h), sym(b.verdict_dec()))
+}
+
 // A conjunction's verdict and its parts' verdicts.
 theorem Bool::and_true_parts(self a, b: Bool): (a && b) = True → a = True ∧ b = True {
     match a { True => λ h => ⟨refl, h⟩, False => λ h => absurd(h) }

@@ -1,6 +1,6 @@
 ---
 title: split_all fails internally on a match whose scrutinee is a decision built from a Boolean
-status: open
+status: closed
 labels: [tactics,elaboration]
 area: tactics
 created: 2026-11-18
@@ -21,3 +21,13 @@ Boolean's own tests are what the search reaches.
 Expected: split at the Boolean test and carry the decision along (each case
 of `is_scalar(code)` reduces `is_true_dec()` to `Inl`/`Inr`), or refuse with
 the stuck match named, never an internal error.
+
+## Log
+
+- 2026-11-18: fixed. A match whose scrutinee is `b.is_true_dec()` is split on
+  the decision itself (`stuck_by_unfolding`), never at `b`'s own tests inside
+  it, whose abstraction left the arms' proofs at the wrong type. Once a case's
+  goal is simplified the proof is gone from it, and `decided_boolean` rewrites
+  `b` by the case equation (`Bool::decided`, `b = Bool::verdict(d)`, in
+  bool.hthr). Probes in `lib/_tests/std/tactic/split_all_tests.hthr`;
+  `emit_is_some` in examples/utf8/utf8_check.hthr is `split_all; all_goals { refl }`.

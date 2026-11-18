@@ -602,6 +602,10 @@ impl Checking<'_> {
                             }
                         }
                     }
+                    goal_combinators::Step::Decided(expr, goal) => {
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
+                        self.elab_check_skel_slots(cx, &expr, &goal, lvl, hint, skel, capture_slots)
+                    }
                     goal_combinators::Step::Revert(positions) => {
                         let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
