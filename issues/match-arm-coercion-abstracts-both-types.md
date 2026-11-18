@@ -1,6 +1,6 @@
 ---
 title: Inside a plain match, every checking fallback rebuilds both types to ask whether the test occurs
-status: open
+status: closed
 labels: [performance,elab,matching]
 area: language
 created: 2026-11-18
@@ -33,3 +33,7 @@ So the price is (checks) × (size of both types), and the real-analysis proofs, 
 ## Done when
 
 `below_located`'s `local_subst_nodes` falls by the 174 M above, and `match/arm-checks` costs what `match/plain-checks` does per check.
+
+## Log
+
+- 2026-11-18: Fixed. The abstraction's rebuild was a small part (asking with a read alone took `below_located` from 22 to 20 s). The cost was the walk's comparison: at every node it weakened the test past the binders above it, so a large test deep in a type was copied once per depth, rebuilt from scratch each check. `AbstractLocal::pre_tm` now builds the weakened test only for a node whose application spine (form, length, head constant) could be it, and `Type::mentions_local` is the same walk read-only, stopping at the first hit; `Readings::coerce` and five other "does it occur" callers use it. Release binary, kernel width one: `below_located` 20.3 → 6.5 s (5.4 s with the check skipped entirely), local nodes 242 M → 68 M; `cubic_nonconst` 12.3 → 9.9 s, local nodes 159 M → 78 M (7.1 s with the check skipped; the rest are checks that find the test and try the transport). `match/arm-checks` is now 1.1–1.2× `match/plain-checks` per check. Whole library re-elaborated with `--expectations`: 664 of 664 files pass. Law `mentions_agrees_with_abstraction` (subst_laws.rs) pins the read to the abstraction, with the test planted under one to three binders.

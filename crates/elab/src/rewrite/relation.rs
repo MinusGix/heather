@@ -1104,7 +1104,7 @@ impl<'a> RelationRewrite<'a> {
     /// `p : R(t, t')` (§10.1).
     fn lambda(&mut self, t: &Rc<Term>, dom_level: &Level, cod_level: &Level, dom: &Rc<Type>, body: &Rc<Term>) -> R<Node> {
         if let Some((lhs, ..)) = self.pattern()
-            && dom.abstract_local(&lhs).is_some()
+            && dom.mentions_local(&lhs)
         {
             return Err(ElabError::Elab {
                 msg: format!(
@@ -1188,7 +1188,7 @@ impl<'a> RelationRewrite<'a> {
     fn opaque(&mut self, t: &Rc<Term>) -> R<Node> {
         let Some((lhs, ..)) = self.pattern() else { return Ok(Node::Same) };
         let probe = Type::El { level: Level::Zero, tm: Rc::clone(t) };
-        if probe.abstract_local(&lhs).is_none() {
+        if !probe.mentions_local(&lhs) {
             return Ok(Node::Same);
         }
         Err(ElabError::Elab {
@@ -1378,7 +1378,7 @@ impl<'a> RelationRewrite<'a> {
         // The label's payload is not walked: an occurrence there would be
         // left behind.
         if let Some((lhs, ..)) = self.pattern()
-            && (Type::El { level: Level::Zero, tm: Rc::clone(&node.label) }).abstract_local(&lhs).is_some()
+            && (Type::El { level: Level::Zero, tm: Rc::clone(&node.label) }).mentions_local(&lhs)
         {
             return Err(ElabError::Elab {
                 msg: format!(

@@ -498,6 +498,45 @@ fn abstraction_inverts_substitution() {
     }
 }
 
+/// `mentions_local` is `abstract_local(..).is_some()` read without building,
+/// and both find a pattern that is there: a subterm of the goal, at the root
+/// and under a binder (where the walk compares the pattern weakened past it,
+/// and skips nodes whose spine head rules them out first).
+#[test]
+fn mentions_agrees_with_abstraction() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x2545f4914f6cdd1d);
+        let sc = gen_scope(&mut r);
+        if sc.local.len == 0 {
+            continue;
+        }
+        let t = gen_term(&sc, &mut r, BUDGET);
+        let at_root = Type::Id { level: Level::Zero, ty: Rc::new(Type::Nat), lhs: Rc::clone(&t), rhs: Rc::clone(&t) };
+        // Under one to three binders: the pattern is compared weakened past
+        // them, and the walk's filters must not rule out its copy there.
+        let depth = 1 + r.below(3);
+        let mut under = at_root.shift_local(depth);
+        for _ in 0..depth {
+            under = Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: Rc::new(Type::Nat), cod: Rc::new(under) };
+        }
+        let subterms = at_root.root_terms();
+        let mut pats = vec![Term::Var(LocalVar(r.below(sc.local.len))), (*gen_term(&sc, &mut r, BUDGET)).clone()];
+        if !subterms.is_empty() {
+            pats.push((*subterms[r.below(subterms.len() as u32) as usize]).clone());
+        }
+        for (k, p) in pats.iter().enumerate() {
+            for ty in [&at_root, &under] {
+                let found = ty.abstract_local(p).is_some();
+                assert_eq!(ty.mentions_local(p), found, "seed {seed}: mentions_local disagrees with abstract_local");
+                if k == 2 {
+                    assert!(found, "seed {seed}: a subterm of the goal was not found");
+                }
+            }
+        }
+    }
+}
+
 /// What abstraction leaves alone it does not rebuild: a subtree that mentions
 /// no variable of the scope holds no occurrence of a pattern that does, and
 /// needs no room made for `z`, so the motive shares it with the goal.
