@@ -150,3 +150,15 @@ theorem deep_clause_eq_swapped<A>(a: A): Option<A> {
         _ => None
     }
 }
+
+// `[…]` asks the literal protocol the same questions wherever a container
+// and a length repeat, and the elaborator answers a repeat from memory.
+// The repeats here are of each kind it must keep apart: one container at
+// several lengths, one length at several containers, the empty literal
+// between others, and the same under a binder whose type the element is.
+fn literal_lengths<A>(xss: List<List<A>>) → List<Nat> { xss.map(λ (xs: List<A>) => xs.len()) }
+theorem literals_repeat_lengths(): literal_lengths<Nat>([[1, 2], [], [3, 4], [5], [], [6]]) = [2, 0, 2, 1, 0, 1] { refl }
+theorem literals_repeat_containers(): literal_lengths<Nat>([[1], [], [2]]).append(literal_lengths<Bool>([[True], [], [False, True]])) = [1, 0, 1, 1, 0, 2] { refl }
+theorem literals_repeat_under_a_binder<A>(x, y: A): literal_lengths<A>([[x], [], [y, x], []]) = [1, 0, 2, 0] { refl }
+theorem literals_repeat_in_scopes(n: Nat, flag: Bool): literal_lengths<Nat>([[n, n], []]).append(literal_lengths<Bool>([[flag, flag], [], [flag]])) = [2, 0, 2, 0, 1] { refl }
+theorem literals_keep_their_elements(n: Nat): List::append<Nat>([n], List::append<Nat>([], [n + 1, 2])) = [n, n + 1, 2] { refl }

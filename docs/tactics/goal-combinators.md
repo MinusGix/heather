@@ -65,7 +65,18 @@ would be split independently. A recursive definition at a constructor
 (`Cons(b, rest).filter(kept)`) reaches its element through the
 constructor's encoding, a projection out of a pair; a comparison's projected
 operands are read off the pair (`b`), so the occurrence there and the one
-the other side spells are one split. Between steps the goal is simplified alike
+the other side spells are one split. A scrutinee that is not a comparison
+is read through the encoding too (`bit7(c1)` reached as `bit7` of the
+list's head projection): the split then names the term the other side
+spells, so the decoder's `cont_lead(c1, r)` and a side that says `bit7(c1)`
+split as one (`lib/_tests/std/text/utf8_tests.hthr`). The search under one
+stuck match is bounded at 1024 steps, which a four-byte sequence's third
+continuation byte needs. The search for hidden occurrences reads a word
+operation's operands without unfolding the operation (`pick(b, c).eq_bit(0)`
+hides the test in `pick`). The `cases` request a Heather tactic makes
+(`bv_decide`'s split) searches each side of an equation under its own
+budget, so a side that unfolds far without the test does not spend the
+search for the other. Between steps the goal is simplified alike
 everywhere: computed matches, projections of pairs and applied function
 literals are reduced, inside constructors too. So is a call of a definition
 whose match the split decided: `Bool::and(False, b)` once a comparison is

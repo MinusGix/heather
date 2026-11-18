@@ -4295,15 +4295,20 @@ impl Host<'_> {
         }
         let goal_ty = crate::inductive::decoded(&goal_ty).into_owned();
         let mut pairs = Vec::new();
-        let mut budget = 256;
+        // Each side searched under its own budget: a side whose calls unfold
+        // far without the test (`emit(…).holds()` beside the program's
+        // verdict) would otherwise spend the search before the side that
+        // holds it.
         match &goal_ty {
             Type::Id { lhs, rhs, .. } => {
                 for side in [lhs, rhs] {
+                    let mut budget = 256;
                     crate::goal_combinators::co_occurrences(self, &cx, side, &scrut, &scrut, &mut budget, &mut pairs);
                 }
             }
             Type::El { tm, .. } => {
                 for arg in crate::spelling::app_spine(tm).1 {
+                    let mut budget = 256;
                     crate::goal_combinators::co_occurrences(self, &cx, arg, &scrut, &scrut, &mut budget, &mut pairs);
                 }
             }

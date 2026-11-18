@@ -92,6 +92,41 @@ decision, and the parameters-vs-indices line are all in
 accommodate it (projection, `let { }`, match arms and the level fold are all
 indifferent to where a type in the spine came from).
 
+### 1.3 A record in a type's namespace (added 2026-11-18)
+
+A record whose value parameters start with the thing it is a claim about
+can be declared in that thing's type's namespace, as a `fn Target::m` is
+(`issues/record-in-type-namespace.md`):
+
+```heather
+record Target::Held(self t: Target, live: List<Nat>, env: Env) {
+    words: List<Nat>,
+    placed: t.Placed(env.with_words(words)),
+}
+```
+
+- **Spellings.** `t.Held(live, env)` and `Target::Held(t, live, env)` are
+  one type; `Held` alone is not in the ambient namespace. A construction
+  names the record by its whole name, `Target::Held(words := …, placed :=
+  …)`, or leaves it to the expected type; fields are read as on any record
+  (`held.placed`).
+- **The method spelling is always the type.** `t.Held(…)`'s arguments are
+  the record's value parameters, so the call is the type former even where a
+  bare `Target::Held(…)` would read as the constructor (an inference
+  position). `Dot` resolution writes it as a type literal
+  (`dispatch/member.rs`).
+- **`self`** may mark the first value parameter and only that one: a method
+  call puts its receiver in the first positional argument of a record's type,
+  and a record keeps no parameter metadata for a later position to be read
+  from. Unmarked, the first parameter is still the receiver, as at a `fn`.
+- **The owner is checked**, as at a `fn` member: it must name a type or a
+  type former in scope (`elab_inductive_members`). One qualifier only; an
+  `inductive` or `enum` still declares no qualified name, since no use asked
+  for one.
+- **Images carry nothing new.** The receiver route needs the base name in
+  the member table (`names::insert_current`), and it is read off the
+  inductive's name when its name event is recorded or replayed.
+
 ### 1.1 Type parameters are monomorphized, like an `inductive`'s
 
 `record Monoid<A>` follows `InductiveDecl`, not `Decl`: `A` is a surface

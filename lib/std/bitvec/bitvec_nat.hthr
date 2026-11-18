@@ -22,6 +22,20 @@ theorem BitVec::toNat_inj(n: Nat, {a, b: BitVec(n)}, p: a.toNat() = b.toNat()): 
     trans(sym(BitVec::ofNat_toNat(n, a)), trans(BitVec::ofNat_cong(n, p), BitVec::ofNat_toNat(n, b)))
 }
 
+// Equality of words is equality of their values.
+theorem BitVec::eq_bit_nat(n: Nat, a, b: BitVec(n)): a.eq_bit(b) = a.toNat().same(b.toNat()) {
+    match e: a.eq_bit(b) {
+        True => sym(rewrite(BitVec::eq_of_eq_bit(n, a, b, e), b.toNat().same_self())),
+        False => match s: a.toNat().same(b.toNat()) {
+            False => refl,
+            True => {
+                let same: (a.eq_bit(b) = True) = rewrite(BitVec::toNat_inj(n, a.toNat().same_sound(b.toNat(), s)), BitVec::eq_bit_self(n, b));
+                absurd(trans(sym(e), same))
+            },
+        },
+    }
+}
+
 // `ofNat` keeps the low `n` digits: its value is the argument modulo `2^n`.
 // The recursion is `ofNat`'s, on the width; the step is `div_mod_unique` at
 // the low bit plus twice the induction hypothesis.
@@ -368,6 +382,25 @@ theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
                 (a.toNat() + 1).leb_sound(b.toNat(), rewrite(same, trivial))))),
         },
     }
+}
+
+// Two words of any widths compared by value, as the bit-blaster compares
+// them: each read from bit 0 at a common width `w` that holds both.
+theorem BitVec::lt_bits_nat(m, n, w: Nat, x: BitVec(m), y: BitVec(n), hm: m <= w, hn: n <= w):
+    x.bits_from(0, n := w).unsigned_lt_bit(y.bits_from(0, n := w)) = Succ(x.toNat()).leb(y.toNat()) {
+    rewrite(unsigned_lt_nat(w, x.bits_from(0, n := w), y.bits_from(0, n := w)),
+        BitVec::bits_from_zero_toNat(m, w, x, hm), BitVec::bits_from_zero_toNat(n, w, y, hn), refl)
+}
+
+theorem BitVec::le_bits_nat(m, n, w: Nat, x: BitVec(m), y: BitVec(n), hm: m <= w, hn: n <= w):
+    !y.bits_from(0, n := w).unsigned_lt_bit(x.bits_from(0, n := w)) = x.toNat().leb(y.toNat()) {
+    rewrite(BitVec::lt_bits_nat(n, m, w, y, x, hn, hm), sym(x.toNat().leb_flip(y.toNat())))
+}
+
+theorem BitVec::eq_bits_nat(m, n, w: Nat, x: BitVec(m), y: BitVec(n), hm: m <= w, hn: n <= w):
+    x.bits_from(0, n := w).eq_bit(y.bits_from(0, n := w)) = x.toNat().same(y.toNat()) {
+    rewrite(BitVec::eq_bit_nat(w, x.bits_from(0, n := w), y.bits_from(0, n := w)),
+        BitVec::bits_from_zero_toNat(m, w, x, hm), BitVec::bits_from_zero_toNat(n, w, y, hn), refl)
 }
 
 theorem strict_complement(n: Nat): (m: Nat) → (n + 1).leb(m) = m.leb(n).not() {

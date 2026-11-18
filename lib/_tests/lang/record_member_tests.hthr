@@ -1,0 +1,63 @@
+// A record declared in a type's namespace (issues/record-in-type-namespace.md):
+// `record Target::Held(self t: Target, …)` is applied as `t.Held(…)` or
+// `Target::Held(t, …)`, constructed by its fields, and read by projection.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+record Frame {
+    base: Nat,
+    words: Nat,
+}
+
+record Frame::Holds(self f: Frame, n: Nat) {
+    low: f.base <= n,
+    count: Nat,
+}
+
+// The method spelling and the qualified one are one type.
+theorem spellings_agree(f: Frame): f.Holds(3) = Frame::Holds(f, 3) { refl }
+
+// Constructed by its fields at either spelling.
+theorem holds_by_method(f: Frame, h: f.base <= 3): f.Holds(3) {
+    Frame::Holds(low := h, count := 2)
+}
+
+fn frame() → Frame { Frame(base := 1, words := 4) }
+
+fn held() → frame().Holds(5) { Frame::Holds(low := omega(), count := 7) }
+
+// Fields read by projection, through the method spelling.
+theorem held_low(f: Frame, h: f.Holds(5)): f.base <= 5 { h.low }
+fn held_count(f: Frame, n: Nat, h: f.Holds(n)) → Nat { h.count }
+theorem held_count_is(): held_count(frame(), 5, held()) = 7 { refl }
+
+// In an expression position the method spelling is the type, not the
+// constructor: its arguments are the record's value parameters.
+fn holds_type(f: Frame) → Type { f.Holds(4) }
+theorem holds_type_is(f: Frame): holds_type(f) = Frame::Holds(f, 4) { refl }
+
+// A type parameter is recovered from the receiver, as at a `fn` member.
+record Option::Holding<A>(self o: Option<A>, a: A) {
+    same: o = Some(a),
+}
+
+theorem some_holds(a: Nat): Some(a).Holding(a) { Option::Holding(same := refl) }
+
+// The name lives in the namespace only: an ambient record of the same base
+// name is a different declaration, and neither reaches the other.
+record Holds { c: Nat }
+fn ambient_holds(h: Holds) → Nat { h.c }
+theorem ambient_holds_is(): ambient_holds(Holds(c := 2)) = 2 { refl }
+
+// Controls.
+
+// expect-error: `Nowhere` is not a type in scope
+record Nowhere::Holds(self n: Nat) { c: Nat }
+
+// expect-error: unbound name `Holds2`
+fn not_ambient(f: Frame, h: Holds2(f, 4)) → Nat { 0 }
+record Frame::Holds2(self f: Frame, n: Nat) { c: Nat }
+
+// expect-error: duplicate name `Frame::Holds`
+record Frame::Holds(self f: Frame) { c: Nat }

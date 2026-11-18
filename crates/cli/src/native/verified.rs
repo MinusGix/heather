@@ -512,6 +512,9 @@ struct Staged {
     plan: String,
     function: String,
     name: String,
+    /// The module and item whose read spells the plan and the function.
+    module: String,
+    item: String,
 }
 
 /// What the optimizer made of a program: the definitions `{prefix}_opt_…`
@@ -645,37 +648,40 @@ fn {prefix}_opt_{item}() → List<Nat> {{ match {question} {{ True => [1], False
         // search is asked of the function the one before it made, and what
         // it makes, where that is another function, is defined under a name
         // of its own, `{prefix}_opt_fn{k}_{tag}{stage}`.
-        let run = |fork: &mut Reading, modules: &mut Vec<String>, tag: &str, from: &str, mut before: Option<String>, searches: &[(Stage, String)]|
+        let run = |fork: &mut Reading, modules: &mut Vec<String>, tag: &str, from: &str, before: Option<String>, searches: &[(Stage, String)]|
             -> Result<Vec<Staged>, String> {
             let mut made: Vec<Staged> = Vec::new();
+            // Whether a search that answers the function it was asked of
+            // is passed over: from the first function made on, and from
+            // the start where the caller's chain has made one.
+            let mut compare = before.is_some();
             for (at, (stage, search)) in searches.iter().enumerate() {
                 let current = made.last().map_or(from.to_string(), |last| format!("{}()", last.name));
                 let item = format!("found_{k}_{tag}{at}");
                 let find = format!("{probe}_opt_{item}");
-                let text = format!("{imports}{}
-fn {prefix}_opt_{item}() → List<Nat> {{ found_spelled({current}.{search}) }}
-", uses(modules));
-                fork.define(&find, &text);
-                let unread = || format!("function {k}'s `{search}` did not read back");
-                let found = spelled_text(&read(fork, &find, &item)?).ok_or_else(unread)?;
-                if trace { eprintln!("optimize: function {k} `{search}` ({tag}{at}): {}", if found == "None" { "nothing" } else { "a plan" }); }
-                if found == "None" { continue; }
-                let (plan, function) = match found.split_once('\n') {
-                    Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => (plan, function),
-                    _ => return Err(unread()),
-                };
-                if before.as_deref() == Some(function) { continue; }
                 let name = format!("{prefix}_opt_fn{k}_{tag}{at}");
-                let module = format!("{probe}_opt_made_{k}_{tag}{at}");
+                // The search's answer is a definition, and the function it
+                // made one over it: the next search is asked of that
+                // value, which the reads' machine has once this read ran
+                // (`answers::Reading`), and nothing is spelled or
+                // elaborated again until the stages kept are stated.
                 let text = format!("{imports}{}
-fn {name}() → Function {{
-    {function}
-}}
-", uses(modules));
-                fork.define(&module, &text);
-                modules.push(module);
-                before = Some(function.to_string());
-                made.push(Staged { stage: *stage, plan: plan.to_string(), function: function.to_string(), name });
+fn {name}_found() → Option<function_ir_optimize::Found> {{ {current}.{search} }}
+fn {name}() → Function {{ found_made({name}_found(), {current}) }}
+fn {prefix}_opt_{item}() → List<Nat> {{ found_kind({name}_found(), {}) }}
+fn {prefix}_opt_{item}_spelled() → List<Nat> {{ found_spelled({name}_found()) }}
+", uses(modules), if compare { format!("Some({current})") } else { "None".to_string() });
+                fork.define(&find, &text);
+                let kind = read(fork, &find, &item)?;
+                if trace { eprintln!("optimize: function {k} `{search}` ({tag}{at}): {}", match kind.as_slice() { [0] => "nothing", [1] => "the same function", _ => "a plan" }); }
+                match kind.as_slice() {
+                    [0] | [1] => continue,
+                    [2] => {}
+                    _ => return Err(format!("function {k}'s `{search}` did not read back")),
+                }
+                modules.push(find.clone());
+                compare = true;
+                made.push(Staged { stage: *stage, plan: String::new(), function: String::new(), name, module: find, item: format!("{item}_spelled") });
             }
             Ok(made)
         };
@@ -693,7 +699,10 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             let answer = read(fork, &module, &item)?;
             if trace {
                 eprintln!("optimize: function {k} lowering `{item}`: {}", if answer.first() == Some(&1) { "placed" } else { "refused" });
-                if answer.first() != Some(&1) && let Some(last) = made.last() { eprintln!("optimize: refused: {}", last.function); }
+                if answer.first() != Some(&1) && let Some(last) = made.last() {
+                    let spelling = fork.read(&format!("{}::{prefix}_opt_{}", last.module, last.item))?;
+                    eprintln!("optimize: refused: {}", spelled_text(&spelling).unwrap_or_default());
+                }
             }
             match answer.split_first() {
                 Some((0, [])) => Ok(None),
@@ -826,6 +835,19 @@ fn {prefix}_opt_{item}() → List<Nat> {{ {prefix}_opt_placed({function}, {k}, {
             }
         }
         placements.push(placement);
+        // The stages kept, spelled: each plan and the function it makes
+        // are stated as literals from here on.
+        for staged in made.iter_mut() {
+            let unread = || format!("`{}` did not read back", staged.name);
+            let found = spelled_text(&read(&mut fork, &staged.module, &staged.item)?).ok_or_else(unread)?;
+            match found.split_once('\n') {
+                Some((plan, function)) if function.starts_with("Function(") && !function.contains('\n') => {
+                    staged.plan = plan.to_string();
+                    staged.function = function.to_string();
+                }
+                _ => return Err(unread()),
+            }
+        }
         // What the replays kept did, in the rules' words
         // (`function_ir_explain`): a read of each plan, a line for each
         // rule it used; a fact two replays derive is said once.

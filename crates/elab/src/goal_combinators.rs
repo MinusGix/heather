@@ -519,10 +519,15 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
         }
         let inductive = domain?;
         elab.spell_term_source(cx, test)?;
+        // Read as the comparison is (`settled`): a definition unfolded at
+        // `Cons(c1, r)` tests `bit7(c1)` through the constructor's encoding,
+        // and the goal's other side spells it `bit7(c1)`; split on the
+        // projection, that side kept it and the leaf was left with the test
+        // undecided there (`seq2_is_some` in examples/utf8/utf8_check.hthr).
         return Some(Blocked {
             original: term.clone(),
             replacement: payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), scrut, &[])?),
-            scrutinee: Rc::clone(test),
+            scrutinee: Rc::new(settled(elab, cx, test)),
             constructors: constructors(&inductive),
             comparison: None,
         });
@@ -540,9 +545,13 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
     }
     *budget -= 1;
     let spells = |t: &Term| abstract_scrutinee(&term_type(Rc::new(t.clone())), scrut, &[]).map(payload);
-    if spells(term).is_some() || word_operation(elab, term) {
+    if spells(term).is_some() {
         return;
     }
+    // A word operation is an atom of the search and is never unfolded, but
+    // its operands are searched: `pick(b, c).eq_bit(0)` hides the split's
+    // scrutinee in `pick`'s body, where bv_decide's split must abstract it.
+    let atom = word_operation(elab, term);
     let before = out.len();
     match term {
         Term::App { .. } | Term::AppAt { .. } => {
@@ -562,7 +571,7 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
             }
         }
     }
-    if out.len() > before {
+    if out.len() > before || atom {
         return;
     }
     // A position that holds the search's own `found` (`clamp(clamp(x, lo,
@@ -1591,7 +1600,11 @@ pub(crate) fn split_stuck(
     span: Span,
     deep: bool,
 ) -> Option<StuckSplit> {
-    let mut budget = 512;
+    // The search's steps. A decoder's third continuation byte
+    // (`utf8::decode_seq(C4, …)` once two are split) sits under the
+    // projections the first two splits left in the goal, each an argument
+    // searched before the call is unfolded; half this found nothing there.
+    let mut budget = 1024;
     // A `Π`'s premise is searched, and the split abstracts the whole `Π`
     // ([`next_step`]); its conclusion lives under the binder and is the
     // next step's.

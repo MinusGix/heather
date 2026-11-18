@@ -1,6 +1,8 @@
 # Probe targets, ranked (cloud, 2026-10-29)
 
 > A later ranking, after the native floor fell: `issues/performance-overview-2026-11-11.md`.
+> The cold library's elaboration by declaration, and the cases it added
+> (2026-11-18): `issues/elaboration-cost-overview-2026-11-18.md`.
 > This file stays as the 2026-10-29 entry. Since 2026-11-12 the `cert/*` cases
 > read the certificate write-elf writes today instead of a frozen copy, and
 > `native/emit-extends` and `tactic/attempt-from` (under 20 ms by then) gave
