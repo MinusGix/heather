@@ -1,0 +1,40 @@
+// The induction principle of a `for` over words, in a file that does not
+// import `bool`: the principle spells each test's evidence by
+// `bool::decide_true`/`bool::decide_false`, which a bare name here would
+// not reach (issues/word-loop-induct-principle-decide-names.md). Tests, not
+// library.
+import logic;
+import bitvec;
+import bitvec_omega;
+
+record R { a: u64, b: u64 }
+
+// Adds to `a` and returns `b`, which the loop never assigns.
+fn R::f(mut self r: R) -> u64 {
+    for i in 0..8 {
+        r.a := r.a + i;
+    }
+    r.b
+}
+
+// The loop keeps `b`, from any count: one case per arm of its test.
+theorem keeps_b(r: R, i: u64): R::f_loop(r, i).after.b = r.b {
+    R::f_loop::induct(
+        λ (y: R) (z: u64) => R::f_loop(y, z).after.b = y.b,
+        λ (y: R) (z: u64) lt e ih => trans(cong(e, f := λ (m: Mutated<R, u64>) => m.after.b), ih),
+        λ (y: R) (z: u64) ge e => cong(e, f := λ (m: Mutated<R, u64>) => m.after.b),
+        r, i)
+}
+
+theorem f_is_b(r: R): R::f(r).value = r.b { keeps_b(r, 0) }
+
+// Negative control: the principle's step case is the loop's own step, so it
+// does not prove that the loop keeps `a`, which it assigns.
+// expect-error: `f_loop(y, z).after.a = y.a` is expected here
+theorem keeps_a(r: R, i: u64): R::f_loop(r, i).after.a = r.a {
+    R::f_loop::induct(
+        λ (y: R) (z: u64) => R::f_loop(y, z).after.a = y.a,
+        λ (y: R) (z: u64) lt e ih => trans(cong(e, f := λ (m: Mutated<R, u64>) => m.after.a), ih),
+        λ (y: R) (z: u64) ge e => cong(e, f := λ (m: Mutated<R, u64>) => m.after.a),
+        r, i)
+}
